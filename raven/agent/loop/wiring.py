@@ -191,7 +191,7 @@ class WiringMixin:
         unchanged: a media tool counts as configured only when its own section
         names a model or a key -- an OpenRouter key set for chat alone must not
         surface tools that bill per call -- and web_search counts a key from
-        the file or the environment.
+        the file or the environment, or a selected vendor that needs none.
 
         Gates the built-in INSTANCE, by identity: plugin tools register last
         precisely so one can shadow a built-in by name -- subclassing it or
@@ -219,7 +219,7 @@ class WiringMixin:
         # environment variable. A predicate spelled out again here was reading
         # SERPER_API_KEY whatever the deployment had chosen, which withheld a
         # keyed Tavily search.
-        if search is not None and search is gated.get(WebSearchTool.name) and not search.api_key:
+        if search is not None and search is gated.get(WebSearchTool.name) and not search.ready:
             names.add(WebSearchTool.name)
         pictures = self.tools.get(ImageSearchTool.name)
         if pictures is not None and pictures is gated.get(ImageSearchTool.name) and not pictures.api_key:
@@ -1233,6 +1233,15 @@ class WiringMixin:
         allowed_dirs = (self.workspace,) if self.restrict_to_workspace else ()
         for cls in (ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, GrepTool, FindTool):
             self.tools.register(cls(workspace=self.workspace, allowed_dirs=allowed_dirs))
+        # Only beside a history strategy that puts refs where the model reads
+        # them: next to one that does not, the tool is a capability the model
+        # reaches for and is always told "found nothing". Read with a default
+        # because an engine slotted in through the runtime door need not
+        # subclass the contract.
+        if getattr(self.context_engine, "mints_source_refs", False):
+            from raven.agent.tools.context_retrieve import ContextRetrieveTool
+
+            self.tools.register(ContextRetrieveTool(self.sessions))
         if self._deliverables is not None:
             from raven.agent.tools.deliver import DeliverFilesTool
 
@@ -2096,6 +2105,7 @@ class WiringMixin:
             "dag_status",
             "cancel_dag",
             "resolve_dag_node",
+            "context_retrieve",
         ):
             if tool := self.tools.get(name):
                 if not hasattr(tool, "set_context"):
@@ -2109,6 +2119,7 @@ class WiringMixin:
                     "dag_status",
                     "cancel_dag",
                     "resolve_dag_node",
+                    "context_retrieve",
                 ):
                     tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
                 else:

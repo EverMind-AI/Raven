@@ -17,6 +17,10 @@ services. They have different purposes and independent lifecycles:
 | Cron | You want an explicitly scheduled task or reminder | A user-created schedule |
 | Heartbeat | You maintain periodic tasks in `HEARTBEAT.md` | Its own timer or an early wake request |
 
+Editing an existing Cron job in the web settings keeps its original messaging
+channel and recipient. Changing its name, instruction, or schedule does not
+move delivery to the local app. New jobs created there use the local app.
+
 Sentinel is off by default (`sentinel.enabled=false`). Enabling it does not
 enable task discovery automatically; disabling it does not disable Cron or
 Heartbeat. Use [Command Reference](commands.md) for their separate commands.
@@ -94,9 +98,10 @@ proof that a running process has reloaded them.
 
 ### Delivery targets
 
-Despite its name, `sentinel.task_discovery_targets` also supplies destinations
-for plain nudges aimed at the internal `sentinel:direct` target, such as
-daily-plan reminders. It is used even when task discovery is disabled.
+`sentinel.task_discovery_targets` supplies destinations for task discovery and
+plain nudges aimed at the internal `sentinel:direct` target, such as daily-plan
+reminders. Plain nudges use these destinations even when task discovery is
+disabled.
 
 - `"channel:chat_id"`: a specific recipient; preferable when a channel has
   multiple conversations.

@@ -153,6 +153,54 @@ async def test_a_missing_param_is_a_gap_and_dispatches_nothing():
     assert tool.calls == []
 
 
+async def test_a_route_condition_is_filled_before_it_reaches_the_judge():
+    """A route condition is a prompt the judge reads in the model's place: an
+    unfilled ``${params.floor}`` in it asks the judge to compare against a
+    placeholder the run never substituted, so the decision hinges on text no
+    reader can evaluate."""
+    tool = FakeDagTool()
+    ex = PlaybookExecutor(dag_tool=tool)
+    spec = _dag_spec(
+        params={
+            "floor": ParamSpec(type="string", required=True, description="the deal floor"),
+            "DEAL_TOKEN": ParamSpec(type="secret", description="the signing token"),
+        },
+        nodes=[
+            NodeSpec(
+                id="triage",
+                subagent="data-raven",
+                node_summary="judge the the deal",
+                prompt_template="look at the deal",
+                routes={
+                    "approve": "the deal is above ${params.floor} and signed with ${params.DEAL_TOKEN}",
+                    "reject": "otherwise",
+                },
+            ),
+            NodeSpec(
+                id="act",
+                subagent="content-raven",
+                node_summary="act on the verdict",
+                prompt_template="act on it",
+                depends_on=["triage"],
+                when="triage.approve",
+            ),
+        ],
+    )
+
+    plan = await ex.execute(spec, params={"floor": "100", "DEAL_TOKEN": "s3cr3t-token"}, confirmed=True)
+
+    assert plan.kind != "gaps", plan.reply
+    triage = next(n for n in tool.calls[0]["nodes"] if n["id"].endswith("-triage"))
+    assert triage["routes"]["approve"] == "the deal is above 100 and signed with [secret DEAL_TOKEN withheld]"
+    assert triage["routes"]["reject"] == "otherwise"
+    # The route text reaches the judge, so the secret must be withheld from it
+    # exactly as from a prompt: a later fill that substitutes it would send the
+    # credential to a model, and this is the pin that turns red.
+    import json as _json
+
+    assert "s3cr3t-token" not in _json.dumps(tool.calls[0]["nodes"])
+
+
 async def test_a_secret_never_reaches_a_dispatched_work_order():
     """Through the executor, because that is where it would leave.
 
@@ -1539,3 +1587,55 @@ async def test_an_entry_that_already_asked_can_say_so_through_load(tmp_path: Pat
 
     await rt.load("weekly-feedback", {"week_of": "w32"}, confirmed=False)
     assert tool.calls[-1]["confirm"] is True, "and one that did not still meets the gate"
+
+
+async def test_a_playbook_run_s_node_attempts_nest_under_the_call_that_ran_it(tmp_path, monkeypatch):
+    """A playbook drives its own graph tool, not the model's, down the same runner: each
+    node still records its attempt under whatever span the playbook was run from."""
+    import asyncio
+
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+    from raven.tracing import spans as _spans
+    from raven.tracing import trace
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    traces = tmp_path / "traces"
+    monkeypatch.setenv("RAVEN_TRACING", "1")
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(traces))
+    _spans._store = None
+    finished = asyncio.Event()
+
+    async def announce(run_id: str, text: str, origin: dict) -> None:
+        finished.set()
+
+    tool = SubAgentDagTool(
+        workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")], announce=announce
+    )
+    tool.set_context("web", "default", "web:playbook")
+    spec = _dag_spec(
+        params={},
+        nodes=[
+            NodeSpec(id="pull", subagent="echo", node_summary="pull the feedback", prompt_template="pull it"),
+            NodeSpec(
+                id="report",
+                subagent="echo",
+                node_summary="write the report",
+                prompt_template="write it up",
+                depends_on=["pull"],
+            ),
+        ],
+    )
+
+    async with draining_dag_runs():
+        with trace.span("tool.call", {"tool.name": "load_playbook"}) as call:
+            plan = await PlaybookExecutor(dag_tool=tool, workspace=tmp_path).execute(spec, params={})
+        assert plan.kind == "dag"
+        await asyncio.wait_for(finished.wait(), timeout=10)
+
+    log = traces / "logs" / "audit-spans.log"
+    spans = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
+    finals = {s["spanId"]: s for s in spans if s["name"] == "subagent.run"}.values()
+    assert len(finals) == 2, "one attempt per node"
+    assert {s["attributes"]["subagent.dispatch"] for s in finals} == {"dag"}
+    assert {s["parentSpanId"] for s in finals} == {call.span_id}

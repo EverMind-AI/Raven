@@ -91,6 +91,24 @@ describe('the chat makes room for the anchored desk', () => {
     }
   })
 
+  it('does not animate the inset while the corner grab is sizing the desk', () => {
+    /* The reserve changes on every frame of that gesture, and a transition
+       retargeted every frame restarts from where it stands each time -- so the
+       composer stayed put while the palette's left edge ran over it, and the
+       palette's height, measured against the card, dropped above it and came
+       back once the card caught up. DeskPalette sets the flag for the gesture
+       alone. */
+    const body = rule(':root[data-desk-resize] .chat:not([data-fresh]) .scroll > *, :root[data-desk-resize] .chat:not([data-fresh]) .dock')
+    expect(body).not.toBeNull()
+    expect(body).toMatch(/transition:\s*none/)
+    /* The pill takes the same half of the reserve as the column, so the same
+       restart would hold it while the column ran left; it keeps only its rise. */
+    const pill = rule(':root[data-desk-resize] .backpill')
+    expect(pill).not.toBeNull()
+    expect(pill).toMatch(/transition:\s*bottom [^;]*;?\s*$/)
+    expect(pill).not.toMatch(/left/)
+  })
+
   it('does not animate the inset for a reader who asked for no motion', () => {
     /* A 162px slide of everything they are reading is exactly the motion that
        setting is for. */

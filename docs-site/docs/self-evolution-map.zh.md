@@ -1,11 +1,11 @@
 # Evolver：设计与实现
 
-首次使用请先读[使用与实验](evolver.md)，了解维护状态、配置、成本和
+首次使用请先读[使用与实验](evolver.md)，了解评估范围、配置、成本和
 run/resume/finalize 操作流程。本页负责实现映射。
 
 **配套文档：** 权威的方法论规格是 `docs/specs/self-evolution-loop-sop.md`，
-与代码一同保留在仓库内，未在本站发布。本文回答的是：Raven 中哪些代码实现了 SOP 的每一条款、
-哪些偏离是有意为之，以及哪些部分已存在但尚未接线。
+与代码一同保留在仓库内，未在本站发布。本文将 SOP 条款映射到 Raven 实现，
+说明评估方案与模块接入方式。
 
 **使用方式：** 在改动 `evolver/**` 或 `benchmarks/appworld/evolve/**` 之前，
 先在此处定位对应的 SOP 条款；若你的改动改变了某条对应关系，
@@ -93,22 +93,20 @@ SOP §8.0 的分工（语义交给模型、确定性算术交给代码）原样�
 - **伤害回放：** 当候选导致某个任务出现回归时，会将该任务在候选版本下的实际执行轨迹摘录
   提供给下一次候选设计；SOP 只要求记录翻转次数。
 
-## 6. 实现差异与尚未接入的部分 { #6-deliberate-deviations-and-unwired-parts-honest-list }
+## 6. 实现选择 { #6-implementation-choices }
 
-1. **零命中 preflight 默认关闭**（`zero_hit_preflight=False`，2026-07 决定）。
+1. **可选的零命中 preflight**（默认 `zero_hit_preflight=False`）。
    提供埋点数据时，Gate-b 排除未触发标记的任务；没有埋点数据时会跳过该检查。
-   Preflight 是独立的节省预算措施，也可能误删候选；TRIGGER_REGEX 声明可选，实际剪枝率尚不清楚。
-   先收集数据（在某次运行中开启，检查历史里的 `pruned_inert` 条目），再决定默认值。
-   SOP §2 把 ③ 标注为 [now]；这是一处有意的偏离。
-2. **借用机制未接线**（SOP §2 ⑤，标注为 [defer]）：`tree_aware_bandit` 已存在，
-   但编排器不调用它。AppWorld 当前跑完整 train 集；任务集变大后再考虑接入借用机制。
-3. **亲和度锚点缺少数据来源：** `select_anchor(affinity)` 接受该参数，
-   但 appworld 一侧没有触发密度的来源（上游的 `affinity_picker.py` 未移植）。
-   当前锚点由破冰任务、哨兵任务和边界任务构成；此处尚未测量缺少亲和度选择的影响。
-4. **WHERE 的机械绑定只有 4 级**（prompt/runtime/mixed/edit），
-   比判定 schema 的 14 个类别更粗。对 QD 分格已经够用；
-   若需要细粒度的杠杆统计，可细化 `_lever_of_path`。自我声明值与机械值都在账本中，
-   目前没有对账告警（属于可选的可观测性增强）。
+   Preflight 是独立的节省预算措施，也可能误删有用的候选。
+   可在提供 `TRIGGER_REGEX` 的实验中启用，并通过历史中的 `pruned_inert` 条目评估剪枝。
+   SOP §2 将这一步标为 [now]，Raven 将其作为可选项。
+2. **全训练集确认。** AppWorld 评估完整训练集。编排器不调用 `tree_aware_bandit`
+   进行借用（SOP §2 ⑤，标注为 [defer]）。
+3. **锚点构成。** AppWorld 使用破冰任务、哨兵任务和边界任务。
+   `select_anchor(affinity)` 接受亲和度数据，但 AppWorld 适配器不提供触发密度来源。
+   这一选择对评估结果的影响尚未单独测量。
+4. **四级 WHERE 绑定。** 机械绑定使用 prompt/runtime/mixed/edit 划分 QD 单元，
+   判定 schema 则有 14 个类别。账本记录自我声明值和机械值供比对，不自动发出对账告警。
 5. **`pruned_inert` 在语义上与 SOP 的状态一致**，但实现方式不同：
    SOP 通过 preflight CLI 判定，我们通过嵌入循环的 preflight 判定（默认关闭，见 ①）。
 

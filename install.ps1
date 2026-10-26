@@ -463,12 +463,14 @@ function Install-Raven([string]$UvPath, [string]$NodePath) {
         # Pin to the locked dependency set so an install matches what we test.
         $constraints = Join-Path ([IO.Path]::GetTempPath()) ("raven-constraints-" + [guid]::NewGuid().ToString("N") + ".txt")
         & $UvPath export --directory "$scriptDir" --frozen --all-extras --no-hashes --no-emit-workspace -o "$constraints"
-        # The default config names the everos memory backend, which ships as
-        # its own distribution beside the wheel -- carry it, and degrade
-        # loudly (the host boots memoryless and `raven doctor` says why) if
-        # it cannot build.
+        # The default config names the everos memory backend, and a user can
+        # point memory at the hosted EverOS instead; each ships as its own
+        # distribution beside the wheel -- carry both, and degrade loudly (the
+        # host boots memoryless and `raven doctor` says why) if they cannot
+        # build.
         $memoryPlugin = @(
-            "--with-editable", (Join-Path $scriptDir "plugins-dist\everos-memory")
+            "--with-editable", (Join-Path $scriptDir "plugins-dist\everos-memory"),
+            "--with-editable", (Join-Path $scriptDir "plugins-dist\everos-cloud-memory")
         )
         # Raven-Design and Raven-PPT keep their harness in their own
         # distributions, and the roster gates on them: discovery reads the
@@ -484,7 +486,7 @@ function Install-Raven([string]$UvPath, [string]$NodePath) {
         # channel SDK cannot block the whole install. Four rungs, dropping one
         # capability each: the engines carry native builds (PDF, raster,
         # plotting) a platform can refuse on its own, so they fall before the
-        # memory plugin rather than taking it down with them.
+        # memory plugins rather than taking them down too.
         try {
             & $UvPath tool install --force -c "$constraints" @memoryPlugin @enginePlugins -e "$scriptDir[channels]"
             if ($LASTEXITCODE -ne 0) { throw "channel extras install failed" }
@@ -495,7 +497,7 @@ function Install-Raven([string]$UvPath, [string]$NodePath) {
                 Write-Warn "A product engine failed to build; Raven-Design and Raven-PPT stay disabled (raven doctor explains)."
                 & $UvPath tool install --force -c "$constraints" @memoryPlugin -e "$scriptDir"
                 if ($LASTEXITCODE -ne 0) {
-                    Write-Warn "EverOS memory plugin failed to install; long-term memory stays off (raven doctor explains)."
+                    Write-Warn "The EverOS memory plugins failed to install; long-term memory stays off (raven doctor explains)."
                     & $UvPath tool install --force -c "$constraints" -e "$scriptDir"
                     if ($LASTEXITCODE -ne 0) { Fail "Raven install failed." }
                 }
@@ -518,7 +520,7 @@ function Install-Raven([string]$UvPath, [string]$NodePath) {
             Get-Content $plugins | ForEach-Object { Write-Info "    $_" }
             $pArgs = @("--with-requirements", $plugins)
             $allLines = @(Get-Content $plugins | Where-Object { $_.Trim() })
-            $memoryLines = @($allLines | Where-Object { $_ -match "^everos-memory " })
+            $memoryLines = @($allLines | Where-Object { $_ -match "^(everos-memory|everos-cloud-memory) " })
             if ($memoryLines.Count -gt 0 -and $memoryLines.Count -lt $allLines.Count) {
                 $memoryOnly = Join-Path ([IO.Path]::GetTempPath()) ("raven-plugins-memory-" + [guid]::NewGuid().ToString("N") + ".txt")
                 Set-Content -Path $memoryOnly -Value $memoryLines -Encoding ascii

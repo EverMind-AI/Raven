@@ -14,7 +14,7 @@
 | 委派给专用 Agent | Roster 中已配置的 Agent | [Agent 集成](agent-integrations.md) |
 | 与专用 Agent 继续协作 | 它的有状态实例 | [与子 Agent 协作](agent-collaboration.md) |
 | 操作共享浏览器 | 浏览器工具和 WebUI 面板 | [浏览器协作](browser-collaboration.md) |
-| 检索文档段落 | 知识库 Python 库或 RPC 客户端 | [知识库](knowledge.md) |
+| 检索文档段落 | WebUI 知识库页面与对话中的知识库选择；集成使用 Python 库或 RPC | [知识库](knowledge.md) |
 | 执行并观察长任务 | 声明 campaign 后的 Raven-Oncall | [长任务托管（Oncall）](oncall.md) |
 | 集成编辑器或远程 peer | ACP 或 A2A | [Agent 协议](agent-protocols.md) |
 
@@ -31,7 +31,10 @@ raven agent --workspace /absolute/path/to/project -m "Read the README and summar
 ```
 
 这会执行模型轮次，可能产生服务商费用。修改任务应明确可编辑文件和验证方式。
-并行编码 Agent 不会自动获得独立 worktree，应划分文件所有权或使用不同工作副本。
+同一 Git 项目中有多个编码任务并行时，宿主的 `multi-agent-coding` skill 会要求各编码
+Agent 创建独立 worktree，并汇报路径和分支。协调并发修改前，应检查这些汇报。
+该流程见[与子 Agent 协作](agent-collaboration.md#models-modes-and-shared-files)；
+手动构建任务图时参阅[DAG 编排](orchestration.md)。
 
 ## 继续对话 { #continue-a-conversation }
 

@@ -7,6 +7,7 @@ import random
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import regex
 
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator
 from raven.session.manager import Session
@@ -486,3 +487,73 @@ def test_image_tokens_survive_the_tiktoken_fallback_path(
 
     assert tokens.estimate_prompt_tokens([{"role": "user", "content": [block]}]) == 100
     assert tokens.estimate_message_tokens({"role": "user", "content": [block]}) == 100
+
+
+def test_ordinary_text_counts_exactly_as_one_encode() -> None:
+    enc = tokens.tiktoken.get_encoding(tokens._ENCODING_NAME)
+    rng = random.Random(7)
+    words = ["alpha", "beta", "path/to/file.py", "x=1", chr(0x4E2D) + chr(0x6587), "{}", "\n"]
+    text = " ".join(rng.choice(words) for _ in range(20_000))
+
+    assert tokens._encoded_len(enc, text) == len(enc.encode(text))
+    assert tokens.estimate_message_tokens({"role": "tool", "content": text}) == len(enc.encode(text))
+
+
+@pytest.mark.parametrize(
+    "run",
+    ["=", "A", "0", " ", "\n", "\t", "=" * 999 + chr(0x1F), "-" * 500 + chr(0x1C)],
+    ids=["equals", "letter", "digit", "space", "newline", "tab", "equals-glued-by-us", "dashes-glued-by-fs"],
+)
+def test_a_long_unbroken_run_never_reaches_the_encoder_whole(monkeypatch, run) -> None:
+    """tiktoken is quadratic in one piece's length; a 200K run held the loop for about twenty seconds.
+
+    Pieces are measured with the encoding's own pattern, not with ``tokens._RUN``:
+    the two disagree on what is space, and that disagreement is what escapes.
+    """
+    real = tokens.tiktoken.get_encoding(tokens._ENCODING_NAME)
+    pieces = regex.compile(real._pat_str)
+    longest: list[int] = []
+
+    class Measured:
+        def encode(self, text):
+            longest.append(max((len(m.group()) for m in pieces.finditer(text)), default=0))
+            return real.encode(text)
+
+    monkeypatch.setattr(tokens.tiktoken, "get_encoding", lambda _name: Measured())
+    content = "head line\n" + run * (120_000 // len(run)) + "\ntail line"
+
+    estimate = tokens.estimate_message_tokens({"role": "tool", "content": content})
+    with tokens.reuse_prompt_tokenization():
+        prompt = tokens.estimate_prompt_tokens([{"role": "tool", "content": content}])
+
+    assert max(longest) <= tokens._RUN_SLICE
+    assert estimate > 0 and prompt > 0
+
+
+@pytest.mark.parametrize("length", [1_000, 1_001, 1_500, 2_001, 3_000])
+def test_text_after_a_sliced_run_is_counted_once(length) -> None:
+    enc = tokens.tiktoken.get_encoding(tokens._ENCODING_NAME)
+    run = "A" * length
+    tail = " word" * 400
+    slices = -(-length // tokens._RUN_SLICE)
+    by_parts = sum(len(enc.encode(run[i : i + tokens._RUN_SLICE])) for i in range(0, length, tokens._RUN_SLICE))
+
+    assert tokens._encoded_len(enc, run + tail) == by_parts + len(enc.encode(tail))
+    assert abs(tokens._encoded_len(enc, run + tail) - len(enc.encode(run + tail))) <= 2 * slices
+
+
+def test_a_reused_count_with_long_runs_matches_a_fresh_one() -> None:
+    """The whole-payload and fragment paths of the trim cache must agree on sliced runs."""
+    rng = random.Random(11)
+    for _ in range(40):
+
+        def message() -> dict:
+            body = rng.choice(["=", "A", " ", "\n"]) * rng.randint(900, 3_500) + " tail " * rng.randint(0, 30)
+            return {"role": "tool", "content": body}
+
+        a = [message() for _ in range(4)]
+        b = [*a[: rng.randint(1, 4)], message()]
+        with tokens.reuse_prompt_tokenization():
+            tokens.estimate_prompt_tokens(a)
+            reused = tokens.estimate_prompt_tokens(b)
+        assert reused == tokens.estimate_prompt_tokens(b)

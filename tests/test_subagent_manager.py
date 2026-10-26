@@ -44,6 +44,7 @@ from raven.contracts.subagent_backend import SubagentActionAbortedError
 from raven.providers.base import LLMResponse, ToolCallRequest
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.sandbox import ExecResult, SandboxExecutor
+from raven.tracing import trace
 from tests._everos_presence import everos_plugin_absent
 
 
@@ -313,13 +314,18 @@ async def test_announce_dag_result_addresses_the_originating_conversation() -> N
 
 
 async def test_announce_dag_result_delivers_the_summary_verbatim() -> None:
-    """The announce carries the run's own summary and nothing else.
+    """The announce carries the run's own summary unaltered, and after it only the
+    reply-rules note a dispatch receipt carries.
 
     A graph's deliverable is its terminal node outputs, so any framing or
-    retell-in-two-sentences instruction wrapped around them is lossy. The
-    untrusted fence is the one exception: node output is attacker-influenceable
-    and this arrives shaped like an inbound message, not like a tool result.
+    retell-in-two-sentences instruction wrapped around them is lossy, and none is
+    added. The untrusted fence stays: node output is attacker-influenceable and
+    this arrives shaped like an inbound message, not like a tool result. The note
+    after it shortens nothing; it says how the reply the host writes next is laid
+    out, which the resident rules alone did not achieve on a DAG notice.
     """
+    from raven.context_engine.segments.render import reply_rules_note
+
     mgr = _make_manager(max_concurrent=1)
     submitted: list[object] = []
     mgr.set_submit(submitted.append)
@@ -330,10 +336,15 @@ async def test_announce_dag_result_delivers_the_summary_verbatim() -> None:
     # Asserted structurally, not against a second wrap_untrusted call: the fence
     # mints a fresh nonce each time, so two wraps of one string never compare
     # equal. Everything between the markers must be the summary, unaltered.
-    lines = submitted[0].text.splitlines()
+    text = submitted[0].text
+    note = reply_rules_note()
+    assert text.endswith(note)
+    assert "gives each task its own `### <task>` section" in note
+    lines = text[: -len(note)].splitlines()
     assert lines[0].startswith("[BEGIN UNTRUSTED subagent ")
     assert lines[-1].startswith("[END UNTRUSTED subagent ")
     assert "\n".join(lines[1:-1]) == summary
+    assert "sentences" not in text and "brief" not in text
 
 
 async def test_announce_dag_result_without_a_submit_does_not_raise() -> None:
@@ -462,6 +473,305 @@ async def test_a_run_ending_while_the_host_drains_does_not_die_of_its_own_announ
         logger.remove(sink_id)
 
     assert task.exception() is None
+
+
+@pytest.fixture
+def run_spans(tmp_path, monkeypatch):
+    """Spans recorded into this test's own directory; the directory."""
+    from raven.tracing import spans as _spans
+
+    directory = tmp_path / "spans"
+    monkeypatch.setenv("RAVEN_TRACING", "1")
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(directory))
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    _spans._store = None
+    yield directory
+    _spans._store = None
+
+
+def _recorded(directory: Path) -> list[dict[str, Any]]:
+    log = directory / "logs" / "audit-spans.log"
+    if not log.exists():
+        return []
+    return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _run_records(directory: Path, task_id: str) -> list[dict[str, Any]]:
+    return [
+        span
+        for span in _recorded(directory)
+        if span["name"] == "subagent.run" and span["attributes"].get("subagent.task_id") == task_id
+    ]
+
+
+class _GatedBackend:
+    """Records one model call, then waits for ``release`` before replying or raising ``error``."""
+
+    streams = False
+
+    def __init__(self, error: BaseException | None = None) -> None:
+        self.error = error
+        self.calls = 0
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def run(self, task: str, **_: Any) -> str:
+        from raven.tracing import trace
+
+        self.calls += 1
+        with trace.span("llm.call", {"llm.provider": "stub", "llm.model": "m"}):
+            pass
+        self.started.set()
+        await self.release.wait()
+        if self.error is not None:
+            raise self.error
+        return "done"
+
+
+def _traced_manager(monkeypatch, tmp_path: Path, backend: _GatedBackend, *, max_concurrent: int = 8) -> SubagentManager:
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+    mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path, max_concurrent=max_concurrent)
+    monkeypatch.setattr(mgr, "_resolve_backend", lambda agent: backend)
+    mgr.set_submit(lambda _req: None)
+    return mgr
+
+
+async def _spawn_in_a_turn(mgr: SubagentManager, **kw: Any) -> tuple[str, str, asyncio.Task]:
+    """Spawn from a turn's tool call; the task id, the call's span id and the run's task.
+
+    Both spans close as soon as the spawn returns: the turn moves on while the
+    run goes on in the background.
+    """
+    from raven.tracing import trace
+
+    with trace.span("session.turn", root=True, session_key="cli:s"):
+        with trace.span("tool.call", {"tool.name": "spawn"}) as call:
+            receipt = await mgr.spawn(
+                task="look around",
+                task_summary="look",
+                session_key="cli:s",
+                origin_channel="cli",
+                origin_chat_id="s",
+                **kw,
+            )
+    match = re.search(r"\(id: ([0-9a-f]+)\)", receipt)
+    assert match, receipt
+    task_id = match.group(1)
+    return task_id, call.span_id, mgr._running_tasks[task_id]
+
+
+async def test_a_spawned_run_is_on_disk_while_it_runs_and_closes_completed(run_spans, monkeypatch, tmp_path):
+    from raven.config.agent_names import canonical_agent_name
+
+    backend = _GatedBackend()
+    mgr = _traced_manager(monkeypatch, tmp_path, backend)
+    task_id, call_span, task = await _spawn_in_a_turn(mgr, agent="researcher", instance="scout")
+    await asyncio.wait_for(backend.started.wait(), timeout=5)
+
+    (opened,) = _run_records(run_spans, task_id)
+    attrs = opened["attributes"]
+    assert opened["parentSpanId"] == call_span
+    assert attrs["subagent.in_progress"] is True
+    assert attrs["subagent.dispatch"] == "spawn"
+    assert (attrs["subagent.agent"], attrs["subagent.instance"], attrs["subagent.handle"]) == (
+        canonical_agent_name("researcher"),
+        "scout",
+        "scout",
+    )
+    assert "subagent.outcome" not in attrs
+    (model_call,) = [span for span in _recorded(run_spans) if span["name"] == "llm.call"]
+    assert model_call["parentSpanId"] == opened["spanId"]
+
+    backend.release.set()
+    await asyncio.wait({task})
+    _, closed = _run_records(run_spans, task_id)
+    assert closed["spanId"] == opened["spanId"]
+    assert closed["attributes"]["subagent.in_progress"] is False
+    assert closed["attributes"]["subagent.outcome"] == "completed"
+    await mgr.cancel_all()
+
+
+async def _cancel_the_session(mgr: SubagentManager, task_id: str, task: asyncio.Task) -> None:
+    await mgr.cancel_by_session("cli:s")
+
+
+async def _leave_it_on_its_machine(mgr: SubagentManager, task_id: str, task: asyncio.Task) -> None:
+    from raven.acp_client import remote_runs
+
+    remote_runs.mark_left(task_id)
+    task.cancel()
+
+
+@pytest.mark.parametrize(
+    ("error", "stop", "outcome"),
+    [
+        (RuntimeError("the run failed"), None, "failed"),
+        (SubagentActionAbortedError("stopped"), None, "aborted"),
+        (None, _cancel_the_session, "cancelled"),
+        (None, _leave_it_on_its_machine, "handed_off"),
+    ],
+    ids=["failed", "aborted", "cancelled", "handed_off"],
+)
+async def test_a_spawned_run_records_how_it_ended(run_spans, monkeypatch, tmp_path, error, stop, outcome):
+    backend = _GatedBackend(error)
+    mgr = _traced_manager(monkeypatch, tmp_path, backend)
+    task_id, _, task = await _spawn_in_a_turn(mgr)
+    await asyncio.wait_for(backend.started.wait(), timeout=5)
+    if stop is None:
+        backend.release.set()
+    else:
+        await stop(mgr, task_id, task)
+    await asyncio.wait({task})
+
+    assert _run_records(run_spans, task_id)[-1]["attributes"]["subagent.outcome"] == outcome
+    await mgr.cancel_all()
+
+
+class _RefusingExecutor:
+    async def __aenter__(self) -> "_RefusingExecutor":
+        raise RuntimeError("the sandbox did not start")
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+
+async def test_a_run_whose_sandbox_never_starts_records_failed(run_spans, monkeypatch, tmp_path):
+    backend = _GatedBackend()
+    mgr = _traced_manager(monkeypatch, tmp_path, backend)
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _RefusingExecutor())
+    task_id, _, task = await _spawn_in_a_turn(mgr)
+    await asyncio.wait({task})
+
+    assert _run_records(run_spans, task_id)[-1]["attributes"]["subagent.outcome"] == "failed"
+    assert backend.calls == 0
+    await mgr.cancel_all()
+
+
+async def test_a_run_cancelled_while_waiting_at_the_gate_records_cancelled(run_spans, monkeypatch, tmp_path):
+    backend = _GatedBackend()
+    mgr = _traced_manager(monkeypatch, tmp_path, backend, max_concurrent=1)
+    await mgr._gate.acquire()
+    try:
+        task_id, _, task = await _spawn_in_a_turn(mgr)
+        await _settle(lambda: task_id not in mgr._unstarted)
+        await mgr.cancel_by_session("cli:s")
+        await asyncio.wait({task})
+    finally:
+        mgr._gate.release()
+
+    assert _run_records(run_spans, task_id)[-1]["attributes"]["subagent.outcome"] == "cancelled"
+    assert backend.calls == 0
+    await mgr.cancel_all()
+
+
+async def test_a_run_failing_before_its_backend_is_reached_records_failed(run_spans, monkeypatch, tmp_path):
+    async def _unreadable_registry(*_a: Any, **_k: Any) -> None:
+        raise RuntimeError("the node registry is unreadable")
+
+    backend = _GatedBackend()
+    mgr = _traced_manager(monkeypatch, tmp_path, backend)
+    monkeypatch.setattr(manager_mod, "ensure_node_claimed", _unreadable_registry)
+    task_id, _, task = await _spawn_in_a_turn(mgr)
+    await asyncio.wait({task})
+
+    assert _run_records(run_spans, task_id)[-1]["attributes"]["subagent.outcome"] == "failed"
+    assert backend.calls == 0
+    await mgr.cancel_all()
+
+
+async def test_a_cancel_landing_while_a_completed_run_is_announced_keeps_it_completed(run_spans, monkeypatch, tmp_path):
+    backend = _GatedBackend()
+    backend.release.set()
+    mgr = _traced_manager(monkeypatch, tmp_path, backend)
+    announced: list[str] = []
+
+    async def _announce(*args: Any, **_k: Any) -> bool:
+        announced.append(args[5])
+        if len(announced) == 1:
+            raise asyncio.CancelledError
+        return True
+
+    monkeypatch.setattr(mgr, "_announce_result", _announce)
+    task_id, _, task = await _spawn_in_a_turn(mgr)
+    await asyncio.wait({task})
+
+    assert announced == ["ok", "cancelled"]
+    assert _run_records(run_spans, task_id)[-1]["attributes"]["subagent.outcome"] == "completed"
+    (meta,) = tmp_path.rglob(f"{task_id}.meta.json")
+    assert json.loads(meta.read_text(encoding="utf-8"))["status"] == "completed"
+    await mgr.cancel_all()
+
+
+async def test_an_outcome_is_marked_only_on_a_recorded_subagent_run(run_spans, monkeypatch):
+    from raven.tracing import trace
+
+    @trace.instrument("tool.call")
+    async def _tool() -> None:
+        manager_mod._mark_outcome("failed")
+
+    @trace.instrument("subagent.run")
+    async def _run_with_tracing_switched_off() -> None:
+        monkeypatch.setenv("RAVEN_TRACING", "0")
+        manager_mod._mark_outcome("failed")
+        monkeypatch.setenv("RAVEN_TRACING", "1")
+
+    await _tool()
+    await _run_with_tracing_switched_off()
+
+    records = _recorded(run_spans)
+    assert [record["name"] for record in records] == ["tool.call", "subagent.run"]
+    assert all("subagent.outcome" not in record["attributes"] for record in records)
+
+
+def _project(directory: Path) -> list[Any]:
+    from raven.trajectory.entries import project_entries
+
+    return list(project_entries(_recorded(directory), state=directory).entries)
+
+
+async def test_a_spawned_run_projects_running_with_its_steps_in_its_turn_then_finished(
+    run_spans, monkeypatch, tmp_path
+):
+    backend = _GatedBackend()
+    mgr = _traced_manager(monkeypatch, tmp_path, backend)
+    _, _, task = await _spawn_in_a_turn(mgr)
+    await asyncio.wait_for(backend.started.wait(), timeout=5)
+
+    entries = _project(run_spans)
+    (running,) = [e for e in entries if e.span_name == "subagent.run"]
+    assert running.operation_status == "running"
+    assert running.status_evidence == ("subagent_in_progress",)
+    assert running.duration_ms is None
+    steps = [e for e in entries if e.span_name == "llm.call"]
+    assert steps and all(e.turn_number == 1 and "turn_unknown" not in e.integrity for e in steps)
+
+    backend.release.set()
+    await asyncio.wait({task})
+    entries = _project(run_spans)
+    (finished,) = [e for e in entries if e.span_name == "subagent.run"]
+    assert finished.operation_status == "ok"
+    assert isinstance(finished.duration_ms, int)
+
+    def _shape(found: list[Any]) -> list[tuple[Any, ...]]:
+        return [(e.entry_id, e.turn_number, e.operation_status, e.preview) for e in found]
+
+    assert _shape([e for e in entries if e.span_name == "llm.call"]) == _shape(steps)
+    await mgr.cancel_all()
+
+
+async def test_a_failed_spawned_run_is_its_span_s_failure_entry(run_spans, monkeypatch, tmp_path):
+    backend = _GatedBackend(RuntimeError("the run failed"))
+    backend.release.set()
+    mgr = _traced_manager(monkeypatch, tmp_path, backend)
+    _, _, task = await _spawn_in_a_turn(mgr)
+    await asyncio.wait({task})
+
+    run_entries = [e for e in _project(run_spans) if e.span_name == "subagent.run"]
+    (failed,) = run_entries
+    assert failed.operation_status == "error"
+    assert failed.status_evidence == ("subagent_failed",)
+    assert [e for e in run_entries if e.failure_entry] == [failed]
+    await mgr.cancel_all()
 
 
 async def test_a_spawn_is_refused_when_the_shutdown_sweep_lands_while_it_is_starting(monkeypatch):
@@ -4430,7 +4740,122 @@ async def test_an_informational_node_notice_is_headed_as_a_notice_not_a_failure(
 
     submitted.clear()
     await mgr.announce_dag_exception("r1", "n", "gave up", origin, awaiting_decision=False)
-    assert "has failed" in submitted[0].text and submitted[0].delegated["status"] == "exception"
+    assert "has failed" in submitted[0].text and submitted[0].delegated["status"] == "error", (
+        "a failed node waits on nothing, so its row must not read as waiting on a decision"
+    )
+
+
+async def test_a_node_report_marks_what_the_node_returned_for_the_reader() -> None:
+    """The fold under the row is the node's own words, so the mark carries them.
+
+    Both readings: the live event and the stored entry the replay draws from. The
+    model's text stays the brief -- the output is not injected a second time.
+    """
+    from raven.rpc.models import SubagentDeliveredPayload, TranscriptDelegated, TurnStartedDelegated
+
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list = []
+    mgr.set_submit(submitted.append)
+    delivered: list[dict] = []
+    mgr._emit_delivered = lambda _origin, mark: delivered.append(mark)
+    said = "I could not push: the fork is read-only"
+
+    await mgr.announce_dag_exception(
+        "20260101T000000Z-abcd1234",
+        "survey",
+        "node 'survey' did not accomplish its task",
+        {"channel": "web", "chat_id": "default", "session_key": "web:sess1"},
+        awaiting_decision=True,
+        output=said,
+    )
+
+    assert delivered[0]["output"] == said
+    assert submitted[0].delegated["output"] == said
+    assert said not in submitted[0].text
+    stored = dict(submitted[0].delegated)
+    assert TranscriptDelegated(**stored).output == said
+    assert TurnStartedDelegated(**stored, content=submitted[0].text).output == said
+    assert SubagentDeliveredPayload(**delivered[0]).output == said
+
+
+async def test_a_node_report_marks_an_empty_return_as_empty_not_absent() -> None:
+    """A node that returned nothing has nothing to fold open, and says so.
+
+    Absent means a server that never sent the output; empty means the node said
+    nothing. A client can only tell the two apart if the key is there.
+    """
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list = []
+    mgr.set_submit(submitted.append)
+    mgr._emit_delivered = lambda _origin, _mark: None
+
+    await mgr.announce_dag_exception(
+        "r1",
+        "n",
+        "did not accomplish",
+        {"channel": "web", "chat_id": "d", "session_key": "web:s"},
+        awaiting_decision=True,
+        output="",
+    )
+
+    assert submitted[0].delegated["output"] == ""
+
+
+@pytest.mark.parametrize("length", [0, 20_000, 20_001, 40_000])
+async def test_a_node_report_bounds_the_output_it_marks(length: int) -> None:
+    """The mark is stored with the conversation and sent on every replay; the run
+    dir keeps the whole text, and the row opens the run."""
+    from raven.agent.subagent.manager import _MARKED_OUTPUT_CHARS
+    from raven.rpc.models import SubagentDeliveredPayload, TranscriptDelegated, TurnStartedDelegated
+
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list = []
+    mgr.set_submit(submitted.append)
+    delivered: list[dict] = []
+    mgr._emit_delivered = lambda _origin, mark: delivered.append(mark)
+
+    await mgr.announce_dag_exception(
+        "r1",
+        "n",
+        "did not accomplish",
+        {"channel": "web", "chat_id": "d", "session_key": "web:s"},
+        awaiting_decision=True,
+        output="x" * length,
+    )
+
+    stored = submitted[0].delegated
+    expected = "x" * min(length, _MARKED_OUTPUT_CHARS)
+    truncated = length > _MARKED_OUTPUT_CHARS
+    for mark in (stored, delivered[0]):
+        assert mark["output"] == expected
+        assert mark["output_truncated"] is truncated
+    for model in (
+        TranscriptDelegated(**stored),
+        TurnStartedDelegated(**stored, content=submitted[0].text),
+        SubagentDeliveredPayload(**delivered[0]),
+    ):
+        assert model.output == expected
+        assert model.output_truncated is truncated
+
+
+async def test_a_stall_notice_marks_no_output() -> None:
+    """Nothing came back from a node that is still running; the notice is the account."""
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list = []
+    mgr.set_submit(submitted.append)
+    mgr._emit_delivered = lambda _origin, _mark: None
+
+    await mgr.announce_dag_exception(
+        "r1",
+        "n",
+        "no sign of life",
+        {"channel": "web", "chat_id": "d", "session_key": "web:s"},
+        awaiting_decision=False,
+        informational=True,
+    )
+
+    assert "output" not in submitted[0].delegated
+    assert "output_truncated" not in submitted[0].delegated
 
 
 # --- unprompted-turn wakes ----------------------------------------------------
@@ -5525,3 +5950,206 @@ async def test_a_failed_run_s_record_on_its_machine_stays_when_the_draining_sche
     )
 
     assert [run.task_id for run in remote_runs.pending()] == ["t1"], "announced: t2's record is gone"
+
+
+# --- each report names the span that dispatched the work it reports on ---------
+
+
+_LINK_ORIGIN = {"channel": "web", "chat_id": "s1", "session_key": "web:s1"}
+
+
+def _traced(monkeypatch, tmp_path: Path) -> Path:
+    from raven.tracing import spans as _spans
+
+    trace_dir = tmp_path / "traces"
+    monkeypatch.setenv("RAVEN_TRACING", "1")
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(trace_dir))
+    _spans._store = None
+    return trace_dir
+
+
+def _run_span(trace_dir: Path, task_id: str) -> tuple[str, str] | None:
+    """The ``subagent.run`` the tracer recorded for ``task_id``, as a dispatch link."""
+    log = trace_dir / "logs" / "audit-spans.log"
+    if not log.exists():
+        return None
+    for line in log.read_text(encoding="utf-8").splitlines():
+        record = json.loads(line)
+        if record["name"] == "subagent.run" and record["attributes"].get("subagent.task_id") == task_id:
+            return (record["traceId"], record["spanId"])
+    return None
+
+
+class _ControlledBackend:
+    """Counts its runs; can hold one open until released, then answer or raise."""
+
+    def __init__(self, *, raises: BaseException | None = None, hold: bool = False) -> None:
+        self.calls = 0
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self._raises = raises
+        self._hold = hold
+
+    async def run(self, task: str, **kwargs: Any) -> str:
+        self.calls += 1
+        self.entered.set()
+        if self._hold:
+            await self.release.wait()
+        if self._raises is not None:
+            raise self._raises
+        return "done"
+
+
+def _linked_manager(
+    monkeypatch, tmp_path: Path, backend: Any, *, max_concurrent: int = 4
+) -> tuple[SubagentManager, list[Any]]:
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+    manager = SubagentManager(provider=_StubProvider(), workspace=tmp_path, max_concurrent=max_concurrent)
+    manager._resolve_backend = lambda agent: backend
+    submitted: list[Any] = []
+    manager.set_submit(submitted.append)
+    return manager, submitted
+
+
+async def _spawn(manager: SubagentManager) -> str:
+    receipt = await manager.spawn(
+        task="do it",
+        task_summary="job",
+        origin_channel="web",
+        origin_chat_id="s1",
+        session_key="web:s1",
+        agent="raven",
+    )
+    found = re.search(r"\(id: ([^)]+)\)", receipt)
+    assert found is not None, receipt
+    return found.group(1)
+
+
+@pytest.mark.parametrize(
+    "raises",
+    [None, RuntimeError("the run failed"), SubagentActionAbortedError("stopped on a terminal decision")],
+    ids=["completed", "failed", "aborted"],
+)
+async def test_a_finished_run_s_report_links_to_its_own_subagent_run(monkeypatch, tmp_path, raises) -> None:
+    trace_dir = _traced(monkeypatch, tmp_path)
+    manager, submitted = _linked_manager(monkeypatch, tmp_path, _ControlledBackend(raises=raises))
+
+    task_id = await _spawn(manager)
+    await _drain(manager)
+
+    assert len(submitted) == 1
+    assert submitted[0].dispatch_link is not None
+    assert submitted[0].dispatch_link == _run_span(trace_dir, task_id)
+
+
+async def test_a_run_cancelled_mid_answer_links_to_its_own_subagent_run(monkeypatch, tmp_path) -> None:
+    trace_dir = _traced(monkeypatch, tmp_path)
+    backend = _ControlledBackend(hold=True)
+    manager, submitted = _linked_manager(monkeypatch, tmp_path, backend)
+
+    task_id = await _spawn(manager)
+    await backend.entered.wait()
+    with trace.span("unrelated.op") as other:
+        await manager.cancel_by_session("web:s1")
+
+    (report,) = submitted
+    assert "cancelled" in report.text.lower()
+    assert report.dispatch_link == _run_span(trace_dir, task_id)
+    assert report.dispatch_link != (other.trace_id, other.span_id)
+
+
+async def test_a_run_whose_sandbox_never_came_up_links_to_its_own_subagent_run(monkeypatch, tmp_path) -> None:
+    """The outer handler reports this one: the backend was never reached."""
+    trace_dir = _traced(monkeypatch, tmp_path)
+    backend = _ControlledBackend()
+    manager, submitted = _linked_manager(monkeypatch, tmp_path, backend)
+
+    class _BrokenExecutor:
+        async def __aenter__(self) -> "_BrokenExecutor":
+            raise RuntimeError("sandbox did not start")
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _BrokenExecutor())
+    task_id = await _spawn(manager)
+    await _drain(manager)
+
+    assert backend.calls == 0
+    (report,) = submitted
+    assert "sandbox did not start" in report.text
+    assert report.dispatch_link is not None
+    assert report.dispatch_link == _run_span(trace_dir, task_id)
+
+
+async def test_a_run_cancelled_while_waiting_on_the_gate_links_to_its_own_subagent_run(monkeypatch, tmp_path) -> None:
+    """It entered ``subagent.run`` and stopped before dispatch; the canceller's span is not its origin."""
+    trace_dir = _traced(monkeypatch, tmp_path)
+    backend = _ControlledBackend()
+    manager, submitted = _linked_manager(monkeypatch, tmp_path, backend, max_concurrent=1)
+
+    await manager._gate.acquire()
+    try:
+        task_id = await _spawn(manager)
+        await _settle(lambda: task_id not in manager._unstarted)
+        with trace.span("unrelated.op") as other:
+            await manager.cancel_by_session("web:s1")
+    finally:
+        manager._gate.release()
+
+    assert backend.calls == 0
+    (report,) = submitted
+    assert report.dispatch_link is not None
+    assert report.dispatch_link == _run_span(trace_dir, task_id)
+    assert report.dispatch_link != (other.trace_id, other.span_id)
+
+
+async def test_a_run_cancelled_before_it_started_links_to_the_span_that_spawned_it(monkeypatch, tmp_path) -> None:
+    """Such a run never opened a ``subagent.run``, so its report points at the dispatch, not at the canceller."""
+    trace_dir = _traced(monkeypatch, tmp_path)
+    backend = _ControlledBackend()
+    manager, submitted = _linked_manager(monkeypatch, tmp_path, backend)
+
+    with trace.span("tool.call") as dispatch:
+        task_id = await _spawn(manager)
+    assert task_id in manager._unstarted, "nothing yielded: the run has not taken its first step"
+    with trace.span("unrelated.op") as other:
+        await manager.cancel_by_session("web:s1")
+
+    assert backend.calls == 0
+    assert _run_span(trace_dir, task_id) is None
+    (report,) = submitted
+    assert report.dispatch_link == (dispatch.trace_id, dispatch.span_id)
+    assert report.dispatch_link != (other.trace_id, other.span_id)
+
+
+async def test_a_dag_report_takes_its_link_from_its_origin_and_never_from_where_it_is_sent(
+    monkeypatch, tmp_path
+) -> None:
+    _traced(monkeypatch, tmp_path)
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[Any] = []
+    mgr.set_submit(submitted.append)
+    linked = {**_LINK_ORIGIN, **trace.dispatch_attrs(("trace-g", "span-g"))}
+
+    with trace.span("unrelated.op"):
+        await mgr.announce_dag_result("r1", "summary", linked)
+        await mgr.announce_dag_exception("r1", "n1", "report", linked, awaiting_decision=True)
+        await mgr.announce_dag_result("r2", "summary", dict(_LINK_ORIGIN))
+        await mgr.announce_dag_exception("r2", "n1", "report", dict(_LINK_ORIGIN), awaiting_decision=False)
+
+    assert [req.dispatch_link for req in submitted] == [("trace-g", "span-g"), ("trace-g", "span-g"), None, None]
+
+
+async def test_an_unprompted_report_carries_no_link_whatever_span_it_is_sent_from(monkeypatch, tmp_path) -> None:
+    _traced(monkeypatch, tmp_path)
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[Any] = []
+    mgr.set_submit(submitted.append)
+    mgr.remember_origin(dict(_LINK_ORIGIN))
+
+    with trace.span("acp.read"):
+        await mgr.announce_unprompted_turn("web:s1", "watch", "h1", "the job finished")
+
+    (report,) = submitted
+    assert report.dispatch_link is None

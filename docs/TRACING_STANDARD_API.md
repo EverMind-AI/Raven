@@ -57,10 +57,12 @@ root of a turn is a `session.turn` span; everything else nests beneath it.
 | method | effect |
 |---|---|
 | `s.set(attributes=None, **kw)` | merge attributes onto the span (dotted-key mapping and/or bare kwargs) |
+| `s.set_dispatch_link(link)` | make the span's `trace.dispatched_by_span_id` / `trace.dispatched_in_trace_id` pair exactly `link`, removing it for `None` -- including the pair a root span takes on its own when opened inside an active span |
 | `s.artifact(key, payload, *, kind="json")` | persist a large payload out-of-line; attach `<key>.artifact_path/_sha1/_bytes` + a truncated `preview`. Use for prompts / tool IO / recall results. |
 | `_spans.address_items(items)` | content-address a list of messages under `audit-artifacts/_messages/`; returns `{"$msg": sha1}` references to embed in a payload. See `audit.artifact.v2` below. |
 | `s.event(name)` | append a timeline event `{time, name}` |
 | `s.error(exc)` | mark `status = ERROR` (done automatically if the block raises) |
+| `s.get(key, default=None)` | the attribute value merged so far, or `default` -- for a value written only once, such as `subagent.outcome` |
 
 Read-only: `s.trace_id`, `s.span_id`, `s.name`.
 
@@ -71,6 +73,9 @@ Read-only: `s.trace_id`, `s.span_id`, `s.name`.
 | `trace.enabled()` | whether recording is on (config/env) |
 | `trace.current()` | the active `TraceCtx` or `None` |
 | `trace.use_context(ctx)` | context manager: re-enter a context captured with `current()`, for a span opened outside the turn that scheduled the work (a queue drained by a long-lived worker) |
+| `trace.dispatch_link()` | `(trace_id, span_id)` of the active span, or `None` (tracing off, or outside any span): read where work is dispatched, carried on the request of the turn that later reports on it |
+| `trace.dispatch_attrs(link)` | the link as the two root-span attributes `trace.dispatched_by_span_id` / `trace.dispatched_in_trace_id`; `{}` for `None` |
+| `trace.dispatch_link_of(attrs)` | the link back out of a mapping carrying those two keys, or `None` unless both are there |
 
 ### Hard guarantees (why an adopter is safe)
 
@@ -141,7 +146,7 @@ adds richer rendering.
 | `session.turn` | `session` | — | `turn.input_preview`, `turn.output_preview`, `turn.in_progress`, `turn.capabilities.{tools,plugins,skills}` |
 | `llm.call` | `model` | `llm.provider`, `llm.model` | `llm.provider_class`, `llm.finish_reason`, `llm.call_id`, `llm.invocation_source`, `llm.usage.{input,output,total,cache_read,cache_write}_tokens`, `llm.usage.cost_total`, `llm.request_{bytes,images,image_bytes}`, `llm.http_status`, `llm.served_by`, `llm.response_id`; artifacts `llm.input` (`audit.artifact.v2`: message references + tools, plus `request` = the messages+tools payload size and picture count, not the provider-final body, and `generation` = what the call asked the model for; see below), `llm.output` (plus `call` = the transport record) |
 | `tool.call` | `tool` | `tool.name` | `tool.call_id`, `tool.duration_ms`, `tool.error`; artifacts `tool.input` (params), `tool.output` (result) |
-| `subagent.run` / `subagent.call` | `subagent` | — | `subagent.id`, `subagent.label`, `subagent.task`, `subagent.session_id`, `subagent.parent_trace_id`, `subagent.parent_span_id`, `subagent.trace_id`, `subagent.status` |
+| `subagent.run` / `subagent.call` | `subagent` | — | `subagent.id`, `subagent.label`, `subagent.task`, `subagent.session_id`, `subagent.parent_trace_id`, `subagent.parent_span_id`, `subagent.trace_id`, `subagent.status`, `subagent.agent`, `subagent.instance`, `subagent.handle`, `subagent.dispatch` (`spawn` / `dag`), `subagent.in_progress` (checkpointed at open, like `turn.in_progress`), `subagent.outcome` (a spawned run: `completed` / `failed` / `aborted` / `cancelled` / `handed_off`; a DAG node attempt: `completed` / `failed` / `exception` / `continued` / `cancelled`), and on a DAG node attempt `subagent.dag_run_id`, `subagent.node_id`, `subagent.attempt` |
 | `skill.read` / `skill.inject` | `skill` | — | `skill.name`, `skill.id`, `skill.source`, `skill.path`, `skill.scripts_dir` (present => a runnable bundle was materialized, vs instructions-only), `skill.read.via_tool` (`use_skill`/`read_skill`/`read_file`), `skill.inject.{names,count,via}` |
 | `memory.recall` / `.store` / `.feedback` / `.extract` / `.consolidate` / `.profile_refresh` | `memory` | — | `memory.scope`, `memory.hits`, `memory.message_count`, `memory.kind`, `memory.deposit_summary`, `memory.deposit_status`, `memory.surface`, `memory.sections_rewritten`; artifacts per op |
 | `plugin.load` / `tracing.bootstrap` | `plugin` | — | `plugin.name`, `plugin.contribution`, `plugin.id` |

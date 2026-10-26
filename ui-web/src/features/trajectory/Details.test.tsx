@@ -10,6 +10,7 @@ import { _resetFreshForTests, unpitch } from '../../state/session/conversation'
 import { resetSources, setSources } from '../../state/sources'
 import { shortName } from './Details'
 import * as details from './detailStore'
+import { DBL_MS } from './geometry'
 import * as list from './store'
 import { TrajectoryApp } from './TrajectoryApp'
 
@@ -502,5 +503,57 @@ describe('the pin', () => {
     expect(q('#trajectory-tab-origin')!.getAttribute('aria-selected')).toBe('true')
     expect(pinButton()!.getAttribute('aria-pressed')).toBe('false')
     expect(q('[data-pinned]')).toBeNull()
+  })
+})
+
+describe('the way to a Scope Tab from the head', () => {
+  const A = 't:runA'
+  const ROWS: TrajectoryEntry[] = [
+    { ...entry('door', 0, 'subagent.run'), span_name: 'subagent.run', opens_subagent_scope: A, meta: { agent: 'coder', label: 'Fix the parser' } },
+    { ...entry('a0', 1), subagent_scope: A },
+    { ...entry('back', 2, 'user.input'), turn_start: true, turn_number: 2, origin: 'subagent', dispatched_by_subagent_scope: A },
+    { ...entry('backEnd', 3, 'turn.end'), turn_number: 2, origin: 'subagent', dispatched_by_subagent_scope: A },
+    entry('plain', 4),
+  ]
+
+  beforeEach(() => {
+    setSources({ trajectory: { ...source, list: async () => ({ epoch: 'e1', snapshot_revision: 100, entries: ROWS, next_cursor: null, index_state: READY, complete: true }) } })
+  })
+
+  const jump = (): HTMLButtonElement | null => q<HTMLButtonElement>('.trajectory-head .trajectory-scope-jump')
+  /* A click on a row that opens a tab waits out a double click before the pane opens. */
+  const pickDoor = async (id: string): Promise<void> => {
+    await pick(id)
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, DBL_MS + 10)) })
+  }
+
+  it('offers to open a door\'s trajectory, and opens it', async () => {
+    await draw()
+    await pickDoor('door')
+    expect(jump()?.textContent).toBe('gui.trajectory.scope.open')
+    expect(jump()?.title).toBe('gui.trajectory.scope.open')
+    /* It sits before the pin and the close button, and does not wait for the descriptor. */
+    expect([...q('.trajectory-head')!.children].slice(1).map((c) => c.className)).toEqual([
+      'trajectory-head-name', 'trajectory-scope-jump', 'trajectory-close',
+    ])
+    act(() => { fireEvent.click(jump()!) })
+    expect(list.get().scope).toBe(A)
+  })
+
+  it('names the sub-agent a report turn came from, and opens its tab', async () => {
+    await draw()
+    await pickDoor('back')
+    expect(jump()?.textContent).toBe('gui.trajectory.scope.from {"title":"coder · Fix the parser"}')
+    act(() => { fireEvent.click(jump()!) })
+    expect(list.get().scope).toBe(A)
+  })
+
+  it('offers nothing on a row that leads nowhere', async () => {
+    await draw()
+    for (const id of ['plain', 'backEnd']) {
+      await pick(id)
+      expect(pane()).not.toBeNull()
+      expect(jump()).toBeNull()
+    }
   })
 })

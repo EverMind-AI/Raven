@@ -461,6 +461,35 @@ def test_schema_match_the_boundary_a_suspended_dag_node_emits(schema: dict[str, 
         TypeAdapter(TurnEvent).validate_python(shape)
 
 
+@pytest.mark.parametrize("truncated", [True, False, None])
+def test_the_output_cut_flag_survives_each_published_delivery_shape(schema: dict[str, Any], truncated) -> None:
+    import jsonschema
+
+    from raven.rpc.models import SubagentDeliveredPayload, TranscriptDelegated, TurnStartedDelegated
+
+    mark = {"kind": "dag", "label": "r1", "status": "exception", "output": "the node's words"}
+    if truncated is not None:
+        mark["output_truncated"] = truncated
+    components = schema["components"]
+    cases = [
+        (TranscriptDelegated, components["schemas"]["TranscriptDelegated"], mark),
+        (
+            TurnStartedDelegated,
+            components["schemas"]["TurnStartedEvent"]["properties"]["payload"]["properties"]["delegated"],
+            {**mark, "content": "model brief"},
+        ),
+        (
+            SubagentDeliveredPayload,
+            components["schemas"]["SubagentDeliveredEvent"]["properties"]["payload"],
+            {**mark, "content": "model brief"},
+        ),
+    ]
+    for model, published, data in cases:
+        actual = model.model_validate(data).model_dump(exclude_none=True)
+        assert actual.get("output_truncated") is truncated
+        jsonschema.validate(actual, {**published, "components": components})
+
+
 def test_schema_match_the_stall_notice_progress_event(schema: dict[str, Any]) -> None:
     """`dag.node_stalled` is what the stall watcher's progress event becomes on
     the wire (`raven.rpc.spine._DAG_WIRE_EVENT`); it is the only frame a bound

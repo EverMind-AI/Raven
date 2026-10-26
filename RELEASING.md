@@ -48,16 +48,15 @@ Highlights before publishing. Structure:
 ## Release Status
 - Version: `X.Y.Z`
 - Tag: `vX.Y.Z`
-- Stability: <public preview patch | public preview minor | ...>   # fill by hand per release type
+- Release type: <patch | minor | major>   # fill by hand per release
 - Assets: wheel, source distribution, the four plugin wheels, locked
   constraints (`raven-constraints.txt`) and the plugin list (`raven-plugins.txt`)
 
 ## Notes
-- pre-1.0 evolution caveat
 - PyPI not enabled; install via the GitHub Release wheel
 ```
 
-`Stability` is not boilerplate -- set it by release type (patch / minor / rc).
+Set `Release type` to the version change (patch / minor / major).
 
 ## Flow
 

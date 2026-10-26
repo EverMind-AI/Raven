@@ -15,6 +15,7 @@ has to still have the last word in it.
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 import pytest
@@ -23,6 +24,8 @@ from typer.testing import CliRunner
 from raven.cli.ops_connection_commands import connection_app
 from raven.ops import connections
 from tests._home import point_home
+
+pytestmark = pytest.mark.usefixtures("no_real_ssh_g")
 
 FULL = [
     "--non-interactive",
@@ -1004,6 +1007,11 @@ def test_an_aborted_add_keeps_the_same_password_of_a_registration_that_has_not_w
     row = {"id": "box", "host": "192.0.2.10", "port": 22, "user": "alice", "auth": "password"}
     connection_add.write(row)
     assert connection_add.password_path("box").is_file(), "the pending registration still owns the password"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / "ssh").write_text('#!/bin/sh\n[ "$1" = -G ] && echo "hostname 192.0.2.10"\n', encoding="utf-8")
+    (bin_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     assert ssh_env(row)
 
 
@@ -1217,3 +1225,38 @@ def test_password_stdin_with_a_key_login_is_refused_and_nothing_is_written(store
     assert "--password-stdin goes with --auth password" in said(out) and "Nothing was written" in out.output
     assert _nothing_kept(rhome) and not store.exists()
     assert "hunter2" not in out.output
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="password machines are refused on Windows")
+@pytest.mark.parametrize("order", ["key-after-password", "password-after-key"])
+def test_add_refuses_a_pair_one_machine_s_alias_would_redirect_even_without_a_probe(
+    store, monkeypatch, tmp_path, order
+):
+    """``--skip-probe`` writes with no connection at all, so the registry write is where the pair is judged:
+    a key machine whose ``Host`` alias would take a registered password machine's logins, or a password machine
+    at a registered key machine's id. Nothing is kept or written (reviewed 2026-10-20)."""
+    point_home(monkeypatch, tmp_path)
+    rhome = tmp_path / "rhome"
+    monkeypatch.setenv("RAVEN_HOME", str(rhome))
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("raven.cli.ops_connection_commands.probe", lambda row, **kw: pytest.fail("reached it"))
+    if order == "key-after-password":
+        theirs = {"id": "lab", "transport": "ssh", "host": "LabBox", "user": "alice", "auth": "password"}
+        argv = ["add", "--id", "labbox", "--name", "Lab box", *SSH, "--skip-probe", *FULL]
+        given = None
+        named = "password machine 'lab'"
+    else:
+        theirs = {"id": "labbox", "transport": "ssh", "host": "198.51.100.66", "user": "root", "key": "~/k"}
+        argv = [*PW_ADD[:6], "labbox", *PW_ADD[7:], "--auth", "password", "--password-stdin", "--skip-probe", *FULL]
+        given = "hunter2\n"
+        named = "key machine 'labbox'"
+    store.write_text(json.dumps({"connections": [theirs]}), encoding="utf-8")
+
+    out = CliRunner().invoke(connection_app, argv, input=given)
+
+    assert out.exit_code == 1, out.output
+    said = " ".join(out.output.split())
+    assert named in said and "Nothing was written" in said
+    assert [r["id"] for r in json.loads(store.read_text())["connections"]] == [theirs["id"]]
+    assert not (rhome / "keys" / "box.password").exists()
+    assert not (tmp_path / ".ssh" / "config").exists()

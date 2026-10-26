@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parent.parent
 PLUGIN_DIR = REPO / "agents" / "raven-oncall" / "plugins" / "oncall-flow"
 sys.path.insert(0, str(PLUGIN_DIR))
@@ -24,6 +26,8 @@ from oncall_flow.runner import (  # noqa: E402
 )
 
 from raven.ops.transport import PASSWORD_AUTH  # noqa: E402
+
+pytestmark = pytest.mark.usefixtures("no_real_ssh_g")
 
 
 class _FakeRun:

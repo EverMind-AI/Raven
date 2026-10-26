@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
+// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { I18N, resetTranslator, setTranslator } from '../../i18n/t'
@@ -107,7 +109,7 @@ describe('the tasks list', () => {
     expect(document.querySelector('.sarow.task .tkerr')?.textContent).toBe('error')
   })
 
-  /* The row is the prototype's: dot, name, second line, error tag. A playbook
+  /* The row is the prototype's: dot, name and its tags, second line. A playbook
      run is told apart only by its node ids, which the executor prefixes with
      the playbook's name; that name is not a fact the list needs -- a slug
      beside the name reads as a node id, and the row is not the place to
@@ -142,6 +144,59 @@ describe('the tasks list', () => {
     expect(tagged).toEqual(['Cross-check quotes'])
     expect(document.querySelectorAll('.tkgraph')).toHaveLength(1)
     expect(document.querySelector('.tkgraph')?.textContent).toBe('gui.tasks.graph_tag')
+  })
+
+  /* Both tags ride the name's line, so they share its baseline whatever fonts the
+     reader has, and the graph tag comes last so it ends every row it is on. Only a
+     browser shows the pixels; this checks the container and the order. */
+  it('sets the error tag on the name line, before the graph tag', async () => {
+    rows = [task({
+      id: 'g', kind: 'dag', status: 'failed',
+      nodes: [node({ node_id: 'a', status: 'completed' }), node({ node_id: 'b', status: 'failed' })],
+    })]
+    await draw()
+    expect([...document.querySelectorAll('.sarow.task .tline > *')].map((e) => e.className))
+      .toEqual(['nm', 'tkerr', 'tkgraph'])
+  })
+
+  /* A failed spawn has no graph tag, so its error tag would take the row's end, where
+     the graph tags stand, unless the graph tag's place is kept for it, unseen: the same
+     word, so the same width, and the domain's stylesheet hides it. */
+  it('keeps the graph tag\'s place on a failed row without one while the list shows a graph', async () => {
+    rows = [
+      task({
+        id: 'g', kind: 'dag', status: 'running',
+        nodes: [node({ node_id: 'a', status: 'completed' }), node({ node_id: 'b', status: 'running' })],
+      }),
+      task({
+        id: 's', kind: 'spawn', status: 'failed', task_summary: 'Scan dependencies',
+        nodes: [node({ node_id: 's', status: 'failed' })],
+      }),
+    ]
+    await draw()
+    const spawn = [...document.querySelectorAll('.sarow.task')]
+      .find((r) => r.querySelector('.nm')?.textContent === 'Scan dependencies')
+    expect([...spawn!.querySelectorAll('.tline > *')].map((e) => e.className))
+      .toEqual(['nm', 'tkerr', 'tkgraph tkslot'])
+    const slot = spawn!.querySelector('.tkslot')!
+    expect(slot.getAttribute('aria-hidden')).toBe('true')
+    expect(slot.textContent).toBe(document.querySelector('.tkgraph:not(.tkslot)')?.textContent)
+    expect(document.querySelectorAll('.tkgraph:not(.tkslot)')).toHaveLength(1)
+    const sheet = document.createElement('style')
+    sheet.textContent = readFileSync('src/features/tasks/styles.css', 'utf8') as string
+    document.head.append(sheet)
+    try {
+      expect(getComputedStyle(slot).visibility).toBe('hidden')
+    } finally {
+      sheet.remove()
+    }
+  })
+
+  it('keeps no such place when no row in the list is a graph', async () => {
+    rows = [task({ id: 's', kind: 'spawn', status: 'failed', nodes: [node({ node_id: 's', status: 'failed' })] })]
+    await draw()
+    expect([...document.querySelectorAll('.sarow.task .tline > *')].map((e) => e.className))
+      .toEqual(['nm', 'tkerr'])
   })
 
   it('counts products across every node, not per task', async () => {

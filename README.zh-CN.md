@@ -30,8 +30,6 @@ Raven 构建于 EverMind 的自进化 harness 引擎之上，由 [EverOS](https:
 
 **内置 Agent：** **Raven-Research**、**Raven-Code**、**Raven-Design** 与 **Raven-Oncall**，分别覆盖研究、编程、视觉设计与无人值守的流程自动化。
 
-> Raven 目前处于 pre-alpha 阶段，接口与配置可能会快速变化。
-
 <p align="center">
   <a href="https://github.com/user-attachments/assets/1756ab94-706d-4c07-b8b3-3ef6dd8a147f"><img src="https://github.com/user-attachments/assets/1756ab94-706d-4c07-b8b3-3ef6dd8a147f" alt="Multi-Agent Orchestration Benchmark: Node F1, Edge F1, Partial Order Accuracy, and Exact Match Rate" width="100%"></a>
 </p>
@@ -323,7 +321,7 @@ raven web
 </tr>
 <tr>
 <td><strong><a href="https://github.com/EverMind-AI/Raven">Raven</a></strong></td>
-<td>以记忆为核心、可自我改进的 Agent harness，支持主动行为、上下文控制与技能演化。</td>
+<td>以记忆为核心、可自我改进的 Agent harness，支持主动行为、上下文控制与可复用技能检索。</td>
 </tr>
 <tr>
 <td><strong><a href="https://github.com/EverMind-AI/EverMe">EverMe (CLI)</a></strong></td>
@@ -409,3 +407,11 @@ raven web
   url           = {https://arxiv.org/abs/2609.33439}
 }
 ```
+
+## ❯❯ 贡献者
+
+感谢每一位帮助 Raven 变得更好的贡献者。
+
+<a href="https://github.com/EverMind-AI/Raven/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=EverMind-AI/Raven&max=500&columns=20&anon=1" alt="Raven 贡献者" />
+</a>

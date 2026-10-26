@@ -95,6 +95,9 @@ export const deliveredMessageKey = (status: TranscriptDelegated['status']): stri
   if (status === 'cancelled') {
     return 'gui.deleg.delivered_cancelled'
   }
+  if (status === 'notice') {
+    return 'gui.deleg.dlv_notice'
+  }
   return 'gui.deleg.delivered'
 }
 
@@ -211,6 +214,42 @@ export const turnErrorLine = (payload: ErrorEvent['payload'], kept = false): str
   return `error: ${payload.message} (code=${payload.code})${detail ? `: ${detail}` : ''}`
 }
 
+const FENCE_OPEN = /\[BEGIN UNTRUSTED ([^ #\]]+) #([^ \]]+) [^\n]*\n/g
+
+/**
+ * A stored tool result as the call returned it. The runtime keeps a string
+ * result inside wrap_untrusted's fence, followed by any note of its own to the
+ * model, and fences a result made of content blocks one text block at a time,
+ * which session.resume joins with spaces. Live previews draw the raw result, so
+ * a resumed one keeps every fenced part, joined by newlines, and drops what lies
+ * between and after them. A fence ends only at the close marker carrying its
+ * opening marker's source and nonce, as ui-web's `defence` reads one, and the
+ * next opening marker is looked for after that close, so a marker quoted inside
+ * a result stays content. A result stored without a fence is kept whole.
+ * Nothing is trimmed: `previewLines` reads the indentation.
+ */
+const storedResult = (text: string): string => {
+  const open = new RegExp(FENCE_OPEN.source, 'g')
+  const parts: string[] = []
+  let marker: null | RegExpExecArray
+
+  while ((marker = open.exec(text))) {
+    const start = marker.index + marker[0].length
+    const close = `\n[END UNTRUSTED ${marker[1]} #${marker[2]}]`
+    const end = text.indexOf(close, start - 1)
+
+    parts.push(text.slice(start, end < 0 ? undefined : Math.max(start, end)))
+
+    if (end < 0) {
+      break
+    }
+
+    open.lastIndex = end + close.length
+  }
+
+  return parts.length ? parts.join('\n') : text
+}
+
 /**
  * Rows as the transcript draws them, with each closed turn's artifact shelf
  * folded in at the boundary that closed it.
@@ -297,7 +336,7 @@ export const toTranscriptMessages = (rows: unknown, opts: { openTurn?: boolean }
       deliveryFiles(metadata).forEach(file => addUnique(artifacts.deliveries, file))
       folded.push({
         role: 'tool',
-        text: clampToolPreview(typeof text === 'string' ? text : ''),
+        text: clampToolPreview(storedResult(typeof text === 'string' ? text : '')),
         ...(durationMs != null ? { durationMs } : {}),
         ...(toolCallId ? { toolCallId } : {}),
         // Carried along so the core can stand up an episode on its own when no

@@ -20,18 +20,52 @@ describe('the offline trajectory library', () => {
     expect(state.enabled).toBe(true)
   })
 
-  it('answers one recorded turn with the shape the page reads', async () => {
+  it('answers three recorded turns with the shape the page reads, in the index\'s order', async () => {
     const page = await transport().call('trajectory.list', { session_key: 'gui:any' })
     expect(page.complete).toBe(true)
     expect(page.index_state.phase).toBe('ready')
-    expect(page.entries).toHaveLength(8)
-    expect(new Set(page.entries.map((e) => e.entry_id)).size).toBe(8)
-    expect(page.entries[0]?.turn_start).toBe(true)
+    expect(page.entries).toHaveLength(21)
+    expect(new Set(page.entries.map((e) => e.entry_id)).size).toBe(21)
+    expect(page.entries.filter((e) => e.turn_start).map((e) => [e.turn_number, e.entry_id])).toEqual([
+      [1, 't:turn:turn.input'], [2, 't2:turn2:turn.input'], [3, 't3:turn3:turn.input'],
+    ])
     expect(page.entries.filter((e) => e.failure_entry).map((e) => e.entry_id)).toEqual(['t:tool1:tool.output'])
-    const charged = page.entries.map((e) => e.charged_ms ?? 0).reduce((a, b) => a + b, 0)
-    expect(charged).toBe(3200 + 600 + 800 + 12000)
+    /* The first turn as it always was: its eight rows, charged as before. */
+    const first = page.entries.filter((e) => e.turn_number === 1)
+    expect(first).toHaveLength(8)
+    expect(first.map((e) => e.charged_ms ?? 0).reduce((a, b) => a + b, 0)).toBe(3200 + 600 + 800 + 12000)
+    const keys = page.entries.map((e) => JSON.stringify(e.sort_key))
+    expect(keys).toEqual([...keys].sort())
     const twice = await transport().call('trajectory.list', { session_key: 'gui:other' })
     expect(twice).toEqual(page)
+  })
+
+  it('puts the second turn\'s sub-agent steps in their own scopes, opened from the main session, with the report turn naming its run', async () => {
+    const page = await transport().call('trajectory.list', { session_key: 'gui:any' })
+    const by = (pick: (e: (typeof page.entries)[number]) => string | null | undefined) => {
+      const out: Record<string, string[]> = {}
+      for (const e of page.entries) {
+        const key = pick(e)
+        if (key) (out[key] ??= []).push(e.entry_id)
+      }
+      return out
+    }
+    expect(by((e) => e.subagent_scope)).toEqual({
+      't2:runA': ['t2:a1:llm.output', 't2:a2:tool.output'],
+      't2:runB': ['t2:b1:llm.output'],
+      't2:runX': ['t2:xext:artifact:subagent.external.transcript'],
+    })
+    expect(by((e) => e.opens_subagent_scope)).toEqual({
+      't2:runA': ['t2:runA:subagent.run'], 't2:runB': ['t2:runB:subagent.run'], 't2:runX': ['t2:runX:subagent.run'],
+    })
+    expect(by((e) => e.dispatched_by_subagent_scope)).toEqual({ 't2:runA': ['t3:turn3:turn.input', 't3:turn3:turn.output'] })
+    /* The doors belong to the main session; the run still going has no end, no duration and no charge yet. */
+    const doors = page.entries.filter((e) => e.opens_subagent_scope)
+    expect(doors.every((e) => (e.subagent_scope ?? null) === null)).toBe(true)
+    const running = page.entries.find((e) => e.entry_id === 't2:runB:subagent.run')!
+    expect([running.operation_status, running.operation_end, running.duration_ms, running.charged_ms]).toEqual(['running', null, null, null])
+    expect(page.entries.find((e) => e.entry_id === 't2:runA:subagent.run')?.meta).toMatchObject({ agent: 'coder', label: 'Fix the flaky retry' })
+    expect(page.entries.find((e) => e.entry_id === 't2:xext:artifact:subagent.external.transcript')?.span_name).toBe('subagent.external')
   })
 
   it('follows the snapshot with an empty change feed and resets on a foreign epoch', async () => {

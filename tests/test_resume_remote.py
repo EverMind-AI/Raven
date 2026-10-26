@@ -601,3 +601,32 @@ async def test_a_pick_up_concludes_the_record_the_run_s_origin_names_not_the_new
     later = _Manager(_backend(), tmp_path / "s2")
     assert await resume_remote._conclude(later, _run(), "ok", "x") is True
     assert later.finalized == ["n-new"], "no origin: the latest left running"
+
+
+async def test_a_picked_up_run_s_announce_claims_no_dispatch_link(tmp_path, monkeypatch):
+    """The span that dispatched the run belongs to the process before this one; the
+    span the pick-up happens to run under is not where the run came from."""
+    from raven.agent.subagent.manager import SubagentManager
+    from raven.tracing import spans as _spans
+    from raven.tracing import trace
+
+    monkeypatch.setenv("RAVEN_TRACING", "1")
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path / "traces"))
+    _spans._store = None
+    monkeypatch.setattr(resume_remote, "get_registry", lambda: _Registry())
+    session_dir = tmp_path / "s1"
+    _open_record(session_dir)
+    manager = SubagentManager(
+        provider=SimpleNamespace(get_default_model=lambda: "stub"),
+        workspace=tmp_path,
+        session_dir=lambda _key: session_dir,
+    )
+    submitted: list[Any] = []
+    manager.set_submit(submitted.append)
+
+    with trace.span("unrelated.op"):
+        assert await resume_remote._conclude(manager, _run(), "ok", "pong") is True
+
+    (report,) = submitted
+    assert "pong" in report.text
+    assert report.dispatch_link is None

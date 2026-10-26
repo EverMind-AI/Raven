@@ -629,12 +629,14 @@ describe('rail island', () => {
   /* The box a name is edited in and the line it goes back to being occupy the
      same child slot, so React reconciles them onto ONE node and resets every
      prop -- but scroll offset is not a prop, it is state the browser keeps on
-     the element. The editing box is a scroll container on purpose (`.sess .t
-     span` clips, and a long name scrolls inside itself), so focusing the field
-     scrolls it to the caret; the finished title then inherited that offset and
+     the element. The editing box is a scroll container (`.sess .t span`
+     clips), and while its column could outgrow the row, focusing the field
+     scrolled it to the caret; the finished title then inherited that offset and
      was drawn 300px to the left of its own box, which under `text-overflow:
      ellipsis` paints nothing -- an empty row where a long name had been, on
-     any exit from the editor and whether or not the name changed.
+     any exit from the editor and whether or not the name changed. The column
+     now stops at the row and the field does the scrolling, but the box can
+     still scroll, so the keys stay.
 
      Distinct keys are the fix, and node identity is what this can assert:
      there is no layout here, so scrollLeft reads 0 either way and only the

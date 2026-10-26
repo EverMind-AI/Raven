@@ -17,6 +17,7 @@ oncall_flow.tune`` (D5).
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses as _dataclasses
 import os
 from datetime import datetime
@@ -1155,7 +1156,7 @@ class OpsTuneStatusTool(Tool):
             try:
                 from oncall_flow.instrument import log_event
 
-                backend = billing_only(backend_from_meta(meta), led)
+                backend = billing_only(await asyncio.to_thread(backend_from_meta, meta), led)
                 try:
                     budget_spent = await backend.spent_minutes()
                     budget_remaining = await backend.remaining_minutes()
@@ -2157,10 +2158,12 @@ class OpsSubmitTool(_OpsScheduler):
         # from there on every round, because the wake message that carries it is
         # written by a turn that no longer has the task statement in front of it.
         objective = objective or str(meta.get("objective_words") or "") or metric
+        # Off the loop, like every backend built here: a password machine's
+        # runner asks a local ``ssh -G`` which host its prompt will name.
         if round == 0:
-            prepare_from_meta(meta, app_dir=app_dir)
+            await asyncio.to_thread(prepare_from_meta, meta, app_dir=app_dir)
 
-        backend = billing_only(backend_from_meta(meta), Ledger(ledger))
+        backend = billing_only(await asyncio.to_thread(backend_from_meta, meta), Ledger(ledger))
 
         # The apparatus, checked against what this campaign was set up with. The
         # first submit is where the baseline is taken -- it is the last moment the
@@ -2514,10 +2517,9 @@ class OpsSubmitTool(_OpsScheduler):
                 f"with ops_note rather than acting twice."
             )
         try:
-            runner = runner_from(_resolve_meta(meta), what="campaign", cap_seconds=120.0)
+            runner = await asyncio.to_thread(runner_from, _resolve_meta(meta), what="campaign", cap_seconds=120.0)
         except Exception as exc:  # noqa: BLE001
             return f"Could not reach the campaign's machine to act: {exc}. Nothing was done."
-        import asyncio
 
         led.record(key, campaign=campaign, config={"action": name, "values": dict(values or {})})
         try:
@@ -2786,7 +2788,8 @@ class OpsCampaignsTool(Tool):
                     from oncall_flow.backends import backend_from_meta, billing_only
                     from oncall_flow.ledger import Ledger
 
-                    spent = await billing_only(backend_from_meta(meta), Ledger(d / "ledger.json")).spent_minutes()
+                    backend = await asyncio.to_thread(backend_from_meta, meta)
+                    spent = await billing_only(backend, Ledger(d / "ledger.json")).spent_minutes()
                     total = (meta.get("budget") or {}).get("total")
                     unit = (meta.get("budget") or {}).get("unit") or ""
                     bits.append(f"spent {spent:.2f}" + (f" of {total} {unit}" if total else ""))
@@ -2949,7 +2952,7 @@ class OpsKillTool(Tool):
         if refusal:
             return refusal
         meta = _json.loads(meta_path.read_text(encoding="utf-8"))
-        backend = billing_only(backend_from_meta(meta), Ledger(ledger_path))
+        backend = billing_only(await asyncio.to_thread(backend_from_meta, meta), Ledger(ledger_path))
         led = Ledger(ledger_path)
         killed, skipped, notes = [], [], []
         for key in trials:

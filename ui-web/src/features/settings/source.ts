@@ -376,12 +376,12 @@ interface WebVendorPick {
 export const WEB_VENDOR: Record<string, WebVendorPick> = {
   web_search: {
     path: 'tools.web.search.provider',
-    vendors: ['serper', 'anysearch', 'serpapi', 'tavily', 'exa', 'brave', 'firecrawl', 'serply'],
+    vendors: ['serper', 'anysearch', 'serpapi', 'tavily', 'exa', 'brave', 'firecrawl', 'serply', 'keenable'],
     fallback: 'serper',
   },
   web_fetch: {
     path: 'tools.web.fetch.provider',
-    vendors: ['jina', 'anysearch', 'tavily', 'exa', 'firecrawl'],
+    vendors: ['jina', 'anysearch', 'tavily', 'exa', 'firecrawl', 'keenable'],
     fallback: 'jina',
   },
 }
@@ -395,15 +395,19 @@ export const WEB_VENDOR_LABEL: Record<string, string> = {
   brave: 'Brave Search',
   firecrawl: 'Firecrawl',
   serply: 'Serply',
+  keenable: 'Keenable',
 }
 /* Where each vendor hands out keys. */
 export const WEB_VENDOR_URL: Record<string, string> = {
   serper: 'https://serper.dev', anysearch: 'https://anysearch.com', serpapi: 'https://serpapi.com',
   jina: 'https://jina.ai/reader', tavily: 'https://tavily.com', exa: 'https://exa.ai',
   brave: 'https://brave.com/search/api', firecrawl: 'https://firecrawl.dev', serply: 'https://serply.io',
+  keenable: 'https://keenable.ai',
 }
-/* Jina reads without a key; every other reader needs one. */
-export const FETCH_KEYLESS = new Set(['jina'])
+/* Jina and Keenable read without a key; every other reader needs one. */
+export const FETCH_KEYLESS = new Set(['jina', 'keenable'])
+/* Keenable searches without a key; every other search vendor needs one. */
+export const SEARCH_KEYLESS = new Set(['keenable'])
 
 const dig = (raw: Record<string, unknown>, path: string): unknown =>
   path.split('.').reduce<unknown>((o, k) => (o && typeof o === 'object' ? (o as Record<string, unknown>)[k] : undefined), raw)

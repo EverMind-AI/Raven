@@ -179,8 +179,26 @@ than a block of its own. Under the raw record the details pane lists the files
 the span names (`features/trajectory/Files.tsx`): the `files` directory whole,
 each file's content read by its own cursor while it is open and in view, kept
 apart from the block pages and let go stalest first when the budget is short.
+Over all of it sits the strip of **Scope Tabs** (`features/trajectory/ScopeTabs.tsx`):
+the main session's tab, always first, then one tab per Sub-agent Scope the
+reader opened, in the order opened, each closable; the strip shows only once
+the conversation has an entry that opens a scope or a tab is open. A tab is a
+filter over the one list store, not a store of its own: `visible` and the bar
+draw only the entries whose `subagent_scope` is the tab's (null for the main
+session), while `entries`, `index` and `spanIndex` keep every entry; each tab
+keeps its own selection, place, bar zoom and whether the details pane was open
+(`scope`, `scopes`, `saved` in `store.ts`; the pane's in `detailStore.ts`), moving
+between tabs never moves the generation, and a closed tab keeps nothing. An
+entry that opens a scope (`opens_subagent_scope`) and the first row of a turn a
+sub-agent's report started (`dispatched_by_subagent_scope`) open their tab on a
+double click, on Enter, or from a button in the details head; `select` on an
+entry of another tab moves to that tab, which is how a details link crosses
+tabs (`scopes.ts` holds the moves that touch both stores).
 _Avoid_: "trace view" or "audit view" for this -- the trace is what the runtime
-records, the trajectory is how this page reads it back.
+records, the trajectory is how this page reads it back. "Tab" alone for a Scope
+Tab -- the details pane's block tabs and its pinned tab already use the word --
+and "sub-agent trace" -- a spawned run's steps are in the trace of the turn that
+dispatched it.
 
 **Region**:
 One of the things `src/App.tsx` renders at the body, in the standing order
@@ -329,7 +347,7 @@ The kind narrows each provider's column, never the provider list.
 **Gateway provider**:
 A provider that resells other vendors' models under `vendor/model` ids --
 `ProviderSpec.is_gateway` in `raven/providers/registry.py`, `gateway` on a
-`model.options` row. Twenty-one of the fifty-five.
+`model.options` row. Twenty-two of the fifty-six.
 _Avoid_: "gateway" alone, which in this document is the page's one data entry
 point above.
 

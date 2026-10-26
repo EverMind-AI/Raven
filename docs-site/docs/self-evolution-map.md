@@ -1,14 +1,13 @@
 # Evolver: design and implementation
 
 New to the tool? Start with [Usage and experiments](evolver.md)
-for status, setup, costs, and the run/resume/finalize workflow. This page is
+for evaluation scope, setup, costs, and the run/resume/finalize workflow. This page is
 the implementation reference.
 
 **Companion:** the authoritative methodology spec is
 `docs/specs/self-evolution-loop-sop.md`, kept in the repository beside the code
-rather than published here. This document answers: which code
-implements each SOP clause in Raven, which deviations are deliberate, and
-which parts are present but unwired.
+rather than published here. This document maps the SOP clauses to Raven's
+implementation, including evaluation choices and module integration.
 
 **How to use:** before changing `evolver/**` or
 `benchmarks/appworld/evolve/**`, locate the SOP clause here; if your
@@ -106,28 +105,25 @@ evolution tree structure. The two are linked by `git_commit_sha`.
   that task's actual execution trajectory under the candidate is provided to
   the next candidate-design attempt; the SOP only requires flip counts.
 
-## 6. Deliberate deviations and unwired parts { #6-deliberate-deviations-and-unwired-parts-honest-list }
+## 6. Implementation choices { #6-implementation-choices }
 
-1. **zero-hit preflight is off by default** (`zero_hit_preflight=False`,
-   decided 2026-07). With instrumentation supplied, Gate-b excludes tasks where
-   no beacon fired; without it, Gate-b is skipped. Preflight is a separate
-   budget-saving check with a false-prune risk. TRIGGER_REGEX declaration is opt-in and the actual prune
-   rate is unknown. Gather data first (enable on a run, inspect
-   `pruned_inert` entries in history), then decide the default. SOP §2 tags ③
-   as [now]; this is a deliberate deviation.
-2. **Borrowing unwired** (SOP §2 ⑤, tagged [defer]): `tree_aware_bandit` is
-   present, but the orchestrator does not call it. The AppWorld train set is
-   currently run in full; add borrowing when larger task sets justify it.
-3. **Affinity anchor lacks a data source:** `select_anchor(affinity)` accepts
-   it; the appworld side has no trigger-density source (upstream's
-   `affinity_picker.py` was not ported). Anchors are currently icebreakers,
-   sentinels, and borderline tasks; the impact of omitting affinity selection
-   has not been measured here.
-4. **WHERE mechanical binding has 4 tiers** (prompt/runtime/mixed/edit),
-   coarser than the judge schema's 14 classes. Sufficient for QD cells;
-   refine `_lever_of_path` for fine-grained lever statistics. Self-declared
-   and mechanical values are both in the ledger; no reconciliation alarm
-   (an optional observability add-on).
+1. **Optional zero-hit preflight** (`zero_hit_preflight=False` by default).
+   With instrumentation supplied, Gate-b excludes tasks where no beacon fired;
+   without it, Gate-b is skipped. Preflight is a separate budget-saving check
+   that can prune useful candidates. Enable it for runs that supply
+   `TRIGGER_REGEX` and inspect their `pruned_inert` history entries to assess
+   pruning. SOP §2 marks this step as [now]; Raven makes it opt-in.
+2. **Full-set confirmation.** AppWorld evaluates the full training set.
+   The orchestrator does not call `tree_aware_bandit` for borrowing
+   (SOP §2 ⑤, tagged [defer]).
+3. **Anchor composition.** AppWorld anchors use icebreakers, sentinels, and
+   borderline tasks. `select_anchor(affinity)` accepts affinity data, but the
+   AppWorld adapter does not supply a trigger-density source. The effect of
+   this selection on evaluation results has not been measured separately.
+4. **Four-tier WHERE binding.** Mechanical binding uses prompt/runtime/mixed/edit
+   for QD cells, while the judge schema has 14 classes. The ledger records both
+   self-declared and mechanical values for comparison; it does not raise an
+   automatic reconciliation alarm.
 5. **`pruned_inert` matches the SOP's status semantically** but differs in
    implementation: the SOP judges it via a preflight CLI, we via the embedded
    loop preflight (default off, see ①).

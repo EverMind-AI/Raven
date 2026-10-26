@@ -705,6 +705,50 @@ async def test_a_generated_persona_runs_the_session_from_the_turn_after_it(tmp_p
     assert provider.setup_calls == 1
 
 
+class _PersonaPromptProvider(_PersonaSessionProvider):
+    """The Persona turn above, also keeping the system prompt of each main call."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.systems: list[str] = []
+
+    async def chat(self, messages, tools=None, model=None, **kwargs) -> LLMResponse:
+        self._keep(messages, tools)
+        return await super().chat(messages, tools, model, **kwargs)
+
+    async def chat_with_retry(self, messages, tools=None, model=None, **kwargs) -> LLMResponse:
+        self._keep(messages, tools)
+        return await super().chat_with_retry(messages, tools, model, **kwargs)
+
+    def _keep(self, messages, tools) -> None:
+        if PERSONA_TOOL in _names(tools):
+            return
+        content = next(m for m in messages if m.get("role") == "system")["content"]
+        self.systems.append(content if isinstance(content, str) else "".join(b.get("text", "") for b in content))
+
+
+@pytest.mark.asyncio
+async def test_the_turn_that_generates_a_persona_reads_a_passed_over_offer_as_declined(tmp_path) -> None:
+    """That turn holds no dispatch path, so it renders no role, and the reply rules'
+    open-decision line is the rule's only statement there. The line carries the role's
+    carve-out, or an offer the user moved past would stay open on every reply."""
+    provider = _PersonaPromptProvider()
+    loop = _persona_session_loop(tmp_path, provider)
+
+    await loop.run_turn(
+        _request("Create a travel concierge persona", "persona-session", playbook_mode="persona"),
+        _emit,
+        lambda: [],
+        stream=False,
+    )
+
+    system = provider.systems[0]
+    rules = system.split("## How you reply", 1)[1].split("\n\nReply directly", 1)[0]
+    assert "## Your role" not in system
+    assert "Decisions you put to the user that are still open close every reply" in rules
+    assert "An offer of yours that they pass over is declined, not open." in rules
+
+
 class _UndesignableProvider(LLMProvider):
     """A model that cannot produce a valid Harness, and would rather write a file.
 

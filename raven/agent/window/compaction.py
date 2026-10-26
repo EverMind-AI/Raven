@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from raven.context_engine.history.markers import HISTORY_PRIVATE_KEYS
 from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
 
 SUMMARY_MARKER = "[Context summary — earlier steps were compacted to fit the context window]"
@@ -160,11 +161,22 @@ def summary_output_budget(limit: int, prompt_tokens: int, ceiling: int) -> int:
 
 def protected_prefix_end(messages: list[dict]) -> int | None:
     """Index just past the first user message; the system prefix and the task
-    statement never enter the summarized head."""
-    for i, m in enumerate(messages):
-        if m.get("role") == "user":
-            return i + 1
-    return None
+    statement never enter the summarized head.
+
+    Nor does anything a history strategy marked (its checkpoint, a pinned
+    exchange): the checkpoint already is a summary, and summarising it again
+    loses what it says to a brief written for code work, while a pinned body
+    is pinned because its absence is silently wrong. The end moves past the
+    last marked message, so a tool pair is never split by it.
+    """
+    first_user = next((i for i, m in enumerate(messages) if m.get("role") == "user"), None)
+    if first_user is None:
+        return None
+    marked = [i for i, m in enumerate(messages) if any(m.get(k) for k in HISTORY_PRIVATE_KEYS)]
+    end = max(first_user, *marked) + 1 if marked else first_user + 1
+    while end < len(messages) and messages[end].get("role") == "tool":
+        end += 1
+    return end
 
 
 def select_split(

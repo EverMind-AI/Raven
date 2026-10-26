@@ -15,6 +15,9 @@ Proactive Engine 包含 Sentinel，以及按时间触发的 Cron 和 Heartbeat �
 | Cron | 明确安排一个定时任务或提醒 | 用户创建的计划 |
 | Heartbeat | 在 `HEARTBEAT.md` 中维护周期性任务 | 独立计时器或提前唤醒请求 |
 
+在网页设置中编辑已有 Cron 任务时，任务会保留原来的消息渠道与收件人。修改名称、指令或
+执行时间不会将投递目标改成本地应用。在网页设置中新建的任务使用本地应用作为目标。
+
 Sentinel 默认关闭（`sentinel.enabled=false`）。启用它不会自动开启任务发现；关闭它也不会
 关闭 Cron 或 Heartbeat。各自的命令见[命令参考](commands.md)。
 
@@ -80,8 +83,8 @@ uv run raven sentinel enable
 
 ### 接收目标 { #delivery-targets }
 
-虽然名为 `sentinel.task_discovery_targets`，该字段也为指向内部 `sentinel:direct` 目标的
-普通提醒提供接收地址，例如日计划提醒。任务发现关闭时仍会使用它。
+`sentinel.task_discovery_targets` 为任务发现以及指向内部 `sentinel:direct` 目标的
+普通提醒提供接收地址，例如日计划提醒。任务发现关闭时，普通提醒仍使用这些地址。
 
 - `"channel:chat_id"`：指定接收方；一个渠道有多个会话时优先使用。
 - `"channel"`：触发时解析该渠道最近的接收方。

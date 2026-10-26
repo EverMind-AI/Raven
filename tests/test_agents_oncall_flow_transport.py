@@ -32,6 +32,8 @@ from oncall_flow.transport import (
 
 from raven.ops.connections import password_path  # noqa: E402
 
+pytestmark = pytest.mark.usefixtures("no_real_ssh_g")
+
 
 def test_a_campaign_that_says_nothing_is_still_reached_over_ssh():
     # Every campaign written before this seam existed says nothing, and has to go
@@ -105,9 +107,14 @@ PASSWORD_ROW = {
 }
 
 # An ssh that logs what it was handed, one JSON line a call, and asks the
-# askpass helper the way OpenSSH does under SSH_ASKPASS_REQUIRE=force.
+# askpass helper the way OpenSSH does under SSH_ASKPASS_REQUIRE=force. Its
+# ``-G``, the config dump a password login reads first, names the host as
+# given and is no call.
 _STAND_IN_SSH = """#!{python}
 import json, os, subprocess, sys
+if "-G" in sys.argv[1:]:
+    print("hostname " + sys.argv[-1].rpartition("@")[2])
+    sys.exit(0)
 saw = {{
     "argv": sys.argv[1:],
     "askpass": os.environ.get("SSH_ASKPASS", ""),

@@ -498,9 +498,8 @@ class TurnStartedDelegated(_Strict):
     node_id: str | None = Field(
         None,
         description=(
-            "Which node of the run this is about. Present only on `kind: dag` "
-            "with `status: exception`, where the report concerns one node rather "
-            "than the whole run."
+            "Which node of the run this is about. Present only on a `kind: dag` "
+            "node's own report, which concerns one node rather than the whole run."
         ),
     )
     content: str | None = Field(
@@ -508,7 +507,24 @@ class TurnStartedDelegated(_Strict):
         description=(
             "The text that re-entered the conversation, verbatim; a client shows "
             "the reader-facing part of it by keeping only what sits INSIDE the "
-            "untrusted fence."
+            "untrusted fence, or `output` instead where a node's report carries it."
+        ),
+    )
+    output: str | None = Field(
+        None,
+        description=(
+            "What a dag node itself returned on the attempt its report is about -- its error, "
+            "when it raised -- carried for the reader beside the report the model was given. "
+            "Set only on a node's own report, and present even when empty: an empty string is "
+            "a node that said nothing, an absent one a report about no attempt (a stall notice) "
+            "or a server that never sent it."
+        ),
+    )
+    output_truncated: bool | None = Field(
+        default=None,
+        description=(
+            "Whether output is limited to the first 20,000 characters. "
+            "Separate from the node's text; absent on older records and reports without output."
         ),
     )
 
@@ -856,9 +872,27 @@ class SubagentDeliveredPayload(_Strict):
         description=(
             "The text that re-entered the conversation, verbatim. A client shows the "
             "reader-facing part of it by keeping only what sits INSIDE the untrusted "
-            "fence -- and a client replaying this turn later reads the same string from "
+            "fence, or `output` instead where a node's report carries it -- and a client "
+            "replaying this turn later reads the same string from "
             "the stored entry's `text`, so one rule over one input keeps the live view "
             "and the reloaded one from disagreeing about what was delivered."
+        ),
+    )
+    output: str | None = Field(
+        default=None,
+        description=(
+            "What a dag node itself returned on the attempt its report is about -- its error, "
+            "when it raised -- carried for the reader beside the report the model was given. "
+            "Set only on a node's own report, and present even when empty: an empty string is "
+            "a node that said nothing, an absent one a report about no attempt (a stall notice) "
+            "or a server that never sent it."
+        ),
+    )
+    output_truncated: bool | None = Field(
+        default=None,
+        description=(
+            "Whether output is limited to the first 20,000 characters. "
+            "Separate from the node's text; absent on older records and reports without output."
         ),
     )
 
@@ -1932,10 +1966,24 @@ class TurnCancelParams(_Strict):
     # handler looks up a key nothing was ever registered under and reports
     # "nothing to cancel" for a turn that is plainly running.
     target: DirectTarget | None = None
+    # The turn to cancel, by the id its opening frame carried. Present, the
+    # cancel reaches the lane's running turn only when that turn has this id,
+    # whoever opened it -- the one way to stop a turn the runtime opened (a
+    # delegated result re-entering), which binds no handle. Absent, the cancel
+    # reaches only what this surface bound: a turn.send turn or a pending inject.
+    turn_id: str | None = None
 
 
 class TurnCancelResult(_Strict):
     cancelled: bool
+    # Only on a refusal: whether the lane still has a turn to run -- the one
+    # that replaced the turn named, one queued, or a message waiting to run as
+    # a turn of its own. A client cannot learn it from the frames in time: the
+    # reply goes out as soon as the handler returns, while the frame opening a
+    # turn that has just started can still be waiting out the subscription's
+    # coalescing window. Absent from an accepted cancel, and from an older
+    # server, which is why it is optional.
+    busy: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -3148,7 +3196,17 @@ class MachinesAddResult(_Strict):
     ok: bool
     detail: str
     reason: Literal[
-        "", "unreachable", "login", "hostkey", "timeout", "nossh", "platform", "duplicate", "invalid", "registry"
+        "",
+        "unreachable",
+        "login",
+        "prompt",
+        "hostkey",
+        "timeout",
+        "nossh",
+        "platform",
+        "duplicate",
+        "invalid",
+        "registry",
     ]
     row: MachineRow | None = None
 
@@ -3839,6 +3897,23 @@ class TranscriptDelegated(_Strict):
         default=None,
         description="Set for a dag node's own message, so a client can place it against that row.",
     )
+    output: str | None = Field(
+        default=None,
+        description=(
+            "What a dag node itself returned on the attempt its report is about -- its error, "
+            "when it raised -- carried for the reader beside the report the model was given. "
+            "Set only on a node's own report, and present even when empty: an empty string is "
+            "a node that said nothing, an absent one a report about no attempt (a stall notice) "
+            "or a server that never sent it."
+        ),
+    )
+    output_truncated: bool | None = Field(
+        default=None,
+        description=(
+            "Whether output is limited to the first 20,000 characters. "
+            "Separate from the node's text; absent on older records and reports without output."
+        ),
+    )
 
 
 class TranscriptFileRemoval(_Strict):
@@ -3942,7 +4017,8 @@ class TranscriptMessage(_Strict):
             "re-entering the conversation. Same rule as `notice` and for the same "
             "reason -- the model reads `text`, a reader must not. Render the delivery "
             "row a live client draws from `subagent.delivered`, and take the readable "
-            "body from inside the untrusted fence in `text`; drawing `text` as prose "
+            "body from inside the untrusted fence in `text`, or from `delegated.output` "
+            "where a node's report carries it; drawing `text` as prose "
             "attributes to the user a question they never asked, fence markers "
             "included. `origin` names who opened the turn; this says which run came back."
         ),
@@ -4496,6 +4572,14 @@ class FsDirsResult(_Strict):
     parent: str | None = Field(..., description="One level up; null at the filesystem root.")
     home: str = Field(..., description="The user's home directory, where the browser starts.")
     ok: bool = Field(..., description="Whether the listed directory itself may be a session's working directory.")
+    roots: list[FsDirEntry] = Field(
+        default_factory=list,
+        description=(
+            "The filesystem roots, listed only while the directory listed is one: a root has no parent, "
+            "so on a host with several (Windows drives) they are reachable no other way. Every drive is "
+            "listed, the one the browser stands on included, each judged as a folder row is."
+        ),
+    )
     entries: list[FsDirEntry] = Field(
         ..., description="Subdirectories only, dotfiles omitted, sorted by name; at most the first 500 found."
     )
@@ -6461,6 +6545,9 @@ class TrajectoryEntry(_Strict):
     turn_number: int | None = None
     turn_start: bool
     origin: TrajectoryOrigin
+    subagent_scope: str | None = None
+    opens_subagent_scope: str | None = None
+    dispatched_by_subagent_scope: str | None = None
     sort_key: list[JsonValue]
     event_time: str
     preview: str | None = None

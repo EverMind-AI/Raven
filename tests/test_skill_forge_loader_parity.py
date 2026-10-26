@@ -515,6 +515,40 @@ class TestSkillRegistryCacheInvalidation:
         assert "simple" in names
 
 
+class TestLayerRoots:
+    """``layer_roots`` is the directory list a local id resolves against; a
+    miss message prints it, so it must be the list the scan walks."""
+
+    def test_every_layer_in_scan_order(self, tmp_path, tmp_workspace, tmp_builtin):
+        ext = tmp_path / "external"
+        ext.mkdir()
+        store = SkillRegistry(tmp_workspace, builtin_skills_dir=tmp_builtin, external_skills_dir=ext)
+        assert store.layer_roots() == [
+            (tmp_workspace / "skills", "workspace"),
+            (ext, "external"),
+            (tmp_builtin, "builtin"),
+        ]
+
+
+class TestNames:
+    """``names`` is what a source-less ``get`` resolves, read without a rescan."""
+
+    def test_the_names_get_resolves(self, tmp_workspace, tmp_builtin):
+        store = SkillRegistry(tmp_workspace, builtin_skills_dir=tmp_builtin)
+        names = store.names()
+        assert names
+        assert all(store.get(name) is not None for name in names)
+        assert sorted(names) == sorted({m.name for m in store.list_all()})
+
+    def test_a_dirty_source_is_not_rescanned(self, tmp_workspace, tmp_builtin):
+        store = SkillRegistry(tmp_workspace, builtin_skills_dir=tmp_builtin)
+        before = store.names()
+        _write_skill(tmp_builtin, "added_after_the_scan", description="d")
+        store.invalidate_source("builtin")
+        assert store.names() == before
+        assert "added_after_the_scan" in {m.name for m in store.list_all()}
+
+
 class TestResolveSourceForPath:
     """``resolve_source_for_path`` powers the file-watcher's per-source
     invalidation — it must mirror ``_iter_skill_dirs``'s flat/nested

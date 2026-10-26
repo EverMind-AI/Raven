@@ -70,6 +70,11 @@ DEFAULT_ALWAYS_VISIBLE: tuple[str, ...] = (
     "message",
     "ask_user",
     "spawn",
+    # Resident because the refs it cashes in are already in the window: a ref
+    # the model can read but whose tool sits behind a search is a promise the
+    # turn has to spend a hop to keep. Registered only beside a strategy that
+    # mints refs, so elsewhere this name matches nothing.
+    "context_retrieve",
 )
 
 TOOL_CALL_NAME: str = "tool_call"

@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
 from raven.spine.message import Media, Source
 
@@ -97,7 +98,7 @@ class TurnRequest:
     # delivery row instead. Shape: ``{"kind": "spawn"|"dag", "label": ...,
     # "status": ..., "run_id": ...}``, the same identity the
     # ``subagent.delivered`` event carries.
-    delegated: dict[str, str] | None = None
+    delegated: dict[str, Any] | None = None
     # Direct sub-agent delivery: when set to ``(agent, handle)`` the turn skips
     # the model and runs against that instance instead, streaming its reply back
     # to this conversation. Runs on that instance's own lane (``direct_lane``),
@@ -112,6 +113,11 @@ class TurnRequest:
     # Per-turn UI choice for Playbook generation. None inherits the configured
     # default; off/task/persona are resolved before the setup model call.
     playbook_mode: str | None = None
+    # ``(trace_id, span_id)`` of the span that dispatched the work this turn
+    # reports on, set only by a submitter announcing a dispatched result. A turn
+    # no longer inherits its submitter's context, so where it came from has to
+    # be stated here; the kernel carries the pair to the runner uninterpreted.
+    dispatch_link: tuple[str, str] | None = None
 
 
 # A lane is a serial domain, so an instance that is to answer while the main

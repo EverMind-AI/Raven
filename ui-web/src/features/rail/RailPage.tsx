@@ -156,11 +156,13 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
         {/* Keyed apart because all three are spans in one slot, which React
             would otherwise reconcile onto a single node: props get reset, and
             scroll offset is not a prop but state the browser keeps on the
-            element. The editing box is a scroll container on purpose (a long
-            name scrolls inside itself), so focusing the field scrolls it to
-            the caret -- and the finished title, drawn into that same node,
+            element. The editing box is a `.t span`, so it clips and can
+            scroll; while its column could outgrow the row it did, to the
+            caret -- and the finished title, drawn into that same node,
             inherited the offset and rendered outside its own box, which under
-            `text-overflow: ellipsis` paints nothing at all. */}
+            `text-overflow: ellipsis` paints nothing at all. The column now
+            stops at the row and the field scrolls instead, but the box is
+            still a scroller, so the keys stay. */}
         {editing ? (
           /* The box is the name's width, not the rail's: a two-character title in
              a box eight times its length reads as a form field waiting to be

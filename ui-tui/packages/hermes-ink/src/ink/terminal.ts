@@ -190,8 +190,13 @@ const EXTENDED_KEYS_TERMINALS = ['iTerm.app', 'kitty', 'WezTerm', 'ghostty', 'tm
 
 /** True if this terminal correctly handles extended key reporting
  *  (Kitty keyboard protocol + xterm modifyOtherKeys). */
-export function supportsExtendedKeys(): boolean {
-  return EXTENDED_KEYS_TERMINALS.includes(env.terminal ?? '')
+export function supportsExtendedKeys(
+  platform: NodeJS.Platform = process.platform,
+  terminal: string | null | undefined = env.terminal
+): boolean {
+  // Native Windows consoles re-encode IME commits when these modes are on,
+  // producing each character twice before the input parser sees it.
+  return platform !== 'win32' && EXTENDED_KEYS_TERMINALS.includes(terminal ?? '')
 }
 
 // Prefixes of XTVERSION-reported terminal names known to correctly implement
@@ -221,8 +226,8 @@ const EXTENDED_KEYS_XTVERSION_PREFIXES = [
  *  extended key reporting. Used as a runtime fallback when env-based
  *  detection (supportsExtendedKeys) misses — notably over SSH where
  *  TERM_PROGRAM is stripped. Case-insensitive prefix match. */
-export function isExtendedKeysCapableByXtversion(name: string): boolean {
-  if (!name) {
+export function isExtendedKeysCapableByXtversion(name: string, platform: NodeJS.Platform = process.platform): boolean {
+  if (!name || platform === 'win32') {
     return false
   }
 

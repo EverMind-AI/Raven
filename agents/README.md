@@ -147,8 +147,7 @@ What one agent directory carries:
   keeps trunk's `ask` (raven dispatching a sub-agent answers those prompts
   itself, and a person in an editor should still be asked), and the one-turn
   CLI hosting renders `permissions.mode: full` because that hosting has no
-  channel to ask on -- with the default it refused every write and the model
-  reported the task incomplete.
+  channel for interactive approval.
 - `soul.md` + the contract the plugin renders into `agent.md` -- optional:
   the agent's own identity, regenerated into the workspace on every launch, for an agent
   that replaces the host identity (research does; its `context.dropSegments`
@@ -245,11 +244,9 @@ Agent notes:
 - `raven-ppt` (the deck agent) needs the ten bundled templates the
   `ppt-engine` plugin offers, and gets them from the clone: they are tracked
   under `plugins-dist/ppt-engine/raven_ppt/assets/templates/`, which the
-  editable install serves and the ppt-engine wheel bundles. Nothing to fetch
-  and no token to hold -- the registry they used to be fetched from is
-  private, and requiring it left an outside install with an empty catalogue
-  and a wheel carrying zero templates. `plugins-dist/ppt-engine/templates.manifest.json`
-  still pins every file by sha256; `make verify-templates` checks the tracked
+  editable install serves and the ppt-engine wheel bundles.
+  `plugins-dist/ppt-engine/templates.manifest.json` pins every file by sha256;
+  `make verify-templates` checks the tracked
   copies against those pins, `make fetch-templates` lands a fresh cut over
   them (maintainers, `GITLAB_TOKEN`), and release.yml refuses a wheel that
   does not carry all ten.

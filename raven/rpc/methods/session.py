@@ -51,6 +51,7 @@ from raven.rpc.methods import turn as turn_module
 from raven.rpc.methods.system import _raven_version
 from raven.session.export import default_export_path, write_transcript
 from raven.session.manager import new_chat_id
+from raven.session.refs import tool_result_view
 from raven.session.resolve import manager_for
 from raven.session.title import TITLE_STORAGE_MAX, collapse_to_line
 from raven.token_wise.usage_tracker import read_usage_rows, row_root
@@ -374,6 +375,9 @@ def _map_to_wire(
     ``deliveries_on_disk`` is false for a transcript recorded on another
     machine (an Imported Conversation): its delivered files are drawn as
     missing whatever this machine has at their paths (``_delivered_file``).
+
+    A ``role="tool"`` entry's ``text`` is cut to ``TOOL_RESULT_VIEW_MAX_CHARS``
+    (:func:`~raven.session.refs.tool_result_view`); what is stored is left whole.
     """
     out = []
     for m in messages:
@@ -390,6 +394,8 @@ def _map_to_wire(
             entry["text"] = content
         elif content is not None:
             entry["text"] = str(content)
+        if m["role"] == "tool" and isinstance(entry.get("text"), str):
+            entry["text"] = tool_result_view(entry["text"])
         for extra_key in (
             "context",
             "name",

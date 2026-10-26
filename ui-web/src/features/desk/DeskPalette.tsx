@@ -313,8 +313,13 @@ export function DeskPalette(): JSX.Element | null {
      Keyed on `shown` rather than `phase`, so the column travels WITH the panel's
      190ms animation rather than after it. Cleared on unmount as well as when it
      reaches zero: a desk that stops being rendered would otherwise leave the
-     transcript narrow with nothing on screen to explain why. */
-  useEffect(() => {
+     transcript narrow with nothing on screen to explain why.
+
+     A layout effect, and declared before the height's: that measure reads the
+     card this moves, so it has to read it moved. Published after paint, a
+     palette widened onto the card measured it where it stood and was drawn
+     short of it for a frame. */
+  useLayoutEffect(() => {
     const chat = document.querySelector('.chat')
     const publish = (): void => {
       const reserve = deskReserve({
@@ -465,6 +470,12 @@ export function DeskPalette(): JSX.Element | null {
     const pointerId = event.pointerId
     const controller = new AbortController()
     target.setPointerCapture(pointerId)
+    /* The reserve follows the width on every frame of this, and the slide the
+       stylesheet gives it restarts from where it stands each time, so the card
+       never moved until the hand paused. The flag holds it still for the
+       gesture (styles/page.css), and the card keeps pace with the edge. */
+    const root = document.documentElement
+    root.dataset.deskResize = 'true'
     const move = (e: globalThis.PointerEvent): void => {
       if (e.pointerId !== pointerId) return
       setGeom((now) => clampGeometry({
@@ -481,6 +492,7 @@ export function DeskPalette(): JSX.Element | null {
       if (e && e.pointerId !== pointerId) return
       if (target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId)
       controller.abort()
+      delete root.dataset.deskResize
       /* What the reader sees when they let go is what they set. A pull past
          the stop above a card would otherwise leave a height the palette grows
          back to by itself once the card moves away. */

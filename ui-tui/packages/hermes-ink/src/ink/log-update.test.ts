@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import type { Frame } from './frame.js'
+import type { Diff, Frame } from './frame.js'
 import { LogUpdate } from './log-update.js'
 import { CellWidth, CharPool, createScreen, HyperlinkPool, type Screen, setCellAt, StylePool } from './screen.js'
 
@@ -159,5 +159,109 @@ describe('LogUpdate.render diff contract', () => {
 
     expect(diff.some(p => p.type === 'clearTerminal')).toBe(true)
     expect(stdoutOnly(diff)).toContain('timer2s')
+  })
+})
+
+/**
+ * The bytes the terminal would see, keeping only what positions text:
+ * written text and absolute column moves (CHA, rendered as the terminal
+ * receives it). Style, hyperlink and row moves are dropped.
+ */
+const wire = (diff: Diff) =>
+  diff
+    .map(p => {
+      switch (p.type) {
+        case 'stdout':
+          return p.content
+        case 'cursorTo':
+          return `\x1b[${p.col}G`
+        default:
+          return ''
+      }
+    })
+    .join('')
+
+const wide = (screen: Screen, x: number, y: number, char: string) =>
+  setCellAt(screen, x, y, { char, styleId: stylePool.none, width: CellWidth.Wide, hyperlink: undefined })
+
+describe('wide graphemes the terminal may size differently from the layout', () => {
+  const w = 20
+  const h = 2
+  const AUTO_WRAP_OFF = '\x1b[?7l'
+  const AUTO_WRAP_ON = '\x1b[?7h'
+  const cha = /\x1b\[\d+G/
+
+  // One row: "ab", the glyph under test at column 2, then "c" right after it.
+  const renderRow = (glyph: string, at = 2) => {
+    const prev = mkScreen(w, h)
+    const next = mkScreen(w, h)
+    paint(next, 0, 'ab')
+    wide(next, at, 0, glyph)
+    setCellAt(next, at + 2, 0, { char: 'c', styleId: stylePool.none, width: CellWidth.Narrow, hyperlink: undefined })
+    next.damage = { x: 0, y: 0, width: w, height: h }
+
+    const log = new LogUpdate({ isTTY: true, stylePool })
+
+    return wire(log.render(mkFrame(prev, w, h), mkFrame(next, w, h), true, false))
+  }
+
+  it('writes a ZWJ emoji with auto-wrap off and pins the cursor to the column after it', () => {
+    // Terminal.app advances five columns for U+1F426 U+200D U+2B1B, xterm.js
+    // and pyte four; the layout counts two. Without the CHA the "c" and every
+    // cell after it land three (or two) columns to the right.
+    const out = renderRow('🐦‍⬛')
+
+    // The styled space at column 3 first (for terminals that advance only
+    // one column), then the glyph guarded against wrapping, then CHA to
+    // column 5 (1-based: 2 + 2 + 1) and the next cell.
+    expect(out).toContain(`\x1b[4G \x1b[3G${AUTO_WRAP_OFF}🐦‍⬛${AUTO_WRAP_ON}\x1b[5Gc`)
+  })
+
+  it('does the same for a skin-tone modifier and a VS16 emoji', () => {
+    expect(renderRow('👍🏽')).toContain(`${AUTO_WRAP_OFF}👍🏽${AUTO_WRAP_ON}\x1b[5Gc`)
+    expect(renderRow('❤️')).toContain(`${AUTO_WRAP_OFF}❤️${AUTO_WRAP_ON}\x1b[5Gc`)
+  })
+
+  it('writes a CJK character plainly', () => {
+    // U+4E2D: one code point, two columns everywhere.
+    const out = renderRow('\u4e2d')
+
+    expect(out).toContain('ab\u4e2dc')
+    expect(out).not.toContain(AUTO_WRAP_OFF)
+    expect(out).not.toMatch(cha)
+  })
+
+  it('writes a single-code-point emoji plainly', () => {
+    const out = renderRow('🐦')
+
+    expect(out).toContain('ab🐦c')
+    expect(out).not.toContain(AUTO_WRAP_OFF)
+    expect(out).not.toMatch(cha)
+  })
+
+  it('still compensates a newer emoji without toggling auto-wrap', () => {
+    // U+1FAE0 (melting face, Unicode 14): one code point, so it cannot
+    // overrun the margin, but old wcwidth tables advance one column.
+    const out = renderRow('🫠')
+
+    expect(out).toContain('\x1b[4G \x1b[3G🫠\x1b[5Gc')
+    expect(out).not.toContain(AUTO_WRAP_OFF)
+  })
+
+  it('keeps the guard at the last column a multi-code-point glyph may start in', () => {
+    // Width 20: column 17 is the last start that keeps both cells inside
+    // (17 + 2 < 20); the CHA then lands on column 20 (1-based).
+    const out = renderRow('🐦‍⬛', 17)
+
+    expect(out).toContain(`${AUTO_WRAP_OFF}🐦‍⬛${AUTO_WRAP_ON}\x1b[20G`)
+  })
+
+  it('skips a multi-code-point glyph that would touch the margin', () => {
+    // Unchanged rule: at column 18 the glyph is not written at all, so no
+    // terminal can be driven past the margin by it.
+    const out = renderRow('🐦‍⬛', 18)
+
+    expect(out).not.toContain('🐦‍⬛')
+    expect(out).not.toContain(AUTO_WRAP_OFF)
   })
 })

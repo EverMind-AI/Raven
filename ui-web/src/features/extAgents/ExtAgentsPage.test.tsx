@@ -148,6 +148,10 @@ function install(
       const why = refuse ? refuse('connect_on_machine') : null
       return why ? { refused: why } : { name }
     },
+    cancelRun: async (name) => {
+      acts.push(['cancel_run', name, {}])
+      return true
+    },
     ...rest,
   }
   const toasts: string[] = []
@@ -2065,6 +2069,35 @@ describe('the model pill', () => {
     expect(acts).toEqual([['model', 'claude_code', { clear_model: true }]])
   })
 
+  /* A preset that is not on the roster has no entry of its own: the server
+     answers an update for a name it does not hold with "no configured
+     sub-agent named ...", so a pick made on one waits for the add that writes
+     the row -- the same way the family drawer's pick waits. */
+  it('holds the model picked on a preset that is not on the roster, for its connect to carry', async () => {
+    const { acts } = install([
+      row({
+        name: 'OpenCode',
+        preset: 'opencode',
+        configured: false,
+        enabled: false,
+        model_source: 'agent',
+        model_choices: choices,
+      }),
+    ])
+    await mount()
+    await openSheet('OpenCode')
+    await click(pill())
+    await click(modelButton('Sonnet'))
+    /* No write: there is no row of that name to update yet. */
+    expect(acts).toEqual([])
+    /* The pill shows the pick, so the reader sees where it went. */
+    expect(pill()!.querySelector('.extAgents-mid')!.textContent).toBe('Sonnet')
+    /* The connect carries it: one write that lands the agent and its model. */
+    const go = [...sheet()!.querySelectorAll<HTMLButtonElement>('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect')!
+    await click(go)
+    expect(acts).toEqual([['connect', 'OpenCode', { model: 'v/sonnet' }]])
+  })
+
   it("draws the built-in row on raven's own connected providers and sends the provider with the pick", async () => {
     hostModels.providers = [
       { id: 'openrouter', name: 'OpenRouter', models: ['anthropic/claude-sonnet-5'], on: true },
@@ -2413,6 +2446,33 @@ describe('the machines module', () => {
     expect(controlOf('Lab box')).toBe('')
   })
 
+  it('keeps polling an install the list says still runs past fifteen minutes, and shows how it ended', async () => {
+    /* Measured 2026-10-22: a fifteen-minute deadline of the store's own gave up two seconds before the gateway
+       recorded that a step had run out of its fifteen minutes, and the card spun from then on. */
+    const stored = mrow()
+    let listed: MachineRow = stored
+    install([row()], { machines: [stored], machinesOver: { list: async () => [{ ...listed }] } })
+    machines._resetForTests(0)
+    await mount()
+    await openMachines()
+    listed = { ...stored, install: { running: true, ok: null, detail: 'Install the Raven node' } }
+    await click(buttonOf('Lab box'))
+    await settle()
+    const later = Date.now() + 16 * 60 * 1000
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(later)
+    try {
+      await settle()
+      expect(controlOf('Lab box')).toBe(' gui.machine.installing')
+      const said = "installing the Raven node on machine 'Lab box' (box) failed at the packages step: it did not finish within 15 minutes"
+      listed = { ...stored, install: { running: false, ok: false, detail: said } }
+      await settle()
+      expect(footOf('Lab box')!.k).toBe(`gui.machine.install_bad_said ${JSON.stringify({ said })}`)
+      expect(buttonOf('Lab box')!.textContent).toBe('gui.machine.install')
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
   it('keeps a refused install on the card without polling', async () => {
     install([row()], { machines: [mrow()], machinesOver: { installNode: async () => ({ started: false, detail: 'an install is already running' }) } })
     await mount()
@@ -2466,6 +2526,18 @@ describe('the machines module', () => {
     const sent = mcalls.filter((c) => c[0] === 'add').map((c) => c[1][0] as RegisterForm)
     expect(sent.length).toBe(2)
     expect(sent[1]).toEqual({ id: 'gpu1', name: 'GPU box 1', host: '203.0.113.7', port: 0, user: 'alice', auth: 'key', key: '~/.ssh/id_gpu1', password: '', paths: ['/data/alice/projects', '/scratch'] })
+  })
+
+  it('names a question the kept password does not answer as its own kind, not as a refused password', async () => {
+    const refused = 'could not reach the machine: raven: the password kept for this machine answers its own password prompt only, and this prompt is not one'
+    install([row()], { machinesOver: { list: async () => [], add: async () => ({ ok: false, detail: refused, reason: 'prompt' as const }) } })
+    await mount()
+    await openMachines()
+    await click(rowNamed('gui.machine.register'))
+    for (const [label, value] of [['gui.machine.f_name', 'GPU box 1'], ['gui.machine.f_id', 'gpu1'], ['gui.machine.f_host', '203.0.113.7'], ['gui.machine.f_user', 'alice'], ['gui.machine.f_key', '~/.ssh/id_gpu1']] as const) await typeInto(field(label), value)
+    await click(sheet()!.querySelector<HTMLButtonElement>('.extAgents-act button')!)
+    expect(sheetStatus()).toBe('gui.machine.why_prompt')
+    expect(note()).toEqual({ t: 'gui.machine.add_bad', said: refused })
   })
 
   it('registers with a password once the login pick says so, and sends the password in place of a key path', async () => {
@@ -3033,17 +3105,19 @@ describe('the machines module', () => {
   })
 
   /* A connect whose readiness ping is still running: the source answers only
-     when the test releases it, with the add's refusal or null. */
-  type Landed = { name: string } | { refused: string }
-  const heldConnect = (): { connect: () => Promise<Landed>; release: (why: string | null) => Promise<void> } => {
-    let release: (why: string | null) => void = () => {}
+     when the test releases it, with the add's refusal or null -- or with the
+     refusal that says the run was stopped (`cancelled`). */
+  type Landed = { name: string } | { refused: string; cancelled?: boolean }
+  const heldConnect = (): { connect: () => Promise<Landed>; release: (why: string | null | { cancelled: string }) => Promise<void> } => {
+    let release: (why: string | null | { cancelled: string }) => void = () => {}
     /* Releasing answers the source -- the name it landed under, or the refusal;
        the write's own continuation -- the roster read, the toast -- is a few
        more turns of the loop. */
     return {
       connect: () =>
         new Promise<Landed>(res => {
-          release = why => res(why === null ? { name: 'codex@box' } : { refused: why })
+          release = why =>
+            res(why === null ? { name: 'codex@box' } : typeof why === 'string' ? { refused: why } : { refused: why.cancelled, cancelled: true })
         }),
       release: async why => {
         await act(async () => {
@@ -3073,7 +3147,7 @@ describe('the machines module', () => {
     await openSheet('Lab box')
     await click(sheetAct('gui.machine.connect_here'))
     await click(sheetAct('gui.machine.connect_do'))
-    expect(sheetStatus()).toBe('gui.machine.connecting')
+    expect(sheetStatus()).toBe('gui.machine.connecting_for {"s":"0"}')
     /* Meanwhile the reader opens the other machine, then its connect form. */
     await openSheet('GPU 1')
     expect(sheetName()).toBe('GPU 1')
@@ -3383,6 +3457,551 @@ describe('the machines module', () => {
     await settle()
     const after = [...sheet()!.querySelectorAll('option')].map(o => [o.textContent, o.disabled])
     expect(after).toEqual(landed)
+  })
+
+  it('counts the seconds a machine-side connect has waited, and Cancel stops the run and leaves the form usable', async () => {
+    /* The wait used to be one static line with one disabled button, for as long as the
+       server took -- minutes, legitimately -- or for ever when the socket went quiet
+       without saying so. Now the line counts, the hint says what the wait is for and
+       its limit, and Cancel stops the run server-side under the name the entry would
+       land under; the server's refusal then says it was cancelled, which the form says
+       as a cancel, not as the agent failing, and the preset is offered again. */
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
+    ]
+    const held = heldConnect()
+    let asked = 0
+    const { acts, toasts } = install([row()], {
+      machines: [ready()],
+      presets: async () => presets,
+      connectOnMachine: async () => {
+        asked += 1
+        return held.connect()
+      }
+    })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.connect_do'))
+    expect(sheetStatus()).toBe('gui.machine.connecting_for {"s":"0"}')
+    /* What is being connected, and what the wait is for, in place of fields
+       that would show the next free preset. */
+    expect([...sheet()!.querySelectorAll('.extAgents-about')].map(n => n.textContent)).toEqual([
+      'gui.machine.preset_connecting {"name":"Codex"}',
+      'gui.machine.connecting_hint'
+    ])
+    expect(sheetActs()).toEqual(['gui.cancel', 'gui.machine.connecting'])
+    expect(store.get().mconnectPending).toEqual(['codex@box'])
+    await click(sheetAct('gui.cancel'))
+    /* Stopping: said on the button, pressed once; the run is stopped server-side. */
+    expect(sheetActs()).toEqual(['gui.machine.cancelling', 'gui.machine.connecting'])
+    expect(sheetAct('gui.machine.cancelling')!.disabled).toBe(true)
+    expect(acts.at(-1)).toEqual(['cancel_run', 'codex@box', {}])
+    await held.release({ cancelled: "the run of sub-agent 'codex@box' was cancelled before it answered, so it was not added" })
+    expect(sheetStatus()).toBe('gui.machine.connect_cancelled_head')
+    expect(sheet()!.querySelector('.extAgents-by')!.className).not.toContain('extAgents-by-bad')
+    expect(note()).toEqual({ t: 'gui.machine.connect_cancelled_head', said: 'gui.machine.connect_cancelled' })
+    expect(sheet()!.querySelector('.extAgents-note')!.className).not.toContain('extAgents-note-warn')
+    expect(store.get().mconnectPending).toEqual([])
+    expect(store.get().mconnectBusy).toBeNull()
+    expect(sheetActs()).toEqual(['gui.machine.connect_do'])
+    expect(sheetAct('gui.machine.connect_do')!.disabled).toBe(false)
+    expect(toasts).toEqual([])
+    expect(asked).toBe(1)
+  })
+
+  it('gives up on a machine-side connect that never answers, stops it server-side, and says where to look', async () => {
+    /* The ceiling: the server bounds its own wait, so past it there is no answer coming
+       on this socket. The run is stopped by name, the form says so with the Agents page
+       as the place to look, and a landing that still arrives is told in a toast. */
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
+    ]
+    const held = heldConnect()
+    const { acts, toasts, loads } = install([row()], {
+      machines: [ready()],
+      presets: async () => presets,
+      connectOnMachine: async () => held.connect()
+    })
+    store._resetForTests({ ceilingMs: 40, graceMs: 20 })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.connect_do'))
+    expect(acts.filter(a => a[0] === 'cancel_run')).toEqual([])
+    await act(async () => {
+      await new Promise(res => setTimeout(res, 120))
+    })
+    expect(acts.at(-1)).toEqual(['cancel_run', 'codex@box', {}])
+    expect(sheetStatus()).toBe('gui.machine.connect_timeout_head')
+    expect(sheet()!.querySelector('.extAgents-by')!.className).toContain('extAgents-by-bad')
+    expect(note()).toEqual({ t: 'gui.machine.connect_timeout_head', said: 'gui.machine.connect_timeout' })
+    expect(sheet()!.querySelector('.extAgents-note')!.className).toContain('extAgents-note-warn')
+    expect(store.get().mconnectPending).toEqual([])
+    expect(sheetActs()).toEqual(['gui.machine.connect_do'])
+    expect(toasts).toEqual([])
+    /* The answer that comes after all: the add landed, so the roster is read with the
+       probe and the toast says, as for a landing the form never saw. */
+    const before = loads.length
+    await held.release(null)
+    expect(toasts).toEqual(['gui.machine.connected_said {"name":"codex@box"}'])
+    expect(loads.slice(before)).toEqual([true])
+  })
+
+  it('ends the wait inside the grace even when the stop request itself never answers', async () => {
+    /* The socket that went silent without closing is the case the ceiling exists for, and
+       on that socket the stop request hangs exactly as the connect did: awaited, it would
+       have held the form open for ever a second time. The stop is sent and the grace runs
+       from that moment, on the ceiling's path and on the Cancel press alike; a Cancel whose
+       stop never answered is said as unconfirmed, not as cancelled. */
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
+    ]
+    let stopsAsked = 0
+    const { toasts } = install([row()], {
+      machines: [ready()],
+      presets: async () => presets,
+      /* Neither the connect nor the stop ever answers. */
+      connectOnMachine: () => new Promise(() => {}),
+      cancelRun: () => {
+        stopsAsked += 1
+        return new Promise(() => {})
+      }
+    })
+    store._resetForTests({ ceilingMs: 40, graceMs: 20 })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.connect_do'))
+    expect(sheetActs()).toEqual(['gui.cancel', 'gui.machine.connecting'])
+    await act(async () => {
+      await new Promise(res => setTimeout(res, 120))
+    })
+    expect(stopsAsked).toBe(1)
+    expect(sheetStatus()).toBe('gui.machine.connect_timeout_head')
+    expect(store.get().mconnectBusy).toBeNull()
+    expect(store.get().mconnectPending).toEqual([])
+    expect(sheetActs()).toEqual(['gui.machine.connect_do'])
+    /* Pressed again and cancelled by hand: the same bound, from the press. */
+    await click(sheetAct('gui.machine.connect_do'))
+    await click(sheetAct('gui.cancel'))
+    expect(stopsAsked).toBe(2)
+    expect(sheetActs()).toEqual(['gui.machine.cancelling', 'gui.machine.connecting'])
+    await act(async () => {
+      await new Promise(res => setTimeout(res, 60))
+    })
+    expect(sheetStatus()).toBe('gui.machine.connect_unconfirmed_head')
+    expect(store.get().mconnectBusy).toBeNull()
+    expect(store.get().mconnectCancelling).toBe(false)
+    expect(sheetActs()).toEqual(['gui.machine.connect_do'])
+    expect(toasts).toEqual([])
+  })
+
+  it('says it is too late to cancel when the stop finds nothing running, and waits for the connect s own answer', async () => {
+    /* A stop that answers `cancelled: false` found no run under the name: the connect is
+       past the point where it can be cancelled -- its run answered and it is writing --
+       or had not started yet. Saying "nothing was written" then was the wrong claim: the
+       entry landed a moment later. The form says it is too late, offers no Cancel it
+       cannot honour, and keeps waiting past the grace for the connect's own answer. */
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
+    ]
+    const held = heldConnect()
+    const { acts, toasts } = install([row()], {
+      machines: [ready()],
+      presets: async () => presets,
+      connectOnMachine: async () => held.connect(),
+      cancelRun: async (name) => {
+        acts.push(['cancel_run', name, {}])
+        return false
+      }
+    })
+    store._resetForTests({ graceMs: 20 })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.connect_do'))
+    await click(sheetAct('gui.cancel'))
+    await settle()
+    expect(acts.at(-1)).toEqual(['cancel_run', 'codex@box', {}])
+    expect(sheetStatus()).toBe('gui.machine.connect_late_for {"s":"0"}')
+    expect(sheetAbouts()).toEqual(['gui.machine.preset_connecting {"name":"Codex"}', 'gui.machine.connect_late_hint'])
+    expect(sheetActs()).toEqual(['gui.machine.connecting'])
+    expect(store.get().mconnectCancelling).toBe(false)
+    /* Well past the grace: still waiting, and nothing said about a cancel. */
+    await act(async () => {
+      await new Promise(res => setTimeout(res, 80))
+    })
+    expect(store.get().mconnectBusy).not.toBeNull()
+    expect(store.get().mconnectStopped).toBe('')
+    expect(sheetStatus()).toBe('gui.machine.connect_late_for {"s":"0"}')
+    expect(note()).toBeNull()
+    /* The connect lands, and is said as a landing. */
+    await held.release(null)
+    await settle()
+    expect(toasts).toEqual(['gui.machine.connected_said {"name":"codex@box"}'])
+    expect(store.get().mconnectBusy).toBeNull()
+    expect(store.get().mconnectLate).toBe(false)
+    expect(store.get().mconnectStopped).toBe('')
+    expect(store.get().mconnectPending).toEqual([])
+  })
+
+  it('ends a too-late wait that gets no answer as possibly written, never as cancelled', async () => {
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
+    ]
+    const { toasts } = install([row()], {
+      machines: [ready()],
+      presets: async () => presets,
+      connectOnMachine: () => new Promise(() => {}),
+      cancelRun: async () => false
+    })
+    store._resetForTests({ ceilingMs: 80, graceMs: 20 })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.connect_do'))
+    await click(sheetAct('gui.cancel'))
+    await settle()
+    expect(store.get().mconnectLate).toBe(true)
+    await act(async () => {
+      await new Promise(res => setTimeout(res, 160))
+    })
+    expect(sheetStatus()).toBe('gui.machine.connect_missed_head')
+    expect(sheet()!.querySelector('.extAgents-by')!.className).toContain('extAgents-by-bad')
+    expect(note()).toEqual({ t: 'gui.machine.connect_missed_head', said: 'gui.machine.connect_missed' })
+    expect(sheet()!.querySelector('.extAgents-note')!.className).toContain('extAgents-note-warn')
+    expect(store.get().mconnectBusy).toBeNull()
+    expect(store.get().mconnectLate).toBe(false)
+    expect(sheetActs()).toEqual(['gui.machine.connect_do'])
+    expect(toasts).toEqual([])
+  })
+
+  it('takes back an unconfirmed note when the stop answers after the grace that nothing was running, and when the connect lands', async () => {
+    /* The stop is sent, not awaited, so the grace can end before it answers and the form
+       says the cancel is unconfirmed. A later answer that nothing was running turns that
+       into the too-late note; a landing after it takes the note down and is toasted. */
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
+    ]
+    const held = heldConnect()
+    let answerStop: (cancelled: boolean) => void = () => {}
+    const { toasts } = install([row()], {
+      machines: [ready()],
+      presets: async () => presets,
+      connectOnMachine: async () => held.connect(),
+      cancelRun: () => new Promise<boolean>(res => (answerStop = res))
+    })
+    store._resetForTests({ graceMs: 20 })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.connect_do'))
+    await click(sheetAct('gui.cancel'))
+    await act(async () => {
+      await new Promise(res => setTimeout(res, 60))
+    })
+    expect(sheetStatus()).toBe('gui.machine.connect_unconfirmed_head')
+    await act(async () => {
+      answerStop(false)
+    })
+    await settle()
+    expect(sheetStatus()).toBe('gui.machine.connect_missed_head')
+    expect(note()).toEqual({ t: 'gui.machine.connect_missed_head', said: 'gui.machine.connect_missed' })
+    await held.release(null)
+    await settle()
+    expect(note()).toBeNull()
+    expect(store.get().mconnectStopped).toBe('')
+    expect(toasts).toEqual(['gui.machine.connected_said {"name":"codex@box"}'])
+  })
+
+  it('leaves the note of a later press alone when an earlier press s stop answers late', async () => {
+    /* Two presses on one form: the first one's stop answers only after the second press
+       has ended in its own cancel. That late answer belongs to the first press, so the
+       second's note stands -- the press, not the form, owns the correction. */
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
+    ]
+    const answers: Array<(cancelled: boolean) => void> = []
+    install([row()], {
+      machines: [ready()],
+      presets: async () => presets,
+      connectOnMachine: () => new Promise(() => {}),
+      cancelRun: () => new Promise<boolean>(res => answers.push(res))
+    })
+    store._resetForTests({ graceMs: 20 })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    for (let press = 0; press < 2; press++) {
+      await click(sheetAct('gui.machine.connect_do'))
+      await click(sheetAct('gui.cancel'))
+      await act(async () => {
+        await new Promise(res => setTimeout(res, 60))
+      })
+      expect(sheetStatus()).toBe('gui.machine.connect_unconfirmed_head')
+    }
+    expect(answers).toHaveLength(2)
+    await act(async () => {
+      answers[0]!(false)
+    })
+    await settle()
+    expect(sheetStatus()).toBe('gui.machine.connect_unconfirmed_head')
+    /* The second press's own answer still corrects its own note. */
+    await act(async () => {
+      answers[1]!(false)
+    })
+    await settle()
+    expect(sheetStatus()).toBe('gui.machine.connect_missed_head')
+  })
+
+  it('does not put the too-late note back over a connect that already landed', async () => {
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
+    ]
+    const held = heldConnect()
+    let answerStop: (cancelled: boolean) => void = () => {}
+    const { toasts } = install([row()], {
+      machines: [ready()],
+      presets: async () => presets,
+      connectOnMachine: async () => held.connect(),
+      cancelRun: () => new Promise<boolean>(res => (answerStop = res))
+    })
+    store._resetForTests({ graceMs: 20 })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.connect_do'))
+    await click(sheetAct('gui.cancel'))
+    await act(async () => {
+      await new Promise(res => setTimeout(res, 60))
+    })
+    expect(sheetStatus()).toBe('gui.machine.connect_unconfirmed_head')
+    await held.release(null)
+    await settle()
+    expect(note()).toBeNull()
+    expect(toasts).toEqual(['gui.machine.connected_said {"name":"codex@box"}'])
+    await act(async () => {
+      answerStop(false)
+    })
+    await settle()
+    expect(store.get().mconnectStopped).toBe('')
+    expect(note()).toBeNull()
+  })
+
+  it('says the cancel once a stop that answers after the grace says it stopped the run', async () => {
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
+    ]
+    let answerStop: (cancelled: boolean) => void = () => {}
+    install([row()], {
+      machines: [ready()],
+      presets: async () => presets,
+      connectOnMachine: () => new Promise(() => {}),
+      cancelRun: () => new Promise<boolean>(res => (answerStop = res))
+    })
+    store._resetForTests({ graceMs: 20 })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.connect_do'))
+    await click(sheetAct('gui.cancel'))
+    await act(async () => {
+      await new Promise(res => setTimeout(res, 60))
+    })
+    expect(store.get().mconnectStopped).toBe('unconfirmed')
+    await act(async () => {
+      answerStop(true)
+    })
+    await settle()
+    expect(sheetStatus()).toBe('gui.machine.connect_cancelled_head')
+    expect(note()).toEqual({ t: 'gui.machine.connect_cancelled_head', said: 'gui.machine.connect_cancelled' })
+  })
+
+  it('never says nothing was written when the stop gives no answer, whether it hangs or fails', async () => {
+    /* Only the stop's answer says whether the run was stopped. A grace that ends with
+       that answer missing, or with the call failing, knows nothing of the kind, so the
+       form says the cancel was not confirmed and the entry may still be written. */
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
+    ]
+    const stops: Array<() => Promise<boolean>> = [() => new Promise(() => {}), () => Promise.reject(new Error('socket closed'))]
+    install([row()], {
+      machines: [ready()],
+      presets: async () => presets,
+      connectOnMachine: () => new Promise(() => {}),
+      cancelRun: () => stops.shift()!()
+    })
+    store._resetForTests({ graceMs: 20 })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    for (let press = 0; press < 2; press++) {
+      await click(sheetAct('gui.machine.connect_do'))
+      await click(sheetAct('gui.cancel'))
+      await act(async () => {
+        await new Promise(res => setTimeout(res, 60))
+      })
+      expect(store.get().mconnectStopped).toBe('unconfirmed')
+      expect(sheetStatus()).toBe('gui.machine.connect_unconfirmed_head')
+      expect(note()).toEqual({ t: 'gui.machine.connect_unconfirmed_head', said: 'gui.machine.connect_unconfirmed' })
+      expect(sheet()!.querySelector('.extAgents-note')!.className).toContain('extAgents-note-warn')
+      expect(store.get().mconnectBusy).toBeNull()
+      expect(store.get().mconnectCancelling).toBe(false)
+      expect(sheetActs()).toEqual(['gui.machine.connect_do'])
+    }
+  })
+
+  it('says the cancel when the connect itself refuses as cancelled after a stop that failed', async () => {
+    /* The connect's own cancelled refusal is the server saying nothing was written, as
+       much as the stop's true answer is: arriving after the grace, it corrects the note. */
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
+    ]
+    const held = heldConnect()
+    const { toasts } = install([row()], {
+      machines: [ready()],
+      presets: async () => presets,
+      connectOnMachine: async () => held.connect(),
+      cancelRun: () => Promise.reject(new Error('socket closed'))
+    })
+    store._resetForTests({ graceMs: 20 })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.connect_do'))
+    await click(sheetAct('gui.cancel'))
+    await act(async () => {
+      await new Promise(res => setTimeout(res, 60))
+    })
+    expect(store.get().mconnectStopped).toBe('unconfirmed')
+    await held.release({ cancelled: "the run of sub-agent 'codex@box' was cancelled before it answered, so it was not added" })
+    await settle()
+    expect(store.get().mconnectStopped).toBe('cancelled')
+    expect(note()).toEqual({ t: 'gui.machine.connect_cancelled_head', said: 'gui.machine.connect_cancelled' })
+    expect(toasts).toEqual([])
+  })
+
+  it('says the cancel once the stop answers that it stopped the run, even with no answer from the connect', async () => {
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
+    ]
+    install([row()], {
+      machines: [ready()],
+      presets: async () => presets,
+      connectOnMachine: () => new Promise(() => {})
+    })
+    store._resetForTests({ graceMs: 20 })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.connect_do'))
+    await click(sheetAct('gui.cancel'))
+    await act(async () => {
+      await new Promise(res => setTimeout(res, 60))
+    })
+    expect(store.get().mconnectStopped).toBe('cancelled')
+    expect(note()).toEqual({ t: 'gui.machine.connect_cancelled_head', said: 'gui.machine.connect_cancelled' })
+    expect(store.get().mconnectBusy).toBeNull()
+    expect(store.get().mconnectCancelling).toBe(false)
+  })
+
+  it('says it is too late to cancel a Reconnect whose stop finds nothing running, and does not leave the row pending', async () => {
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [{ machine: 'box', name: 'codex@box' }], on_machines: [] },
+    ]
+    let release: () => void = () => {}
+    const off = row({ name: 'codex@box', preset: 'codex', configured: true, enabled: false, machine: 'box' })
+    const rows = [row(), off]
+    const { acts, toasts } = install(rows, {
+      machines: [ready({ agents_off_here: ['codex@box'] })],
+      presets: async () => presets,
+      act: async (op, r, args) => {
+        acts.push([op, r.name, args || {}])
+        if (op === 'toggle') {
+          await new Promise<void>(res => (release = res))
+          r.enabled = true
+        }
+        return rows
+      },
+      cancelRun: async () => false
+    })
+    store._resetForTests({ graceMs: 20 })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.reconnect_do'))
+    await click(sheetAct('gui.cancel'))
+    await act(async () => {
+      await new Promise(res => setTimeout(res, 60))
+    })
+    expect(sheetStatus()).toBe('gui.machine.connect_late_for {"s":"0"}')
+    expect(store.get().mconnectStopped).toBe('')
+    await act(async () => {
+      release()
+    })
+    await settle()
+    expect(toasts).toEqual(['gui.machine.reconnected_said {"name":"codex@box"}'])
+    expect(store.get().joining).toEqual({})
+    expect(store.get().mconnectBusy).toBeNull()
+    expect(store.get().mconnectStopped).toBe('')
+  })
+
+  it('leaves a cancelled Reconnect off the row as a failure, and says the cancel on the form', async () => {
+    /* Reconnect is the agents page's own switch, run from the machine's side, so
+       its run is the row's: Cancel stops it the same way, the refusal that says
+       so is not kept on the row -- nothing was written, nothing failed -- and the
+       row's pending mark goes with the wait. */
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [{ machine: 'box', name: 'codex@box' }], on_machines: [] },
+    ]
+    let release: () => void = () => {}
+    const off = row({ name: 'codex@box', preset: 'codex', configured: true, enabled: false, machine: 'box' })
+    const rows = [row(), off]
+    const { acts, toasts } = install(rows, {
+      machines: [ready({ agents_off_here: ['codex@box'] })],
+      presets: async () => presets,
+      act: async (op, r, args) => {
+        acts.push([op, r.name, args || {}])
+        if (op === 'toggle') {
+          await new Promise<void>(res => (release = res))
+          throw { data: { detail: "the run of sub-agent 'codex@box' was cancelled before it answered, so it was not switched on", cancelled: true } }
+        }
+        return rows
+      },
+    })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.reconnect_do'))
+    expect(acts.at(-1)).toEqual(['toggle', 'codex@box', { enabled: true }])
+    expect('codex@box' in store.get().joining).toBe(true)
+    expect(sheetStatus()).toBe('gui.machine.connecting_for {"s":"0"}')
+    await click(sheetAct('gui.cancel'))
+    expect(acts.at(-1)).toEqual(['cancel_run', 'codex@box', {}])
+    await act(async () => {
+      release()
+    })
+    await settle()
+    expect(sheetStatus()).toBe('gui.machine.connect_cancelled_head')
+    expect(store.get().failed).toEqual({})
+    expect(store.get().joining).toEqual({})
+    expect(store.get().mconnectPending).toEqual([])
+    expect(toasts).toEqual([])
   })
 
   it('offers an absent agent no machine when none is registered', async () => {

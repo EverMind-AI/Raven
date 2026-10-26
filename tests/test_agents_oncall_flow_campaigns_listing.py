@@ -113,6 +113,36 @@ def _spend(monkeypatch, minutes=115.47):
 
 
 @pytest.mark.asyncio
+async def test_a_live_campaign_s_backend_is_built_off_the_loop(monkeypatch, tmp_path):
+    """A password machine's runner asks a local ``ssh -G`` which host its prompt names; built on the loop for
+    every live campaign listed, that wait held every other turn (reviewed 2026-10-20)."""
+    import asyncio
+
+    home = _home(monkeypatch, tmp_path)
+    _campaign(home, "dambreak-legA", case="/home/cfd/work/case_legA", trials=2)
+    where: list[bool] = []
+
+    class _Backend:
+        async def spent_minutes(self):
+            return 1.0
+
+    def build(meta):
+        try:
+            asyncio.get_running_loop()
+            where.append(True)
+        except RuntimeError:
+            where.append(False)
+        return _Backend()
+
+    monkeypatch.setattr("oncall_flow.backends.backend_from_meta", build)
+
+    out = await OpsCampaignsTool().execute()
+
+    assert "spent 1.00" in out
+    assert where == [False], "the backend was built on the event loop"
+
+
+@pytest.mark.asyncio
 async def test_it_lists_every_campaign_with_what_it_is(monkeypatch, tmp_path):
     home = _home(monkeypatch, tmp_path)
     _campaign(home, "dambreak-legA", case="/home/cfd/work/case_legA", trials=2)

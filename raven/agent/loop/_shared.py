@@ -444,10 +444,14 @@ def turn_question(messages: list[dict[str, Any]] | None) -> str:
     Read once, at entry -- later the history has grown and the last user
     message may be an injection rather than what the user asked.
     """
+    from raven.context_engine.scratch import strip_turn_scratch
+
     for m in reversed(messages or []):
         if not isinstance(m, dict) or m.get("role") != "user":
             continue
-        content = m.get("content")
+        # The turn scratch rides at the end of the same message; it is recalled
+        # context, not part of what was asked.
+        content = strip_turn_scratch(m)
         text = ""
         if isinstance(content, str):
             text = content

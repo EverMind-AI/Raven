@@ -28,6 +28,7 @@ from raven.agent.tools.capabilities import (
     is_configured,
     is_disabled,
     is_offered,
+    runs_keyless,
 )
 from raven.config.loader import load_config
 from raven.providers.base import LLMProvider, LLMResponse
@@ -199,6 +200,42 @@ def test_an_openrouter_key_alone_switches_nothing_on(workspace, tmp_path: Path) 
     for cap in (c for c in CAPABILITIES if c.media_attr):
         assert not is_configured(cap, config), cap.tool
         assert not loop.tools.offers_by_name(cap.tool), cap.tool
+
+
+def test_a_search_vendor_that_needs_no_key_is_configured_without_a_credential(
+    workspace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keenable searches unauthenticated, so web_search on it is configured and
+    offered with no key. Readiness is not a key, though: a report that ticked
+    ``has_credential`` here would claim one that does not exist, and
+    ``runs_keyless`` is what keeps the row from reading as the media family's
+    configured-and-failing state instead."""
+    monkeypatch.delenv("KEENABLE_API_KEY", raising=False)
+    config = _config(tmp_path)
+    config.tools.web.search.provider = "keenable"
+    loop = _loop(workspace, config, web_search_provider="keenable")
+    cap = next(c for c in CAPABILITIES if c.tool == "web_search")
+
+    assert is_configured(cap, config) and loop.tools.offers_by_name("web_search")
+    assert not has_credential(cap, config)
+    assert runs_keyless(cap, config)
+    assert configured_from(cap, config) == ""
+
+    config.tools.web.providers.keenable.api_key = "kn"
+    assert has_credential(cap, config) and not runs_keyless(cap, config)
+    assert configured_from(cap, config) == "tools.web.providers.keenable.apiKey"
+
+
+def test_nothing_else_runs_keyless(tmp_path: Path) -> None:
+    """A keyed vendor is configured by its key and nothing else, so it never
+    reaches the keyless state with or without one; a media model with no key is
+    configured and broken, which is the state the warning is for."""
+    config = _config(tmp_path)
+    config.tools.media.image.model = "some/model"
+    assert not any(runs_keyless(c, config) for c in CAPABILITIES)
+
+    config.tools.web.search.api_key = "sk-serper"
+    assert not any(runs_keyless(c, config) for c in CAPABILITIES)
 
 
 def test_the_free_capability_needs_no_credential(workspace, tmp_path: Path) -> None:

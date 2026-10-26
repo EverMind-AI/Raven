@@ -597,8 +597,8 @@ class DagRunStore:
             return []
         return [message for message in recorded if isinstance(message, str)]
 
-    async def record_follow_up(self, node_id: str, message: str) -> None:
-        """Append one follow-up to the node's record.
+    async def record_follow_up(self, node_id: str, message: str) -> list[str]:
+        """Append one follow-up to the node's record, and return the record as it now stands.
 
         Args:
             node_id (`str`):
@@ -606,9 +606,29 @@ class DagRunStore:
             message (`str`):
                 The follow-up as sent -- not the prompt a stateless node gets,
                 which repeats the task around it.
+
+        Returns:
+            `list[str]`:
+                Every follow-up the node has been sent, oldest first, this one last.
         """
-        sent = await self.read_follow_ups(node_id)
-        await self.write_text(self.follow_ups_path(node_id), json.dumps([*sent, message], ensure_ascii=False, indent=2))
+        sent = [*await self.read_follow_ups(node_id), message]
+        await self.write_text(self.follow_ups_path(node_id), json.dumps(sent, ensure_ascii=False, indent=2))
+        return sent
+
+    async def forget_follow_ups(self, node_id: str) -> None:
+        """Empty the node's follow-up record where an earlier node under the same id left one.
+
+        Ids are unique per conversation only while the registry that claims them
+        survives. Once it is lost, a new node can take an old id with that node's
+        record still on disk, and its first judge would read the old follow-ups as
+        its own. A node with no record is left with none: nothing is created.
+
+        Args:
+            node_id (`str`):
+                The node id.
+        """
+        if await self.read_follow_ups(node_id):
+            await self.write_text(self.follow_ups_path(node_id), "[]")
 
     def output_path(self, node_id: str) -> str:
         """Path of a node's output file. See :func:`output_path_in`."""

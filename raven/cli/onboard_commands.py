@@ -143,6 +143,7 @@ _CURATED_GROUPS: list[dict[str, Any]] = [
             {"name": "ph8", "label": "PH8"},
             {"name": "aionly", "label": "AIOnly"},
             {"name": "radeon_cloud", "label": "AMD GPU Cloud"},
+            {"name": "opper", "label": "Opper"},
             {"name": "azure_openai", "label": "Azure OpenAI"},
         ],
     },
@@ -2916,12 +2917,12 @@ def register(app: typer.Typer) -> None:
         search_provider: Optional[str] = typer.Option(
             None,
             "--search-provider",
-            help="web_search vendor: serper, anysearch, serpapi, tavily, exa, brave, firecrawl or serply",
+            help="web_search vendor: serper, anysearch, serpapi, tavily, exa, brave, firecrawl, serply or keenable",
         ),
         fetch_provider: Optional[str] = typer.Option(
             None,
             "--fetch-provider",
-            help="web_fetch vendor: jina, anysearch, tavily, exa or firecrawl",
+            help="web_fetch vendor: jina, anysearch, tavily, exa, firecrawl or keenable",
         ),
         search_api_key: Optional[str] = typer.Option(
             None,

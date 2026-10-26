@@ -298,3 +298,29 @@ async def test_an_action_of_none_is_pointed_at_the_door_that_already_exists(camp
 
     assert "ops_check_later" in out
     assert not (campaign / "ledger.json").exists(), "no trial, no action, no record of one"
+
+
+async def test_an_action_s_runner_is_built_off_the_loop(campaign, monkeypatch) -> None:
+    """A password machine's runner asks a local ``ssh -G`` which host its prompt names; built on the loop, that
+    wait held every other turn (reviewed 2026-10-20). Only the command was run in a thread."""
+    import asyncio
+
+    from oncall_flow import transport
+
+    where: list[bool] = []
+    built = transport.runner_from
+
+    def runner_from(meta, **kw):
+        try:
+            asyncio.get_running_loop()
+            where.append(True)
+        except RuntimeError:
+            where.append(False)
+        return built(meta, **kw)
+
+    monkeypatch.setattr(transport, "runner_from", runner_from)
+
+    out = await _act(campaign, action="note_it", values={})
+
+    assert "REFUSED" not in out
+    assert where == [False], "the runner was built on the event loop"

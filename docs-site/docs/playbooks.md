@@ -37,8 +37,7 @@ instead of, or alongside, `--input`. Inspect the generated parameters and
 steps before running: generation does not promise the exact example below.
 `get` prints the file to stdout and its source path to stderr.
 
-**Newly created Playbooks are usable immediately**, despite older CLI help
-describing them as disabled on creation. Use `raven playbook disable brief-review`
+**Newly created Playbooks are usable immediately.** Use `raven playbook disable brief-review`
 to withhold one during review. For review before discovery, author the file
 outside the library, validate it by path, and install it only when ready.
 
@@ -146,7 +145,8 @@ branching language; inspect the submitted graph's options, including approval.
 
 Declare inputs in `params`. Supported declarations are `string`, `integer`,
 `number`, `boolean`, `enum`, `path`, and `secret`. Ordinary parameter references
-belong directly in `promptTemplate` or `prompts`, not in node `inputs`.
+belong directly in `promptTemplate`, `prompts`, or a route condition, not in
+node `inputs`.
 Both `{{ params.brief }}` and the dollar-brace parameter form are supported.
 
 The current resolver substitutes text and detects missing required values; it
@@ -178,8 +178,10 @@ Node fields use the [DAG contract](orchestration.md#node-contract-and-data-flow)
 Omitting `skills` or `mcps` preserves that agent's/default selection; `[]`
 requests none. Non-empty lists request a specific selection, subject to backend
 support. A shared `instance` needs a stateful agent and dependency-ordered
-nodes targeting the same agent. Do not expect isolated working copies from
-parallelism alone.
+nodes targeting the same agent. For parallel writes, provide separate working
+copies or explicit file ownership in the workflow. The host's coding skill
+instructs coding agents to create worktrees; the DAG scheduler does not create
+them. See [Working with sub-agents](agent-collaboration.md#models-modes-and-shared-files).
 
 A DAG Playbook can carry `mcpServers` definitions, using the host MCP config
 schema. Its definition takes precedence over a same-named host server for

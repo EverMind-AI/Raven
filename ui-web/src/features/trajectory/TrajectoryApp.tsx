@@ -1,6 +1,8 @@
 /* The trajectory island: what `#trajHost` shows while the trajectory view is
- * up. A status line for what the index wants said, the duration bar under
- * it, and the list with the details pane beside it under both.
+ * up. The Scope Tab strip on top once there is a sub-agent tab to offer, with
+ * the line that names the sub-agent tab on screen, then a status line for
+ * what the index wants said, the duration bar under it, and the list with the
+ * details pane beside it under all of them.
  *
  * The root subscribes to the language itself, like every island, and to the
  * store for the few facts the status line reads; the list and the pane have
@@ -17,6 +19,7 @@ import { Details, Grip } from './Details'
 import * as details from './detailStore'
 import { DurationBar } from './DurationBar'
 import { EntryList, mib } from './EntryList'
+import { ScopeInfo, ScopeTabs } from './ScopeTabs'
 import * as store from './store'
 import './styles.css'
 
@@ -77,6 +80,8 @@ export function TrajectoryApp(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
     <div className="trajectory-root">
+      <ScopeTabs />
+      <ScopeInfo />
       <Status />
       <DurationBar />
       <Body />

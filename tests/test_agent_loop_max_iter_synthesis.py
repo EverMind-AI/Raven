@@ -203,6 +203,8 @@ def _bind_synth(provider, max_iterations: int = 40):
         provider=provider,
         max_iterations=max_iterations,
         _strip_think=AgentLoop._strip_think,
+        # Room for the whole ceiling: the wrap-up goes out unsized, as it did.
+        _reply_room=lambda messages, tools, model: None,
     )
     return AgentLoop._synthesize_final_on_exhaustion.__get__(fake_self)
 

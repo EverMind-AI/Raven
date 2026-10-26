@@ -593,6 +593,250 @@ def test_kinds_slots_and_owners_across_span_types(state):
     assert _one(entries, "read", "skill.read").meta == {"skill": "pdf"}
 
 
+_RUN_ATTRS = {
+    "subagent.task": "look around",
+    "subagent.label": "look",
+    "subagent.task_id": "k1",
+    "subagent.origin_session": "cli:s",
+    "subagent.agent": "researcher",
+    "subagent.instance": "scout",
+    "subagent.handle": "scout",
+    "subagent.dispatch": "spawn",
+}
+
+
+def _spawned_run(state, *run_records, with_run=True):
+    """A turn whose spawn call dispatched a sub-agent run with one model call of its own."""
+    spans = [
+        _span("t", "turn", "session.turn", start=0, end=2, attrs=_turn_attrs(state, "turn")),
+        _span(
+            "t", "spawn", "tool.call", parent="turn", start=1, end=2, attrs=_tool_attrs(state, "spawn", {}, "started")
+        ),
+        _span(
+            "t",
+            "child",
+            "llm.call",
+            parent="run",
+            start=3,
+            end=4,
+            attrs=_llm_attrs(state, "child", _messages("look around"), {"content": "seen"}),
+        ),
+    ]
+    if with_run:
+        spans[2:2] = list(run_records)
+    return spans
+
+
+def _run(*, start=2, end=3, **attrs):
+    return _span("t", "run", "subagent.run", parent="spawn", start=start, end=end, attrs={**_RUN_ATTRS, **attrs})
+
+
+def _checkpoint():
+    return _run(end=5, **{"subagent.in_progress": True})
+
+
+def _final(outcome="completed", end=9):
+    return _run(end=end, **{"subagent.in_progress": False, "subagent.outcome": outcome})
+
+
+def test_a_running_subagent_run_has_its_entry_and_its_steps_their_turn(state):
+    entries = tent.project_entries(_spawned_run(state, _checkpoint()), state=state, read=True).entries
+
+    run = _one(entries, "run", "subagent.run")
+    assert run.operation_status == "running"
+    assert run.status_evidence == ("subagent_in_progress",)
+    assert run.duration_ms is None
+    steps = [e for e in entries if e.span_id == "child"]
+    assert steps and all(e.turn_number == 1 and "turn_unknown" not in e.integrity for e in steps)
+
+    orphaned = tent.project_entries(_spawned_run(state, with_run=False), state=state, read=True).entries
+    assert all("turn_unknown" in e.integrity for e in orphaned if e.span_id == "child")
+
+
+@pytest.mark.parametrize("final_first", [False, True], ids=["checkpoint_then_final", "final_then_checkpoint"])
+def test_a_finished_subagent_run_replaces_its_checkpoint_in_either_order(state, final_first):
+    records = (_final(), _checkpoint()) if final_first else (_checkpoint(), _final())
+    entries = tent.project_entries(_spawned_run(state, *records), state=state, read=True).entries
+
+    run = _one(entries, "run", "subagent.run")
+    assert run.operation_status == "ok"
+    assert run.status_evidence == ()
+    assert run.duration_ms == 7000
+
+
+@pytest.mark.parametrize(
+    ("outcome", "status", "evidence", "fails"),
+    [
+        ("completed", "ok", (), False),
+        ("failed", "error", ("subagent_failed",), True),
+        ("aborted", "error", ("subagent_aborted",), True),
+        ("cancelled", "cancelled", ("subagent_cancelled",), False),
+        ("handed_off", "unknown", ("subagent_handed_off",), False),
+    ],
+)
+def test_a_subagent_run_s_outcome_sets_its_entry_status(state, outcome, status, evidence, fails):
+    entries = tent.project_entries(_spawned_run(state, _final(outcome)), state=state, read=True).entries
+
+    run = _one(entries, "run", "subagent.run")
+    assert (run.operation_status, run.status_evidence) == (status, evidence)
+    failures = [e for e in entries if e.span_id == "run" and e.failure_entry]
+    assert failures == ([run] if fails else [])
+
+
+def test_a_subagent_run_recorded_before_its_outcome_existed_projects_as_before(state):
+    old = _span(
+        "t",
+        "run",
+        "subagent.run",
+        parent="spawn",
+        start=2,
+        end=9,
+        attrs={
+            "subagent.task": "do",
+            "subagent.label": "helper",
+            "subagent.task_id": "k1",
+            "subagent.origin_session": "s",
+        },
+    )
+    entries = tent.project_entries(_spawned_run(state, old), state=state, read=True).entries
+
+    run = _one(entries, "run", "subagent.run")
+    assert (run.operation_status, run.status_evidence, run.duration_ms) == ("ok", (), 7000)
+    assert run.meta == {"label": "helper", "task_id": "k1"}
+
+
+def test_a_subagent_run_entry_names_the_run_in_its_meta(state):
+    entries = tent.project_entries(_spawned_run(state, _final()), state=state, read=True).entries
+
+    assert _one(entries, "run", "subagent.run").meta == {
+        "label": "look",
+        "task_id": "k1",
+        "agent": "researcher",
+        "instance": "scout",
+        "handle": "scout",
+        "dispatch": "spawn",
+        "outcome": "completed",
+    }
+
+
+@pytest.mark.parametrize("name", ["agent", "instance", "handle", "dispatch", "outcome"])
+@pytest.mark.parametrize("recorded", ["absent", "null"])
+def test_a_subagent_run_meta_leaves_out_a_name_it_has_no_value_for(state, name, recorded):
+    final = _final()
+    if recorded == "absent":
+        del final["attributes"][f"subagent.{name}"]
+    else:
+        final["attributes"][f"subagent.{name}"] = None
+    entries = tent.project_entries(_spawned_run(state, final), state=state, read=True).entries
+
+    meta = _one(entries, "run", "subagent.run").meta
+    assert name not in meta
+    assert {"label", "task_id", "agent", "instance", "handle", "dispatch", "outcome"} - {name} == set(meta)
+
+
+_ATTEMPT_ATTRS = {
+    "subagent.task": "pull it",
+    "subagent.label": "pull the feedback",
+    "subagent.task_id": "pull",
+    "subagent.origin_session": "cli:s",
+    "subagent.agent": "researcher",
+    "subagent.handle": "pull",
+    "subagent.dispatch": "dag",
+    "subagent.dag_run_id": "run-1",
+    "subagent.node_id": "pull",
+    "subagent.attempt": 1,
+    "subagent.in_progress": False,
+}
+
+
+def _dag_attempt(state, outcome, reason=None):
+    """A turn's run_subagent_dag call, and one attempt of its node with a model call of its own."""
+    status = {"code": "ERROR", "message": reason} if reason else None
+    return [
+        _span("t", "turn", "session.turn", start=0, end=9, attrs=_turn_attrs(state, "turn")),
+        _span(
+            "t",
+            "dag",
+            "tool.call",
+            parent="turn",
+            start=1,
+            end=9,
+            attrs=_tool_attrs(state, "run_subagent_dag", {}, "started"),
+        ),
+        _span(
+            "t",
+            "attempt",
+            "subagent.run",
+            parent="dag",
+            start=2,
+            end=8,
+            attrs={**_ATTEMPT_ATTRS, "subagent.outcome": outcome},
+            status=status,
+        ),
+        _span(
+            "t",
+            "step",
+            "llm.call",
+            parent="attempt",
+            start=3,
+            end=4,
+            attrs=_llm_attrs(state, "step", _messages("pull it"), {"content": "pulled"}),
+        ),
+    ]
+
+
+def test_a_dag_node_attempt_entry_names_the_node_in_its_meta(state):
+    entries = tent.project_entries(_dag_attempt(state, "completed"), state=state, read=True).entries
+
+    assert _one(entries, "attempt", "subagent.run").meta == {
+        "label": "pull the feedback",
+        "task_id": "pull",
+        "agent": "researcher",
+        "handle": "pull",
+        "dispatch": "dag",
+        "outcome": "completed",
+        "dag_run_id": "run-1",
+        "node_id": "pull",
+        "attempt": 1,
+    }
+
+
+@pytest.mark.parametrize("name", ["dag_run_id", "node_id", "attempt"])
+@pytest.mark.parametrize("recorded", ["absent", "null"])
+def test_a_dag_node_attempt_meta_leaves_out_a_name_it_has_no_value_for(state, name, recorded):
+    spans = _dag_attempt(state, "completed")
+    attempt = next(span for span in spans if span["spanId"] == "attempt")
+    if recorded == "absent":
+        del attempt["attributes"][f"subagent.{name}"]
+    else:
+        attempt["attributes"][f"subagent.{name}"] = None
+    entries = tent.project_entries(spans, state=state, read=True).entries
+
+    meta = _one(entries, "attempt", "subagent.run").meta
+    assert name not in meta
+    assert {"dag_run_id", "node_id", "attempt"} - {name} <= set(meta)
+
+
+@pytest.mark.parametrize(
+    ("outcome", "reason", "status", "evidence", "fails"),
+    [
+        ("completed", None, "ok", (), False),
+        ("failed", "boom", "error", ("span_error",), True),
+        ("exception", "a token", "error", ("span_error",), True),
+        ("continued", "a token", "error", ("span_error",), True),
+        ("cancelled", None, "cancelled", ("subagent_cancelled",), False),
+    ],
+)
+def test_a_dag_node_attempt_s_outcome_sets_its_entry_status(state, outcome, reason, status, evidence, fails):
+    entries = tent.project_entries(_dag_attempt(state, outcome, reason), state=state, read=True).entries
+
+    run = _one(entries, "attempt", "subagent.run")
+    assert (run.operation_status, run.status_evidence) == (status, evidence)
+    assert len([e for e in entries if e.span_id == "attempt" and e.failure_entry]) == (1 if fails else 0)
+    steps = [e for e in entries if e.span_id == "step"]
+    assert steps and all(e.turn_number == 1 and "turn_unknown" not in e.integrity for e in steps)
+
+
 def test_generic_owner_prefers_output_phase_over_key_order(state):
     both = {
         "foo.output.artifact_path": _artifact(state, {"o": 1}, "g-out"),
@@ -644,6 +888,328 @@ def test_base_spans_get_a_summary_entry(state):
     rich = _one(entries, "rich", "summary")
     assert rich.preview is not None and "memory.queue" in rich.preview and "\n" not in rich.preview
     assert rich.operation_status == "ok" and rich.status_evidence == ("outer_only",)
+
+
+# ── sub-agent scope ───────────────────────────────────────────────────
+
+
+def _scope_fields(entries, span_id):
+    """(subagent_scope, opens_subagent_scope, dispatched_by_subagent_scope), alike on every entry of the span."""
+    found = {
+        (e.subagent_scope, e.opens_subagent_scope, e.dispatched_by_subagent_scope)
+        for e in entries
+        if e.span_id == span_id
+    }
+    assert len(found) == 1, (span_id, found)
+    return found.pop()
+
+
+def _turn_span(state, trace, span_id, *, start, end, extra=None):
+    attrs = {**_turn_attrs(state, f"{trace}-{span_id}"), **(extra or {})}
+    return _span(trace, span_id, "session.turn", start=start, end=end, attrs=attrs)
+
+
+def _tool_span(state, trace, span_id, parent, tool, *, start, end=None):
+    attrs = _tool_attrs(state, tool, {}, "ok")
+    return _span(
+        trace, span_id, "tool.call", parent=parent, start=start, end=end if end is not None else start + 1, attrs=attrs
+    )
+
+
+def _run_span(trace, span_id, parent, *, start, end):
+    attrs = {**_RUN_ATTRS, "subagent.in_progress": False, "subagent.outcome": "completed"}
+    return _span(trace, span_id, "subagent.run", parent=parent, start=start, end=end, attrs=attrs)
+
+
+def _attempt_span(trace, span_id, parent, *, start, end):
+    attrs = {
+        **_ATTEMPT_ATTRS,
+        "subagent.task_id": span_id,
+        "subagent.handle": span_id,
+        "subagent.node_id": span_id,
+        "subagent.outcome": "completed",
+    }
+    return _span(trace, span_id, "subagent.run", parent=parent, start=start, end=end, attrs=attrs)
+
+
+def _step(state, trace, span_id, parent, *, start, purpose=None):
+    return _call(state, trace, span_id, parent, start=start, messages=_messages(f"step {span_id}"), purpose=purpose)
+
+
+def test_each_spawned_run_owns_its_own_steps_and_its_entry_opens_it(state):
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=20),
+        _tool_span(state, "t", "spawn1", "turn", "spawn", start=1),
+        _tool_span(state, "t", "spawn2", "turn", "spawn", start=2),
+        _run_span("t", "run1", "spawn1", start=2, end=10),
+        _run_span("t", "run2", "spawn2", start=3, end=12),
+        _step(state, "t", "s1", "run1", start=4),
+        _tool_span(state, "t", "s1-tool", "run1", "read_file", start=5),
+        _step(state, "t", "s2", "run2", start=6),
+        _step(state, "t", "own", "turn", start=15),
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+
+    assert _scope_fields(entries, "run1") == (None, "t:run1", None)
+    assert _scope_fields(entries, "run2") == (None, "t:run2", None)
+    assert _scope_fields(entries, "s1") == _scope_fields(entries, "s1-tool") == ("t:run1", None, None)
+    assert _scope_fields(entries, "s2") == ("t:run2", None, None)
+    for span_id in ("turn", "spawn1", "spawn2", "own"):
+        assert _scope_fields(entries, span_id) == (None, None, None), span_id
+    # The boundary is not `origin`: a spawned run's steps share its turn's trace and stay `main`.
+    assert {e.origin for e in entries if e.span_id in ("s1", "s2")} == {"main"}
+
+
+def test_a_run_still_working_through_the_next_turn_keeps_its_steps_and_the_session_stays_in_order(state):
+    spans = [
+        _turn_span(state, "t", "turn1", start=0, end=10),
+        _tool_span(state, "t", "spawn", "turn1", "spawn", start=1),
+        _run_span("t", "run", "spawn", start=2, end=28),
+        _step(state, "t", "early", "run", start=14),
+        _step(state, "t", "late", "run", start=25),
+        _turn_span(state, "u", "turn2", start=12, end=30),
+        _step(state, "u", "reply", "turn2", start=20),
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+
+    order = [e.entry_id for e in entries]
+    opened = order.index("u:turn2:turn.input")
+    closed = order.index("u:turn2:turn.output")
+    steps = [i for i, e in enumerate(entries) if e.span_id in ("early", "late")]
+    assert steps and all(opened < i < closed for i in steps)
+    assert {e.subagent_scope for e in entries if e.span_id in ("early", "late")} == {"t:run"}
+    numbers = [e.turn_number for e in entries]
+    main = [e.turn_number for e in entries if e.subagent_scope is None]
+    assert numbers != sorted(numbers) and main == sorted(main)
+
+
+@pytest.mark.parametrize(
+    ("by", "scope"),
+    [("run", "t:run"), ("inside", "t:run"), ("spawn", None), ("gone", None)],
+    ids=["the_run", "a_step_of_the_run", "the_spawn_call", "an_unknown_span"],
+)
+def test_a_dispatched_turn_names_the_scope_that_dispatched_it_on_its_root_only(state, by, scope):
+    link = {"trace.dispatched_in_trace_id": "t", "trace.dispatched_by_span_id": by}
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=50),
+        _tool_span(state, "t", "spawn", "turn", "spawn", start=1),
+        _run_span("t", "run", "spawn", start=2, end=20),
+        _tool_span(state, "t", "inside", "run", "read_file", start=3),
+        _turn_span(state, "r", "report", start=30, end=40, extra=link),
+        _step(state, "r", "answer", "report", start=31),
+        _turn_span(state, "u", "plain", start=60, end=70),
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+
+    assert {e.slot for e in entries if e.span_id == "report"} == {"turn.input", "turn.output"}
+    # The report itself is a turn of the main session; only its root names where it came from.
+    assert _scope_fields(entries, "report") == (None, None, scope)
+    assert _scope_fields(entries, "answer") == (None, None, None)
+    assert _scope_fields(entries, "plain") == (None, None, None)
+
+
+@pytest.mark.parametrize(
+    ("nodes", "by", "scope"),
+    [(True, "n1", "t:n1"), (True, "dag", None), (False, "dag", "t:dag")],
+    ids=["a_node_s_report", "the_graph_s_result", "the_graph_s_result_before_node_spans"],
+)
+def test_a_turn_a_graph_dispatched_names_a_scope_only_one_that_holds_steps(state, nodes, by, scope):
+    link = {"trace.dispatched_in_trace_id": "t", "trace.dispatched_by_span_id": by}
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=50),
+        _tool_span(state, "t", "dag", "turn", "run_subagent_dag", start=1, end=20),
+        _turn_span(state, "r", "report", start=30, end=40, extra=link),
+    ]
+    if nodes:
+        spans += [_attempt_span("t", "n1", "dag", start=2, end=10), _step(state, "t", "work", "n1", start=3)]
+    else:
+        spans.append(_step(state, "t", "work", "dag", start=3))
+    entries = tent.project_entries(spans, state=state, read=True).entries
+
+    assert _scope_fields(entries, "report") == (None, None, scope)
+
+
+@pytest.mark.parametrize("loose", [False, True], ids=["all_in_nodes", "a_step_outside_the_nodes"])
+def test_a_dag_node_owns_its_steps_and_its_verdict_and_the_graph_opens_only_what_is_left(state, loose):
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=50),
+        _tool_span(state, "t", "dag", "turn", "run_subagent_dag", start=1, end=30),
+        _attempt_span("t", "n1", "dag", start=2, end=10),
+        _step(state, "t", "n1-work", "n1", start=3),
+        _step(state, "t", "n1-verdict", "n1", start=8, purpose="dag_verdict"),
+        _attempt_span("t", "n2", "dag", start=4, end=12),
+        _step(state, "t", "n2-work", "n2", start=5),
+        _step(state, "t", "n2-verdict", "n2", start=11, purpose="dag_verdict"),
+    ]
+    if loose:
+        spans.append(_step(state, "t", "loose", "dag", start=20))
+    entries = tent.project_entries(spans, state=state, read=True).entries
+
+    for node in ("n1", "n2"):
+        assert _scope_fields(entries, node) == (None, f"t:{node}", None)
+        assert _scope_fields(entries, f"{node}-work") == (f"t:{node}", None, None)
+        assert _scope_fields(entries, f"{node}-verdict") == (f"t:{node}", None, None)
+    if loose:
+        assert _scope_fields(entries, "loose") == ("t:dag", None, None)
+        assert _scope_fields(entries, "dag") == (None, "t:dag", None)
+    else:
+        assert _scope_fields(entries, "dag") == (None, None, None)
+
+
+@pytest.mark.parametrize("nodes", [True, False], ids=["rounds_in_node_spans", "rounds_before_node_spans"])
+def test_the_review_of_a_graph_call_is_the_main_agent_s_and_opens_no_scope_for_the_graph(state, nodes):
+    """The permission gate reviews a call inside its span, so the reviewer's call sits under the graph's."""
+    link = {"trace.dispatched_in_trace_id": "t", "trace.dispatched_by_span_id": "dag"}
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=60),
+        _tool_span(state, "t", "dag", "turn", "run_subagent_dag", start=1, end=30),
+        _step(state, "t", "review", "dag", start=2, purpose="permission_judge"),
+        _turn_span(state, "r", "report", start=31, end=35, extra=link),
+        _tool_span(state, "t", "spawn", "turn", "spawn", start=40),
+        _step(state, "t", "spawn-review", "spawn", start=41, purpose="permission_judge"),
+        _run_span("t", "run", "spawn", start=42, end=50),
+        _tool_span(state, "t", "inside", "run", "read_file", start=43),
+        _step(state, "t", "inside-review", "inside", start=44, purpose="permission_judge"),
+    ]
+    if nodes:
+        spans += [_attempt_span("t", "n1", "dag", start=3, end=10), _step(state, "t", "work", "n1", start=4)]
+    else:
+        spans.append(_step(state, "t", "work", "dag", start=4))
+    entries = tent.project_entries(spans, state=state, read=True).entries
+
+    # The review belongs where the call it reviews belongs: the main session, or a run's own call to its run.
+    assert _scope_fields(entries, "review") == _scope_fields(entries, "spawn-review") == (None, None, None)
+    assert _scope_fields(entries, "inside-review") == ("t:run", None, None)
+    if nodes:
+        assert _scope_fields(entries, "work") == ("t:n1", None, None)
+        assert _scope_fields(entries, "dag") == _scope_fields(entries, "report") == (None, None, None)
+    else:
+        assert _scope_fields(entries, "work") == ("t:dag", None, None)
+        assert _scope_fields(entries, "dag") == (None, "t:dag", None)
+        assert _scope_fields(entries, "report") == (None, None, "t:dag")
+
+
+def test_a_graph_recorded_without_node_spans_owns_every_step_under_its_call(state):
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=50),
+        _tool_span(state, "t", "dag", "turn", "run_subagent_dag", start=1, end=30),
+        _step(state, "t", "work", "dag", start=3),
+        _tool_span(state, "t", "read", "dag", "read_file", start=4),
+        _step(state, "t", "verdict", "dag", start=8, purpose="dag_verdict"),
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+
+    for span_id in ("work", "read", "verdict"):
+        assert _scope_fields(entries, span_id) == ("t:dag", None, None), span_id
+    assert _scope_fields(entries, "dag") == (None, "t:dag", None)
+    assert {e.slot for e in entries if e.span_id == "dag"} == {"tool.input", "tool.output"}
+
+
+def test_a_replan_round_belongs_to_the_resolve_call_that_started_it(state):
+    """Reached through the tool_call meta tool, resolve_dag_node is a call inside a call."""
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=90),
+        _tool_span(state, "t", "dag", "turn", "run_subagent_dag", start=1, end=5),
+        _step(state, "t", "first-round", "dag", start=3),
+        _tool_span(state, "t", "meta", "turn", "tool_call", start=40, end=42),
+        _tool_span(state, "t", "resolve", "meta", "resolve_dag_node", start=40),
+        _step(state, "t", "new-round", "resolve", start=50),
+        _tool_span(state, "t", "resolve2", "turn", "resolve_dag_node", start=60),
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+
+    assert _scope_fields(entries, "new-round") == ("t:resolve", None, None)
+    assert _scope_fields(entries, "first-round") == ("t:dag", None, None)
+    # The decision itself is the main agent's: its input and output stay in the session.
+    assert {e.slot for e in entries if e.span_id == "resolve"} == {"tool.input", "tool.output"}
+    assert _scope_fields(entries, "resolve") == (None, "t:resolve", None)
+    assert _scope_fields(entries, "meta") == (None, None, None)
+    # A decision that started no new round has nothing under it to open.
+    assert _scope_fields(entries, "resolve2") == (None, None, None)
+
+
+def test_a_replan_round_run_in_node_spans_belongs_to_its_nodes(state):
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=90),
+        _tool_span(state, "t", "dag", "turn", "run_subagent_dag", start=1, end=5),
+        _attempt_span("t", "n1", "dag", start=2, end=4),
+        _step(state, "t", "n1-work", "n1", start=3),
+        _tool_span(state, "t", "resolve", "turn", "resolve_dag_node", start=40),
+        _attempt_span("t", "n2", "resolve", start=42, end=50),
+        _step(state, "t", "n2-work", "n2", start=43),
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+
+    assert _scope_fields(entries, "n2-work") == ("t:n2", None, None)
+    assert _scope_fields(entries, "n2") == (None, "t:n2", None)
+    assert _scope_fields(entries, "n1-work") == ("t:n1", None, None)
+    assert _scope_fields(entries, "resolve") == _scope_fields(entries, "dag") == (None, None, None)
+
+
+def test_an_external_agent_belongs_to_the_run_or_node_it_ran_in(state):
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=50),
+        _tool_span(state, "t", "spawn", "turn", "spawn", start=1),
+        _run_span("t", "run", "spawn", start=2, end=20),
+        _span("t", "ext", "subagent.external", parent="run", start=3, end=19),
+        _tool_span(state, "t", "dag", "turn", "run_subagent_dag", start=21, end=40),
+        _attempt_span("t", "n1", "dag", start=22, end=39),
+        _span("t", "ext2", "subagent.external", parent="n1", start=23, end=38),
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+
+    assert _scope_fields(entries, "ext") == ("t:run", None, None)
+    assert _scope_fields(entries, "ext2") == ("t:n1", None, None)
+
+
+def test_a_running_run_owns_its_steps_and_a_step_whose_run_is_not_on_record_has_no_scope(state):
+    entries = tent.project_entries(_spawned_run(state, _checkpoint()), state=state, read=True).entries
+    run = _one(entries, "run", "subagent.run")
+    assert run.operation_status == "running" and run.opens_subagent_scope == "t:run"
+    assert _scope_fields(entries, "child") == ("t:run", None, None)
+
+    orphaned = tent.project_entries(_spawned_run(state, with_run=False), state=state, read=True).entries
+    assert _scope_fields(orphaned, "child") == (None, None, None)
+
+
+def test_records_without_a_span_id_belong_to_no_scope_and_open_none(state):
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=50),
+        _tool_span(state, "t", "spawn", "turn", "spawn", start=1),
+        _run_span("t", "run", "spawn", start=2, end=20),
+        _span("t", None, "llm.call", parent="run", start=3, end=4),
+        _span("t", None, "subagent.run", parent="spawn", start=5, end=6, attrs=dict(_RUN_ATTRS)),
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+
+    broken = [e for e in entries if e.entry_id.startswith("broken:")]
+    assert {e.span_name for e in broken} == {"llm.call", "subagent.run"}
+    assert {(e.subagent_scope, e.opens_subagent_scope, e.dispatched_by_subagent_scope) for e in broken} == {
+        (None, None, None)
+    }
+
+
+def test_ancestry_past_the_depth_limit_or_round_a_cycle_has_no_scope(state):
+    deepest = tconv._DEPTH_LIMIT - 1
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=50),
+        _tool_span(state, "t", "spawn", "turn", "spawn", start=1),
+        _run_span("t", "run", "spawn", start=2, end=20),
+    ]
+    parent = "run"
+    for depth in range(deepest + 1):
+        spans.append(_span("t", f"c{depth}", "custom.step", parent=parent, start=3, end=4))
+        parent = f"c{depth}"
+    spans += [
+        _span("t", "loop-a", "custom.step", parent="loop-b", start=5, end=6),
+        _span("t", "loop-b", "custom.step", parent="loop-a", start=5, end=6),
+    ]
+    entries = tent.project_entries(spans, state=state).entries
+
+    # The walk looks as far up as the turn lookup does: a chain of at most the limit, the span itself included.
+    assert _scope_fields(entries, f"c{deepest - 1}") == ("t:run", None, None)
+    assert _scope_fields(entries, f"c{deepest}") == (None, None, None)
+    assert _scope_fields(entries, "loop-a") == _scope_fields(entries, "loop-b") == (None, None, None)
 
 
 # ── read modes and previews ────────────────────────────────────────────
@@ -1253,28 +1819,74 @@ def test_a_continued_input_whose_added_messages_start_with_a_system_message_prev
     assert _one(entries, "a3", "llm.input").preview == "a reminder slipped in"
 
 
-def test_sub_agent_inputs_are_measured_against_their_own_trace(state):
-    s, u1, a1, u2 = _m("system", "rules"), _m("user", "q1"), _m("assistant", "a1"), _m("user", "q2")
+def test_a_turn_reported_back_continues_the_main_session_and_a_sub_agent_starts_its_own(state):
+    s, u1, a1 = _m("system", "rules"), _m("user", "q1"), _m("assistant", "a1")
+    ss, task, worked, found = (
+        _m("system", "you are a helper"),
+        _m("user", "look around"),
+        _m("assistant", "looking"),
+        _m("tool", "found it"),
+    )
+    report = _m("user", "the helper finished: found it")
+    link = {"trace.dispatched_in_trace_id": "A", "trace.dispatched_by_span_id": "run"}
     spans = [
-        _span("A", "tA", "session.turn", start=0, end=30, attrs=_turn_attrs(state, "tA")),
-        _call(state, "A", "a1", "tA", start=1, messages=[s, u1, a1, u2], purpose="main"),
-        _span(
-            "S",
-            "sub",
-            "session.turn",
-            start=2,
-            end=20,
-            attrs={**_turn_attrs(state, "sub"), "trace.dispatched_in_trace_id": "A"},
-        ),
-        _call(state, "S", "s1", "sub", start=3, messages=[s, u1], purpose="main"),
-        _call(state, "S", "s2", "sub", start=4, messages=[s, u1, a1], purpose="main"),
+        _turn_span(state, "A", "tA", start=0, end=10),
+        _call(state, "A", "m1", "tA", start=1, messages=[s, u1], purpose="main"),
+        _tool_span(state, "A", "spawn", "tA", "spawn", start=2),
+        _run_span("A", "run", "spawn", start=3, end=20),
+        _call(state, "A", "sub1", "run", start=4, messages=[ss, task]),
+        _call(state, "A", "sub2", "run", start=5, messages=[ss, task, worked, found]),
+        _turn_span(state, "R", "report", start=30, end=40, extra=link),
+        _call(state, "R", "r1", "report", start=31, messages=[s, u1, a1, report], purpose="main"),
     ]
     entries = tent.project_entries(spans, state=state, read=True).entries
-    assert _one(entries, "s1", "llm.input").origin == "subagent"
-    assert _delta(entries, "s1") == ("first", 0, 2)
-    # Only s1's own output was added: nothing new, and the row keeps its prompt.
-    assert _delta(entries, "s2") == ("continued", 3, 3)
-    assert _one(entries, "s2", "llm.input").preview == "a1"
+    assert _delta(entries, "m1") == ("first", 0, 2)
+    # The run's first input is the first of its own scope, not an input the session failed to continue.
+    assert _delta(entries, "sub1") == ("first", 0, 2)
+    assert _delta(entries, "sub2") == ("continued", 3, 4)
+    assert _one(entries, "sub2", "llm.input").meta["echo_at"] == 2
+    # The report is the main agent's next call on its own history.
+    assert _delta(entries, "r1") == ("continued", 3, 4)
+    assert _one(entries, "r1", "llm.input").meta["echo_at"] == 2
+    assert _one(entries, "r1", "llm.input").preview == "the helper finished: found it"
+    assert _one(entries, "r1", "llm.input").origin == "subagent"
+
+
+def test_sub_agent_inputs_never_crowd_the_main_session_s_predecessor_out_of_its_window(state):
+    s, u1, a1, u2 = _m("system", "rules"), _m("user", "q1"), _m("assistant", "a1"), _m("user", "q2")
+    crowd = [_m("system", "you are a helper"), _m("user", "look around")]
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=30),
+        _call(state, "t", "m1", "turn", start=1, messages=[s, u1], purpose="main"),
+        _tool_span(state, "t", "spawn", "turn", "spawn", start=2),
+        _run_span("t", "run", "spawn", start=3, end=20),
+        *(_call(state, "t", f"s{n:02d}", "run", start=4, messages=crowd) for n in range(tent.DELTA_CANDIDATES + 1)),
+        _call(state, "t", "m2", "turn", start=10, messages=[s, u1, a1, u2], purpose="main"),
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+    assert _delta(entries, "s00") == ("first", 0, 2)
+    assert _delta(entries, "m2") == ("continued", 3, 4)
+    assert _one(entries, "m2", "llm.input").meta["echo_at"] == 2
+
+
+def test_a_sub_agent_input_not_read_yet_leaves_the_main_session_s_inputs_decided(state):
+    s, u1, a1, u2 = _m("system", "rules"), _m("user", "q1"), _m("assistant", "a1"), _m("user", "q2")
+    m1 = _call(state, "t", "m1", "turn", start=1, messages=[s, u1], purpose="main")
+    sub = _call(state, "t", "sub", "run", start=4, messages=[_m("user", "look around")])
+    m2 = _call(state, "t", "m2", "turn", start=6, messages=[s, u1, a1, u2], purpose="main")
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=30),
+        m1,
+        _tool_span(state, "t", "spawn", "turn", "spawn", start=2),
+        _run_span("t", "run", "spawn", start=3, end=20),
+        sub,
+        m2,
+    ]
+    budget = tent.ReadBudget(10, 10**7)
+    cached = {("t", c["spanId"]): tent.preview_records(c, state=state, budget=budget).records for c in (m1, m2)}
+    entries = tent.project_entries(spans, state=state, cached_records=cached).entries
+    assert _delta(entries, "sub")[0] == "unknown"
+    assert _delta(entries, "m2") == ("continued", 3, 4)
 
 
 def test_delta_is_unknown_until_the_predecessor_is_read(state):
@@ -1395,6 +2007,22 @@ def test_replies_repeating_the_last_model_output_are_marked_hidden(state):
     assert "hidden" not in _one(entries, "fb1", "summary").meta
     # The hidden reply still owns the turn's clock.
     assert _one(entries, "turn", "turn.output").charged_ms == 10000
+
+
+@pytest.mark.parametrize("spawned", [False, True], ids=["alone", "with_a_sub_agent_answering_later"])
+def test_a_turn_s_end_is_compared_with_the_main_session_s_last_output_only(state, spawned):
+    spans = [
+        _span("t", "turn", "session.turn", start=0, end=10, attrs=_turn_attrs(state, "turn", content_out="Done.")),
+        _call(state, "t", "l1", "turn", start=1, messages=[_m("user", "go")], content="Done.", purpose="main"),
+    ]
+    if spawned:
+        spans += [
+            _tool_span(state, "t", "spawn", "turn", "spawn", start=2),
+            _run_span("t", "run", "spawn", start=3, end=30),
+            _call(state, "t", "sub", "run", start=20, messages=[_m("user", "look around")], content="Found it."),
+        ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+    assert _one(entries, "turn", "turn.output").meta.get("hidden") == "redundant_reply"
 
 
 def _end_attrs(state, name, content, *, written=True):

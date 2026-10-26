@@ -893,6 +893,10 @@ SKILL_LANE_TOOLS = {
 #: the fold off would hold it open at exactly the size it exists for.
 TRUNK_RESERVED = {"tool_call", "tool_search"}
 
+#: Trunk serves ``context_retrieve`` beside the default compacting history
+#: strategy, so the refs that strategy leaves in the window can be read back.
+TRUNK_HISTORY = {"context_retrieve"}
+
 #: The machine lane, opened 2026-09-23. This product builds a case where the
 #: solver is and smoke-tests it there, and in the usual chain it runs before
 #: the on-call agent -- so when the owner's registry lists no machine that
@@ -909,6 +913,7 @@ MACHINE_LANE_TOOLS = {"ops_connection_add"}
 #: fixture, so their disable rows are the pin.
 VENDORED_TOOL_FACE = {
     "ask_user",
+    "context_retrieve",
     "edit_file",
     "exec",
     "find_skill",
@@ -961,6 +966,7 @@ def test_the_face_arithmetic_is_the_ledger():
         | SKILL_LANE_TOOLS
         | MACHINE_LANE_TOOLS
         | TRUNK_RESERVED
+        | TRUNK_HISTORY
     )
     assert VENDORED_TOOL_FACE == expected
 

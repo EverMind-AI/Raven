@@ -409,6 +409,14 @@ export interface TranscriptDelegated {
    * Set for a dag node's own message, so a client can place it against that row.
    */
   node_id?: string;
+  /**
+   * What a dag node itself returned on the attempt its report is about -- its error, when it raised -- carried for the reader beside the report the model was given. Set only on a node's own report, and present even when empty: an empty string is a node that said nothing, an absent one a report about no attempt (a stall notice) or a server that never sent it.
+   */
+  output?: string;
+  /**
+   * Whether output is limited to the first 20,000 characters. Separate from the node's text; absent on older records and reports without output.
+   */
+  output_truncated?: boolean | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -1578,14 +1586,22 @@ export interface TurnStartedEvent {
       label: string;
       status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled';
       /**
-       * Which node of the run this is about. Present only on `kind: dag` with `status: exception`, where the report concerns one node rather than the whole run.
+       * Which node of the run this is about. Present only on a `kind: dag` node's own report, which concerns one node rather than the whole run.
        */
       node_id?: string;
       run_id?: string;
       /**
-       * The text that re-entered the conversation, verbatim; a client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence.
+       * The text that re-entered the conversation, verbatim; a client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence, or `output` instead where a node's report carries it.
        */
       content?: string;
+      /**
+       * What a dag node itself returned on the attempt its report is about -- its error, when it raised -- carried for the reader beside the report the model was given. Set only on a node's own report, and present even when empty: an empty string is a node that said nothing, an absent one a report about no attempt (a stall notice) or a server that never sent it.
+       */
+      output?: string;
+      /**
+       * Whether output is limited to the first 20,000 characters. Separate from the node's text; absent on older records and reports without output.
+       */
+      output_truncated?: boolean | null;
     };
     target?: DirectTarget;
   };
@@ -1912,13 +1928,21 @@ export interface SubagentDeliveredEvent {
      */
     run_id?: string;
     /**
-     * The text that re-entered the conversation, verbatim. A client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence -- and a client replaying this turn later reads the same string from the stored entry's `text`, so one rule over one input keeps the live view and the reloaded one from disagreeing about what was delivered.
+     * The text that re-entered the conversation, verbatim. A client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence, or `output` instead where a node's report carries it -- and a client replaying this turn later reads the same string from the stored entry's `text`, so one rule over one input keeps the live view and the reloaded one from disagreeing about what was delivered.
      */
     content?: string;
     /**
      * Set for a dag node's own message, so a client can place it against that row.
      */
     node_id?: string;
+    /**
+     * What a dag node itself returned on the attempt its report is about -- its error, when it raised -- carried for the reader beside the report the model was given. Set only on a node's own report, and present even when empty: an empty string is a node that said nothing, an absent one a report about no attempt (a stall notice) or a server that never sent it.
+     */
+    output?: string;
+    /**
+     * Whether output is limited to the first 20,000 characters. Separate from the node's text; absent on older records and reports without output.
+     */
+    output_truncated?: boolean | null;
   };
 }
 /**
@@ -3130,9 +3154,21 @@ export interface TrajectoryEntry {
   turn_number?: number | null;
   turn_start: boolean;
   /**
-   * Whether the trace is the session's own or a dispatched sub-agent's.
+   * Whether the entry's trace was dispatched from another trace (a follow-up turn such as a sub-agent's report, or a trace linked in from another session). Not the sub-agent boundary: see subagent_scope.
    */
   origin: 'main' | 'subagent';
+  /**
+   * The Sub-agent Scope the entry belongs to: trace_id:span_id of the nearest sub-agent boundary above its span (a subagent.run span, or a run_subagent_dag / resolve_dag_node tool call; a boundary's own entries, and the permission reviewer's llm.call recorded under the call it reviews, look only for a subagent.run above). Null for the main session. Decided by span ancestry, never by time; kept when the boundary is trimmed to a skeleton.
+   */
+  subagent_scope?: string | null;
+  /**
+   * On a boundary's own entries, the Sub-agent Scope it opens: always for a subagent.run, for a graph tool call only while at least one entry belongs to that scope. Null otherwise.
+   */
+  opens_subagent_scope?: string | null;
+  /**
+   * On the root entries of a dispatched session.turn trace, the Sub-agent Scope that dispatched it: the dispatching span when it is a boundary, else that span's own subagent_scope. Null when the span is unknown or in the main session, or names a graph scope no entry belongs to. The turn itself belongs to the main session.
+   */
+  dispatched_by_subagent_scope?: string | null;
   sort_key: JsonValue[];
   event_time: string;
   /**
@@ -3717,6 +3753,7 @@ export interface TurnUnsubscribeResult {
 export interface TurnCancelParams {
   session_key: string;
   target?: DirectTarget;
+  turn_id?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -3724,6 +3761,10 @@ export interface TurnCancelParams {
  */
 export interface TurnCancelResult {
   cancelled: boolean;
+  /**
+   * Only on a refusal: whether the lane still has a turn to run -- the one that replaced the turn named, one queued, or a message waiting to run as a turn of its own. A client cannot learn it from the frames in time: this reply goes out as soon as the handler returns, while the frame opening a turn that has just started can still be waiting out the subscription's coalescing window. Absent from an accepted cancel, and from an older server.
+   */
+  busy?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4611,12 +4652,13 @@ export interface MachinesAddResult {
    */
   detail: string;
   /**
-   * Why the row was not written, as a kind the page can explain: the machine could not be reached, refused the login, presented a changed host key, did not answer in time, ssh is missing here, this computer cannot use the login picked (a password on Windows), the id is taken, the fields are not usable, or the registry file cannot be changed. Empty when it was written.
+   * Why the row was not written, as a kind the page can explain: the machine could not be reached, refused the login, asked a question the kept password does not answer (so the password was not sent), presented a changed host key, did not answer in time, ssh is missing here, this computer cannot use the login picked (a password on Windows), the id is taken, the fields are not usable, or the registry file cannot be changed. Empty when it was written.
    */
   reason:
     | ''
     | 'unreachable'
     | 'login'
+    | 'prompt'
     | 'hostkey'
     | 'timeout'
     | 'nossh'
@@ -5812,6 +5854,10 @@ export interface FsDirsResult {
    * Whether the listed directory itself may be a session's working directory.
    */
   ok: boolean;
+  /**
+   * The filesystem roots, listed only while the directory listed is one: a root has no parent, so on a host with several (Windows drives) they are reachable no other way. Every drive is listed, the one the browser stands on included, each judged as a folder row is.
+   */
+  roots?: FsDirEntry[];
   /**
    * Subdirectories only, dotfiles omitted, sorted by name; at most the first 500 found.
    */

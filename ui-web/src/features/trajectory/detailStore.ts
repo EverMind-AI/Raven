@@ -176,6 +176,12 @@ export interface DetailsState {
   pins: Record<string, Tab | null>
   /** The entry the pane just arrived at, whose tab the pin is still to decide. */
   arrival: string | null
+  /** Whether the pane was open in each Scope Tab not on screen, by `list.scopeKey`. */
+  openByScope: Record<string, boolean>
+  /** The blocks to open first on an entry's next arrival when no pin applies, best first; spent on that arrival. */
+  preferred: Record<string, string[]>
+  /** The pane last closed because the reader moved to a tab where it was closed, not because they closed it. */
+  swapped: boolean
   /** Scroll offsets by entry and tab: an intention, kept across revisions. */
   scrollByEntryTab: Record<string, number>
   descriptors: Record<string, DescriptorRecord>
@@ -222,6 +228,9 @@ const initial: DetailsState = {
   tabByEntry: {},
   pins: {},
   arrival: null,
+  openByScope: {},
+  preferred: {},
+  swapped: false,
   scrollByEntryTab: {},
   descriptors: {},
   blocks: {},
@@ -377,7 +386,7 @@ export function openDetails(): void {
   bump()
   const s = store.get()
   const entryId = list.get().selectedId
-  let next: DetailsState = { ...s, open: true, unstable: false, arrival: entryId }
+  let next: DetailsState = { ...s, open: true, swapped: false, unstable: false, arrival: entryId }
   /* Reopened on the entry it closed on: the descriptor is still the pane's and
      nothing will read it again, so the pin decides here. A stale one is read
      again first, and the pin decides against what the reader will see. */
@@ -390,7 +399,7 @@ export function openDetails(): void {
 export function closeDetails(): void {
   if (!store.get().open) return
   bump()
-  patch({ open: false, arrival: null })
+  patch({ open: false, swapped: false, arrival: null })
 }
 
 export function setWidth(px: number): void {
@@ -445,12 +454,22 @@ function withPinOf(pins: Record<string, Tab | null>, sessionKey: string | null):
 }
 
 /* The pin decides the tab of an entry the pane has just arrived at, when that
-   entry has the tab; otherwise the entry keeps whatever it would show. */
+   entry has the tab; where it does not, the first of the blocks preferred for
+   the entry that it has; otherwise the entry keeps whatever it would show. A
+   preference is for one arrival and goes with it, used or not. */
 function land(s: DetailsState, entryId: string, value: TrajectoryDetailResult): DetailsState {
   const pin = pinned(s)
-  const next = { ...s, arrival: null }
-  if (pin === null || !visibleTabs(value.blocks).includes(pin)) return next
-  return { ...next, tabByEntry: { ...next.tabByEntry, [entryId]: pin } }
+  const tabs = visibleTabs(value.blocks)
+  const wanted = s.preferred[entryId]
+  const next = { ...s, arrival: null, preferred: wanted ? without(s.preferred, entryId) : s.preferred }
+  const tab = pin !== null && tabs.includes(pin) ? pin : (wanted?.find((b) => tabs.includes(b)) ?? null)
+  if (tab === null) return next
+  return { ...next, tabByEntry: { ...next.tabByEntry, [entryId]: tab } }
+}
+
+/** The blocks to open first when the pane next arrives at the entry and no pin applies. */
+export function prefer(entryId: string, blocks: string[]): void {
+  patch({ preferred: { ...store.get().preferred, [entryId]: blocks } })
 }
 
 /** Pins the entry's current tab for this conversation, or unpins it when it is the pinned one. */
@@ -721,7 +740,7 @@ export async function loadDescriptor(opts: { fresh?: boolean; force?: boolean } 
     if (moved && moved.epoch !== id.epoch) { store.set({ ...s, waitingEpoch: moved.epoch }); return }
     if (isEntryGone(e)) {
       bump()
-      store.set({ ...s, open: false })
+      store.set({ ...s, open: false, swapped: false })
       list.select(null, { source: 'migrate' })
       return
     }
@@ -829,7 +848,7 @@ async function read(blockId: string, cursor: string | null, continuing: boolean,
     }
     if (isEntryGone(e)) {
       bump()
-      store.set({ ...s, open: false })
+      store.set({ ...s, open: false, swapped: false })
       list.select(null, { source: 'migrate' })
       return
     }
@@ -1251,9 +1270,12 @@ interface Seen {
   selectedBy: string | null
   /** The trajectory is on screen for a conversation the toggle may show, over a whole snapshot. */
   permitted: boolean
+  scope: string | null
 }
 
-const nothingSeen: Seen = { sessionKey: null, epoch: null, selectedId: null, revision: null, selectedBy: null, permitted: false }
+const nothingSeen: Seen = {
+  sessionKey: null, epoch: null, selectedId: null, revision: null, selectedBy: null, permitted: false, scope: null,
+}
 
 const seenNow = (): Seen => {
   const s = list.get()
@@ -1262,6 +1284,7 @@ const seenNow = (): Seen => {
     sessionKey: s.sessionKey, epoch: s.epoch, selectedId: s.selectedId,
     revision: entry ? entry.revision : null, selectedBy: s.selectedBy,
     permitted: s.view === 'trajectory' && list.available(s) && s.snapshotReady,
+    scope: s.scope,
   }
 }
 
@@ -1291,12 +1314,32 @@ function follow(): void {
     bump()
     patch({ paused: !now.permitted })
   }
+  /* Another Scope Tab: the pane is as that tab left it, unless the move
+     brought a selection of its own (a link, a tab opening on its entry),
+     which opens it the way a click would. Coming back to a tab is not an
+     arrival -- its entry stays on the block the reader left it on. */
+  if (now.scope !== was.scope) {
+    bump()
+    revisionHops = 0
+    const d = store.get()
+    const kept = new Set([list.scopeKey(null), ...list.get().scopes.map((o) => list.scopeKey(o.id))])
+    const openByScope = Object.fromEntries(
+      Object.entries({ ...d.openByScope, [list.scopeKey(was.scope)]: d.open }).filter(([key]) => kept.has(key)),
+    )
+    const brought = now.selectedBy !== 'migrate'
+    const open = now.selectedId !== null && (brought || openByScope[list.scopeKey(now.scope)] === true)
+    patch({
+      open, openByScope, swapped: d.open && !open, current: null, stale: false, unstable: false, waitingEpoch: null,
+      pending: null, arrival: open && brought ? now.selectedId : null,
+    })
+    return
+  }
   if (now.selectedId !== was.selectedId) {
     bump()
     revisionHops = 0
     const d = store.get()
     const open = now.selectedId === null ? false : (now.selectedBy !== 'migrate' ? true : d.open)
-    patch({ open, current: null, stale: false, unstable: false, waitingEpoch: null, pending: null, arrival: open ? now.selectedId : null })
+    patch({ open, swapped: false, current: null, stale: false, unstable: false, waitingEpoch: null, pending: null, arrival: open ? now.selectedId : null })
     return
   }
   if (now.epoch !== was.epoch) {

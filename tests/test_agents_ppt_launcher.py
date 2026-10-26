@@ -1608,7 +1608,10 @@ DECK_TOOLS = {
 #: a dispatcher can attach MCP servers to this product at runtime, and pinning
 #: the fold off would hold it open at exactly the size it exists for.
 TRUNK_RESERVED = {"tool_call", "tool_search"}
-VENDORED_TOOL_FACE = FORK_CONFIG_INTENT | DECK_TOOLS | TRUNK_RESERVED
+#: Trunk serves ``context_retrieve`` beside the default compacting history
+#: strategy, so the refs that strategy leaves in the window can be read back.
+TRUNK_HISTORY = {"context_retrieve"}
+VENDORED_TOOL_FACE = FORK_CONFIG_INTENT | DECK_TOOLS | TRUNK_RESERVED | TRUNK_HISTORY
 KEY_GATED = {"web_search", "ppt_image_search"}
 
 

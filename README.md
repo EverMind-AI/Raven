@@ -28,8 +28,6 @@ Raven is **the harness of harnesses, built for recursive self-improvement (RSI).
 
 **Built-in Agents: Raven-Research**, **Raven-Code**, **Raven-Design**, and **Raven-Oncall** support research, coding, visual design, and unattended workflow automation.
 
-> Raven is pre-alpha. Interfaces and configuration may change quickly.
-
 <p align="center">
   <a href="https://github.com/user-attachments/assets/1756ab94-706d-4c07-b8b3-3ef6dd8a147f"><img src="https://github.com/user-attachments/assets/1756ab94-706d-4c07-b8b3-3ef6dd8a147f" alt="Multi-Agent Orchestration Benchmark: Node F1, Edge F1, Partial Order Accuracy, and Exact Match Rate" width="100%"></a>
 </p>
@@ -340,7 +338,7 @@ integrations into one open-source ecosystem.
 </tr>
 <tr>
 <td><strong><a href="https://github.com/EverMind-AI/Raven">Raven</a></strong></td>
-<td>A memory-first, self-improving agent harness with proactivity, context control, and skill evolution.</td>
+<td>A memory-first, self-improving agent harness with proactivity, context control, and reusable skill retrieval.</td>
 </tr>
 <tr>
 <td><strong><a href="https://github.com/EverMind-AI/EverMe">EverMe (CLI)</a></strong></td>
@@ -428,3 +426,11 @@ If you use Raven in your research, please cite the [technical report](https://ar
   url           = {https://arxiv.org/abs/2609.33439}
 }
 ```
+
+## ❯❯ Contributors
+
+Thanks to everyone who has helped make Raven better.
+
+<a href="https://github.com/EverMind-AI/Raven/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=EverMind-AI/Raven&max=500&columns=20&anon=1" alt="Raven contributors" />
+</a>

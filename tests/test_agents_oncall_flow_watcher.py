@@ -461,3 +461,45 @@ async def test_an_unresolvable_backend_is_reported_not_swallowed(tmp_path: Path)
     finally:
         await watcher.stop()
         logger.remove(sink_id)
+
+
+async def test_building_the_backend_does_not_hold_the_event_loop(monkeypatch, tmp_path: Path) -> None:
+    """A password machine's backend runs ``ssh -G`` while it is built, so the
+    watcher builds it on a worker thread: the loop keeps turning meanwhile."""
+    import asyncio
+
+    from oncall_flow import backends as backends_mod
+
+    beats: list[int] = []
+    seen_while_building: list[int] = []
+    recorder = _RecordingProbe()
+
+    def slow_factory(meta):
+        before = len(beats)
+        time.sleep(0.3)
+        seen_while_building.append(len(beats) - before)
+        return recorder
+
+    monkeypatch.setitem(backends_mod._FACTORIES, "slow", slow_factory)
+
+    async def heartbeat() -> None:
+        while True:
+            beats.append(1)
+            await asyncio.sleep(0.01)
+
+    _svc, grant = _grant(tmp_path)
+    watcher = _watcher(tmp_path, probe_from_meta=backends_mod.backend_from_meta)
+    await _started(watcher, grant)
+    _campaign(watcher.store, "c1", meta={"backend": "slow", **ROUTE})
+    beating = asyncio.create_task(heartbeat())
+    try:
+        await asyncio.sleep(0)
+        acted = await watcher.tick()
+    finally:
+        beating.cancel()
+
+    assert seen_while_building and seen_while_building[0] >= 2, (
+        f"the loop turned {seen_while_building} times while the backend was built"
+    )
+    assert recorder.polled == ["job-1"], "the probe built off the loop is still the one polled"
+    assert acted == ["c1"]

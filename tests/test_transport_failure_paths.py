@@ -26,6 +26,8 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
+import pytest
+
 from raven.contracts.llm_provider import ChatDelta, GenerationSettings, LLMResponse
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.providers.transport_failure import flag_transport_failure
@@ -153,6 +155,75 @@ def test_content_that_is_only_a_sentinel_counts_as_nothing_delivered() -> None:
     )
 
     assert _provider()._parse_response(leaked, sent_chars=SENT).finish_reason == "error"
+
+
+def test_a_reply_that_is_only_a_sentinel_is_handed_to_the_loop_empty() -> None:
+    """The shape the review measured on this branch: OpenRouter, native `stop`,
+    real usage, and a reply of nothing but `<|im_end|>`.
+
+    With `stop` on the allow list the verdict rightly steps aside -- and the
+    loop's emptiness test reads the sentinel as visible text, so the user was
+    handed `<|im_end|>` as the answer. The exit folds such a reply to empty, and
+    the loop runs the recovery it has for one; the finish reason stays the
+    upstream's, because nothing failed.
+    """
+    bare = _Response(
+        choices=[
+            _Choice(
+                message=_Msg(content="<|im_end|>"),
+                provider_specific_fields={"native_finish_reason": "stop"},
+            )
+        ],
+        usage=_Usage(prompt_tokens=367412, completion_tokens=27, total_tokens=367439),
+    )
+
+    response = _provider()._parse_response(bare, sent_chars=SENT)
+
+    assert response.finish_reason == "stop"
+    assert response.content == ""
+    assert response.error_classification is None
+
+
+@pytest.mark.parametrize(
+    ("content", "folded"),
+    [
+        (None, None),
+        ("", ""),
+        ("<|im_end|>", ""),
+        (" <|eot_id|> ", ""),
+        ("<|endoftext|><|im_end|>", ""),
+        ("the answer<|endoftext|>", "the answer<|endoftext|>"),
+        ("hi", "hi"),
+    ],
+)
+def test_without_sentinels_folds_only_a_reply_that_is_nothing_else(content: str | None, folded: str | None) -> None:
+    from raven.providers.transport_failure import without_sentinels
+
+    assert without_sentinels(content) == folded
+
+
+def test_the_fold_reads_the_reply_after_the_orphan_think_is_split_off() -> None:
+    """A self-hosted backend that leaves `</think>` in the content: the split
+    takes the thought, and what is left is only the sentinel. The fold has to
+    read that remainder, not the raw content -- folded first, the thought
+    beside the sentinel reads as an answer and `<|im_end|>` reaches the loop.
+    """
+    thought_then_sentinel = _Response(
+        choices=[
+            _Choice(
+                message=_Msg(content="plan the reply</think>\n<|im_end|>"),
+                provider_specific_fields={"native_finish_reason": "stop"},
+            )
+        ],
+        usage=_Usage(prompt_tokens=367412, completion_tokens=27, total_tokens=367439),
+    )
+
+    with patch.object(LiteLLMProvider, "emits_unparsed_reasoning", return_value=True):
+        response = _provider()._parse_response(thought_then_sentinel, sent_chars=SENT)
+
+    assert response.finish_reason == "stop"
+    assert response.reasoning_content == "plan the reply"
+    assert response.content == ""
 
 
 def test_a_sentinel_beside_a_real_answer_is_still_an_answer() -> None:
@@ -292,6 +363,64 @@ async def test_the_streaming_path_reconnects_instead_of_ending_the_turn() -> Non
     assert response.content == "the answer"
 
 
+class _SentinelStream:
+    """A stream whose only token is the upstream's own end marker."""
+
+    generation = GenerationSettings()
+
+    async def chat_stream(self, *a: Any, **kw: Any):
+        yield ChatDelta(content="<|im_end|>")
+        yield ChatDelta(content=None, finish_reason="stop", usage={"prompt_tokens": 2900, "total_tokens": 2901})
+
+
+async def test_a_stream_that_is_only_a_sentinel_ends_as_empty_on_this_path_too() -> None:
+    """The same fold as the non-streaming exit, so the fault reads the same
+    inside the TUI as outside it."""
+    from raven.providers.streaming import stream_llm_call
+
+    response = await stream_llm_call(
+        _SentinelStream(),
+        messages=[{"role": "user", "content": "hi" * 6000}],
+        tools=None,
+        model="stub",
+    )
+
+    assert response.finish_reason == "stop"
+    assert response.content == ""
+
+
+class _ThoughtThenSentinelStream:
+    """A self-hosted backend's stream: an unmarked thought, its closing tag,
+    then only the upstream's end marker."""
+
+    generation = GenerationSettings()
+
+    def emits_unparsed_reasoning(self) -> bool:
+        return True
+
+    async def chat_stream(self, *a: Any, **kw: Any):
+        yield ChatDelta(content="plan the reply</think>\n")
+        yield ChatDelta(content="<|im_end|>")
+        yield ChatDelta(content=None, finish_reason="stop", usage={"prompt_tokens": 2900, "total_tokens": 2901})
+
+
+async def test_the_streamed_fold_also_reads_the_reply_after_the_split() -> None:
+    """The streamed exit splits the orphan thought off first too; folded before
+    the split, the thought would keep the sentinel from folding."""
+    from raven.providers.streaming import stream_llm_call
+
+    response = await stream_llm_call(
+        _ThoughtThenSentinelStream(),
+        messages=[{"role": "user", "content": "hi" * 6000}],
+        tools=None,
+        model="stub",
+    )
+
+    assert response.finish_reason == "stop"
+    assert response.reasoning_content == "plan the reply"
+    assert response.content == ""
+
+
 async def test_a_stream_that_stays_empty_ends_as_empty_not_as_an_error() -> None:
     """Once the reconnects are spent, the response is what it is. An error
     here would pre-empt the loop's own empty-response recovery."""
@@ -306,6 +435,224 @@ async def test_a_stream_that_stays_empty_ends_as_empty_not_as_an_error() -> None
 
     assert response.finish_reason == "stop"
     assert response.content == ""
+
+
+# ---------- what the watcher sees while it streams ----------------------------
+
+
+class _ScriptedStream:
+    """A stream that sends `contents` as content deltas, then ends as told.
+
+    `emitted` is what the watcher was handed; `shown_before` records how much of
+    it had gone out by the time each delta after the first was sent, which is
+    what a watcher's wait for the first token is made of.
+    """
+
+    generation = GenerationSettings()
+
+    def __init__(
+        self,
+        *contents: str,
+        finish: str | None = "stop",
+        error_delta: bool = False,
+        raises: Exception | None = None,
+    ) -> None:
+        self.contents = contents
+        self.finish = finish
+        self.error_delta = error_delta
+        self.raises = raises
+        self.emitted: list[str] = []
+        self.shown_before: list[int] = []
+
+    async def chat_stream(self, *a: Any, **kw: Any):
+        for index, content in enumerate(self.contents):
+            if index:
+                self.shown_before.append(len("".join(self.emitted)))
+            yield ChatDelta(content=content)
+        if self.raises is not None:
+            raise self.raises
+        if self.error_delta:
+            from raven.contracts.llm_provider import ErrorClassification
+
+            yield ChatDelta(
+                content="the upstream failed",
+                finish_reason="error",
+                error_classification=ErrorClassification(category="network", retryable=False),
+            )
+            return
+        if self.finish is not None:
+            yield ChatDelta(
+                content=None, finish_reason=self.finish, usage={"prompt_tokens": 2900, "total_tokens": 2950}
+            )
+
+    def classify_error(self, exc: Any = None, content: Any = None) -> Any:
+        from raven.contracts.llm_provider import ErrorClassification
+
+        return ErrorClassification(category="network", retryable=True)
+
+
+async def _watched(stream: Any, **kw: Any) -> LLMResponse:
+    from raven.providers.streaming import stream_llm_call
+
+    async def watch(text: str) -> None:
+        stream.emitted.append(text)
+
+    return await stream_llm_call(
+        stream,
+        messages=[{"role": "user", "content": "hi" * 6000}],
+        tools=None,
+        model="stub",
+        on_token_delta=watch,
+        **kw,
+    )
+
+
+async def test_a_reply_that_is_only_a_sentinel_is_never_shown_to_the_watcher() -> None:
+    """The review's reproduction: the response folded to empty while the
+    callback had already been handed `<|im_end|>`."""
+    stream = _ScriptedStream("<|im_end|>")
+
+    response = await _watched(stream)
+
+    assert stream.emitted == []
+    assert response.content == ""
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        ("<|im_", "end|>"),
+        ("<", "|", "im", "_e", "nd|>"),
+        ("\n", "<|eot_", "id|>", " "),
+        ("<|endoftext|><|im_", "end|>"),
+    ],
+)
+async def test_a_sentinel_split_across_deltas_is_held_until_it_completes(contents: tuple[str, ...]) -> None:
+    """`<|im_` on its own is text; only the next delta says it was a sentinel."""
+    stream = _ScriptedStream(*contents)
+
+    response = await _watched(stream)
+
+    assert stream.emitted == []
+    assert response.content == ""
+
+
+@pytest.mark.parametrize(
+    ("contents", "shown_before"),
+    [
+        (("Hello", " world"), [5]),
+        (("<", "div>hello</div>"), [0]),
+        (("\n", " ", "Hi"), [0, 0]),
+    ],
+)
+async def test_an_ordinary_reply_reaches_the_watcher_whole_and_on_time(
+    contents: tuple[str, ...], shown_before: list[int]
+) -> None:
+    """A reply that does not begin like a sentinel goes out on its first delta;
+    one that opens with `<` or whitespace waits only for the character that
+    tells it apart, and then goes out exactly as it came."""
+    stream = _ScriptedStream(*contents)
+
+    response = await _watched(stream)
+
+    assert "".join(stream.emitted) == response.content == "".join(contents)
+    assert "" not in stream.emitted
+    assert stream.shown_before == shown_before
+
+
+async def test_a_reply_that_only_looked_like_a_sentinel_goes_out_at_the_end() -> None:
+    stream = _ScriptedStream("<|im")
+
+    response = await _watched(stream)
+
+    assert stream.emitted == ["<|im"]
+    assert response.content == "<|im"
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [("<|im_end|>", "the answer"), ("the answer", "<|im_end|>"), ("<|im_", "end|>", "the answer")],
+)
+async def test_a_sentinel_beside_a_real_answer_is_shown_as_it_is_returned(contents: tuple[str, ...]) -> None:
+    stream = _ScriptedStream(*contents)
+
+    response = await _watched(stream)
+
+    assert "".join(stream.emitted) == response.content == "".join(contents)
+
+
+@pytest.mark.parametrize(
+    ("stream", "content"),
+    [
+        (_ScriptedStream("<|im_end|>", finish="length"), ""),
+        (_ScriptedStream("<|im_", "end|>", finish=None), ""),
+        (_ScriptedStream("<|im_end|>", error_delta=True), "the upstream failed"),
+    ],
+    ids=["truncated", "closed-early", "error-delta"],
+)
+async def test_a_failed_stream_does_not_release_a_held_sentinel(stream: _ScriptedStream, content: str) -> None:
+    response = await _watched(stream)
+
+    assert stream.emitted == []
+    assert response.content == content
+
+
+async def test_a_stream_that_raises_after_a_sentinel_has_shown_nothing() -> None:
+    stream = _ScriptedStream("<|im_", raises=RuntimeError("connection reset"))
+
+    with pytest.raises(RuntimeError):
+        await _watched(stream)
+
+    assert stream.emitted == []
+
+
+class _AnswerCutThenSentinel(_ScriptedStream):
+    """A first attempt that streams words and drops, then a second that is only
+    the end marker."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempts = 0
+
+    async def chat_stream(self, *a: Any, **kw: Any):
+        self.attempts += 1
+        if self.attempts == 1:
+            yield ChatDelta(content="partial")
+            raise RuntimeError("connection reset")
+        yield ChatDelta(content="<|im_end|>")
+        yield ChatDelta(content=None, finish_reason="stop", usage={"prompt_tokens": 2900, "total_tokens": 2950})
+
+
+async def test_a_retried_attempt_holds_its_own_opening_again() -> None:
+    """What the first attempt released does not release the second's."""
+    stream = _AnswerCutThenSentinel()
+
+    response = await _watched(stream, retry_after_output=True)
+
+    assert stream.attempts == 2
+    assert stream.emitted == ["partial"]
+    assert response.content == ""
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [("<|im_end|>",), ("<|im_", "end|>"), ("<", "div>"), ("<|im_end|>", "the answer"), ("Hello",)],
+)
+async def test_without_a_watcher_the_reply_is_unchanged(contents: tuple[str, ...]) -> None:
+    """Spawn and the DAG stream with no callback; holding back is only about
+    what a watcher is shown."""
+    from raven.providers.streaming import stream_llm_call
+
+    watched = await _watched(_ScriptedStream(*contents))
+    unwatched = await stream_llm_call(
+        _ScriptedStream(*contents),
+        messages=[{"role": "user", "content": "hi" * 6000}],
+        tools=None,
+        model="stub",
+    )
+
+    assert unwatched.content == watched.content
+    assert unwatched.finish_reason == watched.finish_reason
 
 
 # ---------- what the verdict is worth: the ladder acts on it ------------------
@@ -623,6 +970,95 @@ def test_every_spelling_of_stop_the_library_knows_is_classified() -> None:
         "A normal end belongs in _NORMAL_STOP_ALIASES; a failure needs no entry, but add it to "
         "known_failures here so the next addition is the only thing this test reports."
     )
+
+
+def test_the_upstreams_own_stop_is_a_normal_end() -> None:
+    """The shape OpenRouter handed back on 2026-10-21, from the session record.
+
+    A reply of one space, `finish_reason: "stop"` -- and `native_finish_reason:
+    "stop"` beside it, because that gateway names its backend's reason on every
+    choice, rename or not. Read as "a value renamed to stop that is not a known
+    normal end", a plain stop became an upstream failure: twelve retries over
+    five minutes, then the verdict's own sentence delivered as the answer. A
+    model that said nothing is the loop's case (prefill, nudge, retry), and it
+    is only reachable when this verdict stays out of the way.
+    """
+    blank = _Response(
+        choices=[
+            _Choice(
+                message=_Msg(content=" "),
+                provider_specific_fields={"native_finish_reason": "stop"},
+            )
+        ],
+        usage=_Usage(prompt_tokens=367412, completion_tokens=27, total_tokens=367439),
+    )
+
+    response = _provider()._parse_response(blank, sent_chars=SENT)
+
+    assert response.finish_reason == "stop"
+    assert response.error_classification is None
+    assert "failed call" not in (response.content or "")
+
+
+def test_a_native_stop_still_faces_the_accounting_check() -> None:
+    """Admitting `stop` to the allow list says the upstream ended normally; it
+    does not say the request was processed. A prompt of thousands of
+    characters billed as one token with nothing delivered is the incident's
+    dead-request shape whatever the finish reason reads, so the verdict is
+    still asked -- a native `stop` must not return early past it.
+    """
+    evidence = flag_transport_failure(
+        finish_reason="stop",
+        content="",
+        reasoning=None,
+        tool_calls=[],
+        native_finish_reason="stop",
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        sent_chars=SENT,
+    )
+
+    assert evidence and "billed as 1 tokens" in evidence
+
+
+def test_openrouter_names_its_backends_reason_on_every_choice() -> None:
+    """The premise, on the real conversion.
+
+    `Choices.__init__` records a copy only when it renamed something, which is
+    what the reader relies on for most vendors. OpenRouter's body carries
+    `native_finish_reason` itself, and the dict conversion passes every
+    non-standard choice field through -- so a plain `stop` reaches the verdict
+    under that name. If the library ever stopped passing it through, this goes
+    red before the allow list's `stop` entry turns into dead weight.
+    """
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+        convert_to_model_response_object,
+    )
+    from litellm.types.utils import ModelResponse
+
+    from raven.providers.transport_failure import native_finish_reason
+
+    body = {
+        "id": "gen-1792555321-59XScE7pyZzOA2G0vlxy",
+        "object": "chat.completion",
+        "created": 1792555321,
+        "model": "z-ai/glm-5.3-flash",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "native_finish_reason": "stop",
+                "message": {"role": "assistant", "content": " "},
+            }
+        ],
+        "usage": {"prompt_tokens": 367412, "completion_tokens": 27, "total_tokens": 367439},
+    }
+
+    converted = convert_to_model_response_object(response_object=body, model_response_object=ModelResponse())
+    choice = converted.choices[0]
+
+    assert choice.finish_reason == "stop"
+    assert native_finish_reason(choice) == "stop"
+    assert flag_transport_failure(finish_reason="stop", content=" ", tool_calls=[], native_finish_reason="stop") is None
 
 
 async def test_a_real_model_response_is_judged_and_retried() -> None:

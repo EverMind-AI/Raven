@@ -116,12 +116,20 @@ class ConnectionAddTool(Tool):
         kind = connections.LOCAL if str(transport).strip().lower() == connections.LOCAL else connections.SSH
         conn_id = str(id).strip() or mint_slug(label)
         row: dict[str, Any] = {"id": conn_id, "display_name": label, "transport": kind}
-        if kind == connections.LOCAL:
-            reached, message, found = await asyncio.to_thread(adder.probe, row)
-        else:
+        if kind == connections.SSH:
             host = str(host).strip()
             if not host:
                 return "REFUSED: an ssh machine needs its address; ask the owner rather than guessing. Nothing was written."
+            row["host"] = host
+        # Asked before anything is resolved or reached; the registry write asks
+        # again. The address is on an ssh row by then: a key machine at the very
+        # address its id names is allowed beside a password machine there, and
+        # without the address the check reads it as a redirect.
+        if collision := adder.alias_collision(row, connections.load()):
+            return f"REFUSED: {collision}. Nothing was written."
+        if kind == connections.LOCAL:
+            reached, message, found = await asyncio.to_thread(adder.probe, row)
+        else:
             # What the owner left out, ssh's own config supplies -- the same
             # answer their terminal would give -- and the probe decides. Asked
             # only when something is actually missing: with all three given there
@@ -132,7 +140,6 @@ class ConnectionAddTool(Tool):
                 resolved = await asyncio.to_thread(adder.ssh_defaults, host, port=int(port or 0), user=str(user))
             row.update(
                 {
-                    "host": host,
                     "port": int(port or resolved.get("port") or 22),
                     "user": str(user).strip() or str(resolved.get("user") or "root"),
                 }

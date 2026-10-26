@@ -1409,6 +1409,35 @@ async def test_prepare_replan_tolerates_a_graph_already_carrying_a_replan_link(t
     assert isinstance(second, ReplanPlan), "must parse past the stray `replan` key rather than raising"
 
 
+async def test_a_replanned_run_s_attempts_nest_under_the_call_that_decided_the_replan(tmp_path, monkeypatch) -> None:
+    """The successor is dispatched from `resolve_dag_node`'s own tool call, a later turn's
+    perhaps, so that call -- not the one that started the replaced run -- is its nodes' parent."""
+    import asyncio
+
+    from raven.tracing import spans as _spans
+    from raven.tracing import trace
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    traces = tmp_path / "traces"
+    monkeypatch.setenv("RAVEN_TRACING", "1")
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(traces))
+    _spans._store = None
+    tool, live = await _replannable_tool(tmp_path)
+    plan = await tool.prepare_replan(_OLD_RUN_ID, "a", [_node("fresh")], "the plan was wrong", None, live)
+
+    async with draining_dag_runs():
+        with trace.span("tool.call", {"tool.name": "resolve_dag_node"}) as decided:
+            await tool.start_replan(_OLD_RUN_ID, plan)
+        await asyncio.wait_for(tool._runs[plan.run_id], timeout=10)
+
+    log = traces / "logs" / "audit-spans.log"
+    spans = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
+    attempts = [s for s in spans if s["name"] == "subagent.run" and s["attributes"].get("subagent.node_id") == "fresh"]
+    assert attempts, "the successor ran its node"
+    assert {s["attributes"]["subagent.dag_run_id"] for s in attempts} == {plan.run_id}
+    assert {s["parentSpanId"] for s in attempts} == {decided.span_id}
+
+
 async def test_a_refused_submission_still_records_the_link_as_unstarted(tmp_path) -> None:
     """A dangling reason is worse than a record saying the successor never ran."""
     tool, live = await _replannable_tool(tmp_path)

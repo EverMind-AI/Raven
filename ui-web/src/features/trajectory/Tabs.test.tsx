@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { useSyncExternalStore } from 'react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as details from './detailStore'
@@ -24,6 +24,10 @@ const block = (id: string): TrajectoryBlockDescriptor => ({
 const q = (sel: string): HTMLElement | null => document.querySelector<HTMLElement>(sel)
 
 /* happy-dom lays nothing out: the strip's geometry is written by hand. */
+/* A box where happy-dom lays nothing out: its left edge and its width. */
+const rect = (left: number, width: number): DOMRect =>
+  ({ left, right: left + width, top: 0, bottom: 30, width, height: 30, x: left, y: 0, toJSON: () => ({}) }) as DOMRect
+
 function geometry(strip: HTMLElement, scrollWidth: number, clientWidth: number): void {
   Object.defineProperty(strip, 'scrollWidth', { get: () => scrollWidth, configurable: true })
   Object.defineProperty(strip, 'clientWidth', { get: () => clientWidth, configurable: true })
@@ -70,35 +74,44 @@ describe('the tab strip', () => {
     expect(strip.scrollLeft).toBe(600 - 300 * ARROW_STEP)
   })
 
-  it('keeps the selected tab in view when the keyboard moves it', () => {
+  it('keeps the selected tab in view when the keyboard moves it, by scrolling the strip and nothing else', () => {
     render(<Host blocks={Array.from({ length: 12 }, (_, i) => block(`b${i}`))} />)
     const strip = q('.trajectory-tabs') as HTMLElement
-    const scrolled: string[] = []
-    for (const tab of document.querySelectorAll<HTMLElement>('[role="tab"]')) tab.scrollIntoView = () => { scrolled.push(tab.id) }
+    const intoView = vi.fn()
+    for (const tab of document.querySelectorAll<HTMLElement>('[role="tab"]')) tab.scrollIntoView = intoView
+    strip.getBoundingClientRect = () => rect(0, 300)
+    ;(q('#trajectory-tab-b11') as HTMLElement).getBoundingClientRect = () => rect(820, 60)
     act(() => { fireEvent.keyDown(strip, { key: 'End' }) })
     expect(details.tabOf('r0')).toBe('b11')
-    expect(scrolled.at(-1)).toBe('trajectory-tab-b11')
+    expect(strip.scrollLeft).toBe(580)
+    ;(q('#trajectory-tab-overview') as HTMLElement).getBoundingClientRect = () => rect(-580, 70)
+    act(() => { fireEvent.keyDown(strip, { key: 'Home' }) })
+    expect(strip.scrollLeft).toBe(0)
+    expect(intoView).not.toHaveBeenCalled()
   })
 
   it('brings the selected tab into view again once the arrows take their room, and not on a nudge', () => {
     details.setTab('r0', 'b11')
     render(<Host blocks={Array.from({ length: 12 }, (_, i) => block(`b${i}`))} />)
     const strip = q('.trajectory-tabs') as HTMLElement
-    const scrolled: string[] = []
-    for (const tab of document.querySelectorAll<HTMLElement>('[role="tab"]')) tab.scrollIntoView = () => { scrolled.push(tab.id) }
+    /* With the arrows in, the strip is narrower and the selected tab ends 20px past its edge. */
+    strip.getBoundingClientRect = () => rect(22, 256)
+    ;(q('#trajectory-tab-b11') as HTMLElement).getBoundingClientRect = () => rect(238, 60)
     geometry(strip, 900, 300)
     act(() => { fireEvent.scroll(strip) })
     expect(document.querySelectorAll('.trajectory-tab-arrow')).toHaveLength(2)
-    expect(scrolled).toEqual(['trajectory-tab-b11'])
+    expect(strip.scrollLeft).toBe(20)
+    strip.scrollLeft = 0
+    act(() => { fireEvent.scroll(strip) })
     /* A nudge changes which arrows are enabled, not whether they show: the
-       reader's own scroll stands. */
+       reader's own scroll stands, and the selected tab, still past the edge,
+       is not brought back over it. */
     const arrows = (): HTMLButtonElement[] => [...document.querySelectorAll<HTMLButtonElement>('.trajectory-tab-arrow')]
     expect(arrows().map((a) => a.disabled)).toEqual([true, false])
     act(() => { fireEvent.click(arrows()[1]!) })
     act(() => { fireEvent.scroll(strip) })
     expect(strip.scrollLeft).toBe(300 * ARROW_STEP)
     expect(arrows().map((a) => a.disabled)).toEqual([false, false])
-    expect(scrolled).toEqual(['trajectory-tab-b11'])
   })
 })
 

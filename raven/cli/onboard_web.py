@@ -1,10 +1,10 @@
 """Web tool credentials cluster of the onboard wizard (Step 5).
 
 Two tools, each behind a vendor the user picks here, and the keys are not the
-same kind of thing. A search key is what makes ``web_search`` exist at all --
-the agent loop withholds the tool entirely without one -- while the page
-reader defaults to Jina, which works unauthenticated at a lower rate limit, so
-its key only raises the ceiling; the other readers refuse without one. The
+same kind of thing. A search key is what makes ``web_search`` exist at all,
+Keenable aside -- the agent loop withholds the tool without one -- while the
+page reader defaults to Jina, which works unauthenticated at a lower rate limit,
+so its key only raises the ceiling; the other readers refuse without one. The
 screen says so, because presenting the keys as equal blanks invites skipping
 the one that actually costs a capability. The search key is then spent on
 one real query before it is kept: no search vendor has a free ``/v1/models``,
@@ -160,7 +160,7 @@ def _pick_provider(kind: str, current: str) -> Optional[str]:
     choices = []
     for vendor, spec in specs.items():
         note = ""
-        if kind == "fetch" and not spec.needs_key:
+        if not spec.needs_key:
             note = t(" (no key needed)")
         elif kind == "fetch":
             note = t(" (key required)")
@@ -306,10 +306,10 @@ def _step5_web(
 
     oc.console.print(
         t(
-            "  [dim]web_search[/dim]  Search the web — needs the chosen vendor's key; without\n"
-            "              one the tool is not offered to the model at all.\n"
-            "  [dim]web_fetch [/dim]  Read a page — Jina works with no key at a lower rate limit;\n"
-            "              every other reader needs its key."
+            "  [dim]web_search[/dim]  Search the web — needs the chosen vendor's key, except Keenable;\n"
+            "              without one the tool is not offered to the model at all.\n"
+            "  [dim]web_fetch [/dim]  Read a page — Jina and Keenable work with no key at a lower\n"
+            "              rate limit; every other reader needs its key."
         ),
         highlight=False,
     )
@@ -325,7 +325,7 @@ def _step5_web(
             label=t("{label} API key", label=spec.label),
             obtain_from=spec.signup,
             current=_stored_key(search),
-            optional_note=t(" enables web_search"),
+            optional_note=t(" enables web_search") if spec.needs_key else t(" optional"),
         )
         if search_key is None:
             raise typer.Exit(1)

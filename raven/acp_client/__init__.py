@@ -13,6 +13,9 @@ The split of concerns here:
   and the error types the layers above catch.
 - :mod:`raven.acp_client.client` -- one connection: the child process, the read
   loop, request/response correlation, and a bounded stderr tail.
+- :mod:`raven.acp_client.npx_fetch` -- the package an ``npx`` launch names, fetched
+  before the handshake by a process nothing here ends, so a download that outlasts
+  its caller is never cut off half-installed.
 - :mod:`raven.acp_client.capabilities` -- turning one ``initialize`` handshake into
   a stored snapshot of what the agent can actually do, so the roster advertises
   measurements rather than hand-typed declarations.

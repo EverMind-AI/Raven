@@ -7,6 +7,7 @@ pool and event sink are placeholders filled in by later sub-steps.
 
 import asyncio
 import contextlib
+import contextvars
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable
@@ -170,15 +171,31 @@ class OriginPools:
 
 
 class Lane:
-    def __init__(self, runner: TurnRunner, pools: OriginPools, sink: EventSink, conversation_id: str):
+    def __init__(
+        self,
+        runner: TurnRunner,
+        pools: OriginPools,
+        sink: EventSink,
+        conversation_id: str,
+        home: contextvars.Context | None = None,
+    ):
         self._runner = runner
         self._pools = pools
         self._sink = sink
         self._conversation_id = conversation_id
+        # Every task this lane starts begins from a fresh copy of this context,
+        # never from its submitter's: a worker created inside a sub-agent's
+        # report would otherwise carry that frame's state -- its trace span
+        # above all -- into every turn queued behind it.
+        self._home = home if home is not None else contextvars.copy_context()
         self._pending: deque[tuple[TurnRequest, asyncio.Future]] = deque()
         self._worker: asyncio.Task | None = None
         self._run_task: asyncio.Task | None = None
         self._running_fut: asyncio.Future | None = None
+        # The running turn's id, set and cleared with ``_running_fut``: a caller
+        # that names a turn (turn.cancel's ``turn_id``) has nothing else to
+        # match against, since the request itself lives only in the task.
+        self._running_turn_id: str | None = None
         self._idle_since: float | None = None  # set when the worker drains; the reaper's clock
         # Whether the running turn's payload has already emitted its own terminal
         # event. Deliberately not "did the payload start": a cancel can land while
@@ -220,7 +237,7 @@ class Lane:
             # queue and run like a normal turn.
             self._enqueue(req, fut)
         if self._worker is None or self._worker.done():
-            self._worker = loop.create_task(self._run_worker())
+            self._worker = loop.create_task(self._run_worker(), context=self._home.copy())
         return fut
 
     def _enqueue(self, req: TurnRequest, fut: asyncio.Future, *, front: bool = False) -> None:
@@ -306,6 +323,22 @@ class Lane:
         """
         return self._running_fut
 
+    def running_turn(self) -> tuple[str, asyncio.Future] | None:
+        """The running turn's id and terminal future while its task can still be
+        cancelled, else None -- idle, or between the task ending and the worker
+        resolving it, when a cancel could only arrive after the answer.
+        """
+        if self._running_fut is None or self._run_task is None or self._run_task.done():
+            return None
+        return self._running_turn_id or "", self._running_fut
+
+    def busy(self) -> bool:
+        """Whether a turn is still to run here: the running one while it can
+        still be cancelled, one queued, or an inject in the mailbox, which runs
+        as a turn of its own if the turn it was meant for ends first.
+        """
+        return self.running_turn() is not None or bool(self._pending) or bool(self._inject_mailbox)
+
     def drain_pending(self) -> int:
         """Resolve every not-yet-running turn (queued + mailboxed injects) as
         cancelled and return the count, leaving the running turn untouched.
@@ -349,13 +382,14 @@ class Lane:
         while self._pending:
             req, fut = self._pending.popleft()
             self._running_fut = fut
+            self._running_turn_id = req.turn_id
             # Create the task synchronously (no await before this) so the turn is
             # cancel-visible via _run_task the moment it leaves the queue. Which is
             # also why the flag is armed here: from this line until the payload's
             # own report completes, the turn is cancellable without having named
             # its end.
             self._payload_reported = False
-            self._run_task = asyncio.create_task(self._run_turn(req))
+            self._run_task = asyncio.create_task(self._run_turn(req), context=self._home.copy())
             outcome: TurnOutcome | TurnFailed | None = None
             try:
                 # The payload's three answers: the outcome of a turn that ran, the
@@ -429,6 +463,7 @@ class Lane:
                     self._enqueue(inject_req, inject_fut)
                 self._run_task = None
                 self._running_fut = None
+                self._running_turn_id = None
         # Idle exit: stamp the reaper's silence clock, with no await between the
         # queue check and return — a submit racing the exit must not be lost
         # (lost-wakeup), and the same gap keeps the stamp atomic against submit
@@ -575,8 +610,14 @@ class TurnHandle:
         """How the turn ended, in three: the ``TurnOutcome`` of a turn that ran to
         an answer, the ``TurnFailed`` its lane filed for a turn that failed with a
         name, or None when it was cancelled or never got to run.
+
+        Shielded: the lane's worker is this future's sole resolver, and a waiter
+        cancelled mid-await -- a connection closing under the handler waiting
+        here -- would otherwise cancel the future itself, so the worker's own
+        ``set_result`` raises and it dies with the lane still marked running.
+        The waiter is cancelled; the turn and its future are not.
         """
-        return await self._fut
+        return await asyncio.shield(self._fut)
 
     async def cancel(self) -> None:
         await self._lane.cancel_turn(self._fut)
@@ -589,6 +630,10 @@ class Scheduler:
 
     def __init__(self, runner: TurnRunner, pools: OriginPools, sink: EventSink):
         self._loop = asyncio.get_running_loop()  # home loop; submit must come from here
+        # Home context: every turn starts from a copy of this one, whoever
+        # submitted it, so what a host sets for its turns must be set before
+        # the scheduler is built.
+        self._home = contextvars.copy_context()
         self._runner = runner
         self._pools = pools
         self._sink = sink
@@ -608,13 +653,13 @@ class Scheduler:
         conversation_id = self._conversation_id(req)
         lane = self._lanes.get(conversation_id)
         if lane is None:
-            lane = Lane(self._runner, self._pools, self._sink, conversation_id)
+            lane = Lane(self._runner, self._pools, self._sink, conversation_id, self._home)
             self._lanes[conversation_id] = lane
         handle = TurnHandle(lane, lane.submit(req, policy))
         # Lazy-start the reaper alongside the first lane (same pattern as the
         # lane worker); it self-terminates when no lanes remain.
         if self._reaper is None or self._reaper.done():
-            self._reaper = self._loop.create_task(self._reap_loop())
+            self._reaper = self._loop.create_task(self._reap_loop(), context=self._home.copy())
         return handle
 
     def cancel_conversation(self, conversation_id: str) -> int:
@@ -625,6 +670,22 @@ class Scheduler:
         lane = self._lanes.get(conversation_id)
         return lane.cancel() if lane is not None else 0
 
+    def running_turn(self, conversation_id: str) -> tuple[str, TurnHandle] | None:
+        """The turn running on a conversation's lane, as its id and a handle,
+        whoever submitted it; None when nothing there can still be cancelled.
+
+        A handle rather than the lane's future, so a caller reaches the turn
+        only through what every submitter gets: ``cancel`` ends the running
+        turn and leaves queued work in place, and ``result`` waits without
+        being able to cancel the future the worker resolves.
+        """
+        lane = self._lanes.get(conversation_id)
+        running = lane.running_turn() if lane is not None else None
+        if running is None:
+            return None
+        turn_id, fut = running
+        return turn_id, TurnHandle(lane, fut)
+
     def has_inflight(self, conversation_id: str) -> bool:
         """True if a turn is currently running for this conversation's lane.
         The inbound gate uses this to submit a mid-turn message as
@@ -632,6 +693,17 @@ class Scheduler:
         """
         lane = self._lanes.get(conversation_id)
         return lane is not None and lane.running_future() is not None
+
+    def is_busy(self, conversation_id: str) -> bool:
+        """True while a conversation's lane still has a turn to run: one running,
+        one queued, or an inject waiting to run as a turn of its own.
+
+        Not ``has_inflight`` at a turn's end: from the moment the running turn
+        stops until the worker resolves its future, that still reports the
+        finished turn, and this reports only what waits behind it.
+        """
+        lane = self._lanes.get(conversation_id)
+        return lane is not None and lane.busy()
 
     def has_running(self) -> bool:
         """True if any lane has a turn in flight, whatever its origin. The

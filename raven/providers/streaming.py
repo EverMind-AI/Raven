@@ -34,7 +34,12 @@ from raven.providers.base import (
 )
 from raven.providers.reasoning import split_orphan_think
 from raven.providers.tool_names import normalized_tool_name
-from raven.providers.transport_failure import flag_transport_failure, prompt_chars
+from raven.providers.transport_failure import (
+    flag_transport_failure,
+    may_fold_to_nothing,
+    prompt_chars,
+    without_sentinels,
+)
 from raven.providers.truncation import flag_truncation
 from raven.providers.usage import merge_usage
 
@@ -103,7 +108,9 @@ async def stream_llm_call(
     """Stream an LLM response via ``provider.chat_stream`` + accumulate to LLMResponse.
 
     When a turn caller wires ``on_token_delta``, its loop diverts here instead
-    of to ``chat_with_retry``. Each non-empty content chunk fires the callback;
+    of to ``chat_with_retry``. Each non-empty content chunk fires the callback,
+    except that the opening of a reply is held back while it could still be one
+    that is only a sentinel, so a reply the response returns empty is never shown;
     tool_call fragments are merged positionally; the final response object is
     shape-compatible with what ``chat()`` would have returned.
 
@@ -144,6 +151,9 @@ async def stream_llm_call(
     # or a session switch has nothing left to read.
     think_t0: float | None = None
     reasoning_ms: int | None = None
+    # Whether this attempt's content has gone out through ``on_token_delta``.
+    # Until it has, ``content_buf`` is the part held back.
+    content_released = False
 
     def stop_thinking() -> int | None:
         """Close the thinking clock at the first output that is not a thought."""
@@ -175,8 +185,9 @@ async def stream_llm_call(
         longer exists.
         """
         nonlocal final_usage, thinking_blocks, record, upstream_finish_reason
-        nonlocal think_t0, reasoning_ms
+        nonlocal think_t0, reasoning_ms, content_released
         content_buf.clear()
+        content_released = False
         reasoning_buf.clear()
         tool_call_slots.clear()
         final_usage = None
@@ -248,7 +259,13 @@ async def stream_llm_call(
                         stop_thinking()
                         content_buf.append(delta.content)
                         if on_token_delta is not None:
-                            await on_token_delta(delta.content)
+                            if content_released:
+                                await on_token_delta(delta.content)
+                            else:
+                                held = "".join(content_buf)
+                                if not may_fold_to_nothing(held):
+                                    content_released = True
+                                    await on_token_delta(held)
                     if delta.tool_call_delta:
                         stop_thinking()
                         _merge_tool_call_fragments(
@@ -376,12 +393,14 @@ async def stream_llm_call(
                     exc,
                 )
                 reset_attempt()
-            if classification.strip_images:
-                # The one recovery this function cannot make: the picture has to
-                # come out of the messages it only reads. Handed back as the error
-                # response the loop's strip-and-retry acts on; raising ended a
-                # deck build on the first render an endpoint refused for its size,
-                # and waiting would not have shrunk the bytes.
+            if classification.strip_images or (classification.should_compress and not emitted):
+                # The recoveries this function cannot make: the picture has to
+                # come out of the messages it only reads, and so does the history
+                # a too-long prompt carries. Handed back as the error response the
+                # loop's shrink-and-retry acts on; raising ended a deck build on
+                # the first render an endpoint refused for its size, and ended a
+                # long streamed turn on its first context overflow, and waiting
+                # would have shrunk neither.
                 return LLMResponse(
                     content=canonical_llm_error(classification.category, None, str(exc)),
                     finish_reason="error",
@@ -470,6 +489,10 @@ async def stream_llm_call(
     stop_thinking()
 
     content = "".join(content_buf)
+    # A held opening that the end of the stream shows was not a sentinel after
+    # all -- a reply of `<`, say -- is an answer, and goes out as one.
+    if on_token_delta is not None and not content_released and without_sentinels(content):
+        await on_token_delta(content)
     reasoning_content = "".join(reasoning_buf) or None
     # getattr because the loop accepts duck-typed providers (test stubs and
     # thin adapters implement just chat/chat_stream); absent means the
@@ -478,6 +501,9 @@ async def stream_llm_call(
     if reasoning_content is None and emits_unparsed is not None and emits_unparsed():
         split_reasoning, content = split_orphan_think(content)
         reasoning_content = split_reasoning
+    # The same fold as the non-streaming exit: a reply that is only a sentinel
+    # reaches the loop empty on both paths.
+    content = without_sentinels(content)
 
     # No verdict here: it was asked inside the attempt loop, where a reconnect
     # is still possible. Once the reconnects are spent the response is returned

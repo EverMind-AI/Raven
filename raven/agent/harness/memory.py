@@ -44,6 +44,8 @@ from loguru import logger
 
 from raven.agent.harness.participants import Intake, compose_addendum, compose_intake, compose_record
 from raven.agent.window import compaction, shrink
+from raven.agent.window.images import ATTACHED_IMAGE_KEY
+from raven.context_engine import headroom
 from raven.contracts.assembled import TokenBudget
 from raven.contracts.harness import MemoryModule, ShrinkResult, WindowPressure, WindowState
 from raven.contracts.participant import AgentParticipant, StepView
@@ -69,8 +71,11 @@ class DefaultMemory:
         system_prompt: Callable[[list[Any] | None], str],
         compaction: Callable[[], Any],
         output_ceiling: Callable[[str | None], int],
+        headroom: Callable[[], Any] | None = None,
     ) -> None:
         self._engine = engine
+        # ``context.headroom``: the step a refusal teaches the reply room by.
+        self._headroom = headroom
         # The two the window's mid-turn moves read: the compaction settings
         # (config-gated, factory-off) and the output ceiling a request for a
         # model will carry, which sizes what the window must keep in reserve.
@@ -278,12 +283,46 @@ class DefaultMemory:
         return ShrinkResult(messages, bool(windowed))
 
     async def _on_overflow(self, messages: list[dict[str, Any]], state: WindowState, model: str | None) -> ShrinkResult:
-        """The endpoint refused the request as too long: elide the bulk of
-        accumulated tool output (a smaller window would not help), and when
-        nothing is left to elide, summarize the head once per turn. Bounded by
-        the shared retry budget."""
+        """The endpoint refused the request as too long.
+
+        First the refusal is learned from, every time and outside the retry
+        budget: it says the room this request left the reply was not enough,
+        and the history strategy's trigger reads that on the next assembly.
+        Then the engine is asked, because a strategy that put the history
+        there knows what it can give back of it; when it declines, elide the
+        bulk of accumulated tool output (a smaller window would not help), and
+        when nothing is left to elide, summarize the head once per turn.
+        Bounded by the shared retry budget."""
+        window = self._window()
+        self._learn_from_overflow(messages, model, window)
         if state.compress_retries >= shrink.MAX_COMPRESS_RETRIES:
             return ShrinkResult(messages, False)
+        # Read with a default: an engine slotted in through the runtime door
+        # need not subclass the contract.
+        ask = getattr(self._engine, "on_context_overflow", None)
+        outcome = None
+        if ask is not None:
+            try:
+                outcome = await ask(state.session_key, messages, attempt=state.compress_retries + 1, window=window)
+            except Exception:
+                # The engine loses its say on this refusal, never the turn: the
+                # elision below is what answers instead.
+                logger.opt(exception=True).error("the context engine failed on a refused prompt; eliding instead")
+        if outcome is not None and not _keeps_the_question(messages, outcome.messages):
+            # Whatever the engine meant to give back, a retry without the turn's
+            # own question answers something the user did not ask this turn.
+            logger.error("the context engine's reclaim dropped the turn's question; eliding instead")
+            outcome = None
+        if outcome is not None:
+            state.compress_retries += 1
+            state.last_context_used = 0
+            logger.warning(
+                "Context overflow; the history strategy reclaimed ~{} token(s), retrying ({}/{})",
+                outcome.reclaimed_tokens,
+                state.compress_retries,
+                shrink.MAX_COMPRESS_RETRIES,
+            )
+            return ShrinkResult(outcome.messages, True)
         shrunk, elided = shrink.emergency_shrink(messages)
         if elided > 0:
             state.compress_retries += 1
@@ -311,6 +350,25 @@ class DefaultMemory:
                 )
                 return ShrinkResult(summarized, True)
         return ShrinkResult(messages, False)
+
+    def _learn_from_overflow(self, messages: list[dict[str, Any]], model: str | None, window: int) -> None:
+        provider = self._provider()
+        chosen = model or self._model()
+        wire = getattr(provider, "wire_model_id", lambda m: m)(chosen)
+        cfg = self._headroom() if self._headroom is not None else None
+        step = cfg.overflow_backoff_tokens if cfg is not None else headroom.DEFAULT_OVERFLOW_BACKOFF_TOKENS
+        prompt = estimate_prompt_tokens(messages, self._tool_definitions())
+        floor = cfg.min_tokens if cfg is not None else headroom.DEFAULT_MIN_REPLY_HEADROOM_TOKENS
+        # Asked the way the loop sized the refused request, so the lesson is
+        # drawn from what that request actually asked for.
+        narrowed = (
+            headroom.request_max_tokens(
+                window=window, prompt_tokens=prompt, ceiling=self._output_ceiling(chosen), floor=floor
+            )
+            is not None
+        )
+        learned = headroom.learn_from_overflow(wire, window=window, prompt_tokens=prompt, step=step, narrowed=narrowed)
+        logger.info("Context overflow on {}: the reply room it needs is now {} token(s)", wire, learned)
 
     @staticmethod
     def _on_tool_images_refused(messages: list[dict[str, Any]], state: WindowState) -> ShrinkResult:
@@ -391,6 +449,21 @@ class DefaultMemory:
         self, step: StepView, reply: str | None, participants: Sequence[AgentParticipant]
     ) -> dict[str, Any] | None:
         return await compose_record(step, reply, participants)
+
+
+def _keeps_the_question(sent: list[dict[str, Any]], reclaimed: list[dict[str, Any]]) -> bool:
+    """Whether ``reclaimed`` still holds the latest user message ``sent`` held.
+
+    A message carrying only pictures a tool showed (``ATTACHED_IMAGE_KEY``) is the
+    loop's, not the user's, and is not the question.
+    """
+    question = next(
+        (m for m in reversed(sent) if m.get("role") == "user" and not m.get(ATTACHED_IMAGE_KEY)),
+        None,
+    )
+    if question is None:
+        return True
+    return any(m.get("role") == "user" and m.get("content") == question.get("content") for m in reclaimed)
 
 
 def bind(memory: DefaultMemory) -> MemoryModule:

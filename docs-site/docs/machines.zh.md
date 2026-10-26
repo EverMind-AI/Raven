@@ -61,8 +61,19 @@ raven ops connection add --id gpu1 --name "GPU box 1" \
   askpass）也会走助手而不是在终端上要密码。跳板机不行：密码连接关掉了 `ProxyJump` 和
   `ProxyCommand`，因为跳板自己的 ssh 会拿到这台机器的密码；只能经跳板到达的机器请用
   密钥登记。助手只回答一种提示：ssh 自己向登记的账号、登记的地址（`user@host`）索要密码的
-  那一句。别的账号的提示、第二重验证的提示（验证码、passcode）、一次性密码的提示都拿不到
-  回答，所以登录时还要第二重验证的机器也请用密钥登记。登记表里这一行记 `auth: password`，
+  那一句，地址按 ssh 解析后的写法来认（别名取你 ssh 配置里的 `HostName` 或 `HostKeyAlias`，
+  IP 地址取规范写法），所以地址也可以填 ssh 配置里的别名。但不能是 Raven 自己为密钥机器写的、
+  指向别处的 `Host <id>` 别名：地址写成这样一个 id 的密码机器会登录到另一台机器的地址上，
+  所以会被点名拒绝，密码不会发出去。不是 Raven 原样写下的块同样拒绝：两行标记少了一行、出现
+  Raven 不写的关键字（`ProxyCommand`、`Include` 等）、`HostName` 缺失或多出一个、`Host` 行
+  带第二个名字。别名的 `HostName` 就是 id 本身时（密钥机器 `gpu1` 登记在 `gpu1`），去向不变，
+  可以登记。会重定向的组合登记时两种顺序都会被拒绝（密码机器的地址是某台密钥机器的 id，或者
+  密钥机器的 id 是某台密码机器的地址），登记早于这项检查的此类组合在连接时仍会被拒绝。
+  密码连接还会关掉 `CanonicalizeHostname`，所以登录的就是 `ssh -G` 给出的主机，而不是之后
+  DNS 查询改出来的那台；依赖这项设置的机器请用完整主机名登记。ssh 说不出地址怎么解析时，
+  助手按登记的写法等提示，被拒时会说明是解析失败。别的账号的提示、第二重验证的提示
+  （验证码、passcode）、一次性密码的提示都拿不到回答，所以登录时还要第二重验证的机器也请用
+  密钥登记；这样被拒的登记会说明密码没有发出去。登记表里这一行记 `auth: password`，
   没有密钥路径。`raven ops connection doctor` 把它算作可用，Oncall 的 campaign 也能在上面跑，
   登录方式相同，而且只登录到登记的地址：campaign 不能把这样一条连接指到别的主机、端口或
   用户名上。机器的 sshd 必须允许
@@ -95,6 +106,9 @@ raven ops connection add --id gpu1 --name "GPU box 1" \
 已有的密钥：先是 ssh 自己的那几把（`~/.ssh/id_rsa` 排在 `id_ed25519` 前面，和 ssh 自己尝试的顺序一致），再是你自己
 起名的密钥对，其余的可以下拉换；一把都没找到时表单会说明，这时可以改用*密码*登记。
 
+机器卡上的状态行说的是此刻的链路。*未连接（派活时自动连上）*是静止态，不是故障：链路只在派活、
+点**测试链路**或安装节点时打开，打开列表不会去连每一台机器。**测试链路**会把这一台连上，并读出它节点的版本。
+
 ## 2. 安装节点 { #2-install-the-node }
 
 ```bash
@@ -115,12 +129,15 @@ The node answers: Python 3.12.3, code <摘要>.
 | --- | --- |
 | 节点 | `<node_dir>/<版本>-<摘要>/`，`node_dir` 取注册表那一行的值，默认 `~/.raven-node` |
 | 运行状态 | `node_dir` 下的 `run/`（套接字）、`tasks/<任务>/`（每个 Agent 的记录，仅属主可读）和 `log/` |
-| `uv`（机器上原本没有时，或者机器自己的 `uv` 早于 0.4.23 而 pip 又配了索引时——那样的 `uv` 会无视索引） | `<node_dir>/.uv`，版本 0.13.0，用机器自己的 `curl` 或 `wget` 取回；之后的安装直接用它 |
+| `uv`（机器上原本没有时，或者机器自己的 `uv` 早于 0.4.23 而安装会交给它一个索引时——pip 配的，或者选中替代的镜像；那样的 `uv` 会无视索引） | `<node_dir>/.uv`，版本 0.13.0，用机器自己的 `curl` 或 `wget` 取回；之后的安装直接用它 |
 | Python 3.12（机器上原本没有时） | 节点旁边，由 `uv` 管理 |
 
 别的都不变：不装系统包，不改 shell 的 rc 文件，不改环境变量，不注册服务，不开端口。
-节点的依赖包从机器上 pip 配置的索引安装，没有配置就从 PyPI 安装。安装程序按下面的
-数字检查空间：
+节点的依赖包从机器上 pip 配置的索引安装，没有配置就从 PyPI 安装。安装前先在机器上用它的
+`curl` 给这个索引测速，最多几秒：在那里连不上，或者速度低于 256 KB/s 时，再测两个国内的
+PyPI 镜像（清华 TUNA 和阿里云），改从快的那个安装，机器自己的索引留在它后面作后备。打印出来的
+计划会写明用了哪个镜像、为什么。索引回了错误状态、要求登录，或者证书不被机器信任时，照旧用它；
+在本机设置 `RAVEN_NO_MIRROR=1`，每次安装都只用机器自己的索引。安装程序按下面的数字检查空间：
 
 | 部分 | 大约 |
 | --- | --- |
@@ -134,7 +151,7 @@ The node answers: Python 3.12.3, code <摘要>.
 
 ### 在 Agent Hub 里安装 { #installing-from-the-agent-hub }
 
-机器卡片或抽屉里的**安装节点**在后台做同样的安装：卡片上显示*正在安装节点*直到结束，
+机器卡片或抽屉里的**安装节点**在后台做同样的安装：卡片上显示*正在安装节点*直到结束，不管要多久，
 抽屉里保留结束时的结果。抽屉里的*安装到*就是命令的 `--dir`。节点是另一个版本的 Raven 装的，
 会显示*需要更新*并提供**更新节点**。
 
@@ -142,7 +159,11 @@ The node answers: Python 3.12.3, code <摘要>.
 状态行*链路在，没有 Agent 在跑*说的是此刻），抽屉里会给出下一步并提供**在这台机器上接入
 Agent**：选 Agent、填它在机器上的工作目录，**接入**会像第 4 节的 `subagents.add` 一样写入
 `<预设>@<机器 id>`（如 `codex@gpu1`），写入前先在机器上真跑一句；机器上已经有这个预设时同样
-会被拒绝。可选的是机器节点能启动的全部预设，本机
+会被拒绝。等待时表单显示已等的秒数，随时可以**取消**：机器上的那一跑随之停止，什么都不写入
+（服务端是按条目名的 `subagents.test_cancel`，和停止一次测试是同一个调用）；取消时如果已经没有可停的
+（Agent 已经答过、条目正在写入），表单会说已经来不及取消，并继续等这次接入结束；停止请求没有答复时，
+表单会说取消未确认，因为只有停止的答复能说明有没有写入；等满 10 分钟还没有答复，
+表单会自己请求停止它，并提示到「智能体」页看它有没有接上。可选的是机器节点能启动的全部预设，本机
 已经接入的也在其中——那是机器上的第二个条目，不冲突。机器上已断开的条目也会显示出来，
 卡片和表单里都带「已断开」：它仍然占着这台机器，所以表单里每条这样的条目各是一个选项（按条目名），
 按钮变成**重新接入**，点下去是把那条条目重新启用（同样先真跑一句），不是再加一条。也可以在 Agent 自己的抽屉里选
@@ -252,8 +273,12 @@ Raven 之后，再跑一次 `install-node`：新节点装在旧节点旁边；`-
 Agent 在机器能读到的地方使用它（两边都挂载的盘上的同一路径、已经在那里的副本），
 读不到就在回复里说明找不到，然后继续。
 
-**MCP 服务器不出借。** 宿主的 MCP 服务器通过本机上的一个套接字访问，别的机器上的
-Agent 打不开它。授权了的服务器会在回复里注明没有出借。跨链路出借即将提供（拉取请求 #947）。
+**远程 ACP Agent 可以通过 Raven 节点使用获准的 MCP 服务。**
+服务运行在宿主，定义、凭据、工具限制和沙箱规则也保留在宿主。
+节点把每条桥接连接关联到对应任务，宿主按该任务的授权检查调用。
+出借需要节点支持 MCP 桥接，并为 Agent 配置会话 MCP 下发；未能出借的服务会在回复中说明。
+远程 CLI Agent 不借用 MCP。宿主重启后可以恢复任务结果，但不会恢复此前的 MCP 连接。
+详见[与子 Agent 协作](agent-collaboration.md#work-on-a-registered-machine)。
 
 **它写的文件留在机器上。** 这一轮结束时什么都不会自动拿回来。回复末尾有一行说明它在哪里工作：
 
@@ -381,7 +406,8 @@ Windows 保留的字符，落地时该字符写成百分号编码。
 | *is not installed on machine …; install it with `raven ops connection install-node …`* | 那里没有节点 | 安装节点 |
 | *runs different code from this Raven; update it with …* | 节点来自另一个 Raven 版本 | 再跑一次 `install-node` |
 | *has no uv, and no curl or wget to fetch one with* | 安装程序需要 `uv`，机器上既没有它也没有取它的办法；有 Python 也不改变这一点 | 在机器上装 `uv`（提示里给了它的安装程序），或者装 `curl` 或 `wget`，再试 |
-| *has uv 0.4.22, and only uv 0.4.23 or later installs from the package index pip is configured with there; with no curl or wget to fetch uv 0.13.0, upgrade uv there* | 机器上的 pip 配了索引，它的 `uv` 太旧、读不了索引（或者说不出自己的版本），安装程序又没办法取一个新的 | 在机器上升级 `uv`，或者装 `curl` 或 `wget` 让安装程序把 `uv` 取到 `node_dir` 下，再试 |
+| *has uv 0.4.22, and only uv 0.4.23 or later installs from the index pip is configured with there; with no curl or wget to fetch uv 0.13.0, upgrade uv there* | 机器上的 pip 配了索引，它的 `uv` 太旧、读不了索引（或者说不出自己的版本），安装程序又没办法取一个新的 | 在机器上升级 `uv`，或者装 `curl` 或 `wget` 让安装程序把 `uv` 取到 `node_dir` 下，再试 |
+| *failed at the packages step: it did not finish within 15 minutes, installing packages from …* | 机器上从那个索引下载太慢，也没有更快的镜像（或者设了 `RAVEN_NO_MIRROR`，或者机器上没有 `curl` 可以测速） | 把机器上 pip 的索引换成近一点的（pip 配置里的 `index-url`，或者 `PIP_INDEX_URL`），再试 |
 | *the agent's command was not found on machine …* | 那个用户在机器上没装这个 Agent | 在机器上安装并登录 |
 | *already runs 8 agents; wait for one to finish* | 机器已到上限 | 等一等，或换一台机器 |
 | *did not answer a heartbeat within 15s* | 链路断了 | 不用做什么，Raven 会重连；Agent 还在跑 |

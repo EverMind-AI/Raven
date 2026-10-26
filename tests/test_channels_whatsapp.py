@@ -605,6 +605,9 @@ class _FakeBridge:
         await ws.wait_closed()
 
     async def emit(self, frame: dict) -> None:
+        # The adapter sets _bridge_up once its auth frame is sent, which can be
+        # before _serve has read it; a frame emitted then reaches no one.
+        await _wait_for(lambda: bool(self.clients))
         for ws in self.clients:
             await ws.send(json.dumps(frame))
 
@@ -964,7 +967,7 @@ async def test_cancelling_during_the_reconnect_wait_does_not_orphan_its_bridge(t
 
     task = asyncio.create_task(ch.start())
     try:
-        await _wait_for(lambda: ch._bridge_up)
+        await _wait_for(lambda: ch._bridge_up and bool(fake.clients))
         for ws in fake.clients:
             await ws.close()
         await asyncio.wait_for(reconnecting.wait(), timeout=5)
@@ -996,6 +999,9 @@ async def test_a_restart_after_expiry_pairs_again(tmp_path, monkeypatch):
     await _wait_for(lambda: ch._bridge_up)
     await fake.emit({"type": "status", "status": "pairing_expired"})
     await asyncio.wait_for(first, timeout=5)
+    # start() swallows the cancel wait_for sends on timeout, so only the
+    # stopped flag shows the first start() ended on the expiry frame.
+    assert ch.is_running is False
     fake.clients.clear()
 
     second = asyncio.create_task(ch.start())

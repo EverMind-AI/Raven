@@ -86,7 +86,9 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
     5. Sends responses back
     """
 
-    _TOOL_RESULT_MAX_CHARS = 16_000
+    # The default of ``context.toolResultMaxChars``; an instance reads its own
+    # config over it. 0 writes every tool result whole.
+    _TOOL_RESULT_MAX_CHARS = 1_000_000
 
     # Reconnects allowed for a streamed call that failed before its first delta
     # (after one, the caller has output that a retry would duplicate).
@@ -400,6 +402,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         from raven.context_engine import build_context_engine
 
         self.context_config = context_config
+        self._TOOL_RESULT_MAX_CHARS = max(0, int(context_config.tool_result_max_chars))
 
         # Skill Hub client — built once and shared by the HubSkillSource
         # (catalog discovery) and the read_skill / use_skill tools (body /
@@ -487,6 +490,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             # costs a lambda.
             compaction=lambda: self._compaction,
             output_ceiling=self._wire_output_ceiling,
+            headroom=lambda: self.context_config.headroom,
         )
 
         # Checkpointing is configured under ``runtime.checkpoint``;

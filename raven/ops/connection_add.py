@@ -27,7 +27,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -37,7 +36,7 @@ from typing import Any
 # and a test that stands a scratch registry in patches it there.
 from raven.ops import connections
 from raven.ops.connections import LOCAL, SSH, UNREADABLE, password_auth, password_path, transport_of
-from raven.ops.transport import TransportError
+from raven.ops.transport import ALIAS_MARK, ASKPASS_REFUSED, ASKPASS_UNRESOLVED, TransportError
 from raven.utils.atomic_io import atomic_replace, write_transaction
 
 # What the owner has to be asked for, when the registry lists nothing that
@@ -83,24 +82,23 @@ def ssh_defaults(host: str, *, port: int = 0, user: str = "") -> dict[str, Any]:
     included -- so an owner who left the port, the user or the key path out
     gets the values their own ssh would pick, not a guess. ``keys`` lists only
     identity files that exist here, in ssh's own order; the caller probes each
-    and keeps the one that connects. Empty when ssh is not on this computer.
+    and keeps the one that connects. Empty when ssh is not on this computer,
+    or cannot say: the same reader a password machine's prompt is resolved by
+    (``transport.resolve_with_ssh``), with plain ssh's command line.
     """
-    argv = ["ssh", "-G"] + (["-p", str(port)] if port else []) + [f"{user}@{host}" if user else host]
-    try:
-        done = subprocess.run(argv, capture_output=True, text=True, timeout=10, check=False)
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return {}
-    if done.returncode != 0:
+    from raven.ops.transport import resolve_with_ssh
+
+    resolved = resolve_with_ssh(["ssh"] + (["-p", str(port)] if port else []) + [f"{user}@{host}" if user else host])
+    if resolved.failure:
         return {}
     out: dict[str, Any] = {"keys": []}
-    for line in done.stdout.splitlines():
-        key, _, value = line.partition(" ")
-        if key == "port" and value.strip().isdigit():
-            out["port"] = int(value)
-        elif key == "user" and value.strip():
-            out["user"] = value.strip()
-        elif key == "identityfile" and value.strip() and Path(os.path.expanduser(value.strip())).exists():
-            out["keys"].append(value.strip())
+    if resolved.first("port").isdigit():
+        out["port"] = int(resolved.first("port"))
+    if resolved.first("user"):
+        out["user"] = resolved.first("user")
+    for path in resolved.values.get("identityfile", ()):
+        if path and Path(os.path.expanduser(path)).exists():
+            out["keys"].append(path)
     return out
 
 
@@ -196,7 +194,25 @@ def probe(
         return False, f"could not reach {where}: no answer within {timeout:.0f}s", {}
     if code != 0:
         said = out.strip() or f"exit {code}"
-        if password_auth(row) and re.search(r"permission denied|password|authentication", said, re.IGNORECASE):
+        if password_auth(row) and ASKPASS_UNRESOLVED in said:
+            # The helper waited for the row's spelling because ssh could not
+            # resolve the host; the machine's prompt may name the host ssh
+            # did resolve when it connected, so this is no other question.
+            said += (
+                "\nRaven could not learn from ssh which host this machine's password prompt names (above), so the "
+                "kept password waited for the prompt at the registered address, and this prompt was not that one, so "
+                "it was not sent. Check that `ssh -G` for this address works on this computer, or register the "
+                "machine at the address ssh logs in to."
+            )
+        elif password_auth(row) and ASKPASS_REFUSED in said:
+            # The helper gave ssh nothing, so the refusal that follows is no
+            # verdict on the password: the machine asked another question.
+            said += (
+                "\nssh asked something other than this account's password (a one-time code, another account's "
+                "password, or a question worded another way); the kept password answers only its own prompt, so it "
+                "was not sent. A machine that asks that is registered with a key."
+            )
+        elif password_auth(row) and re.search(r"permission denied|password|authentication", said, re.IGNORECASE):
             # ssh says only that the login was refused; the other cause is a
             # sshd that takes no password at all, which looks the same.
             said += (
@@ -353,6 +369,70 @@ def parse_probe(out: str) -> dict[str, Any]:
     return found
 
 
+def alias_collision(row: dict[str, Any], rows: list[dict[str, Any]]) -> str:
+    """Why registering ``row`` beside ``rows`` would let a ``Host`` alias Raven writes decide where a password
+    machine logs in; empty when it would not.
+
+    Raven writes ``Host <id>`` / ``HostName <address>`` for every key machine
+    (:func:`write_ssh_alias`), and ssh follows it for any connection to that
+    name. A password machine registered at such a name would log in at the key
+    machine's address, with its password (reviewed 2026-10-20). Both orders
+    are refused: a key machine whose id is a registered password machine's
+    address, and a password machine at a registered key machine's id or at an
+    alias Raven keeps with no machine left behind it. A pair whose alias names
+    the very address it is called by (key machine ``gpu1`` at ``gpu1``) sends
+    the password nowhere else and registers; the registry row (what the next
+    add rewrites the block from) and the block in ~/.ssh/config must both say
+    so. Names compare ignoring case, though OpenSSH took ``Host labbox`` for
+    ``labbox`` only and not ``LabBox`` (measured 2026-10-20): a mixed-case
+    pair is refused although ssh would not redirect it, the safe direction.
+    Connecting refuses the pair again by name (``transport.ssh_env``), which
+    is what still covers a pair written before this check existed.
+    """
+    from raven.ops.transport import alias_redirects, managed_alias_hostnames
+
+    if transport_of(row) == LOCAL:
+        return ""
+    conn_id = str(row.get("id") or "").strip()
+    if not password_auth(row):
+        address = str(row.get("host") or "").strip()
+        for other in rows:
+            if transport_of(other) == SSH and password_auth(other):
+                host = str(other.get("host") or "").strip()
+                if host.lower() == conn_id.lower() and address.lower() != host.lower():
+                    return (
+                        f"id {conn_id!r} is the address password machine {str(other.get('id') or '?')!r} is "
+                        f"registered at ({host!r}): the ssh alias Raven writes for this id would take that "
+                        f"machine's logins, and its password, to this machine's address ({address!r}). Pick "
+                        "another id"
+                    )
+        return ""
+    host = str(row.get("host") or "").strip()
+    for other in rows:
+        other_id = str(other.get("id") or "").strip()
+        other_host = str(other.get("host") or "").strip()
+        if (
+            transport_of(other) == SSH
+            and not password_auth(other)
+            and other_id.lower() == host.lower()
+            and other_host.lower() != host.lower()
+        ):
+            return (
+                f"machine {conn_id!r} would log in at {host!r}, the id of key machine {other_id!r}: the ssh alias "
+                f"Raven keeps for {other_id!r} would take this machine's logins, and its password, to "
+                f"{other_id!r}'s address ({other_host!r}). Register {conn_id!r} at an address that is no "
+                f"machine's id here (its IP address or full domain name), or remove {other_id!r} first"
+            )
+    if alias_redirects(host, managed_alias_hostnames()):
+        return (
+            f"machine {conn_id!r} would log in at {host!r}, the ssh alias Raven keeps in ~/.ssh/config for a "
+            f"machine {host.lower()!r}, and that block does not keep ssh at that name: ssh would follow it elsewhere. "
+            f"Take the '{ALIAS_MARK.format(conn_id=host.lower())}' block out of ~/.ssh/config, or register "
+            f"{conn_id!r} at an address that is not one of these aliases (its IP address or full domain name)"
+        )
+    return ""
+
+
 def write(row: dict[str, Any], *, password: str | None = None) -> Path:
     """Append one machine, keeping whatever shape the file already had.
 
@@ -377,6 +457,10 @@ def write(row: dict[str, Any], *, password: str | None = None) -> Path:
         rows = list(found.rows)
         if any(str(r.get("id")).strip() == row["id"] for r in rows):
             raise ValueError(f"a machine with id {row['id']!r} is already listed in {path}")
+        # Judged here too, under the registry's lock: the callers ask before
+        # they reach the machine, and a registration can land in between.
+        if collision := alias_collision(row, rows):
+            raise ValueError(collision)
         rows.append(row)
         payload = json.dumps({"connections": rows}, indent=2, ensure_ascii=False) + "\n"
         if password is None:
@@ -426,8 +510,6 @@ def set_fields(conn_id: str, fields: dict[str, Any]) -> Path:
 #: the listing to say whether the machine has this Raven's node without
 #: reaching it.
 NODE_FIELD = "node_install"
-
-ALIAS_MARK = "# raven connection {conn_id} (managed; rewritten on every add)"
 
 
 def write_ssh_alias(row: dict[str, Any]) -> str | None:
