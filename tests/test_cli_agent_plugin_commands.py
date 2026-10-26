@@ -10,6 +10,7 @@ commands write lands in the home of whoever runs the suite.
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -262,6 +263,32 @@ def test_import_json_reports_the_installed_skill(env: _Env) -> None:
     assert payload["packages"][0]["package"] == PACKAGE_NAME
     assert payload["packages"][0]["installed"] == [SKILL_NAME]
     assert payload["packages"][0]["failed"] == []
+
+
+def test_import_keeps_the_ledger_entry_when_a_stale_skill_cannot_be_removed(
+    env: _Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed stale deletion fails the command and leaves the skill owned."""
+    assert _run(env, "import", str(env.package)).exit_code == 0
+    shutil.rmtree(env.package / "skills" / SKILL_NAME)
+
+    real_rmtree = shutil.rmtree
+
+    def _refuse(path, *args, **kwargs):
+        if Path(path).name == SKILL_NAME:
+            raise OSError("the directory is busy")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr("raven.agent_plugins.skills.shutil.rmtree", _refuse)
+
+    result = _run(env, "import", str(env.package), "--json")
+
+    assert result.exit_code == 1
+    payload = _json_payload(result)
+    assert payload["packages"][0]["retained"] == [SKILL_NAME]
+    ledger = json.loads(env.ledger.read_text(encoding="utf-8"))
+    assert ledger["packages"][PACKAGE_NAME]["skills"] == [SKILL_NAME]
+    assert env.installed.is_dir()
 
 
 def test_import_takes_the_always_flag_out_of_the_copy(env: _Env) -> None:

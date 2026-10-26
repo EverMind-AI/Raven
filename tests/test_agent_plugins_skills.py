@@ -617,6 +617,73 @@ def test_import_package_removes_a_skill_the_package_no_longer_ships(tmp_path: Pa
     assert not (workspace / "skills" / PACKAGE_NAME / "beta").exists()
 
 
+def test_import_package_keeps_ownership_when_a_stale_skill_cannot_be_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed deletion must not report success or drop the ledger's claim.
+
+    The ledger is the only record of what this package put in the workspace.
+    Rewriting it to the installed set after a deletion that did not happen
+    leaves the directory unowned, so no later ``remove`` can clear it.
+    """
+    root = _package_root(tmp_path)
+    _write_skill(root / "skills" / "alpha", _frontmatter("alpha"))
+    _write_skill(root / "skills" / "beta", _frontmatter("beta"))
+    workspace, ledger = _workspace(tmp_path)
+
+    first = import_package(load_package(root), workspace=workspace, ledger=ledger)
+    ledger.record(LedgerEntry(name=PACKAGE_NAME, version="1.0.0", skills=first.installed))
+    shutil.rmtree(root / "skills" / "beta")
+
+    real_rmtree = shutil.rmtree
+
+    def _refuse(path, *args, **kwargs):
+        if Path(path).name == "beta":
+            raise OSError("the directory is busy")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(skills_module.shutil, "rmtree", _refuse)
+
+    second = import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    assert second.installed == ("alpha",)
+    assert second.removed == ()
+    assert second.retained == ("beta",)
+    assert "busy" in dict(second.failed)["beta"]
+    assert (workspace / "skills" / PACKAGE_NAME / "beta").is_dir()
+
+
+def test_import_package_treats_a_vanished_stale_skill_as_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A raise after the directory is gone is a success, not a retained claim."""
+    root = _package_root(tmp_path)
+    _write_skill(root / "skills" / "alpha", _frontmatter("alpha"))
+    _write_skill(root / "skills" / "beta", _frontmatter("beta"))
+    workspace, ledger = _workspace(tmp_path)
+
+    first = import_package(load_package(root), workspace=workspace, ledger=ledger)
+    ledger.record(LedgerEntry(name=PACKAGE_NAME, version="1.0.0", skills=first.installed))
+    shutil.rmtree(root / "skills" / "beta")
+
+    real_rmtree = shutil.rmtree
+
+    def _remove_then_raise(path, *args, **kwargs):
+        result = real_rmtree(path, *args, **kwargs)
+        if Path(path).name == "beta":
+            raise OSError("the directory vanished while being removed")
+        return result
+
+    monkeypatch.setattr(skills_module.shutil, "rmtree", _remove_then_raise)
+
+    second = import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    assert second.removed == ("beta",)
+    assert second.retained == ()
+    assert second.failed == ()
+    assert not (workspace / "skills" / PACKAGE_NAME / "beta").exists()
+
+
 def test_import_package_keeps_a_directory_the_ledger_never_claimed(tmp_path: Path) -> None:
     """The stale sweep is scoped to the ledger, not to the package directory."""
     root = _package_root(tmp_path)

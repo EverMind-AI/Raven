@@ -59,6 +59,12 @@ class ImportReport:
     installed: tuple[str, ...] = ()
     removed: tuple[str, ...] = ()
     """Skills an earlier import installed that this package no longer ships."""
+    retained: tuple[str, ...] = ()
+    """Skills this package no longer ships but whose copy could not be removed.
+
+    The ledger keeps claiming these: the directory still exists, and dropping
+    the claim would leave it unowned and impossible to remove later.
+    """
     skipped: tuple[tuple[str, str], ...] = ()
     failed: tuple[tuple[str, str], ...] = ()
     problems: tuple[SkillProblem, ...] = ()
@@ -224,13 +230,14 @@ def import_package(
         drop_always_flag(target / SKILL_FILENAME)
         installed.append(skill.name)
 
-    removed = _remove_stale_skills(
+    removed, retained, stale_failed = _remove_stale_skills(
         target_root,
         previous=ledger.entry(package.name),
         installed=installed,
         workspace=workspace,
         ledger=ledger,
     )
+    failed.extend(stale_failed)
 
     return ImportReport(
         package=package.name,
@@ -238,6 +245,7 @@ def import_package(
         target=str(target_root),
         installed=tuple(installed),
         removed=tuple(removed),
+        retained=tuple(retained),
         skipped=tuple(skipped),
         failed=tuple(failed),
         problems=tuple(problems),
@@ -251,7 +259,7 @@ def _remove_stale_skills(
     installed: list[str],
     workspace: Path,
     ledger: PackageLedger,
-) -> list[str]:
+) -> tuple[list[str], list[str], list[tuple[str, str]]]:
     """Delete what an earlier import installed and this one no longer ships.
 
     The ledger is the record of what this package put in the workspace. A
@@ -260,16 +268,36 @@ def _remove_stale_skills(
     forgets it was ever ours -- so the copy becomes unowned and no later
     ``remove`` can clear it. Converging to the installed set here is what
     makes a re-import mean "the workspace matches the package".
+
+    Returns the removed names, the names still on disk after a failed
+    deletion, and the failures. A retained name stays in the ledger's claim:
+    reporting it as removed would strand a directory nothing owns.
     """
     if previous is None:
-        return []
+        return [], [], []
     removed: list[str] = []
+    retained: list[str] = []
+    failed: list[tuple[str, str]] = []
     for name in sorted(set(previous.skills) - set(installed)):
         stale = target_root / name
-        if stale.is_dir() and ledger.owns_directory(stale, workspace=workspace):
-            shutil.rmtree(stale, ignore_errors=True)
-            removed.append(name)
-    return removed
+        if not (stale.is_dir() and ledger.owns_directory(stale, workspace=workspace)):
+            continue
+        try:
+            shutil.rmtree(stale)
+        except OSError as exc:
+            if stale.exists():
+                retained.append(name)
+                failed.append((name, f"could not be removed: {exc}"))
+            else:
+                # The directory is gone: whatever raised, the removal succeeded.
+                removed.append(name)
+            continue
+        if stale.exists():
+            retained.append(name)
+            failed.append((name, "still present after removal"))
+            continue
+        removed.append(name)
+    return removed, retained, failed
 
 
 def _escaped_entry(root: Path, directory: Path) -> str | None:

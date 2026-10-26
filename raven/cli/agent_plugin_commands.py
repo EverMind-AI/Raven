@@ -291,6 +291,8 @@ def import_package(
                     "version": report.version,
                     "target": report.target,
                     "installed": [],
+                    "removed": [],
+                    "retained": [],
                     "skipped": [],
                     "failed": [],
                     "problems": [],
@@ -304,7 +306,9 @@ def import_package(
                 version=report.version,
                 source=str(package.root),
                 imported_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                skills=report.installed,
+                # A skill whose copy could not be removed still belongs to this
+                # package; dropping the claim would make it unremovable later.
+                skills=report.installed + report.retained,
                 fingerprint=package.fingerprint(),
             )
         )
@@ -315,6 +319,7 @@ def import_package(
                 "target": report.target,
                 "installed": list(report.installed),
                 "removed": list(report.removed),
+                "retained": list(report.retained),
                 "skipped": [{"skill": name, "reason": reason} for name, reason in report.skipped],
                 "failed": [{"skill": name, "reason": reason} for name, reason in report.failed],
                 "problems": [{"name": item.name, "reason": item.reason} for item in report.problems],
@@ -343,6 +348,11 @@ def import_package(
         console.print(f"  [dim]target:[/dim] {escape(report['target'])}")
         for name in report["removed"]:
             console.print(f"  [yellow]removed[/yellow] {escape(name)}: no longer in the package")
+        for name in report["retained"]:
+            console.print(
+                f"  [red]kept[/red] {escape(name)}: the old copy could not be removed",
+                highlight=False,
+            )
         for name, reason in [(item["skill"], item["reason"]) for item in report["skipped"]]:
             console.print(f"  [yellow]skipped[/yellow] {escape(name)}: {escape(reason)}", highlight=False)
         for item in report["failed"]:
