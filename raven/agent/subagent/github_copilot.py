@@ -101,6 +101,8 @@ _REFUSAL_OPENING = re.compile(
     r")",
     re.IGNORECASE,
 )
+# Longer than any refusal above: the longest measured runs to under 300 characters.
+_REFUSAL_MAX_CHARS = 1000
 
 
 def read_reply(reply: str) -> tuple[str, Remedy | None] | None:
@@ -110,8 +112,12 @@ def read_reply(reply: str) -> tuple[str, Remedy | None] | None:
     can cite the same words -- a 500 in the log of a deploy it is debugging, an
     error a request it was asked to make returned -- and failing it for that
     would lose the work, so a reply is read only when it opens the way one of
-    Copilot's own refusals does. A ping's reply answers a one-word prompt, which
-    is why the connect reads it as it is.
+    Copilot's own refusals does, and only when it is as short as one: a long
+    reply is work, and the patterns above are not run over text that size. A
+    ping's reply answers a one-word prompt, which is why the connect reads it as
+    it is.
     """
     said = reply.strip()
-    return read(said) if _REFUSAL_OPENING.match(said) else None
+    if len(said) > _REFUSAL_MAX_CHARS or not _REFUSAL_OPENING.match(said):
+        return None
+    return read(said)

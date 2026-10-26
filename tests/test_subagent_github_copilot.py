@@ -313,6 +313,16 @@ def test_an_answer_that_opens_with_an_error_it_found_is_not_a_refusal(answer: st
     assert github_copilot.read_reply(answer) is None
 
 
+def test_a_long_reply_is_never_read_as_a_refusal() -> None:
+    """Copilot's refusals are short -- the longest measured runs to under 300
+    characters. A long reply is work, whatever it opens with; and a long reply
+    that opens like one and never closes would walk the patterns above once per
+    restart, which measured 1.6 s at 0.56 MB and 23 s at 2.2 MB."""
+    reply = "Error: Authentication failed with provider at http://x (HTTP 401)." + " and the rest of an answer" * 100
+
+    assert github_copilot.read_reply(reply) is None
+
+
 async def test_another_agents_dispatch_is_not_read_with_copilots_sentences(tmp_path: Path, _closed_pool) -> None:
     backend = _dispatched("qwen_code", _CREDIT)
 
