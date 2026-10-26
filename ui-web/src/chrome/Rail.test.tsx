@@ -245,12 +245,52 @@ describe('the rail on a window under the fold', () => {
     expect(railState.get()).toBe(false)
   })
 
+  /* A session row is a div with the button role that opens on Enter or Space
+     in its own handler, and no click follows a key there; its rename box is
+     inside the row, and a press or an Enter in it is the name's, not a pick. */
+  it('folds when a session row is picked by keyboard, and not from its rename box', async () => {
+    render()
+    railState.set(true)
+    const row = document.createElement('div')
+    row.className = 'sess'
+    row.setAttribute('role', 'button')
+    const box = document.createElement('input')
+    box.className = 'ren'
+    row.append(box)
+    el('list').append(row)
+    const key = async (target: Element, key: string): Promise<void> => {
+      await act(async () => {
+        target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
+      })
+    }
+    await act(async () => {
+      box.click()
+    })
+    await key(box, 'Enter')
+    expect(railState.get()).toBe(true)
+    await key(row, ' ')
+    expect(railState.get()).toBe(false)
+    railState.set(true)
+    await key(row, 'Enter')
+    expect(railState.get()).toBe(false)
+    railState.set(true)
+    await key(row, 'a')
+    expect(railState.get()).toBe(true)
+  })
+
   it('keeps standing beside the page on a window that holds both', async () => {
     narrow = false
     render()
     railState.set(true)
     await click('agentsBtn')
     expect(opened.list).toEqual(['hub'])
+    expect(railState.get()).toBe(true)
+    const row = document.createElement('div')
+    row.className = 'sess'
+    el('list').append(row)
+    await act(async () => {
+      row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
     expect(railState.get()).toBe(true)
   })
 })

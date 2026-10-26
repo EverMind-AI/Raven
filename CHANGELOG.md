@@ -454,7 +454,8 @@ All notable changes to Raven are documented here.
   cards, a drawer wider than the window) and a horizontal scroll to reach any
   of it. Below 780px the body has no width floor; below 640px the window holds
   one column, the boot starts the rail folded, a rail opened from its twin lies
-  over the content and folds again when a row in it is pressed, shrinking a
+  over the content (under a drawer opened beside it) and folds again when a
+  row in it is picked by pointer or keyboard, shrinking a
   window under 640px folds a standing rail, the agent, machine and channel
   drawers are capped to the window less a gutter, and the agent and machine
   drawer's action bar wraps. The first-run wizard drops its own 780px floor

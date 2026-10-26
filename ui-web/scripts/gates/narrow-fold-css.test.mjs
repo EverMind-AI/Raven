@@ -153,6 +153,20 @@ function settingsRule(selector, property) {
   return null
 }
 
+describe('a standing rail under the fold', () => {
+  const token = (name) => Number(css.match(new RegExp(`${name}:\\s*(\\d+);`))[1])
+
+  /* Over the pages and under the drawers: a drawer opened from the strip of
+     page the rail leaves visible is the newer surface, and is drawn over it. */
+  it('lies over the pages and under the drawers', () => {
+    const rail = rules(null, foldBlock()).find(([selector]) => selector === '.app .rail')
+    expect(rail, 'the fold places the rail').toBeDefined()
+    expect(rail[1]).toMatch(/z-index:\s*var\(--z-rail-fold\)/)
+    expect(token('--z-page')).toBeLessThan(token('--z-rail-fold'))
+    expect(token('--z-rail-fold')).toBeLessThan(token('--z-detail'))
+  })
+})
+
 describe('the first-run wizard under the body floor', () => {
   it('lifts its own floor at the width the body floor lifts', () => {
     expect(FLOOR).toBe('780px')

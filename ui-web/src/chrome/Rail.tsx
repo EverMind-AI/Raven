@@ -230,19 +230,33 @@ function RailFoot(): JSX.Element {
    state/rail.ts `FOLDS`), so a press that goes somewhere -- a module, a
    session, the draft row, the import, the settings -- folds it, the way a drawer
    closes on the choice made in it. The rail's own controls keep it open: its
-   toggle, the search and its box, a group's head, the grip. A native listener
-   on the aside rather than React handlers on each row, because the session
-   rows are the rail island's, a root of its own under #list. In the bubble
-   phase, which runs it after a session row's handler (that root is inside
-   the aside) but before the module and settings buttons' (App is a portal,
-   so React hears those above the aside); chrome/Rail.test.tsx presses both
+   toggle, the search and its box, a group's head, the grip; so does a session
+   row's rename box, where a press places the caret and Enter commits the name.
+   A native listener on the aside rather than React handlers on each row,
+   because the session rows are the rail island's, a root of its own under
+   #list. In the bubble phase, which runs it after a session row's handler
+   (that root is inside the aside) but before the module and settings buttons'
+   (App is a portal, so React hears those above the aside). A row picked by
+   keyboard folds it too: a session row is a div with the button role, opened on
+   Enter or Space by its own handler with no click after it (features/rail/
+   RailPage.tsx), where the module buttons, being buttons, click on those keys
+   themselves and need no second listener. chrome/Rail.test.tsx presses both
    kinds under the fold. */
 const PICKS = '.navi, .sess, .me'
+const KEEPS = 'input, textarea, [contenteditable]'
+
+function picked(e: Event): boolean {
+  const target = e.target as Element | null
+  return !!target?.closest(PICKS) && !target.closest(KEEPS)
+}
 
 function foldOnPick(aside: HTMLElement | null): void {
   aside?.addEventListener('click', (e) => {
-    if (rail.stands()) return
-    if ((e.target as Element | null)?.closest(PICKS)) rail.set(false)
+    if (!rail.stands() && picked(e)) rail.set(false)
+  })
+  aside?.addEventListener('keydown', (e) => {
+    if (rail.stands() || (e.key !== 'Enter' && e.key !== ' ')) return
+    if (picked(e) && !(e.target as Element | null)?.closest('button, a')) rail.set(false)
   })
 }
 

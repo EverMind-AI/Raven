@@ -207,6 +207,10 @@
      is scoped to its own stacking context and is not part of this ladder. */
   --z-pop: 15;
   --z-page: 24;
+  /* A standing rail on a window under the fold (this sheet's fold block,
+     the width state/rail.ts folds on): over the pages, under the drawers, so
+     a drawer opened from the strip of page it leaves visible is drawn over it. */
+  --z-rail-fold: 25;
   --z-detail: 26;
   --z-rail-handle: 30;
   /* The floating desk, and a desk pane blown up to fill the window. Both sit
@@ -440,7 +444,7 @@ body {
   :root .app { grid-template-columns: 1fr; }
   .app .rail {
     position: fixed; top: 0; bottom: 0; left: 0; width: min(var(--rail), 86vw);
-    z-index: var(--z-rail-handle); box-shadow: var(--shadow);
+    z-index: var(--z-rail-fold); box-shadow: var(--shadow);
   }
   .app .rail #railGrip { display: none; }
   :root .page { left: 0; }
