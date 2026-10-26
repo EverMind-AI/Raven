@@ -158,31 +158,19 @@ def inspect_package(
     as_json: bool = typer.Option(False, "--json", help="Print JSON instead of a table"),
 ) -> None:
     """Validate a package and report what it holds, importing nothing."""
-    from raven.agent_plugins import (
-        AgentPluginManifestError,
-        candidate_roots,
-        discover_skills,
-        load_package,
-    )
+    from raven.agent_plugins import discover_packages, discover_skills
 
-    _load_config(config_path)
+    config = _load_config(config_path)
     entry = Path(path).expanduser()
-    roots = candidate_roots(entry)
-    if not roots:
-        console.print(f"[red]{escape(str(entry))}[/red] holds no plugin.json", highlight=False)
-        raise typer.Exit(1)
+    packages, discovery_problems = discover_packages([entry], disabled=config.agent_plugins.disabled)
 
     reports: list[dict] = []
-    problems: list[dict] = []
-    failed = False
-    for root in roots:
-        try:
-            package = load_package(root)
-        except AgentPluginManifestError as exc:
-            failed = True
-            problems.append({"path": str(root), "reason": str(exc)})
-            console.print(f"[red]{escape(str(root))}[/red]: {escape(str(exc))}", highlight=False)
-            continue
+    problems: list[dict] = [{"path": item.path, "reason": item.reason} for item in discovery_problems]
+    failed = bool(problems)
+    if not as_json:
+        for item in problems:
+            console.print(f"[red]{escape(item['path'])}[/red]: {escape(item['reason'])}", highlight=False)
+    for package in packages:
         skills, skill_problems = discover_skills(package)
         mcp_report = _mcp_report(package)
         reports.append(
@@ -245,38 +233,26 @@ def import_package(
     as_json: bool = typer.Option(False, "--json", help="Print JSON instead of a table"),
 ) -> None:
     """Validate a package and import its skills into the workspace."""
-    from raven.agent_plugins import (
-        AgentPluginManifestError,
-        LedgerEntry,
-        candidate_roots,
-        load_package,
-    )
+    from raven.agent_plugins import LedgerEntry, discover_packages
     from raven.agent_plugins import (
         import_package as run_import,
     )
 
     config = _load_config(config_path)
     entry = Path(path).expanduser()
-    roots = candidate_roots(entry)
-    if not roots:
-        console.print(f"[red]{escape(str(entry))}[/red] holds no plugin.json", highlight=False)
-        raise typer.Exit(1)
+    packages, discovery_problems = discover_packages([entry], disabled=config.agent_plugins.disabled)
 
     workspace = _workspace_path()
     ledger = _load_ledger()
     blocklist = config.skill_forge.blocklist
     reports: list[dict] = []
-    problems: list[dict] = []
-    failed = False
+    problems: list[dict] = [{"path": item.path, "reason": item.reason} for item in discovery_problems]
+    failed = bool(problems)
+    if not as_json:
+        for item in problems:
+            console.print(f"[red]{escape(item['path'])}[/red]: {escape(item['reason'])}", highlight=False)
 
-    for root in roots:
-        try:
-            package = load_package(root)
-        except AgentPluginManifestError as exc:
-            failed = True
-            problems.append({"path": str(root), "reason": str(exc)})
-            console.print(f"[red]{escape(str(root))}[/red]: {escape(str(exc))}", highlight=False)
-            continue
+    for package in packages:
         report = run_import(
             package,
             workspace=workspace,
@@ -304,7 +280,9 @@ def import_package(
             LedgerEntry(
                 name=report.package,
                 version=report.version,
-                source=str(package.root),
+                # Resolved: `check` may run from any directory, and "." must
+                # not mean the directory it happens to be run in.
+                source=str(package.root.resolve()),
                 imported_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 # A skill whose copy could not be removed still belongs to this
                 # package; dropping the claim would make it unremovable later.
@@ -426,7 +404,9 @@ def check_packages(
     ledger = _load_ledger()
     rows: list[dict] = []
     for name, entry in sorted(ledger.entries.items()):
-        source = Path(entry.source)
+        # Old records may carry a path as typed; normalize what can be
+        # normalized before asking whether the package is there.
+        source = Path(entry.source).expanduser().resolve()
         if not source.is_dir():
             rows.append({"name": name, "status": "missing", "detail": f"{source} is gone"})
             continue

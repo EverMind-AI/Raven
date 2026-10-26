@@ -291,6 +291,48 @@ def test_import_keeps_the_ledger_entry_when_a_stale_skill_cannot_be_removed(
     assert env.installed.is_dir()
 
 
+def test_import_leaves_a_disabled_package_alone(env: _Env) -> None:
+    config = json.loads(env.config.read_text(encoding="utf-8"))
+    config["agentPlugins"]["disabled"] = [PACKAGE_NAME]
+    env.config.write_text(json.dumps(config), encoding="utf-8")
+
+    result = _run(env, "import", str(env.package))
+
+    assert result.exit_code == 0, result.stdout
+    assert not env.installed.exists()
+    if env.ledger.exists():
+        assert PACKAGE_NAME not in json.loads(env.ledger.read_text(encoding="utf-8"))["packages"]
+
+
+def test_inspect_of_a_disabled_package_reports_nothing(env: _Env) -> None:
+    config = json.loads(env.config.read_text(encoding="utf-8"))
+    config["agentPlugins"]["disabled"] = [PACKAGE_NAME]
+    env.config.write_text(json.dumps(config), encoding="utf-8")
+
+    result = _run(env, "inspect", str(env.package), "--json")
+
+    assert result.exit_code == 0, result.stdout
+    assert _json_payload(result)["packages"] == []
+
+
+def test_check_finds_a_package_imported_by_a_relative_path(
+    env: _Env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(env.package)
+    assert _run(env, "import", ".").exit_code == 0
+
+    ledger = json.loads(env.ledger.read_text(encoding="utf-8"))
+    assert Path(ledger["packages"][PACKAGE_NAME]["source"]).is_absolute()
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    result = _run(env, "check", "--json")
+
+    assert result.exit_code == 0, result.stdout
+    assert _json_payload(result)["packages"][0]["status"] == "current"
+
+
 def test_import_takes_the_always_flag_out_of_the_copy(env: _Env) -> None:
     """A third-party package does not get to be injected into every turn."""
     assert _run(env, "import", str(env.package)).exit_code == 0
