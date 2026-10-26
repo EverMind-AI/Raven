@@ -250,10 +250,13 @@ All notable changes to Raven are documented here.
   `MCPServerConfig` gained `cwd`, which the stdio transport passes to the
   MCP SDK, and `SandboxExecutor.start_process` gained an optional `cwd` so
   a sandboxed server runs in the directory it names instead of being
-  refused. A package server never replaces an operator-configured one: a
-  name collision is reported and the host's entry wins. Re-importing a
-  package also removes the skills it no longer ships, so the workspace
-  converges on the package. `raven agent-plugins list` and `inspect` show
+  refused; the boxlite executor translates the command, arguments and
+  environment to their guest mounts too, and a package's data root is
+  mounted at `/plugin-data` so `PLUGIN_DATA` is reachable inside the VM. A
+  package server never replaces an operator-configured one: a name
+  collision is reported and the host's entry wins. Re-importing a package
+  also removes the skills it no longer ships, keeping the ledger's claim on
+  a copy whose deletion failed, so the workspace converges on the package. `raven agent-plugins list` and `inspect` show
   a package's servers and their problems without starting anything.
 
 ### Changed
