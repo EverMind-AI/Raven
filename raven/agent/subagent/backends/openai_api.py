@@ -36,6 +36,7 @@ from raven.agent.subagent.attachments import with_attachment_note
 from raven.agent.subagent.backends import turn_rows
 from raven.agent.subagent.backends.base import bounded_delta, clamp_output
 from raven.agent.subagent.openai_steps import OpenAIStepReader
+from raven.contracts.subagent_backend import SubagentNoAnswerError
 from raven.spine.message import Media
 
 if TYPE_CHECKING:
@@ -353,6 +354,11 @@ class OpenAIApiBackend:
         # lane follows.
         activity.note_transcript(turn_rows.rows(reader.events()))
         reply = await clamp_output(str(content).strip(), self.max_output_chars, agent=self.name, sink=on_delta)
+        if not reply:
+            # A reply with nothing visible in it is no answer, as the in-process
+            # backend reads one: handed back as "", the run was recorded
+            # completed with nothing as its result (manager.py, dag_runner.py).
+            raise SubagentNoAnswerError(f"OpenAI-API agent {self.name!r}: the model's reply was empty")
         if on_messages is not None:
             on_messages([*messages, {"role": "assistant", "content": reply}])
         return reply

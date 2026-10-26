@@ -3419,6 +3419,29 @@ async def test_the_answer_asked_for_after_a_blank_reply_reaches_a_watching_calle
     assert streamed.endswith(out) and streamed.count(out) == 1, seen
 
 
+async def test_the_answer_asked_for_streams_before_the_grant_note(tmp_path, monkeypatch) -> None:
+    """What streams ends with the reply the record stores, and the record's
+    reply is the answer followed by the note about the servers withheld: a
+    watcher that heard the note last would end on the note, not the answer."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.agent.subagent.mcp_grant import McpGrant, WithheldServer
+
+    provider = _ScriptedProvider([" ", "the answer"])
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+    withheld = McpGrant(withheld=(WithheldServer("ghost", "oauth_interaction"),))
+    monkeypatch.setattr(backend, "resolve_mcp_grant", lambda mcps=None: withheld)
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    out = await backend.run("sum it up", task_id="n9", workspace=tmp_path, executor=None, on_delta=on_delta)
+
+    note = "\n\n[raven] " + withheld.note_text() + "."
+    assert out == "the answer" + note
+    assert seen == ["the answer", note], seen
+
+
 async def test_the_answer_asked_for_after_the_rounds_run_out_reaches_a_watching_caller(tmp_path) -> None:
     """The same on the older path: a run out of rounds answers through the
     wrap-up call too, and that answer is the reply."""

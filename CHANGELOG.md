@@ -429,7 +429,8 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
-- A sub-agent whose model ends its turn with nothing visible -- the one-space
+- A sub-agent of the in-process or OpenAI-API kind whose model ends its turn
+  with nothing visible -- the one-space
   reply OpenRouter hands back for an empty turn, or the empty reply of a
   vendor that keeps no native finish reason -- no longer completes with that
   as its answer. The in-process backend read only a missing reply as no
@@ -438,6 +439,9 @@ All notable changes to Raven are documented here.
   blank reply now gets the one wrap-up call a run out of rounds gets, worded
   for what happened, and a run that answers nothing twice fails with
   `SubagentNoAnswerError` saying so, rather than that it used all its rounds.
+  The OpenAI-API backend handed a blank reply back as the answer too; it now
+  fails the run as one with no answer. A cli entry's answer is what it
+  printed, and is not changed here.
   In a direct chat an answer the backend waited for rather than streamed --
   the wrap-up's, on either path, or the one it asks for again after a cut
   stream -- now streams like any other reply: once anything had streamed
