@@ -1,7 +1,7 @@
 /* What a draft chose before it had a conversation to choose it for.
  *
- * A model, a tier and a permission mode picked while the page is still a draft
- * cannot be written: there is no session to scope any of the three to, and
+ * A model, a tier, a permission mode and a reasoning effort picked while the
+ * page is still a draft cannot be written: there is no session to scope any of the three to, and
  * writing them would move the global default instead. They are held until the
  * first message mints a session, applied to it, and forgotten.
  *
@@ -23,6 +23,8 @@ export interface Staging {
   model: StagedModel | null
   tier: string | null
   perm: string | null
+  /** A reasoning effort picked for the draft; written once a session exists. */
+  effort: string | null
 }
 
 /** The staged picks of the conversation on screen. */

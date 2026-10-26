@@ -84,6 +84,7 @@ from raven.agent.loop.dead_end import NO_RESPONSE_FALLBACK, dead_reasons
 from raven.agent.loop.failure_text import attach_full_detail, response_failure_text
 from raven.agent.loop.first_call import FirstCallGuard
 from raven.agent.loop.recovery import ContinuationGate, DraftGate, cut_reasoning_head, lower_reasoning_effort
+from raven.agent.session_effort import of as session_effort_of
 from raven.agent.tools.registry import call_failed
 from raven.agent.tools.removals import RemovalWatch
 from raven.agent.window import shrink
@@ -789,6 +790,7 @@ class TurnPathMixin:
         rerun_pending: "Callable[[str | None, list[dict], str], bool] | None" = None,
         spend: TurnSpend | None = None,
         turn_log: TurnLog | None = None,
+        session_effort: str | None = None,
     ) -> tuple[str | None, list[str], list[dict], LoopOutcome]:
         """Run the agent iteration loop.
 
@@ -839,6 +841,11 @@ class TurnPathMixin:
         hand back and keeps what the turn actually said. A caller that passes
         none gets one opened here, so the rerun question below is still asked of
         the turn rather than of the window.
+
+        ``session_effort`` is the reasoning effort the session picked for its
+        own model calls (``raven.agent.session_effort``), read off its record
+        by the caller the way the model is. It outranks a mode's effort and
+        the configured default; a hook's rollback override still outranks it.
         """
         spend = spend if spend is not None else TurnSpend(session_key)
         messages = initial_messages
@@ -944,6 +951,13 @@ class TurnPathMixin:
         # Read once, here: a mode switched mid-turn lands on the next turn.
         policy = self.session_policy(session_key or "")
         iteration_cap = policy.max_iterations or self.max_iterations
+        # The effort this turn's own calls ask for, short of a hook's rollback
+        # override: the session's own pick over its mode's. Both are the
+        # session's and both land on the next turn; the pick wins because a
+        # person set it on this conversation, and the mode's is the
+        # catalogue's word for every conversation in that mode. None here
+        # leaves the configured default to ``gen_overrides``.
+        turn_effort = session_effort or policy.reasoning_effort
         # The other bound on this turn, and the only one a product supplies rather
         # than the loop: whatever a hook left under ``TURN_BUDGETS_KEY``. Read here
         # for the same reason the cap is, and defaulting to unbounded, so an agent
@@ -1194,16 +1208,18 @@ class TurnPathMixin:
 
             # TokenWise before-hook: strategies may rewrite messages, tools,
             # or model (e.g. CacheOptimizer marks cache_control blocks).
-            # The session's pinned effort first, a hook's rollback override on
-            # top: a mode that asks for more thinking sets the turn's default,
-            # and a gate re-sampling one call may still move that one call.
+            # The session's effort first, a hook's rollback override on top: a
+            # mode that asks for more thinking, or the session's own pick, sets
+            # the turn's default, and a gate re-sampling one call may still
+            # move that one call.
             gen_overrides = {
-                # The configured default underneath, the session's pin over it,
-                # a hook's rollback override on top. The default is here rather
-                # than left to the provider because the provider's copy is
-                # frozen at construction (see ``default_reasoning_effort``).
+                # The configured default underneath, the session's effort over
+                # it (``turn_effort``: its own pick, else its mode's), a hook's
+                # rollback override on top. The default is here rather than
+                # left to the provider because the provider's copy is frozen
+                # at construction (see ``default_reasoning_effort``).
                 **({"reasoning_effort": self.default_reasoning_effort} if self.default_reasoning_effort else {}),
-                **({"reasoning_effort": policy.reasoning_effort} if policy.reasoning_effort else {}),
+                **({"reasoning_effort": turn_effort} if turn_effort else {}),
                 **(pending_gen_overrides or {}),
             }
             pending_gen_overrides = None
@@ -1551,7 +1567,7 @@ class TurnPathMixin:
                                 tool_call.arguments, str(result), agent_output=getattr(result, "agent_output", False)
                             ),
                             watch_request,
-                            reasoning_effort=policy.reasoning_effort,
+                            reasoning_effort=turn_effort,
                         )
                         # A call that bound a Worker Table (load_playbook) moved the
                         # dispatch enums under an identity assembled before it.
@@ -2128,7 +2144,7 @@ class TurnPathMixin:
                 fallback_models,
                 on_token_delta=on_token_delta,
                 on_reasoning_delta=on_reasoning_delta,
-                reasoning_effort=policy.reasoning_effort,
+                reasoning_effort=turn_effort,
                 prompt=_MAX_ITER_SYNTHESIS_PROMPT if stalled_tool is None else _STALLED_SYNTHESIS_PROMPT,
                 fallback=(
                     _STALLED_STATIC_FALLBACK.format(tool=stalled_tool)
@@ -2696,6 +2712,9 @@ class TurnPathMixin:
                 rerun_pending=_rerun_pending,
                 spend=spend,
                 turn_log=live["log"],
+                # Read here, beside the model, because this is where the
+                # session is: the loop below is handed a key, not a record.
+                session_effort=session_effort_of(session.metadata),
             )
 
         # Taken BEFORE the first attempt, because the loop appends to the list it is

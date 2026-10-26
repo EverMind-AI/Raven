@@ -787,6 +787,14 @@ TIER_LADDER: tuple[str, ...] = ("medium", "high", "max")
 """The built-in tiers, cheapest first. The order is what makes a clamp possible,
 so it is a constant here rather than something read back off the catalogue."""
 
+REASONING_EFFORTS: tuple[str, ...] = ("minimal", "low", "medium", "high")
+"""The reasoning efforts a surface may ask for, least first: the words
+``agents.defaults.reasoningEffort`` accepts, and the ones a session's own pick
+(``session.set_effort``) is checked against. Each provider maps a word to its
+own wire -- the adaptive efforts and thinking budgets in
+``providers/anthropic_messages_provider.py``, ``reasoning_effort`` on the
+OpenAI-shaped ones -- and a model with no thinking to move ignores it."""
+
 ROUTE_REQUIREMENTS: tuple[str, ...] = ("image_generation", "image_search")
 """What a route may declare its target's own pipeline spends.
 

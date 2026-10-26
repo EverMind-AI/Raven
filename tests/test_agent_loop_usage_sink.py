@@ -470,6 +470,76 @@ async def test_no_configured_effort_sends_none(workspace, monkeypatch):
     assert provider.efforts == [None]
 
 
+async def _one_turn(agent: AgentLoop, session_key: str = "s1") -> None:
+    await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="hi",
+        ),
+        session_key=session_key,
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_sessions_own_pick_outranks_the_configured_effort(workspace, monkeypatch):
+    """`session.set_effort` keeps the pick on the session's record, and the
+    turn reads it there, where it reads the model: over the file's default."""
+    _point_config(workspace, monkeypatch, {"agents": {"defaults": {"reasoningEffort": "high"}}})
+    provider = EffortProvider("stub")
+    agent = _make_agent(workspace, provider, model="stub", window=None)
+    agent.sessions.get_or_create("s1").metadata["reasoning_effort"] = "low"
+
+    await _one_turn(agent)
+
+    assert provider.efforts == ["low"]
+
+
+@pytest.mark.asyncio
+async def test_the_sessions_own_pick_outranks_its_modes_effort(workspace, monkeypatch):
+    """A mode's effort is the catalogue's word for every conversation in that
+    mode; the pick is a person's word for this one, so it wins -- and without a
+    pick the mode's effort stands, as before."""
+    _point_config(workspace, monkeypatch, {})
+    provider = EffortProvider("stub")
+    agent = _make_agent(workspace, provider, model="stub", window=None)
+    agent.set_session_policy("s1", mode="deep", reasoning_effort="medium")
+
+    await _one_turn(agent)
+    agent.sessions.get_or_create("s1").metadata["reasoning_effort"] = "minimal"
+    await _one_turn(agent)
+
+    assert provider.efforts == ["medium", "minimal"]
+
+
+@pytest.mark.asyncio
+async def test_a_pick_this_raven_does_not_know_is_ignored(workspace, monkeypatch):
+    """A record written by a later raven may carry a word this one cannot
+    send; the turn runs at the default rather than being refused."""
+    _point_config(workspace, monkeypatch, {"agents": {"defaults": {"reasoningEffort": "high"}}})
+    provider = EffortProvider("stub")
+    agent = _make_agent(workspace, provider, model="stub", window=None)
+    agent.sessions.get_or_create("s1").metadata["reasoning_effort"] = "turbo"
+
+    await _one_turn(agent)
+
+    assert provider.efforts == ["high"]
+
+
+@pytest.mark.asyncio
+async def test_a_cleared_pick_is_the_default_again(workspace, monkeypatch):
+    """Cleared is null on the record, not absent (a metadata patch sets keys);
+    both read as no pick."""
+    _point_config(workspace, monkeypatch, {"agents": {"defaults": {"reasoningEffort": "medium"}}})
+    provider = EffortProvider("stub")
+    agent = _make_agent(workspace, provider, model="stub", window=None)
+    agent.sessions.get_or_create("s1").metadata["reasoning_effort"] = None
+
+    await _one_turn(agent)
+
+    assert provider.efforts == ["medium"]
+
+
 # --------------------------------------------------------------------------- #
 # the cost is the turn's: every iteration, and every call it delegated          #
 # --------------------------------------------------------------------------- #

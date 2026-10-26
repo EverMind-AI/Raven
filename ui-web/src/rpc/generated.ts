@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 248 methods, 138 component schemas.
+// 249 methods, 138 component schemas.
 
 /* eslint-disable */
 /**
@@ -170,6 +170,10 @@ export interface SessionInitInfo {
    * A turn is in flight on this session right now.
    */
   running?: boolean;
+  /**
+   * The reasoning effort this session's own model calls run at: its own pick (session.set_effort), else its mode's, else agents.defaults.reasoningEffort; null when the provider's own default stands.
+   */
+  reasoning_effort?: string | null;
   /**
    * True for an Imported Conversation, which nothing can change; absent on every other session.
    */
@@ -3659,6 +3663,32 @@ export interface SessionSetModeResult {
     description?: string;
   }[];
 }
+export interface SessionSetEffortParams {
+  session_key: string;
+  /**
+   * One of the words in options. Omit it to report without changing.
+   */
+  effort?: string;
+  /**
+   * Drop the session's own pick and follow the default again. Wins over effort when both are given.
+   */
+  clear?: boolean;
+}
+export interface SessionSetEffortResult {
+  session_key: string;
+  /**
+   * The session's own pick, or null while it follows the default.
+   */
+  effort?: string | null;
+  /**
+   * What the session runs at with no pick of its own: its mode's effort where the catalogue sets one, else agents.defaults.reasoningEffort, else null for the provider's own default.
+   */
+  default?: string | null;
+  /**
+   * The words effort accepts, least first.
+   */
+  options?: string[];
+}
 export interface SessionSetKnowledgeParams {
   session_id: string;
   /**
@@ -6504,6 +6534,7 @@ export interface RpcMethods {
   'machines.local_keys': { params: MachinesLocalKeysParams; result: MachinesLocalKeysResult };
   'session.set_harness': { params: SessionSetHarnessParams; result: SessionSetHarnessResult };
   'session.set_mode': { params: SessionSetModeParams; result: SessionSetModeResult };
+  'session.set_effort': { params: SessionSetEffortParams; result: SessionSetEffortResult };
   'session.set_knowledge': { params: SessionSetKnowledgeParams; result: SessionSetKnowledgeResult };
   'system.hello': { params: SystemHelloParams; result: SystemHelloResult };
   'system.ping': { params: SystemPingParams; result: SystemPingResult };
@@ -6868,6 +6899,7 @@ export const RPC_METHODS = [
   "session.pin",
   "session.resume",
   "session.save",
+  "session.set_effort",
   "session.set_harness",
   "session.set_knowledge",
   "session.set_mode",
