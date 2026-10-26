@@ -68,8 +68,8 @@ const questionOf = (seg: AskData): HTMLElement | null =>
   document.querySelector<HTMLElement>(`#stage [data-ask="${seg.id}"]`)
 
 /* The reader chose a place, so the transcript stops following its tail before
-   it moves; the scroller's own listener takes the pin back if the move ends
-   there. */
+   it moves; the scroller's own listener turns tail-follow back on if the move
+   ends at the tail. */
 function goTo(seg: AskData): void {
   const scroll = document.getElementById('scroll')
   const question = questionOf(seg)

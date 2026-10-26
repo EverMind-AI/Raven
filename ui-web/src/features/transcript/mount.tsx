@@ -102,9 +102,9 @@ export function mainLane(): Lane {
 }
 
 /* The lane on the stage right now, or null -- never a new one. `mainLane`
-   starts a lane when the stage has none, which is right for a writer and wrong
-   for a reader: the turn nav asking would put an empty lane on a stage the
-   session layer just wiped. */
+   starts a lane when the stage has none, which is right for a caller about to
+   draw into it and wrong for one that only reads: the turn nav asking would
+   put an empty lane on a stage the session layer just wiped. */
 export function shownLane(): Lane | null {
   const host = document.getElementById('stage')?.querySelector<HTMLElement>(':scope > [data-tsl]')
   return host ? HOSTS.get(host)?.lane ?? null : null

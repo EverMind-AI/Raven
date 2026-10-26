@@ -4,9 +4,9 @@
 /* The turn nav (TurnNav.tsx): a dash per turn at the chat's right edge,
    centred on the band between the header (.top, 52px) and the composer
    (--lift). It stands just left of the strip an anchored desk takes
-   (--desk-reserve, whose last 12px are the gap before the panel), so the
-   marks sit in the gutter between the transcript and the panel; with no desk
-   they sit at the edge itself, 6px clear of the overlay scrollbar's thumb
+   (--desk-reserve, whose last 12px are the gap before the desk palette), so
+   the marks sit in the gutter between the transcript and the palette; with no
+   desk they sit at the edge itself, 6px clear of the overlay scrollbar's thumb
    (2-8px in from the edge, chrome/behaviour/scrollbars.ts). The column's own
    36px of side padding is wider than the strip, so no text runs under it.
 

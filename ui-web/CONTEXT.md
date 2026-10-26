@@ -154,7 +154,7 @@ line. Pointing at or focusing a mark shows the turn's number, how long ago it
 was asked and what was asked; a click scrolls the question into view. It draws
 nothing below two turns; a strip longer than its band scrolls with no thumb
 (`data-thumb="none"`), centred on the mark being read, and fades at either end
-instead. One root per page, not per lane: it reads the lane whose host is on
+instead. A single root, not one per lane: it reads the lane whose host is on
 `#stage` (`mount.tsx`'s `shownLane`), never one held off it.
 _Avoid_: "minimap" -- it marks turns, not a scaled copy of the transcript.
 

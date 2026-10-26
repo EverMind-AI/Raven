@@ -32,13 +32,15 @@ const $ = <T extends Element = HTMLElement>(sel: string): T | null => document.q
 const marks = (): HTMLButtonElement[] => [...document.querySelectorAll<HTMLButtonElement>('.transcript-navmark')]
 const stage = (): HTMLElement => $('#stage') as HTMLElement
 const laneHost = (): HTMLElement => $('#stage > [data-tsl]') as HTMLElement
-/* A catalogue entry in the other language, filled the way t() fills it: the
-   expectation is read from the catalogue rather than spelled here. */
+/* A message catalogue entry in the other language, filled the way t() fills
+   it: the expectation is read from the catalogue file rather than spelled
+   here. */
 const zh = (key: string, n: number): string =>
   String((catalog.ui as Record<string, { zh?: string }>)[key]?.zh).replace('{n}', String(n))
 
-/* The host swap is seen through a MutationObserver, whose records arrive after
-   the task that made them: let them land inside act so the re-render commits. */
+/* The host swap is seen through a MutationObserver, whose records arrive in a
+   microtask after the change: let them land inside act so the re-render
+   commits. */
 async function settle(fn: () => void = () => {}): Promise<void> {
   await act(async () => {
     fn()
@@ -282,7 +284,7 @@ describe('the turn nav', () => {
     expect(marks()).toHaveLength(2)
   })
 
-  it('goes when the stage is wiped for a new task', async () => {
+  it('goes when the stage is wiped for a new conversation', async () => {
     await settle(() => {
       mount.ask('first question')
       mount.ask('second question')

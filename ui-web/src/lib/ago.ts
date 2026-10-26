@@ -2,8 +2,8 @@
  *
  * One spelling for every row that carries a past instant -- a remembered test
  * verdict on an agent card, a turn on the transcript's nav -- so "5m ago" reads
- * the same wherever it is drawn. The words are the catalogue's shared `time`
- * namespace; an instant of 0 or null is one nothing measured, and says nothing.
+ * the same wherever it is drawn. The words are the message catalogue's shared
+ * `time` namespace; an instant of 0 or null is one nothing measured, and says nothing.
  */
 import { t } from '../i18n/t'
 
