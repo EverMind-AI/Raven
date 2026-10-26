@@ -103,12 +103,39 @@ def _real_interpreter() -> str:
 # to land, DETACHED_PROCESS keeps the job off any console -- the Windows spelling
 # of the POSIX launcher's ``nohup ... &``. argv: log path, job dir, then the
 # launcher's own command line.
+#
+# CREATE_BREAKAWAY_FROM_JOB takes the job out of the Windows job object the
+# host keeps this agent in (``raven.acp_client.windows``): that object is
+# kill-on-close, so without leaving it a job died the moment the host exited,
+# hours of work with it, though no parent chain led to it any more. A job
+# object that does not allow leaving refuses the flag, and the job is started
+# as before, inside it. Through a launcher that keeps a job object of its own
+# (a virtual environment's python.exe does) the flag can also be accepted and
+# the job stay in the host's, without an error (measured). Either way the
+# job's log says so -- otherwise "the job died when the host exited" would
+# leave nothing to find.
 _RELAY = """\
-import subprocess, sys
+import ctypes, subprocess, sys
 log = open(sys.argv[1], "ab")
-p = subprocess.Popen(sys.argv[3:], cwd=sys.argv[2], stdin=subprocess.DEVNULL, stdout=log,
-                     stderr=subprocess.STDOUT,
-                     creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS)
+flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+kwargs = dict(cwd=sys.argv[2], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
+try:
+    p = subprocess.Popen(sys.argv[3:], creationflags=flags | subprocess.CREATE_BREAKAWAY_FROM_JOB, **kwargs)
+except OSError:
+    log.write(b"could not leave the agent's job object; this job ends if the host exits\\n")
+    p = subprocess.Popen(sys.argv[3:], creationflags=flags, **kwargs)
+else:
+    try:  # only a note: nothing here may keep the pid from being reported
+        k = ctypes.windll.kernel32
+        h, inside = k.OpenProcess(0x1000, False, p.pid), ctypes.c_int(0)
+        if h and k.IsProcessInJob(h, None, ctypes.byref(inside)) and inside.value:
+            log.write(b"still in a job object after asking to leave the agent's; if it is the host's, "
+                      b"this job ends if the host exits\\n")
+        if h:
+            k.CloseHandle(h)
+    except Exception:
+        pass
+log.flush()
 print(p.pid)
 """
 

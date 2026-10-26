@@ -38,7 +38,8 @@ def test_the_host_is_the_only_owner_and_closing_its_handle_ends_the_job(api):
     api.SetInformationJobObject.side_effect = set_limits
     job = windows.JobObject()
     api.CreateJobObjectW.assert_called_once_with(None, None)
-    assert flags == [0x2000]
+    # Kill-on-close, and leaving allowed to a process that asks to.
+    assert flags == [0x2000 | 0x0800]
     job.assign(123)
     api.OpenProcess.assert_called_once_with(0x0101, False, 123)
     api.AssignProcessToJobObject.assert_called_once_with(100, 200)
