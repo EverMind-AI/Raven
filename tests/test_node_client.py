@@ -924,6 +924,50 @@ async def test_a_refused_call_keeps_the_node(tmp_path):
     assert changed.value.reason == "changed", "the node's own refusal, by name, for the file tools"
 
 
+async def test_the_hosts_own_opt_out_travels_with_the_launch(tmp_path, monkeypatch):
+    """The daemon decides the mirror on the machine it runs on and cannot read
+    the host's environment, so the host's switch travels with the launch."""
+    pool = NodePool()
+    client = _live(pool, tmp_path, result={"pid": 4242})
+    monkeypatch.setenv("RAVEN_NO_MIRROR", "1")
+
+    await pool.open_channel("box", name="echo@box", command="agent --acp", cwd="~", env={})
+
+    asked = [params for method, params, _timeout in client.asked if method == protocol.AGENT_LAUNCH]
+    assert asked and asked[0].get("no_mirror") is True, "the switch reaches the machine"
+
+
+async def test_a_launch_without_the_switch_carries_none(tmp_path, monkeypatch):
+    """The machine's own environment decides then, as it did before."""
+    pool = NodePool()
+    client = _live(pool, tmp_path, result={"pid": 4242})
+    monkeypatch.delenv("RAVEN_NO_MIRROR", raising=False)
+
+    await pool.open_channel("box", name="echo@box", command="agent --acp", cwd="~", env={})
+
+    asked = [params for method, params, _timeout in client.asked if method == protocol.AGENT_LAUNCH]
+    assert asked and "no_mirror" not in asked[0]
+
+
+async def test_the_launch_is_answered_within_the_budget_the_protocol_names(tmp_path):
+    """The host waits so long for the answer, and drops every agent of that
+    machine when it does not come."""
+    pool = NodePool()
+    client = _live(pool, tmp_path, result={"pid": 4242})
+
+    await pool.open_channel("box", name="echo@box", command="agent --acp", cwd="~", env={})
+
+    asked = [(method, timeout) for method, _params, timeout in client.asked if method == protocol.AGENT_LAUNCH]
+    assert asked == [(protocol.AGENT_LAUNCH, protocol.AGENT_LAUNCH_TIMEOUT_S)]
+
+
+def test_the_daemon_prepares_a_launch_within_the_time_the_host_waits():
+    """The host waits so long for the answer, and drops every agent of that
+    machine when it does not come; the daemon prepares a launch within that
+    time, so the answer comes in time."""
+    assert protocol.AGENT_LAUNCH_PREPARE_S < protocol.AGENT_LAUNCH_TIMEOUT_S
+
+
 async def test_a_call_that_timed_out_drops_the_node(tmp_path):
     pool = NodePool(backoff_s=())
     client = _live(pool, tmp_path, raises=AcpTimeoutError("no answer", method=protocol.READ))
@@ -1064,11 +1108,21 @@ async def test_a_heartbeat_unanswered_loses_the_link_tells_its_agents_and_reconn
     endpoint = ChannelEndpoint(client, 1, target=_box(), agent="echo@box")  # type: ignore[arg-type]
     node.channels[1] = endpoint
     tried: list[str] = []
+    back = asyncio.Event()
+    first = asyncio.Event()
 
     async def launch(machine_id: str) -> _Node:
         tried.append(machine_id)
         if len(tried) == 1:
+            # The failure is the test's to give: until then the reason the
+            # link lost carries is the heartbeat's, and the reconnect's own
+            # would replace it.
+            await first.wait()
             raise NodeError("machine 'Lab box' (box) could not be reached")
+        # The link stays lost until the test has read the state that says so:
+        # the backoff is ten milliseconds, and the state it leaves behind is
+        # the one the test is about.
+        await back.wait()
         return _Node(_Client(), _box(), log, {"home": "/h"}, {})  # type: ignore[arg-type]
 
     monkeypatch.setattr(pool, "_launch", launch)
@@ -1083,6 +1137,8 @@ async def test_a_heartbeat_unanswered_loses_the_link_tells_its_agents_and_reconn
         "link lost: machine 'Lab box' (box) did not answer a heartbeat within 0s; "
         "1 task continues on the machine; reconnecting"
     )
+    back.set()
+    first.set()
     await _until(lambda: len(tried) == 2 and pool.live() == ["box"] and endpoint.detached is None)
     again = pool._nodes["box"].client
     # Among the new link's requests, not its last: a heartbeat may well follow the attach.

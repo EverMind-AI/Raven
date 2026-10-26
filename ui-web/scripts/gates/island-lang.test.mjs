@@ -44,10 +44,6 @@ const NO_ROOT = {
   installed:
     'no island at all: one shared read of ext.list that the two capability tabs '
     + 'and the settings dialog draw from',
-  transcript:
-    'one root per lane rather than one per page, and its words are baked into '
-    + 'stored segments -- which is why the version bump per lane is the one '
-    + 'island step state/lang/effects.ts still spends',
 }
 
 /** Every `features/<domain>/` directory, and the files in it. */

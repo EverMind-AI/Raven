@@ -98,6 +98,17 @@ CHUNK = 1024 * 1024
 #: How many agents one machine runs at once; a launch past it is refused with :data:`BUSY`.
 MAX_AGENTS = 8
 
+#: How long the host waits for the daemon to answer ``agent/launch``. An answer
+#: that does not come in time is a lost machine: every agent on it is dropped.
+AGENT_LAUNCH_TIMEOUT_S = 60.0
+
+#: How long the daemon may spend preparing a launch -- deciding on a mirror,
+#: installing a package from one -- before it answers. It is shorter than
+#: :data:`AGENT_LAUNCH_TIMEOUT_S`, which the host waits, and the rest of the
+#: answer is the launch itself: a preparation past its budget is abandoned,
+#: and the command starts as it was configured.
+AGENT_LAUNCH_PREPARE_S = 40.0
+
 #: How many MCP streams one task holds open at once: one per server per session its agent runs.
 MAX_STREAMS = 16
 
@@ -133,6 +144,8 @@ __all__ = [
     "AGENT_EXIT",
     "AGENT_FRAME",
     "AGENT_LAUNCH",
+    "AGENT_LAUNCH_PREPARE_S",
+    "AGENT_LAUNCH_TIMEOUT_S",
     "AGENT_STDERR",
     "AGENT_STDIN",
     "BUSY",

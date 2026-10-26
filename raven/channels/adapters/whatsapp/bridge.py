@@ -23,6 +23,8 @@ from urllib.parse import urlparse
 
 from loguru import logger
 
+from raven.utils import mirrors
+
 DEFAULT_BRIDGE_PORT = 3001
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
@@ -110,8 +112,18 @@ def _build_bridge(npm: str, source: Path, install_dir: Path, fingerprint: str) -
         shutil.copytree(source, staging, ignore=shutil.ignore_patterns("node_modules", "dist"))
 
         logger.info("  Installing dependencies...")
+        # The one step that reads the registry, so the one told about a
+        # mirror when the registry cannot be reached; staging is raven's own
+        # directory, so the lockfile npm writes there is raven's too.
+        extra = mirrors.npm_registry_env(os.environ, str(staging))
         with progress("npm install (first run: 30-120s)..."):
-            subprocess.run([npm, "install"], cwd=staging, check=True, capture_output=True)
+            subprocess.run(
+                [npm, "install"],
+                cwd=staging,
+                check=True,
+                capture_output=True,
+                env={**os.environ, **extra} if extra else None,
+            )
 
         logger.info("  Building...")
         with progress("tsc compile..."):

@@ -334,9 +334,50 @@ async def test_a_streamed_reply_cut_in_transport_is_asked_again_without_the_stre
 
     assert answer == "done"
     assert provider.streams == 1 and len(provider.seen) == 1, "one stream, then one waited-for call"
-    assert "cut off" not in answer and rendered == [], "the diagnostic never reached the reply"
+    assert "cut off" not in answer and rendered == ["done"], "the diagnostic never streamed; the answer did"
     assert billed[0] == {"prompt_tokens": 4000, "completion_tokens": 12000}, "the cut call is billed first"
     assert len(billed) == 2, "and the waited-for call after it"
+
+
+async def test_the_answer_asked_for_again_after_a_cut_stream_reaches_the_watcher(tmp_path):
+    """What streams has to end with the reply the record stores. A round that
+    narrated before its tool call has streamed, so the turn sends no closing
+    text; when the next round's stream is cut and the waited-for call answers,
+    that answer has to stream too, or it is recorded and never shown."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.contracts.llm_provider import ChatDelta
+
+    class _NarratesThenIsCut(_RecordingProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.streams = 0
+
+        async def chat_stream(self, *, messages, tools=None, model=None, **_):
+            self.streams += 1
+            if self.streams == 1:
+                call = {
+                    "index": 0,
+                    "id": "c1",
+                    "function": {"name": "list_dir", "arguments": json.dumps({"path": "."})},
+                }
+                yield ChatDelta(content="looking ", tool_call_delta={"tool_calls": [call]}, finish_reason="tool_calls")
+                return
+            yield ChatDelta(content=None, reasoning_content="thinking about it")
+            yield ChatDelta(content=None, finish_reason="stop", finish_synthesized=True)
+
+    provider = _NarratesThenIsCut()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+    rendered: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        rendered.append(text)
+
+    answer = await backend.run("hi", task_id="t1", workspace=tmp_path, executor=None, history=[], on_delta=on_delta)
+
+    assert answer == "done"
+    assert provider.streams == 2 and len(provider.seen) == 1, "the second stream is cut, then one waited-for call"
+    streamed = "".join(rendered)
+    assert streamed.endswith(answer) and streamed.count(answer) == 1, rendered
 
 
 async def test_a_streamed_refusal_the_repo_does_not_retry_fails_the_run_without_a_second_ask(tmp_path, monkeypatch):

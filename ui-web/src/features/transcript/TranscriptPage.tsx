@@ -1032,7 +1032,7 @@ const AskView = memo(function AskView({ lane, seg }: { lane: Lane; seg: AskData 
   const thumb = (p: string, liveImg: boolean): ReactElement => <AskShot key={p} path={p} live={liveImg} />
   const showClip = seg.clipped && !seg.clipOpen
   return (
-    <div className="turn me in">
+    <div className="turn me in" data-ask={seg.id}>
       {/* Pictures above the bubble, files inside it (Figma: Raven / UserMessage).
           A picture is a thing to look at and stands on its own; a file is a tag
           on what was said about it, so it heads the sentence the way it headed

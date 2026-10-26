@@ -10,7 +10,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,6 +21,7 @@ from raven.acp_client import leftovers, npx_fetch
 from raven.acp_client.pool import AcpConnectionPool
 from raven.acp_client.protocol import AcpConnectionError
 from raven.agent.subagent.backends import env as backends_env
+from raven.utils import mirrors
 
 _STUB = Path(__file__).with_name("acp_stub_server.py")
 
@@ -487,6 +488,50 @@ async def test_a_pool_fetches_before_it_holds_the_agent_s_lock(stand_in: SimpleN
             acquiring.cancel()
         await asyncio.gather(acquiring, return_exceptions=True)
         await pool.close_all()
+
+
+# ---- the mirror, asked before the fetch ---------------------------------------
+
+
+def _deciding(argv: list[str]) -> Callable[..., Awaitable[list[str]]]:
+    """The mirror's answer, as the module gives it: the argv a launch starts with."""
+
+    async def decide(command: object, env: object, cwd: object = None, **_kwargs: object) -> list[str]:
+        return list(argv)
+
+    return decide
+
+
+@needs_posix
+async def test_a_launch_the_mirror_took_over_is_not_fetched(
+    stand_in: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fetch goes to the default registry, the very one the mirror's answer
+    is about: the mirror is asked first, as the direct launch asks it, and a
+    launch it took over is started from what it installed."""
+    monkeypatch.setattr(mirrors, "package_launch_async", _deciding(["/opt/mirror/bin/agent"]))
+
+    await npx_fetch.ensure_fetched("Claude Code", ["npx", "-y", _SPEC], env=stand_in.env, cwd=stand_in.cwd)
+
+    assert _calls(stand_in.log) == [], "the fetch went to a registry the mirror took over from"
+
+
+@needs_posix
+async def test_a_pooled_launch_the_mirror_took_over_is_not_fetched(
+    stand_in: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The user-facing route: the pool's prefetch would reach the registry the
+    mirror's answer is about, and a registry that cannot be reached fails the
+    launch before the fallback is consulted."""
+    monkeypatch.setattr(mirrors, "package_launch_async", _deciding([sys.executable, str(_STUB)]))
+    pool = AcpConnectionPool()
+    env = {**stand_in.env, "ACP_STUB_MODE": "ok"}
+    try:
+        await pool.acquire(name="Claude Code", command=f"npx -y {_SPEC}", cwd=stand_in.cwd, env=env)
+    finally:
+        await pool.close_all()
+
+    assert _fetches(stand_in.log) == [], "the fetch went to a registry the mirror took over from"
 
 
 # ---- reading npm's report of an incomplete entry -------------------------------

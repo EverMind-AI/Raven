@@ -129,6 +129,21 @@ describe('overlay scrollbars', () => {
     expect(vert()).toBeTruthy()
   })
 
+  it('draws no thumb over a scroller that declares it wants none, scrolled from anywhere', () => {
+    /* A strip that is its own position indicator -- the transcript's turn
+       nav, which scrolls itself to keep the mark being read in view -- would
+       wear a thumb that says the same thing a second time. */
+    const strip = scroller({ clientHeight: 300, scrollHeight: 900 })
+    strip.dataset.thumb = 'none'
+    show(strip)
+    strip.dispatchEvent(new Event('scroll'))
+    expect(thumbs()).toHaveLength(0)
+
+    delete strip.dataset.thumb
+    show(strip)
+    expect(vert()).toBeTruthy()
+  })
+
   /* page.css lifts the layer over an open lightbox and shows only the thumbs
      marked as its own there (state/lightbox.test.ts reads that half). */
   it('marks the lightbox\'s thumbs as its own, and nobody else\'s', () => {
