@@ -273,6 +273,30 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  charter-joins:
+    name: charter joins
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: make install-deps
+
+      # tests/integration is outside the default collection, so a file there
+      # runs only where a step names it.
+      - name: Test a charter from the host's table to the worker's tool call
+        run: uv run pytest tests/integration/test_subagent_charter_e2e.py -q -n 0 --tb=short
+
   installer:
     name: installer (${{ matrix.os }}) against the latest release
     # The two installers are served from main and install the latest published

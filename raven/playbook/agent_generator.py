@@ -84,7 +84,7 @@ PERSONA_SYSTEM_PROMPT = (
     "The coordinator is the main Raven identity the user will converse with. Put cross-cutting behavior, input "
     "gates, orchestration policy, and user-facing output rules on it. Workers are specialist delegates the "
     "coordinator may dispatch, not peer main agents or temporary authors asked to design or save the persona. Write "
-    "every brief, system prompt, stop condition, check, and function for future runtime behavior; remove creation-"
+    "every brief, system prompt, stop condition, and function for future runtime behavior; remove creation-"
     "time commands. Choose distinct specialist owners for materially different responsibilities, and never create "
     "a generic Raven worker merely to repeat the coordinator's job. Do not design a Workflow or invent a DAG for the act "
     "of creating the persona.\n\n"
@@ -106,41 +106,15 @@ PERSONA_SYSTEM_PROMPT = (
 # Compatibility for direct imports that historically meant the task generator.
 SYSTEM_PROMPT = TASK_SYSTEM_PROMPT
 
-_RULE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "tool": {"type": "string", "description": "The tool this rule is about."},
-        "when": {
-            "type": "object",
-            "additionalProperties": {"type": "string"},
-            "description": "Narrows the rule to calls whose arguments match these values.",
-        },
-        "pathPrefix": {"type": "string", "description": "The path argument must start with this."},
-        "forbid": {"type": "string", "description": "A fragment no argument of the call may contain."},
-        "requiresPrior": {"type": "string", "description": "A tool that must already have run successfully."},
-        "matchParam": {
-            "type": "string",
-            "description": "With requiresPrior: the argument the earlier call must have matched on.",
-        },
-        "message": {"type": "string", "description": "What the worker is told when this rule refuses."},
-    },
-    "required": ["tool"],
-    "additionalProperties": False,
-}
-"""One rule, in the worker's own vocabulary.
-
-Spelled out here rather than derived from :class:`CheckRule`: a schema the
-model reads wants a sentence per field saying when to write it, and a dump of
-the dataclass would carry the field names without the reason for any of them.
-The two are held together by :func:`_persona_spec_from_args`, which validates what
-comes back against the real model.
-"""
-
 FUNCTION_REFERENCE_IMPLEMENTATIONS: dict[str, str] = {
     "intake": "def intake(text, step):\n    return None",
+    "select_tools": "def select_tools(offered, step):\n    return None",
     "advise": "def advise(step):\n    return None",
+    "system_addendum": "def system_addendum(step):\n    return None",
+    "review": "def review(step):\n    return None",
     "judge": "def judge(name, params, prior):\n    return []",
     "salvage": "def salvage(step):\n    return None",
+    "archive": "def archive(step, reply):\n    return None",
 }
 """The generated, synchronous equivalents of AgentParticipant's default no-ops."""
 
@@ -149,6 +123,21 @@ _STEP_FIELDS = (
     "session_key, iteration, response, transcript, history, turn_base, question, "
     "rollbacks, mode, mode_overlay, phase, tools, window, max_iterations, tools_ran"
 )
+
+
+_FUNCTION_INPUTS: dict[str, str] = {
+    "judge": "name is the tool name; params is its argument dict; prior is [(tool_name, params), ...].",
+    "select_tools": (
+        "offered is the tool-schema array this call would carry, each entry a dict with a function key; "
+        "step is a read-only JSON-like dict with " + _STEP_FIELDS + "."
+    ),
+    "archive": (
+        "step is a read-only JSON-like dict with "
+        + _STEP_FIELDS
+        + "; reply is the turn's final text, or None for a silent turn."
+    ),
+}
+"""What each verb is handed, for the verbs whose inputs are not just ``step``."""
 
 
 _FUNCTION_CONTRACTS: dict[str, dict[str, str]] = {
@@ -179,6 +168,51 @@ _FUNCTION_CONTRACTS: dict[str, dict[str, str]] = {
             "The first participant with a non-empty refusal decides."
         ),
     },
+    "select_tools": {
+        "when": (
+            "Runs before each model call, with the tool array that call would carry. Narrowing here is "
+            "per-iteration and additive to the seat's tools list; a verb that returns the array unchanged "
+            "costs a call for nothing, so return None unless this iteration genuinely needs fewer."
+        ),
+        "returns": (
+            "None to leave offered as it is, or the array this iteration carries. Entries must be drawn "
+            "from offered -- a name it did not contain is dropped rather than invented. Across "
+            "participants each sees what the previous one returned."
+        ),
+    },
+    "system_addendum": {
+        "when": (
+            "Runs before each model call, after the system prefix is assembled. For operating rules this "
+            "call must see and the seat prompt cannot state once -- something that depends on the step."
+        ),
+        "returns": (
+            "None for nothing to add; otherwise a dict. text is spliced in after the system prefix, and "
+            "reply ends the turn before the call. The previous addendum is taken out before asking, so "
+            "return the whole of what this call should carry rather than a delta."
+        ),
+    },
+    "review": {
+        "when": (
+            "Runs after a model step, at two moments the step's tools_ran distinguishes: before this "
+            "step's tool calls run, and after they have. Use it to judge what the model produced; use "
+            "judge for whether one tool call may run at all."
+        ),
+        "returns": (
+            "None or {'verdict': 'accept'} for the step stands; {'verdict': 'resample', 'reason': ...} to "
+            "send the loop back to the model, optionally with inject (a list of transcript messages) and "
+            "overrides (temperature, max_tokens or reasoning_effort for that one call; other keys are "
+            "dropped); {'verdict': 'end', 'reply': ...} to close the turn. The loop bounds how many "
+            "resamples a turn may spend, so a verb that always resamples ends the turn anyway."
+        ),
+    },
+    "archive": {
+        "when": "Runs once after the turn is over, with the final reply, and cannot change it.",
+        "returns": (
+            "None for nothing to file, or a dict stamped on the turn's record under this participant's "
+            "name. The turn has already been answered, so what is returned reaches the record and later "
+            "readers rather than the person."
+        ),
+    },
     "salvage": {
         "when": "Runs only when a turn otherwise ended without a final answer.",
         "returns": "None for no opinion or a final reply string. The first non-empty string decides.",
@@ -191,8 +225,12 @@ def participant_function_guide() -> dict[str, dict[str, str]]:
     guide: dict[str, dict[str, str]] = {}
     for module, name in (
         ("memory", "intake"),
+        ("memory", "system_addendum"),
+        ("memory", "archive"),
+        ("capability", "select_tools"),
         ("planning", "advise"),
         ("action", "judge"),
+        ("action", "review"),
         ("action", "salvage"),
     ):
         if not function_enabled(module, "participant", name):
@@ -202,11 +240,7 @@ def participant_function_guide() -> dict[str, dict[str, str]]:
             "defaultImplementation": FUNCTION_REFERENCE_IMPLEMENTATIONS[name],
             "when": _FUNCTION_CONTRACTS[name]["when"],
             "returnsAndComposition": _FUNCTION_CONTRACTS[name]["returns"],
-            "availableInputs": (
-                "step is a read-only JSON-like dict with " + _STEP_FIELDS
-                if name != "judge"
-                else "name is the tool name; params is its argument dict; prior is [(tool_name, params), ...]."
-            ),
+            "availableInputs": _FUNCTION_INPUTS.get(name, "step is a read-only JSON-like dict with " + _STEP_FIELDS),
         }
     return guide
 
@@ -483,15 +517,6 @@ def persona_tool(
             "items": {"type": "string", "enum": tool_names},
             "description": "Optional: the tools this seat calls for. Guidance, not a permission.",
         },
-        "checks": {
-            "type": "array",
-            "items": _RULE_SCHEMA,
-            "description": (
-                "Optional: rules judged before each of this seat's tool calls. A rule that "
-                "refuses replaces the call with its message, so the seat can try again correctly. "
-                "Write one only where the job has a boundary the brief alone cannot hold."
-            ),
-        },
         "timeoutSeconds": {
             "type": "integer",
             "minimum": 1,
@@ -521,7 +546,6 @@ def persona_tool(
         ("memory", "systemPrompt", "systemPrompt"),
         ("memory", "stopWhen", "stopWhen"),
         ("capability", "tools", "tools"),
-        ("action", "checks", "checks"),
     ):
         if not parameter_enabled(module, name):
             properties.pop(field, None)
@@ -533,8 +557,12 @@ def persona_tool(
         }
         for module, name in (
             ("memory", "intake"),
+            ("memory", "system_addendum"),
+            ("memory", "archive"),
+            ("capability", "select_tools"),
             ("planning", "advise"),
             ("action", "judge"),
+            ("action", "review"),
             ("action", "salvage"),
         )
         if function_enabled(module, "participant", name)
@@ -589,7 +617,7 @@ def persona_tool(
             (
                 "Create a durable digital person, assistant, or agent Harness. Workers are the persona's "
                 "future operating parts, not authors asked to create it. Write future-facing briefs, system "
-                "prompts, tools, functions, checks, and stop conditions; remove creation-time commands such "
+                "prompts, tools, functions, and stop conditions; remove creation-time commands such "
                 "as save it, do not run now, or only plan later. A single named persona may still use several "
                 "workers when different offered specialists own materially different behavior. Use intake "
                 "on the coordinator for an enforceable named missing-input gate; prose alone is insufficient. "
@@ -658,7 +686,6 @@ def build_payload(brief: str, spec: "SubPlaybook | None") -> dict[str, Any] | No
         (spec.memory.system_prompt if spec else "") if parameter_enabled("memory", "systemPrompt") else ""
     )
     tools = spec.capability.tools if spec and parameter_enabled("capability", "tools") else None
-    checks = spec.action.checks if spec and spec.action.checks else None
     stop_when = spec.stop_when if spec and parameter_enabled("memory", "stopWhen") else ""
     payload: dict[str, Any] = {}
     if brief.strip():
@@ -672,17 +699,11 @@ def build_payload(brief: str, spec: "SubPlaybook | None") -> dict[str, Any] | No
         payload["tools"] = list(tools)
     if stop_when.strip():
         payload["stopWhen"] = stop_when.strip()
-    if parameter_enabled("action", "checks") and checks and checks.rules:
-        payload["checks"] = [rule.model_dump(by_alias=True, exclude_defaults=True) for rule in checks.rules]
-    # Carried whether or not there are rules beside it: a judgement some jobs
-    # can only state as code is the reason the field exists, and one written
-    # without any declarative rule would otherwise be dropped on the way out.
-    if function_enabled("action", "participant", "judge") and checks and checks.code.strip():
-        payload["code"] = checks.code
     generated_functions: dict[str, str] = {}
     if spec:
         for module, functions in (
             ("memory", spec.memory.functions),
+            ("capability", spec.capability.functions),
             ("planning", spec.planning.functions),
             ("action", spec.action.functions),
         ):
@@ -852,7 +873,6 @@ def _persona_spec_from_args(
             "systemPrompt",
             "stopWhen",
             "tools",
-            "checks",
             "functions",
             "timeoutSeconds",
         }
@@ -880,7 +900,6 @@ def _persona_spec_from_args(
             ("systemPrompt", parameter_enabled("memory", "systemPrompt")),
             ("stopWhen", parameter_enabled("memory", "stopWhen")),
             ("tools", parameter_enabled("capability", "tools")),
-            ("checks", parameter_enabled("action", "checks")),
         )
         disabled = [field for field, enabled in switches if field in row and not enabled]
         if disabled:
@@ -892,8 +911,12 @@ def _persona_spec_from_args(
             continue
         function_modules = {
             "intake": "memory",
+            "system_addendum": "memory",
+            "archive": "memory",
+            "select_tools": "capability",
             "advise": "planning",
             "judge": "action",
+            "review": "action",
             "salvage": "action",
         }
         generated_functions: dict[str, tuple[str, str]] = {}
@@ -927,10 +950,7 @@ def _persona_spec_from_args(
         if row.get("stopWhen"):
             sub["stopWhen"] = str(row["stopWhen"])
         for function_name, (module, source) in generated_functions.items():
-            if function_name == "judge":
-                sub.setdefault("action", {}).setdefault("checks", {})["code"] = source
-            else:
-                sub.setdefault(module, {}).setdefault("functions", {})[function_name] = source
+            sub.setdefault(module, {}).setdefault("functions", {})[function_name] = source
         raw_tools = row.get("tools")
         if "tools" in row and not isinstance(raw_tools, list):
             errors.append(f"{index}. tools must be an array")
@@ -942,18 +962,6 @@ def _persona_spec_from_args(
                 errors.append(f"{index}. unknown tool(s): {', '.join(unknown_tools)}")
                 continue
             sub.setdefault("capability", {})["tools"] = requested_tools
-        # Both halves of the judgement seat land under one key, because a
-        # worker with code and no rules is as ordinary as one with rules and no
-        # code -- the two are alternatives, not a base and an extension.
-        checks: dict[str, Any] = dict(sub.get("action", {}).get("checks", {}))
-        raw_checks = row.get("checks")
-        if "checks" in row and not isinstance(raw_checks, list):
-            errors.append(f"{index}. checks must be an array")
-            continue
-        if isinstance(raw_checks, list) and raw_checks:
-            checks["rules"] = raw_checks
-        if checks:
-            sub.setdefault("action", {})["checks"] = checks
         timeout = row.get("timeoutSeconds")
         if "timeoutSeconds" in row:
             if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
@@ -1000,7 +1008,6 @@ def persona_parameter_guide() -> dict[str, str]:
         "systemPrompt": "Long-lived behavior and style appended to the worker identity.",
         "stopWhen": "What means this worker is finished.",
         "tools": "Suggested tools for this role; guidance, not permission.",
-        "checks": "Declarative rules evaluated before worker tool calls.",
         "functions": "Generated Participant runtime functions.",
         "timeoutSeconds": "A tightening-only dispatch deadline.",
     }
@@ -1008,7 +1015,6 @@ def persona_parameter_guide() -> dict[str, str]:
         "systemPrompt": parameter_enabled("memory", "systemPrompt"),
         "stopWhen": parameter_enabled("memory", "stopWhen"),
         "tools": parameter_enabled("capability", "tools"),
-        "checks": parameter_enabled("action", "checks"),
     }
     return {name: detail for name, detail in guide.items() if switches.get(name, True)}
 
