@@ -20,7 +20,6 @@ touched.
 from __future__ import annotations
 
 import json
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -351,6 +350,8 @@ def remove_package(
     as_json: bool = typer.Option(False, "--json", help="Print JSON instead of a table"),
 ) -> None:
     """Delete a package's imported skills and forget it."""
+    from raven.agent_plugins.skills import remove_tree
+
     _load_config(config_path)
     workspace = _workspace_path()
     ledger = _load_ledger()
@@ -362,6 +363,7 @@ def remove_package(
     target = workspace / "skills" / name
     removed: list[str] = []
     kept: list[str] = []
+    failed: list[tuple[str, str]] = []
     if target.is_dir():
         if not ledger.owns_directory(target, workspace=workspace):
             console.print(
@@ -371,19 +373,42 @@ def remove_package(
             raise typer.Exit(1)
         for child in sorted(target.iterdir()):
             if ledger.owns_directory(child, workspace=workspace):
-                shutil.rmtree(child)
-                removed.append(child.name)
+                try:
+                    remove_tree(child)
+                except OSError as exc:
+                    failed.append((child.name, str(exc)))
+                else:
+                    removed.append(child.name)
             else:
                 kept.append(child.name)
         if not any(target.iterdir()):
-            target.rmdir()
+            try:
+                target.rmdir()
+            except OSError as exc:
+                failed.append((name, str(exc)))
 
-    ledger.forget(name)
+    if not failed:
+        ledger.forget(name)
     ledger.save()
 
     if as_json:
-        console.print_json(json.dumps({"package": name, "removed": removed, "kept": kept}))
+        console.print_json(
+            json.dumps(
+                {
+                    "package": name,
+                    "removed": removed,
+                    "kept": kept,
+                    "failed": [{"skill": skill, "reason": reason} for skill, reason in failed],
+                }
+            )
+        )
+        if failed:
+            raise typer.Exit(1)
         return
+    for skill, reason in failed:
+        console.print(f"  [red]failed[/red] {escape(skill)}: {escape(reason)}", highlight=False)
+    if failed:
+        raise typer.Exit(1)
     console.print(f"removed '{escape(name)}'" + (f" and {len(removed)} imported skill(s)" if removed else ""))
     for child in kept:
         console.print(

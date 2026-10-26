@@ -17,6 +17,7 @@ import json
 import os
 import re
 import shutil
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -37,6 +38,18 @@ RESERVED_SOURCE_LABELS = frozenset({"workspace", "external", "builtin"})
 _NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _MAX_NAME_LENGTH = 64
 _MAX_DESCRIPTION_LENGTH = 1024
+
+
+def remove_tree(path: Path) -> None:
+    """Remove a tree, retrying Windows read-only entries as writable."""
+
+    def _retry_writable(function, failing_path, error):
+        if not isinstance(error, PermissionError):
+            raise error
+        os.chmod(failing_path, stat.S_IWRITE)
+        function(failing_path)
+
+    shutil.rmtree(path, onexc=_retry_writable)
 
 
 @dataclass(frozen=True)
@@ -233,20 +246,28 @@ def import_package(
             if not ledger.owns_directory(target, workspace=workspace):
                 skipped.append((skill.name, f"{target} already exists and is not owned by the package ledger"))
                 continue
-            shutil.rmtree(target, ignore_errors=True)
 
         try:
+            if target.exists():
+                remove_tree(target)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copytree(skill.directory, target)
         except OSError as exc:
-            shutil.rmtree(target, ignore_errors=True)
+            if target.exists():
+                try:
+                    remove_tree(target)
+                except OSError:
+                    pass
             failed.append((skill.name, str(exc)))
             continue
 
         try:
             drop_always_flag(target / SKILL_FILENAME)
         except (OSError, ValueError) as exc:
-            shutil.rmtree(target, ignore_errors=True)
+            try:
+                remove_tree(target)
+            except OSError:
+                pass
             failed.append((skill.name, f"the always flag could not be removed: {exc}"))
             continue
         installed.append(skill.name)
@@ -304,7 +325,7 @@ def _remove_stale_skills(
         if not (stale.is_dir() and ledger.owns_directory(stale, workspace=workspace)):
             continue
         try:
-            shutil.rmtree(stale)
+            remove_tree(stale)
         except OSError as exc:
             if stale.exists():
                 retained.append(name)

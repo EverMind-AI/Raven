@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from raven.agent_plugins.skills import (
     discover_skills,
     drop_always_flag,
     import_package,
+    remove_tree,
     strip_always_keys,
     validate_skill,
 )
@@ -615,6 +617,30 @@ def test_import_package_removes_a_skill_the_package_no_longer_ships(tmp_path: Pa
     assert second.installed == ("alpha",)
     assert second.removed == ("beta",)
     assert not (workspace / "skills" / PACKAGE_NAME / "beta").exists()
+
+
+def test_remove_tree_retries_a_read_only_entry_as_writable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "skill"
+    root.mkdir()
+    read_only = root / "data.txt"
+    read_only.write_text("data\n", encoding="utf-8")
+    read_only.chmod(stat.S_IREAD)
+
+    def _windows_rmtree(path, *, onexc):
+        def _unlink(failing_path):
+            assert Path(failing_path).stat().st_mode & stat.S_IWRITE
+            Path(failing_path).unlink()
+
+        onexc(_unlink, read_only, PermissionError("read-only file"))
+        Path(path).rmdir()
+
+    monkeypatch.setattr(skills_module.shutil, "rmtree", _windows_rmtree)
+
+    remove_tree(root)
+
+    assert not root.exists()
 
 
 def test_import_package_keeps_ownership_when_a_stale_skill_cannot_be_removed(

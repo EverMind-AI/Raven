@@ -381,6 +381,26 @@ def test_remove_keeps_a_directory_the_ledger_does_not_claim(env: _Env) -> None:
     assert (mine / "NOTES.md").is_file()
 
 
+def test_remove_reports_a_failed_deletion_and_keeps_the_ledger_entry(
+    env: _Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert _run(env, "import", str(env.package)).exit_code == 0
+
+    def _refuse(_path):
+        raise PermissionError("the file is read-only")
+
+    monkeypatch.setattr("raven.agent_plugins.skills.remove_tree", _refuse)
+
+    result = _run(env, "remove", PACKAGE_NAME, "--json")
+
+    assert result.exit_code == 1
+    payload = _json_payload(result)
+    assert payload["failed"] == [{"skill": SKILL_NAME, "reason": "the file is read-only"}]
+    ledger = json.loads(env.ledger.read_text(encoding="utf-8"))
+    assert ledger["packages"][PACKAGE_NAME]["skills"] == [SKILL_NAME]
+    assert env.installed.is_dir()
+
+
 def test_import_refuses_a_package_directory_the_ledger_does_not_own(env: _Env) -> None:
     """The operator's own directory of the same name is never written into."""
     mine = env.workspace / "skills" / PACKAGE_NAME

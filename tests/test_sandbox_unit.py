@@ -12,7 +12,7 @@ import sys
 import tempfile
 import textwrap
 import time
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1087,6 +1087,31 @@ class TestBoxliteTranslateProcessCwd:
         e = self._make_executor(tmp_path)
         with pytest.raises(ValueError, match="not inside any volume mounted into the sandbox"):
             e._translate_process_cwd("/completely/outside")
+
+    def test_guest_mount_path_uses_posix_separators(self):
+        relative = PureWindowsPath("packages/demo/bin").relative_to(PureWindowsPath("."))
+
+        assert BoxliteExecutor._guest_mount_path("/workspace", relative) == "/workspace/packages/demo/bin"
+
+
+class TestBoxliteTranslateProcessPath:
+    def test_windows_path_suffix_uses_posix_separators(self, tmp_path, monkeypatch):
+        executor = BoxliteExecutor(
+            image="ubuntu:22.04",
+            workspace=tmp_path,
+            sandbox_home=_TEST_SANDBOX_HOME,
+        )
+        monkeypatch.setattr(
+            executor,
+            "_mount_roots",
+            lambda: [(PureWindowsPath("C:/workspace"), "/workspace")],
+        )
+
+        translated = executor._translate_process_path(
+            r"C:\workspace\packages\demo\bin;C:\outside\bin"
+        )
+
+        assert translated == r"/workspace/packages/demo/bin;C:\outside\bin"
 
 
 # ---------------------------------------------------------------------------

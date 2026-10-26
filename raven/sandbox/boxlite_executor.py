@@ -523,8 +523,8 @@ class BoxliteExecutor(SandboxExecutor):
         for host_root, guest_root in self._mount_roots():
             host = str(host_root)
             text = re.sub(
-                re.escape(host) + r"(?=$|[\\/])",
-                lambda _match, guest=guest_root: guest,
+                re.escape(host) + r"(?=$|[\\/])(?P<suffix>(?:[\\/][^:;]*)?)",
+                lambda match, guest=guest_root: guest + match.group("suffix").replace("\\", "/"),
                 text,
             )
         return text
@@ -544,8 +544,7 @@ class BoxliteExecutor(SandboxExecutor):
                 rel = host_path.relative_to(host_root)
             except ValueError:
                 continue
-            rel_str = str(rel)
-            return guest_root if rel_str == "." else f"{guest_root}/{rel_str}"
+            return self._guest_mount_path(guest_root, rel)
         raise ValueError(
             f"the working directory {cwd!r} is not inside any volume mounted into the "
             "sandbox; mount its parent directory or run this server without the sandbox"
@@ -567,7 +566,11 @@ class BoxliteExecutor(SandboxExecutor):
                 rel = host_path.relative_to(host_root)
             except ValueError:
                 continue
-            rel_str = str(rel)
-            return guest_root if rel_str == "." else f"{guest_root}/{rel_str}"
+            return self._guest_mount_path(guest_root, rel)
         logger.warning("cwd '%s' is outside every mounted volume; falling back to /workspace", cwd)
         return self.WORKSPACE_MOUNT
+
+    @staticmethod
+    def _guest_mount_path(guest_root: str, relative: Path) -> str:
+        suffix = "/".join(relative.parts)
+        return guest_root if not suffix else f"{guest_root}/{suffix}"
