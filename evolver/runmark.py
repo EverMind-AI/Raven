@@ -44,7 +44,7 @@ def fingerprint(harness_dir: Path | None) -> str:
     for p in sorted(root.rglob("*")):
         if not p.is_file() or p.name == MARK or _ignored(p):
             continue
-        h.update(str(p.relative_to(root)).encode())
+        h.update(p.relative_to(root).as_posix().encode())
         h.update(b"\0")
         try:
             h.update(p.read_bytes())
