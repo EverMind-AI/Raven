@@ -684,6 +684,74 @@ def test_import_package_treats_a_vanished_stale_skill_as_removed(
     assert not (workspace / "skills" / PACKAGE_NAME / "beta").exists()
 
 
+def test_the_one_line_metadata_form_of_always_does_not_survive_the_import(tmp_path: Path) -> None:
+    """The registry reads this form as always-on, so the copy must ask the same rule."""
+    from raven.memory_engine.skill_local.registry import _parse_nested_metadata, _resolve_always
+    from raven.utils.text import parse_frontmatter
+
+    root = _package_root(tmp_path)
+    skill_md = root / "skills" / "alpha" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text(
+        "---\n"
+        "name: alpha\n"
+        "description: A demo skill.\n"
+        'metadata: {"raven":{"always":true,"emoji":"x"}}\n'
+        "---\n"
+        "\n"
+        "Do the thing.\n",
+        encoding="utf-8",
+    )
+    workspace, ledger = _workspace(tmp_path)
+
+    report = import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    assert report.installed == ("alpha",)
+    copied = workspace / "skills" / PACKAGE_NAME / "alpha" / "SKILL.md"
+    frontmatter, _ = parse_frontmatter(copied.read_text(encoding="utf-8"), line_fallback=True)
+    nested = _parse_nested_metadata(frontmatter.get("metadata", ""))
+    assert _resolve_always(frontmatter, nested) is False
+    assert nested.get("emoji") == "x", "only the flag may go; the rest of the namespace stays"
+
+
+@pytest.mark.parametrize("name", ["builtin", "workspace", "external"])
+def test_import_refuses_a_package_named_after_a_layer_label(tmp_path: Path, name: str) -> None:
+    """A package directory becomes a pool source label; the layer labels are taken."""
+    root = _package_root(tmp_path, name=name)
+    _write_skill(root / "skills" / "alpha", _frontmatter("alpha"))
+    workspace, ledger = _workspace(tmp_path)
+
+    report = import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    assert report.refusal
+    assert "reserved" in report.refusal
+    assert not (workspace / "skills" / name).exists()
+
+
+def test_a_skill_md_that_cannot_be_rewritten_fails_the_import_and_leaves_no_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The copy lands before the flag is dropped; a write failure must not leave it unowned."""
+    root = _package_root(tmp_path)
+    _write_skill(root / "skills" / "alpha", _frontmatter("alpha") + "always: true\n")
+    workspace, ledger = _workspace(tmp_path)
+
+    real_write = Path.write_bytes
+
+    def _refuse(path: Path, data: bytes) -> int:
+        if path.name == "SKILL.md":
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_write(path, data)
+
+    monkeypatch.setattr(Path, "write_bytes", _refuse)
+
+    report = import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    assert report.installed == ()
+    assert "alpha" in dict(report.failed)
+    assert not (workspace / "skills" / PACKAGE_NAME / "alpha").exists()
+
+
 def test_import_package_keeps_a_directory_the_ledger_never_claimed(tmp_path: Path) -> None:
     """The stale sweep is scoped to the ledger, not to the package directory."""
     root = _package_root(tmp_path)

@@ -13,6 +13,7 @@ ledger claims.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -20,12 +21,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+import yaml
+
 from raven.agent_plugins.ledger import LedgerEntry, PackageLedger
 from raven.agent_plugins.package import AgentPluginPackage, is_contained
 from raven.skill_hub.policy import is_blocked, lint_external_paths, normalize_blocklist
+from raven.utils.skill_meta import nested_metadata, resolve_always
 from raven.utils.text import parse_frontmatter
 
 SKILL_FILENAME = "SKILL.md"
+
+RESERVED_SOURCE_LABELS = frozenset({"workspace", "external", "builtin"})
+"""The registry labels a package directory must not take (``registry.py`` layers)."""
 
 _NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _MAX_NAME_LENGTH = 64
@@ -164,8 +171,17 @@ def import_package(
     which is what gives every package its own source label in the pool.
     """
     off = normalize_blocklist(blocklist)
-    skills, problems = discover_skills(package)
     target_root = Path(workspace) / "skills" / package.name
+    if package.name in RESERVED_SOURCE_LABELS:
+        # The first directory level under the workspace is the pool's source
+        # label; a package there would answer as the layer itself.
+        return ImportReport(
+            package=package.name,
+            version=package.version,
+            target=str(target_root),
+            refusal=(f"the package name {package.name!r} is reserved for a skill layer; choose another name"),
+        )
+    skills, problems = discover_skills(package)
 
     if target_root.exists() and not ledger.owns_directory(target_root, workspace=workspace):
         # The package directory would land on top of a directory the ledger
@@ -227,7 +243,12 @@ def import_package(
             failed.append((skill.name, str(exc)))
             continue
 
-        drop_always_flag(target / SKILL_FILENAME)
+        try:
+            drop_always_flag(target / SKILL_FILENAME)
+        except (OSError, ValueError) as exc:
+            shutil.rmtree(target, ignore_errors=True)
+            failed.append((skill.name, f"the always flag could not be removed: {exc}"))
+            continue
         installed.append(skill.name)
 
     removed, retained, stale_failed = _remove_stale_skills(
@@ -373,25 +394,60 @@ def strip_always_keys(block: str) -> str:
 def drop_always_flag(skill_md: Path) -> None:
     """Remove the always-injection flag from an imported skill.
 
-    The copy is Raven's, so the copy is what gets the flag removed. A file
-    whose frontmatter cannot be split is left untouched.
+    The copy is Raven's, so the copy is what gets the flag removed. The
+    decision uses the registry's own parse instead of a second grammar: the
+    line filter alone misses forms the registry reads as always-on (the
+    one-line JSON ``metadata`` mapping, for one). Raises ``OSError`` or
+    ``ValueError`` when the copy cannot be shown safe; the caller removes it
+    rather than leaving an unowned, always-on skill behind.
     """
-    try:
-        raw = Path(skill_md).read_bytes()
-    except OSError:
-        return
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return
+    raw = Path(skill_md).read_bytes()
+    text = raw.decode("utf-8")
     split = split_frontmatter(text)
     if split is None:
         return
     opening, block, rest = split
-    stripped = strip_always_keys(block)
-    if stripped == block:
+    frontmatter, _body = parse_frontmatter(opening + block + rest, line_fallback=True, preserve_body_whitespace=True)
+    if not isinstance(frontmatter, dict) or not frontmatter:
+        raise ValueError("the SKILL.md frontmatter is unreadable")
+    nested = nested_metadata(frontmatter.get("metadata", ""))
+    if not resolve_always(frontmatter, nested):
+        stripped = strip_always_keys(block)
+        if stripped != block:
+            Path(skill_md).write_bytes((opening + stripped + rest).encode("utf-8"))
         return
-    Path(skill_md).write_bytes((opening + stripped + rest).encode("utf-8"))
+    cleaned = _frontmatter_without_always(frontmatter)
+    dumped = yaml.safe_dump(cleaned, sort_keys=False, allow_unicode=True)
+    Path(skill_md).write_bytes((opening + dumped + rest).encode("utf-8"))
+
+
+def _frontmatter_without_always(frontmatter: dict) -> dict:
+    """The parsed frontmatter with every form of the flag removed.
+
+    ``metadata`` may be a mapping or a JSON string; the string keeps its
+    form so the file's shape changes no more than the removal needs.
+    """
+    data = dict(frontmatter)
+    data.pop("always", None)
+    raw_meta = data.get("metadata")
+    encoded = isinstance(raw_meta, str)
+    meta = raw_meta
+    if encoded:
+        try:
+            meta = json.loads(raw_meta)
+        except (json.JSONDecodeError, TypeError):
+            return data
+    if not isinstance(meta, dict):
+        return data
+    changed = False
+    for namespace in ("raven", "nanobot", "openclaw"):
+        value = meta.get(namespace)
+        if isinstance(value, dict) and "always" in value:
+            meta = {**meta, namespace: {key: item for key, item in value.items() if key != "always"}}
+            changed = True
+    if changed:
+        data["metadata"] = json.dumps(meta) if encoded else meta
+    return data
 
 
 __all__ = [
