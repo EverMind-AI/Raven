@@ -35,6 +35,7 @@ import type { TranscriptSource } from '../features/transcript/types'
 import type { WorkspaceSource } from '../features/workspace/types'
 import type { ProseSource } from '../lib/prose'
 import type { BannerSource } from './banner'
+import type { EffortSource } from './effort'
 import type { TierSource } from './tier'
 
 /* Whether the extensions list has been read, and reading it. Declared here
@@ -52,6 +53,8 @@ export interface Sources {
   capabilities: CapabilitiesSource
   composer: ComposerSource
   connections: ConnectionsSource
+  /* This conversation's reasoning effort, read by the picker's effort row. */
+  effort: EffortSource
   knowledge: KnowledgeSource
   cron: CronSource
   /* The registered machines, read by the extAgents island's machines tab. */

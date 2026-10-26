@@ -48,6 +48,7 @@ on a specific command. From a source checkout, prefix commands with `uv run`.
 | Task | Read |
 | --- | --- |
 | Choose a conversation or one-shot workflow | [Using Raven](using-raven.md) |
+| Set how much the model thinks, globally or per conversation | [Using Raven](using-raven.md#set-the-reasoning-effort) |
 | Configure shipped or external agents | [Agent Integrations](agent-integrations.md) |
 | Continue or steer a specialist task | [Working with sub-agents](agent-collaboration.md) |
 | Share browser work with the agent | [Browser collaboration](browser-collaboration.md) |

@@ -25,7 +25,7 @@ from pydantic.alias_generators import to_snake
 
 from raven.config.env_file import MIRRORED_KEYS, refresh_env_file
 from raven.config.keys import key_as_written as _as_written
-from raven.config.schema import WEB_VENDOR_ENV_VARS, WebFetchProvider, WebSearchProvider
+from raven.config.schema import REASONING_EFFORTS, WEB_VENDOR_ENV_VARS, WebFetchProvider, WebSearchProvider
 from raven.rpc import LOCAL_CHANNEL
 from raven.rpc.errors import ConfigValidationError
 from raven.rpc.files import UPLOAD_DIR as _UPLOAD_DIR
@@ -1137,6 +1137,16 @@ def _chk_int_or_null(key: str, lo: int, hi: int):
     return chk
 
 
+def _chk_enum_or_null(key: str, *allowed: Any):
+    """An enum a surface may also clear: null takes the key back to its default."""
+    inner = _chk_enum(key, *allowed)
+
+    def chk(v: Any) -> Any:
+        return None if v is None else inner(v)
+
+    return chk
+
+
 _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "tools.exec.timeout": _chk_int("tools.exec.timeout", 5, 3600),
     "tools.web.search.apiKey": _chk_str("tools.web.search.apiKey", 200),
@@ -1178,7 +1188,9 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "embedding": _chk_pin_pair("embedding", "model", "provider"),
     "vision": _chk_pin_pair("vision", "model", "provider"),
     "agents.defaults.enablePersonalization": _chk_bool("agents.defaults.enablePersonalization"),
-    "agents.defaults.reasoningEffort": _chk_enum("agents.defaults.reasoningEffort", "minimal", "low", "medium", "high"),
+    # Clearable: null hands the choice back to the provider's own default,
+    # which is what an unset key means and what the settings page offers.
+    "agents.defaults.reasoningEffort": _chk_enum_or_null("agents.defaults.reasoningEffort", *REASONING_EFFORTS),
     "permissions.mode": _chk_enum("permissions.mode", "ask", "smart", "full"),
     "agents.defaults.maxToolIterations": _chk_int("agents.defaults.maxToolIterations", 1, 200),
     "agents.defaults.contextWindowTokens": _chk_int_or_null("agents.defaults.contextWindowTokens", 1024, 100_000_000),

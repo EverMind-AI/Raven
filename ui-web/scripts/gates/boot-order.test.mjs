@@ -26,7 +26,7 @@ const installText = moduleText('app/install.ts')
    rest of the draw shells. */
 const STEPS = [
   'lookLoad', 'paneLoad', 'setRail', 'sessionDraw', 'sessionOpen',
-  'drawPerm', 'loadTier', 'drawCtx', 'bumpWs', 'drawSettings',
+  'drawPerm', 'loadTier', 'loadEffort', 'drawCtx', 'bumpWs', 'drawSettings',
   'setRuntime', 'goState',
 ]
 
@@ -51,6 +51,7 @@ async function harness(rows = [], { connected = false, selectionOnly = true } = 
       'src/chrome/behaviour/panes': { load: step('paneLoad') },
       'src/state/perm': { draw: step('drawPerm') },
       'src/state/tier': { load: step('loadTier') },
+      'src/state/effort': { load: step('loadEffort') },
       'src/state/ctxChip': { draw: step('drawCtx') },
       'src/state/failureBar': {
         bootError: (where, error) => { throw new Error(`${where}: ${error}`) },
