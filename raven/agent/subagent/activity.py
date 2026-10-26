@@ -637,6 +637,17 @@ async def note_provider_usage(
 ) -> None:
     """Record one direct provider call in the run activity and usage ledger."""
     note_usage(usage)
+    await note_ledger_usage(usage, model=model, session_key=session_key, task_id=task_id)
+
+
+async def note_ledger_usage(
+    usage: Any,
+    *,
+    model: str,
+    session_key: str | None,
+    task_id: str,
+) -> None:
+    """Book one delegated call in the usage ledger under the conversation that delegated it."""
     if session_key is None or not isinstance(usage, dict):
         return
     try:

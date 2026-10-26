@@ -226,3 +226,125 @@ async def test_an_ordinary_reply_is_still_a_success(monkeypatch: pytest.MonkeyPa
     result = await probe_mod.ping_agent(_cfg())
     assert result.ok is True
     assert result.remedy is None
+
+
+# ---- the dispatch lane ------------------------------------------------------
+
+
+_STUB = Path(__file__).with_name("acp_stub_server.py")
+
+
+@pytest.fixture
+async def _closed_pool():
+    from raven.acp_client.pool import close_pool
+
+    yield
+    await close_pool()
+
+
+def _dispatched(preset: str, reply: str):
+    import sys
+
+    from raven.agent.subagent.backends import build_third_party_backend
+    from raven.config.schema import ThirdPartyAcpSubagentConfig
+    from raven.utils.commands import command_quote
+
+    return build_third_party_backend(
+        ThirdPartyAcpSubagentConfig(
+            name="GitHub Copilot",
+            preset=preset,
+            command=f"{command_quote(sys.executable)} {command_quote(str(_STUB))}",
+            env={"ACP_STUB_REPLY": reply},
+            ready_timeout_ms=15000,
+        )
+    )
+
+
+async def test_a_dispatch_whose_reply_is_the_refusal_fails(tmp_path: Path, _closed_pool) -> None:
+    """The run a spawn or a DAG node makes, not only the Connect ping.
+
+    Copilot ends the turn normally with the refusal as its message, so the
+    lane's own checks -- an empty turn, a failed call with nothing after it --
+    pass it, and the sentence went back as the work: a node recorded completed
+    whose output was "Your credit balance is too low", merged downstream.
+    """
+    from raven.acp_client.acp_agent import AcpEmptyTurnError
+
+    backend = _dispatched("github_copilot", _CREDIT)
+
+    with pytest.raises(AcpEmptyTurnError) as caught:
+        await backend.run("summarize the README", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert "for want of credit" in str(caught.value)
+    assert _CREDIT in str(caught.value), "the agent's own words travel with the reading"
+
+
+async def test_an_answer_that_quotes_such_an_error_is_still_an_answer(tmp_path: Path, _closed_pool) -> None:
+    """A refusal is the whole message: an answer that cites a 500 while
+    debugging something is the work, and failing it would lose the work."""
+    answer = (
+        "The deploy failed because the worker crashed. Its log ends with "
+        "'Last error: 500 Internal server error'; restart the worker and redeploy."
+    )
+    backend = _dispatched("github_copilot", answer)
+
+    out = await backend.run("why did the deploy fail?", task_id="t2", workspace=tmp_path, executor=None)
+
+    assert out == answer
+
+
+@pytest.mark.parametrize("said", [_KEY_401, _KEY_403, _CREDIT, _EXPIRED, _MODEL, _LOCAL, _TUNNEL, _SERVER, _GATEWAY])
+def test_every_measured_refusal_is_read_as_a_whole_reply(said: str) -> None:
+    assert github_copilot.read_reply(said) is not None
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Error: 502 Bad Gateway from the staging load balancer; the upstream pool is empty.",
+        "Error: GET /api/users failed (HTTP 404) because the route was renamed to /api/accounts.",
+        "Error: your credit balance is too low is what the billing page shows; top it up there.",
+    ],
+)
+def test_an_answer_that_opens_with_an_error_it_found_is_not_a_refusal(answer: str) -> None:
+    """A task can be "curl staging and tell me what it returns": the answer then
+    opens with the error it found. Copilot's own refusals are its fixed sentences
+    -- "with provider at", "from the AI model; retried" -- and only those are."""
+    assert github_copilot.read_reply(answer) is None
+
+
+async def test_another_agents_dispatch_is_not_read_with_copilots_sentences(tmp_path: Path, _closed_pool) -> None:
+    backend = _dispatched("qwen_code", _CREDIT)
+
+    out = await backend.run("summarize the README", task_id="t3", workspace=tmp_path, executor=None)
+
+    assert out == _CREDIT
+
+
+async def test_a_connect_reads_a_refusal_once_now_that_the_run_raises_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _closed_pool
+) -> None:
+    """The connect builds the same backend a dispatch does, so the refusal now
+    arrives as the run's failure rather than as its reply. Read again from the
+    failure's text, the reading wrapped itself: "refused ... It said: acp agent
+    ... refused ... It said: Error: 402 ...". It is read from the agent's words."""
+    import sys
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.config.schema import ThirdPartyAcpSubagentConfig
+    from raven.utils.commands import command_quote
+
+    monkeypatch.chdir(tmp_path)
+    cfg = ThirdPartyAcpSubagentConfig(
+        name="GitHub Copilot",
+        preset="github_copilot",
+        command=f"{command_quote(sys.executable)} {command_quote(str(_STUB))}",
+        env={"ACP_STUB_REPLY": _CREDIT},
+        ready_timeout_ms=15000,
+    )
+
+    result = await probe_mod.ping_agent(cfg)
+
+    assert result.ok is False
+    assert result.remedy == Remedy("billing")
+    assert result.detail == github_copilot.read(_CREDIT)[0]

@@ -57,7 +57,7 @@ from raven.acp_client.protocol import (
     AcpRemoteError,
     AcpTimeoutError,
 )
-from raven.agent.subagent import activity
+from raven.agent.subagent import activity, github_copilot
 from raven.agent.subagent.attachments import attachment_blocks
 from raven.agent.subagent.backends import turn_rows
 from raven.agent.subagent.backends.base import bounded_delta, clamp_output
@@ -161,7 +161,71 @@ class AcpEmptyTurnError(RuntimeError):
     """
 
 
+class AcpProviderRefusalError(AcpEmptyTurnError):
+    """The agent ended its turn normally and its whole reply was its model provider's refusal.
+
+    ``said`` is that reply as the agent wrote it, kept apart from raven's reading
+    of it so a caller that explains refusals itself (the connect) reads the
+    agent's words rather than this error's.
+    """
+
+    def __init__(self, message: str, *, said: str) -> None:
+        super().__init__(message)
+        self.said = said
+
+
 _RESULT_TEXT_CAP = 2000
+
+
+def _counted(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _ledger_counts(counts: Any) -> dict[str, Any] | None:
+    """One ACP turn's token counts in the shape the usage ledger reads, or ``None`` without them.
+
+    ``counts`` is the turn's ``usage`` in the field names ACP's draft gives it.
+    Its ``inputTokens`` leaves out the cached reads and writes reported beside it
+    (claude-agent-acp and codex-acp both), so they are kept apart rather than
+    taken out again. ``None`` when the input and output counts are not both
+    there: the ledger stores numbers, and a row of zeros would say the turn read
+    and wrote nothing.
+    """
+    if not isinstance(counts, dict):
+        return None
+    read, wrote = counts.get("inputTokens"), counts.get("outputTokens")
+    if not (_counted(read) and _counted(wrote)):
+        return None
+    cached_read, cached_write = counts.get("cachedReadTokens"), counts.get("cachedWriteTokens")
+    thought, total = counts.get("thoughtTokens"), counts.get("totalTokens")
+    return {
+        "prompt_tokens": read,
+        "prompt_tokens_include_cache": False,
+        "completion_tokens": wrote,
+        "cache_read_input_tokens": cached_read if _counted(cached_read) else None,
+        "cache_creation_input_tokens": cached_write if _counted(cached_write) else None,
+        "reasoning_tokens": thought if _counted(thought) else 0,
+        "total_tokens": total if _counted(total) else None,
+    }
+
+
+def _turn_cost(reported: Any, spent_before: float | None) -> tuple[float | None, float | None]:
+    """What one turn cost in USD, and the session's cumulative cost to measure the next from.
+
+    ACP's ``usage_update.cost`` is the session's cumulative cost, so a turn
+    costs what it added to it. ``spent_before`` is the total at the turn's
+    start: 0 for a session this process opened, ``None`` when it is unknown --
+    a session resumed after this process started -- and then the turn's cost is
+    unknown too, not the whole total charged again. A total that went down says
+    the agent counts some other way, and is read as unknown for the same reason.
+    """
+    cost = reported.get("cost") if isinstance(reported, dict) else None
+    amount = cost.get("amount") if isinstance(cost, dict) and cost.get("currency") == "USD" else None
+    if not isinstance(amount, (int, float)) or isinstance(amount, bool) or amount < 0:
+        return None, spent_before
+    if spent_before is None or amount < spent_before:
+        return None, float(amount)
+    return float(amount) - spent_before, float(amount)
 
 
 def _holds_session(exc: AcpRemoteError) -> bool:
@@ -792,6 +856,18 @@ class _TurnCollector:
                 return
         self.events.append({"t": "result", "id": _PLAN_CALL_ID, "ok": True, "text": checklist, "at": self._now()})
 
+    def turn_counts(self, answered: Any) -> dict[str, Any]:
+        """The turn's token counts, from one source: never both, as ``note_usage`` adds.
+
+        ``answered`` is the prompt response's ``usage``, read where the dialect
+        says it counts the whole turn; the ``usage_update`` then carries only the
+        window and the cost. Otherwise the update, where an earlier agent was seen
+        to send its counts.
+        """
+        if self._dialect.prompt_usage_counts_the_turn and isinstance(answered, dict) and answered:
+            return answered
+        return self.usage
+
     @property
     def calls(self) -> list[ToolCall]:
         return [ev["call"] for ev in self.events if ev["t"] == "call"]
@@ -1051,6 +1127,7 @@ class AcpAgentBackend:
         pool: Any = None,
         machine: str | None = None,
         remote_cwd: str | None = None,
+        preset: str | None = None,
     ) -> None:
         self.name = name
         self.command = command
@@ -1059,6 +1136,8 @@ class AcpAgentBackend:
         # see ``raven.acp_client.remote`` for what changes when it is set.
         self.machine = (machine or "").strip() or None
         self.remote_cwd = remote_cwd
+        # Which shipped preset this row is, for the readings measured per agent.
+        self.preset = preset
         self.env = env or {}
         self.ready_timeout_ms = ready_timeout_ms
         self.timeout = timeout
@@ -1075,6 +1154,16 @@ class AcpAgentBackend:
         # route into a session -- and on every fresh session a spawn opens --
         # is said once per value rather than once per turn.
         self._model_refused: set[str] = set()
+        # An instance whose earlier session the agent could not resume, by
+        # (session key, handle): the next reply on that handle has to say it
+        # starts over. Held until a turn there answers, not only for the turn
+        # that met the refusal -- the binding is dropped at that refusal, so a
+        # retry after a failed turn opens a fresh session with nothing of its
+        # own to report. For this process's life, as the backend is.
+        self._resume_lost: dict[tuple[str, str], str] = {}
+        # Each session's cumulative cost as last reported, for the cost of its
+        # next turn (`_turn_cost`). Only for sessions this process has seen.
+        self._session_spend: dict[str, float] = {}
         self._registry = registry or get_registry()
         # Which pool this backend's turns are served from. Almost always the
         # process-wide one, and held unresolved until it is used so that
@@ -1898,7 +1987,25 @@ class AcpAgentBackend:
                     activity.note_output_limit()
                 text = collector.text
                 frames = self._frames(journal, connection, session_id, frames_start)
-                self._record(span, collector, stop_reason=stop_reason, started=started, frames=frames)
+                self._record(
+                    span,
+                    collector,
+                    stop_reason=stop_reason,
+                    started=started,
+                    frames=frames,
+                    counted=result.get("usage") if isinstance(result, dict) else None,
+                )
+                # Before the checks below: a turn that answered nothing usable
+                # still spent what it spent.
+                await self._book_usage(
+                    collector,
+                    result.get("usage") if isinstance(result, dict) else None,
+                    initialize=connection.initialize,
+                    session_id=session_id,
+                    resumed=resumed,
+                    session_key=session_key,
+                    task_id=task_id,
+                )
 
                 if not text:
                     tail = client.stderr_tail(1500)
@@ -1931,6 +2038,10 @@ class AcpAgentBackend:
                         f"{detail.strip() or '<no detail>'}"
                     )
 
+                if (refused := self._provider_refusal(text)) is not None:
+                    span.error("the reply is the model provider's refusal")
+                    raise AcpProviderRefusalError(refused, said=text)
+
                 if not resumed and self.is_stateful:
                     # Deferred commit, as the cli transport does it: binding a handle
                     # before the first turn succeeded would resume a session that
@@ -1940,7 +2051,7 @@ class AcpAgentBackend:
                     await self._registry.commit(skey, self.name, handle, session_id, kind="acp")
 
                 reply = await self._finished(collector.reply, stop_reason=stop_reason, span=span, sink=on_delta)
-                notes = [self._mcp_note(grant, lent)]
+                notes = [self._resume_lost.pop((skey, handle), None), self._mcp_note(grant, lent)]
                 if launched is not None:
                     # Where to find what it made: the caller's workspace line names
                     # this computer, and what it wrote is there, by address --
@@ -2083,6 +2194,49 @@ class AcpAgentBackend:
 
         return steer
 
+    async def _book_usage(
+        self,
+        collector: _TurnCollector,
+        answered: Any,
+        *,
+        initialize: Any,
+        session_id: str,
+        resumed: bool,
+        session_key: str | None,
+        task_id: str,
+    ) -> None:
+        """Book the turn's tokens and cost in the usage ledger, as an in-process sub-agent's calls are.
+
+        Not for a raven agent: it books its own calls under the delegating
+        conversation (the prompt's ``raven.usage``), so booking its turn here as
+        well would count it twice.
+        """
+        info = initialize.get("agentInfo") if isinstance(initialize, dict) else None
+        if isinstance(info, dict) and info.get("name") == "raven":
+            return
+        before = self._session_spend.get(session_id, None if resumed else 0.0)
+        cost, spent = _turn_cost(collector.usage, before)
+        if spent is not None:
+            self._session_spend[session_id] = spent
+        if (usage := _ledger_counts(collector.turn_counts(answered))) is None:
+            return
+        model = self._model_pushed.get(session_id) or self._model_baseline.get(session_id) or ""
+        await activity.note_ledger_usage(
+            {**usage, "cost_usd": cost}, model=model, session_key=session_key, task_id=task_id
+        )
+
+    def _provider_refusal(self, reply: str) -> str | None:
+        """Why the run failed, when the whole reply is the agent's model provider refusing the call.
+
+        Copilot ends a refused model call as a finished turn whose message is the
+        refusal, so neither an empty-turn check nor a failed-call check sees it,
+        and handed back it is a completed run whose output is the error. Read only
+        for the agent it was measured on.
+        """
+        if self.preset != "github_copilot" or (refused := github_copilot.read_reply(reply)) is None:
+            return None
+        return f"acp agent {self.name!r} answered with its model provider's refusal: {refused[0]}"
+
     async def _finished(
         self,
         text: str,
@@ -2177,6 +2331,7 @@ class AcpAgentBackend:
                     f"the same silence again."
                 ) from None
 
+        lost: str | None = None
         if self.is_stateful:
             known = await self._registry.lookup(skey, self.name, handle, kind="acp")
             if known is not None and (self._snapshot and self._snapshot.can_load):
@@ -2221,6 +2376,7 @@ class AcpAgentBackend:
                         exc.message,
                     )
                     await self._registry.unbind(skey, self.name, handle)
+                    lost = exc.message
                 except AcpError:
                     # A transport-level failure is not evidence the session was
                     # pruned, so the binding is kept and the caller is told.
@@ -2234,6 +2390,11 @@ class AcpAgentBackend:
         self._note_session_model(session_id, result)
         await self._set_mode(client, session_id, mode, budget=budget)
         await self._set_model(client, session_id, session_model, budget=budget)
+        if lost is not None:
+            self._resume_lost[(skey, handle)] = (
+                f"Instance {handle!r} could not pick up its earlier conversation ({lost}), "
+                "so this reply comes from a fresh session that has none of it"
+            )
         return session_id, False
 
     async def _set_model(self, client: Any, session_id: str, model: str | None, *, budget: float) -> None:
@@ -2393,6 +2554,7 @@ class AcpAgentBackend:
         stop_reason: Any,
         started: float,
         frames: dict[str, Any],
+        counted: Any = None,
     ) -> None:
         counts = collector.counts()
         record_events(span, transport="acp", kinds=counts)
@@ -2413,7 +2575,7 @@ class AcpAgentBackend:
         # already published as they landed; this is the settled list, with the
         # labels every later frame corrected, written over it rather than added.
         activity.set_tool_calls(activity.current(), collector.tool_calls, collector.failed_calls)
-        activity.note_usage(collector.usage)
+        activity.note_usage(collector.turn_counts(counted))
         activity.note_steps(counts)
         activity.note_thoughts(thought_chars)
         activity.note_transcript(collector.messages())

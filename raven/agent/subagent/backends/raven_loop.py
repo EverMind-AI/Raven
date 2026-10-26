@@ -549,6 +549,9 @@ class RavenLoopBackend:
         # running out of rounds: the one wrap-up call below is worded for each,
         # and so is the failure if that call answers nothing either.
         answered_blank = False
+        # Whether the rounds ran out with the model still calling tools: the
+        # answer is then a wrap-up, and the reply says it is partial.
+        ran_out = False
         # Whether the LAST model response of this run was cut at the output
         # ceiling, not whether any was: a round that was cut and then answered
         # in full delivered its answer, and the verdict reading this is asking
@@ -827,6 +830,7 @@ class RavenLoopBackend:
             # another, it answers from what it has. Observed need -- a research
             # node spent all fifteen rounds on web_fetch and wrote nothing, and
             # the run's whole output was the placeholder that used to sit here.
+            ran_out = not answered_blank
             if answered_blank:
                 logger.warning("Subagent [{}] ended its turn with an empty reply; asking once with no tools", task_id)
                 reason = "Your reply was empty."
@@ -896,12 +900,28 @@ class RavenLoopBackend:
             # anything has streamed the turn sends no closing text, so an answer
             # kept from ``on_delta`` would be recorded and never shown.
             await on_delta(final_result)
+        # What the instance's own history keeps as its reply.
+        kept = final_result
+        if ran_out:
+            # The ACP lane's partial-turn notice for the same case, so a caller
+            # reads a capped run the same way whichever lane ran it. Not kept:
+            # it is raven telling the caller about this run, and a resumed
+            # instance that read it as its own words could repeat it in a reply
+            # that was not cut.
+            notice = (
+                f"\n\n[raven] The sub-agent used all {self._MAX_ITERATIONS} tool rounds before finishing; "
+                "reply is partial."
+            )
+            if on_delta is not None:
+                await on_delta(notice)
+            final_result += notice
         if note := grant.note_text():
             notice = f"\n\n[raven] {note}."
             if on_delta is not None:
                 await on_delta(notice)
             final_result += notice
+            kept += notice
         if on_messages is not None:
-            messages.append({"role": "assistant", "content": final_result})
+            messages.append({"role": "assistant", "content": kept})
             on_messages(messages)
         return final_result

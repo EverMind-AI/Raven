@@ -3306,9 +3306,53 @@ async def test_a_run_out_of_rounds_answers_from_what_it_gathered(tmp_path) -> No
 
     out = await backend.run("research it", task_id="n1", workspace=tmp_path, executor=None)
 
-    assert out == "here is what I have"
+    assert out.startswith("here is what I have\n\n[raven] ")
     assert provider.rounds == RavenLoopBackend._MAX_ITERATIONS, "the budget is still a budget"
     assert provider.toolless_calls == 1, "asked exactly once, after the rounds ran out"
+
+
+async def test_a_run_out_of_rounds_says_its_answer_is_partial(tmp_path) -> None:
+    """The wrap-up is worth having and it is still not the work: the tool budget
+    ended the run, not the task. Handed back bare, a spawn records it completed
+    and a DAG node's judge reads it as the result. The ACP lane marks the same
+    case with a ``[raven]`` line (``AcpAgentBackend._finished``); so does this one,
+    in the reply and on the stream, which is the only place a watcher reads it.
+    """
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    backend = RavenLoopBackend(provider=_AlwaysToolsProvider(), model="stub", agent_home=tmp_path)
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    out = await backend.run("research it", task_id="n8", workspace=tmp_path, executor=None, on_delta=on_delta)
+
+    notice = (
+        f"\n\n[raven] The sub-agent used all {RavenLoopBackend._MAX_ITERATIONS} tool rounds "
+        "before finishing; reply is partial."
+    )
+    assert out == "here is what I have" + notice
+    assert seen == ["here is what I have", notice], seen
+
+
+async def test_the_partial_notice_stays_out_of_the_instances_own_history(tmp_path) -> None:
+    """The notice is raven telling the caller about this run, not something the
+    sub-agent said. Kept in the history a resumed instance continues from, the
+    model reads it as its own earlier words and can repeat it in a reply that was
+    not cut -- which the caller would then read as cut. The ACP lane never puts
+    its notices into the agent's session, for the same reason."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    backend = RavenLoopBackend(provider=_AlwaysToolsProvider(), model="stub", agent_home=tmp_path)
+    kept: list[list[dict[str, Any]]] = []
+
+    out = await backend.run(
+        "research it", task_id="n10", workspace=tmp_path, executor=None, on_messages=lambda m: kept.append(list(m))
+    )
+
+    assert "reply is partial" in out
+    assert kept[-1][-1] == {"role": "assistant", "content": "here is what I have"}
 
 
 async def test_a_run_with_nothing_to_say_fails_instead_of_reading_as_done(tmp_path) -> None:
@@ -3456,8 +3500,8 @@ async def test_the_answer_asked_for_after_the_rounds_run_out_reaches_a_watching_
 
     out = await backend.run("research it", task_id="n7", workspace=tmp_path, executor=None, on_delta=on_delta)
 
-    assert out == "here is what I have"
-    assert seen == ["here is what I have"]
+    assert seen[0] == "here is what I have"
+    assert "".join(seen) == out
 
 
 async def test_a_wrap_up_that_answers_nothing_streams_nothing(tmp_path) -> None:

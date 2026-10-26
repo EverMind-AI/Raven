@@ -922,9 +922,15 @@ class AcpMethods:
 
     @staticmethod
     def _stop_reason(stop: Any, sessions: Any, session_key: str, filed_before: int) -> Any:
-        """``stop``, refined to ``max_tokens`` when this turn hit the ceiling.
+        """``stop``, refined to the limit that cut this turn short, if one did.
 
-        The protocol already has a word for it, and the schema's own enum
+        ``max_turn_requests`` when the turn's own budget ended it (the tool cap,
+        the wall clock or a stalled tool) and a wrap-up answered in its place;
+        ``max_tokens`` when generation stopped at the output ceiling. The budget
+        is read first: it is what ended the turn, and a wrap-up that was then
+        cut too does not make the turn any less over budget.
+
+        The protocol already has a word for each, and the schema's own enum
         carries it -- so a turn cut at the output ceiling is reported the way
         every conforming agent reports one, rather than through a private
         ``_meta`` key the client would have to be taught and that no other agent
@@ -942,8 +948,12 @@ class AcpMethods:
         """
         if stop != "end_turn" or sessions is None:
             return stop
-        at = getattr(sessions.get_or_create(session_key), "metadata", {}).get("output_limit_turn_at")
-        return "max_tokens" if isinstance(at, int) and at >= filed_before else stop
+        metadata = getattr(sessions.get_or_create(session_key), "metadata", {})
+        for key, refined in (("budget_stop_turn_at", "max_turn_requests"), ("output_limit_turn_at", "max_tokens")):
+            at = metadata.get(key)
+            if isinstance(at, int) and at >= filed_before:
+                return refined
+        return stop
 
     async def _session_cancel(self, params: dict[str, Any]) -> None:
         """Cancel the session's turn, and make sure its prompt is answered.

@@ -2237,6 +2237,33 @@ def test_a_more_specific_stop_reason_is_never_overwritten_by_the_ceiling():
         assert AcpMethods._stop_reason(stop, sessions, "k", 0) == stop
 
 
+def test_a_turn_cut_by_its_own_budget_is_reported_as_max_turn_requests():
+    """The loop's tool, clock or stalled-tool budget ended the turn and a wrap-up
+    answered for it. ``end_turn`` would claim the turn finished; the schema's own
+    word for a turn its budget ended is ``max_turn_requests``."""
+    sessions = _MetaSessions([{"role": "user", "content": "hi"}], {"budget_stop_turn_at": 0})
+    assert AcpMethods._stop_reason("end_turn", sessions, "k", 0) == "max_turn_requests"
+
+
+def test_a_budget_stop_left_by_an_earlier_turn_does_not_answer_this_prompt():
+    messages = [{"role": "user", "content": str(n)} for n in range(6)]
+    sessions = _MetaSessions(messages, {"budget_stop_turn_at": 0})
+    assert AcpMethods._stop_reason("end_turn", sessions, "k", 5) == "end_turn"
+
+
+def test_a_more_specific_stop_reason_is_never_overwritten_by_the_budget():
+    sessions = _MetaSessions([{"role": "user", "content": "hi"}], {"budget_stop_turn_at": 0})
+    for stop in ("cancelled", "refusal"):
+        assert AcpMethods._stop_reason(stop, sessions, "k", 0) == stop
+
+
+def test_a_budget_stop_whose_wrap_up_was_also_cut_reports_the_budget():
+    """The budget is what ended the turn; the wrap-up being cut as well does not
+    make the turn any less over budget."""
+    sessions = _MetaSessions([{"role": "user", "content": "hi"}], {"budget_stop_turn_at": 0, "output_limit_turn_at": 0})
+    assert AcpMethods._stop_reason("end_turn", sessions, "k", 0) == "max_turn_requests"
+
+
 def test_turn_meta_reads_only_what_hooks_filed():
     """Back to the documented contract: the table is the hooks' stash and
     nothing else, so nothing the host decides from rides in it."""

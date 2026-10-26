@@ -110,6 +110,10 @@ class CodexDialect(AcpDialect):
     plan_tool_name = "update_plan"
     """codex's own name for the tool behind a plan frame (``plan_tool.rs``)."""
 
+    prompt_usage_counts_the_turn = False
+    """codex-acp 1.13.1 builds the prompt response's ``usage`` from the app
+    server's ``tokenUsage.last``: the turn's final model call, not the turn."""
+
     def tool_name(self, update: dict[str, Any]) -> str:
         raw = _dict(update.get("rawInput"))
         meta = _dict(update.get("_meta"))

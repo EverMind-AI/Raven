@@ -223,8 +223,12 @@ def _said(exc: BaseException) -> tuple[str, str | None]:
     when no agent answered at all (a timeout, a process that never started), and
     the whole text is then all there is to go on.
     """
+    from raven.acp_client.acp_agent import AcpProviderRefusalError
     from raven.acp_client.protocol import reason_of, remote_error_in
 
+    if isinstance(exc, AcpProviderRefusalError):
+        # The run already read the refusal; its words are the agent's answer.
+        return str(exc), exc.said
     shown = str(exc)
     error = remote_error_in(exc)
     if error is None:
