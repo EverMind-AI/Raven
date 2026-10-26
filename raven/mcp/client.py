@@ -214,7 +214,9 @@ async def open_mcp_transport(
             # starts is fetched in there, so only its command line can carry one.
             # The registry probe runs without the server's cwd on purpose: a
             # package root is third-party content, and a .npmrc there must not
-            # choose the registry or the payload.
+            # choose the registry or the payload. The cost is that a host
+            # server's own project .npmrc is not seen either; telling the two
+            # apart needs a source marker on the config, not a looser probe.
             sandboxed = executor is not None and executor.supports_process_spawning
             command, *args = await mirrors.package_launch_async(
                 [cfg.command, *cfg.args], {**os.environ, **(cfg.env or {})}, local=not sandboxed
