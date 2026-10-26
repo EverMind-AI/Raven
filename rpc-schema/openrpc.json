@@ -7954,7 +7954,7 @@
             },
             "context_used": {
               "type": "integer",
-              "description": "Estimated tokens the next call would send."
+              "description": "Tokens the session's last model call filled the window with; a tiktoken estimate when no call recorded one."
             },
             "context_percent": {
               "type": "integer",

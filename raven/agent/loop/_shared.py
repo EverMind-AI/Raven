@@ -154,6 +154,44 @@ def _stamp_reasoning_ms(messages: list[dict[str, Any]], response: Any) -> None:
         messages[-1][_REASONING_MS_KEY] = int(reasoning_ms)
 
 
+# How full a model call left the window, on the assistant entry it produced.
+# Same underscore-then-rename convention as the spans above; ``_save_turn``
+# writes it as ``context_used``. A resume has no other way to know what the
+# model was sent: the context engine compacts on its own and leaves the stored
+# log whole, so the log is not that.
+_CONTEXT_USED_KEY = "_context_used"
+
+
+def _window_reading(usage: dict[str, Any] | None) -> int:
+    """How full a call left the window: its prompt plus its reply, in tokens.
+
+    Not what the prompt was billed as. A provider that reports cache reads apart
+    from ``prompt_tokens`` (``prompt_tokens_include_cache`` false, the Anthropic
+    Messages shape) bills a fraction of a warm prompt while all of it still
+    occupies the window, so the cached counts are added back. Same add-back, for
+    the same reason, as ``transport_failure.never_processed``.
+    """
+    if not usage:
+        return 0
+    used = int(usage.get("prompt_tokens", 0) or 0) + int(usage.get("completion_tokens", 0) or 0)
+    if not usage.get("prompt_tokens_include_cache", True):
+        used += int(usage.get("cache_read_input_tokens", 0) or 0) + int(
+            usage.get("cache_creation_input_tokens", 0) or 0
+        )
+    return used
+
+
+def _stamp_context_used(messages: list[dict[str, Any]], response: Any) -> None:
+    """Put a model call's window reading on the assistant entry it produced.
+
+    Absent when the provider reported no usage, and absent means unknown: a
+    resume reads the newest entry that has one.
+    """
+    used = _window_reading(getattr(response, "usage", None))
+    if used > 0 and messages:
+        messages[-1][_CONTEXT_USED_KEY] = used
+
+
 def _first_line(text: str) -> str:
     """The one line of a tool error worth putting in front of a person."""
     for line in str(text or "").splitlines():

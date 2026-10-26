@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from raven.agent.loop._shared import (
     _ABORTED_ACTION_REPLY,
+    _CONTEXT_USED_KEY,
     _DELEGATED_KEY,
     _HOOK_INJECTED_KEY,
     _MAX_ITER_STATIC_FALLBACK,
@@ -51,8 +52,10 @@ from raven.agent.loop._shared import (
     _file_written_payload,
     _first_line,
     _runtime_origin,
+    _stamp_context_used,
     _stamp_reasoning_ms,
     _strip_inline_images,
+    _window_reading,
     append_hook_note,
     asyncio,
     autofill_resolver,
@@ -1331,22 +1334,14 @@ class TurnPathMixin:
             if response.usage:
                 prompt_tokens = int(response.usage.get("prompt_tokens", 0) or 0)
                 completion_tokens = int(response.usage.get("completion_tokens", 0) or 0)
-                # One reading for both consumers: the sink gauge below and the
+                # One reading for every consumer: the sink gauge below, the
                 # proactive compaction trigger at the top of the next
-                # iteration. They differ in their thresholds, not in what
-                # they measure -- and what they measure is how full the window
-                # is, which is not what the prompt was billed as. A provider
-                # that reports cache reads apart from ``prompt_tokens``
-                # (``prompt_tokens_include_cache`` false, the Anthropic
-                # Messages shape) bills a fraction of a warm prompt while all
-                # of it still occupies the window, so the cached counts are
-                # added back here. Same add-back, for the same reason, as
-                # ``transport_failure.never_processed``.
-                context_used = prompt_tokens + completion_tokens
-                if not response.usage.get("prompt_tokens_include_cache", True):
-                    context_used += int(response.usage.get("cache_read_input_tokens", 0) or 0) + int(
-                        response.usage.get("cache_creation_input_tokens", 0) or 0
-                    )
+                # iteration, and the reply this call produced, which keeps it
+                # for a resume (``_stamp_context_used``). They differ in their
+                # thresholds, not in what they measure -- and what they measure
+                # is how full the window is, which is not what the prompt was
+                # billed as (see ``_window_reading``).
+                context_used = _window_reading(response.usage)
                 if context_used > 0:
                     window.last_context_used = context_used
             if usage_sink is not None and response.usage:
@@ -1467,6 +1462,7 @@ class TurnPathMixin:
                     thinking_blocks=response.thinking_blocks,
                 )
                 _stamp_reasoning_ms(messages, response)
+                _stamp_context_used(messages, response)
 
                 for tool_call_index, tool_call in enumerate(response.tool_calls):
                     tools_used.append(tool_call.name)
@@ -2089,6 +2085,7 @@ class TurnPathMixin:
                     thinking_blocks=response.thinking_blocks,
                 )
                 _stamp_reasoning_ms(messages, response)
+                _stamp_context_used(messages, response)
                 final_content = clean
                 break
 
@@ -3328,10 +3325,12 @@ class TurnPathMixin:
             for private_key, stored_key in (
                 (_REASONING_MS_KEY, "reasoning_ms"),
                 (_TOOL_DURATION_MS_KEY, "duration_ms"),
+                (_CONTEXT_USED_KEY, "context_used"),
             ):
-                # Renamed for the same reason as the diff above. A duration is a
-                # property of the part it measures, so it is written down with
-                # it: a clock started when a page loads can only ever guess.
+                # Renamed for the same reason as the diff above. A duration or a
+                # window reading is a property of the part it measures, so it is
+                # written down with it: a clock started when a page loads, or a
+                # count of the stored log, can only ever guess.
                 if (took := entry.pop(private_key, None)) is not None:
                     entry[stored_key] = took
             if role == "tool" and isinstance(content, list):

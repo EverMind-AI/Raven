@@ -1988,12 +1988,13 @@ async def test_session_delete_releases_the_sessions_binding(tmp_path: Path, monk
 async def test_session_resume_estimates_only_what_the_next_call_sends(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The context meter counts the unconsolidated tail, not the whole file.
+    """With no stored reading, the estimate counts the unconsolidated tail, not the whole file.
 
-    The runtime consolidates on every user-inbound turn and never removes the
-    archived messages from the transcript, so estimating over everything stored
-    reported the size of a context that had already been archived -- a session a
-    quarter full resumed showing a meter pegged at 100%.
+    A runtime whose context engine leaves compaction to the consolidator
+    archives on user-inbound turns and never removes the archived messages from
+    the transcript, so estimating over everything stored reported the size of a
+    context that had already been archived -- a session a quarter full resumed
+    showing a meter pegged at 100%.
     """
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -2054,6 +2055,70 @@ async def test_session_resume_estimates_past_the_five_hundred_message_default(
     newest_500 = estimate_prompt_tokens(session.get_history())
     assert newest_500 < whole_tail, "fixture must exceed the default cap for this to mean anything"
     assert used == whole_tail, f"{used} is the newest 500 ({newest_500}), not the whole tail ({whole_tail})"
+
+
+async def test_session_resume_reports_the_window_the_last_call_measured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reading stored with a reply wins over any estimate of the stored log.
+
+    The context engine compacts on its own and never advances
+    ``last_consolidated``, so the stored log is not what the model was sent: a
+    long session's log estimated at forty times the window its last call
+    measured, and a short one at a few tokens, the system prompt and the tool
+    list being no part of it. The newest stored reading is the number the meter
+    showed when that turn ended, and a question asked since has no reading yet.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    cfg.agents.defaults.context_window_tokens = 200_000
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_meas01"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    for i in range(100):
+        session.add_message("user", f"message number {i} " * 200)
+    session.add_message("assistant", "first answer", context_used=1_234)
+    session.add_message("user", "and then?")
+    session.add_message("assistant", "second answer", context_used=50_000)
+    session.add_message("user", "one more question, not answered yet")
+    mgr.save(session)
+    estimate = estimate_prompt_tokens(session.get_history(max_messages=0))
+    assert estimate > 50_000, f"fixture must estimate past the reading for this to mean anything ({estimate})"
+
+    result = await session_resume({"session_id": session_key})
+    usage = result["info"]["usage"]
+
+    assert usage["context_used"] == 50_000
+    assert usage["context_percent"] == 25
+    assert usage["context_estimated"] is False
+
+
+@pytest.mark.parametrize("junk", [0, -5, True, "50000", 1.5], ids=["zero", "negative", "bool", "string", "float"])
+async def test_session_resume_reads_past_a_stored_reading_that_is_no_token_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, junk: object
+) -> None:
+    """Only a positive integer is a reading -- and ``True`` is an ``int`` to Python."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    cfg.agents.defaults.context_window_tokens = 200_000
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_meas03"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "hello")
+    session.add_message("assistant", "first answer", context_used=1_234)
+    session.add_message("user", "and then?")
+    session.add_message("assistant", "second answer", context_used=junk)
+    mgr.save(session)
+
+    result = await session_resume({"session_id": session_key})
+    usage = result["info"]["usage"]
+
+    assert usage["context_used"] == 1_234
+    assert usage["context_estimated"] is False
 
 
 async def test_session_resume_carries_a_stored_tool_diff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3561,6 +3626,25 @@ async def test_session_usage_sums_the_sessions_calls_its_delegations_included(
     assert result["context_max"] == 200_000
     assert 0 < result["context_used"] < result["context_max"]
     assert result["context_estimated"] is True
+
+
+async def test_session_usage_reports_the_measured_window_when_one_was_stored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The panel's gauge is read the way ``session.resume`` reads it."""
+    _usage_setup(tmp_path, monkeypatch)
+    root = "tui:20260922_101500_meas02"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(root)
+    session.add_message("user", "hello")
+    session.add_message("assistant", "hi", context_used=14_795)
+    mgr.save(session)
+
+    result = await session_usage({"session_id": root})
+
+    assert result["context_used"] == 14_795
+    assert result["context_percent"] == 7
+    assert result["context_estimated"] is False
 
 
 async def test_session_usage_for_a_worker_that_only_delegated_reports_zeros(
