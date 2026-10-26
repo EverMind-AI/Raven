@@ -12,12 +12,15 @@ import { act, fireEvent } from '@testing-library/react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import catalog from '../../../../i18n/messages.json'
+import * as lang from '../../state/lang'
 import { hold as holdHost } from '../../state/session/hosts'
 import { resetSources, setSources } from '../../state/sources'
 import * as mount from './mount'
 import * as store from './store'
 import * as tail from './tail'
-import { readingTurn, TurnNav } from './TurnNav'
+import { TranscriptApp } from './TranscriptApp'
+import { readingTurn } from './TurnNav'
 
 import type { Root } from 'react-dom/client'
 
@@ -29,6 +32,10 @@ const $ = <T extends Element = HTMLElement>(sel: string): T | null => document.q
 const marks = (): HTMLButtonElement[] => [...document.querySelectorAll<HTMLButtonElement>('.transcript-navmark')]
 const stage = (): HTMLElement => $('#stage') as HTMLElement
 const laneHost = (): HTMLElement => $('#stage > [data-tsl]') as HTMLElement
+/* A catalogue entry in the other language, filled the way t() fills it: the
+   expectation is read from the catalogue rather than spelled here. */
+const zh = (key: string, n: number): string =>
+  String((catalog.ui as Record<string, { zh?: string }>)[key]?.zh).replace('{n}', String(n))
 
 /* The host swap is seen through a MutationObserver, whose records arrive after
    the task that made them: let them land inside act so the re-render commits. */
@@ -49,7 +56,9 @@ beforeEach(async () => {
     + '<div id="turnNav"></div></div>'
   tail._resetForTests()
   root = createRoot($('#turnNav') as HTMLElement)
-  await settle(() => root!.render(<TurnNav />))
+  /* The domain's root, as src/main.tsx mounts it, rather than the nav alone:
+     the language subscription is the root's. */
+  await settle(() => root!.render(<TranscriptApp />))
 })
 
 afterEach(() => {
@@ -163,6 +172,24 @@ describe('the turn nav', () => {
     })
     act(() => { fireEvent.mouseEnter(marks()[0]!) })
     expect($('.transcript-navwhen')?.textContent).toBe('Turn 1')
+  })
+
+  it('says its words in the language the reader picks', async () => {
+    await settle(() => {
+      mount.ask('first question')
+      mount.ask('second question')
+    })
+    expect(marks()[0]!.getAttribute('aria-label')).toBe('Turn 1: first question')
+    try {
+      act(() => { lang.set('zh') })
+      expect(zh('gui.transcript.nav_turn', 1)).not.toBe('Turn 1')
+      expect(marks()[0]!.getAttribute('aria-label')).toBe(`${zh('gui.transcript.nav_turn', 1)}: first question`)
+      act(() => { fireEvent.mouseEnter(marks()[1]!) })
+      expect($('.transcript-navwhen')?.textContent?.startsWith(zh('gui.transcript.nav_turn', 2))).toBe(true)
+    } finally {
+      act(() => { lang.set('en') })
+    }
+    expect(marks()[0]!.getAttribute('aria-label')).toBe('Turn 1: first question')
   })
 
   it('names what opened a turn nobody typed', async () => {

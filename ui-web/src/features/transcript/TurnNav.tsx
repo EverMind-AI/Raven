@@ -8,18 +8,18 @@
  * asked and what was asked; a click brings the question to the top of the
  * scroller.
  *
- * Mounted once, into `#turnNav` (src/chrome/ChatTop.tsx renders it beside the
- * scroller and hands it over empty), rather than drawn by a lane: a lane held
- * off the stage keeps its root, so a nav drawn per lane would draw one for
- * every conversation the reader left mid-turn. It reads the one lane on the
- * stage instead (`shownLane`) and watches the stage for the host swaps the
- * session layer makes as the reader moves between conversations.
+ * Mounted once, by the domain's root (TranscriptApp.tsx) in `#turnNav`, the
+ * box src/chrome/ChatTop.tsx renders beside the scroller and hands over empty,
+ * rather than drawn by a lane: a lane held off the stage keeps its root, so a
+ * nav drawn per lane would draw one for every conversation the reader left
+ * mid-turn. It reads the one lane on the stage instead (`shownLane`) and
+ * watches the stage for the host swaps the session layer makes as the reader
+ * moves between conversations.
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
 import { ago } from '../../lib/ago'
-import * as lang from '../../state/lang'
 import { shownLane } from './mount'
 import * as store from './store'
 import * as tail from './tail'
@@ -80,7 +80,6 @@ function goTo(seg: AskData): void {
 }
 
 export function TurnNav(): JSX.Element | null {
-  useSyncExternalStore(lang.subscribe, lang.get)
   const [lane, setLane] = useState<Lane | null>(shownLane)
   const listen = useCallback((cb: () => void) => (lane ? store.subscribe(lane, cb) : () => {}), [lane])
   const listV = useSyncExternalStore(listen, () => (lane ? lane.listV : -1))
