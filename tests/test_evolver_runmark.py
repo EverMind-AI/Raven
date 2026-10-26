@@ -24,6 +24,8 @@ def test_fingerprint_stable_and_ignores_byproducts(tmp_path: Path):
     d = tmp_path / "harness"
     d.mkdir()
     (d / "a.py").write_text("x = 1\n")
+    (d / "sub").mkdir()
+    (d / "sub" / "b.py").write_text("y = 1\n")  # nested path digests via as_posix()
     (d / "__pycache__").mkdir()
     (d / "__pycache__" / "a.cpython-312.pyc").write_bytes(b"junk")
     (d / ".DS_Store").write_text("noise")
