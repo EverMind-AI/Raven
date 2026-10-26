@@ -126,7 +126,15 @@ except OSError:
     p = subprocess.Popen(sys.argv[3:], creationflags=flags, **kwargs)
 else:
     try:  # only a note: nothing here may keep the pid from being reported
-        k = ctypes.windll.kernel32
+        # Typed as raven.acp_client.windows types them: a handle is pointer
+        # wide, and an undeclared return is cut to a 32-bit int.
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+        k.OpenProcess.restype = ctypes.c_void_p
+        k.IsProcessInJob.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
+        k.IsProcessInJob.restype = ctypes.c_int
+        k.CloseHandle.argtypes = [ctypes.c_void_p]
+        k.CloseHandle.restype = ctypes.c_int
         h, inside = k.OpenProcess(0x1000, False, p.pid), ctypes.c_int(0)
         if h and k.IsProcessInJob(h, None, ctypes.byref(inside)) and inside.value:
             log.write(b"still in a job object after asking to leave the agent's; if it is the host's, "
