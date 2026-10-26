@@ -520,6 +520,18 @@ def _no_leaked_skill_watchers() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _forget_learned_reply_headroom() -> Iterator[None]:
+    """The reply headroom a refusal teaches is process state, keyed by model id:
+    a test whose provider refuses one prompt would otherwise move the trigger
+    of every later test on the same stub model."""
+    from raven.context_engine import headroom
+
+    headroom.reset()
+    yield
+    headroom.reset()
+
+
+@pytest.fixture(autouse=True)
 def no_discovered_products(monkeypatch):
     """Pin agent-table discovery off, so the suite sees the same table everywhere.
 
@@ -1226,3 +1238,38 @@ def _this_process_goes_on() -> Iterator[None]:
     remote = sys.modules.get("raven.acp_client.remote")
     if remote is not None:
         remote.staying()
+
+
+@pytest.fixture
+def no_real_ssh_g(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail a test that runs the computer's own ``ssh -G``.
+
+    It reads the ssh config of whoever runs the suite -- found through the
+    passwd entry, which the suite's ``HOME`` does not move -- and a ``Match
+    exec`` there runs. A stand-in under the test's own directory, or an ``-F``
+    naming the test's config, is what a test resolves with; with no ssh on
+    PATH at all nothing runs, and the lookup's own error stands. Used by the
+    modules whose code asks ``ssh -G`` (``transport.resolve_with_ssh``).
+
+    It judges the command line ``Popen`` is finally handed, the one that
+    execs: a test may swap ``Popen`` for a wrapper that starts its own
+    stand-in in place of ``ssh``, and what that wrapper passes on is what
+    runs. A subclass, so ``isinstance`` and ``Popen[bytes]`` keep working.
+    """
+    import subprocess
+
+    class Popen(subprocess.Popen):
+        def __init__(self, argv, *args, **kwargs):
+            if (
+                isinstance(argv, (list, tuple))
+                and argv
+                and Path(str(argv[0])).stem.lower() == "ssh"
+                and "-G" in argv
+                and "-F" not in argv
+            ):
+                found = shutil.which(str(argv[0]), path=(kwargs.get("env") or os.environ).get("PATH"))
+                if found is not None and not Path(found).resolve().is_relative_to(tmp_path.resolve()):
+                    raise AssertionError(f"the real ssh -G ran against the owner's own config: {found}")
+            super().__init__(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", Popen)

@@ -1271,3 +1271,27 @@ async def test_report_to_dict_degrades_non_json_values_to_repr() -> None:
     entry = payload["divergences"][0]
     assert entry["expected"] == {"path": repr(Path("/x")), "n": 1}
     assert entry["actual"] == [["a", "b"]]
+
+
+def test_the_replay_session_takes_the_recorded_log_revision(tmp_path: Path) -> None:
+    """Refs in recorded requests are scoped by the recorded log; a fresh id
+    would spell every one of them differently."""
+    from raven.session.manager import SessionManager
+    from raven.trajectory.replay import _adopt_recorded_revision
+
+    recorded_manager = SessionManager(tmp_path / "recorded")
+    recorded = recorded_manager.get_or_create("cli:direct")
+    recorded.add_message("user", "one")
+    recorded.add_message("assistant", "two")
+    recorded.undo_last_turn()
+    recorded.add_message("user", "three")
+    recorded_manager.save(recorded)
+    replay_manager = SessionManager(tmp_path / "replay")
+    replayed = replay_manager.get_or_create("cli:direct")
+
+    _adopt_recorded_revision(replayed, recorded_manager.session_path("cli:direct"))
+    replayed.add_message("user", "three")
+    replay_manager.save(replayed)
+
+    assert replayed.revision.scope == recorded.revision.scope
+    assert SessionManager(tmp_path / "replay").get_or_create("cli:direct").revision.scope == recorded.revision.scope

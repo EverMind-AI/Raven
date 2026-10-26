@@ -456,8 +456,10 @@ async def run_on_machine(command: str, *, connection: str, cwd: str | None = Non
 
     # The runner's own cap is a backstop behind the wrapper's: the wrapper
     # fires first, keeps the output and reports 124; the runner's group kill is
-    # for a wrapper that could not run at all (a machine with no bash).
-    runner, row = _runner_for_connection(connection, cap_seconds=_TIMEOUT_S + 15)
+    # for a wrapper that could not run at all (a machine with no bash). Built
+    # off the loop, like the run below: a password machine's runner asks a
+    # local ``ssh -G`` which host its prompt will name (``transport.ssh_env``).
+    runner, row = await asyncio.to_thread(_runner_for_connection, connection, cap_seconds=_TIMEOUT_S + 15)
     if runner is None:
         return row  # the message explaining why not
 

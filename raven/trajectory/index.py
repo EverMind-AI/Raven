@@ -27,8 +27,8 @@ Protocol facts the readers rely on:
 - A list snapshot freezes entry objects, not ids, so paging returns one
   consistent picture while the index moves on.
 - Trimming to the entry limit keeps a lightweight skeleton of any removed
-  span that still has descendants, so survivors keep their turn, depth and
-  origin; turn numbering also remembers removed turn roots.
+  span that still has descendants, so survivors keep their turn, depth,
+  origin and Sub-agent Scope; turn numbering also remembers removed turn roots.
 """
 
 from __future__ import annotations
@@ -80,9 +80,10 @@ PHASE_FAILED = "failed"
 
 _SKELETON_ATTRS = (
     "session.key",
+    "tool.name",
     "trace.dispatched_by_span_id",
     "trace.dispatched_in_trace_id",
-    "turn.in_progress",
+    *_entries.IN_PROGRESS_KEYS,
 )
 _OUTPUT_SLOTS = ("turn.output", "llm.output", "tool.output", "io.output")
 
@@ -812,6 +813,10 @@ class SessionIndex:
         span_id = tstore._str_value(span.get("spanId")) or ""
         key: SpanKey = (trace, span_id) if trace and span_id else ("", str(span.get(_entries.POSITION_KEY)))
         existing = self.spans.get(key)
+        if existing is None:
+            # A trimmed final record lives on as its skeleton, which a late
+            # checkpoint must not displace either.
+            existing = self.skeletons.get(key)
         if existing is not None and _entries._in_progress(span) and not _entries._in_progress(existing):
             return
         self.spans[key] = span

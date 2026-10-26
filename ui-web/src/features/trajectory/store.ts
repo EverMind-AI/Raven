@@ -25,6 +25,13 @@
  *     can otherwise bring A's first answer back over A's second.
  *   - a batch of changes is one `set`. The feed may carry hundreds of upserts,
  *     and the list repaints once per batch rather than once per row.
+ *
+ * The rows the list and the bar draw are one Scope Tab's: the main session's,
+ * or one sub-agent run's that the reader opened. `entries`, `index` and
+ * `spanIndex` still hold every row, since links and the feed cross tabs. A tab
+ * is another filter over the same picture, so moving between tabs leaves the
+ * generation alone, and `select` on a row of another tab moves to that tab. A
+ * tab coming back brings its own selection back under the `migrate` door.
  */
 
 import { current as sessionCurrent } from '../../lib/session'
@@ -68,6 +75,20 @@ export interface Timeline {
 
 export const initialTimeline: Timeline = {
   scale: 1, offset: 0, fit: true, frozenUnit: null, frozenMark: null, anchor: null, bucket: null, threshold: false,
+}
+
+/** What a Scope Tab keeps while another is on screen. */
+export interface ScopeView {
+  selectedId: string | null
+  follow: boolean
+  anchor: Anchor | null
+  timeline: Timeline
+}
+
+/** An open sub-agent tab: its Sub-agent Scope and the entry that opened it, as it was then. */
+export interface OpenScope {
+  id: string
+  door: TrajectoryEntry | null
 }
 
 export interface TrajectoryState {
@@ -114,7 +135,13 @@ export interface TrajectoryState {
   prefs: Prefs
   /** Hidden rows shown for now because something pointed at them; cleared with the conversation. */
   revealed: string[]
-  /** The rows the list draws: `entries` less the hidden ones, unless the switch or `revealed` says otherwise. */
+  /** The Scope Tab on screen: a Sub-agent Scope's id, or null for the main session. */
+  scope: string | null
+  /** The sub-agent tabs the reader opened, in the order they were opened. */
+  scopes: OpenScope[]
+  /** The tabs not on screen, by scope id (`scopeKey`). */
+  saved: Record<string, ScopeView>
+  /** The rows the list draws: the tab's entries less the hidden ones, unless the switch or `revealed` says otherwise. */
   visible: TrajectoryEntry[]
   /** `entry_id` to position in `visible`, rebuilt with it. */
   visibleIndex: Record<string, number>
@@ -122,6 +149,14 @@ export interface TrajectoryState {
   spanIndex: Record<string, string>
   /** A turn's whole charged time, from its reply entry, by `turn_span_id`. */
   turnTotals: Record<string, number>
+  /** A Sub-agent Scope's id to the first entry that opens it. */
+  doors: Record<string, string>
+  /** A Sub-agent Scope's id to how many entries belong to it. */
+  scopeSizes: Record<string, number>
+  /** How many of the tab's entries the index marked hidden. */
+  hiddenCount: number
+  /** The tab's turns whose reply the list leaves out, by turn number, with the reply's charged time. */
+  hiddenTurns: Record<number, number>
 }
 
 /** What the reader can set: the bar's duration threshold (0 filters nothing), and showing the entries the list hides. */
@@ -172,23 +207,52 @@ export const hiddenOf = (entry: TrajectoryEntry): string | null => {
   return typeof value === 'string' ? value : null
 }
 
+/** The Sub-agent Scope the entry belongs to; null for the main session. */
+export const scopeOf = (entry: TrajectoryEntry): string | null => entry.subagent_scope ?? null
+/** The Sub-agent Scope the entry opens, on a boundary's own entries. */
+export const opensOf = (entry: TrajectoryEntry): string | null => entry.opens_subagent_scope ?? null
+/** The Sub-agent Scope whose report started the entry's turn, on that turn's root entries. */
+export const reportedFromOf = (entry: TrajectoryEntry): string | null => entry.dispatched_by_subagent_scope ?? null
+
+/* The main session's key among the saved tabs: a scope id is `trace:span`, never empty. */
+const MAIN_KEY = ''
+export const scopeKey = (scope: string | null): string => scope ?? MAIN_KEY
+
 const spanKey = (trace: string, span: string): string => `${trace}:${span}`
 
 /* Everything the list and the bar read that follows from `entries`: the
-   visible rows and their positions, the span lookup and the turn totals. */
-function derived(entries: TrajectoryEntry[], prefs: Prefs, revealed: string[]) {
+   tab's visible rows and their positions, the span lookup, the turn totals,
+   and what the tab strip and the bar need to know about every scope. */
+function derived(entries: TrajectoryEntry[], prefs: Prefs, revealed: string[], scope: string | null) {
   const visible: TrajectoryEntry[] = []
   const spanIndex: Record<string, string> = {}
   const turnTotals: Record<string, number> = {}
+  const doors: Record<string, string> = {}
+  const scopeSizes: Record<string, number> = {}
+  const hiddenTurns: Record<number, number> = {}
+  let hiddenCount = 0
   for (const entry of entries) {
     const key = spanKey(entry.trace_id, entry.span_id)
     if (!(key in spanIndex)) spanIndex[key] = entry.entry_id
     if (entry.slot === 'turn.output' && entry.turn_span_id && typeof entry.charged_ms === 'number') {
       turnTotals[entry.turn_span_id] = entry.charged_ms
     }
-    if (hiddenOf(entry) === null || prefs.showHidden || revealed.includes(entry.entry_id)) visible.push(entry)
+    const own = scopeOf(entry)
+    if (own !== null) scopeSizes[own] = (scopeSizes[own] ?? 0) + 1
+    const opens = opensOf(entry)
+    if (opens !== null && !(opens in doors)) doors[opens] = entry.entry_id
+    if (own !== scope) continue
+    const hidden = hiddenOf(entry) !== null
+    if (hidden) hiddenCount += 1
+    if (!hidden || prefs.showHidden || revealed.includes(entry.entry_id)) visible.push(entry)
+    else if (entry.slot === 'turn.output' && typeof entry.turn_number === 'number' && typeof entry.charged_ms === 'number') {
+      hiddenTurns[entry.turn_number] = entry.charged_ms
+    }
   }
-  return { entries, index: indexOf(entries), visible, visibleIndex: indexOf(visible), spanIndex, turnTotals }
+  return {
+    entries, index: indexOf(entries), visible, visibleIndex: indexOf(visible), spanIndex, turnTotals,
+    doors, scopeSizes, hiddenCount, hiddenTurns,
+  }
 }
 
 const initial: TrajectoryState = {
@@ -216,10 +280,17 @@ const initial: TrajectoryState = {
   timeline: initialTimeline,
   prefs: loadPrefs(),
   revealed: [],
+  scope: null,
+  scopes: [],
+  saved: {},
   visible: [],
   visibleIndex: {},
   spanIndex: {},
   turnTotals: {},
+  doors: {},
+  scopeSizes: {},
+  hiddenCount: 0,
+  hiddenTurns: {},
 }
 
 const store = makeStore<TrajectoryState>(initial)
@@ -229,7 +300,7 @@ export const { get, set, subscribe } = store
 const patch = (p: Partial<TrajectoryState>): void => { store.set({ ...store.get(), ...p }) }
 
 /** The fields that change together with the rows: the whole set, its positions, the visible set and the lookups. */
-export const rowsOf = (entries: TrajectoryEntry[], s: TrajectoryState = store.get()) => derived(entries, s.prefs, s.revealed)
+export const rowsOf = (entries: TrajectoryEntry[], s: TrajectoryState = store.get()) => derived(entries, s.prefs, s.revealed, s.scope)
 const rows = rowsOf
 
 export const source = (): TrajectorySource | null => sources.trajectory ?? null
@@ -312,7 +383,7 @@ export function setPrefs(next: Partial<Prefs>): void {
   const prefs = { ...s.prefs, ...next, minChargedMs: snapThreshold(next.minChargedMs ?? s.prefs.minChargedMs) }
   if (prefs.minChargedMs === s.prefs.minChargedMs && prefs.showHidden === s.prefs.showHidden) return
   savePrefs(prefs)
-  patch({ prefs, revealed: [], ...derived(s.entries, prefs, []) })
+  patch({ prefs, revealed: [], ...derived(s.entries, prefs, [], s.scope) })
 }
 
 /** The surface is switched off for this process; the toggle goes, the data stays. */
@@ -390,6 +461,10 @@ export const toggleView = (): void => { setView(store.get().view === 'trajectory
 export function select(entryId: string | null, opts: { source: SelectSource }): void {
   const s = store.get()
   if (entryId !== null && !(entryId in s.index)) return
+  if (entryId !== null) {
+    const target = scopeOf(s.entries[s.index[entryId]!]!)
+    if (target !== s.scope) { enter(target, { select: { id: entryId, source: opts.source } }); return }
+  }
   /* A hidden row that something pointed at is shown for now, so the selection has a row to land on --
      also when it was the selection already and a switch has since hidden it. */
   const reveal = entryId !== null && !(entryId in s.visibleIndex)
@@ -407,6 +482,165 @@ export function setPlace(follow: boolean, anchor: Anchor | null): void {
   if (s.follow === follow && s.anchor?.id === anchor?.id && s.anchor?.offset === anchor?.offset) return
   patch({ follow, anchor })
 }
+
+/* ── the Scope Tabs ───────────────────────────────────────────────────── */
+
+const freshView = (): ScopeView => ({ selectedId: null, follow: true, anchor: null, timeline: initialTimeline })
+
+const viewOf = (s: TrajectoryState): ScopeView => ({
+  selectedId: s.selectedId, follow: s.follow, anchor: s.anchor, timeline: { ...s.timeline, bucket: null, threshold: false },
+})
+
+const doorOf = (s: TrajectoryState, id: string): TrajectoryEntry | null => {
+  const door = s.doors[id]
+  const at = door === undefined ? undefined : s.index[door]
+  return at === undefined ? null : (s.entries[at] ?? null)
+}
+
+/* Puts another tab on screen in one write: the tab being left keeps its
+   view (unless it is being closed), the arriving one gets its own back, or
+   a fresh one, or the selection the caller brings. The generation stays
+   where it is: moving it would make a snapshot walk in progress give up at
+   its next page and void the details' answers in the air, and a tab is only
+   another filter over the same picture. */
+function enter(target: string | null, how: {
+  select?: { id: string; source: SelectSource }
+  discard?: boolean
+  base?: Pick<TrajectoryState, 'scopes' | 'saved' | 'revealed'>
+} = {}): void {
+  const s: TrajectoryState = { ...store.get(), ...how.base }
+  const saved = { ...s.saved }
+  if (!how.discard) saved[scopeKey(s.scope)] = viewOf(s)
+  const back = saved[scopeKey(target)] ?? freshView()
+  delete saved[scopeKey(target)]
+  const scopes = target === null || s.scopes.some((o) => o.id === target) ? s.scopes : [...s.scopes, { id: target, door: doorOf(s, target) }]
+  let selectedId = how.select ? how.select.id : back.selectedId
+  if (selectedId !== null && !(selectedId in s.index)) selectedId = null
+  let revealed = s.revealed
+  let next = derived(s.entries, s.prefs, revealed, target)
+  if (how.select && !(how.select.id in next.visibleIndex)) {
+    revealed = [...revealed, how.select.id]
+    next = derived(s.entries, s.prefs, revealed, target)
+  }
+  const moved = how.select !== undefined || selectedId !== s.selectedId
+  patch({
+    scope: target, scopes, saved, revealed, ...next,
+    follow: back.follow, anchor: back.anchor, timeline: back.timeline,
+    selectedId, selectedBy: selectedId === null ? null : (how.select ? how.select.source : 'migrate'),
+    selections: moved ? s.selections + 1 : s.selections,
+  })
+}
+
+/** Opens a sub-agent tab, or goes to it when it is open; says whether it was opened just now. */
+export function openScope(id: string): boolean {
+  const s = store.get()
+  const added = !s.scopes.some((o) => o.id === id)
+  if (s.scope !== id) enter(id)
+  return added
+}
+
+/** Goes to an open tab, or to the main session's. */
+export function switchScope(id: string | null): void {
+  const s = store.get()
+  if (s.scope === id || (id !== null && !s.scopes.some((o) => o.id === id))) return
+  enter(id)
+}
+
+/* Closes a sub-agent tab and forgets everything it kept, the hidden rows a
+   link showed in it included, so it opens afresh next time. A shown row is
+   the tab's where the row is now: one whose scope the feed has since changed
+   is shown in its new tab and stays. The tab on screen being closed hands
+   over to its right-hand neighbour, else its left, else the main session. */
+export function closeScope(id: string): void {
+  const s = store.get()
+  const at = s.scopes.findIndex((o) => o.id === id)
+  if (at < 0) return
+  const scopes = s.scopes.filter((o) => o.id !== id)
+  const saved = { ...s.saved }
+  delete saved[scopeKey(id)]
+  const revealed = s.revealed.filter((rid) => {
+    const i = s.index[rid]
+    return i === undefined || scopeOf(s.entries[i]!) !== id
+  })
+  if (s.scope === id) {
+    const neighbour = s.scopes[at + 1]?.id ?? s.scopes[at - 1]?.id ?? null
+    enter(neighbour, { discard: true, base: { scopes, saved, revealed } })
+    return
+  }
+  const shown = revealed.length !== s.revealed.length
+  patch({ scopes, saved, revealed, ...(shown ? rows(s.entries, { ...s, revealed }) : {}) })
+}
+
+/* The rows before and after a change, what the change replaced, and which
+   rows the list draws under the reader's switches, for carrying a tab's
+   place across it. */
+interface Change {
+  before: TrajectoryEntry[]
+  beforeIndex: Record<string, number>
+  after: TrajectoryEntry[]
+  afterIndex: Record<string, number>
+  replaced: ReadonlyMap<string, string | null>
+  drawn: (entry: TrajectoryEntry) => boolean
+}
+
+const drawnUnder = (prefs: Prefs, revealed: string[]) => (entry: TrajectoryEntry): boolean =>
+  hiddenOf(entry) === null || prefs.showHidden || revealed.includes(entry.entry_id)
+
+/* A tab's place after the rows changed under it, worked out in the same
+   write as the change: once the change is past, a gone anchor has nothing
+   left to be found by and its replacement is forgotten, and a tab left in
+   the meantime would keep it. An anchor holds while it is a row of the tab
+   that the list can still put on screen -- itself drawn, or a drawn row of
+   the tab after it, which is where the list puts a hidden anchor. Else its
+   replacement on the same terms, else the first drawn row of the tab after
+   where it was; with none the tab follows the tail -- with neither an
+   anchor nor the tail, the list would keep the scroll position the previous
+   tab left, which says nothing about this one. */
+function carryPlace(place: Pick<ScopeView, 'follow' | 'anchor'>, scope: string | null, c: Change): Pick<ScopeView, 'follow' | 'anchor'> {
+  const { follow, anchor } = place
+  if (anchor === null) return { follow, anchor }
+  const shown = (e: TrajectoryEntry): boolean => scopeOf(e) === scope && c.drawn(e)
+  const placeable = (id: string): boolean => {
+    const at = c.afterIndex[id]
+    if (at === undefined || scopeOf(c.after[at]!) !== scope) return false
+    for (let k = at; k < c.after.length; k += 1) if (shown(c.after[k]!)) return true
+    return false
+  }
+  if (placeable(anchor.id)) return { follow, anchor }
+  const by = c.replaced.get(anchor.id)
+  if (by && placeable(by)) return { follow, anchor: { id: by, offset: anchor.offset } }
+  const from = c.beforeIndex[anchor.id]
+  if (from !== undefined) {
+    for (let k = from + 1; k < c.before.length; k += 1) {
+      const at = c.afterIndex[c.before[k]!.entry_id]
+      const now = at === undefined ? undefined : c.after[at]
+      if (now && shown(now)) return { follow, anchor: { id: now.entry_id, offset: 0 } }
+    }
+  }
+  return { follow: true, anchor: null }
+}
+
+/* The saved tabs after a change: each one's place, and its selection --
+   kept while the index has it or its replacement, whichever tab it is in
+   now, the way the tab on screen keeps its own. Answers the same object
+   when nothing moved. */
+function carry(saved: Record<string, ScopeView>, c: Change): Record<string, ScopeView> {
+  let out: Record<string, ScopeView> | null = null
+  for (const [key, view] of Object.entries(saved)) {
+    let selectedId = view.selectedId
+    if (selectedId !== null && !(selectedId in c.afterIndex)) {
+      const by = c.replaced.get(selectedId)
+      selectedId = by && by in c.afterIndex ? by : null
+    }
+    const place = carryPlace(view, key === MAIN_KEY ? null : key, c)
+    if (selectedId === view.selectedId && place.anchor === view.anchor && place.follow === view.follow) continue
+    out ??= { ...saved }
+    out[key] = { ...view, ...place, selectedId }
+  }
+  return out ?? saved
+}
+
+const NOTHING_REPLACED: ReadonlyMap<string, string | null> = new Map()
 
 /* ── the duration bar's view ──────────────────────────────────────────── */
 
@@ -432,12 +666,13 @@ export function setThresholdOpen(open: boolean): void {
 
 /* ── the conversation on screen ───────────────────────────────────────── */
 
+/* What is kept of a conversation is its main session's place: the sub-agent
+   tabs are let go with it, so one of theirs would be a place nobody can return to. */
 function remember(key: string): void {
   const s = store.get()
+  const main = s.scope === null ? viewOf(s) : (s.saved[MAIN_KEY] ?? freshView())
   remembered.delete(key)
-  remembered.set(key, {
-    view: s.view, selectedId: s.selectedId, follow: s.follow, anchor: s.anchor, timeline: { ...s.timeline, bucket: null, threshold: false },
-  })
+  remembered.set(key, { view: s.view, ...main })
   while (remembered.size > REMEMBERED_MAX) {
     const oldest = remembered.keys().next().value as string
     remembered.delete(oldest)
@@ -472,10 +707,17 @@ export function sessionChanged(key: string | null = sessionCurrent()): void {
     anchor: back?.anchor ?? null,
     timeline: back?.timeline ?? initialTimeline,
     revealed: [],
+    scope: null,
+    scopes: [],
+    saved: {},
     visible: [],
     visibleIndex: {},
     spanIndex: {},
     turnTotals: {},
+    doors: {},
+    scopeSizes: {},
+    hiddenCount: 0,
+    hiddenTurns: {},
   })
   if (back?.view === 'trajectory' && !available()) patch({ view: 'chat' })
 }
@@ -524,8 +766,16 @@ export async function load(): Promise<void> {
       const got = await pages(src, key, g, progressive)
       if (got === null) return
       const { entries, last } = got
+      const was = store.get()
+      const next = rows(entries)
+      const change: Change = {
+        before: was.entries, beforeIndex: was.index, after: entries, afterIndex: next.index, replaced: NOTHING_REPLACED,
+        drawn: drawnUnder(was.prefs, was.revealed),
+      }
       patch({
-        ...rows(entries),
+        ...next,
+        ...carryPlace(was, was.scope, change),
+        saved: carry(was.saved, change),
         epoch: last.epoch,
         revision: last.snapshot_revision,
         snapshotReady: true,
@@ -579,8 +829,15 @@ export function applyChanges(batch: TrajectoryChangesResult): void {
     if (gone) selectedId = gone.replaced_by && gone.replaced_by in index ? gone.replaced_by : null
     else if (!(selectedId in index)) selectedId = null
   }
+  const change: Change = {
+    before: s.entries, beforeIndex: s.index, after: entries, afterIndex: index,
+    replaced: new Map(batch.removed.map((r) => [r.entry_id, r.replaced_by ?? null])),
+    drawn: drawnUnder(s.prefs, s.revealed),
+  }
   patch({
     ...rows(entries, s),
+    ...carryPlace(s, s.scope, change),
+    saved: carry(s.saved, change),
     revision: Math.max(s.revision, batch.to_revision),
     indexState: batch.index_state,
     fault: null,

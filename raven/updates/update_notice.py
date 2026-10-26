@@ -208,9 +208,9 @@ def _upgrade_command_works() -> bool:
     users points them at a command that always exits 1.
     """
     try:
-        from raven.updates.upgrade import _is_uv_tool_install
+        from raven.updates.upgrade import _is_editable_install, _is_uv_tool_install
 
-        return _is_uv_tool_install()
+        return _is_uv_tool_install() and not _is_editable_install()
     except Exception:
         # A malformed uv receipt raises UpgradeError; treat unknown as "no".
         return False

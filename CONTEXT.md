@@ -425,7 +425,15 @@ preset is, with `machine` (and
 Hub, whose preset sheet picks the machine (*Runs on*) among those with this
 Raven's node — refused before anything is spent when
 the id is not usable or the preset is a built-in agent, and proved by the same
-readiness ping as a local add, run on that machine.
+readiness ping as a local add, run on that machine. That ping, and the
+capability record an acp row is measured with once it answers, is one run held
+under the entry's name in `subagents._RUNNING`, the map a test's run is held in
+(`subagents._run_once`), so `subagents.test_cancel` stops it -- the hub's connect
+form counts the seconds, offers Cancel, and stops the run itself after five
+minutes with no answer -- and the add, switch or update then refuses with
+`cancelled` in its error data and writes nothing; one run per name at a time, a
+Test during it refused as a second test is, the row reporting `test_running`
+meanwhile.
 Registered-machine dispatch, file access and recovery are available without an
 environment switch. An entry without `machine` still runs here. Registration,
 SSH authentication, file permissions and concurrency limits govern remote work;
@@ -442,8 +450,16 @@ key, gets no ssh alias, no jump host and no shared connection, and is refused on
 whose OpenSSH cannot run Raven's POSIX askpass helper; a password under six characters is
 refused, since the scrubber would pass it as ordinary text, one with a line break too, since
 ssh would take only its first line, and the id rule is the one owner `connections.password_path`;
-the askpass helper answers the registered account's own password prompt (`user@host`, named by
-`transport.ASKPASS_FOR_ENV`) and no other, another account's, a second factor's and a one-time
+the askpass helper answers the registered account's own password prompt (`user@host`, the host as
+`ssh -G` resolves it -- the `HostKeyAlias`, else the `HostName` in canonical form -- named by
+`transport.ASKPASS_FOR_ENV`; a host that is the id of a `Host` alias Raven keeps for a key machine,
+`transport.ALIAS_MARK`, is refused rather than followed when that alias sends ssh to another
+`HostName` (`transport.managed_alias_hostnames`), and so is a block that is not the one Raven
+writes -- one of its two marks gone, a keyword Raven does not write (`ProxyCommand`, `Include`
+...), a missing or second `HostName`, a second pattern on its `Host` line -- at registration in
+either order by
+`connection_add.alias_collision` and again on connecting; one reader, `transport.resolve_with_ssh`,
+serves both this and a key machine's defaults, and a password connection never canonicalizes) and no other, another account's, a second factor's and a one-time
 password's included; Oncall's ssh and rsync log in to such a row the same way, at the registry's
 address alone, `oncall_flow.transport.password_row`), install the node in the background, doctor,
 and remove (`raven ops connection remove`, refused while a connected agent entry names the
@@ -637,8 +653,10 @@ covers the work, by its label. Work no worker covers is put to the user -- a wor
 it, or another Harness -- rather than done by the host or sent to an agent outside the enum,
 which offers labels alone. A table a call binds mid-turn (`load_playbook`) arrives after the
 identity was assembled, so that call's result carries the same rule, after its untrusted
-fence. A `spawn` result carries the open-decision rule the same way, since the host writes
-its closing text right after reading one. Rendered only in a process that is
+fence. A dispatch receipt (`spawn`, `run_subagent_dag`) and a background DAG run's
+announcement carry the open-decision rule the same way, together with the reply rule that
+gives each task a reply covers its own heading, since the host writes its closing text right
+after reading one. Rendered only in a process that is
 not a **Sub-agent role** and on a turn holding a dispatch path -- elsewhere the identity
 stays "a helpful AI assistant", byte for byte. The reply rules (`## How you reply`) say the
 open-decision rule again, the declined offer included, on every turn outside a
@@ -724,7 +742,7 @@ _Avoid_: "function" — a Tool is the agent-facing capability, not a Python func
 
 **Web Vendor** (`config/schema.py`, `WebProvidersConfig`):
 Who issues a web credential, as opposed to which tool spends it. Keys live at
-`tools.web.providers.<vendor>.apiKey` because one AnySearch, Tavily, Exa or Firecrawl
+`tools.web.providers.<vendor>.apiKey` because one AnySearch, Tavily, Exa, Firecrawl or Keenable
 account serves both `web_search` and `web_fetch`; a key held per tool would have to be
 pasted twice and could drift into two values for one credential. The pre-vendor leaves
 (`tools.web.search.apiKey`, `tools.web.jinaApiKey`) are still read, after the vendor
@@ -735,20 +753,21 @@ _Avoid_: "provider" unqualified — that is the LLM Provider in this vocabulary;
 
 **Web Search Provider** / **Web Fetch Provider** (`agent/tools/web.py`, `SEARCH_PROVIDERS` / `FETCH_PROVIDERS`):
 Which interchangeable backend each web tool calls: `tools.web.search.provider` selects
-`serper` (default), `anysearch`, `serpapi`, `tavily`, `exa`, `brave`, `firecrawl` or `serply`, and
-`tools.web.fetch.provider` selects `jina` (default), `anysearch`, `tavily`, `exa` or
-`firecrawl`. Every endpoint is a literal in the tool, so a selection names a vendor and
+`serper` (default), `anysearch`, `serpapi`, `tavily`, `exa`, `brave`, `firecrawl`, `serply` or
+`keenable`, and `tools.web.fetch.provider` selects `jina` (default), `anysearch`, `tavily`, `exa`,
+`firecrawl` or `keenable`. Every endpoint is a literal in the tool, so a selection names a vendor and
 never a URL. `web_search` is registered whatever the config holds and *withheld* from the
-offered set while the selected vendor's key does not resolve, so a key pasted mid-run
+offered set while the selected vendor's key does not resolve (Keenable searches without
+one and is offered keyless, as Jina reads pages keyless), so a key pasted mid-run
 surfaces it without a restart -- read live from the vendor slot and, for Serper, from the
 pre-vendor leaf, in the order `WebToolsConfig.vendor_key` resolves them, and an empty slot
 is a revocation rather than a miss; `web_fetch` is always offered, falling back to Jina,
 which reads pages without a key. The two sub-agent launchers inherit the host's selection
 differently: the in-process backend (`agent/subagent/backends/raven_loop.py`) takes it and
-then declines to *register* `web_search` when no key resolves, while the agent launcher
-(`agents/raven-research/run.py`, and the retired fork before it -- its snapshot sits in
-`tests/fixtures/vendored_fork/`) refuses to start without a search key, because its gate
-exits rather than degrading. Most vendors take the key
+then declines to *register* `web_search` when no key resolves and the vendor needs one, while
+the agent launcher (`agents/raven-research/run.py`, and the retired fork before it -- its
+snapshot sits in `tests/fixtures/vendored_fork/`) refuses to start without a search key unless
+the vendor needs none, because its gate exits rather than degrading. Most vendors take the key
 in a header; SerpApi takes it as a query parameter, so for that one the key travels inside
 every request URL and two surfaces have to keep it out -- the error path renders vendor plus
 status rather than the exception text, and the persisted log sink redacts a URL-borne
@@ -897,11 +916,22 @@ and is the unit of cancellation. A stalled Lane never blocks other Lanes. A conv
 be a *sub*-conversation: a Direct Chat runs on `session#agent/handle`
 (`raven.spine.turn.direct_lane`), which is what lets several instances answer at once while
 the main agent keeps its own serial lane.
+Every task the Scheduler starts for a Lane -- its worker, each turn, and the idle reaper -- begins
+from a fresh copy of the Scheduler's home context, the context it was built in; a turn inherits
+neither its submitter's context nor the worker's, and what one turn sets never reaches the next.
+Whatever a host wants every turn to see (the surface's approval families, for one) must therefore
+be set before the Scheduler is built.
 _Avoid_: conflating Lane with OriginPools — different dimensions (ordering vs. concurrency).
 
 **TurnRequest**:
 The single input to Spine: carries `origin`, `source`, `text`, `media`, and `busy` policy.
 Replaces the old `InboundMessage`.
+`dispatch_link` is the `(trace_id, span_id)` of the span that dispatched the work a turn reports on,
+set only by the submitter announcing a dispatched result; the kernel carries it to the runner
+uninterpreted, and the turn's `session.turn` span records it as `trace.dispatched_by_span_id` /
+`trace.dispatched_in_trace_id` -- that link and no other: a turn opened inside an active span
+(a scheduler built inside one keeps it for every turn) drops the link the root span would take
+from it. It is explicit because a turn no longer inherits its submitter's context.
 
 **Deliverable** (= `RunnerEvent`):
 The union of all content-type events a runner can emit: `Text | MediaOut | StreamDelta |
@@ -1044,7 +1074,12 @@ rolls token counts and USD cost up into per-session, per-day, and lifetime aggre
 **CacheOptimizer**:
 The shipped TokenStrategy (`"cache_optimizer"`) that places Anthropic's ≤4 ephemeral
 `cache_control` breakpoints adaptively (tools tail + system tail + a rolling message-tail
-window). A Hermes-faithful `SystemAndTailCacheStrategy` ships alongside as an A/B reference.
+window). When the compacting History Strategy flags the message its next summary is
+expected to end on (`cache_compaction_boundary`, opt-in through `context.cache.compactionBreakpoint`),
+that mark takes the rolling window's oldest slot: the summary replays an earlier request as
+a byte prefix that stops behind every rolling mark, so it is the only breakpoint the
+summary can read back past the system head. A Hermes-faithful `SystemAndTailCacheStrategy`
+ships alongside as an A/B reference.
 
 **UsageSnapshot**:
 The token/cost accounting unit for a single LLM or built-in image-generation API call: input / output / cache-read /
@@ -1222,9 +1257,9 @@ The layer that assembles each turn's LLM window. One unified engine —
 SegmentBuilders in two phases: Phase A builds the system prefix in parallel, Phase B
 budgets history serially against that fixed overhead. The historical
 `legacy` / `curator` / `default` engine split was collapsed into this one engine;
-`engine:` survives only as a backward-compat config alias.
-_Avoid_: describing "legacy" and "Curator" as two separate engines — there is one
-engine and the Curator is its Segment 6.
+which builder fills the history slot is the History Strategy.
+_Avoid_: describing "compacting" and "Curator" as two engines — there is one
+engine, and they are two History Strategies for its Segment 6.
 
 **SegmentBuilder**:
 A pluggable contributor to the prompt; each builder produces one Segment for a fixed
@@ -1233,14 +1268,71 @@ defer into Phase B.
 
 **Segment**:
 A SegmentBuilder's uniform output: system-slot text, optional history (only the
-Curator sets this), and metadata merged into the assembled context.
+History Strategy's builder sets this), and metadata merged into the assembled context.
+
+**History Strategy** (`context_engine/history/`):
+The scheme that fills the history slot, named by `context.history.strategy` and
+resolved through the registry in `context_engine/history/__init__.py`, which is
+the only importer of a strategy and refuses an unknown name at startup.
+`compacting` (default) hands history over verbatim until the window nears its
+trigger, then prunes large tool results to a one-line record and a Source Ref,
+drops whole groups behind a fold, and past that writes a History Checkpoint;
+`curator` is the Curator. Each registry entry declares `owns_compaction` and
+`mints_source_refs`, which the host reads before any turn.
+_Avoid_: calling it an engine; it is one builder inside the one engine.
+
+**History Checkpoint** (`context_engine/history/compacting/checkpoint.py`):
+The user-role message the compacting strategy puts where the history it removed
+used to be: either a fold (counts and a ref, no model) or an eight-section
+summary (Goal, User Constraints, Decisions, Artifacts, Findings, Open Threads,
+Next Step, Pointers) written by the turn's model. Its chain is stored under
+`memory/.context/checkpoints/` and restored per Session Revision, so a new
+process resumes without compacting again; a later one `supersedes` the earlier.
+It carries `_history_checkpoint` in the window so the in-turn head summary never
+re-summarises it.
+_Avoid_: confusing it with the in-turn head summary (`agent/window`), which is
+written mid-turn for the working transcript and is never filed.
+
+**Source Ref** (`utils/refs.py`, `session/refs.py`):
+A `[[ref store/scope#lo-hi]]` token naming verbatim entries of an append-only
+store; for the session log the scope is the Session Revision's
+`<log_id>@<generation>`. A rendered ref is a promise that `context_retrieve`
+returns the stored original byte for byte, which is why that tool is registered
+only beside a strategy that mints refs.
+_Avoid_: treating a ref as a citation the model may paraphrase; it is an address.
+
+**Session Revision** (`contracts/context.py`):
+The identity of one append-only view of a session log: `log_id` (new on `/new`)
+and `generation` (bumped by an undo, or by a save that finds another writer
+changed messages this copy had already filed; another writer that only appended
+leaves it alone). Saves merge it across processes, taking the most recent
+clear's id and the larger generation, so a ref minted before an undo or a `/new`
+misses instead of naming a different message.
+
+**Turn Scratch** (`context_engine/scratch.py`):
+The tagged block appended to the end of the turn's user message carrying the
+phase-A segments whose builder declares `stable = False`, which today is
+`# Memory` and `# Skills`. It reaches the model but never `session.messages`:
+the assembler records on the envelope exactly what it appended (`_turn_scratch`),
+and the loop's `_save_turn`, the hooks' turn question, the watched-work judge and
+replay remove that recorded text, never whatever merely contains the tag. It
+keeps the system prompt byte-identical across turns, so the tools and system
+cache marks are read back on the next turn; the history behind it is not, since
+the envelope is filed in its stripped form, and reads back only through a
+provider's look-back over earlier breakpoints. The trade-off: recalled memory now
+sits in a user-role message rather than the system prompt; its untrusted-data
+fence and the scratch tag still say what it is.
+`context.cache.turnScratch = false` puts those segments back in the system prompt.
+_Avoid_: calling it "injected memory" — it is a slot, and what occupies it is
+whatever the builders declared too volatile for the system prompt.
 
 **Prompt Segments**:
 The ordered blocks `ContextAssembler` renders into the system prompt, one per
-SegmentBuilder: `# Raven` (identity), the Bootstrap Files block, `# Memory`
-(host `user.md` ⊕ EverOS recall), `# Active Skills` (always-on) and `# Skills`
+SegmentBuilder: `# Raven` (identity), the Bootstrap Files block, `# Active Skills`
+(always-on), `# Memory` (host `user.md` ⊕ EverOS recall) and `# Skills`
 (SkillForge-routed candidates — see SkillForge), and `# Curator Working State`
-(Segment 6). `context.dropSegments` names, by builder name, the host segments an agent does
+(Segment 6). Under Turn Scratch, `# Memory` and `# Skills` ride in the user
+message instead. `context.dropSegments` names, by builder name, the host segments an agent does
 without — an agent whose bootstrap files carry its own identity drops `identity`.
 _Avoid_: treating the system prompt as one opaque blob — each segment has an owner and order.
 
@@ -2205,6 +2297,13 @@ dispatched -- sub-agents, their own sub-agents, follow-up turns reporting back -
 resolved through those links. A main-line turn counts as in progress only when it
 is the session's latest, its record is still only a checkpoint, and the session is
 answering right now; a checkpoint left behind by a process that died is selectable.
+A turn reporting a dispatched result carries that link whenever this process knows the span
+that dispatched the work: the `subagent.run` of a spawn that started, the spawning call of one
+cancelled before it started, the `subagent.run` of the DAG node attempt that sent a node's report,
+and for a graph's result the span the DAG was dispatched under. A report with no such span --
+a run picked up after a restart, a graph dispatched outside any span -- carries none and is
+therefore main-line, as is an unprompted report from an external agent. A turn never inherits a
+link from earlier work in its session.
 _Avoid_: selecting a dispatched trace as a turn of its own.
 
 **Turn Trace Mark** (`raven/agent/loop/turn_path.py`):
@@ -2519,16 +2618,98 @@ unreadable expected payload always yields a record.
 _Avoid_: confusing with the session's conversation history — a Conversation
 Record derives from trace spans, not from session messages.
 
+**Sub-agent Run Span** (`raven/observability/semconv.py`, `raven/agent/subagent/manager.py`,
+`raven/agent/subagent/dag_runner.py`):
+The `subagent.run` span of one sub-agent run, opened by `SubagentManager._run_subagent` under
+the tool call that dispatched the run, in that call's trace, so the run's own model and tool
+calls nest under it. It is written when it opens -- its attributes and an in-progress
+checkpoint, as a turn's root is -- and again when it closes; both records share the span id
+and the same attributes: `subagent.task_id`, `subagent.task` (a 300-character preview),
+`subagent.label` (the Task summary), `subagent.origin_session`, `subagent.agent` (the
+canonical agent name), `subagent.instance` (the instance name, absent when the run has
+none), `subagent.handle` (the instance name, else the task id), `subagent.dispatch` (`spawn`,
+or `dag` for a graph node's attempt, below) and `subagent.in_progress` (`true` in the
+checkpoint, `false` when it closes). The closing record also carries `subagent.outcome`:
+`completed`, `failed`, `aborted` (stopped on a terminal safety decision), `cancelled`, or
+`handed_off` (the process stopped and the run goes on on its registered machine). It is set
+beside the run record's own outcome and, like it, the first decision stands; a run that
+closes by cancellation or by an escaping exception before any branch decided reads
+`cancelled` or `failed`. A run cancelled before its task first ran records no span. Records
+written before these attributes existed carry only the first four and no outcome. The
+trajectory projection reads the run's entry status from them: `running` while the record is
+the checkpoint (evidence `subagent_in_progress`), `error` for `failed` / `aborted`
+(`subagent_failed` / `subagent_aborted`, the entry being the span's failure entry),
+`cancelled` (`subagent_cancelled`), `unknown` for `handed_off` (`subagent_handed_off`), and
+the span status otherwise.
+A DAG node gets one such span per attempt, opened by `dag_runner._attempt_node` once the
+attempt holds a concurrency slot and closed after its terminal status event -- the time
+queued for the slot is outside it, where a spawned run's span includes its wait at the
+gate. Its parent is the span active where the graph was dispatched (the `run_subagent_dag` or
+`resolve_dag_node` tool call); a graph dispatched outside any span -- a stint round resumed or
+swept outside a turn -- roots each attempt in a trace of its own. A node continued, or sent its judge's own follow-up, runs
+again under a new span; a node never executed (its branch not selected, skipped behind a
+failed dependency, or still queued when the run stopped) has none. Its `subagent.task` is
+the node's prompt template, `subagent.label` the node summary (else the node id),
+`subagent.task_id` the node id, and it adds `subagent.dag_run_id`, `subagent.node_id` and
+`subagent.attempt` (the node's attempt number, from 1 -- not a trajectory **Attempt**). Its
+outcome is `completed`, `failed`, `exception` (waiting on the main agent's decision),
+`continued` (judged not accomplished and sent its judge's follow-up, so the node runs
+again) or `cancelled`; for `failed`, `exception` and `continued` the span status is `ERROR`
+with the reason as its message, never empty, so the trajectory shows the entry as `error`
+(evidence `span_error`). A report an attempt sends -- its exception report or a stall notice,
+including one a blocking run injects only once released -- starts a turn whose dispatch link
+(`trace.dispatched_by_span_id`) names that attempt's span; the graph's result names the span
+that dispatched the graph. A graph dispatched outside any span reports with no link at all,
+its attempts' reports included, so those turns stay main-line (**Main-line Turn**).
+_Avoid_: reading a spawned run's `status.code` as its result -- the run reports its own
+failures and returns, so that span is `OK` whatever the outcome.
+
+**Sub-agent Scope** (`raven/trajectory/entries.py`, `_span_scopes`):
+The part of a session's trajectory one sub-agent boundary owns, named by that boundary span's
+`trace_id:span_id`. A boundary is a **run** -- a Sub-agent Run Span (`subagent.run`), so a
+spawned run or one attempt of a DAG node -- or a **graph**: a `tool.call` whose `tool.name` is
+`run_subagent_dag` or `resolve_dag_node`, which owns a graph's steps where no node span holds
+them (records written before node spans existed) and, for `resolve_dag_node`, the round a
+replan it chose started under it. An entry belongs to the nearest boundary above its span in
+its own trace, its own span not counted; a boundary's own entries look only for a run above,
+so a node's entry and a graph's call stay where the graph was dispatched, and so does the
+permission reviewer's `llm.call` (`llm.purpose` `permission_judge`), which the gate records
+under the call it reviews; a graph's scope holds only what its rounds produced. A dispatched
+agent cannot dispatch again, so scopes do not nest past one run, and since a spawned run's steps
+share the trace of the turn that spawned it and run alongside later turns, the scope is read
+from span ancestry alone, never from time. Three Trajectory Entry fields carry it:
+`subagent_scope`, the scope the entry belongs to (null for the main session);
+`opens_subagent_scope`, on a boundary's own entries, the scope it opens -- always for a run,
+for a graph only while at least one entry belongs to its scope (a graph whose rounds all ran
+in node spans opens nothing); and `dispatched_by_subagent_scope`, on the root entries of a
+dispatched `session.turn` trace, the scope that dispatched it -- the dispatching span itself
+when it is a boundary, else that span's own scope, null when the span is unknown, in the
+main session, or a graph scope no entry belongs to (a graph's result, once its nodes have
+spans). The dispatched turn itself -- a report injected back -- belongs to the main session,
+as does a trace linked in from another session. A step whose parent is not on record yet
+has no scope until the parent arrives, when the index reprojects it under a new revision;
+a boundary trimmed to a skeleton loses its entries, so its scope has no entry to open it
+while its descendants keep the scope id (the skeleton keeps the span's name and `tool.name`,
+so it still counts as a boundary). These fields are the input the trajectory view's
+per-sub-agent tabs are built from.
+_Avoid_: "Lane" -- the scheduler's term; "sub-agent trace" -- a spawned run's steps live in the
+spawning turn's trace; `origin` for the boundary -- it says only whether a trace was dispatched.
+
 **Trajectory Entry** (`raven/trajectory/entries.py`):
 One row of the trajectory view, projected by `project_entries` from a logical
 span (`traceId + spanId`, checkpoints merged last-write-wins, an in-progress
-snapshot never overriding a terminal record) at a stable slot (`llm.input`,
+snapshot -- a turn's or a Sub-agent Run Span's -- never overriding a terminal record,
+nor the skeleton the index keeps of a trimmed one) at a stable slot (`llm.input`,
 `tool.output`, `artifact:<key>`, `summary`, `error`, …). Its id is
 `trace:span:slot` — never a sequence number, array index or text hash — so it
-survives re-reads, late inputs and checkpoint upgrades. It carries the owning
+survives re-reads, late inputs and checkpoint upgrades. It names the Sub-agent Scope it
+belongs to, opens or was dispatched by (`subagent_scope`, `opens_subagent_scope`,
+`dispatched_by_subagent_scope`), apart from `origin`, which says only whether its trace was
+dispatched from another (`subagent`) or not (`main`). It carries the owning
 operation's status (`running` / `ok` / `error` / `cancelled` / `unknown`) with the
 evidence codes that produced it, data-integrity codes kept separate from status,
-and the span's clock with a Timing Owner. A base span that expands to nothing
+and the span's clock with a Timing Owner; an in-progress snapshot's entries have no
+duration and are `running` unless the snapshot already records an error. A base span that expands to nothing
 gets a `summary` entry; a failed span with no completion slot gets an `error`
 entry, so exactly one entry per failed span is the `failure_entry`. A turn
 opens with `user.input` (slot `turn.input`) and closes with `turn.end` (slot
@@ -2539,26 +2720,35 @@ records around it: for a model input the Message Delta (`delta` ∈ `first` /
 `continued` / `independent` / `unknown`, `new_from`, `echo_at`,
 `message_count`) and the LLM Purpose (`purpose`); and `hidden` for a row the
 list need not show — `redundant_reply`, a turn's end that repeats the turn's
-last model output word for word; `empty_reply`, a turn's end of a turn that
+last model output in the main session word for word (a sub-agent's outputs, though
+they belong to the turn that dispatched it and may come after its end, are never
+compared); `empty_reply`, a turn's end of a turn that
 finished `ok` whose recorded content was read and is null or blank;
 `empty_internal`, an outer-only summary that recorded nothing. A hidden row
 stays in the index and keeps its clock. While the recorder writes the turn's
 end as `{"content": null}` (`semconv.turn` reads `.content` off the tuple the
 turn returns), every ok turn end it records is `empty_reply` and
 `redundant_reply` cannot fire; the latter takes effect once that is fixed.
+A `subagent.run` entry's `meta` names the run: `label` and `task_id`, and `agent`,
+`instance`, `handle`, `dispatch`, `outcome`, `dag_run_id`, `node_id` and `attempt` each only
+when recorded with a value; these keys belong to the same input contract for the
+trajectory view's per-sub-agent tabs as the Sub-agent Scope fields.
 _Avoid_: calling a Conversation Record an entry — that is the CLI's text
 projection, without identity, structured status or timing.
 
 **Message Delta** (`raven/trajectory/entries.py`, `_apply_delta`):
 What one model input adds to the conversation before it, proven rather than
-assumed: an earlier input of the same chain (the main line, or one sub-agent
-trace) with a compatible LLM Purpose counts as the predecessor only when its
+assumed: an earlier input of the same chain (the main session, or one Sub-agent
+Scope) with a compatible LLM Purpose counts as the predecessor only when its
 message sequence — the content addresses of a v2 artifact's messages — is an
 ordered prefix of this one; then `new_from = len(prefix)`, one more when the
 message right after the prefix is an assistant one — the predecessor's own
 output written back into the history, already a row of its own (`echo_at`
 names it; the role of a referenced message is learnt by a bounded read, and
-until then the prefix alone counts). The chain's first
+until then the prefix alone counts). A turn reported back belongs to the main
+session, so its inputs continue the main agent's history; a sub-agent's inputs
+find a predecessor only within their own scope, so they neither take the main
+session's candidate places nor leave its inputs `unknown`. The chain's first
 input is `first` (all new); an input no candidate precedes is `independent`
 (all new); an input whose own or whose candidates' messages are not read yet is
 `unknown`, decided again when they are. Computed at projection time from the

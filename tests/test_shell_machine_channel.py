@@ -10,6 +10,8 @@ stand.
 
 from __future__ import annotations
 
+import os
+import sys
 import time
 
 import pytest
@@ -91,6 +93,45 @@ async def test_a_named_machine_routes_to_the_channel(registry, monkeypatch, tmp_
 
     assert out == "routed"
     assert seen == {"command": "nvidia-smi", "connection": "conn_gpu", "cwd": "/root/ws"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in ssh is a POSIX script")
+async def test_a_password_machine_s_runner_is_built_off_the_event_loop(monkeypatch, tmp_path, supported_host):
+    """A password machine's runner asks a local ``ssh -G`` which host its prompt will name. On the loop, a
+    resolution waiting on DNS or a slow ``Match exec`` would hold every other turn the loop serves."""
+    import asyncio
+
+    from raven.ops.connection_add import store_password
+
+    row = {**{k: v for k, v in ROW.items() if k != "key"}, "auth": "password"}
+    monkeypatch.setattr("raven.ops.connections.load", lambda: [dict(row)])
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    store_password("conn_gpu", "hunter2")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "ssh").write_text(
+        '#!/bin/sh\nif [ "$1" = -G ]; then sleep 1; echo "hostname 203.0.113.7"; exit 0; fi\necho looked\n',
+        encoding="utf-8",
+    )
+    (bin_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    ticks = 0
+
+    async def tick():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.05)
+            ticks += 1
+
+    ticker = asyncio.create_task(tick())
+    try:
+        out = await machine_exec.run_on_machine("true", connection="conn_gpu")
+    finally:
+        ticker.cancel()
+
+    assert "looked" in out
+    assert ticks >= 5, f"the loop ran {ticks} ticks of 50 ms while ssh -G took a second"
 
 
 @pytest.mark.asyncio

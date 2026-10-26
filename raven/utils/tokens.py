@@ -21,6 +21,37 @@ from raven.utils.images import estimate_content_part_tokens
 _ENCODING_NAME = "cl100k_base"
 _TOKEN_BOUNDARY = re.compile(r"(?<=[\r\n])(?=\S)")
 
+# tiktoken's merge loop is quadratic in the length of one regex piece, and an
+# unbroken run of one character (padding, a row of ``=``, base64 of zeros, a
+# page of blank lines) is one piece: 200,000 of them hold the event loop for
+# about twenty seconds. A run of space or non-space longer than this is counted
+# in slices of it, which moves the count by a token or two a slice, either way.
+# Space is cl100k's: Python's ``\s`` also takes U+001C..U+001F, which cl100k
+# glues to the text around them, so those four go with the non-space runs.
+_RUN_SLICE = 1_000
+_RUN = re.compile(r"[^\S\x1c-\x1f]+|[\S\x1c-\x1f]+")
+
+
+def _encoded_len(encoding: tiktoken.Encoding, text: str) -> int:
+    """``len(encoding.encode(text))``, with any run past ``_RUN_SLICE`` counted in slices."""
+    if len(text) <= _RUN_SLICE:
+        return len(encoding.encode(text))
+    long_runs = [m for m in _RUN.finditer(text) if m.end() - m.start() > _RUN_SLICE]
+    if not long_runs:
+        return len(encoding.encode(text))
+    total = 0
+    pos = 0
+    for m in long_runs:
+        if m.start() > pos:
+            total += len(encoding.encode(text[pos : m.start()]))
+        total += sum(
+            len(encoding.encode(text[i : min(i + _RUN_SLICE, m.end())])) for i in range(m.start(), m.end(), _RUN_SLICE)
+        )
+        pos = m.end()
+    if pos < len(text):
+        total += len(encoding.encode(text[pos:]))
+    return total
+
 
 class _PromptTokenCache:
     def __init__(self) -> None:
@@ -38,7 +69,7 @@ class _PromptTokenCache:
     def count(self, payload: str, encoding: tiktoken.Encoding) -> int:
         if not self.counts:
             if self.initial_payload is None:
-                self.total = len(encoding.encode(payload))
+                self.total = _encoded_len(encoding, payload)
                 self.initial_payload = payload
                 return self.total
             if payload == self.initial_payload:
@@ -53,7 +84,7 @@ class _PromptTokenCache:
         for part, count in counts.items():
             cost = self.costs.get(part)
             if cost is None:
-                cost = len(encoding.encode(part))
+                cost = _encoded_len(encoding, part)
             total += max(0, count - self.counts[part]) * cost
             costs[part] = cost
         self.counts, self.costs, self.total = counts, costs, total
@@ -120,7 +151,7 @@ def estimate_prompt_tokens(
         return extra_tokens
     try:
         enc = tiktoken.get_encoding(_ENCODING_NAME)
-        text_tokens = len(enc.encode(payload)) if cache is None else cache.count(payload, enc)
+        text_tokens = _encoded_len(enc, payload) if cache is None else cache.count(payload, enc)
     except Exception:
         if cache is not None:
             cache.clear()
@@ -165,7 +196,7 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
         return max(1, extra_tokens)
     try:
         enc = tiktoken.get_encoding(_ENCODING_NAME)
-        text_tokens = len(enc.encode(payload))
+        text_tokens = _encoded_len(enc, payload)
     except Exception:
         text_tokens = len(payload) // 4
     return max(1, text_tokens + extra_tokens)

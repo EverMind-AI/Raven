@@ -268,13 +268,42 @@ def _refusal_detail(cfg: Any, said: str, answer: str | None = None) -> str:
     return _refusal(cfg, said, answer)[0]
 
 
+_PI_TOO_OLD = re.compile(r"get_available_thinking_levels failed: Unknown command")
+"""pi-acp 0.0.34 asks pi for its model's thinking levels as a session opens, an RPC
+pi answers from 0.81.0; an older pi refuses it by name, and no session opens until
+pi is upgraded (measured 2026-10-23 on pi 0.80.10)."""
+
+
+def _pi_too_old(cfg: Any, said: str, judged: str | None = None) -> tuple[str, Remedy] | None:
+    """pi-acp's refusal over a pi older than it needs, and the fix, or ``None`` for any other text.
+
+    One reading for every surface that shows the refusal: a connect (`_refusal`),
+    the Test button and the roster, the last two over the handshake's record
+    (`_process_refusal`, `_probe_acp`). The floor it names is config's
+    (`raven.config.loader.shim_agent_floor`), the one the pin migration reads.
+    """
+    if getattr(cfg, "preset", None) != "pi" or not _PI_TOO_OLD.search(said if judged is None else judged):
+        return None
+    from raven.config.loader import shim_agent_floor
+
+    floor = shim_agent_floor("pi")
+    first = f"older than {'.'.join(map(str, floor.oldest))}, the first pi" if floor else "older than the first pi"
+    up = upgrade_hint_for(cfg)
+    how = f" with `{up}`" if up else ""
+    return (
+        f"its pi is {first} that answers what its adapter asks as a session opens; "
+        f"upgrade pi{how} and connect again. It said: {said}"
+    )[:_DETAIL_CAP], Remedy("upgrade", up)
+
+
 def _refusal(cfg: Any, said: str, answer: str | None = None) -> tuple[str, Remedy | None]:
     """`_refusal_detail`'s sentence, and the remedy it was written from.
 
     One decision with two renderings: the sentence is the record the log, the
     CLI and the TUI read, and the remedy is the same verdict as data a page can
-    put in its reader's language. ``None`` for a refusal that is not about a
-    credential, whose words are passed through as they came.
+    put in its reader's language. ``None`` for a refusal that is neither about a
+    credential nor an agent's own measured sentence, whose words are passed
+    through as they came.
     """
     from raven.acp_client.capabilities import looks_like_auth
 
@@ -285,6 +314,8 @@ def _refusal(cfg: Any, said: str, answer: str | None = None) -> tuple[str, Remed
     # first so a bad API key is not told to sign in.
     if github_copilot.applies(cfg) and (named := github_copilot.read(judged)) is not None:
         return named[0][:_DETAIL_CAP], named[1]
+    if (named := _pi_too_old(cfg, said, judged)) is not None:
+        return named
     if not looks_like_auth(judged):
         # Read off the agent's answer only: a launch that died says nothing
         # about a provider, and its stderr can name an unreachable host that is
@@ -404,9 +435,10 @@ def _provider_refusal(cfg: Any, said: str, answer: str) -> tuple[str, Remedy] | 
     return None
 
 
-_EXITED = re.compile(r"connection ended \(exit -?\d+\); stderr tail:\s*(?!<empty>)\S")
-"""A launch that quit and said why on its way out. One that quit without a word
-is left unnamed: pointing a reader at what it said would point at nothing."""
+_EXITED = re.compile(r"(?:connection ended|npx could not fetch \S+) \(exit -?\d+\); stderr tail:\s*(?!<empty>)\S")
+"""A launch that quit and said why on its way out, or the npx fetch ahead of it. One
+that quit without a word is left unnamed: pointing a reader at what it said would
+point at nothing."""
 
 _NO_ACP_FLAG = re.compile(
     r"(?:unknown|no such|unexpected) (?:argument|option|flag|command)s?:?\s*['\"]?-{0,2}acp\b",
@@ -441,11 +473,23 @@ def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy | None] | None:
     on a Node.js older than its package declares was run on the wrong one
     (`_stale_node`). A timed-out prompt or an empty turn carries nothing, and is
     named only for an agent measured to go silent that way
-    (`presets.DIAGNOSE_HINTS`), with the command that makes it say why.
+    (`presets.DIAGNOSE_HINTS`), with the command that makes it say why. pi-acp's
+    refusal over a pi too old for it is read here as a connect reads it
+    (`_pi_too_old`), since the Test button reads the handshake's record here.
 
     Runs ``node --version`` for a Node.js agent that quit, so its callers keep it
     off the event loop.
+
+    An npx cache entry left without its package.json comes first: npm says so in
+    a line of its own, every later start of that spec fails the same way, and the
+    one fix is npm's own command for removing the entry
+    (`npx_fetch.incomplete_entry`).
     """
+    from raven.acp_client.capabilities import npx_incomplete_lead
+    from raven.acp_client.npx_fetch import incomplete_entry
+
+    if (entry := incomplete_entry(shown)) is not None:
+        return f"{npx_incomplete_lead(entry)}. It said: {shown}"[:_DETAIL_CAP], Remedy("exited", entry.clear_command)
     if _EXITED.search(shown):
         if _NO_ACP_FLAG.search(shown) or (getattr(cfg, "preset", None) == "grok" and _GROK_NO_AGENT.search(shown)):
             up = upgrade_hint_for(cfg)
@@ -465,6 +509,8 @@ def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy | None] | None:
                 f"{stale.found} ({stale.node}); upgrade Node.js{how} and connect again. It said: {shown}"
             )[:_DETAIL_CAP], Remedy("runtime", stale.upgrade, needs=stale.needs, found=stale.found)
         return shown[:_DETAIL_CAP], Remedy("exited")
+    if (named := _pi_too_old(cfg, shown)) is not None:
+        return named
     if _PROMPT_TIMEOUT.search(shown):
         run = diagnose_hint_for(cfg)
         if run:
@@ -694,7 +740,9 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
             f"installed at {resolved}, but its model menu has not been measured yet -- run a test",
             resolved,
         )
-    return done(snapshot.status, snapshot.detail, resolved)
+    # The record of a refusal reads as Test and a connect read it.
+    named = _pi_too_old(cfg, snapshot.detail)
+    return done(snapshot.status, named[0] if named else snapshot.detail, resolved)
 
 
 def _model_ids(payload: Any) -> list[str] | None:
@@ -915,13 +963,14 @@ def _ping_bounds(cfg: Any) -> tuple[int, int, float]:
     The answer is capped at `_ENABLE_PING_TIMEOUT_SECONDS`, the number a
     person waiting on a switch can stand. The handshake is not: an acp row
     starts within its own ``readyTimeoutMs``, the window every dispatch of it
-    gets (`AcpAgentBackend`), and for an ``npx`` command that window is where
-    the first download happens. Capping it too turned two things into "it did
-    not answer within 60s" -- a first download on a slow line (a cold fetch of
-    the Claude Code adapter is about 260 MB unpacked; 20s on a good line,
-    measured 2026-09-23), and npm's own "cannot reach the registry", which it
-    reports only after about 70s of retries (measured the same day), so the
-    reader never saw it.
+    gets (`AcpAgentBackend`). The first download of an ``npx`` row is in
+    neither: `ping_agent` has npx fetch the package before they start
+    (`npx_fetch`), because a cold fetch of the Claude Code adapter is 288 MB
+    (measured 2026-10-23), and a bound that ran out on one ended npx
+    half-installed. An ``npx`` command the fetch cannot repeat
+    (`npx_fetch.fetchable_package`) still downloads inside this window, and so
+    does a row on a registered machine, whose Raven node starts it with no fetch
+    ahead.
 
     The wait is the two added together, which keeps what the cap once kept:
     neither inner bound is ever cancelled from outside before the backend can
@@ -1061,6 +1110,7 @@ async def ping_agent(cfg: Any) -> PingResult:
     """
     # Function-level like the rest of this module's acp imports: the client family
     # is future shelf cargo and must not be named at import time.
+    from raven.acp_client import npx_fetch
     from raven.acp_client import pool as acp_pool
 
     ready_ms, answer_s, wait_s = _ping_bounds(cfg)
@@ -1089,6 +1139,16 @@ async def ping_agent(cfg: Any) -> PingResult:
         # handle; one shared by every check leaves one directory there
         # rather than one per press.
         checked = {"instance": remote_check_handle()} if machine else {}
+        if not machine and getattr(cfg, "kind", None) == "acp":
+            # Ahead of the bounds, not inside them: a first download is npx's
+            # work, not the handshake's, and one a bound ran out on was ended
+            # half-installed (`npx_fetch`). The launch below then finds it done.
+            await npx_fetch.ensure_fetched(
+                getattr(cfg, "name", "") or "",
+                getattr(cfg, "command", "") or "",
+                env=getattr(cfg, "env", None),
+                cwd=getattr(cfg, "cwd", None) or str(scratch.path),
+            )
         reply = await asyncio.wait_for(
             backend.run(
                 PROBE_PROMPT,

@@ -445,7 +445,9 @@ export function qa(lane: Lane, question: string, answer: string, opts?: { skippe
 }
 
 /* What a delegated result looks like to a reader: the text from INSIDE the
-   untrusted fence, and nothing else.
+   untrusted fence, and nothing else -- unless the delivery also carries what a
+   dag node returned (`delivered`, below), since that report's fence holds a
+   brief written for the model.
 
    One rule, and it is the fence's own contract rather than a guess about the
    prose around it. A spawn's injection wraps the result in framing the model
@@ -462,42 +464,54 @@ export function qa(lane: Lane, question: string, answer: string, opts?: { skippe
 /* `status` is loosely typed and normalised here rather than by the caller,
    because one caller is the live path's plain-JS turn handler, which has no
    import statements and only ever hands this function a raw wire string. */
+const DELIVERED_STATUSES: ReadonlySet<string> = new Set(['error', 'exception', 'notice', 'cancelled'])
 const deliveredStatus = (v: unknown): DeliveredData['status'] =>
-  v === 'error' ? 'error' : v === 'exception' ? 'exception' : 'ok'
+  typeof v === 'string' && DELIVERED_STATUSES.has(v) ? v as DeliveredData['status'] : 'ok'
 
+/* `output` is a dag node's own words, sent beside its report. A string, even an
+   empty one, wins over the fenced brief: empty is a node that said nothing, and
+   then there is nothing to fold open. Absent is a server that never sent it. */
 export function delivered(lane: Lane, p: {
-  label: string; isDag: boolean; status?: string; open: () => void; body?: string
+  label: string; isDag: boolean; status?: string; open: () => void; body?: string; output?: string; outputTruncated?: boolean | null
 }): void {
+  const said = typeof p.output === 'string'
   push(lane, {
     v: 0, id: nextId(), kind: 'sdlv',
     label: p.label, isDag: p.isDag, status: deliveredStatus(p.status), open: p.open,
-    body: defence(p.body || ''), shown: false,
+    body: said ? (p.output as string).trim() : defence(p.body || ''), said, shown: false,
+    outputTruncated: said && p.outputTruncated === true,
   } satisfies DeliveredData)
 }
 
-const FENCE_OPEN = /^\s*\[BEGIN UNTRUSTED ([^ #]+) #([^ ]+) /
+const FENCE_OPEN = /\[BEGIN UNTRUSTED ([^ #\]]+) #([^ \]]+) [^\n]*\n/g
 const FENCE_CLOSE = /^\s*\[END UNTRUSTED ([^ #]+) #([^ ]+) /
 
-/* A forged close marker must not end the fence. wrap_untrusted tags both ends
-   with a per-call nonce for exactly that reason: the fence ends only at the
-   line whose source AND nonce match the opening line's. Anything else --
-   including a close-shaped line with a different tag -- is content, and if the
-   genuine close never appears the whole rest is content too. */
+/* A forged close marker must not end a fence. wrap_untrusted tags both ends
+   with a per-call nonce for exactly that reason: a fence ends only at the close
+   marker whose source AND nonce match its opening one's, and the next opening
+   marker is looked for after that close. Anything else -- a close-shaped line
+   with a different tag, a marker the result quotes -- is content, and if the
+   genuine close never appears the whole rest is content too. Every fence is
+   kept, joined by newlines, not only the first: a result made of content blocks
+   is fenced one text block at a time, and session.resume joins the blocks with a
+   space, so one restored row can hold several fences in a row. */
 export function defence(text: string): string {
-  const lines = String(text || '').split('\n')
-  const start = lines.findIndex((l) => FENCE_OPEN.test(l))
-  if (start < 0) {
-    return lines.filter((l) => !FENCE_CLOSE.test(l)).join('\n').trim()
+  const src = String(text || '')
+  const open = new RegExp(FENCE_OPEN.source, 'g')
+  const parts: string[] = []
+  let m: RegExpExecArray | null
+  while ((m = open.exec(src))) {
+    const start = m.index + m[0].length
+    const close = `\n[END UNTRUSTED ${m[1]} #${m[2]}]`
+    const end = src.indexOf(close, start - 1)
+    parts.push(src.slice(start, end < 0 ? undefined : Math.max(start, end)))
+    if (end < 0) break
+    open.lastIndex = end + close.length
   }
-  const m = FENCE_OPEN.exec(lines[start] || '')
-  const tag = m ? `${m[1]} #${m[2]}` : null
-  const rest = lines.slice(start + 1)
-  let end = -1
-  if (tag) {
-    const close = new RegExp(`^\\s*\\[END UNTRUSTED ${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]`)
-    end = rest.findIndex((l) => close.test(l))
+  if (!parts.length) {
+    return src.split('\n').filter((l) => !FENCE_CLOSE.test(l)).join('\n').trim()
   }
-  return (end < 0 ? rest : rest.slice(0, end)).join('\n').trim()
+  return parts.join('\n').trim()
 }
 
 export function toggleDelivered(lane: Lane, seg: DeliveredData): void {
@@ -1675,6 +1689,8 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
           isDag,
           status: d.status,
           body: m.text || '',
+          output: d.output,
+          outputTruncated: d.output_truncated,
           open: () => {
             const src = source()
             if (isDag) src.openDagRun?.(String(d.run_id || d.label || ''))
@@ -1778,7 +1794,11 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
          sentence for, and it is the only thread a restored card has back to the
          record. */
       if (m.spawn_task_id && h.spawnTask) h.spawnTask(String(m.spawn_task_id))
-      const preview = src.clean(m.text).split('\n').slice(0, 8).map((l) => l.slice(0, 160)).join('\n')
+      /* The stored result is the model's copy: inside its fence, and after it
+         whatever note this system added for the model (a dispatch receipt's
+         reply rules). The live preview is the raw result, so this one is the
+         fence's content alone. */
+      const preview = src.clean(defence(String(m.text || ''))).split('\n').slice(0, 8).map((l) => l.slice(0, 160)).join('\n')
       h.done(src.okOf(m.name || '', preview), preview, m.duration_ms != null ? m.duration_ms : 0, m.diff)
     }
   })

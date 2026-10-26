@@ -1,11 +1,15 @@
 """A scheduler lane's FIFO execution and its emit-guard and stamping rules."""
 
 import asyncio
+import contextvars
+from collections import defaultdict
+from contextvars import ContextVar
 
 from loguru import logger
 
 from raven.spine import (
     AnswerlessTurnError,
+    BusyPolicy,
     ChatType,
     Notice,
     NoticeKind,
@@ -703,3 +707,163 @@ def test_only_a_non_empty_string_counts_as_a_long_account():
     assert full_detail_of(exc) is None
     exc.full_detail = "the long one"
     assert full_detail_of(exc) == "the long one"
+
+
+# --- every turn starts from the lane's home context ---------------------------
+
+_PROBE: ContextVar[str] = ContextVar("lane_test_probe", default="unset")
+
+
+def _submit_as(lane: Lane, value: str, req: TurnRequest, policy: BusyPolicy = BusyPolicy.APPEND):
+    """Submit from a context of its own in which the probe reads ``value``."""
+
+    def _go():
+        _PROBE.set(value)
+        return lane.submit(req, policy)
+
+    return contextvars.copy_context().run(_go)
+
+
+class ProbeRunner:
+    """Records what each turn reads from the probe; can hold a turn open or set the probe in it."""
+
+    def __init__(self, *, hold: frozenset[str] = frozenset(), set_inside: dict[str, str] | None = None):
+        self.seen: dict[str, str] = {}
+        self.links: dict[str, tuple[str, str] | None] = {}
+        self.started: defaultdict[str, asyncio.Event] = defaultdict(asyncio.Event)
+        self.release: defaultdict[str, asyncio.Event] = defaultdict(asyncio.Event)
+        self._hold = hold
+        self._set_inside = set_inside or {}
+
+    async def run(self, req, emit, drain) -> TurnOutcome:
+        self.seen[req.text] = _PROBE.get()
+        self.links[req.text] = req.dispatch_link
+        if req.text in self._set_inside:
+            _PROBE.set(self._set_inside[req.text])
+        self.started[req.text].set()
+        if req.text in self._hold:
+            await self.release[req.text].wait()
+        return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=False)
+
+
+async def test_a_turn_does_not_see_its_submitters_context():
+    runner = ProbeRunner()
+    lane = _lane(runner)
+
+    await _submit_as(lane, "X", _req("t1"))
+
+    assert runner.seen == {"t1": "unset"}
+
+
+async def test_a_worker_started_by_one_submitter_carries_nothing_into_the_next_turn():
+    """The worker is born in X's frame; Y's turn queued on it must not read X."""
+    runner = ProbeRunner(hold=frozenset({"first"}))
+    lane = _lane(runner)
+
+    first = _submit_as(lane, "X", _req("first"))
+    await runner.started["first"].wait()
+    assert lane._worker is not None
+    assert lane._worker.get_context().get(_PROBE, "unset") == "unset", "the worker holds no submitter state"
+    second = _submit_as(lane, "Y", _req("second"))
+    runner.release["first"].set()
+    await asyncio.gather(first, second)
+
+    assert runner.seen == {"first": "unset", "second": "unset"}
+
+
+async def test_an_inject_that_falls_back_runs_without_its_submitters_context():
+    runner = ProbeRunner(hold=frozenset({"first"}))
+    lane = _lane(runner)
+
+    first = _submit_as(lane, "Y", _req("first"))
+    await runner.started["first"].wait()
+    inject = _submit_as(lane, "X", _req("inject"), BusyPolicy.INJECT)
+    runner.release["first"].set()
+    await asyncio.gather(first, inject)
+
+    assert runner.seen["inject"] == "unset", "the never-drained inject ran as its own turn"
+
+
+async def test_an_interrupting_turn_runs_without_its_submitters_context():
+    runner = ProbeRunner(hold=frozenset({"first"}))
+    lane = _lane(runner)
+
+    first = _submit_as(lane, "Y", _req("first"))
+    await runner.started["first"].wait()
+    interrupter = _submit_as(lane, "X", _req("interrupt"), BusyPolicy.INTERRUPT)
+    await asyncio.gather(first, interrupter)
+
+    assert runner.seen["interrupt"] == "unset"
+
+
+async def test_a_turn_after_a_cancelled_queued_one_is_still_isolated():
+    runner = ProbeRunner(hold=frozenset({"first"}))
+    lane = _lane(runner)
+
+    first = _submit_as(lane, "Y", _req("first"))
+    await runner.started["first"].wait()
+    queued = _submit_as(lane, "X", _req("queued"))
+    await lane.cancel_turn(queued)
+    later = _submit_as(lane, "Z", _req("later"))
+    runner.release["first"].set()
+    await asyncio.gather(first, later)
+
+    assert "queued" not in runner.seen
+    assert runner.seen["later"] == "unset"
+
+
+async def test_what_one_turn_sets_does_not_reach_the_next():
+    runner = ProbeRunner(set_inside={"first": "turn-1"})
+    lane = _lane(runner)
+
+    first = lane.submit(_req("first"))
+    second = lane.submit(_req("second"))
+    await asyncio.gather(first, second)
+
+    assert runner.seen == {"first": "unset", "second": "unset"}
+
+
+async def test_a_turn_submitted_from_inside_a_running_turn_does_not_inherit_it():
+    """The shape of a menu pick: a hook inside a running turn submits the next one."""
+    seen: dict[str, str] = {}
+    inner: list[asyncio.Future] = []
+    lane: Lane | None = None
+
+    class NestingRunner:
+        async def run(self, req, emit, drain) -> TurnOutcome:
+            seen[req.text] = _PROBE.get()
+            if req.text == "outer":
+                _PROBE.set("outer")
+                assert lane is not None
+                inner.append(lane.submit(_req("inner")))
+            return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=False)
+
+    lane = _lane(NestingRunner())
+    await lane.submit(_req("outer"))
+    await inner[0]
+
+    assert seen == {"outer": "unset", "inner": "unset"}
+
+
+async def test_the_dispatch_link_reaches_the_runner_unchanged():
+    runner = ProbeRunner()
+    lane = _lane(runner)
+    src = Source(channel="t", chat_id="c", sender_id="subagent", chat_type=ChatType.DM)
+    linked = TurnRequest(origin=Origin.SUBAGENT, source=src, text="report", dispatch_link=("trace-x", "span-y"))
+
+    await asyncio.gather(lane.submit(linked), lane.submit(_req("plain")))
+
+    assert runner.links == {"report": ("trace-x", "span-y"), "plain": None}
+
+
+async def test_a_lane_built_directly_takes_its_construction_context_as_home():
+    runner = ProbeRunner()
+
+    def _build() -> Lane:
+        _PROBE.set("home")
+        return _lane(runner)
+
+    lane = contextvars.copy_context().run(_build)
+    await _submit_as(lane, "X", _req("t1"))
+
+    assert runner.seen == {"t1": "home"}

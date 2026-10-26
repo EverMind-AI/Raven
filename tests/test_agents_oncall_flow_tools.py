@@ -243,6 +243,36 @@ async def test_kill_without_a_fresh_observation_is_refused(tmp_path: Path) -> No
     assert "basis_refused" in [e["kind"] for e in read_events(cdir)]
 
 
+async def test_kill_builds_its_backend_off_the_loop(tmp_path: Path) -> None:
+    """A password machine's runner asks a local ``ssh -G`` which host its prompt names; built on the loop, that
+    wait held every other turn (reviewed 2026-10-20)."""
+    import asyncio
+
+    cdir = _campaign(tmp_path)
+    backend = _Backend()
+    where: list[bool] = []
+
+    def build(meta):
+        try:
+            asyncio.get_running_loop()
+            where.append(True)
+        except RuntimeError:
+            where.append(False)
+        return backend
+
+    register_backend("mock", build)
+    led = Ledger(cdir / "ledger.json")
+    led.record("t1", campaign="camp-a")
+    led.set_handle("t1", JobHandle("mock", "job-1"))
+    led.set_status("t1", JobStatus.RUNNING)
+    _fresh_probe(cdir)
+
+    out = await OpsKillTool().execute(trials=["t1"], campaign="camp-a", basis="looked again; diverging")
+
+    assert out.startswith("Killed 1 trial(s): t1")
+    assert where == [False], "the backend was built on the event loop"
+
+
 async def test_kill_with_a_fresh_observation_cancels_and_records(tmp_path: Path) -> None:
     cdir = _campaign(tmp_path)
     backend = _Backend()

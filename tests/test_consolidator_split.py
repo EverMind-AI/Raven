@@ -482,3 +482,34 @@ async def test_maybe_refresh_hot_tags_advances_offsets(tmp_path: Path):
     assert offsets == {"project-b": 5}
     # Profile bullet wrote successfully.
     assert "post-refresh bullet" in store.read_long_term()
+
+
+@pytest.mark.asyncio
+async def test_annotate_reads_a_large_tool_result_as_its_view(tmp_path: Path):
+    """The session files tool results whole for ``context_retrieve``; the
+    annotation prompt carries the bounded view, or one large read would push it
+    past the window and ``/new`` could never clear the session."""
+    from raven.session.refs import TOOL_RESULT_VIEW_MAX_CHARS
+
+    store = MemoryStore(tmp_path, now_fn=lambda: datetime(2026, 5, 7, 17, 32))
+    provider = _FakeProvider()
+    provider.set_response("annotate_conversation", ANNOTATE_RESPONSE)
+    sent: list[str] = []
+    original_chat = provider.chat
+
+    async def recording_chat(**kwargs):
+        sent.append("\n".join(str(m.get("content")) for m in kwargs.get("messages") or []))
+        return await original_chat(**kwargs)
+
+    provider.chat = recording_chat
+    read = chr(0x5B57) * 600_000
+    messages = [
+        *CASE_06_MESSAGES,
+        {"role": "tool", "timestamp": "2026-05-07T12:31", "content": read},
+    ]
+
+    assert await store.annotate(messages, provider, "fake-model") is True
+
+    assert sent and len(sent[0]) < 2 * TOOL_RESULT_VIEW_MAX_CHARS
+    assert "more characters of the stored result not shown here" in sent[0]
+    assert messages[-1]["content"] == read

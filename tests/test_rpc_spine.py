@@ -1042,7 +1042,15 @@ async def test_the_boundary_carries_the_delivery_identity_and_text():
                 text="[BEGIN UNTRUSTED subagent #ab12cd34 ...]\nresult\n[END UNTRUSTED subagent #ab12cd34]",
                 conversation="tui:c1",
                 turn_id="t1",
-                delegated={"kind": "dag", "label": "run-7", "status": "ok", "run_id": "run-7"},
+                delegated={
+                    "kind": "dag",
+                    "label": "run-7",
+                    "status": "exception",
+                    "run_id": "run-7",
+                    "node_id": "n1",
+                    "output": "node's words",
+                    "output_truncated": True,
+                },
             )
         )
         await handle.result()
@@ -1052,6 +1060,7 @@ async def test_the_boundary_carries_the_delivery_identity_and_text():
     start = next(e for k, e in emitter.emitted if e["type"] == "turn.started")
     d = start["payload"]["delegated"]
     assert d["kind"] == "dag" and d["label"] == "run-7" and d["run_id"] == "run-7"
+    assert d["output"] == "node's words" and d["output_truncated"] is True
     # The text that re-entered the conversation rides along, verbatim.
     assert d["content"] == "[BEGIN UNTRUSTED subagent #ab12cd34 ...]\nresult\n[END UNTRUSTED subagent #ab12cd34]"
 

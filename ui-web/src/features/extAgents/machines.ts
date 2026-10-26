@@ -113,9 +113,17 @@ export async function register(form: RegisterForm): Promise<boolean> {
 }
 
 let pollMs = 1500
-const INSTALL_GIVE_UP_MS = 15 * 60 * 1000
 
-/** Put this Raven's node on the machine; the server runs it in the background and the list reports it. */
+/** Put this Raven's node on the machine; the gateway runs the install in the background and the list reports it.
+ *
+ * Polled for as long as the list says it runs, with no deadline of its own.
+ * The fifteen-minute one it had kept an install that never ended from
+ * being polled forever; but the gateway bounds every step of an install, so
+ * one always ends and the list says how, and a deadline here can only stop
+ * the polling first: measured 2026-10-22, it gave up two seconds before the
+ * gateway recorded that a step had run out of its own fifteen minutes, and the
+ * card spun on that last answer from then on, never told the install had
+ * failed. */
 export async function installNode(id: string, nodeDir = ''): Promise<void> {
   set({ busy: { ...get().busy, [id]: 'install' }, failed: without(get().failed, id) })
   try {
@@ -128,11 +136,10 @@ export async function installNode(id: string, nodeDir = ''): Promise<void> {
     set({ failed: { ...get().failed, [id]: t('gui.machine.install_bad_said', { said: said(e) }) }, busy: without(get().busy, id) })
     return
   }
-  const started = Date.now()
   const poll = async (): Promise<void> => {
     await load()
     const row = rowOf(id)
-    if (row && row.install.running && Date.now() - started < INSTALL_GIVE_UP_MS) {
+    if (row && row.install.running) {
       setTimeout(() => void poll(), pollMs)
       return
     }

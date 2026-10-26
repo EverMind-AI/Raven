@@ -321,6 +321,9 @@ def test_the_owners_home_wins_over_an_own_copy(grounded, tmp_path):
 #: product's config, so it stays out.
 VENDORED_TOOL_FACE = {
     "ask_user",
+    # Trunk serves it beside the default compacting history strategy, so the
+    # refs that strategy leaves in the window can be read back.
+    "context_retrieve",
     "edit_file",
     "exec",
     "find",

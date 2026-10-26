@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.metadata as _md
 import os
 import re
+import shlex
 import sys
 import time
 from typing import TYPE_CHECKING, Any
@@ -45,7 +46,8 @@ TRAJECTORY_CAPABILITY = "trajectory-v1"
 BUGREPORT_CAPABILITY = "bugreport-v1"
 # Announced while this host has a folder dialog to open (`fs.pick_dir`), so the
 # page offers that dialog only where one can come up and walks the gateway's
-# folders in the page everywhere else.
+# folders in the page everywhere else. A Windows host never announces it: its
+# dialog opens behind the browser (raven.rpc.folder_dialog).
 FOLDER_DIALOG_CAPABILITY = "folder-dialog-v1"
 _bugreport_url_warned = False
 
@@ -239,6 +241,60 @@ async def system_version(params: dict, *, send_frame: Any = None) -> dict:
     return result
 
 
+#: The install is mid-replacement (uv swaps the environment before writing the
+#: new one), so a metadata read failing here is an upgrade in flight, not a
+#: broken install -- naming it as one invites a second upgrade into the gap.
+_IN_PROGRESS_DETAIL = "An upgrade is already running; wait for it to finish."
+#: Passed to _refuse when no command can work, or none can be named safely: sent
+#: over the wire as an explicit null so the card hides the row per refusal,
+#: rather than the client re-encoding which reasons mean that.
+_NO_COMMAND = object()
+
+
+def _on_windows() -> bool:
+    return os.name == "nt"
+
+
+def _checkout_recovery(checkout: str, windows: bool) -> str:
+    """Update and reinstall the checkout at ``checkout``, from inside it.
+
+    A bare `git pull` updates whichever repository the terminal is in, so the
+    command moves into the checkout first. On Windows the installer replaces
+    the environment this Raven runs from, and an executable that is still
+    running cannot be deleted there, so the serving Raven is stopped first.
+    POSIX replaces a running executable without complaint, and stopping the
+    page there would only take it down before the install needs to.
+    """
+    if windows:
+        # PowerShell, which `.\install.ps1` needs anyway: -LiteralPath keeps
+        # `[` and `]` from reading as wildcards, and a doubled quote is the only
+        # escape a single-quoted string has -- for each of the four curly single
+        # quotes PowerShell also reads as one, not only for the ASCII quote.
+        literal = re.sub("(['\u2018\u2019\u201a\u201b])", r"\1\1", checkout)
+        return "raven web --stop\nSet-Location -LiteralPath '" + literal + "'\ngit pull\n.\\install.ps1"
+    return f"cd {shlex.quote(checkout)}\ngit pull\n./install.sh"
+
+
+def _unsupervised_recovery(windows: bool) -> tuple[str, str]:
+    """The sentence and the command for a gateway nothing would bring back."""
+    lead = "This Raven was started by hand, so nothing would bring it back after an upgrade. "
+    if windows:
+        # `raven upgrade` returns as soon as its helper is started, and the
+        # helper installs only after that: a `raven web` on the next line would
+        # land in the middle of the install, so the start is left to the reader.
+        return (
+            lead + "Run `raven web --stop` to stop it, then `raven upgrade`. The upgrade carries on after "
+            "that command returns; start Raven again with `raven web` only once it reports that it has finished.",
+            "raven web --stop\nraven upgrade",
+        )
+    return (
+        lead + "Run `raven web --stop` to stop it, `raven upgrade` to install the new release, then `raven web` "
+        "to start it again: the upgrade does not stop Raven for you, and a `raven web` started beside the old "
+        "one would only attach to it.",
+        "raven web --stop\nraven upgrade\nraven web",
+    )
+
+
 async def system_upgrade(params: dict) -> dict:
     """`system.upgrade` — install the latest release and restart what serves the page.
 
@@ -254,24 +310,90 @@ async def system_upgrade(params: dict) -> dict:
     import asyncio
 
     from raven.rpc.serve_control import SERVE
-    from raven.updates.upgrade import UpgradeError, plan_upgrade, spawn_detached_upgrade
+    from raven.updates.upgrade import (
+        EditableInstallError,
+        UpgradeError,
+        _is_editable_install,
+        editable_checkout,
+        plan_upgrade,
+        spawn_detached_upgrade,
+    )
 
     # The dispatcher only lifts `detail` into error.data when no data dict is
     # given, so every refusal carries its own reason AND its human sentence --
     # the GUI shows that sentence verbatim next to the fallback command.
-    def _refuse(reason: str, detail: str) -> ConfigValidationError:
-        return ConfigValidationError(detail, data={"reason": reason, "detail": detail})
+    def _refuse(reason: str, detail: str, command: str | object | None = None) -> ConfigValidationError:
+        data: dict[str, object] = {"reason": reason, "detail": detail}
+        if command is _NO_COMMAND:
+            # Explicitly none, sent as null: this refusal has no command it
+            # can stand behind, and the card drops the row rather than fall
+            # back to its default `raven upgrade` -- a wrong suggestion is
+            # worse than none, and so is a dangling instruction to run one.
+            data["command"] = None
+        elif command is not None:
+            # What the card copies instead of its default `raven upgrade`: the
+            # recovery differs by reason, and a wrong suggestion is worse than
+            # none.
+            data["command"] = command
+        return ConfigValidationError(detail, data=data)
+
+    async def _refuse_checkout() -> ConfigValidationError:
+        # A checkout tracks upstream `main`, so no release is ever "newer" for
+        # it in the sense the button means; and both `raven upgrade` and the
+        # page's default fallback refuse it. Name the steps that do work.
+        try:
+            command: str | object = _checkout_recovery(str(await asyncio.to_thread(editable_checkout)), _on_windows())
+        except Exception:
+            # Without the path, the only command left is a `git pull` in
+            # whatever repository the terminal happens to be in.
+            command = _NO_COMMAND
+        return _refuse(
+            "editable",
+            "This Raven is a source checkout, so released upgrades do not apply to it. "
+            "Update it with git, then reinstall.",
+            command,
+        )
+
+    if not SERVE.running:
+        raise _refuse("not_serving", "system.upgrade is only available while `raven serve` is running")
+
+    # Classified before the gateway's process answers: no release upgrade
+    # applies to a checkout whatever supervises the process, and the
+    # unsupervised recovery's first command (`raven upgrade`) refuses a
+    # checkout, so offering it there hands the reader a step that cannot work.
+    # The probe is a metadata read in the same window the release lookup is
+    # refused from, so it answers in progress rather than escaping as an
+    # internal error whose card falls back to that withheld default.
+    try:
+        # A filesystem read (importlib.metadata walks candidate directories),
+        # off the event loop for the same reason the release lookup below is.
+        editable_install = await asyncio.to_thread(_is_editable_install)
+    except _md.PackageNotFoundError as exc:
+        raise _refuse("in_progress", _IN_PROGRESS_DETAIL) from exc
+    except UpgradeError as exc:
+        # Malformed direct_url.json reads the same as it does from the release
+        # lookup below: the install is not upgradable from the page, and the
+        # message says which file is at fault.
+        raise _refuse("not_upgradable", str(exc), command=_NO_COMMAND) from exc
+    except Exception:
+        # Anything else the probe can hit -- an undecodable metadata file, a
+        # filesystem read racing the in-flight install -- must not escape as an
+        # internal error: its card falls back to the default `raven upgrade`
+        # this branch exists to withhold. The probe only classifies a
+        # checkout, so an unreadable probe is taken as none here; plan_upgrade
+        # reads again and still refuses a checkout it finds. This clause
+        # comes last on purpose: `PackageNotFoundError` and `UpgradeError`
+        # are both `Exception` subclasses, and each has its own refusal.
+        editable_install = False
+    if editable_install:
+        raise await _refuse_checkout()
 
     if SERVE.hosted_by_gateway:
         if SERVE.supervisor_pid is None:
             # Nothing would bring this gateway back: started by hand, or under
             # `raven web --foreground`. Starting a resident supervisor on the
             # reader's behalf would change how their Raven runs, so say so.
-            raise _refuse(
-                "unsupervised",
-                "This Raven was started by hand, so nothing would bring it back after an upgrade. "
-                "Run `raven upgrade` in a terminal, then start Raven again.",
-            )
+            raise _refuse("unsupervised", *_unsupervised_recovery(_on_windows()))
         busy = SERVE.busy()
         if busy is not None:
             # The restart cancels every turn, sub-agent and pending question on
@@ -281,12 +403,14 @@ async def system_upgrade(params: dict) -> dict:
                 "Raven is still working on a turn, a sub-agent or a pending question. "
                 "Upgrading restarts it and would cut that off; let it finish first.",
             )
-    if not SERVE.running:
-        raise _refuse("not_serving", "system.upgrade is only available while `raven serve` is running")
-
     try:
         # Network-bound and synchronous (httpx), so keep it off the event loop.
         plan = await asyncio.to_thread(plan_upgrade)
+    except EditableInstallError as exc:
+        # Reached when the probe above failed and was taken as "not a
+        # checkout", and the engine's own read then found one: the same
+        # answer, not a bare refusal whose card falls back to `raven upgrade`.
+        raise await _refuse_checkout() from exc
     except UpgradeError as exc:
         raise _refuse("not_upgradable", str(exc)) from exc
     except _md.PackageNotFoundError as exc:
@@ -295,7 +419,7 @@ async def system_upgrade(params: dict) -> dict:
         # that gap for minutes while it byte-compiles. Reporting the raw lookup
         # failure reads as a broken install and invites a second upgrade into
         # the same gap, so name what is actually happening.
-        raise _refuse("in_progress", "An upgrade is already running; wait for it to finish.") from exc
+        raise _refuse("in_progress", _IN_PROGRESS_DETAIL) from exc
     except Exception as exc:
         raise _refuse("check_failed", f"Could not check for a newer Raven release: {exc}") from exc
 

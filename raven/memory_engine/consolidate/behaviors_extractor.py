@@ -40,6 +40,7 @@ from raven.memory_engine.consolidate.behaviors import (
 )
 from raven.observability.purpose import purpose as _llm_purpose
 from raven.session.manager import SessionManager
+from raven.session.refs import tool_result_view
 
 if TYPE_CHECKING:
     from raven.config.raven import BehaviorsExtractConfig
@@ -555,6 +556,10 @@ def _render_chunk_for_llm(chunk: list[dict[str, Any]]) -> str:
         if isinstance(content, list):
             text_parts = [blk.get("text", "") for blk in content if isinstance(blk, dict) and blk.get("type") == "text"]
             content_text = " ".join(t for t in text_parts if t)
+        elif role == "tool" and isinstance(content, str):
+            # Filed whole for ``context_retrieve``; the extractor reads the view
+            # every copy that leaves the session gets.
+            content_text = tool_result_view(content)
         else:
             content_text = str(content or "")
         content_text = _TS_NOISE_RE.sub(" ", content_text).strip()

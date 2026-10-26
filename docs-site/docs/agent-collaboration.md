@@ -11,8 +11,9 @@ covers using them, not installing their transports.
 
 Raven itself works as your agent manager. It sorts a request into tasks, hands
 each to the sub-agent that fits it, keeps track of every task until you accept
-the result, and gathers what the agents report into one answer, where each task's
-result gets its own section under a heading that names the task. When it asks you
+the result, and gathers what the agents report into one answer, where each task it
+covers gets its own section under a heading that names the task, whether that is the
+task's result or a single line on how it is going. When it asks you
 to decide several things and your reply settles only some of them, it acts on
 those and asks about the rest again at the end of every reply, until you decide
 each one, drop it or tell it to leave it for later. A later message
@@ -150,12 +151,8 @@ own menu. A mode override can take precedence over the host session's tier;
 clearing it restores inheritance. Clearing a model override returns to the
 agent's own choice. Neither setting grants new filesystem or tool permissions.
 
-Parallel instances do not imply independent working copies. For concurrent
-edits, give each agent explicit file ownership or separate worktrees. Raven-Code
-reports shared-workspace conditions, but that is not a filesystem lock.
-
-For coding work the host arranges this itself, following its built-in
-`multi-agent-coding` skill. When coding tasks run side by side in one git
+For coding work the host follows its built-in `multi-agent-coding` skill.
+When coding tasks run side by side in one Git
 project, the host asks each coding agent to create a git worktree of its own, on
 a branch named for its task, and to report the worktree's path and branch. The
 changes stay on those branches until you ask for them to be merged, and the
@@ -163,6 +160,12 @@ worktrees stay until you ask for them to be removed. The same skill keeps one
 instance per task, sends a follow-up on an unfinished task to that task's
 instance, and moves a task to another coding agent when the first reports that
 its quota is used up.
+
+Worktree creation is a step performed by the coding agent under the host's
+instructions. Check the reported path and branch before concurrent edits.
+When constructing a graph yourself, assign working copies or explicit file
+ownership: the dispatcher does not create worktrees or lock files. Raven-Code's
+shared-workspace report helps identify overlap.
 
 ## Troubleshooting
 

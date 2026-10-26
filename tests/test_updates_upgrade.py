@@ -552,6 +552,31 @@ def test_is_editable_install_reads_pep_610_metadata(monkeypatch: pytest.MonkeyPa
     distribution.read_text.assert_called_once_with("direct_url.json")
 
 
+def test_editable_checkout_reads_the_directory_from_pep_610_metadata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    checkout = tmp_path / "source checkout"
+    distribution = Mock()
+    distribution.read_text.return_value = json.dumps({"url": checkout.as_uri(), "dir_info": {"editable": True}})
+    monkeypatch.setattr(upgrade_commands.metadata, "distribution", lambda name: distribution)
+    run = Mock(side_effect=AssertionError("naming the checkout must not run git"))
+    monkeypatch.setattr(upgrade_commands.subprocess, "run", run)
+
+    assert upgrade_commands.editable_checkout() == checkout
+
+
+@pytest.mark.parametrize("url", ["https://example.com/source", "file://remote/source", "file:relative"])
+def test_editable_checkout_refuses_a_url_that_is_not_a_local_directory(
+    monkeypatch: pytest.MonkeyPatch, url: str
+) -> None:
+    distribution = Mock()
+    distribution.read_text.return_value = json.dumps({"url": url, "dir_info": {"editable": True}})
+    monkeypatch.setattr(upgrade_commands.metadata, "distribution", lambda name: distribution)
+
+    with pytest.raises(upgrade_commands.UpgradeError):
+        upgrade_commands.editable_checkout()
+
+
 @pytest.mark.parametrize(
     "raw",
     [
@@ -2467,6 +2492,104 @@ def test_upgrade_helper_stops_what_still_runs_from_the_old_install(monkeypatch: 
     assert r"$root = 'C:\Users\x\AppData\Roaming\uv\tools\raven\'" in stop
     assert "ExecutablePath.StartsWith($root" in stop and "Stop-Process" in stop
     assert "Stop-Process" not in check and "ExecutablePath.StartsWith($root" in check
+
+
+@pytest.mark.parametrize("quote", ["'", "\u2018", "\u2019", "\u201a", "\u201b"])
+def test_upgrade_helper_cannot_close_its_quoted_root_early(monkeypatch: pytest.MonkeyPatch, quote: str) -> None:
+    """PowerShell reads the four curly single quotes as quotes too, so a uv
+    tool directory under a profile spelled O\u2019Neil would end the literal
+    early and run the rest of the path as code unless every one is doubled."""
+    namespace = _load_upgrade_helper_namespace()
+    ran: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        ran.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(namespace["shutil"], "which", lambda name: "powershell")
+    root = "C:\\Users\\O" + quote + "Neil\\AppData\\Roaming\\uv\\tools\\raven"
+
+    assert namespace["stop_leftovers_of"](root) == ([], [])
+
+    script = ran[0][-1]
+    assert "$root = 'C:\\Users\\O" + quote * 2 + "Neil\\AppData\\Roaming\\uv\\tools\\raven\\'" in script
+
+
+def test_upgrade_helper_does_not_read_a_failed_query_as_no_survivors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A PowerShell that failed answered nothing; its empty stdout is not
+    evidence that nothing runs from the environment."""
+    namespace = _load_upgrade_helper_namespace()
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 1, stdout="", stderr="denied"),
+    )
+    monkeypatch.setattr(namespace["shutil"], "which", lambda name: "powershell")
+
+    assert namespace["stop_leftovers_of"](r"C:\Users\x\AppData\Roaming\uv\tools\raven") == ([], None)
+
+
+def test_upgrade_helper_does_not_trust_a_stop_list_from_a_failed_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The query that follows the stop decides whether the stop was enough; a
+    non-zero exit there is not a verdict, whatever its stdout says."""
+    namespace = _load_upgrade_helper_namespace()
+    answers = iter(
+        [
+            subprocess.CompletedProcess([], 0, stdout="4242\r\n", stderr=""),
+            subprocess.CompletedProcess([], 1, stdout="", stderr="denied"),
+        ]
+    )
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kwargs: next(answers))
+    monkeypatch.setattr(namespace["shutil"], "which", lambda name: "powershell")
+    monkeypatch.setattr(namespace["time"], "sleep", lambda _s: None)
+
+    assert namespace["stop_leftovers_of"](r"C:\Users\x\AppData\Roaming\uv\tools\raven") == (["4242"], None)
+
+
+def test_upgrade_helper_makes_each_leftover_query_fail_loudly(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Under the default preference a non-terminating Get-CimInstance failure
+    still exits 0, so an empty stdout from a broken query would read as "no
+    survivors" again. Stop makes the failure terminate, which the exit code the
+    caller checks can report."""
+    namespace = _load_upgrade_helper_namespace()
+    ran: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        ran.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(namespace["shutil"], "which", lambda name: "powershell")
+    monkeypatch.setattr(namespace["time"], "sleep", lambda _s: None)
+
+    namespace["stop_leftovers_of"](r"C:\Users\x\AppData\Roaming\uv\tools\raven")
+
+    assert len(ran) == 2
+    assert all(argv[-1].startswith("$ErrorActionPreference = 'Stop'; ") for argv in ran)
+
+
+def test_upgrade_helper_does_not_install_when_it_could_not_check_for_survivors(
+    monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """An unanswered query used to read as "nothing is running", and uv then
+    deleted the environment an unknown process still used. It has to stop the
+    install instead."""
+    namespace = _load_upgrade_helper_namespace()
+    order: list[object] = []
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("UV_TOOL_DIR", r"C:\tools")
+    namespace["wait_for_parent"] = lambda _pid: 0
+    namespace["stop_leftovers_of"] = lambda env_dir: ([], None)
+    monkeypatch.setattr(
+        subprocess, "run", lambda argv, **kw: order.append("uv") or subprocess.CompletedProcess(argv, 0)
+    )
+
+    assert namespace["main"](["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "123"]) == 1
+    assert order == []
+    assert "could not check" in capsys.readouterr().err
 
 
 def test_upgrade_helper_refuses_to_install_over_a_survivor(monkeypatch: pytest.MonkeyPatch, capsys) -> None:

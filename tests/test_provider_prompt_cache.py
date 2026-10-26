@@ -221,6 +221,26 @@ def test_stripping_tolerates_no_tools_and_odd_blocks():
     assert stripped[1]["content"] == ["not-a-dict"]
 
 
+def test_the_compaction_boundary_flag_never_reaches_a_wire():
+    """Ours, like the stable-prefix offset: ``strip`` takes it off on a wire that
+    cannot carry breakpoints, and the allow-list and the Anthropic converter
+    drop it on the ones that can -- so a stored request compared against the
+    history it was built from does not differ by it either."""
+    from raven.providers.anthropic_messages_provider import convert_messages
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "hi", prompt_cache.COMPACTION_BOUNDARY_KEY: True},
+    ]
+
+    stripped, _ = prompt_cache.strip(messages, None)
+
+    assert stripped == [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
+    assert prompt_cache.COMPACTION_BOUNDARY_KEY not in str(LiteLLMProvider._sanitize_messages(messages))
+    assert prompt_cache.COMPACTION_BOUNDARY_KEY not in str(convert_messages(messages))
+
+
 # --- The retry that learns it (raven.providers.base) ---
 
 

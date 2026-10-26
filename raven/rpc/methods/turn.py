@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from raven.providers.binding import ModelBinding
     from raven.rpc.dispatcher import Dispatcher
     from raven.rpc.methods.session import AgentLoopFactory
+    from raven.rpc.question_broker import QuestionBroker
 
 _TURN_FAILED_CODE = -32099
 
@@ -444,6 +445,7 @@ async def turn_send(
     build_error: RpcError | None = None,
     default_channel: str = "tui",
     agent_loop_factory: "AgentLoopFactory | None" = None,
+    question_broker: "QuestionBroker | None" = None,
 ) -> dict[str, Any]:
     """``turn.send`` — submit a turn onto the spine, return ``{turn_id, accepted}``.
 
@@ -502,6 +504,32 @@ async def turn_send(
     # Both paths below resolve the same attachments; the root is only looked
     # up when there is something to resolve.
     media_root = _media_root(agent_loop_factory, parsed.session_key) if parsed.media else None
+
+    # A turn blocked on an ask_user question is waiting for this very text. The
+    # page sends a message typed into the main composer as an inject whenever a
+    # turn is running, and the turn drains injects only between model calls --
+    # which it never reaches while the question waits -- so the question ran out
+    # its budget as unanswered and the agent went on with its own
+    # recommendation, the person's answer arriving after as a side note. The
+    # channel path checks the broker first (``gateway_commands``); this mirrors
+    # it: the text answers the question, and no turn or inject is made of it.
+    if (
+        parsed.busy == "inject"
+        and question_broker is not None
+        and question_broker.pending_req(lane) is not None
+        and not parsed.media
+        and question_broker.reply(lane, parsed.content, close=True)
+    ):
+        if emitter is not None:
+            # Still a message the person sent, and every window draws the
+            # sender's own bubble from this frame rather than from the call --
+            # without it the answer was nowhere on the page, only inside the
+            # asking tool's folded row.
+            await emitter.emit(
+                parsed.session_key,
+                {"type": "message.injected", "payload": _tag({"turn_id": turn_id, "content": parsed.content}, target)},
+            )
+        return {"turn_id": (turn_ids or {}).get(lane, ""), "accepted": True, "naming": False}
 
     if parsed.busy == "inject" and (is_turn_active(lane) or _lane_in_flight(scheduler, lane)):
         # Two records of "a turn is running here", and both count: this map
@@ -722,11 +750,12 @@ async def turn_unsubscribe(
 
 
 def _cancel_payload(turn_id: str) -> dict[str, Any]:
-    """The cancelled-turn error's payload, carrying its turn when one is bound.
+    """The cancelled-turn error's payload, carrying the cancelled turn's id when there is one.
 
-    The lane's bound turn is the right source here and only here: the client
-    cancels its own session, so the turn ``turn.send`` bound to this lane is the
-    turn being cancelled. The key is omitted rather than sent empty, so that
+    The id is whatever identified the turn being cancelled: the one a named
+    cancel gave, a pending inject's own, or the turn ``turn.send`` bound to
+    this lane -- never the lane's slot read for a turn it does not hold. The
+    key is omitted rather than sent empty, so that
     "absent" has one representation on the wire -- a consumer that correlates a
     request to a turn treats both the same way, as not its own.
     """
@@ -740,6 +769,18 @@ def _cancel_payload(turn_id: str) -> dict[str, Any]:
     return payload
 
 
+def _refused(lane: str) -> dict[str, Any]:
+    """``turn.cancel``'s answer when it reached nothing on ``lane``.
+
+    ``busy`` says whether the lane still has a turn to run. A client waiting on
+    this answer cannot tell from the frames: the answer is written the moment
+    the handler returns, while the frame opening a turn that has just started
+    can still be waiting out the subscription's coalescing window.
+    """
+    probe = getattr(_scheduler, "is_busy", None)
+    return {"cancelled": False, "busy": bool(probe(lane)) if callable(probe) else False}
+
+
 async def turn_cancel(
     params: dict[str, Any],
     *,
@@ -750,17 +791,32 @@ async def turn_cancel(
     """``turn.cancel`` — cancel the in-flight turn + notify subscribers.
 
     Sequence:
-      1. Look up the active turn handle; if absent → ``{cancelled: False}``.
-      2. ``await handle.cancel()``.
+      1. Find the turn to cancel. With ``turn_id``: the lane's running turn,
+         and only when it carries that id -- whether ``turn.send`` bound it or
+         the runtime opened it (a delegated result re-entering, which binds no
+         handle). Without: the active turn handle, else the oldest pending
+         inject. Neither there → ``{cancelled: False, busy: ...}``, ``busy``
+         saying whether the lane still has a turn to run (``_refused``).
+      2. Cancel what was found.
       3. ``emitter.emit(session_key, error(reason="cancelled_by_client"))`` — the
          client resets its UI off this event. This is the ONLY cancelled-turn
          error; the sink stays silent on a cancelled TurnFailed (avoiding a
          double error), so this emit is the one signal that clears the front-end
          turn slot — it must always fire.
-      4. Await the handle so the turn is provably unwound (the sink's TurnFailed
+      4. Await the turn so it is provably unwound (the sink's TurnFailed
          handler drops the active-turn slot) before returning, so the next
          ``turn.send`` cannot race a half-unwound turn into a phantom -32003.
       5. Return ``{cancelled: True}``.
+
+    A named cancel goes past pending injects to the running turn: an inject
+    already merged into it ends with it, as it does when a bound turn is
+    cancelled, and one still waiting in the lane's mailbox falls back to a turn
+    of its own once the cancelled turn unwinds -- the spine never drops it, so
+    the reader's correction runs rather than vanishing under the stop. An
+    unnamed cancel keeps its older reach on purpose: callers that send no id
+    (the terminal UI, the ACP adapter's ``session/cancel``) mean the turn they
+    started, and reaching for whatever the lane happens to be running would
+    stop a cron wake, or a delegated turn that began after the request left.
 
     The subscription is SESSION-scoped, not turn-scoped: a per-turn cancel ends
     only the turn and MUST leave the session's subscriptions open so the next
@@ -780,9 +836,29 @@ async def turn_cancel(
         else parsed.session_key
     )
 
+    if parsed.turn_id is not None:
+        # Probed, not assumed, like ``_lane_in_flight``: a scheduler without
+        # the seam (a test fake) has no running turn to name.
+        probe = getattr(_scheduler, "running_turn", None)
+        running = probe(lane) if callable(probe) else None
+        if running is None or running[0] != parsed.turn_id:
+            return _refused(lane)
+        handle = running[1]
+        await handle.cancel()
+        if emitter is not None:
+            await emitter.emit(
+                parsed.session_key,
+                {
+                    "type": "error",
+                    "payload": _tag(_cancel_payload(parsed.turn_id), (direct_targets or {}).get(lane)),
+                },
+            )
+        await handle.result()
+        return {"cancelled": True}
+
     reach = _cancellable(lane)
     if reach is None:
-        return {"cancelled": False}
+        return _refused(lane)
     handle, inject_id = reach
 
     await handle.cancel()
@@ -860,6 +936,7 @@ def register_turn_methods(
     build_error: RpcError | None = None,
     default_channel: str = "tui",
     agent_loop_factory: "AgentLoopFactory | None" = None,
+    question_broker: "QuestionBroker | None" = None,
 ) -> None:
     """Register ``turn.{send,subscribe,unsubscribe,cancel}`` on a dispatcher.
 
@@ -886,6 +963,7 @@ def register_turn_methods(
             build_error=build_error,
             agent_loop_factory=agent_loop_factory,
             default_channel=default_channel,
+            question_broker=question_broker,
         )
 
     async def _subscribe(params: dict[str, Any]) -> dict[str, Any]:

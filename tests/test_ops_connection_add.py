@@ -25,6 +25,8 @@ from raven.ops import connection_add as adder
 from raven.ops import connections
 from tests._home import point_home
 
+pytestmark = pytest.mark.usefixtures("no_real_ssh_g")
+
 # Taken before the autouse fixture below replaces it for every test.
 _REAL_STORE_PATH = connections.store_path
 
@@ -383,6 +385,86 @@ def test_ssh_defaults_is_empty_when_ssh_cannot_answer(tmp_path, monkeypatch):
     record = _python_ssh(tmp_path, monkeypatch, "sys.exit(255)")
     assert adder.ssh_defaults("203.0.113.7", port=22, user="root") == {}
     assert "-G" in json.loads(record.read_text(encoding="utf-8"))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in ssh is a POSIX shell script")
+def test_ssh_defaults_reads_a_config_dump_carrying_bytes_that_are_not_utf_8(tmp_path, monkeypatch):
+    """ssh prints the owner's config values as they are on disk. One that is not UTF-8 raised out of the key
+    registration while the password machine's reader of the same dump went on (reviewed 2026-10-20)."""
+    real = tmp_path / "id_real"
+    real.write_text("")
+    _fake_ssh(
+        tmp_path,
+        monkeypatch,
+        f"printf 'remotecommand caf\\351\\nuser cfd\\nport 58717\\nidentityfile {real}\\n'",
+    )
+
+    assert adder.ssh_defaults("203.0.113.7") == {"user": "cfd", "port": 58717, "keys": [str(real)]}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in ssh is a POSIX shell script")
+def test_ssh_defaults_is_empty_when_ssh_is_there_and_cannot_be_started(tmp_path, monkeypatch):
+    """An ssh that cannot be executed answers nothing, as a missing one does, rather than raising out of the
+    registration: the password machine's reader already read it that way."""
+    _fake_ssh(tmp_path, monkeypatch, "echo 'user cfd'")
+    (tmp_path / "bin" / "ssh").chmod(0o644)
+    # Alone on PATH: a lookup skips an entry it cannot execute and would go on to the computer's own ssh.
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+
+    assert adder.ssh_defaults("203.0.113.7") == {}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in ssh is a POSIX shell script")
+def test_ssh_defaults_gives_what_it_starts_no_askpass_and_no_terminal_input(tmp_path, monkeypatch):
+    """The key machine's resolution is the same call as the password machine's: nothing it starts finds an
+    askpass to call, and it reads no input from whoever started Raven."""
+    seen = tmp_path / "seen"
+    _fake_ssh(
+        tmp_path,
+        monkeypatch,
+        f'printf "%s|%s|%s|" "$1" "$SSH_ASKPASS" "$SSH_ASKPASS_REQUIRE" > {seen}\n'
+        f'if read -r line; then printf "read:%s" "$line" >> {seen}; else printf "eof" >> {seen}; fi\n'
+        "echo 'user cfd'",
+    )
+    monkeypatch.setenv("SSH_ASKPASS", str(tmp_path / "an-askpass-already-set"))
+    monkeypatch.setenv("SSH_ASKPASS_REQUIRE", "force")
+    typed, feed = os.pipe()
+    os.write(feed, b"typed at the terminal\n")
+    os.close(feed)
+    saved = os.dup(0)
+    os.dup2(typed, 0)
+    try:
+        adder.ssh_defaults("203.0.113.7")
+    finally:
+        os.dup2(saved, 0)
+        os.close(saved)
+        os.close(typed)
+
+    assert seen.read_text(encoding="utf-8") == "-G||never|eof"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="password machines are refused on Windows")
+def test_key_and_password_machines_resolve_through_one_reader_of_ssh_g(tmp_path, monkeypatch, supported_host):
+    """Two readers of ``ssh -G`` disagreed on decoding and on which failures they survived (reviewed
+    2026-10-20). Both machines' resolutions are now one call, with each caller's own command line."""
+    from raven.ops import transport
+
+    asked: list[list[str]] = []
+
+    def resolve(argv):
+        asked.append(list(argv))
+        return transport.SshResolution({"hostname": ("203.0.113.7",), "user": ("cfd",), "port": ("58717",)}, "")
+
+    monkeypatch.setattr(transport, "resolve_with_ssh", resolve, raising=False)
+    _fake_ssh(tmp_path, monkeypatch, "echo 'a reader of its own ran ssh' >&2; exit 99")
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    adder.store_password("box", "hunter2")
+
+    assert adder.ssh_defaults("203.0.113.7") == {"user": "cfd", "port": 58717, "keys": []}
+    transport.ssh_env(PASSWORD_ROW)
+
+    assert asked[0] == ["ssh", "203.0.113.7"]
+    assert asked[1][0] == "ssh" and asked[1][-1] == "root@203.0.113.7" and "PubkeyAuthentication=no" in asked[1]
 
 
 def test_the_probe_reads_the_c_library_line_into_the_note():
@@ -867,6 +949,74 @@ def test_a_refused_password_is_one_sentence_that_names_the_other_cause_too_and_n
     assert "wrong-one" not in said
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in ssh is a POSIX shell script")
+def test_a_question_the_kept_password_does_not_answer_is_named_and_the_password_is_not_blamed(tmp_path, monkeypatch):
+    """The helper gives a second factor's question nothing, and ssh then reports the login refused; saying the
+    password was refused sent the owner after a fault the password did not have."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    adder.store_password("box", "hunter2")
+    _fake_ssh(
+        tmp_path,
+        monkeypatch,
+        """
+        [ "$1" = -G ] && { echo 'hostname 203.0.113.7'; exit 0; }
+        "$SSH_ASKPASS" "(root@203.0.113.7) Verification code: " > /dev/null
+        echo 'root@203.0.113.7: Permission denied (keyboard-interactive).' >&2; exit 255
+        """,
+    )
+
+    reached, said, _ = adder.probe(PASSWORD_ROW, timeout=10)
+
+    assert not reached
+    assert "Permission denied (keyboard-interactive)." in said
+    assert "The password was refused" not in said
+    assert "so it was not sent" in said
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in ssh is a POSIX shell script")
+def test_a_host_ssh_could_not_resolve_is_named_and_the_owner_is_not_sent_to_a_key(tmp_path, monkeypatch):
+    """``ssh -G`` fails, so the helper waits for the row's spelling ``ownerbox``; the machine then asks exactly
+    for its password, at the address ssh did resolve, and the helper declines. That is no other question: the
+    registration says the host could not be resolved, keeps that the password was not sent, and does not tell
+    the owner to register with a key (reviewed 2026-10-20)."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    adder.store_password("box", "hunter2")
+    _fake_ssh(
+        tmp_path,
+        monkeypatch,
+        """
+        [ "$1" = -G ] && { echo 'ssh: Could not resolve hostname ownerbox' >&2; exit 255; }
+        given=$("$SSH_ASKPASS" "root@192.0.2.8's password: ")
+        echo "given=$given" >&2
+        echo 'root@192.0.2.8: Permission denied (password).' >&2; exit 255
+        """,
+    )
+
+    reached, said, _ = adder.probe(dict(PASSWORD_ROW, host="ownerbox"), timeout=10)
+
+    assert not reached
+    assert "given=\n" in said and "hunter2" not in said
+    assert "could not say which host" in said and "ssh -G exited 255" in said and "so it was not sent" in said
+    assert "registered with a key" not in said and "The password was refused" not in said
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in ssh is a POSIX shell script")
+def test_a_password_machine_at_another_machine_s_alias_is_refused_before_ssh_is_started(tmp_path, monkeypatch):
+    """The key machine ``labbox`` was registered first, so ``Host labbox`` in ~/.ssh/config is Raven's. A password
+    machine registered at ``labbox`` would log in at the key machine's address; it is refused by name, before
+    ssh starts, and the password is offered to nothing."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    assert adder.write_ssh_alias(dict(SSH_ROW, id="labbox", host="198.51.100.66")) == "labbox"
+    adder.store_password("lab", "hunter2")
+    _fake_ssh(tmp_path, monkeypatch, f"echo started >> {tmp_path / 'ssh-ran'}; exit 0")
+
+    reached, said, _ = adder.probe(dict(PASSWORD_ROW, id="lab", host="labbox"), timeout=10)
+
+    assert not reached
+    assert "ssh alias Raven keeps" in said and "'labbox'" in said and "not sent" in said
+    assert not (tmp_path / "ssh-ran").exists()
+
+
 def test_a_password_row_with_no_password_kept_here_is_refused_before_ssh_is_started(
     tmp_path, monkeypatch, supported_host
 ):
@@ -887,3 +1037,130 @@ def test_a_password_row_is_refused_on_windows_before_ssh_is_started(tmp_path, mo
     reached, said, _ = adder.probe(PASSWORD_ROW, timeout=10)
 
     assert not reached and "Windows" in said and "use a key" in said
+
+
+# ---- a registration that would let one machine's ssh alias take another's password is refused up front ----
+
+KEY_LAB = {"id": "labbox", "transport": "ssh", "host": "198.51.100.66", "port": 22, "user": "root", "key": "~/k"}
+PASSWORD_LAB = {"id": "lab", "transport": "ssh", "host": "LabBox", "port": 22, "user": "alice", "auth": "password"}
+
+
+def _registered(_home, *rows):
+    (_home / "connections.json").write_text(json.dumps({"connections": list(rows)}), encoding="utf-8")
+
+
+def test_a_key_machine_whose_id_is_a_password_machine_s_address_is_not_written(_home):
+    """Its ``Host labbox`` alias would take the password machine at ``LabBox`` (names compare ignoring case)
+    to this machine's address. Connecting refuses that pair by name, but only once the alias exists; the
+    writer every registration goes through refuses it before (reviewed 2026-10-20)."""
+    _registered(_home, PASSWORD_LAB)
+
+    with pytest.raises(ValueError, match="password machine 'lab'") as refused:
+        adder.write(dict(KEY_LAB))
+
+    assert "Pick another id" in str(refused.value)
+    assert [r["id"] for r in connections.load()] == ["lab"]
+
+
+def test_a_password_machine_at_a_key_machine_s_id_is_not_written_even_before_its_alias_exists(_home):
+    """The key machine's alias may not be written yet (it is written after its row, and a failed write is only a
+    warning), so the registry is asked as well as ~/.ssh/config."""
+    _registered(_home, KEY_LAB)
+
+    with pytest.raises(ValueError, match="key machine 'labbox'") as refused:
+        adder.write(dict(PASSWORD_LAB), password="hunter2")
+
+    assert "('198.51.100.66')" in str(refused.value) and "its IP address or full domain name" in str(refused.value)
+    assert [r["id"] for r in connections.load()] == ["labbox"]
+    assert not connections.password_path("lab").exists()
+
+
+def test_a_password_machine_at_an_alias_left_with_one_mark_and_no_machine_is_not_written(_home):
+    """A block whose machine is gone, cut short to one mark, is still Raven's alias and still decides where ssh
+    goes for that name."""
+    (_home / ".ssh").mkdir()
+    (_home / ".ssh" / "config").write_text(
+        adder.ALIAS_MARK.format(conn_id="labbox") + "\nHost labbox\n  HostName 198.51.100.66\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="ssh alias Raven keeps"):
+        adder.write(dict(PASSWORD_LAB, host="labbox"))
+
+    assert not (_home / "connections.json").exists()
+
+
+@pytest.mark.parametrize("order", ["key-after-password", "password-after-key"])
+@pytest.mark.parametrize("key_host", ["gpu1", "GPU1"], ids=["as-written", "another-case"])
+def test_a_key_machine_named_after_its_own_address_and_a_password_machine_there_both_register(_home, order, key_host):
+    """Key machine ``gpu1`` at ``gpu1`` and password machine ``gpu1-shared`` at ``gpu1``: the alias Raven writes
+    for the key machine names the address it is called by, so ssh logs the password machine in where it was
+    registered, and the pair registers in either order (reviewed 2026-10-22)."""
+    key = {"id": "gpu1", "transport": "ssh", "host": key_host, "port": 2200, "user": "owner", "key": "~/k"}
+    password = {
+        "id": "gpu1-shared",
+        "transport": "ssh",
+        "host": "gpu1",
+        "port": 22,
+        "user": "shared",
+        "auth": "password",
+    }
+    first, second = (password, key) if order == "key-after-password" else (key, password)
+
+    adder.write(dict(first))
+    adder.write_ssh_alias(first)
+    adder.write(dict(second))
+
+    assert [r["id"] for r in connections.load()] == [first["id"], second["id"]]
+
+
+def test_a_password_machine_is_refused_when_the_block_on_disk_redirects_though_the_registry_does_not(_home):
+    """The registry row is what the next add writes the block from, but ssh reads the block as it is now: a key
+    machine at its own name whose block was edited to another address still takes the password machine there."""
+    key = {"id": "gpu1", "transport": "ssh", "host": "gpu1", "port": 22, "user": "owner", "key": "~/k"}
+    _registered(_home, key)
+    adder.write_ssh_alias(dict(key, host="10.0.0.5"))
+
+    with pytest.raises(ValueError, match="ssh alias Raven keeps") as refused:
+        adder.write({"id": "gpu1-shared", "transport": "ssh", "host": "gpu1", "user": "shared", "auth": "password"})
+
+    assert "does not keep ssh at that name" in str(refused.value)
+    assert [r["id"] for r in connections.load()] == ["gpu1"]
+
+
+def test_rows_that_do_not_meet_register_as_before(_home):
+    """Only the colliding pair is refused: a key machine with another id, a password machine elsewhere, a local
+    machine named like an address."""
+    _registered(_home, PASSWORD_LAB)
+
+    adder.write(dict(KEY_LAB, id="labbox2"))
+    adder.write(dict(PASSWORD_LAB, id="lab2", host="203.0.113.9"))
+    adder.write({"id": "labbox-local", "transport": "local"})
+
+    assert [r["id"] for r in connections.load()] == ["lab", "labbox2", "lab2", "labbox-local"]
+
+
+def test_the_model_cannot_register_a_key_machine_whose_id_is_a_password_machine_s_address(_home, monkeypatch):
+    """The reviewed path: ops_connection_add, callable by the model, registered the key machine whose alias then
+    redirected the password machine. Refused before anything is reached or resolved."""
+    _registered(_home, PASSWORD_LAB)
+    monkeypatch.setattr(adder, "probe", lambda row, **kw: pytest.fail("probed a machine that cannot be registered"))
+    monkeypatch.setattr(
+        adder, "ssh_defaults", lambda host, **kw: pytest.fail("resolved a machine that cannot be registered")
+    )
+
+    out = add(id="labbox", host="198.51.100.66", key="", port=0, user="")
+
+    assert out.startswith("REFUSED") and "password machine 'lab'" in out and "Nothing was written" in out
+    assert not (_home / ".ssh" / "config").exists()
+
+
+def test_the_model_registers_a_key_machine_named_after_its_own_address_beside_a_password_machine_there(_home, reached):
+    """The pair the writer lets through, key machine ``gpu1`` at ``gpu1`` beside a password machine at ``gpu1``, is
+    let through on the model's path too: the check asked before anything is reached sees the address this machine
+    is called by, not an empty one."""
+    _registered(_home, dict(PASSWORD_LAB, id="gpu1-shared", host="gpu1"))
+
+    out = add(id="gpu1", host="gpu1")
+
+    assert "wrote gpu1" in out, out
+    assert [r["id"] for r in connections.load()] == ["gpu1-shared", "gpu1"]

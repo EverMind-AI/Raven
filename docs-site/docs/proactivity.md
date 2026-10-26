@@ -98,9 +98,10 @@ proof that a running process has reloaded them.
 
 ### Delivery targets
 
-Despite its name, `sentinel.task_discovery_targets` also supplies destinations
-for plain nudges aimed at the internal `sentinel:direct` target, such as
-daily-plan reminders. It is used even when task discovery is disabled.
+`sentinel.task_discovery_targets` supplies destinations for task discovery and
+plain nudges aimed at the internal `sentinel:direct` target, such as daily-plan
+reminders. Plain nudges use these destinations even when task discovery is
+disabled.
 
 - `"channel:chat_id"`: a specific recipient; preferable when a channel has
   multiple conversations.

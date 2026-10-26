@@ -215,11 +215,14 @@ def require_search(config: dict) -> None:
     Search is what this agent is for; withheld, the tool is absent and a run
     answers from the model's own memory -- which reads as an ordinary run, in
     the one failure mode nobody inspects. The bare env var counts because the
-    tool resolves its key at call time from the config value or that var.
+    tool resolves its key at call time from the config value or that var, and
+    a vendor that searches without a key (Keenable) needs neither.
     """
+    from raven.agent.tools.web import SEARCH_PROVIDERS
+
     vendor, _ = selected_vendors(config)
     env_var = WEB_VENDOR_ENV_VARS.get(vendor, SEARCH_ENV_VAR)
-    if vendor_key(config, vendor) or os.environ.get(env_var):
+    if not SEARCH_PROVIDERS[vendor].needs_key or vendor_key(config, vendor) or os.environ.get(env_var):
         return
     raise SystemExit(
         f"error: search has no key for {vendor}; put RESEARCH_{env_var} in "

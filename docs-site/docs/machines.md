@@ -82,10 +82,30 @@ What gets recorded, and where:
   the jump's own ssh would be handed this machine's password; a machine
   reached only through one has to be registered with a key. The helper
   answers one prompt: ssh's own, for the password of the registered account
-  at the registered address (`user@host`). Another account's prompt, a
-  second factor's (a verification code, a passcode) and a one-time
-  password's get no answer, so a machine whose login also asks for one is
-  registered with a key as well. The row carries `auth: password` and no key
+  at the registered address (`user@host`), named as ssh resolves it -- the
+  `HostName` or `HostKeyAlias` your ssh config gives an alias, an address in
+  its canonical form -- so the address can be an alias from your ssh config.
+  Not one of the `Host <id>` aliases Raven itself writes for key machines,
+  though, when it points elsewhere: a password machine whose address is such
+  an id would log in at that other machine's address, so it is refused by name
+  and its password is not sent. So is a block Raven did not write as it is:
+  one of its two marker lines gone, a keyword Raven does not write
+  (`ProxyCommand`, `Include` ...), a missing or second `HostName`, or a second
+  name on its `Host` line. An alias whose `HostName` is the id itself (key
+  machine `gpu1` at `gpu1`) moves nothing, and the pair is accepted.
+  Registration refuses a redirecting pair in either order -- a password machine at
+  a key machine's id, or a key machine whose id is a password machine's
+  address -- and connecting refuses it again for a pair registered before.
+  A password connection also turns off `CanonicalizeHostname`, so it reaches
+  the host `ssh -G` names rather than one a DNS lookup picks later; a machine
+  that relied on canonicalization is registered at its full name. When ssh
+  cannot say how it resolves the address, the helper waits for the registered
+  spelling, and a refusal then says the resolution failed.
+  Another account's prompt, a second factor's (a verification code, a
+  passcode) and a one-time password's get no answer, so a machine whose login
+  also asks for one is registered with a key as well; a registration refused
+  that way says the password was not sent. The row carries `auth: password`
+  and no key
   path. `raven ops connection doctor` counts the row usable, and Oncall
   campaigns run on it too, logging in the same way at the registered address
   alone: a campaign cannot point such a connection at another host, port or
@@ -135,6 +155,11 @@ own identities first (`~/.ssh/id_rsa` before `id_ed25519`, the order ssh tries t
 named, with the others to pick from; when none is found the form says so, and
 *Password* is the other way in.
 
+A card's state line is about the link now. *Not connected; the link opens
+when work is sent* is the resting state, not a fault: a link is opened by a
+dispatch, by **Test link** or by a node install, and opening the tab reaches
+no machine. **Test link** opens this one's and reads its node's version.
+
 ## 2. Install the node
 
 ```bash
@@ -157,13 +182,20 @@ What lands on the machine:
 | --- | --- |
 | The node | `<node_dir>/<version>-<digest>/`, with `node_dir` from the registry row, `~/.raven-node` by default |
 | Its runtime state | `run/` (the socket), `tasks/<task>/` (each agent's record, owner-only) and `log/` under `node_dir` |
-| `uv`, when the machine had none, or when its own is older than 0.4.23 while pip there is configured with an index (such a `uv` ignores the index) | `<node_dir>/.uv`, version 0.13.0, fetched with the machine's `curl` or `wget`; the next install uses it |
+| `uv`, when the machine had none, or when its own is older than 0.4.23 while an install would give it an index, pip's own or a mirror chosen over it (such a `uv` ignores the index) | `<node_dir>/.uv`, version 0.13.0, fetched with the machine's `curl` or `wget`; the next install uses it |
 | A Python 3.12, when the machine had none | beside the node, kept by `uv` |
 
 Nothing else changes: no system package, no shell rc file, no environment
 variable, no service, no open port. The node's packages come from the index
-pip is configured with on the machine, else from PyPI. Space needed, as the
-installer checks it:
+pip is configured with on the machine, else from PyPI. That index is timed
+from the machine first, with its `curl`, for a few seconds at most: when it
+cannot be reached there, or serves slower than 256 KB/s, the installer times
+two PyPI mirrors in mainland China (Tsinghua's TUNA and Alibaba Cloud's) and
+installs from the faster, with the machine's own index tried after it. The
+printed plan names the mirror and why. An index that answers with an error,
+asks for a sign-in, or shows a certificate the machine does not trust is
+kept, and `RAVEN_NO_MIRROR=1` on this computer keeps every install on the
+machine's own index. Space needed, as the installer checks it:
 
 | Part | About |
 | --- | --- |
@@ -180,9 +212,9 @@ has the node before any link to it is up.
 ### Installing from the Agent Hub
 
 **Install node** on a machine's card, or in its sheet, runs the same install
-in the background: the card says *Installing the node* until it ends, and the
-sheet keeps how it ended. The sheet's *Install into* field is the command's
-`--dir`. A machine whose node is another Raven's shows *needs updating* and
+in the background: the card says *Installing the node* until it ends, however
+long that takes, and the sheet keeps how it ended. The sheet's *Install into*
+field is the command's `--dir`. A machine whose node is another Raven's shows *needs updating* and
 offers **Update node**.
 
 Once the node is up, the card lists the agent entries on the machine,
@@ -192,7 +224,15 @@ step and offers **Connect an agent on this machine**: pick the agent, give
 its working directory there, and **Connect** adds `<preset>@<machine id>`
 (`codex@gpu1`) the way section 4's `subagents.add` does, one real prompt run
 on the machine first, and refused the same way when the machine already has
-that preset. The list has every preset a machine's node can start, including
+that preset. While it runs, the form counts the seconds and offers
+**Cancel**, which stops the run on the machine and writes nothing
+(`subagents.test_cancel` by the entry's name, the call that stops a test);
+a Cancel that finds nothing left to stop -- the agent has answered and the
+entry is being written -- is said as too late to cancel, and the form waits
+for the connect to finish; a Cancel whose stop gives no answer is said as not
+confirmed, since only the stop's answer says whether anything was written;
+after ten minutes with no answer the form asks it to stop itself and says to look
+at the Agents page for whether it connected. The list has every preset a machine's node can start, including
 one already connected on this computer -- that is a second entry, on the
 machine, not a conflict. An entry on the machine that is switched off is shown
 too, marked *switched off*, on the card and in the form: it still holds the
@@ -335,10 +375,14 @@ was copied. The agent uses it where the machine can read it -- the same path
 on a disk both mount, a copy already there -- or says in its reply that it
 could not be found on the machine, and goes on.
 
-**MCP servers are not lent.** The host's MCP servers are reached through a
-socket on this computer, which an agent elsewhere cannot open. A granted
-server is noted in the reply as not lent. Lending them across the link is
-coming, in pull request #947.
+**Remote ACP agents can use granted MCP servers through the Raven node.**
+The servers run on the host, which retains their definitions, credentials,
+tool restrictions, and sandbox rules. The node associates each bridge with
+its task, and the host checks calls against that task's grant. Lending requires
+a node with MCP bridge support and an agent configured for session MCP delivery;
+the reply reports servers that could not be lent. Remote CLI agents run without
+lent MCP. After a host restart, task results can be recovered, but previous MCP
+connections are not restored. See [Working with sub-agents](agent-collaboration.md#work-on-a-registered-machine).
 
 **Its files stay on the machine.** Nothing is brought back when the turn
 ends. The reply closes with a line that says where it worked:
@@ -501,7 +545,8 @@ to an owner-only log under the Raven home (`logs/ssh/`).
 | *is not installed on machine …; install it with `raven ops connection install-node …`* | No node there | Run the install |
 | *runs different code from this Raven; update it with …* | The node is from another Raven version | Run `install-node` again |
 | *has no uv, and no curl or wget to fetch one with* | The installer needs `uv`, and the machine has neither it nor a way to fetch it; a Python there does not change this | Install `uv` on the machine (the sentence names its installer), or `curl` or `wget`, then retry |
-| *has uv 0.4.22, and only uv 0.4.23 or later installs from the package index pip is configured with there; with no curl or wget to fetch uv 0.13.0, upgrade uv there* | pip on the machine is configured with an index, its `uv` is too old to read one (or does not say its version), and the installer has no way to fetch a newer one | Upgrade `uv` on the machine, or install `curl` or `wget` so the installer fetches one under `node_dir`, then retry |
+| *has uv 0.4.22, and only uv 0.4.23 or later installs from the index pip is configured with there; with no curl or wget to fetch uv 0.13.0, upgrade uv there* | pip on the machine is configured with an index, its `uv` is too old to read one (or does not say its version), and the installer has no way to fetch a newer one | Upgrade `uv` on the machine, or install `curl` or `wget` so the installer fetches one under `node_dir`, then retry |
+| *failed at the packages step: it did not finish within 15 minutes, installing packages from …* | Downloads from that index crawl on the machine, and no mirror did better (or `RAVEN_NO_MIRROR` is set, or the machine has no `curl` to time it with) | Point pip there at a nearer index (`index-url` in pip's configuration, or `PIP_INDEX_URL`), then retry |
 | *the agent's command was not found on machine …* | The agent is not installed there for that user | Install and sign in on the machine |
 | *already runs 8 agents; wait for one to finish* | The machine is at its limit | Wait, or use another machine |
 | *did not answer a heartbeat within 15s* | The link dropped | Nothing; Raven reconnects. The agent keeps running |

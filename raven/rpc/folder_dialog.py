@@ -18,6 +18,14 @@ from pathlib import Path
 # Only the first tool found on PATH is offered on Linux, where no dialog ships
 # with every desktop, and only with a display to put it on: neither tool starts
 # without one, and exiting having printed nothing reads as a dismissal.
+#
+# Windows is deliberately absent. It has FolderBrowserDialog, but a gateway is
+# a background process and Windows will not let one take the foreground: the
+# dialog is created behind the browser and the page's click reads as nothing
+# happening (measured 2026-10-22 through the gateway's own spawn). Raising it
+# takes a compiled helper that forces the dialog topmost once it is up, and
+# even then it cannot take the keyboard; the page walks the host's folders
+# instead, which needs no foreground at all.
 _PICK_DIR_PROMPT = "Choose the folder this conversation will work in"
 
 
@@ -26,15 +34,7 @@ def pick_dir_argv() -> list[str] | None:
     if sys.platform == "darwin":
         return ["osascript", "-e", f'POSIX path of (choose folder with prompt "{_PICK_DIR_PROMPT}")']
     if sys.platform.startswith("win"):
-        return [
-            "powershell",
-            "-NoProfile",
-            "-Command",
-            "Add-Type -AssemblyName System.Windows.Forms;"
-            "$d=New-Object System.Windows.Forms.FolderBrowserDialog;"
-            f"$d.Description='{_PICK_DIR_PROMPT}';"
-            "if($d.ShowDialog() -eq 'OK'){Write-Output $d.SelectedPath}",
-        ]
+        return None
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         return None
     for argv in (

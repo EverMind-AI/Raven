@@ -95,8 +95,10 @@ Charter 不是操作系统沙箱，也不是 fail-closed 安全边界；应独�
 宿主生成 worker table 时，使用 worker label，而不是底层 Agent 名。再次向同一对话
 提交图时，要选择新的节点 id。
 
-写入任务应划分文件所有权或使用不同工作副本；并行节点不代表自动拥有独立 worktree
-或文件排他锁。
+同一 Git 项目中并行编码时，宿主的 `multi-agent-coding` skill 会要求各编码 Agent
+创建并汇报独立 worktree。直接构建任务图时，应分配工作副本或划分文件所有权；
+DAG 调度器本身不会创建 worktree 或锁定文件。
+详见[与子 Agent 协作](agent-collaboration.md#models-modes-and-shared-files)。
 
 ## 节点契约与数据流 { #node-contract-and-data-flow }
 

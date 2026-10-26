@@ -10,16 +10,16 @@
  * Three rules on timing:
  *   - a click waits a quarter of a second for a second click, and the wait
  *     carries what it is about -- the entry or the dense block's members,
- *     and the list's generation, conversation and view at the time. When it
+ *     and the list's generation, conversation, Scope Tab and view at the time. When it
  *     fires it checks all of that and the target's presence, and does
  *     nothing if any changed. A new click replaces the wait; a double click
  *     cancels it; a drag never starts one.
  *   - a pointer that moves more than a few pixels is a drag, which pans the
  *     view and ends without a click; a cancelled or lost pointer ends it the
  *     same way.
- *   - the conversation, the view, the switch or the epoch changing under the
- *     bar clears the wait, the hover, the drag and the dense block's pick
- *     list, and so does unmounting.
+ *   - the conversation, the tab, the view, the switch or the epoch changing
+ *     under the bar clears the wait, the hover, the drag and the dense block's
+ *     pick list, and so does unmounting.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
@@ -69,13 +69,15 @@ export const BUCKET_MAX_H = 280
 interface Captured {
   gen: number
   sessionKey: string | null
+  scope: string | null
 }
 
-const captured = (): Captured => ({ gen: store.gen(), sessionKey: store.get().sessionKey })
+const captured = (): Captured => ({ gen: store.gen(), sessionKey: store.get().sessionKey, scope: store.get().scope })
 
 const stillValid = (c: Captured): boolean => {
   const s = store.get()
-  return c.gen === store.gen() && c.sessionKey === s.sessionKey && s.view === 'trajectory' && store.available(s) && s.snapshotReady
+  return c.gen === store.gen() && c.sessionKey === s.sessionKey && c.scope === s.scope && s.view === 'trajectory'
+    && store.available(s) && s.snapshotReady
 }
 
 interface Pending {
@@ -262,16 +264,12 @@ export function DurationBar(): JSX.Element {
     document.addEventListener('pointerdown', onDown, true)
     return () => document.removeEventListener('pointerdown', onDown, true)
   }, [timeline.threshold])
-  const hiddenCount = useMemo(() => s.entries.reduce((n, e) => n + (store.hiddenOf(e) === null ? 0 : 1), 0), [s.entries])
-  /* The turns whose reply the list leaves out keep their time as a band. */
-  const hiddenTurns = useMemo(() => {
-    const out = new Map<number, number>()
-    for (const e of s.entries) {
-      if (e.slot !== 'turn.output' || store.hiddenOf(e) === null || e.entry_id in s.visibleIndex) continue
-      if (typeof e.turn_number === 'number' && typeof e.charged_ms === 'number') out.set(e.turn_number, e.charged_ms)
-    }
-    return out
-  }, [s.entries, s.visibleIndex])
+  const hiddenCount = s.hiddenCount
+  /* The tab's turns whose reply the list leaves out keep their time as a band. */
+  const hiddenTurns = useMemo(
+    () => new Map(Object.entries(s.hiddenTurns).map(([turn, ms]) => [Number(turn), ms])),
+    [s.hiddenTurns],
+  )
   const root = useRef<HTMLDivElement | null>(null)
   const canvas = useRef<HTMLCanvasElement | null>(null)
   const observer = useRef<ResizeObserver | null>(null)
@@ -387,14 +385,19 @@ export function DurationBar(): JSX.Element {
     if (root.current) delete root.current.dataset.drag
   }, [])
 
-  /* The world moving under the bar -- another conversation, the conversation
-     view, the switch off, a rebuilt index -- takes every gesture in progress
-     with it; so does unmounting. */
+  /* The world moving under the bar -- another conversation, another tab, the
+     conversation view, the switch off, a rebuilt index -- takes every gesture
+     in progress with it; so does unmounting. */
   useEffect(() => {
-    let seen = { sessionKey: store.get().sessionKey, view: store.get().view, epoch: store.get().epoch, available: store.available() }
+    const world = (): { sessionKey: string | null; scope: string | null; view: string; epoch: string | null; available: boolean } => {
+      const s = store.get()
+      return { sessionKey: s.sessionKey, scope: s.scope, view: s.view, epoch: s.epoch, available: store.available(s) }
+    }
+    let seen = world()
     const unsubscribe = store.subscribe(() => {
-      const now = { sessionKey: store.get().sessionKey, view: store.get().view, epoch: store.get().epoch, available: store.available() }
-      const changed = now.sessionKey !== seen.sessionKey || now.view !== seen.view || now.epoch !== seen.epoch || now.available !== seen.available
+      const now = world()
+      const changed = now.sessionKey !== seen.sessionKey || now.scope !== seen.scope || now.view !== seen.view
+        || now.epoch !== seen.epoch || now.available !== seen.available
       seen = now
       if (!changed) return
       clearPending()
@@ -411,12 +414,13 @@ export function DurationBar(): JSX.Element {
     }
   }, [clearPending, endDrag])
 
-  /* The hover follows the rows: a block whose entry left is no longer anything to describe. */
+  /* The hover follows the rows: a block whose entry left the bar -- gone, or
+     filed under another tab by the feed -- is no longer anything to describe. */
   useEffect(() => {
     if (!hover) return
-    const alive = hover.block.ids ? hover.block.ids.some((id) => id in s.index) : hover.block.id in s.index
+    const alive = hover.block.ids ? hover.block.ids.some((id) => id in s.visibleIndex) : hover.block.id in s.visibleIndex
     if (!alive) setHover(null)
-  }, [hover, s.index])
+  }, [hover, s.visibleIndex])
 
   const contentX = (clientX: number): number => {
     const rect = canvas.current?.getBoundingClientRect()
@@ -439,17 +443,20 @@ export function DurationBar(): JSX.Element {
     if (first) store.select(first.entry_id, { source: 'bar' })
   }
 
-  /* The delayed click, fired with the world it was made in. */
+  /* The delayed click, fired with the world it was made in. Its target must
+     still be a row of this tab's bar: an entry the feed has since filed under
+     another tab is still in the index, and selecting it would move the reader
+     to that tab from a click on a block that is no longer here. */
   const fire = (p: Pending): void => {
     pending.current = null
     if (!stillValid(p.world)) return
-    const index = store.get().index
+    const onBar = store.get().visibleIndex
     if (p.block.ids) {
-      const alive = p.block.ids.filter((id) => id in index)
+      const alive = p.block.ids.filter((id) => id in onBar)
       if (alive.length) store.openBucket(alive, p.x)
       return
     }
-    if (!(p.block.id in index)) return
+    if (!(p.block.id in onBar)) return
     store.select(p.block.id, { source: 'bar' })
     details.openDetails()
   }
@@ -534,7 +541,7 @@ export function DurationBar(): JSX.Element {
 
   const onPick = (id: string): void => {
     store.closeBucket()
-    if (!(id in store.get().index)) return
+    if (!(id in store.get().visibleIndex)) return
     store.select(id, { source: 'bar' })
     details.openDetails()
     root.current?.focus()
@@ -551,12 +558,16 @@ export function DurationBar(): JSX.Element {
   }
 
   /* When the list closes for any other reason -- Escape through the page's
-     order, the world moving -- the focus comes back here. */
+     order, the world moving -- the focus comes back here; but not when the
+     reader moved to another tab, which is where their focus went. */
   const hadBucket = useRef(bucket !== null)
+  const lastScope = useRef(s.scope)
   useEffect(() => {
-    if (hadBucket.current && bucket === null) root.current?.focus()
+    const moved = lastScope.current !== s.scope
+    lastScope.current = s.scope
+    if (hadBucket.current && bucket === null && !moved) root.current?.focus()
     hadBucket.current = bucket !== null
-  }, [bucket])
+  }, [bucket, s.scope])
 
   const label = t('gui.trajectory.bar.canvas_label', { n: entries.length, known: formatDuration(sum.known) })
   const rect = canvas.current?.getBoundingClientRect()

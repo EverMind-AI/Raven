@@ -19,6 +19,7 @@ from typing import Any, Callable
 
 from raven.config.raven import ContextConfig
 from raven.context_engine.history_trimmer import HistoryTrimmer, _tool_parents
+from raven.context_engine.pinned import pinned_message_ids
 from raven.contracts.assembled import AssembledContext, TokenBudget
 from raven.contracts.context import AssembledPrefix, TurnContext
 from raven.contracts.llm_provider import LLMProvider
@@ -830,66 +831,6 @@ def _plan_from_kwargs(kwargs: dict[str, Any]) -> ContextPlan:
         ],
         notes=str(kwargs.get("notes", "") or ""),
     )
-
-
-# Tools whose result is a skill body rather than conversation. ``read_skill``
-# is included because it returns the same body for a local skill, so which of
-# the two the agent happened to call must not decide whether the pin holds.
-_SKILL_FETCH_TOOLS = frozenset({"use_skill", "read_skill"})
-
-
-def _tool_call_name_args(tool_call: Any) -> tuple[str, dict[str, Any]]:
-    """``(name, arguments)`` from one stored tool_call, or ``("", {})``.
-
-    Arguments are serialized as a JSON *string* on the way into the session
-    (OpenAI shape, see ``providers.tool_calls.openai_tool_call``) but arrive as a dict
-    from some providers, so both are accepted. Anything unparseable degrades to
-    "no arguments", never an exception -- this runs inside manifest building,
-    where a raise would fail the whole turn.
-    """
-    if not isinstance(tool_call, dict):
-        return ("", {})
-    fn = tool_call.get("function") if isinstance(tool_call.get("function"), dict) else tool_call
-    name = fn.get("name") if isinstance(fn.get("name"), str) else ""
-    raw = fn.get("arguments")
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except json.JSONDecodeError:
-            raw = None
-    return (name or "", raw if isinstance(raw, dict) else {})
-
-
-def pinned_message_ids(messages: list[dict[str, Any]], skill_ids: list[str] | None) -> set[int]:
-    """Ids of the messages that fetched a pinned skill's body.
-
-    Returns the assistant message carrying the fetch and every result paired
-    with it by ``_tool_parents``, including sibling results. This is the same
-    positional pairing used by ``HistoryTrimmer.tool_group``: the trimmer drops
-    whole tool groups and treats a group with any protected member as protected.
-
-    Only the latest fetch per skill id is pinned: a re-read supersedes the
-    earlier copy, so the same 2k-token body can never occupy the window twice.
-    """
-    wanted = {s for s in (skill_ids or []) if isinstance(s, str) and s}
-    if not wanted:
-        return set()
-
-    latest: dict[str, int] = {}
-    for idx, message in enumerate(messages):
-        if message.get("role") != "assistant" or not message.get("tool_calls"):
-            continue
-        for tool_call in message.get("tool_calls") or []:
-            name, args = _tool_call_name_args(tool_call)
-            if name not in _SKILL_FETCH_TOOLS:
-                continue
-            skill_id = args.get("skill_id")
-            if isinstance(skill_id, str) and skill_id in wanted:
-                latest[skill_id] = idx
-
-    parents = set(latest.values())
-    pinned = parents | {result for result, parent in _tool_parents(messages).items() if parent in parents}
-    return pinned
 
 
 def _message_text(message: dict[str, Any]) -> str:

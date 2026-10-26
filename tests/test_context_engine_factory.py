@@ -122,7 +122,7 @@ def _build_engine(
     engine = build_context_engine(
         provider_pool=provider_pool,
         workspace=tmp_path,
-        config=ContextConfig(),
+        config=ContextConfig(history={"strategy": "curator"}),
         builder=builder,
         provider=_StubProvider(),
         model=model,
@@ -362,7 +362,7 @@ def _make_loop(tmp_path: Path, *, backend=None, agents=None, skill_forge_config=
         tools=ToolWiring(restrict_to_workspace=True),
         engine=EngineWiring(
             backend=backend,
-            context_config=ContextConfig(),
+            context_config=ContextConfig(history={"strategy": "curator"}),
             memory_config=MemoryConfig(),
             skill_forge_router_config=SkillForgeRouterConfig(),
             skill_forge_config=skill_forge_config,
@@ -504,7 +504,7 @@ class TestTheWindowFollowsTheTurnsBinding:
             tools=ToolWiring(restrict_to_workspace=True),
             engine=EngineWiring(
                 context_window_tokens=8192,
-                context_config=ContextConfig(),
+                context_config=ContextConfig(history={"strategy": "curator"}),
                 memory_config=MemoryConfig(),
                 skill_forge_router_config=SkillForgeRouterConfig(),
             ),
@@ -704,14 +704,24 @@ def _engine_with(tmp_path: Path, config: ContextConfig) -> ContextAssembler:
 
 
 def test_a_product_drops_the_host_segments_it_names(tmp_path: Path) -> None:
-    full = [b.name for b in _engine_with(tmp_path, ContextConfig())._builders]
+    full = [b.name for b in _engine_with(tmp_path, ContextConfig(history={"strategy": "curator"}))._builders]
     assert full[:2] == ["identity", "bootstrap"] and "memory" in full and "curator" in full
 
-    slim = [b.name for b in _engine_with(tmp_path, ContextConfig(drop_segments=["identity", "memory"]))._builders]
+    slim = [
+        b.name
+        for b in _engine_with(
+            tmp_path, ContextConfig(history={"strategy": "curator"}, drop_segments=["identity", "memory"])
+        )._builders
+    ]
     assert "identity" not in slim and "memory" not in slim
     assert slim == [n for n in full if n not in ("identity", "memory")], "order and the rest untouched"
 
 
 def test_an_unknown_segment_name_drops_nothing(tmp_path: Path) -> None:
-    full = [b.name for b in _engine_with(tmp_path, ContextConfig())._builders]
-    assert [b.name for b in _engine_with(tmp_path, ContextConfig(drop_segments=["nope"]))._builders] == full
+    full = [b.name for b in _engine_with(tmp_path, ContextConfig(history={"strategy": "curator"}))._builders]
+    assert [
+        b.name
+        for b in _engine_with(
+            tmp_path, ContextConfig(history={"strategy": "curator"}, drop_segments=["nope"])
+        )._builders
+    ] == full

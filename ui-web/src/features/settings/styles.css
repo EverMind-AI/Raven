@@ -54,7 +54,7 @@ h1 {font-size:34px; font-weight:700; letter-spacing:-.02em; margin:8px 0 8px}
 .settings-rail {background:var(--surface); border-right:1px solid var(--line); padding:20px 12px 24px; overflow-y:auto}
 .settings-rail h4 {font-size:16px; font-weight:600; padding:0 10px 14px}
 .settings-rail .settings-grp {font-family:var(--disp); font-size:11px; letter-spacing:.13em; text-transform:uppercase; color:var(--faint); font-weight:600; padding:14px 10px 6px}
-.settings-nitem {display:flex; align-items:center; gap:8px; width:100%; height:32px; text-align:left; font:inherit; font-size:13px;
+.settings-nitem {display:flex; align-items:center; gap:8px; width:100%; height:32px; text-align:left; font:inherit; font-size:14px;
   background:none; border:0; color:var(--rail-ink); padding:0 8px; border-radius:8px; cursor:pointer; position:relative}
 .settings-nitem:hover {background:var(--settings-nav-on); color:var(--rail-ink-on)}
 .settings-nitem[aria-current="true"] {background:var(--settings-nav-on); color:var(--rail-ink-on); font-weight:500}
@@ -92,17 +92,23 @@ h1 {font-size:34px; font-weight:700; letter-spacing:-.02em; margin:8px 0 8px}
 .settings-swi-fixed {opacity:.45; cursor:default; box-shadow:none}
 .settings-swi-fixed[aria-checked="true"] {background:var(--line); border-color:var(--line)}
 .settings-seg {display:inline-flex; border:1px solid var(--line); border-radius:var(--ctl-r); overflow:hidden; background:var(--surface); height: var(--ctl-h); box-sizing: border-box; padding: 2px; gap: 2px}
-.settings-seg button {font:inherit; font-size:13px; border:0; background:none; color:var(--muted); padding:0 12px; cursor:pointer; border-right:1px solid var(--line); border-radius: calc(var(--ctl-r) - 3px); white-space: nowrap}
+.settings-seg button {font:inherit; font-size:14px; border:0; background:none; color:var(--muted); padding:0 12px; cursor:pointer; border-right:1px solid var(--line); border-radius: calc(var(--ctl-r) - 3px); white-space: nowrap}
 .settings-seg button:last-child {border-right:0}
 .settings-seg button[aria-pressed="true"] {background:var(--paper); color:var(--text); font-weight:500; box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 0 0 1px rgba(0,0,0,.03)}
 .settings-stepper {display:inline-flex; align-items:center; gap:0; border:1px solid var(--line); border-radius:8px; overflow:hidden}
 .settings-stepper button {font:inherit; border:0; background:var(--raised); color:var(--muted); width:26px; height:28px; cursor:pointer}
 .settings-stepper button:hover {color:var(--text)}
-.settings-stepper .settings-v {min-width:58px; text-align:center; font-family:var(--mono); font-size:13px; font-variant-numeric:tabular-nums}
-.settings-tbox {font:inherit; font-family:var(--mono); font-size:13px; border:1px solid var(--line); border-radius:var(--ctl-r);
+.settings-stepper .settings-v {min-width:58px; text-align:center; font-family:var(--mono); font-size:14px; font-variant-numeric:tabular-nums}
+.settings-tbox {font:inherit; font-family:var(--mono); font-size:14px; border:1px solid var(--line); border-radius:var(--ctl-r);
   background:var(--paper); color:var(--text); padding:5px 10px; min-width:170px; height:var(--ctl-h); box-sizing:border-box}
 .settings-tbox:focus {outline:none; border-color:var(--amber); box-shadow:var(--ctl-focus)}
 textarea.settings-tbox {height:auto}
+/* page.css pins bare `input[type=text]`/`select` at 13px with type selectors
+   (0,1,1) that a lone class loses to; naming the element too repeats that
+   specificity, and this sheet loads after page.css, so the dialog's own size
+   wins. The drawer's `.settings-cfg` pair outranks this and stays one step
+   down. */
+input.settings-tbox, textarea.settings-tbox, .settings-panel select { font-size: 14px; }
 /* The setup step bodies render in the onboarding wizard rather than in the
    settings dialog, so they take the dialog's own button sizes here (page.css
    says why 32 and 8). */
@@ -124,7 +130,7 @@ textarea.settings-tbox {height:auto}
 .settings-chip.settings-act {cursor:pointer; font:inherit; font-size:11px; font-weight:600}
 .settings-chip.settings-act:hover {border-color:var(--clay)}
 .settings-taglist {display:flex; flex-wrap:wrap; gap:6px; align-items:center}
-.settings-tag2 {font-family:var(--mono); font-size:12px; background:var(--raised); border:1px solid var(--line); border-radius:6px; padding:2px 7px; color:var(--muted)}
+.settings-tag2 {font-family:var(--mono); font-size:13px; background:var(--raised); border:1px solid var(--line); border-radius:6px; padding:2px 7px; color:var(--muted)}
 .settings-tag2 .settings-x {color:var(--faint); margin-left:5px; cursor:pointer}
 .settings-b {font-size:11px; font-family:var(--disp); font-weight:600; letter-spacing:.04em; padding:1px 6px; border-radius:4px; border:1px solid transparent; white-space:nowrap}
 .settings-b.settings-new {color:var(--sky); background:color-mix(in srgb, var(--sky) 12%, transparent); border-color:color-mix(in srgb, var(--sky) 30%, transparent)}
@@ -218,7 +224,7 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
 .settings-plist .settings-pit[disabled] {opacity:.45; cursor:not-allowed}
 .settings-modal.settings-wide {max-width:520px}
 .settings-tkrow {display:flex; gap:8px; align-items:center; padding:10px 15px; background:var(--surface); border-bottom:1px solid var(--line-soft); flex-wrap:wrap}
-.settings-tkrow input {flex:1; min-width:150px; font:inherit; font-size:13px; font-family:var(--mono); border:1px solid var(--line);
+.settings-tkrow input {flex:1; min-width:150px; font:inherit; font-size:14px; font-family:var(--mono); border:1px solid var(--line);
   border-radius:var(--ctl-r); background:var(--paper); color:var(--text); padding:0 9px;
   height:var(--ctl-h); box-sizing:border-box}
 .settings-tkrow input:focus {outline:none; border-color:var(--amber); box-shadow:var(--ctl-focus)}
@@ -229,8 +235,8 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
 .settings-ff input {font-family:var(--mono)}
 .settings-ff .settings-acts2 {display:flex; gap:8px}
 .settings-mnote {color:var(--faint); font-size:12px}
-.settings-inline-err {color:var(--clay); font-size:12px; padding:0 15px 9px}
-.settings-padderr {color:var(--clay); font-size:12px; line-height:1.4}
+.settings-inline-err {color:var(--clay); font-size:13px; padding:0 15px 9px}
+.settings-padderr {color:var(--clay); font-size:13px; line-height:1.4}
 .settings-okmark {color:var(--moss); font-weight:600}
 .settings-fl2 {color:var(--muted); font-size:13px; white-space:nowrap}
 .settings-tkrow input[type="date"] {flex:0 0 auto; min-width:0}
@@ -245,7 +251,7 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
 .settings-kvrow .settings-kvn {font-family:var(--mono); font-size:12px; font-weight:500; min-width:120px}
 .settings-kvrow .settings-kvv {font-family:var(--mono); font-size:12px; color:var(--faint); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .settings-kvform {display:flex; gap:7px; flex-wrap:wrap; align-items:center}
-.settings-kvform input,.settings-kvform select {font:inherit; font-family:var(--mono); font-size:13px; border:1px solid var(--line);
+.settings-kvform input,.settings-kvform select {font:inherit; font-family:var(--mono); font-size:14px; border:1px solid var(--line);
   border-radius:var(--ctl-r); background:var(--paper); color:var(--text); padding:0 9px; flex:1; min-width:110px;
   height:var(--ctl-h); box-sizing:border-box}
 .settings-kvform input:focus,.settings-kvform select:focus {outline:none; border-color:var(--amber); box-shadow:var(--ctl-focus)}
@@ -433,17 +439,17 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
   background:var(--paper); border:1px solid var(--line);
   box-shadow:0 1px 2px rgba(0,0,0,.06), 0 10px 24px -12px rgba(0,0,0,.2), 0 24px 56px -22px rgba(0,0,0,.3)}
 .settings-vgrp {font-size:11.5px; color:var(--faint); padding:8px 9px 4px}
-.settings-vopt {display:flex; align-items:center; gap:9px; width:100%; min-width:0; text-align:left; font:inherit; font-size:13px;
+.settings-vopt {display:flex; align-items:center; gap:9px; width:100%; min-width:0; text-align:left; font:inherit; font-size:14px;
   background:none; border:0; border-radius:7px; color:var(--text); padding:6px 9px; cursor:pointer}
 .settings-vopt > span {overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .settings-vopt:hover, .settings-vopt:focus-visible {background:var(--surface); outline:none}
 .settings-vopt[aria-selected="true"] {background:var(--raised); font-weight:600}
 /* A credential check's verdict: green when the vendor said yes, clay when it
    refused or could not be reached, grey when it cannot be asked at all. */
-.settings-pnote {display:inline-flex; align-items:center; gap:8px; font-size:12px; color:var(--clay); min-width:0}
+.settings-pnote {display:inline-flex; align-items:center; gap:8px; font-size:13px; color:var(--clay); min-width:0}
 .settings-pnote[data-tone="ok"] {color:var(--moss)}
 .settings-pnote[data-tone="muted"] {color:var(--faint)}
-.settings-plink {font:inherit; font-size:12px; background:none; border:0; padding:0; color:var(--amber); cursor:pointer}
+.settings-plink {font:inherit; font-size:13px; background:none; border:0; padding:0; color:var(--amber); cursor:pointer}
 .settings-plink:hover:not(:disabled) {text-decoration:underline}
 .settings-plink:disabled {color:var(--faint); cursor:default}
 .settings-pline {margin:-4px 0 10px}
@@ -549,7 +555,7 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
    navigation, it was the size of one, and it said nothing about the three
    values behind it. This sheet loads after page.css, which is what lets these
    tune .foldcap's own declarations. */
-.settings-disc {font-size:12px; line-height:1.3; margin:5px 0 0 -4px; padding:3px 8px 3px 4px; border-radius:6px;
+.settings-disc {font-size:13px; line-height:1.3; margin:5px 0 0 -4px; padding:3px 8px 3px 4px; border-radius:6px;
   flex-wrap:nowrap; gap:6px; max-width:100%; min-width:0; text-align:left}
 .settings-disc:hover {background:var(--line-soft)}
 .settings-disc .settings-sl {white-space:nowrap}
@@ -571,7 +577,7 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
 .settings-xrow.settings-dim .settings-xn {color:var(--muted)}
 .settings-xname {display:inline-flex; align-items:center; gap:9px; flex:1; min-width:0; font:inherit; color:inherit; background:none; border:0; padding:0; text-align:left}
 button.settings-xname {cursor:pointer}
-.settings-xname .settings-xn {font-size:13.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.settings-xname .settings-xn {font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .settings-xrow.settings-open .settings-chev {transform:rotate(90deg); color:var(--amber)}
 .settings-lnkico {margin-left:6px; vertical-align:middle}
 
@@ -589,7 +595,7 @@ button.settings-xname {cursor:pointer}
 .settings-tp {display:grid; grid-template-columns:286px minmax(0,1fr); grid-template-rows:minmax(0,1fr); border:1px solid var(--line); border-radius:12px; overflow:hidden; height:calc(100vh - 220px); min-height:420px}
 .settings-tp-side {border-right:1px solid var(--line-soft); padding:13px; display:flex; flex-direction:column; gap:9px; min-height:0; min-width: 0; overflow: hidden}
 .settings-tp-find {display:flex; gap:8px; align-items:center}
-.settings-tp-find input {flex:1; min-width:0; font:inherit; font-size:13px; padding:0 11px; border:1px solid var(--line);
+.settings-tp-find input {flex:1; min-width:0; font:inherit; font-size:14px; padding:0 11px; border:1px solid var(--line);
   border-radius:var(--ctl-r); background:var(--paper); color:var(--text); outline:none;
   height:var(--ctl-h); box-sizing:border-box}
 .settings-tp-find input:focus {border-color:var(--amber); box-shadow:var(--ctl-focus)}
@@ -603,9 +609,9 @@ button.settings-xname {cursor:pointer}
 .settings-tp-row:hover {background:var(--surface)}
 .settings-tp-row[aria-current="true"] {background:var(--raised)}
 .settings-tp-hit {display:flex; align-items:center; gap:9px; width:100%; min-width:0; text-align:left; font:inherit; background:none; border:0; color:var(--text); padding:7px 9px; cursor:pointer}
-.settings-tp-nm {flex:1; min-width:0; font-size:13.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.settings-tp-nm {flex:1; min-width:0; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .settings-tp-row[aria-current="true"] .settings-tp-nm {font-weight:600}
-.settings-tp-def {flex:none; font-size:10.5px; color:var(--gold); border:1px solid var(--line); border-radius:99px; padding:0 6px}
+.settings-tp-def {flex:none; font-size:11px; color:var(--gold); border:1px solid var(--line); border-radius:99px; padding:0 6px}
 .settings-tp-dot {width:7px; height:7px; border-radius:50%; background:var(--moss); flex:none}
 .settings-tp-empty {padding:12px 9px; color:var(--faint); font-size:13px}
 /* An empty card or column: the settings copy of the two-pane frame's empty state. */
@@ -614,7 +620,7 @@ button.settings-xname {cursor:pointer}
   background:var(--surface); box-shadow:inset 0 0 0 1px var(--line-soft); color:var(--faint)}
 .settings-glyph svg {width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round}
 .settings-et {font-size:14px; font-weight:600; color:var(--text)}
-.settings-es {max-width:26em; word-break:keep-all; overflow-wrap:anywhere; margin-top:5px; font-size:12.5px; line-height:1.6; color:var(--muted)}
+.settings-es {max-width:26em; word-break:keep-all; overflow-wrap:anywhere; margin-top:5px; font-size:13px; line-height:1.6; color:var(--muted)}
 .settings-ea {margin-top:16px}
 .settings-quiet .settings-glyph {width:auto; height:auto; background:none; box-shadow:none; margin-bottom:8px}
 .settings-quiet .settings-glyph svg {width:18px; height:18px}
@@ -675,9 +681,9 @@ button.settings-xname {cursor:pointer}
 .settings-apop {position:fixed; z-index:47; width:min(470px, calc(100vw - 32px)); display:flex; flex-direction:column; background:var(--paper); border:1px solid var(--line); border-radius:12px; box-shadow:var(--elev-up); overflow:hidden}
 .settings-apsearch {display:flex; align-items:center; gap:9px; padding:9px 13px; border-bottom:1px solid var(--line-soft)}
 .settings-apsearch svg {width:14px; height:14px; flex:none; fill:none; stroke:var(--faint); stroke-width:1.7; stroke-linecap:round}
-.settings-apsearch input {flex:1; min-width:0; font:inherit; font-size:13px; border:0; background:none; color:var(--text); outline:none}
+.settings-apsearch input {flex:1; min-width:0; font:inherit; font-size:14px; border:0; background:none; color:var(--text); outline:none}
 .settings-apkinds {display:flex; flex-wrap:wrap; gap:5px; padding:8px 10px 6px; border-bottom:1px solid var(--line-soft)}
-.settings-mkind {display:inline-flex; align-items:center; gap:5px; font:inherit; font-size:12px; color:var(--muted); background:none; border:1px solid transparent; border-radius:7px; padding:3px 8px; cursor:pointer}
+.settings-mkind {display:inline-flex; align-items:center; gap:5px; font:inherit; font-size:13px; color:var(--muted); background:none; border:1px solid transparent; border-radius:7px; padding:3px 8px; cursor:pointer}
 .settings-mkind:hover {background:var(--surface)}
 .settings-mkind[aria-pressed="true"] {border-color:var(--line); background:var(--surface); color:var(--text)}
 .settings-mkind .model-tag {width:12px; height:12px; color:inherit}
@@ -695,17 +701,17 @@ button.settings-xname {cursor:pointer}
 .settings-apgrp .settings-apm {padding-left:32px}
 /* The fold at the end of a provider's model chips: a word in the chips' own
    line, not a button in a box, so it reads as the list's tail. */
-.settings-tagmore {font:inherit; font-size:12px; color:var(--muted); background:none; border:0; padding:3px 6px;
+.settings-tagmore {font:inherit; font-size:13px; color:var(--muted); background:none; border:0; padding:3px 6px;
   border-radius:6px; cursor:pointer}
 .settings-tagmore:hover {color:var(--text); background:var(--surface)}
 /* The footer's select-all: the rows' tick, at the rows' left edge. */
-.settings-apall {display:inline-flex; align-items:center; gap:9px; font:inherit; font-size:12px; color:var(--muted);
+.settings-apall {display:inline-flex; align-items:center; gap:9px; font:inherit; font-size:13px; color:var(--muted);
   background:none; border:0; padding:4px 6px 4px 0; border-radius:6px; cursor:pointer}
 .settings-apall:hover {color:var(--text)}
 .settings-apall:hover .settings-aptick {border-color:var(--muted)}
 .settings-apall[aria-checked="true"] .settings-aptick,
 .settings-apall[aria-checked="mixed"] .settings-aptick {background:var(--amber); border-color:var(--amber); color:var(--ink-on-accent)}
-.settings-apm {display:flex; align-items:center; gap:9px; width:100%; min-width:0; text-align:left; font:inherit; font-size:13px; background:none; border:0; color:var(--text); padding:6px 8px; border-radius:7px; cursor:pointer}
+.settings-apm {display:flex; align-items:center; gap:9px; width:100%; min-width:0; text-align:left; font:inherit; font-size:14px; background:none; border:0; color:var(--text); padding:6px 8px; border-radius:7px; cursor:pointer}
 .settings-apm:hover {background:var(--surface)}
 /* A tick box: the list is a selection, and the footer commits it. The glyph
    inside is inked in the ground colour, so it only shows once the box fills. */
@@ -718,7 +724,7 @@ button.settings-xname {cursor:pointer}
 .settings-apm[aria-checked="true"] .settings-aptick,
 .settings-mgroup[aria-checked="true"] .settings-aptick,
 .settings-mgroup[aria-checked="mixed"] .settings-aptick {background:var(--amber); border-color:var(--amber); color:var(--ink-on-accent)}
-.settings-apnm {flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--mono); font-size:12px}
+.settings-apnm {flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--mono); font-size:13px}
 .settings-apsd {font-family:var(--sans); font-size:11.5px; color:var(--faint); flex:none}
 .settings-apadd {color:var(--gold)}
 /* The typed-id row's box is dashed and holds a plus: it is the one row that is
@@ -769,7 +775,7 @@ button.settings-xname {cursor:pointer}
 .settings-gen {display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px 20px}
 .settings-gen-below {grid-template-columns:minmax(0,1fr)}
 .settings-gen-k, .settings-gen-ctl {min-width:0}
-.settings-gen-t {font-size:15px; font-weight:500; color:var(--text)}
+.settings-gen-t {font-size:14px; font-weight:500; color:var(--text)}
 .settings-gen-d {font-size:13px; color:var(--faint); margin-top:3px}
 
 /* The theme as three miniatures of the window. The palette is written as
@@ -785,7 +791,7 @@ button.settings-xname {cursor:pointer}
 .settings-theme:hover {border-color:color-mix(in oklab, var(--line) 50%, var(--muted))}
 .settings-theme[aria-checked="true"] {border-color:var(--amber); box-shadow:0 0 0 1px var(--amber)}
 .settings-theme:focus-visible {outline:2px solid var(--amber); outline-offset:2px}
-.settings-theme-foot {display:flex; align-items:center; justify-content:space-between; font-size:13.5px; padding:0 2px}
+.settings-theme-foot {display:flex; align-items:center; justify-content:space-between; font-size:14px; padding:0 2px}
 .settings-theme-dot {width:16px; height:16px; border-radius:50%; border:1.5px solid var(--line); box-sizing:border-box; flex:none}
 .settings-theme[aria-checked="true"] .settings-theme-dot {border:4.5px solid var(--amber)}
 

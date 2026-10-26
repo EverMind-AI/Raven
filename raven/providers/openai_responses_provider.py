@@ -96,7 +96,7 @@ class OpenAIResponsesProvider(LLMProvider):
         tool_choice: str | dict[str, Any] | None = None,
     ) -> LLMResponse:
         stored_model = model or self.default_model
-        instructions, input_items = _convert_messages(messages)
+        instructions, input_items = _convert_messages(messages, openai_item_ids=self._provider_name == "openai")
         body: dict[str, Any] = {
             "model": self.wire_model_id(stored_model),
             "input": input_items,

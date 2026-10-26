@@ -683,6 +683,25 @@ class TestOneCallIsBounded:
         await _settle(loop)
         assert fake.tails[0][0] == {"role": "user", "content": f"q{len(sent) // 2}"}
 
+    def test_a_large_tool_result_is_counted_as_the_view_the_annotator_reads(self) -> None:
+        """A whole-filed read is not what the annotator is sent, so it must not
+        be what the budget counts: counted raw, one large read marks its turn
+        oversized and pushes every later turn into a pass of its own."""
+        from raven.agent.loop.turn_path import _first_turns_within
+
+        read = "x" * 1_000_000
+        tail = [
+            {"role": "user", "content": "q0"},
+            {"role": "tool", "tool_call_id": "c", "content": read},
+            {"role": "assistant", "content": "a0"},
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "content": "a1"},
+        ]
+
+        capped, oversized = _first_turns_within(tail, 20_000)
+
+        assert (capped, oversized) == (tail, False)
+
     async def test_a_refused_oversized_turn_moves_the_cursor_past_it(self, tmp_path: Path, log_lines) -> None:
         """The one refusal the cursor absorbs, because retrying it is repeating it.
 

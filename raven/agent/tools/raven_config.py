@@ -152,7 +152,9 @@ _YOURS = {
     "silent": "It gave no reason. Run `{command}` with exec; it prints what its model provider answered.",
     "exited": "It quit on start; its last words are in the refusal. Fix what they name (a dependency, a flag, "
     "its config), then retry.",
-    "download": "Fetching it failed. Run `{command}` once with exec (nothing times it out there), then retry.",
+    "download": "Fetching it failed or ran out of time; the refusal says which. Fix what it names (the network, "
+    "the npm registry or the proxy), then retry. Do not fetch it yourself with exec: exec's time limit ends a "
+    "fetch part-way, and npx cannot start a copy left that way.",
     "upgrade": "It is too old to be connected. Upgrade it with `{command}`, then retry.",
     "runtime": "Its Node.js is too old (needs {needs}, found {found}). Upgrade Node.js{with_command}, then retry.",
     "model": "Its provider will not serve the model it is set to. Pick another one it lists and retry.",
@@ -269,7 +271,6 @@ def _what_it_needs(
     remedy = remedy or {}
     kind = str(remedy.get("kind") or "")
     fallback = {
-        "download": "its launch command (npx -y <package> --version fetches it)",
         "config": "its own config check (its --help names it: doctor, config validate)",
     }.get(kind, "its own sign-in or setup command (find it in its --help: login, auth, onboard, configure)")
     fields = {

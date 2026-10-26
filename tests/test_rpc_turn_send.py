@@ -1504,3 +1504,71 @@ async def test_a_stop_leaves_an_unmerged_inject_to_run_as_its_own_turn() -> None
         for gate in loop.release.values():
             gate.set()
         await teardown()
+
+
+async def test_a_message_typed_while_a_question_waits_answers_it() -> None:
+    """The page sends text typed into the main composer as an inject whenever a
+    turn runs. A turn blocked on ask_user never reaches the gap where injects
+    are read, so the question ran out its budget as unanswered and the agent went
+    on with its own recommendation. While a question waits on the lane, the text
+    answers it: the asking tool gets it, and no inject or turn is made.
+
+    It is still a message the person sent, so it is announced the way any
+    mid-turn message is and every window draws it; and the prompt the question
+    drew, which did not answer, is told the question is over."""
+    from raven.rpc.methods import turn as turn_mod
+    from raven.rpc.question_broker import QuestionBroker
+
+    frames: list[dict] = []
+
+    async def send_frame(frame: dict) -> None:
+        frames.append(frame)
+
+    broker = QuestionBroker(send_frame)
+    scheduler = FakeScheduler()
+    emitter = FakeEmitter()
+    turn_mod._active_turns["tui:default"] = FakeHandle()
+    asking = asyncio.create_task(broker.await_question("tui:default", prompt="which greeting?", default="hello"))
+    for _ in range(50):
+        if broker.pending_req("tui:default") is not None:
+            break
+        await asyncio.sleep(0.01)
+    request_id = broker.pending_req("tui:default")
+
+    result = await turn_send(
+        {"session_key": "tui:default", "content": "good morning", "busy": "inject"},
+        emitter=emitter,
+        scheduler=scheduler,
+        turn_ids={"tui:default": "running-1"},
+        question_broker=broker,
+    )
+
+    assert await asyncio.wait_for(asking, 1.0) == "good morning"
+    assert result == {"turn_id": "running-1", "accepted": True, "naming": False}
+    assert scheduler.submitted == [], "answered, so nothing is injected"
+    assert emitter.types() == ["message.injected"]
+    assert emitter.emitted[0][1]["payload"]["content"] == "good morning"
+    for _ in range(50):
+        if any(f["method"] == "clarify.closed" for f in frames):
+            break
+        await asyncio.sleep(0.01)
+    closed = [f["params"]["request_id"] for f in frames if f["method"] == "clarify.closed"]
+    assert closed == [request_id], "the prompt that did not answer is closed, once"
+
+
+async def test_with_no_question_waiting_a_typed_message_is_still_an_inject() -> None:
+    from raven.rpc.methods import turn as turn_mod
+    from raven.rpc.question_broker import QuestionBroker
+
+    async def send_frame(frame: dict) -> None:
+        return None
+
+    scheduler = FakeScheduler()
+    turn_mod._active_turns["tui:default"] = FakeHandle()
+    await turn_send(
+        {"session_key": "tui:default", "content": "how far along?", "busy": "inject"},
+        scheduler=scheduler,
+        turn_ids={"tui:default": "running-1"},
+        question_broker=QuestionBroker(send_frame),
+    )
+    assert len(scheduler.submitted) == 1 and scheduler.submitted[0].text == "how far along?"

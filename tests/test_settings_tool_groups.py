@@ -3,7 +3,8 @@
 ``ui-web/src/features/settings/toolGroups.json`` is the page's table: eight
 groups by tool name, read by the Tools page. A tool the loop registers and the
 table omits would have no switch anywhere, so the table is diffed here against
-a loop built with every switchable tool the bare wiring can register.
+a loop built with every switchable tool the bare wiring can register; the few
+the page deliberately does not switch are named in ``UNSWITCHABLE``.
 """
 
 from __future__ import annotations
@@ -25,6 +26,13 @@ GROUPS = Path(__file__).resolve().parents[1] / "ui-web" / "src" / "features" / "
 # deliverables sink. Each is a tool name the page still has to offer a switch
 # for, and the set is pinned so a tool that stops registering shows up here.
 GATED = {"cron", "load_playbook", "create_playbook", "understand_media", "deliver_files"}
+
+# Registered by the loop but deliberately given no switch: ``context_retrieve``
+# comes with the history strategy that leaves refs in the window, and turning it
+# off alone would leave those refs pointing at text the model can no longer
+# read. It goes with the strategy (``context.history.strategy``), not with a
+# toggle on the page.
+UNSWITCHABLE = {"context_retrieve"}
 
 
 class _StubProvider(LLMProvider):
@@ -85,8 +93,9 @@ def test_tool_groups_cover_the_default_tools() -> None:
             ),
             engine=EngineWiring(),
         )
-        registered = set(loop.tools.names())
+        registered = set(loop.tools.names()) - UNSWITCHABLE
     listed = {t for tools in _listed().values() for t in tools}
+    assert not UNSWITCHABLE & listed, "a tool without a switch is not on the page either"
     assert registered <= listed, f"registered but ungrouped: {sorted(registered - listed)}"
     assert listed - registered == GATED, f"grouped but never registered: {sorted(listed - registered - GATED)}"
     # The media tools register on a bare loop under the names the table uses.

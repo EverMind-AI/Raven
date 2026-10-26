@@ -12,7 +12,11 @@ import * as store from './store'
 import type { ExtAgentActArgs, ExtAgentRow, ExtAgentsSource } from './types'
 
 /* The two source verbs the machine sheet's form uses; nothing here opens that form. */
-const offMachine = { presets: async () => [], connectOnMachine: async () => ({ refused: 'no machine form in this test' }) }
+const offMachine = {
+  presets: async () => [],
+  connectOnMachine: async () => ({ refused: 'no machine form in this test' }),
+  cancelRun: async () => false,
+}
 
 const toastWriter = vi.hoisted(() => ({ items: [] as string[] }))
 vi.mock('../../state/toast', () => ({

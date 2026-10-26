@@ -39,6 +39,7 @@ const PLUS = 'M12 5v14M5 12h14'
 const WHY: Record<Exclude<RegisterReason, ''>, string> = {
   unreachable: 'gui.machine.why_unreachable',
   login: 'gui.machine.why_login',
+  prompt: 'gui.machine.why_prompt',
   hostkey: 'gui.machine.why_hostkey',
   timeout: 'gui.machine.why_timeout',
   nossh: 'gui.machine.why_nossh',
@@ -46,6 +47,15 @@ const WHY: Record<Exclude<RegisterReason, ''>, string> = {
   duplicate: 'gui.machine.why_duplicate',
   invalid: 'gui.machine.why_invalid',
   registry: 'gui.machine.why_registry',
+}
+
+/* How the connect form's wait ended without the agent's answer, by
+   `mconnectStopped`: the head line and the note under the form. */
+const STOPPED: Record<Exclude<ExtAgentsState['mconnectStopped'], ''>, { head: string; said: string }> = {
+  cancelled: { head: 'gui.machine.connect_cancelled_head', said: 'gui.machine.connect_cancelled' },
+  timeout: { head: 'gui.machine.connect_timeout_head', said: 'gui.machine.connect_timeout' },
+  missed: { head: 'gui.machine.connect_missed_head', said: 'gui.machine.connect_missed' },
+  unconfirmed: { head: 'gui.machine.connect_unconfirmed_head', said: 'gui.machine.connect_unconfirmed' },
 }
 
 function MachineTile(): JSX.Element {
@@ -412,6 +422,26 @@ export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsS
   const pickable = choices.filter(c => !c.taken && !c.pending)
   const chosen: Choice | undefined = pickable.find(c => c.key === picked) ?? pickable[0]
   const busy = s.mconnectBusy !== null && s.mconnectBusy === s.mconnectGen
+  /* The wait, counted on the form: a line that does not move for a minute
+     reads as a page that stopped, and the server's own wait can be minutes
+     (`store.awaitRun`). Redrawn once a second while the write runs. */
+  const [, tick] = useState(0)
+  useEffect(() => {
+    if (!busy) return
+    const timer = setInterval(() => tick(n => n + 1), 1000)
+    return () => clearInterval(timer)
+  }, [busy])
+  const waited = busy && s.mconnectSince !== null ? Math.max(0, Math.floor((Date.now() - s.mconnectSince) / 1000)) : 0
+  /* How the last wait ended without the agent's answer, when it did: the
+     reader's Cancel the stop confirmed, said plainly; the ceiling, a stop that
+     came too late to stop anything, or one that never confirmed, said as a
+     warning with where to look. None is drawn while a new write runs. */
+  const stopped = busy ? '' : s.mconnectStopped
+  const unsure = stopped === 'timeout' || stopped === 'missed' || stopped === 'unconfirmed'
+  /* The stop found nothing running: the wait goes on, with no Cancel left to offer. */
+  const late = busy && s.mconnectLate
+  const headClass = 'extAgents-by' + ((s.mconnectFailed || unsure) && !busy ? ' extAgents-by-bad' : '')
+  const stoppedClass = unsure ? 'extAgents-note extAgents-note-warn' : 'extAgents-note extAgents-note-next'
   const submit = async (): Promise<void> => {
     if (!chosen) return
     const { landed, current, name } = chosen.off
@@ -446,19 +476,35 @@ export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsS
         <MachineTile />
         <div className="extAgents-meta">
           <h3>{t('gui.machine.connect_title', { name: row.name })}</h3>
-          <div className={'extAgents-by' + (s.mconnectFailed && !busy ? ' extAgents-by-bad' : '')}>
+          <div className={headClass}>
             {busy
-              ? t('gui.machine.connecting')
-              : s.mconnectFailed
-                ? t('gui.machine.connect_bad')
-                : chosen?.off
-                  ? t('gui.machine.reconnect_hint')
-                  : t('gui.machine.connect_hint')}
+              ? t(late ? 'gui.machine.connect_late_for' : 'gui.machine.connecting_for', { s: String(waited) })
+              : stopped
+                ? t(STOPPED[stopped].head)
+                : s.mconnectFailed
+                    ? t('gui.machine.connect_bad')
+                    : chosen?.off
+                      ? t('gui.machine.reconnect_hint')
+                      : t('gui.machine.connect_hint')}
           </div>
         </div>
       </div>
       <div className="extAgents-body">
-        {s.presets === null && !s.presetsFailed ? (
+        {busy ? (
+          /* While the write runs: what is being connected, and what the wait
+             is for -- the form's own fields would show the next free preset,
+             which is not the one in flight. */
+          <>
+            {choices
+              .filter(c => c.pending)
+              .map(c => (
+                <div className="extAgents-about" key={c.key}>
+                  {label(c)}
+                </div>
+              ))}
+            <div className="extAgents-about">{t(late ? 'gui.machine.connect_late_hint' : 'gui.machine.connecting_hint')}</div>
+          </>
+        ) : s.presets === null && !s.presetsFailed ? (
           <div className="extAgents-about">{t('gui.machine.presets_loading')}</div>
         ) : s.presetsFailed ? (
           <div className="extAgents-note extAgents-note-warn">
@@ -503,14 +549,29 @@ export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsS
             <div className="extAgents-about">{t('gui.machine.next_body')}</div>
           </>
         )}
-        {s.mconnectFailed && !busy ? (
+        {s.mconnectFailed && !busy && !stopped ? (
           <div className="extAgents-note extAgents-note-warn">
             <div className="extAgents-note-t">{t('gui.machine.connect_bad')}</div>
             <div className="extAgents-note-said">{s.mconnectFailed}</div>
           </div>
         ) : null}
+        {stopped ? (
+          <div className={stoppedClass}>
+            <div className="extAgents-note-t">{t(STOPPED[stopped].head)}</div>
+            <div className="extAgents-note-said">{t(STOPPED[stopped].said)}</div>
+          </div>
+        ) : null}
       </div>
       <div className="extAgents-act">
+        {busy && !late ? (
+          /* The way out of the wait, left of the press that started it: the
+             run on the machine is asked to stop, and the stop's answer says
+             whether anything was written (`awaitRun`). */
+          <button className="mini danger" disabled={s.mconnectCancelling} onClick={() => store.cancelConnect()} type="button">
+            {s.mconnectCancelling ? <Spin /> : null}
+            {t(s.mconnectCancelling ? 'gui.machine.cancelling' : 'gui.cancel')}
+          </button>
+        ) : null}
         <button className="mini go" disabled={busy || !chosen} onClick={() => void submit()} type="button">
           {busy ? <Spin /> : null}
           {t(busy ? 'gui.machine.connecting' : chosen?.off ? 'gui.machine.reconnect_do' : 'gui.machine.connect_do')}

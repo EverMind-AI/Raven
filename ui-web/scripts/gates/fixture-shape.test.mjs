@@ -266,6 +266,8 @@ const UNSENT = new Set([
   'subagents.test.cancelled', 'subagents.test.reply',
   // system.hello: 1
   'system.hello.platform',
+  // turn.cancel: 1 -- the offline stop always lands, and busy rides a refusal alone
+  'turn.cancel.busy',
   // session.compress / session.create: 1 each -- only resuming an Imported Conversation sets read_only
   'session.compress.info.read_only', 'session.create.info.read_only',
 ])

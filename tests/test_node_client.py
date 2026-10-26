@@ -38,6 +38,8 @@ from raven.node import bundle, protocol
 from raven.node import client as node_client
 from raven.node.client import DEFAULT_NODE_DIR, ChannelEndpoint, NodeError, NodePool, _Node
 
+pytestmark = pytest.mark.usefixtures("no_real_ssh_g")
+
 HOST = "203.0.113.7"
 PORT = 58717
 
@@ -45,6 +47,10 @@ _FAKE_SSH = """#!{python}
 import json, os, sys
 here = os.path.dirname(os.path.abspath(__file__))
 args = sys.argv[1:]
+if "-G" in args:
+    # How a password machine's prompt resolves (transport.resolve_with_ssh): a config dump, not a launch.
+    print("hostname {host}")
+    sys.exit(0)
 with open(os.path.join(here, "calls"), "a") as f:
     f.write(json.dumps(args) + "\\n")
 mode = open(os.path.join(here, "mode")).read().strip()
@@ -1795,6 +1801,7 @@ async def test_the_link_to_a_password_machine_logs_in_through_askpass_and_offers
     from raven.ops.connection_add import store_password
 
     monkeypatch.setenv("RAVEN_HOME", str(box.root / "rhome"))
+    monkeypatch.setenv("PATH", f"{box.bin}{os.pathsep}{os.environ.get('PATH', '')}")
     box.rows([_password_row()])
     box.password("hunter2")
     store_password("box", "hunter2")
@@ -1813,6 +1820,7 @@ async def test_a_password_the_machine_refuses_ends_the_link_with_the_login_named
     from raven.ops.connection_add import store_password
 
     monkeypatch.setenv("RAVEN_HOME", str(box.root / "rhome"))
+    monkeypatch.setenv("PATH", f"{box.bin}{os.pathsep}{os.environ.get('PATH', '')}")
     box.rows([_password_row()])
     box.password("hunter2")
     store_password("box", "wrong-one")

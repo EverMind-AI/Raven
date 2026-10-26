@@ -126,14 +126,25 @@ def test_a_ceiling_as_large_as_the_window_still_leaves_room_for_history(workspac
     # Raven Guidelines above it already state. Still loose, as this bound is
     # meant to be: the regression it guards is history at zero.
     #
-    # Lowered again from 126_000 (measured 125_984) when the host's role gained
+    # Lowered again from 126_000 (measured 125_950) when the host's role gained
     # the open-decision bullet and the reply rules gained the open-decision and
-    # per-task heading lines: 99 + 74 + 47 tokens, each kept because a replay
+    # per-task heading lines: 99 + 74 + 85 tokens, each kept because a replay
     # measured its effect. 14 of the 74 repeat the role's carve-out for a
     # passed-over offer, since on a turn without a dispatch path that line is the
-    # rule's only statement. What stayed out: worked examples, and a second copy
-    # of the rule in the tool descriptions.
-    assert budget.available_history > 125_500, "an honest ceiling must not squeeze history toward zero"
+    # rule's only statement; 38 of the 85 widen the heading line from reported
+    # results to every task a reply covers, the reply shape live sessions have.
+    # What stayed out: worked examples, and a second copy of the rule in the tool
+    # descriptions.
+    #
+    # The compacting history strategy then became the default and brought
+    # `context_retrieve` onto every default face: its schema is ~250 tokens, the
+    # cost of the refs the strategy leaves in the window being readable at all.
+    # Measured 125_652 here with both, and about 300 less on native Windows
+    # (125_389 before the reply rules' last 38 tokens), where the resolved temp
+    # path and the platform text in the system prompt run longer; lowered to
+    # 125_000 for that slack rather than for anything the prompt grew. Nothing was traded: the tool is only registered beside a strategy
+    # that mints refs, and the tool face stays guarded on its own just below.
+    assert budget.available_history > 125_000, "an honest ceiling must not squeeze history toward zero"
     # `reserved_tools` is what the old 129_000 bound was really watching, and it
     # is invariant across those same three paths: paid on every turn of every
     # conversation. Asserted directly so a grown tool description trips it for
@@ -157,7 +168,13 @@ def test_a_ceiling_as_large_as_the_window_still_leaves_room_for_history(workspac
     # was traded: its first draft listed every action and cost ~540 tokens; the
     # schema now names no setting and no action beyond the enum, and the how-to
     # lives in the raven-self-config skill, read on demand -- ~130 tokens left.
-    assert budget.reserved_tools < 7_500, f"tool surface grew: {budget.reserved_tools} tokens reserved"
+    #
+    # Raised from 7_500 (measured 7642) when the compacting history strategy
+    # became the default and `context_retrieve` joined the default face. What
+    # was traded: the ported schema cost ~300 tokens, with an example ref and a
+    # sentence on why the output is still stored; both went, and so did the
+    # parameter prose a caller can read off the enum -- ~200 tokens left.
+    assert budget.reserved_tools < 7_700, f"tool surface grew: {budget.reserved_tools} tokens reserved"
 
 
 def test_an_honest_but_large_ceiling_does_not_eat_the_window(workspace, monkeypatch) -> None:

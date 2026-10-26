@@ -77,7 +77,7 @@ class TurnStarted:
     """
 
     origin: Origin | None = None
-    delegated: dict[str, str] | None = None
+    delegated: dict[str, Any] | None = None
     content: str | None = None
     conversation_id: str | None = None
     turn_id: str = ""

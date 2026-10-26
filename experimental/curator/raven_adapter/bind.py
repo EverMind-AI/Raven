@@ -409,6 +409,13 @@ def assemble(
                     cron_tool.set_context("acp", "default")
             if memory_context is not None:
                 memory_context.bind(runtime, effective.extensions)
+                # The loop registered its tools before this base existed, when the
+                # wrapper could not yet say its strategy mints refs; a ref the model
+                # reads with no tool to cash it in is a promise nobody keeps.
+                if memory_context.mints_source_refs and runtime.loop.tools.get("context_retrieve") is None:
+                    from raven.agent.tools.context_retrieve import ContextRetrieveTool
+
+                    runtime.loop.tools.register(ContextRetrieveTool(runtime.loop.sessions))
             if planning and planning.to_change:
                 if runtime.loop.tools.get(TOOL_NAME) is not None:
                     raise ValueError(f"planning tool would replace an existing tool: {TOOL_NAME}")

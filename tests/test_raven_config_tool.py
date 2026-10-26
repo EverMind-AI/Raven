@@ -1140,7 +1140,7 @@ class _Refused(RuntimeError):
     ("remedy", "raven_does", "user_does"),
     [
         ({"kind": "upgrade", "command": "npm i -g @qwen-code/qwen-code@latest"}, "Upgrade it with `npm i", None),
-        ({"kind": "download", "command": "npx -y pi-acp@0.0.33"}, "Run `npx -y pi-acp@0.0.33` once", None),
+        ({"kind": "download", "command": "npx -y pi-acp@0.0.33"}, "then retry", None),
         ({"kind": "runtime", "command": "brew upgrade node", "needs": "22", "found": "18.20"}, "needs 22", None),
         ({"kind": "model"}, "Pick another one it lists", None),
         ({"kind": "sign_in", "command": "codex login"}, None, "the user runs `codex login`"),
@@ -1439,17 +1439,24 @@ async def test_what_an_unset_media_model_needs_asks_the_provider_it_would_borrow
     assert "a model is all it lacks" in on_endpoint
 
 
+@pytest.mark.parametrize("remedy", [{"kind": "download", "command": "npx -y pi-acp@0.0.33"}, {"kind": "download"}])
 @pytest.mark.asyncio
-async def test_a_download_that_timed_out_names_how_to_fetch_it_even_without_a_command(config_file):
-    """A refusal whose remedy carries no launch to quote read
-    "run `its own sign-in or setup command` once" for an npx fetch."""
-    refusal = _Refused(
-        "sub-agent 'Kimi Code' did not answer a test message, so it was not added: ...", {"kind": "download"}
-    )
+async def test_a_failed_fetch_is_retried_and_never_run_by_hand_with_exec(config_file, remedy):
+    """exec ends what it runs at its time limit with SIGKILL, and npx's own launch never exits
+    once it has fetched: a fetch run that way on a slow line was cut off half-installed, which
+    no later npx of that spec recovers from. A retry fetches it again with no time limit.
+
+    Without a command to quote, the line once fell back to "run `its own sign-in or setup
+    command` once" for an npx fetch, which is no step at all for this refusal."""
+    refusal = _Refused("sub-agent 'Kimi Code' did not answer a test message, so it was not added: ...", remedy)
     tool = RavenConfigTool()
     tool.set_rpc_caller(Calls({"subagents.add": refusal, "subagents.list": _roster()}))
     reply = await _run(tool, action="add", path="subagents", value='{"preset": "kimi_code"}')
-    assert "npx -y <package> --version" in reply and "sign-in" not in reply.split("\n")[1]
+    step = reply.split("\n")[1]
+    assert "then retry" in step
+    assert "ran out of time" in step, "a start that ran out while npx may have been fetching is this kind too"
+    assert "Run `" not in step and "npx -y" not in step
+    assert "sign-in" not in step
 
 
 @pytest.mark.asyncio

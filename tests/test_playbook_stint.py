@@ -1815,7 +1815,7 @@ class TestWhoAnswersARoundsSuspendedNode:
 
         woken: list[str] = []
 
-        async def host(run_id, node_id, report, origin, *, awaiting_decision, informational=False):
+        async def host(run_id, node_id, report, origin, *, awaiting_decision, informational=False, output=None):
             woken.append(node_id)
 
         async def adjudicate(node_id: str, report: str) -> tuple[str, str]:
@@ -1837,7 +1837,7 @@ class TestWhoAnswersARoundsSuspendedNode:
 
         woken: list[str] = []
 
-        async def host(run_id, node_id, report, origin, *, awaiting_decision, informational=False):
+        async def host(run_id, node_id, report, origin, *, awaiting_decision, informational=False, output=None):
             woken.append(node_id)
 
         async def adjudicate(node_id: str, report: str) -> tuple[str, str]:

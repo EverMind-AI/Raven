@@ -110,8 +110,11 @@ names from the current tool's advertised roster. When the host generates a
 worker table, use its worker labels rather than the underlying agent names.
 Choose fresh node ids when submitting another graph in the same conversation.
 
-For writing tasks, divide file ownership or use separate working copies:
-parallel nodes do not imply separate worktrees or exclusive file locks.
+For parallel coding in a Git project, the host's `multi-agent-coding` skill
+instructs each coding agent to create and report its own worktree. When
+constructing a graph directly, assign working copies or divide file ownership;
+the DAG scheduler itself does not create worktrees or lock files. See
+[Working with sub-agents](agent-collaboration.md#models-modes-and-shared-files).
 
 ## Node contract and data flow
 

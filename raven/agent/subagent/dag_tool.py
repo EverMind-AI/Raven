@@ -89,6 +89,7 @@ from raven.config.schema import MCPServerConfig
 from raven.contracts.tool import Tool, ToolResult
 from raven.security.trust import wrap_untrusted
 from raven.stint.record import STINTS_DIRNAME, StintRef
+from raven.tracing import trace
 
 if TYPE_CHECKING:
     from raven.agent.subagent.delegate import DelegateTable, Worker
@@ -197,10 +198,15 @@ class _DagOrigin:
     channel: str
     chat_id: str
     conversation: str
+    # The span that dispatched the run, set where the graph is dispatched; part
+    # of one run's origin, never of the address a stint writes down.
+    dispatch_link: tuple[str, str] | None = None
 
     def as_dict(self) -> dict[str, str]:
-        """The shape the announcers take: channel, chat, and session key."""
-        return {"channel": self.channel, "chat_id": self.chat_id, "session_key": self.conversation}
+        """The shape the announcers take: channel, chat, session key, and the dispatch link when there is one."""
+        out = {"channel": self.channel, "chat_id": self.chat_id, "session_key": self.conversation}
+        out.update(trace.dispatch_attrs(self.dispatch_link))
+        return out
 
     @classmethod
     def from_dict(cls, data: "Mapping[str, str]") -> "_DagOrigin":
@@ -914,17 +920,27 @@ class SubAgentDagTool(Tool):
         return ("\n\n" + "\n".join(rendered)) if rendered else ""
 
     def _report_announcer(self, run_id: str, origin: _DagOrigin):
-        async def _announce(node_id: str, text: str, *, awaiting_decision: bool, informational: bool = False) -> None:
+        async def _announce(
+            node_id: str,
+            text: str,
+            *,
+            awaiting_decision: bool,
+            informational: bool = False,
+            output: str | None = None,
+            dispatch_link: tuple[str, str] | None = None,
+        ) -> None:
             if self._announce_exception is None:
                 logger.info("DAG run {} node {} reported after release with no announcer wired", run_id, node_id)
                 return
+            address = origin if dispatch_link is None else replace(origin, dispatch_link=dispatch_link)
             await self._announce_exception(
                 run_id,
                 node_id,
                 text,
-                origin.as_dict(),
+                address.as_dict(),
                 awaiting_decision=awaiting_decision,
                 informational=informational,
+                output=output,
             )
 
         return _announce
@@ -957,6 +973,7 @@ class SubAgentDagTool(Tool):
             *,
             awaiting_decision: bool,
             informational: bool = False,
+            output: str | None = None,
         ) -> None:
             if not awaiting_decision or informational:
                 if announce is not None:
@@ -967,6 +984,7 @@ class SubAgentDagTool(Tool):
                         origin,
                         awaiting_decision=awaiting_decision,
                         informational=informational,
+                        output=output,
                     )
                 return
             try:
@@ -1001,8 +1019,14 @@ class SubAgentDagTool(Tool):
         if self._announce is None:
             logger.debug("run {} had progress to report and no announcer wired", run_id)
             return
+        addressed = dict(origin or {})
+        if trace.dispatch_link_of(addressed) is None:
+            # A stint's address comes off disk with no link, and this is said from
+            # the finished round's own task, which still holds the context that
+            # round was dispatched in.
+            addressed.update(trace.dispatch_attrs(trace.dispatch_link()))
         try:
-            await self._announce(run_id, text, dict(origin or {}))
+            await self._announce(run_id, text, addressed)
         except Exception as exc:  # noqa: BLE001 - progress that cannot be said must not end the round
             logger.warning("run {} could not report progress: {}", run_id, exc)
 
@@ -1747,6 +1771,10 @@ class SubAgentDagTool(Tool):
         either parking on the first event or building the background message --
         is identical between a fresh submission and an applied replan.
         """
+        # Taken once, here: every report of this run starts from this origin, and
+        # several are sent where the dispatching span is no longer current -- a
+        # node's own task, or a released outbox drained after its turn closed.
+        origin = replace(origin, dispatch_link=trace.dispatch_link())
         cancel = asyncio.Event()
         self._cancels[run_id] = cancel
 
@@ -2483,15 +2511,21 @@ class SubAgentDagTool(Tool):
                 _run_id: str,
                 node_id: str,
                 report: str,
-                _origin: dict[str, str],
+                origin: dict[str, str],
                 *,
                 awaiting_decision: bool,
                 informational: bool = False,
+                output: str | None = None,
             ) -> None:
                 # Whether a notification is dropped depends on whether a blocking call is
                 # still there to be handed the summary, which is the outbox's own state.
                 await outbox.put_report(
-                    node_id, report, awaiting_decision=awaiting_decision, informational=informational
+                    node_id,
+                    report,
+                    awaiting_decision=awaiting_decision,
+                    informational=informational,
+                    output=output,
+                    dispatch_link=trace.dispatch_link_of(origin),
                 )
 
             announce_exception = _to_outbox

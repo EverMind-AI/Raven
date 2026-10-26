@@ -241,13 +241,19 @@ export interface DeliveredData {
   kind: 'sdlv'
   label: string
   isDag: boolean
-  status: 'ok' | 'error' | 'exception'
+  status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled'
   open: () => void
   /* What was delivered, as a reader may read it: the text from inside the
      untrusted fence, with the fence and the framing the model was given left
      out. Empty when the delivery carried none -- and then the row has no fold,
-     which is also what an older session's stored entry gives. */
+     which is also what an older session's stored entry gives. A dag node's
+     report is the exception: what the node itself returned, when the server
+     sent it, rather than the brief inside the fence, which is addressed to the
+     model. */
   body: string
+  /* That `body` is a node's own output rather than the injected text. */
+  said: boolean
+  outputTruncated: boolean
   /* Whether that fold is open. */
   shown: boolean
 }
@@ -376,7 +382,9 @@ export interface HistoryMessage {
   /* Present on a USER entry the runtime wrote: a delegated run's result coming
      back. The model reads `text`, a reader must not -- see the note on the
      delivery branch in history(). */
-  delegated?: { kind?: string; label?: string; status?: string; run_id?: string; node_id?: string }
+  delegated?: {
+    kind?: string; label?: string; status?: string; run_id?: string; node_id?: string; output?: string; output_truncated?: boolean | null
+  }
   /* Set on a user entry the runtime merged into a turn already running. It is
      drawn inside that turn -- see the mid-turn branch in history(). */
   mid_turn?: boolean

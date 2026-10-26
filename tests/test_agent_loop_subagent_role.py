@@ -369,20 +369,24 @@ def test_a_turn_without_the_role_still_reads_a_passed_over_offer_as_declined(
     assert clause not in child
 
 
-def test_the_reply_rules_head_each_task_in_a_report_on_several(workspace) -> None:
-    """A report on several tasks keeps each task's result apart, under a heading that
-    names it. Replayed on synthetic conversations (glm-5.3-flash), the replies that
-    reported three tasks headed every task in 11 of 11 with this line and 3 of 34
-    without it, and a single task's result was given no heading in 6 of 6. The
-    heading syntax is spelled out because the model kept the task name inline
-    otherwise: asked only for "a short heading on a line of its own", it wrote
-    "**Pricing** -- the report ..." on one line in 4 of 7."""
+def test_the_reply_rules_head_each_task_a_reply_covers(workspace) -> None:
+    """Every task a reply covers gets its own section under a heading that names it,
+    whether the reply carries its result or a line of its progress. Results arrive one
+    turn each, so the common reply is one task's result plus a line on each task still
+    running; a rule scoped to "the results of several tasks" left that reply
+    unsectioned. The heading syntax is spelled out because the model kept the task
+    name inline otherwise: asked only for "a short heading on a line of its own", it
+    wrote "**Pricing** -- the report ..." on one line in 4 of 7. The decision list
+    stays one list, so the rule does not turn it into a section per decision."""
     plain = render.identity_text(workspace)
     section = plain.split("## How you reply", 1)[1].split("\n\nReply directly", 1)[0]
 
-    assert "When one reply reports the results of several tasks" in section
+    assert "When a reply covers more than one task -- a result, progress, a one-line status, a late notice" in section
     assert "a markdown heading naming the task on a line of its own (`### <task>`)" in section
-    assert "never merge two tasks' results into one paragraph" in section
+    assert "even when the section is a single sentence" in section
+    assert "never put two tasks in one paragraph or one list" in section
+    assert "The open decisions that close the reply stay one list after the last section." in section
+    assert "When one reply reports the results of several tasks" not in section
 
 
 def test_both_sub_agent_paths_withhold_the_same_tools(workspace, monkeypatch: pytest.MonkeyPatch) -> None:

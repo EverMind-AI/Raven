@@ -812,15 +812,36 @@ class TestHostRole:
         assert "Ask on every reply until the user decides it, drops it, or says to leave it for later" in role
         assert "do not decide it for them" in role
 
-    def test_a_spawn_result_carries_the_open_decision_rule(self, tmp_path: Path) -> None:
+    def test_a_dispatch_receipt_carries_the_open_decision_rule(self, tmp_path: Path) -> None:
         """The host writes its closing text right after it reads a dispatch's receipt, so
         the rule is said again there, as this system's note after the result's fence --
         the same line the reply rules close every reply with."""
-        note = render.open_decisions_note()
+        note = render.reply_rules_note()
         reply_rules = render.identity_text(tmp_path).split("## How you reply", 1)[1]
         assert note.startswith("\n\nNote: ")
         assert "decisions you put to the user that are still open close this reply too, a line each" in note
         assert "Decisions you put to the user that are still open close every reply, a line each" in reply_rules
+
+    def test_a_dispatch_receipt_carries_the_per_task_section_rule(self, tmp_path: Path) -> None:
+        """The same note says the per-task section rule again. Replayed on a recorded live
+        request (glm-5.3-flash), a 100-message session whose turn ended on a spawn
+        receipt, the resident line alone headed each task in 0 of 6 replies and the line
+        with this note in 4 of 12."""
+        note = render.reply_rules_note()
+        reply_rules = render.identity_text(tmp_path).split("## How you reply", 1)[1]
+        assert "a reply that covers more than one task gives each task its own `### <task>` section" in note
+        assert "even a one-line status" in note
+        assert "When a reply covers more than one task" in reply_rules
+
+    def test_a_sub_agent_role_process_gets_no_reply_rules_note(self, tmp_path: Path, monkeypatch) -> None:
+        """The note says two of the reply rules again, and a process launched to do one task
+        renders none of them, so a dispatch call there, refused or not, earns no note."""
+        from raven.agent.subagent.role import SUBAGENT_ENV_VAR
+
+        assert render.reply_rules_note()
+        monkeypatch.setenv(SUBAGENT_ENV_VAR, "1")
+        assert "## How you reply" not in render.identity_text(tmp_path)
+        assert render.reply_rules_note() == ""
 
     def test_an_offer_the_user_passes_over_is_not_asked_again(self, tmp_path: Path) -> None:
         """Only a decision the host put to the user is open; an offer of more work that

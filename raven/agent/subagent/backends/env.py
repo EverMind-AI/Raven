@@ -161,8 +161,10 @@ def login_shell_env() -> dict[str, str]:
         captured = _capture_now(consequence="subagents inherit raven's environment")
         if captured is None:
             _LOGIN_ENV_FAILED = True
+            _remember_launch_path(os.environ)
             return dict(os.environ)
         _LOGIN_ENV = captured
+        _remember_launch_path(captured)
         return dict(captured)
 
 
@@ -195,7 +197,20 @@ def refresh_login_shell_env() -> bool:
         if captured is None:
             return False
         _LOGIN_ENV = captured
+        _remember_launch_path(captured)
         return True
+
+
+def _remember_launch_path(env: Mapping[str, str]) -> None:
+    """Leave the PATH a launch here gets where config, which starts no shell, can read it.
+
+    Config moves a row onto an adapter build only beside the local agent that build
+    needs (``raven.config.loader._SHIM_COMMAND_NEEDS``), so it has to read that agent
+    on this PATH and not on its own process's.
+    """
+    from raven.config import login_path
+
+    login_path.remember(env.get("PATH", ""))
 
 
 def _capture_now(*, consequence: str) -> dict[str, str] | None:

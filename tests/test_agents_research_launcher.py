@@ -40,6 +40,9 @@ VENDORED_TOOL_FACE = {
     "web_search",
     "web_fetch",
     "ask_user",
+    # Trunk serves it beside the default compacting history strategy, so the
+    # refs that strategy leaves in the window can be read back.
+    "context_retrieve",
     "tool_call",
     "tool_search",
 }
@@ -952,6 +955,19 @@ def test_search_refuses_to_launch_when_the_SELECTED_vendor_has_no_key(grounded, 
         grounded.render_config(RUN_PY.parent / "config.json")
 
     assert "brave" in str(caught.value) and "BRAVE_API_KEY" in str(caught.value)
+
+
+def test_a_search_vendor_that_needs_no_key_launches_without_one(grounded, monkeypatch):
+    """Keenable searches unauthenticated at a lower rate limit, so the refusal
+    that guards a keyed vendor's withheld tool has nothing to guard here."""
+    monkeypatch.setenv("RESEARCH_WEB_SEARCH_PROVIDER", "keenable")
+    monkeypatch.delenv("RESEARCH_KEENABLE_API_KEY", raising=False)
+    monkeypatch.delenv("KEENABLE_API_KEY", raising=False)
+
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+
+    assert data["plugins"]["config"]["research-flow"]["search"]["provider"] == "keenable"
+    assert "apiKey" not in data["plugins"]["config"]["research-flow"]["search"]
 
 
 @pytest.mark.parametrize(

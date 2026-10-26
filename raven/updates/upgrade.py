@@ -52,6 +52,11 @@ class ReleaseLookupError(UpgradeError):
     caller must not advise reinstalling."""
 
 
+class EditableInstallError(UpgradeError):
+    """The install is a source checkout. No release upgrade applies to it, so
+    a caller names the checkout's own recovery rather than a generic refusal."""
+
+
 @dataclass(frozen=True)
 class ReleaseInfo:
     version: str
@@ -66,6 +71,7 @@ class ToolInstallTarget:
 
 _UPGRADE_HELPER_SOURCE = r"""import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -382,8 +388,17 @@ def stop_leftovers_of(env_dir):
     # install cannot proceed around it. Returns (stopped, survivors); survivors
     # is None when the question could not be asked.
     root = env_dir.rstrip("\\/") + "\\"
+    # A doubled quote is the only escape a single-quoted PowerShell string has,
+    # and PowerShell reads the four curly single quotes as one too: a profile
+    # folder spelled O’Neil would otherwise end the literal early and run the
+    # rest of the path as code.
+    # Stop turns a failed query into a terminating error, which is what the exit
+    # code the caller checks can report: under the default a non-terminating
+    # Get-CimInstance failure still exits 0. Stop-Process keeps its own
+    # SilentlyContinue, so a stop it is denied to make leaves a survivor list.
     select = (
-        "$root = '" + root.replace("'", "''") + "'; "
+        "$ErrorActionPreference = 'Stop'; "
+        "$root = '" + re.sub("(['‘’‚‛])", r"\1\1", root) + "'; "
         "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and "
         "$_.ExecutablePath.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase) }"
     )
@@ -401,6 +416,11 @@ def stop_leftovers_of(env_dir):
                 check=False,
             )
         except (OSError, subprocess.SubprocessError):
+            return None
+        if out.returncode != 0:
+            # A query that failed is not a query that found nothing: its empty
+            # stdout would read as "no survivors" and let uv delete an
+            # environment something still runs from.
             return None
         return out.stdout.split()
 
@@ -1135,8 +1155,8 @@ def _is_editable_install() -> bool:
     return editable
 
 
-def editable_checkout_status() -> tuple[Path, int, int]:
-    """Read the installed checkout against its last fetched origin/main."""
+def editable_checkout() -> Path:
+    """The local directory an editable install was made from."""
     data = _direct_url_data()
     if data is None:
         raise UpgradeError("Editable source checkout metadata is unavailable")
@@ -1149,6 +1169,12 @@ def editable_checkout_status() -> tuple[Path, int, int]:
     checkout = Path(url2pathname(url.path))
     if not checkout.is_absolute():
         raise UpgradeError("Editable source checkout path must be absolute")
+    return checkout
+
+
+def editable_checkout_status() -> tuple[Path, int, int]:
+    """Read the installed checkout against its last fetched origin/main."""
+    checkout = editable_checkout()
     try:
         git = shutil.which("git")
         if git is None:
@@ -1345,12 +1371,14 @@ def plan_upgrade() -> UpgradePlan:
     Network-bound (fetches the latest release), so callers on an event loop must
     run it in a thread.
     """
+    # Before the release lookup: a checkout tracks upstream `main`, so "already
+    # up to date" against a release says nothing true about it.
+    if _is_editable_install():
+        raise EditableInstallError("Editable Raven installations cannot be upgraded automatically")
     current_version = _current_version()
     release, version_key = fetch_latest_for_channel()
     if version_key(current_version) >= version_key(release.version):
         raise UpgradeError(f"Raven {current_version} is already up to date")
-    if _is_editable_install():
-        raise UpgradeError("Editable Raven installations cannot be upgraded automatically")
     target = _uv_tool_target()
     if target is None:
         raise UpgradeError("This Raven installation is not managed by uv")

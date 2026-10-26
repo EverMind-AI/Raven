@@ -82,7 +82,10 @@ def _loop(tmp_path) -> AgentLoop:
         # Push discovery, because that is what builds the skills segment and the
         # gate these tests reach for. Upstream had no such switch and got the
         # segment unconditionally; here the default is pull, which drops it.
-        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig(discovery="push")),
+        engine=EngineWiring(
+            context_config=ContextConfig(history={"strategy": "curator"}),
+            skill_forge_config=SkillForgeConfig(discovery="push"),
+        ),
     )
 
 
@@ -451,7 +454,7 @@ def test_a_configured_pin_survives_a_real_factory_build(tmp_path) -> None:
     cfg.providers.gemini.api_key = "AIza"
 
     _configure_pins(context={"curatorModel": "gemini-2.5-flash"})
-    context_config = ContextConfig()
+    context_config = ContextConfig(history={"strategy": "curator"})
     loop = AgentLoop(
         provider=_Provider("boot"),
         workspace=tmp_path,
@@ -486,7 +489,7 @@ def test_the_factory_hands_the_pool_the_pin_the_user_configured(tmp_path) -> Non
     cfg.providers.openrouter.api_key = "sk-or"
 
     _configure_pins(context={"curatorModel": "claude-haiku-4-5", "curatorProvider": "openrouter"})
-    context_config = ContextConfig()
+    context_config = ContextConfig(history={"strategy": "curator"})
     loop = AgentLoop(
         provider=_Provider("boot"),
         workspace=tmp_path,
@@ -519,7 +522,7 @@ def test_the_factory_hands_the_pool_the_gate_pin_the_user_configured(tmp_path) -
         model="boot/model",
         provider_pool=ProviderPool(cfg),
         engine=EngineWiring(
-            context_config=ContextConfig(),
+            context_config=ContextConfig(history={"strategy": "curator"}),
             skill_forge_config=SkillForgeConfig(discovery="push"),
         ),
     )
@@ -547,7 +550,9 @@ def test_a_stored_model_is_restored_onto_a_resumed_session(tmp_path) -> None:
         workspace=tmp_path,
         model="boot/model",
         provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig()),
+        engine=EngineWiring(
+            context_config=ContextConfig(history={"strategy": "curator"}), skill_forge_config=SkillForgeConfig()
+        ),
     )
 
     assert loop.session_model("tui:a") == "boot/model", "a fresh process has no override"
@@ -570,7 +575,9 @@ def test_a_stored_model_that_cannot_be_built_leaves_the_default(tmp_path) -> Non
         workspace=tmp_path,
         model="boot/model",
         provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig()),
+        engine=EngineWiring(
+            context_config=ContextConfig(history={"strategy": "curator"}), skill_forge_config=SkillForgeConfig()
+        ),
     )
 
     loop.restore_session_model("tui:a", "gemini-2.5-flash")
@@ -592,7 +599,9 @@ def _restorable_loop(tmp_path, stored: dict[str, dict[str, str]]) -> AgentLoop:
         workspace=tmp_path,
         model="boot/model",
         provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig()),
+        engine=EngineWiring(
+            context_config=ContextConfig(history={"strategy": "curator"}), skill_forge_config=SkillForgeConfig()
+        ),
     )
     for key, metadata in stored.items():
         record = loop.sessions.get_or_create(key)
@@ -712,7 +721,7 @@ def test_a_configured_gate_pin_survives_a_real_factory_build(tmp_path) -> None:
         model="boot/model",
         provider_pool=ProviderPool(cfg),
         engine=EngineWiring(
-            context_config=ContextConfig(),
+            context_config=ContextConfig(history={"strategy": "curator"}),
             skill_forge_config=SkillForgeConfig(discovery="push"),
         ),
     )
@@ -881,7 +890,10 @@ def _pooled_loop(tmp_path) -> tuple[AgentLoop, _Pool]:
         workspace=tmp_path,
         model="boot/model",
         provider_pool=pool,
-        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig(discovery="push")),
+        engine=EngineWiring(
+            context_config=ContextConfig(history={"strategy": "curator"}),
+            skill_forge_config=SkillForgeConfig(discovery="push"),
+        ),
     )
     pool.bindings["boot/model"] = loop.default_binding
     return loop, pool
@@ -982,7 +994,10 @@ def test_a_provider_that_cannot_name_its_vendor_is_never_re_paired(tmp_path) -> 
         workspace=tmp_path,
         model="anthropic/some-model",
         provider_pool=pool,
-        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig(discovery="push")),
+        engine=EngineWiring(
+            context_config=ContextConfig(history={"strategy": "curator"}),
+            skill_forge_config=SkillForgeConfig(discovery="push"),
+        ),
     )
 
     binding = loop.binding_for_session("tui:a")

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import threading
 
@@ -20,10 +21,13 @@ from raven.acp_client import remote
 from raven.node import install as node_install
 from raven.node.client import MachineStatus, NodeError
 from raven.ops import connection_add, connections
+from raven.ops.transport import ASKPASS_REFUSED
 from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods import machines as rpc
 from raven.rpc.models import METHOD_MODELS
 from tests._home import point_home
+
+pytestmark = pytest.mark.usefixtures("no_real_ssh_g")
 
 
 def _check(method: str, payload: dict) -> None:
@@ -377,6 +381,11 @@ async def test_add_refuses_before_reaching_anything_over_a_missing_field_a_bad_i
         ("could not reach alice@203.0.113.7:2222: Host key verification failed.", "hostkey"),
         ("could not reach alice@203.0.113.7:2222: no answer within 30s", "timeout"),
         ("could not reach alice@203.0.113.7:2222: ssh not found on this computer", "nossh"),
+        (
+            f"could not reach alice@203.0.113.7:2222: {ASKPASS_REFUSED}\n"
+            "alice@203.0.113.7: Permission denied (keyboard-interactive).",
+            "prompt",
+        ),
     ],
 )
 async def test_a_machine_that_cannot_be_reached_is_not_written_and_the_refusal_names_its_kind_not_the_address(
@@ -906,10 +915,51 @@ async def test_a_refusal_after_the_same_machine_registered_meanwhile_leaves_the_
     assert connection_add.password_path("box").read_text(encoding="utf-8") == BY_PASSWORD["password"] + "\n"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="password machines are refused on Windows before this point")
+async def test_a_password_machine_at_another_machine_s_alias_is_refused_as_a_field_that_cannot_be_used(
+    supported_host, pool, rhome, monkeypatch
+):
+    """``Host labbox`` in ~/.ssh/config is the alias Raven keeps for the key machine ``labbox``; a password machine
+    registered at ``labbox`` would log in at that machine's address. The sheet names the host field, not the
+    network, and the password is forgotten again."""
+    connection_add.write_ssh_alias({"id": "labbox", "transport": "ssh", "host": "198.51.100.66", "key": "~/k"})
+
+    out = await rpc.machines_add(BY_PASSWORD | {"host": "labbox"})
+
+    _check("machines.add", out)
+    assert (out["ok"], out["reason"]) == (False, "invalid")
+    assert "ssh alias Raven keeps" in out["detail"] and "hunter2" not in out["detail"]
+    assert not connection_add.password_path("box").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="password machines are refused on Windows before this point")
+@pytest.mark.parametrize("order", ["key-after-password", "password-after-key"])
+async def test_a_pair_one_machine_s_alias_would_redirect_is_refused_before_anything_is_kept_or_reached(
+    supported_host, pool, rhome, monkeypatch, order
+):
+    """Either order: a key machine whose id is a registered password machine's address (``LabBox``, names compare
+    ignoring case), or a password machine at a registered key machine's id whose alias is not written.
+    Refused as a field that cannot be used, naming the other machine, before a password is kept or a probe
+    runs (reviewed 2026-10-20)."""
+    monkeypatch.setattr(connection_add, "probe", lambda row, **kw: pytest.fail("reached a pair that cannot register"))
+    if order == "key-after-password":
+        _store({"id": "lab", "transport": "ssh", "host": "LabBox", "user": "alice", "auth": "password"})
+        out = await rpc.machines_add({**FORM, "id": "labbox"})
+        named = "password machine 'lab'"
+    else:
+        _store({"id": "labbox", "transport": "ssh", "host": "198.51.100.66", "user": "root", "key": "~/k"})
+        out = await rpc.machines_add(BY_PASSWORD | {"host": "labbox"})
+        named = "key machine 'labbox'"
+
+    _check("machines.add", out)
+    assert (out["ok"], out["reason"]) == (False, "invalid") and named in out["detail"]
+    assert len(_rows()) == 1 and not connection_add.password_path("box").exists()
+
+
 @pytest.mark.parametrize("cancelled", [False, True])
 @pytest.mark.parametrize("failed_index", [0, 1])
 async def test_a_failed_registration_keeps_the_same_password_of_another_registration_still_probing(
-    supported_host, pool, rhome, monkeypatch, cancelled, failed_index
+    supported_host, pool, rhome, monkeypatch, tmp_path, cancelled, failed_index
 ):
     from raven.ops.transport import ssh_env
 
@@ -948,6 +998,11 @@ async def test_a_failed_registration_keeps_the_same_password_of_another_registra
     assert out["ok"]
     (row,) = _rows()
     assert connection_add.password_path("box").is_file(), "the successful registration must keep its password"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / "ssh").write_text('#!/bin/sh\n[ "$1" = -G ] && echo "hostname 203.0.113.7"\n', encoding="utf-8")
+    (bin_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     assert ssh_env(row), "the registered machine must still be able to start its next connection"
 
 

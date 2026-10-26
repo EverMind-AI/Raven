@@ -128,6 +128,17 @@ export function stageOf(row: ExtAgentRow): Stage {
    whose engine wheel is not installed -- is connected from here, and is one
    section. */
 export type Section = 'on' | 'avail' | 'missing'
+
+/* Whether this row has an entry of its own to write to. A preset that is not
+   on the roster has none: the server answers an update for a name it does not
+   hold with "no configured sub-agent named ...", so a model picked on one waits
+   for the add that writes it. A folder found on disk and Raven's own loop both
+   have somewhere to land -- the server writes the first from its manifest and
+   the second from the seed -- so only a preset waits. */
+export function hasEntry(row: ExtAgentRow): boolean {
+  return row.configured || !!row.builtin || !!row.vendored
+}
+
 export function sectionOf(row: ExtAgentRow): Section {
   const stage = stageOf(row)
   if (stage === 'live' || stage === 'builtin') return 'on'
@@ -414,9 +425,17 @@ export const extAgentsSource: ExtAgentsSource = {
       })
       return { name: got.name || `${choice.preset}@${machine}` }
     } catch (e) {
-      const err = e as { message?: string; data?: { detail?: string } } | null
-      return { refused: (err && ((err.data && err.data.detail) || err.message)) || String(e) }
+      const err = e as { message?: string; data?: { detail?: string; cancelled?: boolean } } | null
+      const refused = (err && ((err.data && err.data.detail) || err.message)) || String(e)
+      return err?.data?.cancelled ? { refused, cancelled: true } : { refused }
     }
+  },
+  /* The run server-side is the agent's one real prompt, held under the name
+     the way a test's is; stopping it ends the agent's process there and the
+     connect's own call answers with the refusal that says so. */
+  cancelRun: async (name) => {
+    const got = await gateway().call('subagents.test_cancel', { name })
+    return !!got.cancelled
   },
 }
 

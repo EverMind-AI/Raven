@@ -68,6 +68,61 @@ def test_the_loop_authored_keys_are_the_trunks_own() -> None:
     assert "_recovery_synthetic" in ledger.LOOP_AUTHORED_KEYS
 
 
+def test_the_turn_scratch_and_runtime_header_are_the_trunks_own() -> None:
+    from raven.agent.context import ContextBuilder
+    from raven.context_engine.scratch import TURN_SCRATCH_KEY, TURN_SCRATCH_TAG
+
+    assert ledger.TURN_SCRATCH_KEY == TURN_SCRATCH_KEY
+    assert ledger.TURN_SCRATCH_TAG == TURN_SCRATCH_TAG
+    assert ledger.RUNTIME_CONTEXT_TAG == ContextBuilder._RUNTIME_CONTEXT_TAG
+
+
+def _envelope(content) -> dict:
+    """The turn's user message as the host's assembler builds it."""
+    from raven.context_engine.scratch import mark_turn_scratch, render_turn_scratch
+
+    scratch = render_turn_scratch(["# Memory\n\nrecalled: the user once asked for 60 pages", "# Skills\n\nskill body"])
+    return mark_turn_scratch({"role": "user", "content": content}, scratch)
+
+
+def test_the_hosts_header_and_turn_scratch_are_not_the_users_words() -> None:
+    """The journal reads the turn's envelope off the live window, where the trunk
+    has not yet cut the recalled memory and skill bodies off its end."""
+    header = f"{ledger.RUNTIME_CONTEXT_TAG}\nCurrent Time: now"
+    plain = _envelope(f"{header}\n\nmake it 25 pages")
+    blocks = _envelope([{"type": "text", "text": header}, {"type": "text", "text": "dark cover please"}])
+
+    assert ledger.users_words([plain, blocks]) == ["User: make it 25 pages", "User: dark cover please"]
+
+
+def test_the_running_turns_envelope_is_journaled_without_its_scratch(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    root = _deck(tmp_path)
+    hook = _hook(tmp_path)
+    envelope = _envelope(f"{ledger.RUNTIME_CONTEXT_TAG}\nCurrent Time: now\n\nmake it 25 pages")
+    window = [{"role": "system", "content": "deck author"}, envelope]
+
+    async def run():
+        with workdir.bind(root):
+            await hook.after_iteration(
+                AgentHookContext(
+                    session_key="s1",
+                    iteration=1,
+                    messages=window,
+                    response=SimpleNamespace(content="", tool_calls=[]),
+                    turn_base=1,
+                    metadata={},
+                    session_history=[],
+                )
+            )
+
+    asyncio.run(run())
+    journaled = ledger.read_journal(root)
+    assert "User: make it 25 pages" in journaled
+    assert not any("recalled" in item or ledger.TURN_SCRATCH_TAG in item for item in journaled)
+
+
 def test_the_elided_tool_body_is_the_trunks_own() -> None:
     """The prune's placeholder, taken from the prune rather than transcribed."""
 

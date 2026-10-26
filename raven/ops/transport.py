@@ -15,7 +15,9 @@ own filesystem.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -179,12 +181,28 @@ PASSWORD_AUTH = (
     "ProxyJump=none",
     "-o",
     "ProxyCommand=none",
+    # ``ssh -G`` makes none of the DNS lookups canonicalization makes, and a
+    # connection that canonicalizes re-reads the config under the new name --
+    # where a ``Host <id>`` block Raven wrote for another machine can apply.
+    # Off, the connection reaches the host ``ssh -G`` named, the one the
+    # helper's prompt is for (reviewed 2026-10-20).
+    "-o",
+    "CanonicalizeHostname=no",
 )
 
 #: The variable the askpass helper reads the password file's path from.
 ASKPASS_FILE_ENV = "RAVEN_MACHINE_PASSWORD_FILE"
-#: The variable that tells the helper whose prompt it may answer: the registered ``user@host``.
+#: The variable that tells the helper whose prompt it may answer: the registered account, at the host ssh resolves.
 ASKPASS_FOR_ENV = "RAVEN_MACHINE_PASSWORD_FOR"
+#: What the helper writes on ssh's stderr when the question is not that prompt, so it gave ssh nothing.
+ASKPASS_REFUSED = (
+    "raven: the password kept for this machine answers its own password prompt only, and this prompt is not one"
+)
+#: The variable that tells the helper why the prompt it waits for names the row's own spelling: ssh could not
+#: say how it resolves the host. Empty when it could.
+ASKPASS_UNRESOLVED_ENV = "RAVEN_MACHINE_PROMPT_UNRESOLVED"
+#: What the helper adds to that refusal when the variable is set, with the reason and the prompt it waited for.
+ASKPASS_UNRESOLVED = "raven: ssh could not say which host this machine's password prompt names"
 
 # The helper itself: OpenSSH runs it when ``SSH_ASKPASS_REQUIRE=force`` and
 # reads the password from its stdout. It prints the one line of the file the
@@ -197,7 +215,9 @@ ASKPASS_FOR_ENV = "RAVEN_MACHINE_PASSWORD_FOR"
 # verification code, a passcode) and a one-time password's -- "password" is
 # in that wording too -- get nothing, since the password is the machine's
 # alone and a PAM module may pass what it is given on to its vendor. The
-# question is ssh's first argument; trailing blanks and case are ignored.
+# question is ssh's first argument; trailing blanks and case are ignored. A
+# refusal says so on stderr, and also why the prompt it waited for is the
+# row's own spelling when ssh could not resolve the host.
 _ASKPASS = (
     "#!/bin/sh\n"
     "# Raven: hands ssh the password kept for a registered machine, at that account's own password prompt only.\n"
@@ -207,7 +227,9 @@ _ASKPASS = (
     'case "$asked" in\n'
     f'  "$who\'s password:"|"($who) password:") exec cat "${ASKPASS_FILE_ENV}" ;;\n'
     "esac\n"
-    "echo 'raven: the password kept for this machine answers its own password prompt only, and this prompt is not one' >&2\n"
+    f"echo '{ASKPASS_REFUSED}' >&2\n"
+    f"[ -n \"${ASKPASS_UNRESOLVED_ENV}\" ] && printf '%s (%s), so it waited for the prompt of %s\\n' "
+    f'"{ASKPASS_UNRESOLVED}" "${ASKPASS_UNRESOLVED_ENV}" "${ASKPASS_FOR_ENV}" >&2\n'
     "exit 1\n"
 )
 
@@ -317,16 +339,208 @@ def ssh_env(row: dict[str, Any], *, password_file: Path | None = None) -> dict[s
         raise TransportError(
             f"no password is kept here for machine {label!r} ({secret}); remove the machine and register it again"
         )
-    host, _port, _key, user = ssh_target(row)
+    host, port, _key, user = ssh_target(row)
+    if alias_redirects(host, managed_alias_hostnames()):
+        # ssh would follow the block Raven wrote for that other machine, and
+        # the helper would then wait for that machine's prompt: the password
+        # goes only where the owner registered it, whatever ssh resolves.
+        raise TransportError(
+            f"machine {label!r} is registered at {host!r}, which is also the ssh alias Raven keeps in "
+            f"~/.ssh/config for machine {host.lower()!r}: ssh would log in at that machine's address, so the "
+            f"password kept for {label!r} is not sent; remove one of the two machines, or register {label!r} "
+            "again at an address that is not one of these aliases (its IP address or full domain name)"
+        )
+    target, unresolved = _prompt_target(host, port, user)
     return {
         "SSH_ASKPASS": str(askpass_helper(secret.parent)),
         "SSH_ASKPASS_REQUIRE": "force",
         ASKPASS_FILE_ENV: str(secret),
-        # Whose prompt the helper answers: the account and address the row
-        # registers, which is also the destination on the command line.
-        ASKPASS_FOR_ENV: f"{user}@{host}",
+        ASKPASS_FOR_ENV: target,
+        ASKPASS_UNRESOLVED_ENV: unresolved,
         "DISPLAY": os.environ.get("DISPLAY") or "raven-askpass",
     }
+
+
+#: The line before and after each ``Host <id>`` block Raven keeps in ``~/.ssh/config`` for a key machine
+#: (``connection_add.write_ssh_alias``).
+ALIAS_MARK = "# raven connection {conn_id} (managed; rewritten on every add)"
+_ALIAS_MARK_LINE = re.compile(
+    "^" + re.escape(ALIAS_MARK).replace(re.escape("{conn_id}"), r"(\S+)") + r"[ \t]*\r?$", re.MULTILINE
+)
+
+
+def passwd_home() -> Path | None:
+    """The home ssh reads ``~/.ssh/config`` under: the account's passwd entry, which ``$HOME`` does not move."""
+    try:
+        import pwd
+
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except (ImportError, KeyError):
+        return None
+
+
+def managed_aliases() -> set[str]:
+    """The ids, lowercased, of the ``Host`` blocks Raven keeps in the ssh config ssh reads or the one Raven writes.
+
+    A mark counts on its own: a block the owner cut short is still not theirs.
+    A file that cannot be read adds nothing: ssh, run as the same account,
+    skips a user config it cannot open, so it follows none of its blocks.
+    """
+    return set(managed_alias_hostnames())
+
+
+#: The keywords of the block ``connection_add.write_ssh_alias`` writes. A password connection's
+#: command line names its own port and account (:func:`ssh_argv`), which win over the block's, and
+#: offers no key (:data:`PASSWORD_AUTH`): only ``HostName`` decides where its password goes.
+_ALIAS_KEYWORDS = frozenset({"hostname", "port", "user", "identityfile"})
+
+
+def managed_alias_hostnames() -> dict[str, frozenset[str]]:
+    """Where each ``Host`` block Raven keeps sends ssh: the ``HostName`` of every block, lowercased, by lowercased id.
+
+    The same blocks :func:`managed_aliases` counts. ``""`` stands for a block
+    that cannot be read as the one Raven writes -- one of its marks gone, no
+    ``Host <id>`` line after the first, a second ``HostName``, or a keyword
+    Raven does not write (``ProxyCommand``, ``Include``, ``Match`` ...) --
+    where nothing says ssh stays at the name it was given. A block runs, as
+    ssh reads it, to the next ``Host`` or ``Match`` line, closing mark or not.
+    """
+    homes = {Path(os.path.expanduser("~")), passwd_home()}
+    found: dict[str, set[str]] = {}
+    for home in homes - {None}:
+        try:
+            text = (home / ".ssh" / "config").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        lines = text.splitlines()
+        marks: dict[str, list[int]] = {}
+        for index, line in enumerate(lines):
+            if matched := _ALIAS_MARK_LINE.match(line):
+                marks.setdefault(matched.group(1), []).append(index)
+        for conn_id, at in marks.items():
+            sends = _alias_hostname(lines, at[0] + 1, conn_id) if len(at) == 2 else ""
+            found.setdefault(conn_id.lower(), set()).add(sends)
+    return {conn_id: frozenset(sends) for conn_id, sends in found.items()}
+
+
+def _alias_hostname(lines: list[str], start: int, conn_id: str) -> str:
+    """The lowercased ``HostName`` of the ``Host <conn_id>`` block from ``lines[start]`` on; ``""`` when the block
+    is not one Raven wrote (:func:`managed_alias_hostnames`)."""
+    hostnames: list[str] = []
+    seen_host = False
+    for line in lines[start:]:
+        words = line.strip().replace("=", " ", 1).split()
+        if not words or words[0].startswith("#"):
+            continue
+        keyword = words[0].lower()
+        if keyword in {"host", "match"}:
+            if seen_host:
+                break
+            if keyword == "match" or words[1:] != [conn_id]:
+                return ""
+            seen_host = True
+            continue
+        if not seen_host or keyword not in _ALIAS_KEYWORDS:
+            return ""
+        if keyword == "hostname":
+            if len(words) != 2:
+                return ""
+            hostnames.append(words[1].lower())
+    return hostnames[0] if seen_host and len(hostnames) == 1 else ""
+
+
+def alias_redirects(host: str, kept: dict[str, frozenset[str]]) -> bool:
+    """Whether a Raven ``Host`` block in ``kept`` (:func:`managed_alias_hostnames`) would send ssh, asked for
+    ``host``, anywhere but ``host`` itself. Names compare ignoring case, which also refuses a mixed-case spelling the
+    block would not take: the safe direction."""
+    sends = kept.get(host.lower())
+    return sends is not None and sends != {host.lower()}
+
+
+#: How long ``ssh -G`` may take to say how it resolves a host (config, and DNS
+#: when the owner's config canonicalizes) before the row's spelling stands.
+_RESOLVE_TIMEOUT_S = 10.0
+
+
+def _prompt_target(host: str, port: int, user: str) -> tuple[str, str]:
+    """The ``user@host`` ssh's password prompt names for this destination, and why not when ssh could not say.
+
+    The first is whose prompt the helper answers.
+
+    ssh names the host it resolved, not the one on its command line: the
+    ``HostName`` the owner's ssh config gives an alias, the canonical form of
+    a numeric address (``::1`` for ``0:0:0:0:0:0:0:1``), or the
+    ``HostKeyAlias`` in place of either. A helper waiting for the row's own
+    spelling refused every such machine, and its registration then blamed the
+    password (reviewed 2026-10-20). ``ssh -G`` prints that resolution without
+    connecting, and is asked with the password connection's own options. The
+    row's spelling when ssh cannot say, which sends the password nowhere else;
+    the reason then goes to the helper (:data:`ASKPASS_UNRESOLVED_ENV`), whose
+    refusal would otherwise read as a machine asking another question.
+
+    Asked here, before the connection, never by the helper: a helper that ran
+    ``ssh -G`` itself recursed into thousands of processes against a stand-in
+    ssh that called askpass (2026-10-19). Nothing this call starts finds an
+    askpass to call either (:func:`resolve_with_ssh`).
+    """
+    resolved = resolve_with_ssh(ssh_argv(host, port, "", user=user, password=True))
+    if resolved.failure:
+        return f"{user}@{host}", resolved.failure
+    named = resolved.first("hostkeyalias") or resolved.first("hostname")
+    return (f"{user}@{named}", "") if named else (f"{user}@{host}", "ssh -G named no host")
+
+
+@dataclasses.dataclass(frozen=True)
+class SshResolution:
+    """What ``ssh -G`` printed for one command line: each key's values in ssh's order, or why there are none."""
+
+    values: dict[str, tuple[str, ...]]
+    #: Empty when ssh answered; otherwise what went wrong, in words a refusal can quote.
+    failure: str
+
+    def first(self, key: str) -> str:
+        return next(iter(self.values.get(key, ())), "")
+
+
+def resolve_with_ssh(argv: list[str]) -> SshResolution:
+    """The configuration ssh resolves for ``argv`` -- an ssh command line up to its destination -- without connecting.
+
+    The one reader of ``ssh -G``: a password machine's prompt
+    (:func:`_prompt_target`) and a key machine's registration defaults
+    (``connection_add.ssh_defaults``) both resolve here, each with its own
+    command line. Two readers disagreed (reviewed 2026-10-20): the key one
+    raised on a byte that is not UTF-8 and on an ssh it could not start, and
+    handed its ``ssh -G`` the caller's terminal and askpass. Here nothing the
+    call starts finds an askpass or a terminal to read, a value keeps every
+    occurrence (``identityfile`` repeats, in the order ssh offers them), and
+    a failure is a reason rather than an exception.
+    """
+    probe = [argv[0], "-G", *argv[1:]]
+    env = {**os.environ, "SSH_ASKPASS": "", "SSH_ASKPASS_REQUIRE": "never"}
+    try:
+        # ``errors``: ssh prints config values as they are on disk, in no
+        # promised encoding, and one undecodable byte must not cost the resolution.
+        done = subprocess.run(
+            probe,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=_RESOLVE_TIMEOUT_S,
+            env=env,
+        )
+    except OSError:
+        return SshResolution({}, "ssh -G could not be started")
+    except subprocess.TimeoutExpired:
+        return SshResolution({}, f"ssh -G took over {_RESOLVE_TIMEOUT_S:g} s")
+    if done.returncode != 0:
+        return SshResolution({}, f"ssh -G exited {done.returncode}")
+    values: dict[str, list[str]] = {}
+    for line in done.stdout.splitlines():
+        key, _, value = line.partition(" ")
+        if key:
+            values.setdefault(key, []).append(value.strip())
+    return SshResolution({key: tuple(found) for key, found in values.items()}, "")
 
 
 def make_ssh_runner(

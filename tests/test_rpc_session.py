@@ -48,6 +48,7 @@ from raven.rpc.methods.session import (
     session_usage,
 )
 from raven.session.manager import SessionManager
+from raven.session.refs import tool_result_view
 
 _SESSION_ID_RE = re.compile(r"^tui:\d{8}_\d{6}_[0-9a-f]{6}$")
 
@@ -514,6 +515,88 @@ async def test_session_resume_maps_tool_role_with_name_and_context(
     assert tool_msg["text"] == "tool output here"
     assert tool_msg["name"] == "exec"
     assert tool_msg["context"] == "ls -la"
+
+
+def test_map_to_wire_bounds_tool_results_only() -> None:
+    big = "z" * 50_000
+    wire = _map_to_wire(
+        [
+            {"role": "user", "content": big},
+            {"role": "tool", "name": "read_file", "tool_call_id": "c1", "content": big},
+            {"role": "tool", "name": "read_file", "tool_call_id": "c2", "content": [{"type": "text", "text": big}]},
+            {"role": "assistant", "content": big},
+        ],
+        "tui:x",
+    )
+
+    assert [m["text"] for m in (wire[0], wire[3])] == [big, big]
+    for tool in (wire[1], wire[2]):
+        assert tool["text"] == tool_result_view(big)
+        assert tool["name"] == "read_file"
+
+
+async def test_session_resume_of_large_filed_reads_fits_one_client_frame(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Results are filed whole (the default cap is far above any read), but the
+    transcript a client resumes has to fit the frame it accepts: the TUI drops
+    anything over 1 MiB, and a dropped resume never answers."""
+    from raven.agent.loop import AgentLoop
+    from raven.agent.loop.bundles import ToolWiring
+    from raven.providers.base import LLMProvider, LLMResponse
+
+    class _Stub(LLMProvider):
+        async def chat(self, *args, **kwargs):
+            return LLMResponse(content="ok", finish_reason="stop")
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    session_key = "tui:20260610_143052_bbbbbb"
+    loop = AgentLoop(
+        provider=_Stub(api_key="test"),
+        workspace=tmp_path,
+        model="stub",
+        tools=ToolWiring(restrict_to_workspace=True),
+    )
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    turn: list[dict] = [{"role": "user", "content": "read the nine files"}]
+    for index in range(9):
+        call_id = f"c{index}"
+        turn += [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": json.dumps({"path": f"f{index}.txt"})},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": call_id, "name": "read_file", "content": str(index) * 128_000},
+        ]
+    turn.append({"role": "assistant", "content": "read them all"})
+    loop._save_turn(session, turn, 0)
+    mgr.save(session)
+    stored = SessionManager(tmp_path).get_or_create(session_key).messages
+    assert [len(m["content"]) for m in stored if m["role"] == "tool"] == [128_000] * 9
+
+    result = await session_resume({"session_id": session_key})
+
+    frame = json.dumps({"jsonrpc": "2.0", "id": 1, "result": result}, ensure_ascii=False).encode("utf-8")
+    assert len(frame) < 1024 * 1024, f"resume frame is {len(frame):,} bytes"
+    msgs = result["messages"]
+    assert [m["role"] for m in msgs] == [m["role"] for m in stored]
+    tools = [m for m in msgs if m["role"] == "tool"]
+    assert [m["tool_call_id"] for m in tools] == [f"c{index}" for index in range(9)]
+    assert all(m["text"].startswith(str(i) * 1000) and "not shown here" in m["text"] for i, m in enumerate(tools))
+    assert msgs[-1]["text"] == "read them all"
 
 
 async def test_session_resume_skips_malformed_stored_lines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

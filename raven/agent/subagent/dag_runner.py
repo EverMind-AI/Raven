@@ -64,7 +64,9 @@ from raven.agent.subagent_memory import (
 )
 from raven.context_engine.segments.render import dispatch_language_line
 from raven.contracts.subagent_backend import SubagentNoAnswerError
+from raven.observability import semconv
 from raven.providers.base import bound_llm_detail
+from raven.tracing import trace
 
 # In-context cap for terminal outputs returned to the main agent; the on-disk
 # .out.md always holds the full text.
@@ -99,6 +101,11 @@ class ExceptionAnnouncer(Protocol):
     pending" -- an announcer that reads ``awaiting_decision=False`` alone as
     "the node has failed" would wake the model with a false state, which is
     what the stall notice did before this keyword existed.
+
+    ``output`` is what the node itself returned on the attempt the report is
+    about -- its error, when it raised -- for a reader of the conversation, who
+    is shown that rather than the brief. ``None`` for a report about no attempt
+    (a stall notice). The report stays the model's whole text.
     """
 
     async def __call__(
@@ -110,6 +117,7 @@ class ExceptionAnnouncer(Protocol):
         *,
         awaiting_decision: bool,
         informational: bool = False,
+        output: str | None = None,
     ) -> None: ...
 
 
@@ -1168,7 +1176,7 @@ async def _apply_verdict(
     control_reachable: "Callable[[], bool] | None" = None,
     control_advert: "Callable[[str], str | None] | None" = None,
     output_limited: bool = False,
-) -> None:
+) -> str | None:
     """Turn a finished node's verdict into a status, and report a bad one.
 
     The last attempt reports too: the agent learns this line of the graph is dead
@@ -1177,9 +1185,13 @@ async def _apply_verdict(
 
     A decision node's selection is recorded into ``branch`` here, before the node
     leaves ``unsettled``, so no guard naming it is ever read without it.
+
+    Returns what the attempt left undone when it was judged not accomplished --
+    never empty, and still known on the retry route, which clears ``errors`` --
+    and ``None`` otherwise.
     """
     if status[node.id] not in ("completed", "failed"):
-        return
+        return None
     crashed = status[node.id] == "failed"
     try:
         verdict = await judge_node(
@@ -1197,7 +1209,7 @@ async def _apply_verdict(
         logger.warning("DAG decision node {} could not settle a route: {}", node.id, exc)
         if not crashed:
             _fail_undetermined_route(node.id, str(exc), status=status, errors=errors, output_paths=output_paths)
-        return
+        return None
     except TypeError as exc:
         # Not fail-open, and not raised either: raising here is swallowed further
         # out and the node stays `completed`, which is the failure this guards
@@ -1217,11 +1229,11 @@ async def _apply_verdict(
                     errors=errors,
                     output_paths=output_paths,
                 )
-            return
+            return None
         status[node.id] = "failed"
         errors[node.id] = f"the DAG judge could not be called, so this node was never judged: {exc}"
         output_paths.pop(node.id, None)
-        return
+        return None
     except Exception as exc:  # noqa: BLE001 - as _verdict.judge: an ordinary node fails open, a decision node fails
         if node.routes:
             # The fail-open is an ordinary node's alone. Read as accomplished, a decision
@@ -1237,7 +1249,7 @@ async def _apply_verdict(
                     errors=errors,
                     output_paths=output_paths,
                 )
-            return
+            return None
         logger.opt(exception=True).warning("DAG node {} verdict call raised, judging it accomplished: {}", node.id, exc)
         verdict = Verdict(accomplished=True)
     if verdict.accomplished:
@@ -1256,7 +1268,10 @@ async def _apply_verdict(
                 branch.chosen[node.id] = tuple(verdict.routes)
                 if verdict.route_evidence:
                     branch.evidence[node.id] = verdict.route_evidence
-        return
+        return None
+    # Read before `errors` is overwritten with the judge's reason: a node that raised
+    # returned nothing but its error, and that error is its whole account.
+    said = errors.get(node.id, "") if crashed else (node_output or "")
     reason = verdict.what_is_missing or "The node did not accomplish its task."
     errors[node.id] = reason
     # A node that did not accomplish its task must not be readable as anyone's
@@ -1274,7 +1289,7 @@ async def _apply_verdict(
         status[node.id] = "pending"
         errors.pop(node.id, None)
         logger.info("DAG node {} retries on its judge's own follow-up ({} left)", node.id, remaining - 1)
-        return
+        return reason
     answerable = _route_available(control_reachable)
     report = _exception_report(
         run_id=store.run_id,
@@ -1320,7 +1335,9 @@ async def _apply_verdict(
         # The node's fate must not depend on delivery, so the retries are inside and
         # what comes back is the failure that outlived them.
         failure = await deliver_report(
-            partial(announce_exception, store.run_id, node.id, report, origin, awaiting_decision=suspending),
+            partial(
+                announce_exception, store.run_id, node.id, report, origin, awaiting_decision=suspending, output=said
+            ),
             what=f"node {node.id}",
         )
         if failure is not None and suspending:
@@ -1333,6 +1350,7 @@ async def _apply_verdict(
             errors[node.id] = (
                 f"The exception report could not be delivered in {REPORT_DELIVERY_ATTEMPTS} attempts: {failure}"
             )
+    return reason
 
 
 async def _record_outcome(store: DagRunStore, status: dict[str, str], *, cancelled: bool = False) -> None:
@@ -1783,6 +1801,25 @@ async def _previous_output(store: DagRunStore, node_id: str) -> str:
         return "(the previous attempt left no output)"
 
 
+def _stateless_retry_prompt(prompt: str, previous: str, follow_ups: list[str]) -> str:
+    """A stateless node's retry: its prompt, its previous answer, and every follow-up so far.
+
+    The previous answer shows what the last attempt did, not what it was told, so
+    an earlier follow-up left out here would be gone from this attempt while its
+    judge still holds the node to it. With a single follow-up this is the shape a
+    retry has always had.
+    """
+    *earlier, latest = follow_ups
+    told = (
+        "Earlier follow-ups, oldest first; where a later one disagrees, the later one stands:\n"
+        + "\n\n".join(earlier)
+        + "\n\n"
+        if earlier
+        else ""
+    )
+    return f"{prompt}\n\nYour previous attempt returned:\n{previous}\n\n{told}Now: {latest}"
+
+
 async def _add_node_to_instance_log(
     subagents_root: str | None,
     node: DagNodeSpec,
@@ -1889,279 +1926,428 @@ async def _run_node(
         if attempts is not None:
             attempts[node.id] = attempt
         follow_up = (continuations or {}).pop(node.id, None)
-        started_at_ms = _now_ms()
-        did = None
-        node_started_at[node.id] = started_at_ms
-        # Set inside the gate, so a node still queued for a concurrency slot
-        # stays `pending`: this is what tells a stop which nodes actually ran.
-        status[node.id] = "running"
-        if on_node_start is not None:
-            # Inside the gate and before the first byte of work, because what a
-            # caller wants from this moment is a *baseline*: where the tree stood
-            # before this node touched it. Taken when the node was queued it would
-            # include whatever ran while it waited, and taken afterwards there is
-            # nothing left to compare against.
-            try:
-                await on_node_start(node.id)
-            except Exception as exc:  # noqa: BLE001 - a bookkeeping hook must not fail a node
-                logger.opt(exception=True).warning("DAG node {} start hook raised: {}", node.id, exc)
-        await _emit(
-            progress_publisher,
-            "dag_node_updated",
-            {"run_id": store.run_id, "node": node.id, "status": "running", "started_at": started_at_ms},
+        ended = await _attempt_node(
+            node,
+            agent_backend,
+            attempt=attempt,
+            follow_up=follow_up,
+            by_id=by_id,
+            store=store,
+            backend=backend,
+            workdir=workdir,
+            roots=roots,
+            sandbox_factory=sandbox_factory,
+            output_paths=output_paths,
+            status=status,
+            errors=errors,
+            prompt_written=prompt_written,
+            node_started_at=node_started_at,
+            node_ended_at=node_ended_at,
+            node_activity=node_activity,
+            branch=branch,
+            state_for=state_for,
+            mode_for=mode_for,
+            model_for=model_for,
+            capabilities=capabilities,
+            progress_publisher=progress_publisher,
+            session_key=session_key,
+            subagents_root=subagents_root,
+            continuations=continuations,
+            desk=desk,
+            judge_node=judge_node,
+            on_node_start=on_node_start,
+            announce_exception=announce_exception,
+            max_continuations=max_continuations,
+            origin=origin,
+            dependents=dependents,
+            adjudication_timeout_s=adjudication_timeout_s,
+            control_reachable=control_reachable,
+            control_advert=control_advert,
+            provider=provider,
+            model=model,
         )
-        await _write_node_status(session_key, store.run_id, node.id, node.subagent, "running")
-        await _link_node_instance(session_key, store.run_id, node.id, node.subagent, node.instance)
-        node_output: str | None = None
-        try:
-            rendered_prompt = await render_prompt(
-                node,
-                backend=backend,
-                cwd=workdir,
-                nodes_root=store.nodes_root,
-                roots=roots,
-                run_id=store.run_id,
-                by_id=by_id,
-                capabilities=capabilities,
-                not_executed={nid for nid, st in status.items() if st == NOT_EXECUTED},
-                may_not_execute=branch.skippable,
-            )
-            prompt = rendered_prompt
-            if follow_up is not None:
-                # A node with an instance is resuming a conversation whose history
-                # is already on disk, so restating the task would only compete with
-                # it. A stateless one has no history at all, so the whole task has
-                # to travel with the follow-up or it starts from nothing.
-                previous = await _previous_output(store, node.id)
-                prompt = (
-                    follow_up
-                    if node.instance
-                    else f"{prompt}\n\nYour previous attempt returned:\n{previous}\n\nNow: {follow_up}"
-                )
-            prompt_path = store.prompt_path(node.id)
-            output_path = store.output_path(node.id)
-            if attempt == 1:
-                # `prompt_path` is the prompt as first rendered -- what
-                # dag_status/read_node show, and what the judge reads ahead of the
-                # follow-ups recorded below -- so it must stay fixed at the original
-                # render even once a later attempt substitutes a follow-up into `prompt`.
-                await store.write_text(prompt_path, rendered_prompt)
-            await store.write_text(store.attempt_prompt_path(node.id, attempt), prompt)
-            if follow_up is not None:
-                # The message itself, not `prompt`: the judge reads the task from
-                # `prompt_path`, and a stateless node's prompt would repeat it.
-                await store.record_follow_up(node.id, follow_up)
-            prompt_written.add(node.id)
-            # The instance's message list, on the same terms as `spawn` and a
-            # direct chat. A node that names an `instance` is asking to continue
-            # that conversation; without this it started from empty and wrote
-            # nothing back, so the handle bought nothing.
-            node_state = (
-                state_for(session_key or "", node.subagent, node.instance)
-                if (state_for is not None and node.instance)
-                else None
-            )
-            # The effort level, on the same terms. The `instance` goes in rather
-            # than the handle this node dispatches under: a node that names none
-            # has no override to find, so the resolver answers with the session's
-            # tier -- clamped to this agent's menu, and falling through to the
-            # agent's own default only when there is no tier to inherit -- rather
-            # than each lane deciding again.
-            node_mode = mode_for(session_key or "", node.subagent, node.instance) if mode_for is not None else None
-            # A third-party acp row's own model, on the same terms: an instance
-            # override if the node names one and one is set, else the row's own
-            # configured `model`. `optional_keyword` below is what keeps this
-            # off a backend that declares no such parameter -- a builtin node's
-            # `RavenLoopBackend` among them, whose own model is a pin the
-            # backend pairs with its credential itself (see `manager.build_builtin_backend`).
-            node_session_model = (
-                model_for(session_key or "", node.subagent, node.instance) if model_for is not None else None
-            )
-            # Collected around the dispatch, exactly as a spawn does it: the
-            # backend publishes into whatever is open, so a node gets the same
-            # account of its tool calls and token cost that a spawned call gets,
-            # with no backend knowing which of the two paths ran it. Keyed into
-            # the live index for the same reason a spawn is: nothing of a node
-            # reaches disk until it ends, so without this a panel watching a
-            # node in flight has only its prompt to show.
-            # The handle lock spans load-run-save, because the state is a whole-file
-            # read-modify-write: two runs on one handle that interleave here lose
-            # whichever wrote first, silently, and a later one can also read the
-            # other's turns and answer as if they were its own. Same lock the direct
-            # chat and the cli backend take, keyed by the handle rather than held on
-            # a backend, so a spawn and a node on that handle queue against each
-            # other. Re-entrant, so the cli backend's own acquire below passes
-            # through.
-            #
-            # Taken inside the semaphore, not around it: a node waiting for the lock
-            # then occupies a concurrency slot while it waits, which is a scheduling
-            # cost, whereas taking it first would hold the handle while queueing for
-            # a slot -- blocking every other run's nodes on that handle for longer.
-            async with hold_handle(session_key or "", node.subagent, node.instance or node.id):
-                state_kwargs = (
-                    {"history": node_state.load(), "on_messages": node_state.save} if node_state is not None else {}
-                )
-                if node.mcps is not None:
-                    state_kwargs["mcps"] = node.mcps
-                # Indexed by instance too, on the same terms and with the same
-                # handle rule as `_add_node_to_instance_log`, so the conversation
-                # view reaches a node's steps while it runs rather than only after
-                # it lands.
-                with activity.collecting(
-                    live_key=node_live_key(store.run_id, node.id),
-                    instance=(session_key or "", node.subagent, node.instance or node.id),
-                    prompt=prompt,
-                ) as did:
-                    stall_watch = asyncio.create_task(
-                        _watch_stall(
-                            did,
-                            run_id=store.run_id,
-                            node=node,
-                            origin=origin,
-                            announce_exception=announce_exception,
-                            progress_publisher=progress_publisher,
-                        )
-                    )
-                    # One VM per node, the way a spawn holds one per sub-agent
-                    # (manager.py): a sibling's crashed VM takes no neighbour
-                    # with it, and the graph's semaphore bounds how many boot.
-                    # All of it under the watcher's cancel: a VM that fails to
-                    # boot is an expected operational failure, and a watcher
-                    # left behind would report a stall that is not one.
-                    try:
-                        executor = sandbox_factory(Path(workdir)) if sandbox_factory is not None else None
-                        async with executor if executor is not None else contextlib.nullcontext():
-                            result = await agent_backend.run(
-                                # The graph's own dispatch route: `spawn` goes
-                                # through the manager and never reaches here, so
-                                # the language has to be stated on both or an acp
-                                # node still narrates in English.
-                                dispatch_language_line(prompt),
-                                task_id=node.id,
-                                workspace=Path(workdir),
-                                executor=executor,
-                                session_key=session_key,
-                                instance=node.instance,
-                                mode=node_mode,
-                                # The template, not the rendering: a routing entry
-                                # reads the deliverable off the words the planner
-                                # wrote, not off whatever an upstream output inlined.
-                                **optional_keyword(agent_backend, "authored_task", node.prompt_template),
-                                # The invoking turn's binding, when the tool resolved one:
-                                # a pooled ACP worker otherwise keeps whatever model it
-                                # was first launched with. Only when set, because a node
-                                # backend built for a test may take no such keywords.
-                                **({"provider": provider} if provider is not None else {}),
-                                **({"model": model} if model else {}),
-                                # The row's own acp model choice, not the parent
-                                # binding above: this is what the session itself
-                                # answers with, pushed over `session/set_config_option`
-                                # the same way a spawn's does (`manager.row_default_model`).
-                                **optional_keyword(agent_backend, "session_model", node_session_model),
-                                **state_kwargs,
-                            )
-                            if (failure := llm_error_reply(result)) is not None:
-                                # The same rule as a spawn's (manager.py): a reply
-                                # that is nothing but the provider's error is not
-                                # this node's output, and a node that read it as
-                                # one fed the error to the step downstream.
-                                raise SubagentNoAnswerError(failure)
-                    finally:
-                        stall_watch.cancel()
-                        node_activity[node.id] = did.as_meta()
-                        # Set aside for the reader until the manifest carries
-                        # it: `collecting` drops the live entry as this block
-                        # exits, and the manifest is written once the whole
-                        # run is over.
-                        activity.record_settled(node_live_key(store.run_id, node.id), node_activity[node.id])
-            # The whole answer when the reply cap cut one: the in-context copy of
-            # a terminal output is capped again on the way out (see
-            # `_terminal_outputs`), and this file is what the reader, the next
-            # node's placeholder, and the record all resolve to. The per-attempt
-            # archive keeps the same uncapped text, for the same reason.
-            persisted = activity.persisted_output(did, result) or ""
-            await store.write_text(output_path, persisted)
-            await store.write_text(store.attempt_output_path(node.id, attempt), persisted)
-            await _write_node_closing(store, node.id, did)
-            node_output = result
-            status[node.id] = "completed"
-            output_paths[node.id] = output_path
-            # An earlier attempt's reason is still in `errors`, and nothing else
-            # pops it: a continuation that finally succeeds would otherwise reach
-            # the manifest reading `completed` with the failure that made it
-            # retry still attached. Only reached when this attempt returned, so a
-            # real failure of this attempt is recorded after it, not lost.
-            errors.pop(node.id, None)
-        except Exception as exc:  # noqa: BLE001 - record and continue
-            logger.opt(exception=True).warning("DAG node {} failed: {}", node.id, exc)
-            status[node.id] = "failed"
-            errors[node.id] = str(exc)
-        # Written before the verdict, not after: the production judge reads this
-        # file back through `store.transcript_path` to build its evidence, so
-        # writing it later meant a first attempt was always judged with no
-        # transcript, and a continuation's judge read the previous attempt's.
-        await _write_node_transcript(store, node.id, did, attempt)
-        if judge_node is not None:
-            await _apply_verdict(
-                node,
-                store=store,
-                status=status,
-                errors=errors,
-                output_paths=output_paths,
-                continuations=continuations,
-                node_output=node_output,
-                attempt=attempt,
-                desk=desk,
-                judge_node=judge_node,
-                announce_exception=announce_exception,
-                max_continuations=max_continuations,
-                origin=origin,
-                dependents=dependents or {},
-                adjudication_timeout_s=adjudication_timeout_s,
-                branch=branch,
-                control_reachable=control_reachable,
-                control_advert=control_advert,
-                # Read off the dispatch's own activity rather than the transcript:
-                # a turn that spent its whole budget thinking leaves a record that
-                # looks merely empty, and the cut is the difference between "it
-                # produced nothing" and "it was stopped before it could".
-                output_limited=bool(getattr(did, "output_limited", False)),
-            )
-        elif node.routes and status[node.id] == "completed":
-            # Nobody to select a route, and none to default to. The tool refuses such a
-            # graph on a host with no judge; `run_dag` called directly does not.
-            _fail_undetermined_route(
-                node.id,
-                "this run has no judge to select a route",
-                status=status,
-                errors=errors,
-                output_paths=output_paths,
-            )
-        turn = await _add_node_to_instance_log(subagents_root, node, did, session_key, errors.get(node.id), node_output)
-        ended_at_ms = _now_ms()
-        node_ended_at[node.id] = ended_at_ms
-        selection = _selection_fields(node.id, branch)
-        await _emit(
-            progress_publisher,
-            "dag_node_updated",
-            {
-                "run_id": store.run_id,
-                "node": node.id,
-                "status": status[node.id],
-                "started_at": started_at_ms,
-                "ended_at": ended_at_ms,
-                **selection,
-            },
-        )
-        await _write_node_status(session_key, store.run_id, node.id, node.subagent, status[node.id], **selection)
     # Scheduled after the `async with semaphore` above has already exited, so a
     # node's slot is released the moment its own work is done -- not held for
     # however long the recorder's poll budget takes.
     scope = memory_for(node.subagent) if memory_for is not None else None
     if scope is not None:
         _schedule_node_memory(
-            node, store=store, scope=scope, session_key=session_key, record_tasks=record_tasks, turn=turn
+            node, store=store, scope=scope, session_key=session_key, record_tasks=record_tasks, turn=ended.turn
         )
+
+
+_NO_REASON = "This attempt recorded no reason."
+
+
+@dataclass(frozen=True)
+class _AttemptEnd:
+    """How one attempt of a node ended.
+
+    Attributes:
+        outcome (`str`):
+            ``completed``, ``failed``, ``exception`` (waiting on an adjudication) or
+            ``continued`` (judged short and sent its judge's own follow-up).
+        reason (`str | None`):
+            Why the attempt did not complete; ``None`` exactly when it did.
+        turn (`list[dict[str, Any]]`):
+            The turn the attempt added to its instance's log, for the node's memory record.
+    """
+
+    outcome: str
+    reason: str | None
+    turn: list[dict[str, Any]]
+
+
+def _attempt_outcome(
+    node_id: str, status: dict[str, str], errors: dict[str, str], shortfall: str | None
+) -> tuple[str, str | None]:
+    """An attempt's outcome and reason, read off the node's status once its verdict has landed.
+
+    The reason is never empty for an attempt that did not complete: it is what a
+    reader of the trace is shown in place of the work, and ``str(exc)`` of a bare
+    exception is ``""``. The fallback stays here and never reaches ``errors``.
+    """
+    state = status[node_id]
+    if state == "completed":
+        return "completed", None
+    if state == "pending":
+        return "continued", shortfall or errors.get(node_id) or _NO_REASON
+    outcome = "exception" if state == "exception" else "failed"
+    return outcome, errors.get(node_id) or shortfall or _NO_REASON
+
+
+def _reported_from_here(origin: dict | None) -> dict | None:
+    """``origin`` with its dispatch link moved to the span running now, for a report this attempt sends.
+
+    The run's ``origin`` names the span that dispatched the whole graph; a report
+    about one node belongs to the attempt that sent it, so the turn it starts links
+    there. A copy, because the run's own reports -- its result -- keep the graph's
+    link. Unchanged with tracing off, and for a graph dispatched outside any span:
+    its attempts root traces no turn dispatched, so a turn linked to one could be
+    reached from no main-line turn, where a report with no link is one itself.
+    """
+    link = trace.dispatch_link()
+    if origin is None or link is None or trace.dispatch_link_of(origin) is None:
+        return origin
+    return {**origin, **trace.dispatch_attrs(link)}
+
+
+@trace.instrument("subagent.run", on_open=semconv.dag_node_open, extract=semconv.dag_node)
+async def _attempt_node(
+    node: DagNodeSpec,
+    agent_backend: Any,
+    *,
+    attempt: int,
+    follow_up: str | None,
+    by_id: dict[str, DagNodeSpec],
+    store: DagRunStore,
+    backend: Any,
+    workdir: str,
+    roots: tuple[str, ...],
+    sandbox_factory: Any,
+    output_paths: dict[str, str],
+    status: dict[str, str],
+    errors: dict[str, str],
+    prompt_written: set[str],
+    node_started_at: dict[str, int],
+    node_ended_at: dict[str, int],
+    node_activity: dict[str, dict],
+    branch: BranchState,
+    state_for: "Callable[[str, str | None, str], Any] | None" = None,
+    mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
+    model_for: "Callable[[str | None, str | None, str | None], str | None] | None" = None,
+    capabilities: dict[str, AgentCapabilities] | None = None,
+    progress_publisher: ProgressPublisher | None = None,
+    session_key: str | None = None,
+    subagents_root: str | None = None,
+    continuations: dict[str, str] | None = None,
+    desk: "AdjudicationDesk | None" = None,
+    judge_node: "Callable[..., Awaitable[Any]] | None" = None,
+    on_node_start: "Callable[[str], Awaitable[None]] | None" = None,
+    announce_exception: ExceptionAnnouncer | None = None,
+    max_continuations: int = 2,
+    origin: dict | None = None,
+    dependents: dict[str, list[str]] | None = None,
+    adjudication_timeout_s: float = 600.0,
+    control_reachable: "Callable[[], bool] | None" = None,
+    control_advert: "Callable[[str], str | None] | None" = None,
+    provider: Any = None,
+    model: str | None = None,
+) -> _AttemptEnd:
+    """Run one attempt of a node: from the moment it holds a concurrency slot to its terminal event.
+
+    Recorded as one ``subagent.run`` span, so the attempt's own steps -- its
+    model and tool calls, its judge, the reports it sends -- nest under it, apart
+    from a sibling attempt running beside it. The span closes on the outcome
+    returned here (see ``semconv.dag_node``).
+    """
+    origin = _reported_from_here(origin)
+    started_at_ms = _now_ms()
+    did = None
+    node_started_at[node.id] = started_at_ms
+    # Set inside the gate, so a node still queued for a concurrency slot
+    # stays `pending`: this is what tells a stop which nodes actually ran.
+    status[node.id] = "running"
+    if on_node_start is not None:
+        # Inside the gate and before the first byte of work, because what a
+        # caller wants from this moment is a *baseline*: where the tree stood
+        # before this node touched it. Taken when the node was queued it would
+        # include whatever ran while it waited, and taken afterwards there is
+        # nothing left to compare against.
+        try:
+            await on_node_start(node.id)
+        except Exception as exc:  # noqa: BLE001 - a bookkeeping hook must not fail a node
+            logger.opt(exception=True).warning("DAG node {} start hook raised: {}", node.id, exc)
+    await _emit(
+        progress_publisher,
+        "dag_node_updated",
+        {"run_id": store.run_id, "node": node.id, "status": "running", "started_at": started_at_ms},
+    )
+    await _write_node_status(session_key, store.run_id, node.id, node.subagent, "running")
+    await _link_node_instance(session_key, store.run_id, node.id, node.subagent, node.instance)
+    node_output: str | None = None
+    try:
+        rendered_prompt = await render_prompt(
+            node,
+            backend=backend,
+            cwd=workdir,
+            nodes_root=store.nodes_root,
+            roots=roots,
+            run_id=store.run_id,
+            by_id=by_id,
+            capabilities=capabilities,
+            not_executed={nid for nid, st in status.items() if st == NOT_EXECUTED},
+            may_not_execute=branch.skippable,
+        )
+        prompt = rendered_prompt
+        if follow_up is not None:
+            # Recorded before the dispatch, since this attempt's judge reads the
+            # record, and as the message itself, not `prompt`: the judge reads the
+            # task from `prompt_path`, and a stateless node's prompt repeats it.
+            follow_ups = await store.record_follow_up(node.id, follow_up)
+            # A node with an instance is resuming a conversation whose history
+            # is already on disk, so restating the task would only compete with
+            # it. A stateless one has no history at all, so the whole task has
+            # to travel with the follow-up or it starts from nothing -- every
+            # follow-up, too, since its previous answer need not repeat them.
+            previous = await _previous_output(store, node.id)
+            prompt = follow_up if node.instance else _stateless_retry_prompt(prompt, previous, follow_ups)
+        prompt_path = store.prompt_path(node.id)
+        output_path = store.output_path(node.id)
+        if attempt == 1:
+            # `prompt_path` is the prompt as first rendered -- what
+            # dag_status/read_node show, and what the judge reads ahead of the
+            # follow-ups recorded above -- so it must stay fixed at the original
+            # render even once a later attempt substitutes a follow-up into `prompt`.
+            await store.write_text(prompt_path, rendered_prompt)
+            await store.forget_follow_ups(node.id)
+        await store.write_text(store.attempt_prompt_path(node.id, attempt), prompt)
+        prompt_written.add(node.id)
+        # The instance's message list, on the same terms as `spawn` and a
+        # direct chat. A node that names an `instance` is asking to continue
+        # that conversation; without this it started from empty and wrote
+        # nothing back, so the handle bought nothing.
+        node_state = (
+            state_for(session_key or "", node.subagent, node.instance)
+            if (state_for is not None and node.instance)
+            else None
+        )
+        # The effort level, on the same terms. The `instance` goes in rather
+        # than the handle this node dispatches under: a node that names none
+        # has no override to find, so the resolver answers with the session's
+        # tier -- clamped to this agent's menu, and falling through to the
+        # agent's own default only when there is no tier to inherit -- rather
+        # than each lane deciding again.
+        node_mode = mode_for(session_key or "", node.subagent, node.instance) if mode_for is not None else None
+        # A third-party acp row's own model, on the same terms: an instance
+        # override if the node names one and one is set, else the row's own
+        # configured `model`. `optional_keyword` below is what keeps this
+        # off a backend that declares no such parameter -- a builtin node's
+        # `RavenLoopBackend` among them, whose own model is a pin the
+        # backend pairs with its credential itself (see `manager.build_builtin_backend`).
+        node_session_model = (
+            model_for(session_key or "", node.subagent, node.instance) if model_for is not None else None
+        )
+        # Collected around the dispatch, exactly as a spawn does it: the
+        # backend publishes into whatever is open, so a node gets the same
+        # account of its tool calls and token cost that a spawned call gets,
+        # with no backend knowing which of the two paths ran it. Keyed into
+        # the live index for the same reason a spawn is: nothing of a node
+        # reaches disk until it ends, so without this a panel watching a
+        # node in flight has only its prompt to show.
+        # The handle lock spans load-run-save, because the state is a whole-file
+        # read-modify-write: two runs on one handle that interleave here lose
+        # whichever wrote first, silently, and a later one can also read the
+        # other's turns and answer as if they were its own. Same lock the direct
+        # chat and the cli backend take, keyed by the handle rather than held on
+        # a backend, so a spawn and a node on that handle queue against each
+        # other. Re-entrant, so the cli backend's own acquire below passes
+        # through.
+        #
+        # Taken inside the semaphore, not around it: a node waiting for the lock
+        # then occupies a concurrency slot while it waits, which is a scheduling
+        # cost, whereas taking it first would hold the handle while queueing for
+        # a slot -- blocking every other run's nodes on that handle for longer.
+        async with hold_handle(session_key or "", node.subagent, node.instance or node.id):
+            state_kwargs = (
+                {"history": node_state.load(), "on_messages": node_state.save} if node_state is not None else {}
+            )
+            if node.mcps is not None:
+                state_kwargs["mcps"] = node.mcps
+            # Indexed by instance too, on the same terms and with the same
+            # handle rule as `_add_node_to_instance_log`, so the conversation
+            # view reaches a node's steps while it runs rather than only after
+            # it lands.
+            with activity.collecting(
+                live_key=node_live_key(store.run_id, node.id),
+                instance=(session_key or "", node.subagent, node.instance or node.id),
+                prompt=prompt,
+            ) as did:
+                stall_watch = asyncio.create_task(
+                    _watch_stall(
+                        did,
+                        run_id=store.run_id,
+                        node=node,
+                        origin=origin,
+                        announce_exception=announce_exception,
+                        progress_publisher=progress_publisher,
+                    )
+                )
+                # One VM per node, the way a spawn holds one per sub-agent
+                # (manager.py): a sibling's crashed VM takes no neighbour
+                # with it, and the graph's semaphore bounds how many boot.
+                # All of it under the watcher's cancel: a VM that fails to
+                # boot is an expected operational failure, and a watcher
+                # left behind would report a stall that is not one.
+                try:
+                    executor = sandbox_factory(Path(workdir)) if sandbox_factory is not None else None
+                    async with executor if executor is not None else contextlib.nullcontext():
+                        result = await agent_backend.run(
+                            # The graph's own dispatch route: `spawn` goes
+                            # through the manager and never reaches here, so
+                            # the language has to be stated on both or an acp
+                            # node still narrates in English.
+                            dispatch_language_line(prompt),
+                            task_id=node.id,
+                            workspace=Path(workdir),
+                            executor=executor,
+                            session_key=session_key,
+                            instance=node.instance,
+                            mode=node_mode,
+                            # The template, not the rendering: a routing entry
+                            # reads the deliverable off the words the planner
+                            # wrote, not off whatever an upstream output inlined.
+                            **optional_keyword(agent_backend, "authored_task", node.prompt_template),
+                            # The invoking turn's binding, when the tool resolved one:
+                            # a pooled ACP worker otherwise keeps whatever model it
+                            # was first launched with. Only when set, because a node
+                            # backend built for a test may take no such keywords.
+                            **({"provider": provider} if provider is not None else {}),
+                            **({"model": model} if model else {}),
+                            # The row's own acp model choice, not the parent
+                            # binding above: this is what the session itself
+                            # answers with, pushed over `session/set_config_option`
+                            # the same way a spawn's does (`manager.row_default_model`).
+                            **optional_keyword(agent_backend, "session_model", node_session_model),
+                            **state_kwargs,
+                        )
+                        if (failure := llm_error_reply(result)) is not None:
+                            # The same rule as a spawn's (manager.py): a reply
+                            # that is nothing but the provider's error is not
+                            # this node's output, and a node that read it as
+                            # one fed the error to the step downstream.
+                            raise SubagentNoAnswerError(failure)
+                finally:
+                    stall_watch.cancel()
+                    node_activity[node.id] = did.as_meta()
+                    # Set aside for the reader until the manifest carries
+                    # it: `collecting` drops the live entry as this block
+                    # exits, and the manifest is written once the whole
+                    # run is over.
+                    activity.record_settled(node_live_key(store.run_id, node.id), node_activity[node.id])
+        # The whole answer when the reply cap cut one: the in-context copy of
+        # a terminal output is capped again on the way out (see
+        # `_terminal_outputs`), and this file is what the reader, the next
+        # node's placeholder, and the record all resolve to. The per-attempt
+        # archive keeps the same uncapped text, for the same reason.
+        persisted = activity.persisted_output(did, result) or ""
+        await store.write_text(output_path, persisted)
+        await store.write_text(store.attempt_output_path(node.id, attempt), persisted)
+        await _write_node_closing(store, node.id, did)
+        node_output = result
+        status[node.id] = "completed"
+        output_paths[node.id] = output_path
+        # An earlier attempt's reason is still in `errors`, and nothing else
+        # pops it: a continuation that finally succeeds would otherwise reach
+        # the manifest reading `completed` with the failure that made it
+        # retry still attached. Only reached when this attempt returned, so a
+        # real failure of this attempt is recorded after it, not lost.
+        errors.pop(node.id, None)
+    except Exception as exc:  # noqa: BLE001 - record and continue
+        logger.opt(exception=True).warning("DAG node {} failed: {}", node.id, exc)
+        status[node.id] = "failed"
+        errors[node.id] = str(exc)
+    # Written before the verdict, not after: the production judge reads this
+    # file back through `store.transcript_path` to build its evidence, so
+    # writing it later meant a first attempt was always judged with no
+    # transcript, and a continuation's judge read the previous attempt's.
+    await _write_node_transcript(store, node.id, did, attempt)
+    shortfall = None
+    if judge_node is not None:
+        shortfall = await _apply_verdict(
+            node,
+            store=store,
+            status=status,
+            errors=errors,
+            output_paths=output_paths,
+            continuations=continuations,
+            node_output=node_output,
+            attempt=attempt,
+            desk=desk,
+            judge_node=judge_node,
+            announce_exception=announce_exception,
+            max_continuations=max_continuations,
+            origin=origin,
+            dependents=dependents or {},
+            adjudication_timeout_s=adjudication_timeout_s,
+            branch=branch,
+            control_reachable=control_reachable,
+            control_advert=control_advert,
+            # Read off the dispatch's own activity rather than the transcript:
+            # a turn that spent its whole budget thinking leaves a record that
+            # looks merely empty, and the cut is the difference between "it
+            # produced nothing" and "it was stopped before it could".
+            output_limited=bool(getattr(did, "output_limited", False)),
+        )
+    elif node.routes and status[node.id] == "completed":
+        # Nobody to select a route, and none to default to. The tool refuses such a
+        # graph on a host with no judge; `run_dag` called directly does not.
+        _fail_undetermined_route(
+            node.id,
+            "this run has no judge to select a route",
+            status=status,
+            errors=errors,
+            output_paths=output_paths,
+        )
+    outcome, reason = _attempt_outcome(node.id, status, errors, shortfall)
+    turn = await _add_node_to_instance_log(subagents_root, node, did, session_key, errors.get(node.id), node_output)
+    ended_at_ms = _now_ms()
+    node_ended_at[node.id] = ended_at_ms
+    selection = _selection_fields(node.id, branch)
+    await _emit(
+        progress_publisher,
+        "dag_node_updated",
+        {
+            "run_id": store.run_id,
+            "node": node.id,
+            "status": status[node.id],
+            "started_at": started_at_ms,
+            "ended_at": ended_at_ms,
+            **selection,
+        },
+    )
+    await _write_node_status(session_key, store.run_id, node.id, node.subagent, status[node.id], **selection)
+    return _AttemptEnd(outcome, reason, turn)
 
 
 def _memory_backend():

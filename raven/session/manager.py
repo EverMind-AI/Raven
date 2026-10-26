@@ -2,17 +2,19 @@
 
 import copy
 import json
+import os
 import uuid
 import weakref
 from collections import OrderedDict
 from collections.abc import Collection
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
+from raven.contracts.context import SessionRevision
 from raven.session.title import TITLE_STORAGE_MAX, collapse_to_line
 from raven.utils.atomic_io import atomic_replace, locked_append, write_transaction
 from raven.utils.paths import ensure_dir, safe_filename, safe_path_segment
@@ -200,6 +202,21 @@ class Session:
     # and messages arriving afterwards can take the length back past where it
     # was. In process only -- a task does not outlive the process it ran in.
     truncations: int = field(default=0, repr=False)
+    log_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    """Which logical log ``messages`` is. A clear (``/new``) mints a new one."""
+    log_generation: int = 0
+    """Bumped by every mutation that makes an ordinal name a different message.
+
+    ``session.messages`` is append-only *within* a generation, which is what
+    lets a ``[[ref ...]]`` name a message by its index. An undo breaks that:
+    the list shrinks and later messages take indices that older refs already
+    named. Folding this counter into the scope makes a ref minted before an
+    undo resolve to nothing rather than to whatever took its place.
+    """
+    log_started_at: str | None = None
+    """When the clear that minted ``log_id`` happened; None for an id minted
+    with the session or on loading a file that had none. It is what decides
+    which of two writers' ids survives a save: the most recent clear wins."""
     # ── Personalization state ─────────────────────────────────────────────────
     # Set when the agent asked a clarifying question and is waiting for the answer.
     # Structure: {"original_message": str, "question": str, "domain": str}
@@ -220,6 +237,9 @@ class Session:
     # only that may outrank a record written since -- the snapshot itself is
     # every key the file held at load, most of which this copy never meant.
     _persisted_metadata: dict[str, Any] = field(default_factory=dict, repr=False)
+    # (log_id, log_generation) as this copy last read it from the file or wrote
+    # it there; None while the file has never held one this copy saw.
+    _persisted_revision: tuple[str, int] | None = field(default=None, repr=False)
     # ``_fingerprint`` of this session as last read, written or minted. While it
     # and the message count still match, nothing is unsaved and the session may
     # leave the cache. None where one could not be made, which never matches.
@@ -290,6 +310,11 @@ class Session:
         self.messages.append(msg)
         self.updated_at = datetime.now()
 
+    @property
+    def revision(self) -> SessionRevision:
+        """Identity and high-water mark of this log view, the scope refs into it carry."""
+        return SessionRevision(log_id=self.log_id, generation=self.log_generation)
+
     def get_history(self, max_messages: int = 500) -> list[dict[str, Any]]:
         """Return unconsolidated messages for LLM input, aligned to a user turn."""
         unconsolidated = self.messages[self.last_consolidated :]
@@ -321,6 +346,9 @@ class Session:
         # omits comes back on the next save.
         self.metadata["annotated_through"] = 0
         self.truncations += 1
+        self.log_id = uuid.uuid4().hex
+        self.log_generation = 0
+        self.log_started_at = datetime.now(timezone.utc).isoformat(timespec="microseconds")
         self.updated_at = datetime.now()
 
     def undo_last_turn(self, n: int = 1) -> int:
@@ -346,6 +374,7 @@ class Session:
         if isinstance(cursor, int) and cursor > cut_index:
             self.metadata["annotated_through"] = cut_index
         self.truncations += 1
+        self.log_generation += 1
         self.updated_at = datetime.now()
         return removed
 
@@ -387,6 +416,83 @@ def _saved_time(value: Any) -> datetime | None:
         return None
 
 
+def _stored_revision(record: dict[str, Any]) -> tuple[str, int, str | None] | None:
+    """The (log_id, log_generation, log_started_at) a metadata record holds; None when it holds no valid one."""
+    log_id = record.get("log_id")
+    generation = record.get("log_generation")
+    try:
+        revision = SessionRevision(log_id, generation)
+    except ValueError:
+        return None
+    started = record.get("log_started_at")
+    return revision.log_id, revision.generation, started if isinstance(started, str) and started else None
+
+
+def _started(value: str | None) -> datetime:
+    """A ``log_started_at`` as an aware UTC time; the earliest time when missing or unreadable.
+
+    Written in UTC; a naive value is read as local time.
+    """
+    if isinstance(value, str) and value:
+        try:
+            return datetime.fromisoformat(value).astimezone(timezone.utc)
+        except (ValueError, OverflowError, OSError):
+            pass
+    return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _merge_revision(session: Session, disk: tuple[str, int, str | None] | None) -> None:
+    """Settle ``session``'s revision against the one another writer left on disk.
+
+    ``disk`` is that revision, or None when nobody wrote one since this copy
+    last read or wrote the file. The log id follows the most recent clear -- an
+    id minted with the session or on load never outranks one already on disk --
+    and on a shared id the generation is the larger of the two. Disagreement is
+    resolved, never raised: a save that fails loses the turn it was saving.
+    """
+    if disk is None:
+        return
+    disk_id, disk_generation, disk_started = disk
+    if disk_id != session.log_id:
+        if _started(session.log_started_at) > _started(disk_started):
+            return
+        session.log_id, session.log_started_at = disk_id, disk_started
+        session.log_generation = disk_generation
+    else:
+        session.log_generation = max(disk_generation, session.log_generation)
+
+
+def _move_past(session: Session, *used: tuple[str, int] | None) -> None:
+    """Move the generation past every ``used`` scope of this log id.
+
+    For a save whose file will no longer hold what those scopes named: each was
+    already handed out -- by this copy or by another writer -- for messages at
+    ordinals that now hold something else, and a scope must never name two
+    different messages.
+    """
+    for revision in used:
+        if revision is not None and revision[0] == session.log_id and session.log_generation <= revision[1]:
+            session.log_generation = revision[1] + 1
+
+
+def _normalized(messages: list[dict[str, Any]]) -> list[Any]:
+    """Messages as a reader of the file would get them back."""
+    return [json.loads(json.dumps(m, ensure_ascii=False)) for m in messages]
+
+
+def _legacy_log_id(key: str, created_at: Any, message_count: int) -> str:
+    """The log id of a file that stores none.
+
+    Derived from what identifies that file's log rather than drawn at random, so
+    every reader of the same unsaved legacy file names it the same way: a ref
+    minted against one loaded copy still resolves against another, and two
+    processes that load it converge on one id.
+    """
+    if not isinstance(created_at, str) or not created_at:
+        return uuid.uuid4().hex
+    return uuid.uuid5(uuid.NAMESPACE_URL, f"raven-session-log:{key}:{created_at}:{message_count}").hex
+
+
 def read_session_file(path: Path, key: str) -> Session | None:
     """The session stored in the transcript at ``path``, read as ``key``.
 
@@ -405,8 +511,16 @@ def read_session_file(path: Path, key: str) -> Session | None:
         updated_at = None
         last_consolidated = 0
         pending_clarification = None
+        revision: tuple[str, int, str | None] | None = None
+        created_raw = None
 
         with open(path, encoding="utf-8") as f:
+            # Of the file this read, taken before reading it: a write that lands
+            # while the file is read (or replaces it) leaves the stamp behind the
+            # file, so the next save re-reads and merges rather than writing over
+            # a revision this copy never saw.
+            st = os.fstat(f.fileno())
+            file_stamp = (st.st_size, st.st_mtime_ns)
             for line in f:
                 line = line.strip()
                 if not line:
@@ -426,6 +540,8 @@ def read_session_file(path: Path, key: str) -> Session | None:
                     updated_at = data.get("updated_at")
                     last_consolidated = data.get("last_consolidated", 0)
                     pending_clarification = data.get("pending_clarification")
+                    revision = _stored_revision(data)
+                    created_raw = data.get("created_at")
                 else:
                     messages.append(data)
 
@@ -438,8 +554,17 @@ def read_session_file(path: Path, key: str) -> Session | None:
             last_consolidated=last_consolidated,
             pending_clarification=pending_clarification,
         )
+        # A file written before revisions existed, or whose latest record holds
+        # an unreadable one, gets a derived id that the next save writes. An
+        # older valid record is not reused: the latest record is the one that
+        # speaks for the file.
+        if revision is not None:
+            session.log_id, session.log_generation, session.log_started_at = revision
+            session._persisted_revision = revision[:2]
+        else:
+            session.log_id = _legacy_log_id(key, created_raw, len(messages))
         session._persisted_count = len(messages)
-        session._file_stamp = _stamp(path)
+        session._file_stamp = file_stamp
         session._persisted_metadata = dict(metadata)
         return session
     except Exception as e:
@@ -908,7 +1033,44 @@ class SessionManager:
         # The read and the write are one transaction: the record this merges
         # under can otherwise be written between them and lost anyway.
         with write_transaction(path):
-            session.metadata = self._metadata_to_write(session, path)
+            written = self._record_written_since(session, path)
+            last = None if written is None else written[0]
+            session.metadata = self._metadata_to_write(session, last)
+            rewrite = len(session.messages) < session._persisted_count or _cut_since_persisted(session)
+            disk = None if last is None else _stored_revision(last)
+            disk_scope = None if disk is None else disk[:2]
+            before = (session.log_id, session.log_generation)
+            _merge_revision(session, disk)
+            merged: list[dict[str, Any]] | None = None
+            if rewrite:
+                # The file is about to hold exactly this copy's list, so neither
+                # the scope it last saw nor the one on disk may name it.
+                _move_past(session, session._persisted_revision, disk_scope)
+            elif written is not None and (
+                written[1] != session._persisted_count or disk_scope != session._persisted_revision
+            ):
+                # Somebody else changed the messages since this copy last saw
+                # the file. The append lands after theirs, so the live list is
+                # re-read to match the file. Refs are minted only into history
+                # already persisted, so the scope survives as long as every
+                # persisted ordinal still names the same message, and is retired
+                # otherwise. Where the persisted part agrees, this copy's own
+                # entries are kept by identity, which is what lets a turn find
+                # its own messages again after the merge.
+                on_disk = read_session_file(path, session.key)
+                count = session._persisted_count
+                kept = on_disk is not None and len(on_disk.messages) >= count
+                kept = kept and _normalized(session.messages[:count]) == _normalized(on_disk.messages[:count])
+                if on_disk is not None:
+                    head = session.messages[:count] if kept else on_disk.messages[:count]
+                    merged = head + on_disk.messages[count:] + session.messages[count:]
+                if not kept and (session.log_id, session.log_generation) == before:
+                    _move_past(session, before, disk_scope)
+                # Indices into this copy's unsaved tail move when the other
+                # writer's messages land ahead of it.
+                moved = on_disk is not None and len(on_disk.messages) > count and len(session.messages) > count
+                if merged is None or not kept or moved:
+                    session.truncations += 1
             metadata_line = json.dumps(
                 {
                     "_type": "metadata",
@@ -917,13 +1079,16 @@ class SessionManager:
                     "updated_at": session.updated_at.isoformat(),
                     "metadata": session.metadata,
                     "last_consolidated": session.last_consolidated,
+                    "log_id": session.log_id,
+                    "log_generation": session.log_generation,
+                    "log_started_at": session.log_started_at,
                     # Personalization: persist clarification wait-state across restarts
                     "pending_clarification": session.pending_clarification,
                 },
                 ensure_ascii=False,
             )
 
-            if len(session.messages) < session._persisted_count or _cut_since_persisted(session):
+            if rewrite:
                 lines = [metadata_line]
                 lines += [json.dumps(m, ensure_ascii=False) for m in session.messages]
                 atomic_replace(path, "".join(line + "\n" for line in lines))
@@ -932,15 +1097,32 @@ class SessionManager:
                 lines = [metadata_line]
                 lines += [json.dumps(m, ensure_ascii=False) for m in new_messages]
                 locked_append(path, lines)
+            if merged is not None:
+                session.messages = merged
             session._file_stamp = _stamp(path)
             session._persisted_metadata = dict(session.metadata)
+            session._persisted_revision = (session.log_id, session.log_generation)
 
         session._persisted_count = len(session.messages)
         session._persisted_truncations = session.truncations
         session._clean_fingerprint = _fingerprint(session)
         self._remember(session)
 
-    def _metadata_to_write(self, session: "Session", path: Path) -> dict[str, Any]:
+    def _record_written_since(self, session: "Session", path: Path) -> tuple[dict[str, Any] | None, int] | None:
+        """The file's last metadata record and message count, if anybody wrote to it since this copy last read or wrote it.
+
+        None while the file is byte for byte what this copy last read or wrote,
+        which is every save in the ordinary case of one writer -- so a
+        conversation pays for the scan only when somebody else has actually
+        written to it.
+        """
+        stamp = _stamp(path)
+        if stamp is None or stamp == session._file_stamp:
+            return None
+        last, count, *_rest = self._scan_file(path)
+        return last, count
+
+    def _metadata_to_write(self, session: "Session", last: dict[str, Any] | None) -> dict[str, Any]:
         """What this copy changed, over the record on disk, over what it loaded.
 
         A save rewrites the whole metadata record, so on its own it speaks for
@@ -962,15 +1144,10 @@ class SessionManager:
         output-limit stamp). A new remover that omits a key instead will find
         it resurrected.
 
-        The re-read is skipped while the file is byte for byte what this copy
-        last read or wrote, which is every save in the ordinary case of one
-        writer -- so a conversation pays for the scan only when somebody else
-        has actually written to it.
+        ``last`` is the record somebody else wrote since this copy last read or
+        wrote the file (:meth:`_record_written_since`); None leaves this copy's
+        metadata as it is.
         """
-        stamp = _stamp(path)
-        if stamp is None or stamp == session._file_stamp:
-            return session.metadata
-        last, *_rest = self._scan_file(path)
         if last is None:
             return session.metadata
         base = session._persisted_metadata
