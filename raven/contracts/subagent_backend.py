@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 class SubagentNoAnswerError(Exception):
-    """The run spent its whole round budget and never produced an answer.
+    """The run ended with no answer: a blank reply or spent rounds then a blank wrap-up, a failed call, an error reply.
 
     Raised rather than returned so the node fails. Returned as the run's
     *output*, the sentence "Task completed but no final response was generated"

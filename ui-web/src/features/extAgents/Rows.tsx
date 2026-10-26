@@ -16,6 +16,7 @@ import { AgentMark, MIRASIM_GROUP } from '../../components/AgentMark'
 import { Glyph } from '../../components/Ico'
 import { t } from '../../i18n/t'
 import { agentKindLabel } from '../../lib/agentKind'
+import { ago } from '../../lib/ago'
 import { ask as confirmAsk } from '../../state/confirm'
 import { catalogueCards, familyOf, isOwnRow, shortOf } from './catalogue'
 import { healthOf, kindOf, ledClass, pendingLabel, refusedWrite, shownOf } from './health'
@@ -119,17 +120,6 @@ const WHY: Record<Remedy['kind'], string> = {
 
 export function whyOf(remedy: Remedy): string {
   return t(WHY[kindOf(remedy)])
-}
-
-/* How long ago a verdict was measured, in the largest unit that is not zero. */
-export function ago(atMs: number | null, now = Date.now()): string {
-  if (!atMs) return ''
-  const m = Math.floor((now - atMs) / 60_000)
-  if (m < 1) return t('gui.time.ago_now')
-  if (m < 60) return t('gui.time.ago_m', { n: m })
-  const h = Math.floor(m / 60)
-  if (h < 24) return t('gui.time.ago_h', { n: h })
-  return t('gui.time.ago_d', { n: Math.floor(h / 24) })
 }
 
 /* What a card or row says about the last thing that went wrong, under the

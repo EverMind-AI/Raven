@@ -59,6 +59,7 @@ from raven.mcp.bridge import iter_raw_frames
 from raven.mcp.transport import open_endpoint
 from raven.node import bundle, protocol
 from raven.ops import remote_path
+from raven.utils import mirrors
 
 #: Where a machine keeps its nodes when its registry row names nowhere else
 #: (``node_dir``). ``~`` is the registered user's home there.
@@ -79,7 +80,6 @@ LOST_RC = -1
 
 _HELLO_TIMEOUT_S = 60.0
 _CALL_TIMEOUT_S = 120.0
-_LAUNCH_TIMEOUT_S = 60.0
 _ATTACH_TIMEOUT_S = 30.0
 #: How many frames an endpoint holds for a link that is down before it gives up on it.
 _PENDING_FRAMES = 1000
@@ -594,6 +594,12 @@ class NodePool:
         # Registered before the launch, so a frame the agent writes at once has somewhere to go.
         node.channels[channel] = endpoint
         params = {"channel": channel, "task": task, "command": command, "cwd": cwd, "env": dict(env)}
+        # The host's own switch travels with the launch: the daemon decides
+        # the mirror on the machine it runs on, and it cannot read the host's
+        # environment. The launch's own environment keeps its own value, which
+        # the daemon reads as well.
+        if mirrors.opt_out():
+            params["no_mirror"] = True
         launch = asyncio.ensure_future(self._launch_agent(machine_id, node, channel, name, params))
         try:
             started = await asyncio.shield(launch)
@@ -623,13 +629,16 @@ class NodePool:
         """The Raven node's answer to ``agent/launch`` on ``channel``, or :class:`NodeError` saying why there is none."""
         label = node.target.label
         try:
-            return await node.client.request(protocol.AGENT_LAUNCH, params, timeout=_LAUNCH_TIMEOUT_S)
+            return await node.client.request(protocol.AGENT_LAUNCH, params, timeout=protocol.AGENT_LAUNCH_TIMEOUT_S)
         except AcpRemoteError as exc:
             node.channels.pop(channel, None)
             raise NodeError(self._refused_launch(node, name, exc)) from None
         except AcpTimeoutError:
             node.channels.pop(channel, None)
-            said = f"the Raven node on machine {label} did not answer {protocol.AGENT_LAUNCH} within {_LAUNCH_TIMEOUT_S:.0f}s"
+            said = (
+                f"the Raven node on machine {label} did not answer {protocol.AGENT_LAUNCH} "
+                f"within {protocol.AGENT_LAUNCH_TIMEOUT_S:.0f}s"
+            )
             await self._lost(machine_id, node, said)
             raise NodeError(said) from None
         except AcpConnectionError as exc:

@@ -46,6 +46,43 @@ from that checkout. Piping the installer to a shell installs the published
 wheel, even from inside a clone. To select a local source directory for a piped
 installation, set `RAVEN_LOCAL_SRC=<dir>`.
 
+### When a download host cannot be reached
+
+The installers, `raven resources`, `raven upgrade`, and the agents and MCP
+servers Raven starts through `uvx` or `npx` fetch from their usual hosts first.
+When a host cannot be reached at all, the download comes from a mirror in
+mainland China instead: hf-mirror.com for Hugging Face, jsDelivr for files on
+GitHub, the TUNA mirror for PyPI and LibreOffice, and npmmirror for Node.js,
+npm, Playwright and the Python builds uv installs. An HTTP error from the
+usual host does not switch hosts, and neither does a certificate that fails
+verification. Behind a proxy, the proxy refusing to connect to the host (a 403
+or a 407) does not switch hosts either; a proxy that answers with a 5xx, or a
+SOCKS proxy that cannot connect, counts as a host that cannot be reached.
+uv's own installer and Playwright's Chromium download do not say why they
+failed, so the hosts they download from are asked, and the mirror stands in
+only when none of them can be reached. The LibreOffice and font downloads,
+checked against a pinned digest, try the mirror after their usual hosts.
+
+A host you configured yourself is kept: `HF_ENDPOINT`, a uv index in
+`UV_DEFAULT_INDEX` or `uv.toml`, a download source for uv's installer or for
+the Pythons uv installs (such as `UV_INSTALLER_GITHUB_BASE_URL` or
+`UV_PYTHON_INSTALL_MIRROR`), `PLAYWRIGHT_DOWNLOAD_HOST`, or an npm registry set
+anywhere npm reads one. A `uvx` or `npx` launch switches only when the mirror
+can be reached, so a package already in its cache still starts offline. For
+`uvx`, the mirror goes on that launch's command line, where the tool it starts
+never sees it. npx would hand a registry to everything it starts, where it
+would replace the registry a project names for itself, so in that case Raven
+does not run npx: it installs the package from the mirror into a directory of
+its own (`~/.raven/cache/npx`; a Raven node keeps its own under the node's
+directory) and starts the package's command from there, in the environment the
+launch was given. A package your project or npm's global installs already
+provide still starts through npx, and so does a launch in a project whose
+`.npmrc` names a registry. Set `RAVEN_NO_MIRROR=1` to keep every download on
+its usual host. The switch is read in the environment a launch is given as
+well as in Raven's own, and a Raven node is told the host's value, so an agent
+that runs on another machine keeps its own host too. Raven's own release files
+come from GitHub Releases, which has no mirror.
+
 ## Update Raven
 
 Update Raven the same way you installed it. Running an installer again stops

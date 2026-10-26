@@ -41,6 +41,7 @@ from loguru import logger
 
 from raven.acp_client import leftovers
 from raven.acp_client.protocol import AcpConnectionError
+from raven.utils import mirrors
 from raven.utils.commands import command_argv
 
 _NPX_NAMES = frozenset({"npx", "npx.cmd", "npx.exe"})
@@ -122,6 +123,13 @@ async def ensure_fetched(
     raises :class:`AcpConnectionError` carrying npm's own words when the fetch fails.
     ``env`` is the launch's own, laid over the login shell's as the launch lays it.
     A caller cancelled while it waits stops waiting; the fetch goes on.
+
+    The mirror is asked before the fetch, in the same order the launch asks it:
+    the fetch goes to the default registry, the very one the decision is about,
+    and would fail before the decision could answer. An npx launch the mirror
+    took over is started from what the mirror installed, and there is nothing
+    left for npx to fetch. The question is asked only where a fetch is about to
+    happen, so a warm cache costs nothing.
     """
     try:
         argv = command_argv(command) if isinstance(command, str) else [str(word) for word in command]
@@ -135,6 +143,10 @@ async def ensure_fetched(
     entry = root / "_npx" / cache_key(spec) if root is not None else None
     if entry is not None and _complete(entry):
         return
+    decided = await mirrors.package_launch_async(argv, fetch_env, cwd)
+    if fetchable_package(decided) is None:
+        return
+    argv = decided
     loop = asyncio.get_running_loop()
     key = str(entry) if entry is not None else f"{spec}\0{fetch_env.get('PATH', '')}"
     job = _fetches.get(key)

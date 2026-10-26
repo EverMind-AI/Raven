@@ -104,6 +104,123 @@ async def test_acp_child_is_told_it_serves_as_a_subagent(tmp_path: Path, monkeyp
     assert is_subagent_process(), f"the child was handed {arrived!r}, which it does not read as a sub-agent role"
 
 
+async def _reported(observed: Path) -> str:
+    for _ in range(200):
+        if observed.exists():
+            break
+        await asyncio.sleep(0.01)
+    return observed.read_text(encoding="utf-8")
+
+
+def _launch_reporting_child(script: Path) -> str:
+    """A child that reports the arguments it got, staged and renamed like
+    :func:`_reporting_child`'s report."""
+    script.write_text(
+        "import json, os, pathlib, sys, time\n"
+        "target = pathlib.Path(os.environ['OUTPUT'])\n"
+        "partial = target.with_name(target.name + '.partial')\n"
+        "partial.write_text(json.dumps({'args': sys.argv[1:]}))\n"
+        "os.replace(partial, target)\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    return f"{shlex.quote(sys.executable)} {shlex.quote(str(script))}"
+
+
+async def test_an_acp_child_starts_the_way_the_mirror_fallback_says(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``uvx <agent>`` and ``npx <agent>`` fetch the agent the first time it
+    runs. The launch asks with the argv it is about to start, the environment
+    the child would get and the directory it starts in, and starts the argv it
+    is answered with."""
+    from raven.utils import mirrors
+
+    observed = tmp_path / "observed.json"
+    command = _launch_reporting_child(tmp_path / "child.py")
+    monkeypatch.setattr(backend_env, "login_shell_env", lambda: {"PATH": os.environ["PATH"], "OUTPUT": str(observed)})
+    asked: list[tuple[list[str], dict[str, str], str | None]] = []
+
+    def package_launch(
+        argv: list[str],
+        env: dict[str, str],
+        cwd: str | None = None,
+        *,
+        local: bool = True,
+        deadline: float | None = None,
+        cache_root: Path | None = None,
+    ) -> list[str]:
+        asked.append((list(argv), dict(env), cwd))
+        return [*argv, "--as-the-answer-says"]
+
+    monkeypatch.setattr(mirrors, "package_launch", package_launch)
+
+    client = await AcpClient.launch(name="mirror-probe", command=command, cwd=str(tmp_path), env={"FROM_ENTRY": "1"})
+    try:
+        arrived = json.loads(await _reported(observed))
+    finally:
+        await client.close()
+
+    assert arrived == {"args": ["--as-the-answer-says"]}
+    (argv, env, cwd), *_ = asked
+    assert argv[0] == sys.executable, "asked about the program the entry names"
+    assert (env["OUTPUT"], env["FROM_ENTRY"]) == (str(observed), "1"), "asked with the environment the child gets"
+    assert cwd == str(tmp_path), "and where it starts"
+
+
+async def test_an_acp_launch_asks_the_mirror_before_it_fetches_the_package(tmp_path, monkeypatch):
+    """The fetch goes to the default registry, the very one the mirror
+    fallback decides about: asked the other way round, the fetch fails
+    before the fallback can answer, and a launch on a machine that cannot
+    reach the registry never starts."""
+    from raven.acp_client import npx_fetch
+    from raven.utils import mirrors
+
+    observed = tmp_path / "observed.json"
+    child = tmp_path / "child.py"
+    child.write_text(
+        "import os, pathlib, sys, time\n"
+        "target = pathlib.Path(os.environ['OUTPUT'])\n"
+        "target.write_text(' '.join(sys.argv[1:]), encoding='utf-8')\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    started = [sys.executable, str(child)]
+    monkeypatch.setattr(backend_env, "login_shell_env", lambda: {"PATH": os.environ["PATH"], "OUTPUT": str(observed)})
+    asked: list[list[str]] = []
+
+    def package_launch(
+        argv: list[str],
+        env: dict[str, str],
+        cwd: str | None = None,
+        *,
+        local: bool = True,
+        deadline: float | None = None,
+        cache_root: Path | None = None,
+    ) -> list[str]:
+        asked.append(list(argv))
+        return [*started, "--as-the-answer-says"]
+
+    async def ensure_fetched(name, command, *, env, cwd) -> None:
+        asked.append([str(word) for word in command])
+
+    monkeypatch.setattr(mirrors, "package_launch", package_launch)
+    monkeypatch.setattr(npx_fetch, "ensure_fetched", ensure_fetched)
+
+    client = await AcpClient.launch(
+        name="mirror-probe", command="npx -y @scope/server", cwd=str(tmp_path), env={"FROM_ENTRY": "1"}
+    )
+    try:
+        arrived = await _reported(observed)
+    finally:
+        await client.close()
+
+    assert asked[0] == ["npx", "-y", "@scope/server"], "asked about the launch as it is configured"
+    assert asked[1] == [*started, "--as-the-answer-says"], (
+        "and the fetch is given the answer, so it does not go to the registry the fallback is about"
+    )
+
+
 @pytest.mark.parametrize("legacy", [True, False])
 async def test_acp_launch_preserves_stored_windows_path_quotes(tmp_path, monkeypatch, legacy):
     from types import SimpleNamespace
