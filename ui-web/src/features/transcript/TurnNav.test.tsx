@@ -48,9 +48,9 @@ async function settle(fn: () => void = () => {}): Promise<void> {
 
 beforeEach(async () => {
   setSources({
-    transcript: { clean: (t: unknown) => String(t ?? '').trim(), okOf: () => true },
+    transcript: { clean: (t) => String(t ?? '').trim(), okOf: () => true },
     prose: { pathOf: () => null, linkTargetOf: () => null },
-  } as never)
+  })
   document.body.innerHTML = '<div class="chat">'
     + '<div class="scroll" id="scroll"><div class="col" id="stage"></div></div>'
     + '<div id="turnNav"></div></div>'
@@ -287,6 +287,7 @@ describe('the turn nav', () => {
       mount.ask('first question')
       mount.ask('second question')
     })
+    expect(marks()).toHaveLength(2)
     await settle(() => { stage().innerHTML = '' })
     expect($('.transcript-nav')).toBeNull()
   })
