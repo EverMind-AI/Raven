@@ -338,12 +338,18 @@ def _escaped_entry(root: Path, directory: Path) -> str | None:
 
 
 def split_frontmatter(text: str) -> tuple[str, str, str] | None:
-    """Split *text* into its opening delimiter, its frontmatter and the rest."""
+    """Split *text* into its opening delimiter, its frontmatter and the rest.
+
+    The block closes at a ``---`` line only, the rule the registry's
+    ``parse_frontmatter`` uses; a ``...`` line belongs to the block. The
+    decision and the rewrite must agree on that boundary, or whatever sits
+    between the two splits escapes the rewrite.
+    """
     lines = text.splitlines(keepends=True)
     if not lines or lines[0].strip() != "---":
         return None
     for index in range(1, len(lines)):
-        if lines[index].strip() in ("---", "..."):
+        if lines[index].strip() == "---":
             return lines[0], "".join(lines[1:index]), "".join(lines[index:])
     return None
 
@@ -415,10 +421,23 @@ def drop_always_flag(skill_md: Path) -> None:
         stripped = strip_always_keys(block)
         if stripped != block:
             Path(skill_md).write_bytes((opening + stripped + rest).encode("utf-8"))
+            _assert_always_gone(skill_md)
         return
     cleaned = _frontmatter_without_always(frontmatter)
     dumped = yaml.safe_dump(cleaned, sort_keys=False, allow_unicode=True)
     Path(skill_md).write_bytes((opening + dumped + rest).encode("utf-8"))
+    _assert_always_gone(skill_md)
+
+
+def _assert_always_gone(skill_md: Path) -> None:
+    """Re-read with the registry's parse; a surviving flag is not a success."""
+    text = Path(skill_md).read_text(encoding="utf-8")
+    frontmatter, _body = parse_frontmatter(text, line_fallback=True, preserve_body_whitespace=True)
+    if not isinstance(frontmatter, dict):
+        raise ValueError("the rewritten SKILL.md frontmatter is unreadable")
+    nested = nested_metadata(frontmatter.get("metadata", ""))
+    if resolve_always(frontmatter, nested):
+        raise ValueError("the always flag survived the rewrite")
 
 
 def _frontmatter_without_always(frontmatter: dict) -> dict:

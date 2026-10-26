@@ -714,6 +714,51 @@ def test_the_one_line_metadata_form_of_always_does_not_survive_the_import(tmp_pa
     assert nested.get("emoji") == "x", "only the flag may go; the rest of the namespace stays"
 
 
+def test_a_document_end_marker_before_the_close_does_not_keep_the_flag(tmp_path: Path) -> None:
+    """The decision and the rewrite must split the file at the same line.
+
+    ``parse_frontmatter`` closes only at ``---``; a ``...`` line before it is
+    part of the block and must be rewritten away with the flag, not left
+    outside the rewrite.
+    """
+    from raven.memory_engine.skill_local.registry import _parse_nested_metadata, _resolve_always
+    from raven.utils.text import parse_frontmatter
+
+    root = _package_root(tmp_path)
+    skill_md = root / "skills" / "alpha" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text(
+        "---\nname: alpha\ndescription: A demo skill.\n...\nalways: true\n---\n\nDo the thing.\n",
+        encoding="utf-8",
+    )
+    workspace, ledger = _workspace(tmp_path)
+
+    report = import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    assert report.installed == ("alpha",)
+    copied = workspace / "skills" / PACKAGE_NAME / "alpha" / "SKILL.md"
+    frontmatter, _ = parse_frontmatter(copied.read_text(encoding="utf-8"), line_fallback=True)
+    nested = _parse_nested_metadata(frontmatter.get("metadata", ""))
+    assert _resolve_always(frontmatter, nested) is False
+
+
+def test_a_rewrite_that_leaves_the_flag_fails_the_import(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A rewrite that cannot prove the flag gone must not leave the copy behind."""
+    root = _package_root(tmp_path)
+    _write_skill(root / "skills" / "alpha", _frontmatter("alpha") + "always: true\n")
+    workspace, ledger = _workspace(tmp_path)
+    monkeypatch.setattr(
+        "raven.agent_plugins.skills._frontmatter_without_always",
+        lambda frontmatter: dict(frontmatter),
+    )
+
+    report = import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    assert report.installed == ()
+    assert "alpha" in dict(report.failed)
+    assert not (workspace / "skills" / PACKAGE_NAME / "alpha").exists()
+
+
 @pytest.mark.parametrize("name", ["builtin", "workspace", "external"])
 def test_import_refuses_a_package_named_after_a_layer_label(tmp_path: Path, name: str) -> None:
     """A package directory becomes a pool source label; the layer labels are taken."""
