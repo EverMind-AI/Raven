@@ -183,7 +183,8 @@ function Scroll(): JSX.Element {
   )
 }
 
-/* The first five children of div.chat, in the order page.html had them.
+/* The first seven children of div.chat, the ones page.html carried in the
+ * order it had them; #trajHost and #turnNav are the two boxes added since.
  *
  * The language subscription is the region's, not each component's: the five
  * interiors carry keys and this is what draws them from the catalogue on a
