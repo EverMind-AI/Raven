@@ -8,11 +8,10 @@ keyed by conversation_id; an internal request_id is still minted and carried in
 the notification so a frontend that prefers to answer by request_id can.
 
 Like ConfirmBroker it is transport-agnostic: constructed with a notification
-emit callable (bound to ``RpcServer.send_frame`` in production), and every
-fail-safe path (timeout, cancel, internal error, connection EOF via
-:meth:`cancel_all`, and a surface that reports the question as undeliverable)
-resolves to the prompt's ``default`` rather than raising — the agent loop must
-always get a string back.
+emit callable (bound to ``RpcServer.send_frame`` in production). Timeout,
+internal error, connection EOF via :meth:`cancel_all`, and an undeliverable
+question resolve to the prompt's ``default``. Calling-task cancellation
+propagates so stopping a turn cannot resume agent execution.
 
 A batch answer is a separate concern from a single question's answer: a page
 that renders a whole ``ask_user`` batch as one stepped form answers it in one
@@ -125,9 +124,8 @@ class QuestionBroker:
     ) -> str:
         """Emit a ``clarify.request`` and await the matching answer.
 
-        Returns ``default`` on timeout, cancellation, EOF
-        (:meth:`cancel_all`), an undeliverable question, or any internal
-        error — never raises.
+        Returns ``default`` on timeout, EOF (:meth:`cancel_all`), an
+        undeliverable question, or internal error. Task cancellation propagates.
 
         ``timeout_s`` of ``None`` takes :attr:`default_timeout_s`, and is echoed
         in the notification so a surface can show how long the question
@@ -217,7 +215,7 @@ class QuestionBroker:
             answer = await asyncio.wait_for(future, timeout_s)
             answered = True
             return answer
-        except (asyncio.TimeoutError, asyncio.CancelledError):
+        except asyncio.TimeoutError:
             return default
         except QuestionUndeliverableError as exc:
             # Expected, not exceptional: the conversation has no live surface.
@@ -251,8 +249,7 @@ class QuestionBroker:
 
         Spawned rather than awaited from the ``finally``: one of those exits is a
         cancelled turn, and awaiting while the calling task unwinds a
-        cancellation raises ``CancelledError`` again -- costing both this
-        notification and the default the agent loop is waiting for.
+        cancellation can interrupt the closing notification.
         """
         frame = {
             "jsonrpc": "2.0",
@@ -336,12 +333,27 @@ class RoutingQuestionBroker:
     the question is actually pending.
     """
 
-    def __init__(self, page: QuestionBroker, channel: QuestionBroker, *, page_prefix: str = "tui:") -> None:
+    def __init__(
+        self,
+        page: QuestionBroker,
+        channel: QuestionBroker,
+        *,
+        page_prefix: str = "tui:",
+        channel_route: Callable[[str], bool | None] | None = None,
+    ) -> None:
         self._page = page
         self._channel = channel
         self._page_prefix = page_prefix
+        self._channel_route = channel_route
 
-    def _route(self, conversation_id: str) -> QuestionBroker:
+    def _route(self, conversation_id: str) -> QuestionBroker | None:
+        if self._channel_route is not None:
+            # None refuses an expired turn instead of redirecting its question.
+            channel = self._channel_route(conversation_id)
+            if channel is None:
+                return None
+            if channel:
+                return self._channel
         return self._page if conversation_id.startswith(self._page_prefix) else self._channel
 
     def pending_count(self) -> int:
@@ -362,7 +374,10 @@ class RoutingQuestionBroker:
         total: int = 1,
         batch: list[dict[str, Any]] | None = None,
     ) -> str:
-        return await self._route(conversation_id).await_question(
+        broker = self._route(conversation_id)
+        if broker is None:
+            return default
+        return await broker.await_question(
             conversation_id,
             prompt=prompt,
             choices=choices,

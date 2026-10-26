@@ -276,22 +276,7 @@ class Lane:
         for i, (req, queued) in enumerate(self._pending):
             if queued is fut:
                 del self._pending[i]
-                try:
-                    await self._sink(
-                        TurnFailed(
-                            error="cancelled",
-                            cancelled=True,
-                            conversation_id=self._conversation_id,
-                            turn_id=req.turn_id or "",
-                        )
-                    )
-                finally:
-                    # After the sink, so a caller awaiting this future cannot resume
-                    # and submit the next turn while the consumer still holds this
-                    # turn's slots -- the phantom rejection turn.cancel's drain step
-                    # exists to rule out. In a finally so a sink that raises still
-                    # cannot leave that caller waiting forever.
-                    fut.set_result(None)
+                await self._report_queued_cancel(req, fut)
                 return
         for i, (_req, pending_inject) in enumerate(self._inject_mailbox):
             if pending_inject is fut:
@@ -307,6 +292,20 @@ class Lane:
                 return
         if fut is self._running_fut and self._run_task is not None and not self._run_task.done():
             self._run_task.cancel()
+
+    async def _report_queued_cancel(self, req: TurnRequest, fut: asyncio.Future) -> None:
+        try:
+            await self._sink(
+                TurnFailed(
+                    error="cancelled",
+                    cancelled=True,
+                    conversation_id=self._conversation_id,
+                    turn_id=req.turn_id or "",
+                )
+            )
+        finally:
+            # Release the future only after the sink releases this turn's UI slots.
+            fut.set_result(None)
 
     def cancel_running(self) -> int:
         """Cancel the running turn's task — never its future (the worker stays the
@@ -332,24 +331,24 @@ class Lane:
             return None
         return self._running_turn_id or "", self._running_fut
 
-    def drain_pending(self) -> int:
+    def drain_pending(self, *, reports: list[Awaitable[None]] | None = None) -> int:
         """Resolve every not-yet-running turn (queued + mailboxed injects) as
         cancelled and return the count, leaving the running turn untouched.
 
         Already-drained injects are chained to the running turn and follow its
         fate inside _run_turn — not here, so each future resolves exactly once.
 
-        Silent by design, unlike cancel_turn's queued branch above: its only two
-        callers are Scheduler.shutdown's phase 2, where the process is already
-        going down and every slot dies with it, and Lane.cancel via the gateway's
-        /stop path (the gateway's cancel_conversation), whose
-        scheduler's lanes turn.send never binds -- so there is no client-facing
-        slot here for the silence to strand.
+        With reports, detach queued turns now and defer their resolution until
+        the caller awaits the reports, releasing their page slots. Without it,
+        drain silently for shutdown and gateway lanes that bind no page slots.
         """
         stopped = 0
         while self._pending:
-            _req, fut = self._pending.popleft()
-            fut.set_result(None)  # a queued turn never ran: resolve as cancelled
+            req, fut = self._pending.popleft()
+            if reports is None:
+                fut.set_result(None)
+            else:
+                reports.append(self._report_queued_cancel(req, fut))
             stopped += 1
         while self._inject_mailbox:
             _req, fut = self._inject_mailbox.popleft()
@@ -357,11 +356,11 @@ class Lane:
             stopped += 1
         return stopped
 
-    def cancel(self) -> int:
+    def cancel(self, *, reports: list[Awaitable[None]] | None = None) -> int:
         """/stop: cancel the running turn and drain the queue, resolving every
         waiting future as cancelled; return how many turns were stopped.
         """
-        return self.cancel_running() + self.drain_pending()
+        return self.cancel_running() + self.drain_pending(reports=reports)
 
     def _idle_for(self, now: float) -> float | None:
         """Seconds since the worker drained and the lane went idle, or None while
@@ -632,6 +631,7 @@ class Scheduler:
         self._sink = sink
         self._lanes: dict[str, Lane] = {}
         self._draining = False
+        self._stopping: set[str] = set()
         self._reaper: asyncio.Task | None = None
 
     def submit(self, req: TurnRequest) -> TurnHandle:
@@ -644,6 +644,8 @@ class Scheduler:
             raise SchedulerDrainingError("scheduler is draining; new turns are not accepted")
         policy = self._effective_busy(req)
         conversation_id = self._conversation_id(req)
+        if conversation_id in self._stopping:
+            raise SchedulerDrainingError("conversation is stopping; new turns are not accepted")
         lane = self._lanes.get(conversation_id)
         if lane is None:
             lane = Lane(self._runner, self._pools, self._sink, conversation_id, self._home)
@@ -662,6 +664,35 @@ class Scheduler:
         """
         lane = self._lanes.get(conversation_id)
         return lane.cancel() if lane is not None else 0
+
+    async def cancel_conversation_reported(
+        self,
+        conversation_id: str,
+        *,
+        cancel_children: Callable[[], Awaitable[int]] | None = None,
+    ) -> int:
+        """Stop work before reporting it, holding admission through child cleanup."""
+        if conversation_id in self._stopping:
+            raise SchedulerDrainingError("conversation is already stopping")
+        self._stopping.add(conversation_id)
+        try:
+            lane = self._lanes.get(conversation_id)
+            reports = []
+            stopped = 0
+            if lane is not None:
+                # Cancellation cannot wait behind a blocked UI render barrier.
+                stopped += lane.cancel(reports=reports)
+                if (running := lane.running_future()) is not None:
+                    reports.append(asyncio.shield(running))
+            if cancel_children is not None:
+                reports.append(cancel_children())
+            results = await asyncio.gather(*reports, return_exceptions=True)
+            for result in results:
+                if isinstance(result, BaseException):
+                    raise result
+            return stopped + (results[-1] if cancel_children is not None else 0)
+        finally:
+            self._stopping.remove(conversation_id)
 
     def running_turn(self, conversation_id: str) -> tuple[str, TurnHandle] | None:
         """The turn running on a conversation's lane, as its id and a handle,

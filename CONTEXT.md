@@ -24,6 +24,13 @@ The bare `chat_id` value shown to and accepted from users (the channel prefix is
 stripped for display, re-prepended to form the session key). Presentation term; in
 code the value lives in the `chat_id` field and the composite is the `session_key`.
 
+**Telegram project link**:
+An opt-in mapping of one Telegram private chat and sender to an existing page
+session key (`gateway/linked_chat.py`). The page scheduler serializes both
+surfaces' turns; the source still determines where replies and questions go.
+It leaves both stored transcripts in place and does not broadcast background
+output. See [configuration and limits](docs/telegram-project-link.md).
+
 **Model binding**:
 A model id together with the provider whose credential serves it, as one value
 (`raven/providers/binding.py`). The pairing is the point: a model id alone does
@@ -939,6 +946,11 @@ Reasoning | Notice | ToolEvent`. Routed to delivery outlets by the `DeliveryHub`
 Replaces the old `OutboundMessage`.
 _Avoid_: conflating Deliverable with lifecycle events (`TurnStarted`/`TurnFailed`/`TurnEnded`) —
 those are emitted by the Spine worker, not a runner.
+
+**RetryDeliveryError**:
+A transient outlet failure carrying a continuation for its unacknowledged work.
+The `DeliveryHub` retries that continuation under the original deliverable's retry budget;
+acknowledged parts need not be replayed. Defined in `raven/spine/delivery.py`.
 
 **AnswerlessTurnError**:
 The exception a runner raises to say the turn it ran ended with no answer and that its message is
