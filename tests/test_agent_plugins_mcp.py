@@ -63,6 +63,24 @@ def _http(**fields) -> dict:
     return entry
 
 
+def test_plugin_data_is_spelled_through_a_resolved_data_root(tmp_path: Path) -> None:
+    """The sandbox translator compares resolved roots; PLUGIN_DATA must match."""
+    root = _package(tmp_path, mcp=_mcp({"local": _stdio(command="npx")}))
+    real = tmp_path / "data"
+    real.mkdir()
+    link = tmp_path / "data-link"
+    try:
+        link.symlink_to(real, target_is_directory=True)
+    except OSError:
+        pytest.skip("this platform cannot create a symlink")
+
+    servers, notes = package_mcp_layer([root], allowed=[PACKAGE_NAME], plugin_data_root=link)
+
+    assert notes == []
+    server = servers[f"{PACKAGE_NAME}{PACKAGE_SERVER_SEPARATOR}local"]
+    assert server.env["PLUGIN_DATA"] == str(real / PACKAGE_NAME)
+
+
 def test_a_symlink_loop_in_a_package_command_is_a_server_problem(tmp_path: Path) -> None:
     """Python 3.12's ``Path.resolve`` raises ``RuntimeError`` on ELOOP, not ``OSError``."""
     root = _package(tmp_path, mcp=_mcp({"loop": _stdio(command="./loop")}))

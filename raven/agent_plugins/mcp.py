@@ -434,8 +434,11 @@ def package_mcp_servers(
     problems: list[PackageProblem] = []
     entries: list[McpServerProblem] = []
 
+    # The sandbox translator compares resolved roots; PLUGIN_DATA has to be
+    # spelled the same way or a symlinked RAVEN_HOME leaves it a host path.
+    data_root = Path(plugin_data_root).resolve()
     for package in packages:
-        data_dir = Path(plugin_data_root) / package.name
+        data_dir = data_root / package.name
         if package.name in permitted:
             # The client's persistent directory for this package, created
             # before any process of it starts (spec §9.1).
