@@ -113,6 +113,37 @@ async def test_a_sandboxed_stdio_server_starts_the_same_way(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_stdio_server_resolves_its_registry_from_its_own_directory(monkeypatch):
+    """The mirror decision reads the registry the server's own cwd names.
+
+    ``package_launch`` decides whether a launch reaches its registry by asking
+    npm from ``cwd``; a package server runs in its package root, so the
+    decision has to be evaluated there, not in the agent's process directory.
+    """
+    from raven.utils import mirrors
+
+    asked: list[str | None] = []
+
+    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None):
+        asked.append(cwd)
+        return list(argv)
+
+    monkeypatch.setattr(mirrors, "package_launch", package_launch)
+    executor = _SpawningExecutor()
+    package_root = "/srv/packages/demo"
+
+    async with open_mcp_transport(
+        MCPServerConfig(command="uvx", args=["mcp-server-fetch"], cwd=package_root),
+        "stdio",
+        executor=executor,
+    ):
+        pass
+
+    assert asked == [package_root]
+    assert executor.started == [("uvx", ["mcp-server-fetch"], None, package_root)]
+
+
+@pytest.mark.asyncio
 async def test_unknown_transport_is_the_callers_problem():
     cfg = MCPServerConfig(command="/bin/true")
     with pytest.raises(KeyError):
