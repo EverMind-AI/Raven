@@ -83,6 +83,71 @@ def test_a_job_outlives_a_tree_kill_of_the_agent_that_submitted_it(tmp_path):
             agent.kill()
 
 
+def _hand_off_from_an_agent(tmp_path, close):
+    """An agent started the way the host starts one (``raven.acp_client.windows.launch``)
+    submits a job; the host's job object is closed or left open. Returns (agent ended, result path)."""
+    from raven.acp_client import windows
+
+    body = tmp_path / "body.py"
+    body.write_text(_BODY, encoding="utf-8")
+    root = tmp_path / "ops"
+    argv = [sys.executable, "-c", _SUBMITTER, str(PLUGIN_DIR), str(root), f'"{sys.executable}" "{body}"']
+    result = root / "jobs" / "survivor" / "result.json"
+
+    async def run():
+        proc, job = await windows.launch(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        try:
+            line = await asyncio.wait_for(proc.stdout.readline(), 60)
+            assert line.decode().strip() == "submitted"
+            if not close:
+                # The job object stays open until the job is done, as while the host runs.
+                deadline = time.time() + 30
+                while not result.exists() and time.time() < deadline:
+                    await asyncio.sleep(0.2)
+                return False
+            job.close()
+            await asyncio.wait_for(proc.wait(), 10)
+            return True
+        finally:
+            job.close()
+            if proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+
+    import asyncio
+
+    return asyncio.run(run()), result
+
+
+def _written_by(result, wait=30):
+    deadline = time.time() + wait
+    while not result.exists() and time.time() < deadline:
+        time.sleep(0.2)
+    return json.loads(result.read_text(encoding="utf-8"))["written_by"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="job objects are Windows'")
+def test_a_job_outlives_the_host_closing_the_agents_job_object(tmp_path):
+    # The host keeps each agent in a kill-on-close job object and closes it on
+    # exit. A job the agent handed off was in it too, relay or not, and died
+    # with the host; it now leaves the job, and only the agent ends.
+    agent_ended, result = _hand_off_from_an_agent(tmp_path, close=True)
+    assert agent_ended
+    assert _written_by(result) == "body"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="job objects are Windows'")
+def test_a_job_object_that_does_not_allow_leaving_still_gets_its_job_started(tmp_path, monkeypatch):
+    from raven.acp_client import windows
+
+    monkeypatch.setattr(windows, "_BREAKAWAY_OK", 0)
+    _, result = _hand_off_from_an_agent(tmp_path, close=False)
+    assert _written_by(result) == "body"
+    # Said where someone will look when the job dies with the host.
+    log = (result.parent / "job.log").read_text(encoding="utf-8", errors="replace")
+    assert "this job ends if the host exits" in log
+
+
 _ENV_BODY = r"""
 import json, os
 json.dump({"status": "succeeded", "devices": os.environ.get("CUDA_VISIBLE_DEVICES")}, open("result.json", "w"))
