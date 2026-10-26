@@ -2,13 +2,14 @@
 
 A package is a directory whose root holds a ``plugin.json`` that validates
 against the Agent Plugins 1.0.0 manifest schema, with optional ``skills/``
-and ``mcp.json`` components. It is data only: it contributes skills and MCP
-servers, never code, and it is not a Raven kernel plugin (which ships
-Python factories in ``raven-plugin.toml``).
+and ``mcp.json`` components. It contributes skills and MCP servers, not code
+loaded into the host process; a package's MCP server is a separate process.
+It is not a Raven kernel plugin (which ships Python factories in
+``raven-plugin.toml``).
 
-Phase 1 reads the manifest, discovers the package's skills, validates them
-against the Agent Skills rules and imports them into the workspace skill
-tree. The MCP configuration is Phase 2.
+The loader reads the manifest, discovers the package's skills, validates
+them against the Agent Skills rules, imports them into the workspace skill
+tree, and composes the servers its ``mcp.json`` declares.
 """
 
 from raven.agent_plugins.ledger import LEDGER_VERSION, LedgerEntry, PackageLedger

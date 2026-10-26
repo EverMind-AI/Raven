@@ -1770,9 +1770,11 @@ one announce path while the tools ride the plugin contract.
 **Agent Plugin Package** (`agent_plugins/`):
 A directory whose root holds a `plugin.json` that validates against the Agent Plugins 1.0.0
 manifest schema, with optional `skills/` and `mcp.json` components -- the portable package
-format of Agent Plugins 1.0 (`https://agent-plugins.org/specification`). It is data only: it
-contributes skills and MCP servers, never code, and it is not a **Plugin** (the kernel kind,
-which ships Python factories in `raven-plugin.toml` and runs inside the host). Phase 1 imports
+format of Agent Plugins 1.0 (`https://agent-plugins.org/specification`). It contributes skills
+and MCP servers, not code loaded into the host process: a package's `mcp.json` server is a
+separate process. It is not a **Plugin** (the kernel kind, which ships Python factories in
+`raven-plugin.toml` and runs inside the host), and it is seated inner (see Layer Seats): it
+imports `config`, `security`, `skill_hub` and `utils`, and no surface. The loader imports
 a package's skills into the workspace skill tree under `<workspace>/skills/<package name>/`,
 one directory per package, so the pool mints one source label per package rather than one
 per skill; the copy is recorded in the package ledger (`<home>/agent-plugins.json`), which is
@@ -2000,7 +2002,8 @@ _Avoid_: "telemetry" for either half -- it names neither the machinery nor the m
 Where every package sits, as the machine enforces it. Inner (may not import a surface):
 the shelves and engines the contract lists as sources (`tracing` among them -- a kernel
 member, seated inner here as well so every package appears in one roster), `config` and
-`utils` and `i18n` (cross-cutting leaves), `mcp`, `playbook`, `knowledge`, `skill_hub`, `trajectory`,
+`utils` and `i18n` (cross-cutting leaves), `agent_plugins` (the portable package loader: it
+imports `config`, `security`, `skill_hub` and `utils`, and no surface), `mcp`, `playbook`, `knowledge`, `skill_hub`, `trajectory`,
 `permissions` (the gate the registry consults; its turn context is bound by entrances),
 `eval_engine` and `proactive_engine` (L3 shelf members -- proactive_engine originates
 turns through its schedulers and sentinel but is an engine the loop and the assembly root

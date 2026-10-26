@@ -1548,9 +1548,9 @@ class AgentPluginsConfig(_Base):
 
     A package is a directory whose root holds a ``plugin.json`` that
     validates against the Agent Plugins manifest schema, with optional
-    ``skills/`` and ``mcp.json`` components. It is data only, and it is
-    not a kernel plugin: those ship Python factories in
-    ``raven-plugin.toml``.
+    ``skills/`` and ``mcp.json`` components. It contributes skills and MCP
+    servers; its ``mcp.json`` server is a separate process, and it is not a
+    kernel plugin: those ship Python factories in ``raven-plugin.toml``.
 
     ``packages`` names where the packages live. An entry is either a
     package root (a directory holding ``plugin.json``) or a directory
@@ -2077,7 +2077,7 @@ class RavenConfig(_Base):
 
     # Plugin system + memory backend.
     plugins: PluginsConfig = Field(default_factory=PluginsConfig)
-    # Portable Agent Plugins 1.0 packages (data only, never code).
+    # Portable Agent Plugins 1.0 packages (skills and MCP servers; no host-process code).
     agent_plugins: AgentPluginsConfig = Field(default_factory=AgentPluginsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)

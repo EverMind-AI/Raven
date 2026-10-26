@@ -78,11 +78,6 @@ def get_package_data_root() -> Path:
     return ensure_dir(package_data_root_path())
 
 
-def get_package_data_dir(package: str) -> Path:
-    """Return the persistent data directory of one package, created."""
-    return get_package_data_root() / package
-
-
 def get_sandbox_dir(backend: str) -> Path:
     """Return the sandbox runtime home directory for the given backend.
 
