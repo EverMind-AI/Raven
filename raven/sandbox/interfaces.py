@@ -96,6 +96,10 @@ class SandboxExecutor(ABC):
         Streams are anyio MemoryObjectReceiveStream / MemoryObjectSendStream,
         compatible with the MCP SDK's ClientSession.
 
+        ``command``, ``args``, ``env`` values and ``cwd`` are host paths. The
+        executor owns their mapping to wherever the process actually runs,
+        because only it knows which host directories it mounted; a caller
+        hands them over exactly as the server's configuration spells them.
         ``cwd`` is where the process runs. An MCP server contributed by an
         Agent Plugin package always names one -- the package root when the
         package's ``mcp.json`` omits it -- so an executor that cannot honour

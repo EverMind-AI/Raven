@@ -1686,6 +1686,69 @@ class TestBoxliteStartProcessBridges:
         payload = json.loads(raw.decode())
         assert payload["method"] == "ping"
 
+    async def test_start_process_translates_command_args_and_env(self, tmp_path):
+        """Every host path handed to the VM is translated, not only the cwd.
+
+        A package server's command, its placeholder-expanded arguments and its
+        PLUGIN_ROOT/PLUGIN_DATA variables are host paths. Boxlite knows only
+        its own mounts, so passing them through unchanged launches a path that
+        does not exist inside the VM.
+        """
+        pytest.importorskip("mcp", reason="mcp not installed")
+        plugin_data = tmp_path / "plugin-data"
+        plugin_data.mkdir()
+        executor = BoxliteExecutor(
+            image="ubuntu:22.04",
+            workspace=tmp_path,
+            extra_volumes=[[str(plugin_data), "/plugin-data", "rw"]],
+            sandbox_home=_TEST_SANDBOX_HOME,
+        )
+        mock_box = MagicMock()
+
+        async def _stdout():
+            return
+            yield
+
+        async def _stderr():
+            return
+            yield
+
+        execution = MagicMock()
+        execution.stdout.return_value = _stdout()
+        execution.stderr.return_value = _stderr()
+        execution.stdin.return_value = MagicMock(send_input=AsyncMock())
+        mock_box.exec = AsyncMock(return_value=execution)
+        executor._box = mock_box
+
+        package_root = tmp_path / "packages" / "demo"
+        await executor.start_process(
+            str(package_root / "bin" / "server"),
+            ["--assets", str(package_root / "assets"), "--plugin-data", str(plugin_data)],
+            env={
+                "PLUGIN_ROOT": str(package_root),
+                "PLUGIN_DATA": str(plugin_data),
+                "PATH": f"{package_root / 'bin'}:/usr/bin",
+                "KEEP": "value",
+            },
+            cwd=str(package_root),
+        )
+
+        command, args, env_tuples = mock_box.exec.call_args.args
+        assert command == "/workspace/packages/demo/bin/server"
+        assert args == [
+            "--assets",
+            "/workspace/packages/demo/assets",
+            "--plugin-data",
+            "/plugin-data",
+        ]
+        assert dict(env_tuples) == {
+            "PLUGIN_ROOT": "/workspace/packages/demo",
+            "PLUGIN_DATA": "/plugin-data",
+            "PATH": "/workspace/packages/demo/bin:/usr/bin",
+            "KEEP": "value",
+        }
+        assert mock_box.exec.call_args.kwargs["cwd"] == "/workspace/packages/demo"
+
 
 # ---------------------------------------------------------------------------
 # AgentLoop executor lifecycle (mock executor + mock bus/provider)

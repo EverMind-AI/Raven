@@ -54,6 +54,10 @@ def get_agent_plugins_ledger_path() -> Path:
     return get_data_dir() / "agent-plugins.json"
 
 
+PACKAGE_DATA_MOUNT = "/plugin-data"
+"""Guest path the package data root is mounted at inside a sandboxed VM."""
+
+
 def package_data_root_path() -> Path:
     """The per-package data root, named without creating anything.
 
