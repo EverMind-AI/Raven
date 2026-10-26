@@ -78,10 +78,10 @@ class _SpawningExecutor:
     supports_process_spawning = True
 
     def __init__(self) -> None:
-        self.started: list[tuple[str, list[str], dict | None]] = []
+        self.started: list[tuple[str, list[str], dict | None, str | None]] = []
 
-    async def start_process(self, command, args, env=None):
-        self.started.append((command, list(args), env))
+    async def start_process(self, command, args, env=None, cwd=None):
+        self.started.append((command, list(args), env, cwd))
         return object(), object()
 
 
@@ -108,7 +108,7 @@ async def test_a_sandboxed_stdio_server_starts_the_same_way(monkeypatch):
     ):
         pass
 
-    assert executor.started == [("uvx", ["--default-index", mirrors.PYPI_INDEX, "mcp-server-fetch"], None)]
+    assert executor.started == [("uvx", ["--default-index", mirrors.PYPI_INDEX, "mcp-server-fetch"], None, None)]
     assert asked == [False]
 
 
