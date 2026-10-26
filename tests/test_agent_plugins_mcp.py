@@ -63,6 +63,20 @@ def _http(**fields) -> dict:
     return entry
 
 
+def test_a_symlink_loop_in_a_package_command_is_a_server_problem(tmp_path: Path) -> None:
+    """Python 3.12's ``Path.resolve`` raises ``RuntimeError`` on ELOOP, not ``OSError``."""
+    root = _package(tmp_path, mcp=_mcp({"loop": _stdio(command="./loop")}))
+    loop = root / "loop"
+    try:
+        loop.symlink_to("loop")
+    except OSError:
+        pytest.skip("this platform cannot create a symlink")
+    report = package_mcp_report(load_package(root), plugin_data=tmp_path / "data")
+
+    assert report.servers == {}
+    assert [problem.server for problem in report.problems] == ["loop"]
+
+
 # ---------------------------------------------------------------------------
 # read_mcp_config
 # ---------------------------------------------------------------------------

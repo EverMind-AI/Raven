@@ -160,11 +160,13 @@ def read_mcp_config(path: Path) -> AgentPluginMcpConfig:
 
     try:
         raw_text = Path(path).read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise AgentPluginMcpError(f"the MCP configuration is unreadable: {exc}") from exc
     try:
         raw = json.loads(raw_text)
-    except json.JSONDecodeError as exc:
+    except RecursionError as exc:
+        raise AgentPluginMcpError("the MCP configuration is nested too deeply") from exc
+    except ValueError as exc:
         raise AgentPluginMcpError(f"the MCP configuration is not valid JSON: {exc}") from exc
     if not isinstance(raw, dict):
         raise AgentPluginMcpError("the MCP configuration must contain a JSON object")

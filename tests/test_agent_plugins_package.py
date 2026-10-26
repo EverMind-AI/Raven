@@ -144,6 +144,34 @@ def test_discover_packages_reports_an_invalid_manifest_and_keeps_the_rest(
     assert "JSON" in problems[0].reason
 
 
+@pytest.mark.parametrize("encoding", ["latin-1", "utf-16"])
+def test_a_manifest_that_is_not_utf8_is_a_package_problem(tmp_path: Path, encoding: str) -> None:
+    """A CP1252 or UTF-16 manifest is this package's problem, not the process's."""
+    _package_dir(tmp_path / "good", "good")
+    bad = tmp_path / "bad"
+    bad.mkdir()
+    document = {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "bad", "description": "\x80"}
+    (bad / MANIFEST_FILENAME).write_text(json.dumps(document, ensure_ascii=False), encoding=encoding)
+
+    packages, problems = discover_packages([tmp_path])
+
+    assert [package.name for package in packages] == ["good"]
+    assert [Path(problem.path).name for problem in problems] == ["bad"]
+
+
+def test_json_nested_past_the_recursion_limit_is_a_package_problem(tmp_path: Path) -> None:
+    """``json.loads`` raises ``RecursionError``, which is not a ``JSONDecodeError``."""
+    _package_dir(tmp_path / "good", "good")
+    bad = tmp_path / "bad"
+    bad.mkdir()
+    (bad / MANIFEST_FILENAME).write_text("[" * 200000 + "]" * 200000, encoding="utf-8")
+
+    packages, problems = discover_packages([tmp_path])
+
+    assert [package.name for package in packages] == ["good"]
+    assert [Path(problem.path).name for problem in problems] == ["bad"]
+
+
 def test_discover_packages_keeps_the_first_of_two_packages_with_one_name(
     tmp_path: Path,
 ) -> None:

@@ -63,7 +63,9 @@ def is_contained(root: Path, candidate: Path) -> bool:
     """
     try:
         candidate.resolve().relative_to(Path(root).resolve())
-    except (ValueError, OSError):
+    # Python 3.12 turns ELOOP into RuntimeError, not OSError; a self-referential
+    # link is a containment failure, never a crash for the whole process.
+    except (ValueError, OSError, RuntimeError):
         return False
     return True
 
@@ -103,7 +105,11 @@ def candidate_roots(entry: Path) -> list[Path]:
         return [entry]
     if not entry.is_dir():
         return []
-    return sorted(child for child in entry.iterdir() if child.is_dir() and (child / MANIFEST_FILENAME).is_file())
+    try:
+        children = list(entry.iterdir())
+    except OSError:
+        return []
+    return sorted(child for child in children if child.is_dir() and (child / MANIFEST_FILENAME).is_file())
 
 
 def discover_packages(
@@ -130,7 +136,10 @@ def discover_packages(
         for root in roots:
             try:
                 package = load_package(root)
-            except AgentPluginManifestError as exc:
+            # The contract is per package: a reader's own exception (decode,
+            # recursion, a symlink loop) is this package's problem, not a
+            # reason for every entrance to fail building a runtime.
+            except (OSError, ValueError, RecursionError, RuntimeError) as exc:
                 problems.append(PackageProblem(str(root), str(exc)))
                 continue
             if package.name in off:

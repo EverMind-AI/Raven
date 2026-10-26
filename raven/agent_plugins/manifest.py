@@ -36,7 +36,7 @@ SUPPORTED_SCHEMA_URLS = frozenset({AGENT_PLUGINS_SCHEMA_URL})
 MANIFEST_FILENAME = "plugin.json"
 """The manifest's fixed location at the plugin root (spec §5.1)."""
 
-_NAME_RE = re.compile(r"^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$")
+_NAME_RE = re.compile(r"^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\Z")
 
 _PERMITTED_KEYS = frozenset(
     {
@@ -130,12 +130,14 @@ def read_manifest(path: Path) -> tuple[AgentPluginManifest, tuple[str, ...]]:
     """
     try:
         raw_text = Path(path).read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise AgentPluginManifestError(f"the manifest is unreadable: {exc}") from exc
 
     try:
         raw = json.loads(raw_text)
-    except json.JSONDecodeError as exc:
+    except RecursionError as exc:
+        raise AgentPluginManifestError("the manifest is nested too deeply") from exc
+    except ValueError as exc:
         raise AgentPluginManifestError(f"the manifest is not valid JSON: {exc}") from exc
     if not isinstance(raw, dict):
         raise AgentPluginManifestError("the manifest must contain a JSON object")

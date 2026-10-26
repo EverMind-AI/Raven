@@ -231,6 +231,19 @@ def test_the_only_departures_from_the_official_schema_are_the_documented_ones(
 # ---------------------------------------------------------------------------
 
 
+def test_a_trailing_newline_in_a_name_is_refused(tmp_path: Path) -> None:
+    """The spec's name pattern is anchored at the end; Python's ``$`` is not.
+
+    The parity table above cannot carry this case: ``jsonschema`` evaluates
+    patterns with Python's ``re``, so it shares the quirk the spec does not
+    have.
+    """
+    path = _manifest_file(tmp_path, {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme\n"})
+
+    with pytest.raises(AgentPluginManifestError):
+        read_manifest(path)
+
+
 def test_a_minimal_manifest_loads_without_notes(tmp_path: Path) -> None:
     manifest, notes = read_manifest(_manifest_file(tmp_path, {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme"}))
     assert manifest.name == "acme"
