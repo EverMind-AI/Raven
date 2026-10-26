@@ -477,6 +477,27 @@ describe('model roles', () => {
     expect(screen.getByRole('alert').textContent).toBe('gui.settings.roles.max {"n":200}')
   })
 
+  it('an unset effort reads as the provider default, and that rung clears the key rather than writing a word', async () => {
+    /* The harness holds `low`; this is the install that never touched the key,
+       which the page used to draw as Low -- a setting the file does not hold. */
+    const unset = snap()
+    delete (unset.raw.agents as { defaults: Record<string, unknown> }).defaults.reasoningEffort
+    const { calls } = install(unset)
+    await mount('model')
+    const disc = screen.getByText('gui.settings.roles.params').closest('button') as HTMLButtonElement
+    expect([...disc.querySelectorAll('.settings-sv')][0]!.textContent)
+      .toBe('gui.settings.roles.sum_effortgui.settings.roles.effort_default')
+    await act(async () => { fireEvent.click(disc) })
+    expect(screen.getByText('gui.settings.roles.effort_default').getAttribute('aria-pressed')).toBe('true')
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.roles.effort_medium')) })
+    /* Re-queried: a write bumps the epoch and the card is rebuilt under it. */
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.roles.effort_default')) })
+    expect(sets(calls)).toEqual([
+      { key: 'agents.defaults.reasoningEffort', value: 'medium' },
+      { key: 'agents.defaults.reasoningEffort', value: null },
+    ])
+  })
+
   it('a fixed context window below 1024 is refused; above the model window it saves and warns', async () => {
     const { calls } = install()
     await mount('model')

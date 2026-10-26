@@ -18,6 +18,7 @@ import { remember } from './recent'
 import { beginLoad, current, currentProvider, failLoad, loadStatus, loadToken, open as openPickerAt, setCurrent, statedTags } from './store'
 
 import type { ParamsOf, ResultOf } from '../../rpc/generated'
+import type { EffortSource } from '../../state/effort'
 import type { TierReply, TierSource } from '../../state/tier'
 import type { Recent } from './recent'
 import type { ApiProtocol, Kind, ModelSource, Offer, Provider } from './types'
@@ -373,6 +374,35 @@ export const tierSource: TierSource = {
     tierMenu = (r && r.availableModes) || tierMenu
     return r
   },
+}
+
+/* The reasoning effort over the wire: one method for all three calls, every
+   reply carrying the pick, what the session runs at without one and the
+   words. A draft reads with no key -- the handler answers the default a fresh
+   session starts on -- and stages a pick the way it stages a tier, for the
+   send path to write once the first message has minted a session
+   (state/session/runtime.ts, applyStagedEffort). */
+export const effortSource: EffortSource = {
+  read: async () => gateway().call('session.set_effort', { session_key: sessionCurrent() || '' }),
+  set: async (effort: string | null) => {
+    const sid = sessionCurrent()
+    if (!sid) {
+      /* Staged, and echoed back as though written: there is no server state
+         to contradict it yet. Clearing a staged pick is just dropping it --
+         a draft follows the default anyway. */
+      staging().effort = effort
+      const was = await gateway().call('session.set_effort', { session_key: '' })
+      return { ...was, effort }
+    }
+    return gateway().call('session.set_effort', effort
+      ? { session_key: sid, effort }
+      : { session_key: sid, clear: true })
+  },
+}
+
+/* Read by the send path next to the staged tier. */
+export function stagedEffort(): string | null {
+  return staging().effort
 }
 
 /* Read by the send path, which applies it next to the staged model. The object

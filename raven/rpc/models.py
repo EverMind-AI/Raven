@@ -3484,6 +3484,30 @@ class SessionSetModeResult(_Strict):
     )
 
 
+class SessionSetEffortParams(_Strict):
+    session_key: str
+    effort: str | None = Field(
+        None,
+        description="The reasoning effort this session's own model calls run at, one of the words in options. "
+        "Omit it to report without changing.",
+    )
+    clear: bool = Field(
+        False,
+        description="Drop the session's own pick and follow the default again. Wins over effort when both are given.",
+    )
+
+
+class SessionSetEffortResult(_Strict):
+    session_key: str
+    effort: str | None = Field(None, description="The session's own pick, or null while it follows the default.")
+    default: str | None = Field(
+        None,
+        description="What the session runs at with no pick of its own: its mode's effort where the catalogue sets "
+        "one, else agents.defaults.reasoningEffort, else null for the provider's own default.",
+    )
+    options: list[str] = Field(default_factory=list, description="The words effort accepts, least first.")
+
+
 # ---------------------------------------------------------------------------
 # Method registry — used by tests/test_rpc_schema_match.py to walk every
 # method and compare its Pydantic Params/Result models against the OpenRPC
@@ -3814,6 +3838,13 @@ class SessionInitInfo(_Strict):
         ),
     )
     running: bool = Field(default=False, description="A turn is in flight on this session right now.")
+    reasoning_effort: str | None = Field(
+        default=None,
+        description=(
+            "The reasoning effort this session's own model calls run at: its own pick (session.set_effort), "
+            "else its mode's, else agents.defaults.reasoningEffort; null when the provider's own default stands."
+        ),
+    )
     read_only: bool | None = Field(
         default=None,
         description="True for an Imported Conversation, which nothing can change; absent on every other session.",
@@ -6994,6 +7025,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "session.set_knowledge": (SessionSetKnowledgeParams, SessionSetKnowledgeResult),
     "session.set_harness": (SessionSetHarnessParams, SessionSetHarnessResult),
     "session.set_mode": (SessionSetModeParams, SessionSetModeResult),
+    "session.set_effort": (SessionSetEffortParams, SessionSetEffortResult),
     # ext.list / cron.* / settings.* / channels.status / fs.* -- the console
     "ext.list": (ExtListParams, ExtListResult),
     "cron.list": (CronListParams, CronListResult),

@@ -30,7 +30,7 @@ import { capabilitiesSource, loadExt } from '../features/installed/source'
 import { knowledgeSource } from '../features/knowledge/source'
 import { reveal as revealDocument } from '../features/knowledge/store'
 import { memorySource } from '../features/memory/source'
-import { blockSendForModel, modelSource, openModelsForMissingProvider, tierSource } from '../features/model/source'
+import { blockSendForModel, effortSource, modelSource, openModelsForMissingProvider, tierSource } from '../features/model/source'
 import { onboardSource } from '../features/onboard/source'
 import { isOpen as onboardOpen, setBodies as setOnboardBodies, subscribe as onOnboard } from '../features/onboard/store'
 import { markNew } from '../features/rail/store'
@@ -157,6 +157,7 @@ export function installSources(): void {
   sources.banner = bannerSource
   sources.settings = settingsSource
   sources.tier = tierSource
+  sources.effort = effortSource
   sources.model = modelSource
   composer.beforeSend = blockSendForModel
 

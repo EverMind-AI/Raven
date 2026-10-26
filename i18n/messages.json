@@ -241,6 +241,16 @@
         "help": "查看或设置推理强度（对运行中的 agent 生效）"
       }
     },
+    "effort": {
+      "en": {
+        "name": "effort",
+        "help": "show or set how much the model thinks for this conversation [minimal|low|medium|high|default]"
+      },
+      "zh": {
+        "name": "思考深度",
+        "help": "查看或设置本会话的思考深度 [minimal|low|medium|high|default]"
+      }
+    },
     "fast": {
       "zh": {
         "name": "快速模式",
@@ -6185,6 +6195,46 @@
       "en": "This is a deployment's own mode, not a built-in tier, so it is not passed on to sub-agents.",
       "zh": "这是部署自带的模式，不是内置档位，因此不会下发给子智能体。"
     },
+    "gui.effort.title": {
+      "en": "Reasoning effort",
+      "zh": "思考深度"
+    },
+    "gui.effort.default": {
+      "en": "Default",
+      "zh": "默认"
+    },
+    "gui.effort.minimal": {
+      "en": "Minimal",
+      "zh": "最少"
+    },
+    "gui.effort.low": {
+      "en": "Low",
+      "zh": "低"
+    },
+    "gui.effort.medium": {
+      "en": "Medium",
+      "zh": "中"
+    },
+    "gui.effort.high": {
+      "en": "High",
+      "zh": "高"
+    },
+    "gui.effort.scope": {
+      "en": "How much the model thinks before each answer, for this conversation only. Sub-agents are not affected.",
+      "zh": "模型每次回答前思考多少，只作用于本会话，不影响子智能体。"
+    },
+    "gui.effort.now": {
+      "en": "Default follows the global setting, which is {name} right now.",
+      "zh": "「默认」跟随设置页里的全局值，当前是「{name}」。"
+    },
+    "gui.effort.provider": {
+      "en": "the provider's own default",
+      "zh": "厂商默认"
+    },
+    "gui.effort.failed": {
+      "en": "Could not set the reasoning effort to {name}",
+      "zh": "思考深度切到「{name}」没有成功"
+    },
     "gui.imodel.title": {
       "en": "Model",
       "zh": "模型"
@@ -8596,6 +8646,10 @@
     "gui.settings.roles.effort": {
       "en": "Reasoning effort",
       "zh": "思考深度"
+    },
+    "gui.settings.roles.effort_default": {
+      "en": "Provider default",
+      "zh": "厂商默认"
     },
     "gui.settings.roles.effort_minimal": {
       "en": "Minimal",

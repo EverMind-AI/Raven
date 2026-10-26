@@ -14,10 +14,10 @@
  * and the window its vendor publishes (components/ModelTags). The id is on
  * the title, the provider is the head above, and a pick is a click.
  *
- * Two rows that are not models ride along when the composer opened it: the
- * sub-agent tier (state/tier.ts), a setting of the same conversation drawn
- * where the model is chosen rather than as a chip of its own, and the door to
- * the settings page.
+ * Three rows that are not models ride along when the composer opened it: the
+ * sub-agent tier (state/tier.ts) and the reasoning effort (state/effort.ts),
+ * two settings of the same conversation drawn where the model is chosen rather
+ * than as chips of their own, and the door to the settings page.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
@@ -25,6 +25,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExter
 import { ModelTagDefs, ModelTags } from '../../components/ModelTags'
 import { ProviderIcon } from '../../components/ProviderMark'
 import { t } from '../../i18n/t'
+import * as effort from '../../state/effort'
 import * as lang from '../../state/lang'
 import * as tier from '../../state/tier'
 import { recent } from './recent'
@@ -85,6 +86,50 @@ function TierRow(): JSX.Element | null {
             role="radio"
             aria-checked={row.ticked ? 'true' : 'false'}
             onClick={() => tier.pick(row.id)}
+          >
+            {row.name}
+          </button>
+        ))}
+      </span>
+    </div>
+  )
+}
+
+/** A bulb: how much the model thinks before it answers. */
+const THINK = 'M12 3.5c-3.3 0-5.8 2.5-5.8 5.6 0 1.9.9 3.2 1.9 4.2.7.7 1.1 1.4 1.2 2.3h5.4c.1-.9.5-1.6 1.2-2.3 1-1 1.9-2.3 1.9-4.2 0-3.1-2.5-5.6-5.8-5.6ZM9.8 19h4.4'
+
+/* The effort row: the default rung and every word the server offers as one
+   segmented control, the one in force pressed. Drawn under the tier row for
+   the same opening and under the same rule -- a conversation's setting, so
+   not for a settings slot -- and only once the server has answered, for the
+   reason state/effort.ts's load gives (an older gateway has no row to draw).
+
+   The same shape as the tier row on purpose: a reader meets the two as one
+   block of per-conversation settings. The explanation sits behind the question
+   mark and says what "default" means on this install, because that is the one
+   rung whose meaning is not in its name. */
+function EffortRow(): JSX.Element | null {
+  useSyncExternalStore(effort.subscribe, effort.get)
+  if (!effort.offered()) return null
+  const heading = effort.heading()
+  const note = effort.scopeNote()
+  return (
+    <div className="model-tier model-effort">
+      <span className="model-tier-k">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d={THINK} /></svg>
+        {heading}
+        <span className="model-tier-help" data-tip={note} data-tip-wrap="" aria-label={note} role="img">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true"><path d={HELP} /></svg>
+        </span>
+      </span>
+      <span className="model-seg" role="radiogroup" aria-label={heading}>
+        {effort.options().map((row) => (
+          <button
+            key={row.id || 'default'}
+            type="button"
+            role="radio"
+            aria-checked={row.ticked ? 'true' : 'false'}
+            onClick={() => effort.pick(row.id)}
           >
             {row.name}
           </button>
@@ -391,6 +436,7 @@ function Pick(): JSX.Element {
         ) : null}
       </div>
       {at.scope === 'session' && !at.offer.title ? <TierRow /> : null}
+      {at.scope === 'session' && !at.offer.title ? <EffortRow /> : null}
       {at.footer ? (
         <div className="foot">
           <button

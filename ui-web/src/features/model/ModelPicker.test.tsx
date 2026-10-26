@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
+import * as effort from '../../state/effort'
 import * as pageStore from '../../state/page'
 import { resetSources, setSources } from '../../state/sources'
 import * as tier from '../../state/tier'
@@ -1137,5 +1138,66 @@ describe('the model picker, to a screen reader', () => {
     expect(recent.getAttribute('role')).toBe('radiogroup')
     expect(recent.getAttribute('aria-label')).toBe('gui.picker.recent')
     expect(recents().map((b) => b.getAttribute('aria-checked'))).toEqual(['true'])
+  })
+})
+
+/* The reasoning effort rides the picker as a second row under the tier, for
+   the composer's opening only, drawn once the server has answered
+   (state/effort.ts). */
+describe('the effort row', () => {
+  const WORDS = ['minimal', 'low', 'medium', 'high']
+  const seg = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.mpick .model-effort .model-seg button')]
+
+  afterEach(() => { effort._resetForTests() })
+
+  it('offers the default rung and every word as one segmented control, and asks for the one clicked', async () => {
+    install()
+    const asked: Array<string | null | undefined> = []
+    setSources({
+      model: (await import('./store')).source(),
+      effort: {
+        read: async () => { asked.push(undefined); return { effort: null, default: 'low', options: WORDS } },
+        set: async (id) => { asked.push(id); return { effort: id, default: 'low', options: WORDS } },
+      },
+    })
+    await act(async () => { await effort.load() })
+    mount()
+    openIt()
+    expect(seg().map((b) => b.textContent)).toEqual(['gui.effort.default', 'gui.effort.minimal', 'gui.effort.low', 'gui.effort.medium', 'gui.effort.high'])
+    expect(seg().map((b) => b.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false', 'false', 'false'])
+    /* One explanation behind the question mark, naming what default means. */
+    const help = document.querySelector('.mpick .model-effort .model-tier-help')!
+    expect(help.getAttribute('data-tip')).toBe('gui.effort.scope gui.effort.now {"name":"gui.effort.low"}')
+    expect(help.hasAttribute('data-tip-wrap')).toBe(true)
+    await act(async () => { fireEvent.click(seg()[4]!) })
+    expect(asked).toEqual([undefined, 'high'])
+    expect(seg().map((b) => b.getAttribute('aria-checked'))).toEqual(['false', 'false', 'false', 'false', 'true'])
+    /* Back to the default rung: a clear, not a word. */
+    await act(async () => { fireEvent.click(seg()[0]!) })
+    expect(asked).toEqual([undefined, 'high', null])
+    expect(seg()[0]!.getAttribute('aria-checked')).toBe('true')
+    /* The picker stays up: an effort is not a pick of a model. */
+    expect(pick()).not.toBeNull()
+  })
+
+  it('draws no row before the server answers, and none for a settings slot', async () => {
+    install()
+    mount()
+    openIt()
+    expect(document.querySelector('.mpick .model-effort')).toBeNull()
+    act(() => store.close())
+    setSources({
+      model: (await import('./store')).source(),
+      effort: {
+        read: async () => ({ effort: null, default: 'low', options: WORDS }),
+        set: async (id) => ({ effort: id, default: 'low', options: WORDS }),
+      },
+    })
+    await act(async () => { await effort.load() })
+    act(() => {
+      store.open(document.getElementById('modelChip'), undefined, undefined,
+        { kind: 'text', title: 'Chat', pick: async () => {} })
+    })
+    expect(document.querySelector('.mpick .model-effort')).toBeNull()
   })
 })

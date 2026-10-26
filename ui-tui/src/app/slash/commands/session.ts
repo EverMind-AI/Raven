@@ -14,6 +14,7 @@ import type {
   SessionUsageResponse,
   VoiceToggleResponse
 } from '../../../gatewayTypes.js'
+import type { SessionSetEffortResult } from '../../../rpc/generated.js'
 import type { PanelSection } from '../../../types.js'
 import type { SlashCommand } from '../types.js'
 
@@ -60,6 +61,9 @@ const parseModelArg = (arg: string): { provider?: string; value: string } => {
 // The wire contract is the full `<channel>:<chat_id>` key; users naturally
 // type the bare chat_id they see in filenames, so default those to tui:.
 const normalizeSessionId = (id: string) => (id.includes(':') ? id : `tui:${id}`)
+
+// `/effort default` and its two synonyms, the words `/mode` reserves too.
+const EFFORT_RESET_WORDS = new Set(['default', 'reset', 'clear'])
 
 export const sessionCommands: SlashCommand[] = [
   {
@@ -624,6 +628,52 @@ export const sessionCommands: SlashCommand[] = [
             }
 
             ctx.transcript.sys(`reasoning: ${r.value}`)
+          })
+        )
+        .catch(ctx.guardedErr)
+    }
+  },
+
+  {
+    help: 'show or set how much the model thinks for this conversation [minimal|low|medium|high|default]',
+    name: 'effort',
+    usage: '/effort [minimal|low|medium|high|default]   -- default/reset/clear follow the global setting again',
+    run: (arg, ctx) => {
+      if (!ctx.sid) {
+        return ctx.transcript.sys('no active session')
+      }
+
+      // The session's own reasoning effort, kept on its record by the server:
+      // a bare `/effort` reports, a word sets it from the next turn on, and
+      // the reset words drop it so the conversation follows the global
+      // setting (or its mode's) again. The words are the server's to refuse,
+      // and its refusal names them, so none are spelt here.
+      const want = arg.trim().toLowerCase()
+      const params: Record<string, unknown> = { session_key: ctx.sid }
+
+      if (EFFORT_RESET_WORDS.has(want)) {
+        params.clear = true
+      } else if (want) {
+        params.effort = want
+      }
+
+      ctx.gateway
+        .rpc<SessionSetEffortResult>('session.set_effort', params, { quiet: true })
+        .then(
+          ctx.guarded<SessionSetEffortResult>(r => {
+            const fallback = r.default ?? null
+            const fallbackLabel = fallback ?? "the provider's own"
+            ctx.transcript.sys(
+              r.effort
+                ? `reasoning effort: ${r.effort} (this conversation; default is ${fallbackLabel})`
+                : `reasoning effort: default (${fallbackLabel})`
+            )
+            // The status bar shows what the next turn runs at, as session.info
+            // reports it: the pick, else the default.
+            patchUiState(state => ({
+              ...state,
+              info: state.info ? { ...state.info, reasoning_effort: r.effort ?? fallback ?? '' } : state.info
+            }))
           })
         )
         .catch(ctx.guardedErr)
