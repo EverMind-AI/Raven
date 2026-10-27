@@ -570,6 +570,7 @@ class SubAgentDagTool(Tool):
         memory_for: "Callable[[str], MemoryScope | None] | None" = None,
         mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
         model_for: "Callable[[str | None, str | None, str | None], str | None] | None" = None,
+        effort_for: "Callable[[str | None, str | None, str | None], str | None] | None" = None,
         charge: QuotaCharger | None = None,
         ask: "Ask | None" = None,
         control_reachable: "Callable[[], bool] | None" = None,
@@ -623,6 +624,11 @@ class SubAgentDagTool(Tool):
         # same reason as `state_for`: this tool is built from the same config as
         # the manager but does not own one.
         self._model_for = model_for
+        # The manager's reasoning-effort resolution for an acp row, so a node
+        # runs on the same effort a spawn to it would. Injected for the same
+        # reason as `model_for`: this tool is built from the same config as the
+        # manager but does not own one.
+        self._effort_for = effort_for
         self._adopt = adopt
         self._charge = charge
         # A direct publisher (tests) and/or a late-bound conversation-keyed sink.
@@ -2558,6 +2564,7 @@ class SubAgentDagTool(Tool):
                 memory_for=self._memory_for,
                 mode_for=self._mode_for,
                 model_for=self._model_for,
+                effort_for=self._effort_for,
                 capabilities=self._capability_map(),
                 run_id=run_id,
                 cancel=cancel,
