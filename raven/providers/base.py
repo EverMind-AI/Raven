@@ -86,7 +86,7 @@ _ELLIPSIS = "..."
 
 #: One clause per category ``LLMProvider._classify`` can return (which is where
 #: ``tool_image_unsupported`` comes from too), plus ``upstream_transport_failure``,
-#: which litellm_provider attaches directly. A category with no clause falls to
+#: which ``transport_failure_response`` attaches directly. A category with no clause falls to
 #: the default rather than going unsaid -- the trajectory replay's
 #: ``replay_divergence`` is the one in-tree case -- and
 #: ``test_error_classification`` holds the table to the classifier.

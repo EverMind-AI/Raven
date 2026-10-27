@@ -465,6 +465,22 @@ async def test_a_stream_that_stays_empty_is_reported_as_the_failure_it_is() -> N
     assert "upstream" in (response.content or "").lower()
 
 
+async def test_both_exits_report_the_failure_the_same_way() -> None:
+    """The same fault must read the same whichever exit reported it: one path's
+    classification drifting from the other's is a failure the loop retries on
+    one side and gives up on the other."""
+    from raven.providers.streaming import stream_llm_call
+
+    plain = _provider()._parse_response(_laundered(), sent_chars=SENT)
+    streamed = await stream_llm_call(
+        _EmptyStream(), messages=[{"role": "user", "content": "hi" * 6000}], tools=None, model="stub"
+    )
+
+    assert plain.finish_reason == streamed.finish_reason == "error"
+    assert plain.error_classification == streamed.error_classification
+    assert (plain.content or "").split(":")[0] == (streamed.content or "").split(":")[0]
+
+
 class _DeclinedThenStop:
     """A stream that declines, then closes on the ``stop`` every stream closes on."""
 

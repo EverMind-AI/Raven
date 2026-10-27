@@ -17,7 +17,6 @@ from loguru import logger
 from raven.providers import call_record, prompt_cache
 from raven.providers.base import (
     ChatDelta,
-    ErrorClassification,
     GenerationSettings,
     LLMProvider,
     LLMResponse,
@@ -48,7 +47,7 @@ from raven.providers.transport_failure import (
     native_finish_reason,
     prompt_chars,
     said_nothing,
-    transport_failure_message,
+    transport_failure_response,
     without_sentinels,
 )
 from raven.providers.usage import merge_usage, reported_cost, token_count
@@ -1154,20 +1153,7 @@ class LiteLLMProvider(LLMProvider):
 
         if evidence:
             logger.warning("upstream reported a failed call as a normal end: {}", evidence)
-            return LLMResponse(
-                content=transport_failure_message(evidence),
-                finish_reason="error",
-                usage=usage,
-                error_classification=ErrorClassification(
-                    category="upstream_transport_failure",
-                    # Retried before anything else is tried: the control
-                    # experiment healed on a retry that landed on another
-                    # backend, and there is no partial work to repeat.
-                    retryable=True,
-                    should_fallback=True,
-                ),
-                call_record=record,
-            )
+            return transport_failure_response(evidence, usage=usage, call_record=record)
 
         return LLMResponse(
             content=content,

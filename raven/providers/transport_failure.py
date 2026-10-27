@@ -38,7 +38,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from raven.contracts.llm_provider import ErrorClassification, LLMResponse
+
 if TYPE_CHECKING:
+    from raven.contracts.llm_provider import CallRecord
     from raven.providers.base import ToolCallRequest
 
 #: Sentinels an upstream can leak in place of content. They mean the same as
@@ -331,11 +334,34 @@ def transport_failure_message(evidence: str) -> str:
     )
 
 
+def transport_failure_response(evidence: str, *, usage: dict[str, Any], call_record: CallRecord | None) -> LLMResponse:
+    """The failed call both response exits hand back once the verdict stands.
+
+    Built in one place so the two exits cannot drift: the same fault read as
+    retryable on one path and final on the other would be the split this module
+    exists to prevent. Retried before anything else is tried, because the control
+    experiment healed on a retry that landed on another backend, and there is no
+    partial work to repeat.
+    """
+    return LLMResponse(
+        content=transport_failure_message(evidence),
+        finish_reason="error",
+        usage=usage,
+        error_classification=ErrorClassification(
+            category="upstream_transport_failure",
+            retryable=True,
+            should_fallback=True,
+        ),
+        call_record=call_record,
+    )
+
+
 __all__ = [
     "flag_transport_failure",
     "may_fold_to_nothing",
     "prompt_chars",
     "said_nothing",
     "transport_failure_message",
+    "transport_failure_response",
     "without_sentinels",
 ]

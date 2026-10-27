@@ -38,7 +38,7 @@ from raven.providers.transport_failure import (
     flag_transport_failure,
     may_fold_to_nothing,
     prompt_chars,
-    transport_failure_message,
+    transport_failure_response,
     without_sentinels,
 )
 from raven.providers.truncation import flag_truncation
@@ -644,17 +644,7 @@ async def stream_llm_call(
         # would read as the model's own, when the evidence says the request was
         # never processed.
         logger.warning("upstream reported a failed call as a normal end: {}", transport_evidence)
-        return LLMResponse(
-            content=transport_failure_message(transport_evidence),
-            finish_reason="error",
-            usage=final_usage or {},
-            error_classification=ErrorClassification(
-                category="upstream_transport_failure",
-                retryable=True,
-                should_fallback=True,
-            ),
-            call_record=record,
-        )
+        return transport_failure_response(transport_evidence, usage=final_usage or {}, call_record=record)
 
     tool_calls = _finalize_tool_calls(tool_call_slots)
 
