@@ -733,14 +733,17 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         """The quality a call sends: Settings' where it names one, else the request's.
 
         ``medium`` when neither says and the model is gpt-image-2, and ``None`` for a
-        family without the knob (only gpt-image takes one). Public because a caller
+        family without the knob (only gpt-image takes one). An empty Settings value is
+        "no quality named" -- the schema's own default, which the model picker writes
+        when the reader picks a model without choosing one -- so it does not outrank
+        the request. Public because a caller
         that caches on what it asked for has to key on what was actually sent: the
         deck's generator keyed on its own default while the host sent Settings' value,
         so a quality changed in Settings was answered from the old cache.
         """
         config = self._config
         model_id = model_id or self._model(None)
-        if "quality" in getattr(config, "model_fields_set", set()):
+        if "quality" in getattr(config, "model_fields_set", set()) and config.quality:
             quality = config.quality
         elif requested is None:
             quality = "medium" if model_id.rsplit("/", 1)[-1].lower() == "gpt-image-2" else None
