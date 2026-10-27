@@ -8665,6 +8665,14 @@
       "en": "Search skills",
       "zh": "搜索技能"
     },
+    "gui.settings.skills.add": {
+      "en": "Add",
+      "zh": "新增"
+    },
+    "gui.settings.skills.add_prompt": {
+      "en": "Help me find a skill on Skill Hub that can ... and install it",
+      "zh": "帮我在 Skill Hub 找一个能……的技能并安装"
+    },
     "gui.settings.skills.builtin": {
       "en": "Built-in",
       "zh": "内置"
@@ -8820,6 +8828,18 @@
     "gui.settings.plugins.none_sub": {
       "en": "An MCP server hands Raven tools and data from outside.",
       "zh": "MCP 服务能给 Raven 接上外部的工具和数据。"
+    },
+    "gui.settings.plugins.add": {
+      "en": "Add",
+      "zh": "新增"
+    },
+    "gui.settings.plugins.add_prompt": {
+      "en": "Help me connect the ... MCP server",
+      "zh": "帮我接入……的 MCP 服务"
+    },
+    "gui.settings.plugins.add_hint": {
+      "en": "A server the catalogue does not list goes into tools.mcpServers in {path} by hand.",
+      "zh": "目录里没有的服务，要手改配置文件 {path} 的 tools.mcpServers。"
     },
     "gui.settings.plugins.connected": {
       "en": "Connected",

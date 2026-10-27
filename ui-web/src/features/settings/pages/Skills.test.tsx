@@ -3,8 +3,10 @@ import { act, cleanup, fireEvent, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as confirm from '../../../state/confirm'
+import * as settingsDialog from '../../../state/settings'
 import { resetSources, setSources } from '../../../state/sources'
 import { install, modelSource, mount, source as settingsSource } from '../../../test/settingsHarness'
+import { askInChat } from '../../composer/startTaskWith'
 import * as store from '../store'
 import { stripFrontmatter } from './Skills'
 
@@ -78,5 +80,34 @@ describe('skills page', () => {
       ['uninstallSkill', 'sql-style'],
     ])
     expect(store.get().skill).toBeNull()
+  })
+
+  /* Installing is not this page's: use_skill fetches a Skill Hub bundle on
+     Raven's own judgment. The button leads into the chat with the request
+     half written, through the composer verb the app lends the dialog at boot
+     -- lent here as the real one, so the case sees the dialog close, the
+     field filled and focused, and nothing asked of the gateway. */
+  it('the add button closes the dialog and puts the request in the composer, asking the gateway nothing', async () => {
+    const { calls } = install()
+    await mount('skills')
+    document.body.insertAdjacentHTML('beforeend', '<textarea id="ta"></textarea>')
+    const ta = document.getElementById('ta') as HTMLTextAreaElement
+    const heard: string[] = []
+    ta.addEventListener('input', () => heard.push(ta.value))
+    store.lendAskInChat(askInChat)
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.skills.add')) })
+    expect(settingsDialog.close).toHaveBeenCalledTimes(1)
+    expect(ta.value).toBe('gui.settings.skills.add_prompt')
+    expect(heard).toEqual(['gui.settings.skills.add_prompt'])
+    expect(document.activeElement).toBe(ta)
+    expect(calls).toEqual([])
+  })
+
+  it('unlent, the add button does nothing', async () => {
+    const { calls } = install()
+    await mount('skills')
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.skills.add')) })
+    expect(settingsDialog.close).not.toHaveBeenCalled()
+    expect(calls).toEqual([])
   })
 })
