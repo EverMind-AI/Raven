@@ -87,6 +87,7 @@ _THINK_BLOCK_RE = re.compile(
     rf"<{_NS}(think|thinking|reasoning)>([\s\S]*?)</{_NS}\1>",
     re.IGNORECASE,
 )
+_THINK_OPEN_RE = re.compile(rf"<{_NS}(?:think|thinking|reasoning)>", re.IGNORECASE)
 # The same spellings, read a character at a time by the silence gate (``_read_think_tag``).
 _THINK_NAMES = ("think", "thinking", "reasoning")
 _TAG_NAMESPACE_RE = re.compile(r"[a-z][\w.-]{0,15}", re.IGNORECASE)
@@ -297,6 +298,16 @@ def strip_think_blocks(text: str, *, trim: bool = True) -> str:
     """
     stripped = _THINK_BLOCK_RE.sub("", text)
     return stripped.strip() if trim else stripped
+
+
+def leaves_think_block_open(text: str) -> bool:
+    """Whether ``text`` opens an inline think block it does not close.
+
+    What follows such text is inside the block, so it only reads right joined to it: on its own a
+    continuation of a cut thought is the rest of the thought and a stray closing tag, and only
+    ``strip_think_blocks`` over the whole takes the thought out.
+    """
+    return bool(_THINK_OPEN_RE.search(_THINK_BLOCK_RE.sub("", text)))
 
 
 def is_only_think_debris(text: str) -> bool:

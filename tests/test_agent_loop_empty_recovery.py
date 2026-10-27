@@ -2471,6 +2471,134 @@ async def test_a_held_cut_a_refused_continuation_let_out_is_not_shown_twice(work
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "origin,script,final,silent",
+    [
+        pytest.param(
+            Origin.USER,
+            lambda: [_DyingStream("<think>abc"), _finished_stream("def</think>[SILENT]")],
+            "[SILENT]",
+            True,
+            id="person_marker_after_a_thought_cut_in_two",
+        ),
+        pytest.param(
+            Origin.CRON,
+            lambda: [_DyingStream("<think>abc"), _finished_stream("def</think>\n[SILENT]")],
+            "[SILENT]",
+            True,
+            id="proactive_marker_after_a_thought_cut_in_two",
+        ),
+        pytest.param(
+            Origin.USER,
+            lambda: [_DyingStream("<think>abc"), _finished_stream("def</think>Four.")],
+            "Four.",
+            False,
+            id="an_answer_after_a_thought_cut_in_two",
+        ),
+        pytest.param(
+            Origin.USER,
+            lambda: [_finished_stream("<think>abc", "def</think>[SILENT]")],
+            "[SILENT]",
+            True,
+            id="control_the_same_reply_uncut",
+        ),
+    ],
+)
+async def test_a_reply_cut_inside_its_thinking_is_read_with_the_whole_thought_out(
+    workspace, monkeypatch, origin, script, final, silent
+):
+    """The reply the turn ends on is the joined text with its think blocks taken out, read as a reply with
+    no cut is: a block the cut split is still a block, so neither the reasoning nor a marker after it is
+    delivered as the answer, and a continuation is not read on its own when it only makes sense joined."""
+    _served(monkeypatch, script())
+
+    out, outcome, last, streamed = await _ends_on(_litellm_agent(workspace), origin)
+
+    assert out == final and outcome.silent is silent
+    assert bool(last.get("_silent")) is silent
+    assert last["content"] == final
+    if silent:
+        assert "[SIL" not in "".join(streamed)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "script,max_iterations,final,silent",
+    [
+        pytest.param(
+            lambda: [_DyingStream("<think>abc"), _DyingStream("def</think>[SILENT]"), _unfinished_empty_stream()],
+            10,
+            "[SILENT]",
+            True,
+            id="a_failed_continuation",
+        ),
+        pytest.param(
+            lambda: [_DyingStream("<think>abc"), _DyingStream("def</think>Four"), _unfinished_empty_stream()],
+            10,
+            "Four\n\n" + PARTIAL_STREAM_NOTE,
+            False,
+            id="a_failed_continuation_after_an_answer",
+        ),
+        pytest.param(
+            lambda: [_DyingStream(text) for text in ("<think>a", "b</think>[S", "ILEN", "T]")],
+            10,
+            "[SILENT]",
+            True,
+            id="the_spent_continuations",
+        ),
+        pytest.param(
+            lambda: [_DyingStream("<think>abc"), _DyingStream("def</think>[SILENT]")],
+            2,
+            "[SILENT]",
+            True,
+            id="a_budget_that_stops_the_turn",
+        ),
+    ],
+)
+async def test_every_exit_on_a_cut_thought_reads_the_reply_with_the_thought_out(
+    workspace, monkeypatch, script, max_iterations, final, silent
+):
+    _served(monkeypatch, script())
+    _recorded_sleeps(monkeypatch)
+
+    out, outcome, last, streamed = await _ends_on(_litellm_agent(workspace, max_iterations=max_iterations), Origin.USER)
+
+    assert out == final and outcome.silent is silent
+    assert bool(last.get("_silent")) is silent
+    assert "<think>" not in out
+
+
+@pytest.mark.asyncio
+async def test_a_cut_thought_closed_with_nothing_after_it_delivers_no_reasoning(workspace, monkeypatch):
+    """The continuation only closes the thought, so the joined reply has no answer in it. The reasoning is
+    not one: the turn ends with nothing to deliver rather than with the thought as its text."""
+    _served(monkeypatch, [_DyingStream("<think>abc"), _finished_stream("</think>")])
+
+    out, outcome, _last, _streamed = await _ends_on(_litellm_agent(workspace), Origin.USER)
+
+    assert out == "" and outcome.no_output is True and outcome.silent is False
+
+
+@pytest.mark.asyncio
+async def test_a_cut_thought_whose_continuation_calls_a_tool_files_only_the_words_on_the_call(workspace, monkeypatch):
+    calls = _served(
+        monkeypatch,
+        [
+            _DyingStream("<think>abc"),
+            _preamble_then_tool_stream("def</think>Let me look."),
+            _finished_stream("There is one file."),
+        ],
+    )
+
+    final, _used, messages, _outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=_Sink().delta
+    )
+
+    assert len(calls) == 3 and final == "There is one file."
+    assert [m.get("content") for m in messages if m.get("tool_calls")] == ["Let me look."]
+
+
+@pytest.mark.asyncio
 async def test_an_ordinary_cut_answer_streams_as_it_did(workspace, monkeypatch):
     """The control: a person's answer is out from its first letter, and its continuation follows as it comes."""
     _served(monkeypatch, [_DyingStream("The answer is "), _finished_stream("42", ".")])

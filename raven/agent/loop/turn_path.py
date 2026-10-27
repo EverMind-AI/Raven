@@ -113,6 +113,7 @@ from raven.agent.loop.recovery import (
     decide,
     empty_retry_delay,
     has_thinking_to_refeed,
+    leaves_think_block_open,
     next_step_down,
     reasoning_excerpt,
     reply_kind,
@@ -1248,7 +1249,7 @@ class TurnPathMixin:
             newest call, measured, as every reply does.
             """
             nonlocal messages, status, silent
-            final = "".join(recovery.parts).strip()
+            final = self._strip_think("".join(recovery.parts)) or ""
             held = carried_gate.handed_over() if carried_gate is not None else None
             silent = not reply_awaited and is_silence(final, origin)
             if silent:
@@ -1256,7 +1257,7 @@ class TurnPathMixin:
                     held.discard()
             else:
                 note = "\n\n" + PARTIAL_STREAM_NOTE
-                final += note
+                final = final + note if final else PARTIAL_STREAM_NOTE
                 status = "interrupted"
                 if held is not None:
                     await held.release()
@@ -1656,7 +1657,9 @@ class TurnPathMixin:
                 # continuation of its own. It is what this step said beside its
                 # call, which the reader saw, so the call's row keeps it.
                 said_beside = (
-                    ("".join(recovery.parts) + (response.content or "")).strip() if recovery.parts else response.content
+                    self._strip_think("".join(recovery.parts) + (response.content or ""))
+                    if recovery.parts
+                    else response.content
                 )
                 recovery.empty_streak.clear()
                 recovery.parts.clear()
@@ -2336,10 +2339,11 @@ class TurnPathMixin:
                     continue
                 if action is RecoveryAction.CONTINUE and kind is ReplyKind.NETWORK_CUT:
                     # The stream broke mid-answer. What arrived is kept and the model
-                    # is asked to go on from it. Kept untrimmed: the space at the cut
-                    # is the one between two words, and the reply is trimmed once, whole.
+                    # is asked to go on from it. Kept as it came, think tags and the
+                    # space at the cut included: a cut can split a think block or two
+                    # words, and the reply is read once, whole.
                     recovery.continuations += 1
-                    recovery.parts.append(strip_think_blocks(response.content or "", trim=False))
+                    recovery.parts.append(response.content or "")
                     logger.warning(
                         "empty-recovery: stream cut mid-answer after {} chars; continuation {}/{}",
                         len(clean or ""),
@@ -2419,16 +2423,19 @@ class TurnPathMixin:
                     status = "error"
                     break
 
+                # A continuation that came back a marker on its own has nothing to add.
+                own_marker = action is RecoveryAction.SILENT
                 if recovery.parts:
-                    # The answer is what streamed across every call, joined: a
-                    # continuation that came back empty leaves the partial as it was,
-                    # and so does one that came back a marker, which has nothing to add.
-                    tail = (
-                        strip_think_blocks(response.content or "", trim=False)
-                        if clean and action is not RecoveryAction.SILENT
-                        else ""
-                    )
-                    clean = ("".join(recovery.parts) + tail).strip()
+                    # The answer is what streamed across every call, joined, read as a reply with
+                    # no cut is: think blocks out of the whole, since a cut can split one. A
+                    # continuation inside a block the cut left open is read only that way, as the
+                    # rest of a thought and not a reply of its own. Otherwise one that came back
+                    # empty, as think-tag debris or as a marker leaves the partial as it was.
+                    so_far = "".join(recovery.parts)
+                    in_a_thought = leaves_think_block_open(so_far)
+                    own_marker = own_marker and not in_a_thought
+                    adds = (response.content or "") if (in_a_thought or clean) and not own_marker else ""
+                    clean = self._strip_think(so_far + adds) or ""
                 # The reply the turn ends on is read for silence once it is whole: a cut is
                 # continued rather than judged on its fragment, so after one -- or when one can
                 # no longer be continued -- the joined text is what may be the marker.
@@ -2436,7 +2443,7 @@ class TurnPathMixin:
                     ends_silent = not reply_awaited and is_silence(clean, origin)
                 else:
                     ends_silent = action is RecoveryAction.SILENT
-                dropped_marker = action is RecoveryAction.SILENT and not ends_silent
+                dropped_marker = own_marker and not ends_silent
 
                 # Before the text is persisted, so a short-circuit replaces it
                 # without leaving the replaced draft in history and a rollback

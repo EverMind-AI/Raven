@@ -892,11 +892,13 @@ refusal is handled as one rather than continued. The model is asked to go on, an
 joined, up to `MAX_CONTINUATIONS` times,
 after which the partial is delivered with `PARTIAL_STREAM_NOTE` as an `interrupted` turn. A
 continuation that comes back empty leaves what streamed as the answer, and so does one that is a
-marker on its own; one that comes back as an
+marker on its own, unless the cut left a think block open, when it is read only joined to what came
+before it; one that comes back as an
 error, a stream cut off before any new text included, ends the turn at once on the partial with
 the note, as `interrupted`, with no wait and no fallback model -- and so does a turn that runs out
 of iterations or time while a continuation is still owed, with no wrap-up. On each of those exits
-the reply the turn ends on, the joined parts, is read for a Silence Marker by the turn's rule, and
+the reply the turn ends on is the joined parts with their think blocks taken out of the whole -- a
+cut can split one -- read for a Silence Marker by the turn's rule as a reply with no cut is, and
 one that is a marker ends the turn as a **Silent Turn**: nothing of it shown, its row filed
 `silent: true`, no note, and the turn `interrupted` only when its budget stopped it. A stream that
 merely closed without a terminal chunk -- all a backend that never sends one leaves -- and a body
