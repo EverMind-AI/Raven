@@ -1655,11 +1655,10 @@ class TurnPathMixin:
                 # cut answer the model went on to act on is no longer the start of
                 # the one it gives after the tools, which starts with no
                 # continuation of its own. It is what this step said beside its
-                # call, which the reader saw, so the call's row keeps it.
+                # call, which the reader saw, so the call's row keeps it, as it came:
+                # joined, it is what one uncut call would have said.
                 said_beside = (
-                    self._strip_think("".join(recovery.parts) + (response.content or ""))
-                    if recovery.parts
-                    else response.content
+                    ("".join(recovery.parts) + (response.content or "")) if recovery.parts else response.content
                 )
                 recovery.empty_streak.clear()
                 recovery.parts.clear()

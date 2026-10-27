@@ -2642,22 +2642,34 @@ async def test_a_reply_that_stays_only_a_thought_fails_whether_or_not_a_cut_spli
 
 
 @pytest.mark.asyncio
-async def test_a_cut_thought_whose_continuation_calls_a_tool_files_only_the_words_on_the_call(workspace, monkeypatch):
-    calls = _served(
-        monkeypatch,
-        [
-            _DyingStream("<think>abc"),
-            _preamble_then_tool_stream("def</think>Let me look."),
-            _finished_stream("There is one file."),
-        ],
-    )
+@pytest.mark.parametrize(
+    "script,said",
+    [
+        pytest.param(
+            lambda: [_preamble_then_tool_stream("<think>abcdef</think>Let me look.")],
+            "<think>abcdef</think>Let me look.",
+            id="thought_uncut",
+        ),
+        pytest.param(
+            lambda: [_DyingStream("<think>abc"), _preamble_then_tool_stream("def</think>Let me look.")],
+            "<think>abcdef</think>Let me look.",
+            id="thought_cut",
+        ),
+        pytest.param(lambda: [_preamble_then_tool_stream("Let me look. ")], "Let me look. ", id="words_uncut"),
+        pytest.param(lambda: [_DyingStream("Let me look. "), _tool_stream()], "Let me look. ", id="words_cut"),
+    ],
+)
+async def test_a_call_after_a_cut_files_its_row_as_the_uncut_call_does(workspace, monkeypatch, script, said):
+    """The row a tool call is filed on keeps the words beside the call as they came, inline thought and
+    all, and a cut that split them makes no difference to what history keeps."""
+    calls = _served(monkeypatch, [*script(), _finished_stream("There is one file.")])
 
     final, _used, messages, _outcome = await _litellm_agent(workspace)._run_agent_loop(
         _seed(), on_token_delta=_Sink().delta
     )
 
-    assert len(calls) == 3 and final == "There is one file."
-    assert [m.get("content") for m in messages if m.get("tool_calls")] == ["Let me look."]
+    assert final == "There is one file."
+    assert [m.get("content") for m in messages if m.get("tool_calls")] == [said]
 
 
 @pytest.mark.asyncio
@@ -2812,11 +2824,11 @@ async def test_a_cut_answer_that_goes_on_to_call_a_tool_keeps_its_partial_on_tha
     rows = agent.sessions.get_or_create("s1").messages
     assert [(m["role"], m.get("content"), bool(m.get("tool_calls"))) for m in rows] == [
         ("user", "hi", False),
-        ("assistant", "Let me look.", True),
+        ("assistant", "Let me look. ", True),
         ("tool", rows[2]["content"], False),
         ("assistant", "There is one file.", False),
     ]
-    assert _map_to_wire(rows, "s1")[1]["text"] == "Let me look."
+    assert _map_to_wire(rows, "s1")[1]["text"] == "Let me look. "
 
 
 @pytest.mark.asyncio

@@ -908,7 +908,8 @@ given, and is read as that one: the thinking-only moves below, then the failure.
 merely closed without a terminal chunk -- all a backend that never sends one leaves -- and a body
 that
 names no finish read `unknown` and are delivered as they stand. The continuation streams into the
-step the cut answer opened, and one that calls a tool files the joined words on that call's row. A
+step the cut answer opened, and one that calls a tool files the joined words on that call's row as
+they came, inline thought and all, as an uncut call's row is filed. A
 reply with only thinking is PREFILLed twice when there is thinking
 to re-feed (`has_thinking_to_refeed`: reasoning text that is not blank, or thinking blocks; one
 known only by its reasoning-token count, an empty think block or blank reasoning goes straight
