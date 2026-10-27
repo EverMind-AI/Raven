@@ -35,11 +35,14 @@ import {
 } from './source'
 
 import type {
-  Action, ExportSource, ExportStatus, ExportTurn, Problem, ReportContexts, ReportItem, ReportStatus, Severity,
+  Action, ExportSource, ExportStatus, ExportTurn, Problem, ReportContexts, ReportItem, ReportProbe, ReportStatus, Severity,
 } from './types'
 
 export const POLL_MS = 700
 export const RETRY_MS = 3000
+/* How long a report waits on the receiver check. The gateway bounds its own
+   probe, but a call over the socket has no deadline of its own. */
+export const PROBE_WAIT_MS = 8000
 export const LIST_PAGE = 200
 export const REPORTER_KEY = 'raven.gui.export.reporter'
 const DEFAULT_BASE = 'raven-export'
@@ -86,6 +89,16 @@ export type Fault =
   | { kind: 'undecided' }
   | { kind: 'risk' }
   | { kind: 'error'; detail: string }
+
+/** What one check of the bug report receiver found. */
+export type ProbeOutcome =
+  | { state: 'ok' }
+  | { state: 'down'; target: string; reason: string }
+  /** The check itself failed, or gave no answer within PROBE_WAIT_MS (`detail` null). */
+  | { state: 'failed'; detail: string | null }
+
+/** The receiver check; null in the export flow. A check again keeps what the last one found on screen. */
+export type Probe = { state: 'checking'; last: ProbeOutcome | null } | ProbeOutcome
 
 export interface ExportState {
   open: boolean
@@ -135,6 +148,11 @@ export interface ExportState {
   /** A decide, upload or retry is in flight, or waiting for the status it moves. */
   acting: boolean
   error: Fault | null
+  probe: Probe | null
+  /** The reader chose to go on without a receiver that answered. */
+  probeAccepted: boolean
+  /** A start is waiting for the receiver check to end. */
+  probeWaiting: boolean
   epoch: number
 }
 
@@ -167,6 +185,9 @@ const initial = (): ExportState => ({
   riskAccepted: false,
   acting: false,
   error: null,
+  probe: null,
+  probeAccepted: false,
+  probeWaiting: false,
   epoch: 0,
 })
 
@@ -220,6 +241,17 @@ let timer: ReturnType<typeof setTimeout> | null = null
 let querying: string | null = null
 let nameDraft: string | null = null
 let draft: ProblemDraft = blankDraft()
+
+/** One receiver check: its own deadline, and a way to end it early. */
+interface ProbeRun {
+  ticket: number
+  /** Settles once the check is over: answered, timed out, or stopped. */
+  done: Promise<void>
+  stop: () => void
+}
+
+let probeTicket = 0
+let probeRun: ProbeRun | null = null
 
 const clearTimer = (): void => {
   if (timer !== null) clearTimeout(timer)
@@ -375,6 +407,7 @@ export function open(flow: Flow, sessionKey: string): void {
   draft = blankDraft()
   const epoch = store.get().epoch + 1
   store.set({ ...initial(), open: true, flow, sessionKey, pages: pagesFor(flow, false), epoch })
+  if (flow === 'report') runProbe(epoch)
   void listTurns(epoch)
 }
 
@@ -538,11 +571,77 @@ const POLLED: ReadonlySet<string> = new Set(['collecting', 'finishing', 'uploadi
 /* Files the problem; a second press while a report is starting or under way
    does nothing. A report that failed or was cancelled elsewhere is let go and
    the same turns and words are filed again. */
-export async function startReport(): Promise<void> {
+/* -- the receiver check --------------------------------------------------- */
+
+const probeOf = (answer: ReportProbe): ProbeOutcome =>
+  answer.reachable ? { state: 'ok' } : { state: 'down', target: answer.target, reason: answer.reason }
+
+/* Each check owns its deadline and its stop; a later check, a close or a late
+   answer to an earlier one never touches another check's timer, so a stale
+   answer cannot leave a newer wizard checking forever. */
+function runProbe(epoch: number): void {
+  const ticket = ++probeTicket
+  let deadline: ReturnType<typeof setTimeout> | null = null
+  let halt: (outcome: null) => void = () => undefined
+  const stopped = new Promise<null>((resolve) => { halt = resolve })
+  const late = new Promise<ProbeOutcome>((resolve) => {
+    deadline = setTimeout(() => resolve({ state: 'failed', detail: null }), PROBE_WAIT_MS)
+  })
+  const asked = source().reportProbe().then(probeOf, (err: unknown): ProbeOutcome => ({ state: 'failed', detail: messageOf(err) }))
+  const clear = (): void => {
+    if (deadline !== null) clearTimeout(deadline)
+    deadline = null
+  }
+  const previous = store.get().probe
+  set({ probe: { state: 'checking', last: previous && previous.state !== 'checking' ? previous : null } })
+  const done = Promise.race([asked, late, stopped]).then((outcome) => {
+    clear()
+    if (outcome !== null && current(epoch) && ticket === probeTicket) set({ probe: outcome })
+  })
+  probeRun = { ticket, done, stop: () => { clear(); halt(null) } }
+}
+
+/** What the last finished check found, kept on screen while a check again runs. */
+export const probeShown = (s: ExportState = store.get()): ProbeOutcome | null =>
+  s.probe?.state === 'checking' ? s.probe.last : s.probe
+
+/* The receiver did not answer and the reader has not chosen to go on without it. */
+export const probeRefused = (s: ExportState = store.get()): boolean => {
+  const shown = probeShown(s)
+  return (shown?.state === 'down' || shown?.state === 'failed') && !s.probeAccepted
+}
+
+/** Checks the receiver again; only before a report starts, and not while a check runs. */
+export function recheckProbe(): void {
   const s = store.get()
-  if (!s.open || s.flow !== 'report' || working(s) || s.sessionKey === null || !s.selected.length || !s.problemReady) return
-  if (s.report) forgetReport(s.report.id)
+  if (!s.open || s.flow !== 'report' || s.report !== null || s.probe?.state === 'checking') return
+  runProbe(s.epoch)
+}
+
+/** Starts the report although the receiver did not answer: the reader's own choice. */
+export function continueAnyway(): void {
+  if (!store.get().open) return
+  set({ probeAccepted: true })
+  void startReport()
+}
+
+export async function startReport(): Promise<void> {
+  let s = store.get()
+  if (!s.open || s.flow !== 'report' || working(s) || s.probeWaiting) return
+  if (s.sessionKey === null || !s.selected.length || !s.problemReady) return
   const mine = s.epoch
+  const run = probeRun
+  if (s.probe?.state === 'checking' && run) {
+    set({ probeWaiting: true, error: null })
+    await run.done
+    if (!current(mine)) return
+    set({ probeWaiting: false })
+    s = store.get()
+  }
+  /* The fields stay editable while a start waits on the check, so what was
+     ready when it was pressed is asked again of what the page holds now. */
+  if (s.sessionKey === null || !s.selected.length || !s.problemReady || probeRefused(s)) return
+  if (s.report) forgetReport(s.report.id)
   const problem: Problem = { ...draft }
   writeReporter(draft.reporter)
   set({ ...blankReport(), reportStarting: true, error: null })
@@ -808,6 +907,8 @@ export async function retryUpload(): Promise<void> {
 export function close(): void {
   const s = store.get()
   clearTimer()
+  probeRun?.stop()
+  probeRun = null
   nameDraft = null
   draft = blankDraft()
   if (s.job && !terminal(s.job)) forget(s.job.id)
@@ -838,6 +939,8 @@ export function dismiss(): void {
 
 export function _resetForTests(): void {
   clearTimer()
+  probeRun?.stop()
+  probeRun = null
   querying = null
   nameDraft = null
   draft = blankDraft()

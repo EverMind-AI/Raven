@@ -68,6 +68,7 @@ BARE_MODEL = {
     "aionly": "gpt-5.5",
     "atlascloud": "deepseek-ai/deepseek-v4-flash",
     "radeon_cloud": "deepseek-v3",
+    "opper": "claude-sonnet-4-6",
     "gpustack": "qwen3-8b",
     "ovms": "qwen3-8b",
     "bigmodel": "glm-4.6",
@@ -122,7 +123,7 @@ QUALIFIED_RESOLUTION = {
     "longcat": "openai/longcat-2.0",
     "modelscope": "openai/Qwen/Qwen3-235B-A22B-Instruct-2507",
     "qiniu": "openai/deepseek-v3",
-    # Thirteen resale gateways, all reached through OpenAI's driver: the route
+    # Fourteen resale gateways, all reached through OpenAI's driver: the route
     # is that driver's and the address in config is what tells them apart. The
     # id after it is the shelf's own spelling of somebody else's model and is
     # sent verbatim -- 302.AI's "gpt-5.5" is not OpenAI's, and is never treated
@@ -141,6 +142,7 @@ QUALIFIED_RESOLUTION = {
     "aionly": "openai/gpt-5.5",
     "atlascloud": "openai/deepseek-ai/deepseek-v4-flash",
     "radeon_cloud": "openai/deepseek-v3",
+    "opper": "openai/claude-sonnet-4-6",
     # Two self-hosted servers with no LiteLLM driver, so the same borrowed
     # route -- and the address, supplied per deployment, is the whole of what
     # sends the call to a box on the LAN instead of to OpenAI.
@@ -226,6 +228,7 @@ BARE_RESOLUTION = {
     "aionly": "openai/gpt-5.5",
     "atlascloud": "openai/deepseek-ai/deepseek-v4-flash",
     "radeon_cloud": "openai/deepseek-v3",
+    "opper": "openai/claude-sonnet-4-6",
     "gpustack": "openai/qwen3-8b",
     "ovms": "openai/qwen3-8b",
     # A GLM id names its vendor either way, so both spellings agree here --

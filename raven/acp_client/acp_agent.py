@@ -42,7 +42,7 @@ from raven.acp_client.ask_user import AskUserResponder, clarify_responder
 from raven.acp_client.capabilities import (
     CapabilitySnapshot,
     read_session_current_model,
-    relearn_session_modes,
+    relearn_session_menus,
     steer_offered,
 )
 from raven.acp_client.elicitor import Elicitor
@@ -76,7 +76,6 @@ from raven.agent.tools.snapshot import take as take_snapshot
 from raven.contracts.subagent_backend import SubagentActionAbortedError
 from raven.contracts.tool import FileChange
 from raven.home import subagent_role_env
-from raven.mcp.bridge import unix_sockets_available
 from raven.mcp.endpoint import McpEndpoints, bridge_command
 from raven.ops import remote_path
 from raven.spine.message import Media
@@ -1258,17 +1257,21 @@ class AcpAgentBackend:
         if current:
             self._model_baseline[session_id] = current
 
-    def _relearn_modes(self, result: Any) -> None:
-        """Take the modes a session response advertises over the cached ones.
+    def _relearn_menus(self, result: Any) -> None:
+        """Take the modes and models a session response advertises over the cached ones.
 
-        Best-effort at every step. The menu is a description the NEXT dispatch
-        reads, never something this turn depends on, so neither the write nor
-        the table rebuild may cost the turn that happened to carry the evidence.
+        Or, when a newer measurement has been stored since this backend was
+        built, take that record instead, so the next response builds on it.
+
+        Best-effort at every step. The menus are what the NEXT dispatch and the
+        row's picker read, never something this turn depends on, so neither the
+        write nor the table rebuild may cost the turn that happened to carry the
+        evidence.
         """
         try:
-            updated = relearn_session_modes(self._snapshot, result)
+            updated = relearn_session_menus(self._snapshot, result)
         except Exception as exc:  # noqa: BLE001 - a cache refresh must not sink a turn
-            logger.warning("acp agent {!r}: refreshing modes from the session failed: {}", self.name, exc)
+            logger.warning("acp agent {!r}: refreshing menus from the session failed: {}", self.name, exc)
             return
         if updated is None:
             return
@@ -1395,15 +1398,7 @@ class AcpAgentBackend:
         node carries no streams.
         """
         notes = []
-        unsupported_host = not unix_sockets_available()
-        if unsupported_host and grant.granted:
-            names = ", ".join(repr(server.name) for server in grant.granted)
-            where = f" on machine {self.machine!r}" if self.machine else ""
-            notes.append(
-                f"MCP servers {names} were not delivered to acp agent {self.name!r}{where}: this computer does "
-                "not support Unix-socket MCP endpoints; the task ran without those servers"
-            )
-        elif lent is not None and grant.granted and self.machine:
+        if lent is not None and grant.granted and self.machine:
             names = ", ".join(repr(server.name) for server in grant.granted)
             if lent:
                 notes.append(
@@ -1415,7 +1410,7 @@ class AcpAgentBackend:
                     f"MCP servers {names} were not lent to acp agent {self.name!r}: the Raven node on machine "
                     f"{self.machine!r} carries no MCP streams (it serves without a daemon)"
                 )
-        if self._session_mcp_refused and grant.granted and not unsupported_host:
+        if self._session_mcp_refused and grant.granted:
             names = ", ".join(repr(server.name) for server in grant.granted)
             if not self.session_mcp:
                 notes.append(
@@ -1461,9 +1456,8 @@ class AcpAgentBackend:
         ``launched`` is the dispatch's place on its machine, when it has one:
         the endpoints are opened here all the same, and what is yielded is
         :class:`_Lent`; ``_lent_stanzas`` binds the endpoints to the acquired
-        agent's task before handing its bridge to the session. On a computer
-        without unix sockets (Windows) nothing is opened for either side, the
-        agent runs without the servers, and :meth:`_mcp_note` says so.
+        agent's task before handing its bridge to the session. A host without
+        Unix sockets uses authenticated loopback endpoints for both paths.
 
         ``node_id`` is this dispatch's identity -- a DAG node's id, a spawn's
         task id -- because reaping is per node and not per run: a graph of a
@@ -1480,9 +1474,6 @@ class AcpAgentBackend:
         PATH at all, and the ask itself is a thread hop: :meth:`_adapter_path`
         can run the login shell, and this runs inside the dispatch's own turn.
         """
-        if not unix_sockets_available():
-            yield []
-            return
         # Both of these come off the host's MCP source: the executor so a bridged
         # stdio server is spawned inside the sandbox the host configured rather
         # than on the host, and the deny set so a tool the host switched off is
@@ -2211,7 +2202,7 @@ class AcpAgentBackend:
                             raise
                         loaded = None
                     if loaded is not None:
-                        self._relearn_modes(loaded)
+                        self._relearn_menus(loaded)
                         self._note_session_model(known, loaded)
                     await self._set_mode(client, known, mode, budget=budget)
                     await self._set_model(client, known, session_model, budget=budget)
@@ -2236,7 +2227,7 @@ class AcpAgentBackend:
                     raise
 
         result = await request_or_busy("session/new", {"cwd": cwd, "mcpServers": mcp_servers})
-        self._relearn_modes(result)
+        self._relearn_menus(result)
         session_id = (result or {}).get("sessionId") if isinstance(result, dict) else None
         if not isinstance(session_id, str) or not session_id:
             raise AcpEmptyTurnError(f"acp agent {self.name!r}: session/new returned no sessionId")

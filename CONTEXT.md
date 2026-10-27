@@ -293,7 +293,8 @@ launches, beside the `RAVEN_HOME` it already sends, and a process that reads it 
 registers none of the tools that hand work to a further agent (`spawn`, `run_subagent_dag`,
 the three graph controls) and builds no playbook funnel, so `load_playbook` and
 `create_playbook` unregister themselves. The `## Delegation` block and the DAG orchestration
-guide follow the tools out on their own, both being conditional on a live dispatch path.
+guide follow the tools out on their own, both being conditional on a live dispatch path; the
+**Host role** section is withheld on the role itself as well as on the tools.
 `WITHHELD_FROM_SUBAGENT` is the specification; the gates enforce it by not building, and the
 tests hold the two in agreement. A config `env` entry outranks the host's, which is how one
 agent is handed back a full registry.
@@ -324,10 +325,17 @@ filesystem, then `builtin` package seeds, then config. `builtin` rows are packag
 (`agent/subagent/builtin_agents.py`): they exist whether or not config mentions them, and a
 config row of the same name is a field-level override -- of every field but `enabled`,
 which the merge discards, so a seed row cannot be taken off the roster at all. An unnamed
-`spawn` and a DAG node with no `subagent` both dispatch to the generic seed, `Raven`. A name
-a seed used to answer to resolves to it (`LEGACY_AGENT_ALIASES`; `raven` -> `Raven`), so
-stored instance rows, direct-chat records and dag nodes written before a rename still find
-their agent -- exact match first, and the roster never offers an alias back. Read under the
+`spawn` and a DAG node with no `subagent` both dispatch to the generic seed,
+`Raven-General` -- named apart from the host, so a prompt or an approval can no longer mistake
+one for the other. A name a seed used to answer to resolves to it (`LEGACY_AGENT_ALIASES`;
+`raven` and `Raven` -> `Raven-General`), so stored instance rows, instance logs, direct-chat
+records and dag nodes written before a rename still find their agent -- exact match first,
+and the roster never offers an alias back. Instance records, handle locks and live indexes
+use the current name, including when a request carries an alias. Existing message state
+and instance logs are read from the most recently written store across those names; a
+chat directory without saved messages cannot hide one with resumable state. Equal
+timestamps prefer the current name, then the most recent former name. No files are moved.
+Read under the
 older key `thirdParty` too; the write path emits `agents`.
 _Avoid_: "third-party registry" — the table holds raven's own agents as well, which is the
 point of it: `spawn` and a DAG node pick from one roster, so an agent reachable from one
@@ -417,18 +425,70 @@ preset is, with `machine` (and
 Hub, whose preset sheet picks the machine (*Runs on*) among those with this
 Raven's node — refused before anything is spent when
 the id is not usable or the preset is a built-in agent, and proved by the same
-readiness ping as a local add, run on that machine.
+readiness ping as a local add, run on that machine. That ping, and the
+capability record an acp row is measured with once it answers, is one run held
+under the entry's name in `subagents._RUNNING`, the map a test's run is held in
+(`subagents._run_once`), so `subagents.test_cancel` stops it -- the hub's connect
+form counts the seconds, offers Cancel, and stops the run itself after five
+minutes with no answer -- and the add, switch or update then refuses with
+`cancelled` in its error data and writes nothing; one run per name at a time, a
+Test during it refused as a second test is, the row reporting `test_running`
+meanwhile.
 Registered-machine dispatch, file access and recovery are available without an
 environment switch. An entry without `machine` still runs here. Registration,
 SSH authentication, file permissions and concurrency limits govern remote work;
 listing entries and boot capability backfills do not open machine connections.
-The registry itself is kept from the Agent Hub's **Machines** tab as well
+The registry itself is kept from the Agent Hub's **Machines** tab as well -- the
+hub's third module beside Agents and Channels (`state/hub.ts`), drawn by the agents
+island on the page the two share
 (`machines.*`, `raven/rpc/methods/machines.py`): list, register (the same probe
-as the command), install the node in the background, doctor, and remove
-(`raven ops connection remove`, refused while a connected agent entry names the machine);
+as the command; or, with `auth: password`, a password this computer keeps for the machine
+under `~/.raven/keys/<id>.password`, the owner's alone, and hands to ssh on every connection
+through OpenSSH's askpass hook -- in no row, log, command line or answer,
+`connection_add.store_password`, `transport.ssh_env`; the row carries `auth: password` and no
+key, gets no ssh alias, no jump host and no shared connection, and is refused on Windows,
+whose OpenSSH cannot run Raven's POSIX askpass helper; a password under six characters is
+refused, since the scrubber would pass it as ordinary text, one with a line break too, since
+ssh would take only its first line, and the id rule is the one owner `connections.password_path`;
+the askpass helper answers the registered account's own password prompt (`user@host`, the host as
+`ssh -G` resolves it -- the `HostKeyAlias`, else the `HostName` in canonical form -- named by
+`transport.ASKPASS_FOR_ENV`; a host that is the id of a `Host` alias Raven keeps for a key machine,
+`transport.ALIAS_MARK`, is refused rather than followed when that alias sends ssh to another
+`HostName` (`transport.managed_alias_hostnames`), and so is a block that is not the one Raven
+writes -- one of its two marks gone, a keyword Raven does not write (`ProxyCommand`, `Include`
+...), a missing or second `HostName`, a second pattern on its `Host` line -- at registration in
+either order by
+`connection_add.alias_collision` and again on connecting; one reader, `transport.resolve_with_ssh`,
+serves both this and a key machine's defaults, and a password connection never canonicalizes) and no other, another account's, a second factor's and a one-time
+password's included; Oncall's ssh and rsync log in to such a row the same way, at the registry's
+address alone, `oncall_flow.transport.password_row`), install the node in the background, doctor,
+and remove (`raven ops connection remove`, refused while a connected agent entry names the
+machine; a password file kept under the id goes with the row whatever its login,
+`connection_add.forget_password`, and a refused registration forgets only its own file write
+while no row of the id is listed, `connection_add.forget_unowned_password`;
+`connection_add.store_registration_password` atomically replaces the password file and records
+its identity under the same file lock used by cleanup, so an overlapping registration's file
+survives even while its probe is pending and its password is identical; a registration probe
+uses its own temporary 0600 password file under `keys/` (included in held-secret scrubbing),
+and `connection_add.write` publishes its password and row under the cleanup lock after
+checking duplicates again, so either completion order keeps the successful login usable);
 none of it hands the page an address, an account or a key path, and
 `node_install` on a row is the node the last install or contact found there,
 which is how a listing says a machine has this Raven's node without reaching it.
+A row also names the connected agent entries that run on the machine (`agents_here`) and the
+switched-off ones apart (`agents_off_here`: they still hold the machine for the add, so the card
+says so and the connect form offers them back as *Reconnect*, the agents page's own switch on the
+existing entry; both empty when the agents section, or the config file itself, cannot be read --
+that is the agents page's to say),
+and a machine whose node is up offers the next step from its sheet: connect an agent
+on it, chosen from `subagents.presets` -- every preset a node can start, one already
+connected on this computer included, since an entry is one preset on one machine --
+under the add's default `<preset>@<machine id>`, through the same proved `subagents.add`,
+which refuses a preset the machine already has under that default name (the refusal
+names the entry there; a named add is a second entry on purpose), so the page and the
+chat cannot make one agent on one machine twice between them. The
+register form proposes the private keys this computer has (`machines.local_keys`,
+`~/.ssh` identities in ssh's order) instead of a placeholder path.
 _Avoid_: "host" / "server" / "node" (too broad, no link to the
 `ops connection` registry that supplies the rows); "GPU box" (only some are
 GPU hosts, and the term covers any registered compute destination);
@@ -490,9 +550,11 @@ and the host pumps them into the endpoint it opened on its own side (`raven/node
 `NodePool.lend`). The host binds each dispatch's endpoints to the acquired agent's task
 and checks that binding against the daemon-authenticated task before connecting, and again
 after the connection opens. A bridge's dispatch/server names alone grant no access.
-The server's definition and keys stay here. On a host without Unix-socket endpoint
-support, remote MCP is withheld, the task still runs and its reply explains why; the
-roster does not advertise that capability. Only
+The server's definition and keys stay here. Host endpoints use Unix sockets where
+available; otherwise they bind an ephemeral port on `127.0.0.1` and authenticate
+with a random per-endpoint token before opening the upstream. Local ACP bridges
+and the host's Raven node client use the same transport, including on Windows.
+The loopback token stays on the host for a remote dispatch. Only
 `--stdio` (tests, a fallback) ties the agents to the connection.
 _Avoid_: "node" alone (a DAG node is a `run_subagent_dag` step, and the Machine
 entry already rules the bare word out for a computer); "node id" for the install
@@ -512,8 +574,12 @@ _Avoid_: "transfer", "sync", "collect" (nothing moves on its own); "shared disk"
 registry fact (it is not recorded: a path either reads on a machine or does not).
 
 **Roster** (`format_agent_listing`):
-The agent table rendered as the text spliced into `spawn`'s and `run_subagent_dag`'s tool
-descriptions — `name [stateful, local-files, live-progress] (description)`. The model's only
+The agent table rendered as the text that closes `spawn`'s tool description — `name [stateful,
+local-files, live-progress] (description)`. Rendered once per tool array: the registry lists
+`run_subagent_dag` and then `spawn` after every other tool (`ToolRegistry.list_last`), and the
+graph tool points at the end of `spawn`'s description instead of repeating it -- it renders the
+roster itself only when `spawn` is not on offer, and always lists a turn's worker labels, which
+the roster does not carry. The model's only
 account of which agents exist, so an agent absent from it cannot be chosen; the `enum` on
 the `subagent` parameter constrains the same set. All three capabilities render positive *or*
 negative, because "no tag" and "the roster does not say" are indistinguishable otherwise. A
@@ -564,7 +630,7 @@ in for it: from the folder's manifest for a vendored agent, from the package see
 built-in override, so a config written before the field existed still gets one. `""` is the
 user declaring the agent owns nothing and is never refilled.
 
-Two things never carry ownership. The generic row (`raven`) claims none whatever a config
+Two things never carry ownership. The generic row (`Raven-General`) claims none whatever a config
 says, because it carries no capability bias and a line about it would prohibit the agent
 reading it from doing its own work. And the section is withheld entirely on a turn holding
 no dispatch tool — `spawn` and `run_subagent_dag` can both be withheld by
@@ -572,6 +638,30 @@ no dispatch tool — `spawn` and `run_subagent_dag` can both be withheld by
 leaves a request with no compliant action at all. Only the paths the turn does hold are named.
 _Avoid_: putting it in `description` — that copy is spliced into the tool descriptions, where
 the model reads it only once it is already choosing an agent.
+
+**Host role** (`## Your role`, `_host_role` in `context_engine/segments/render.py`):
+What the host is for, rendered at the top of its identity: the user's agent manager. It sorts
+a request into tasks and dispatches each, keeps every task until the user accepts its result,
+sends each later message about a task's work -- a question included -- to that task's
+instance, and gathers the reports into one answer. A decision it put to the user stays open
+until they make it, drop it or defer it, and each reply until then ends by asking about it
+again; an offer the user passes over is declined. Producing anything goes to the agent whose
+ownership or description fits it, to `Raven-General` only when none does; the host answers
+itself only what needs no tools and belongs to no task. On a turn that dispatches through a
+**Worker Table** the same rule names the table's workers instead: the worker whose brief
+covers the work, by its label. Work no worker covers is put to the user -- a worker added for
+it, or another Harness -- rather than done by the host or sent to an agent outside the enum,
+which offers labels alone. A table a call binds mid-turn (`load_playbook`) arrives after the
+identity was assembled, so that call's result carries the same rule, after its untrusted
+fence. A dispatch receipt (`spawn`, `run_subagent_dag`) and a background DAG run's
+announcement carry the open-decision rule the same way, together with the reply rule that
+gives each task a reply covers its own heading, since the host writes its closing text right
+after reading one. Rendered only in a process that is
+not a **Sub-agent role** and on a turn holding a dispatch path -- elsewhere the identity
+stays "a helpful AI assistant", byte for byte. The reply rules (`## How you reply`) say the
+open-decision rule again, the declined offer included, on every turn outside a
+**Sub-agent role**, so a turn without a dispatch path keeps it. **Ownership** names each
+agent's territory; this says what the host itself does and does not do.
 
 **Subagent working directory** (`workspace=` on every backend's `run`):
 Where a sub-agent's commands and file tools act: the *session's* working directory, the same
@@ -652,7 +742,7 @@ _Avoid_: "function" — a Tool is the agent-facing capability, not a Python func
 
 **Web Vendor** (`config/schema.py`, `WebProvidersConfig`):
 Who issues a web credential, as opposed to which tool spends it. Keys live at
-`tools.web.providers.<vendor>.apiKey` because one AnySearch, Tavily, Exa or Firecrawl
+`tools.web.providers.<vendor>.apiKey` because one AnySearch, Tavily, Exa, Firecrawl or Keenable
 account serves both `web_search` and `web_fetch`; a key held per tool would have to be
 pasted twice and could drift into two values for one credential. The pre-vendor leaves
 (`tools.web.search.apiKey`, `tools.web.jinaApiKey`) are still read, after the vendor
@@ -663,20 +753,21 @@ _Avoid_: "provider" unqualified — that is the LLM Provider in this vocabulary;
 
 **Web Search Provider** / **Web Fetch Provider** (`agent/tools/web.py`, `SEARCH_PROVIDERS` / `FETCH_PROVIDERS`):
 Which interchangeable backend each web tool calls: `tools.web.search.provider` selects
-`serper` (default), `anysearch`, `serpapi`, `tavily`, `exa`, `brave`, `firecrawl` or `serply`, and
-`tools.web.fetch.provider` selects `jina` (default), `anysearch`, `tavily`, `exa` or
-`firecrawl`. Every endpoint is a literal in the tool, so a selection names a vendor and
+`serper` (default), `anysearch`, `serpapi`, `tavily`, `exa`, `brave`, `firecrawl`, `serply` or
+`keenable`, and `tools.web.fetch.provider` selects `jina` (default), `anysearch`, `tavily`, `exa`,
+`firecrawl` or `keenable`. Every endpoint is a literal in the tool, so a selection names a vendor and
 never a URL. `web_search` is registered whatever the config holds and *withheld* from the
-offered set while the selected vendor's key does not resolve, so a key pasted mid-run
+offered set while the selected vendor's key does not resolve (Keenable searches without
+one and is offered keyless, as Jina reads pages keyless), so a key pasted mid-run
 surfaces it without a restart -- read live from the vendor slot and, for Serper, from the
 pre-vendor leaf, in the order `WebToolsConfig.vendor_key` resolves them, and an empty slot
 is a revocation rather than a miss; `web_fetch` is always offered, falling back to Jina,
 which reads pages without a key. The two sub-agent launchers inherit the host's selection
 differently: the in-process backend (`agent/subagent/backends/raven_loop.py`) takes it and
-then declines to *register* `web_search` when no key resolves, while the agent launcher
-(`agents/raven-research/run.py`, and the retired fork before it -- its snapshot sits in
-`tests/fixtures/vendored_fork/`) refuses to start without a search key, because its gate
-exits rather than degrading. Most vendors take the key
+then declines to *register* `web_search` when no key resolves and the vendor needs one, while
+the agent launcher (`agents/raven-research/run.py`, and the retired fork before it -- its
+snapshot sits in `tests/fixtures/vendored_fork/`) refuses to start without a search key unless
+the vendor needs none, because its gate exits rather than degrading. Most vendors take the key
 in a header; SerpApi takes it as a query parameter, so for that one the key travels inside
 every request URL and two surfaces have to keep it out -- the error path renders vendor plus
 status rather than the exception text, and the persisted log sink redacts a URL-borne
@@ -825,11 +916,22 @@ and is the unit of cancellation. A stalled Lane never blocks other Lanes. A conv
 be a *sub*-conversation: a Direct Chat runs on `session#agent/handle`
 (`raven.spine.turn.direct_lane`), which is what lets several instances answer at once while
 the main agent keeps its own serial lane.
+Every task the Scheduler starts for a Lane -- its worker, each turn, and the idle reaper -- begins
+from a fresh copy of the Scheduler's home context, the context it was built in; a turn inherits
+neither its submitter's context nor the worker's, and what one turn sets never reaches the next.
+Whatever a host wants every turn to see (the surface's approval families, for one) must therefore
+be set before the Scheduler is built.
 _Avoid_: conflating Lane with OriginPools — different dimensions (ordering vs. concurrency).
 
 **TurnRequest**:
 The single input to Spine: carries `origin`, `source`, `text`, `media`, and `busy` policy.
 Replaces the old `InboundMessage`.
+`dispatch_link` is the `(trace_id, span_id)` of the span that dispatched the work a turn reports on,
+set only by the submitter announcing a dispatched result; the kernel carries it to the runner
+uninterpreted, and the turn's `session.turn` span records it as `trace.dispatched_by_span_id` /
+`trace.dispatched_in_trace_id` -- that link and no other: a turn opened inside an active span
+(a scheduler built inside one keeps it for every turn) drops the link the root span would take
+from it. It is explicit because a turn no longer inherits its submitter's context.
 
 **Deliverable** (= `RunnerEvent`):
 The union of all content-type events a runner can emit: `Text | MediaOut | StreamDelta |
@@ -972,7 +1074,12 @@ rolls token counts and USD cost up into per-session, per-day, and lifetime aggre
 **CacheOptimizer**:
 The shipped TokenStrategy (`"cache_optimizer"`) that places Anthropic's ≤4 ephemeral
 `cache_control` breakpoints adaptively (tools tail + system tail + a rolling message-tail
-window). A Hermes-faithful `SystemAndTailCacheStrategy` ships alongside as an A/B reference.
+window). When the compacting History Strategy flags the message its next summary is
+expected to end on (`cache_compaction_boundary`, opt-in through `context.cache.compactionBreakpoint`),
+that mark takes the rolling window's oldest slot: the summary replays an earlier request as
+a byte prefix that stops behind every rolling mark, so it is the only breakpoint the
+summary can read back past the system head. A Hermes-faithful `SystemAndTailCacheStrategy`
+ships alongside as an A/B reference.
 
 **UsageSnapshot**:
 The token/cost accounting unit for a single LLM or built-in image-generation API call: input / output / cache-read /
@@ -1150,9 +1257,9 @@ The layer that assembles each turn's LLM window. One unified engine —
 SegmentBuilders in two phases: Phase A builds the system prefix in parallel, Phase B
 budgets history serially against that fixed overhead. The historical
 `legacy` / `curator` / `default` engine split was collapsed into this one engine;
-`engine:` survives only as a backward-compat config alias.
-_Avoid_: describing "legacy" and "Curator" as two separate engines — there is one
-engine and the Curator is its Segment 6.
+which builder fills the history slot is the History Strategy.
+_Avoid_: describing "compacting" and "Curator" as two engines — there is one
+engine, and they are two History Strategies for its Segment 6.
 
 **SegmentBuilder**:
 A pluggable contributor to the prompt; each builder produces one Segment for a fixed
@@ -1161,14 +1268,71 @@ defer into Phase B.
 
 **Segment**:
 A SegmentBuilder's uniform output: system-slot text, optional history (only the
-Curator sets this), and metadata merged into the assembled context.
+History Strategy's builder sets this), and metadata merged into the assembled context.
+
+**History Strategy** (`context_engine/history/`):
+The scheme that fills the history slot, named by `context.history.strategy` and
+resolved through the registry in `context_engine/history/__init__.py`, which is
+the only importer of a strategy and refuses an unknown name at startup.
+`compacting` (default) hands history over verbatim until the window nears its
+trigger, then prunes large tool results to a one-line record and a Source Ref,
+drops whole groups behind a fold, and past that writes a History Checkpoint;
+`curator` is the Curator. Each registry entry declares `owns_compaction` and
+`mints_source_refs`, which the host reads before any turn.
+_Avoid_: calling it an engine; it is one builder inside the one engine.
+
+**History Checkpoint** (`context_engine/history/compacting/checkpoint.py`):
+The user-role message the compacting strategy puts where the history it removed
+used to be: either a fold (counts and a ref, no model) or an eight-section
+summary (Goal, User Constraints, Decisions, Artifacts, Findings, Open Threads,
+Next Step, Pointers) written by the turn's model. Its chain is stored under
+`memory/.context/checkpoints/` and restored per Session Revision, so a new
+process resumes without compacting again; a later one `supersedes` the earlier.
+It carries `_history_checkpoint` in the window so the in-turn head summary never
+re-summarises it.
+_Avoid_: confusing it with the in-turn head summary (`agent/window`), which is
+written mid-turn for the working transcript and is never filed.
+
+**Source Ref** (`utils/refs.py`, `session/refs.py`):
+A `[[ref store/scope#lo-hi]]` token naming verbatim entries of an append-only
+store; for the session log the scope is the Session Revision's
+`<log_id>@<generation>`. A rendered ref is a promise that `context_retrieve`
+returns the stored original byte for byte, which is why that tool is registered
+only beside a strategy that mints refs.
+_Avoid_: treating a ref as a citation the model may paraphrase; it is an address.
+
+**Session Revision** (`contracts/context.py`):
+The identity of one append-only view of a session log: `log_id` (new on `/new`)
+and `generation` (bumped by an undo, or by a save that finds another writer
+changed messages this copy had already filed; another writer that only appended
+leaves it alone). Saves merge it across processes, taking the most recent
+clear's id and the larger generation, so a ref minted before an undo or a `/new`
+misses instead of naming a different message.
+
+**Turn Scratch** (`context_engine/scratch.py`):
+The tagged block appended to the end of the turn's user message carrying the
+phase-A segments whose builder declares `stable = False`, which today is
+`# Memory` and `# Skills`. It reaches the model but never `session.messages`:
+the assembler records on the envelope exactly what it appended (`_turn_scratch`),
+and the loop's `_save_turn`, the hooks' turn question, the watched-work judge and
+replay remove that recorded text, never whatever merely contains the tag. It
+keeps the system prompt byte-identical across turns, so the tools and system
+cache marks are read back on the next turn; the history behind it is not, since
+the envelope is filed in its stripped form, and reads back only through a
+provider's look-back over earlier breakpoints. The trade-off: recalled memory now
+sits in a user-role message rather than the system prompt; its untrusted-data
+fence and the scratch tag still say what it is.
+`context.cache.turnScratch = false` puts those segments back in the system prompt.
+_Avoid_: calling it "injected memory" — it is a slot, and what occupies it is
+whatever the builders declared too volatile for the system prompt.
 
 **Prompt Segments**:
 The ordered blocks `ContextAssembler` renders into the system prompt, one per
-SegmentBuilder: `# Raven` (identity), the Bootstrap Files block, `# Memory`
-(host `user.md` ⊕ EverOS recall), `# Active Skills` (always-on) and `# Skills`
+SegmentBuilder: `# Raven` (identity), the Bootstrap Files block, `# Active Skills`
+(always-on), `# Memory` (host `user.md` ⊕ EverOS recall) and `# Skills`
 (SkillForge-routed candidates — see SkillForge), and `# Curator Working State`
-(Segment 6). `context.dropSegments` names, by builder name, the host segments an agent does
+(Segment 6). Under Turn Scratch, `# Memory` and `# Skills` ride in the user
+message instead. `context.dropSegments` names, by builder name, the host segments an agent does
 without — an agent whose bootstrap files carry its own identity drops `identity`.
 _Avoid_: treating the system prompt as one opaque blob — each segment has an owner and order.
 
@@ -2133,6 +2297,13 @@ dispatched -- sub-agents, their own sub-agents, follow-up turns reporting back -
 resolved through those links. A main-line turn counts as in progress only when it
 is the session's latest, its record is still only a checkpoint, and the session is
 answering right now; a checkpoint left behind by a process that died is selectable.
+A turn reporting a dispatched result carries that link whenever this process knows the span
+that dispatched the work: the `subagent.run` of a spawn that started, the spawning call of one
+cancelled before it started, the `subagent.run` of the DAG node attempt that sent a node's report,
+and for a graph's result the span the DAG was dispatched under. A report with no such span --
+a run picked up after a restart, a graph dispatched outside any span -- carries none and is
+therefore main-line, as is an unprompted report from an external agent. A turn never inherits a
+link from earlier work in its session.
 _Avoid_: selecting a dispatched trace as a turn of its own.
 
 **Turn Trace Mark** (`raven/agent/loop/turn_path.py`):
@@ -2348,10 +2519,13 @@ The standalone HTTP service that takes Bug Report Packages in: it validates each
 upload with `package_check.inspect_package` (streaming, never extracting), lands
 the original bytes under `<save_dir>/<UTC date>/<report-id>.tar.gz` beside an
 Upload Receipt sidecar, and answers idempotently by report id — the same bytes
-again return the stored receipt, different bytes are refused. It authenticates
-nobody and serves no listing or download; who can reach it is the network's
-job. The sidecar is written before the package is moved into place, so a
-package in a date directory is always a committed one.
+again return the stored receipt, different bytes are refused. It takes only
+uploads that answer its Upload Challenge, a shallow gate against HTTP clients
+that are not Raven that identifies nobody; it serves no listing or download,
+and who can reach it is still the network's job. `GET /v1/hello` names the
+service and its protocol so a client can check, before a report starts, that
+its URL leads to a receiver. The sidecar is written before the package is
+moved into place, so a package in a date directory is always a committed one.
 _Avoid_: "upload server" or "uploader backend" — it is not an `Uploader`
 implementation for Trajectory Reports; it is the far end a Bug Report Package
 is sent to.
@@ -2367,6 +2541,21 @@ is rebuilt from the package: the package is the source of truth, the receipt
 is derived from it.
 _Avoid_: "receipt" for the sidecar file — the sidecar carries the receipt plus
 server-side context; the receipt is what the client gets back.
+
+**Upload Challenge** (`raven/trajectory/receiver_auth.py`):
+The string a Bug Report Receiver hands out on `POST /v1/challenge` before an
+upload, together with the client's answer to it. The receiver seals each
+challenge with a key held only in its process memory, so it stores none and a
+restart retires them all; a challenge carries the second it was issued, lives
+`challenge_ttl` seconds (300 by default) and is not consumed. The client
+answers with an HMAC, under a constant built into Raven, of the challenge with
+the package's report id, sha256 and size, and sends both back as
+`X-Raven-Challenge` / `X-Raven-Response`; the receiver checks them from the
+headers alone and refuses with 401 before reading the body. The constant is
+published with the source: the gate keeps out clients that do not know the
+exchange, not anyone who has read the code.
+_Avoid_: "token", "credential" or "authentication" — it identifies nobody and
+nothing about it needs to be kept secret.
 
 **Trajectory Replay** (`raven/trajectory/replay.py`):
 Mock re-run of the harness against a Trajectory Bundle (`raven trajectory replay`):
@@ -2429,16 +2618,98 @@ unreadable expected payload always yields a record.
 _Avoid_: confusing with the session's conversation history — a Conversation
 Record derives from trace spans, not from session messages.
 
+**Sub-agent Run Span** (`raven/observability/semconv.py`, `raven/agent/subagent/manager.py`,
+`raven/agent/subagent/dag_runner.py`):
+The `subagent.run` span of one sub-agent run, opened by `SubagentManager._run_subagent` under
+the tool call that dispatched the run, in that call's trace, so the run's own model and tool
+calls nest under it. It is written when it opens -- its attributes and an in-progress
+checkpoint, as a turn's root is -- and again when it closes; both records share the span id
+and the same attributes: `subagent.task_id`, `subagent.task` (a 300-character preview),
+`subagent.label` (the Task summary), `subagent.origin_session`, `subagent.agent` (the
+canonical agent name), `subagent.instance` (the instance name, absent when the run has
+none), `subagent.handle` (the instance name, else the task id), `subagent.dispatch` (`spawn`,
+or `dag` for a graph node's attempt, below) and `subagent.in_progress` (`true` in the
+checkpoint, `false` when it closes). The closing record also carries `subagent.outcome`:
+`completed`, `failed`, `aborted` (stopped on a terminal safety decision), `cancelled`, or
+`handed_off` (the process stopped and the run goes on on its registered machine). It is set
+beside the run record's own outcome and, like it, the first decision stands; a run that
+closes by cancellation or by an escaping exception before any branch decided reads
+`cancelled` or `failed`. A run cancelled before its task first ran records no span. Records
+written before these attributes existed carry only the first four and no outcome. The
+trajectory projection reads the run's entry status from them: `running` while the record is
+the checkpoint (evidence `subagent_in_progress`), `error` for `failed` / `aborted`
+(`subagent_failed` / `subagent_aborted`, the entry being the span's failure entry),
+`cancelled` (`subagent_cancelled`), `unknown` for `handed_off` (`subagent_handed_off`), and
+the span status otherwise.
+A DAG node gets one such span per attempt, opened by `dag_runner._attempt_node` once the
+attempt holds a concurrency slot and closed after its terminal status event -- the time
+queued for the slot is outside it, where a spawned run's span includes its wait at the
+gate. Its parent is the span active where the graph was dispatched (the `run_subagent_dag` or
+`resolve_dag_node` tool call); a graph dispatched outside any span -- a stint round resumed or
+swept outside a turn -- roots each attempt in a trace of its own. A node continued, or sent its judge's own follow-up, runs
+again under a new span; a node never executed (its branch not selected, skipped behind a
+failed dependency, or still queued when the run stopped) has none. Its `subagent.task` is
+the node's prompt template, `subagent.label` the node summary (else the node id),
+`subagent.task_id` the node id, and it adds `subagent.dag_run_id`, `subagent.node_id` and
+`subagent.attempt` (the node's attempt number, from 1 -- not a trajectory **Attempt**). Its
+outcome is `completed`, `failed`, `exception` (waiting on the main agent's decision),
+`continued` (judged not accomplished and sent its judge's follow-up, so the node runs
+again) or `cancelled`; for `failed`, `exception` and `continued` the span status is `ERROR`
+with the reason as its message, never empty, so the trajectory shows the entry as `error`
+(evidence `span_error`). A report an attempt sends -- its exception report or a stall notice,
+including one a blocking run injects only once released -- starts a turn whose dispatch link
+(`trace.dispatched_by_span_id`) names that attempt's span; the graph's result names the span
+that dispatched the graph. A graph dispatched outside any span reports with no link at all,
+its attempts' reports included, so those turns stay main-line (**Main-line Turn**).
+_Avoid_: reading a spawned run's `status.code` as its result -- the run reports its own
+failures and returns, so that span is `OK` whatever the outcome.
+
+**Sub-agent Scope** (`raven/trajectory/entries.py`, `_span_scopes`):
+The part of a session's trajectory one sub-agent boundary owns, named by that boundary span's
+`trace_id:span_id`. A boundary is a **run** -- a Sub-agent Run Span (`subagent.run`), so a
+spawned run or one attempt of a DAG node -- or a **graph**: a `tool.call` whose `tool.name` is
+`run_subagent_dag` or `resolve_dag_node`, which owns a graph's steps where no node span holds
+them (records written before node spans existed) and, for `resolve_dag_node`, the round a
+replan it chose started under it. An entry belongs to the nearest boundary above its span in
+its own trace, its own span not counted; a boundary's own entries look only for a run above,
+so a node's entry and a graph's call stay where the graph was dispatched, and so does the
+permission reviewer's `llm.call` (`llm.purpose` `permission_judge`), which the gate records
+under the call it reviews; a graph's scope holds only what its rounds produced. A dispatched
+agent cannot dispatch again, so scopes do not nest past one run, and since a spawned run's steps
+share the trace of the turn that spawned it and run alongside later turns, the scope is read
+from span ancestry alone, never from time. Three Trajectory Entry fields carry it:
+`subagent_scope`, the scope the entry belongs to (null for the main session);
+`opens_subagent_scope`, on a boundary's own entries, the scope it opens -- always for a run,
+for a graph only while at least one entry belongs to its scope (a graph whose rounds all ran
+in node spans opens nothing); and `dispatched_by_subagent_scope`, on the root entries of a
+dispatched `session.turn` trace, the scope that dispatched it -- the dispatching span itself
+when it is a boundary, else that span's own scope, null when the span is unknown, in the
+main session, or a graph scope no entry belongs to (a graph's result, once its nodes have
+spans). The dispatched turn itself -- a report injected back -- belongs to the main session,
+as does a trace linked in from another session. A step whose parent is not on record yet
+has no scope until the parent arrives, when the index reprojects it under a new revision;
+a boundary trimmed to a skeleton loses its entries, so its scope has no entry to open it
+while its descendants keep the scope id (the skeleton keeps the span's name and `tool.name`,
+so it still counts as a boundary). These fields are the input the trajectory view's
+per-sub-agent tabs are built from.
+_Avoid_: "Lane" -- the scheduler's term; "sub-agent trace" -- a spawned run's steps live in the
+spawning turn's trace; `origin` for the boundary -- it says only whether a trace was dispatched.
+
 **Trajectory Entry** (`raven/trajectory/entries.py`):
 One row of the trajectory view, projected by `project_entries` from a logical
 span (`traceId + spanId`, checkpoints merged last-write-wins, an in-progress
-snapshot never overriding a terminal record) at a stable slot (`llm.input`,
+snapshot -- a turn's or a Sub-agent Run Span's -- never overriding a terminal record,
+nor the skeleton the index keeps of a trimmed one) at a stable slot (`llm.input`,
 `tool.output`, `artifact:<key>`, `summary`, `error`, …). Its id is
 `trace:span:slot` — never a sequence number, array index or text hash — so it
-survives re-reads, late inputs and checkpoint upgrades. It carries the owning
+survives re-reads, late inputs and checkpoint upgrades. It names the Sub-agent Scope it
+belongs to, opens or was dispatched by (`subagent_scope`, `opens_subagent_scope`,
+`dispatched_by_subagent_scope`), apart from `origin`, which says only whether its trace was
+dispatched from another (`subagent`) or not (`main`). It carries the owning
 operation's status (`running` / `ok` / `error` / `cancelled` / `unknown`) with the
 evidence codes that produced it, data-integrity codes kept separate from status,
-and the span's clock with a Timing Owner. A base span that expands to nothing
+and the span's clock with a Timing Owner; an in-progress snapshot's entries have no
+duration and are `running` unless the snapshot already records an error. A base span that expands to nothing
 gets a `summary` entry; a failed span with no completion slot gets an `error`
 entry, so exactly one entry per failed span is the `failure_entry`. A turn
 opens with `user.input` (slot `turn.input`) and closes with `turn.end` (slot
@@ -2449,26 +2720,35 @@ records around it: for a model input the Message Delta (`delta` ∈ `first` /
 `continued` / `independent` / `unknown`, `new_from`, `echo_at`,
 `message_count`) and the LLM Purpose (`purpose`); and `hidden` for a row the
 list need not show — `redundant_reply`, a turn's end that repeats the turn's
-last model output word for word; `empty_reply`, a turn's end of a turn that
+last model output in the main session word for word (a sub-agent's outputs, though
+they belong to the turn that dispatched it and may come after its end, are never
+compared); `empty_reply`, a turn's end of a turn that
 finished `ok` whose recorded content was read and is null or blank;
 `empty_internal`, an outer-only summary that recorded nothing. A hidden row
 stays in the index and keeps its clock. While the recorder writes the turn's
 end as `{"content": null}` (`semconv.turn` reads `.content` off the tuple the
 turn returns), every ok turn end it records is `empty_reply` and
 `redundant_reply` cannot fire; the latter takes effect once that is fixed.
+A `subagent.run` entry's `meta` names the run: `label` and `task_id`, and `agent`,
+`instance`, `handle`, `dispatch`, `outcome`, `dag_run_id`, `node_id` and `attempt` each only
+when recorded with a value; these keys belong to the same input contract for the
+trajectory view's per-sub-agent tabs as the Sub-agent Scope fields.
 _Avoid_: calling a Conversation Record an entry — that is the CLI's text
 projection, without identity, structured status or timing.
 
 **Message Delta** (`raven/trajectory/entries.py`, `_apply_delta`):
 What one model input adds to the conversation before it, proven rather than
-assumed: an earlier input of the same chain (the main line, or one sub-agent
-trace) with a compatible LLM Purpose counts as the predecessor only when its
+assumed: an earlier input of the same chain (the main session, or one Sub-agent
+Scope) with a compatible LLM Purpose counts as the predecessor only when its
 message sequence — the content addresses of a v2 artifact's messages — is an
 ordered prefix of this one; then `new_from = len(prefix)`, one more when the
 message right after the prefix is an assistant one — the predecessor's own
 output written back into the history, already a row of its own (`echo_at`
 names it; the role of a referenced message is learnt by a bounded read, and
-until then the prefix alone counts). The chain's first
+until then the prefix alone counts). A turn reported back belongs to the main
+session, so its inputs continue the main agent's history; a sub-agent's inputs
+find a predecessor only within their own scope, so they neither take the main
+session's candidate places nor leave its inputs `unknown`. The chain's first
 input is `first` (all new); an input no candidate precedes is `independent`
 (all new); an input whose own or whose candidates' messages are not read yet is
 `unknown`, decided again when they are. Computed at projection time from the
@@ -2620,7 +2900,8 @@ below does, does not need wrapping: the path is raven-minted, only the file's co
 A DAG node is told where its upstream records are: every node whose sub-agent can open
 local paths gets an `## Upstream memory records` block appended to its rendered prompt,
 listing each transitive upstream's node id and the absolute path of its record. Paths only --
-nothing injects a record's text. Suppressed entirely for a sub-agent the roster tags
+nothing injects a record's text. A node that was not executed gets no line: it never ran, so
+it has no record to point at. Suppressed entirely for a sub-agent the roster tags
 [no-local-files], gated the same as a `_path` placeholder (Prompt template, below). The
 listed files usually do not exist yet when the node starts, because the record is written by a
 fire-and-forget poller after the upstream finished while the runner starts the next wave
@@ -2637,9 +2918,9 @@ same two ways, and `ref:<path>` / `ref_path:<path>` do it for an arbitrary file 
 form always injects content, the `_path` form always injects a location. `output` and
 `output_path` name a node by the id it ran under, and both surfaces resolve them against the
 same flat node root, so a spawn may name a graph's node and a graph may name a spawn's. The
-id must already be readable: a node that failed, was skipped, was cancelled or is still
-running is refused with which of those it was, rather than handed the leftover file a bare
-path would resolve to. A `{{ ... }}` body
+id must already be readable: a node that failed, was skipped, was cancelled, was not
+executed or is still running is refused with which of those it was, rather than handed the
+leftover file a bare path would resolve to. A `{{ ... }}` body
 matching none of the six is not a mistyped placeholder -- it is ordinary text, carried
 through untouched, so template syntax from another system (Jinja, Vue, Handlebars) can sit
 in a prompt with no escape form needed. A body that does match a shape still fails
@@ -2684,7 +2965,10 @@ node-shaped `inputs.<k>` entry, both `run_subagent_dag` only -- is wrapped with
 a run fetched or a checkout brought in, and a node's output is sub-agent-authored by
 construction. A literal `inputs.<k>` string is not fenced, because the author typed it into
 the call, and neither is any `_path` form or the `## Upstream memory records` block -- those
-carry a raven-minted path rather than content.
+carry a raven-minted path rather than content. Neither is the sentence that stands in for a
+node that was not executed: that is the runner's own words, so it is written unfenced too,
+and an upstream that writes the same sentence into its own output has it land inside a
+nonce-tagged fence, where it reads as data.
 This rule replaces one that keyed on location: a read whose resolved path landed under
 Subagent history was fenced, and every other read was not. That left the contents of a file
 in the working directory reaching a prompt bare, which is the wrong way round -- a checkout
@@ -2751,9 +3035,15 @@ never fetched; its preset names the bare executable (`opencode acp`, `hermes acp
 build that answers is the one the user installed, at the version they chose, holding the login
 they already granted. `SHIM_LAUNCHED_PRESETS` declares that split per preset and a test holds
 every acp command to it. A **bundled shim** (`BUNDLED_SHIM_PRESETS`) is one Raven ships rather
-than fetches: `raven.acp.mirasim` serves an agent Mirasim runs, over `mirasim ui-cli`, launched
-on Raven's own interpreter (`{PYTHON}`, expanded when the preset is read), so there is no pin;
-the executable its probe asks after is `mirasim` (`SHIM_REQUIRED_EXECUTABLES`).
+than fetches: `raven.acp.mirasim` serves an agent Mirasim runs, as one more client of the
+Mirasim host running on the machine (its WebSocket protocol), launched on Raven's own
+interpreter (`{PYTHON}`, expanded when the preset is read), so there is no pin; and its probe asks
+after Mirasim itself rather than an executable (`mirasim_presets.presence`: a host that answers -- the
+desktop port behind a token that is not blank, or the socket of a server run here over ssh -- else the
+launcher Mirasim writes under its home, `mirasim` on the login PATH or a server installed here over ssh,
+Mirasim putting its CLI on no PATH; a file a dead host left behind, token or socket, is an install and
+not a host), since the adapter runs none -- a row with Mirasim installed but not running says to open
+the app, or to let the app on another computer reach this one again.
 _Avoid_: inferring it from the command shape. An agent whose own CLI happens to ship on npm
 (`opencode-ai`) is not a shim, and fetching it would run a second copy beside the user's
 install and report the agent as present on a machine that does not have it - `_probe_acp`
@@ -3238,9 +3528,9 @@ refused, so an id names one task and one output. Compared case-folded, because a
 artifacts are files named after it and `Plan` and `plan` are one file on macOS and Windows.
 An id is claimed at dispatch and kept whatever the outcome, but referencing it needs both a
 `completed` status and an output file actually written — a task can finish having written
-nothing, which the status alone does not say. A failed, skipped, cancelled or still-running
-one — or, as a replan validating its replacement sees it, one still pending or awaiting a
-decision — keeps its id and is refused with which of those it is. A run stopped
+nothing, which the status alone does not say. A failed, skipped, cancelled, not-executed or
+still-running one — or, as a replan validating its replacement sees it, one still pending
+or awaiting a decision — keeps its id and is refused with which of those it is. A run stopped
 by `/stop` or a shutdown records its still-running nodes as `cancelled` and its pending
 ones as `skipped` on the way out, so "still-running" means what it says rather than
 outliving the run that claimed it. Distinct from an
@@ -3249,11 +3539,16 @@ _Avoid_: "node name" — the id is an address, not a label. _Avoid_: "DAG node i
 name from when only a graph could claim one.
 
 **verdict** -- the judgement on whether a finished DAG node accomplished the task
-its prompt set. Made by one constrained model call over the node's prompt, its
-output, the tail of its transcript, and one fact read off the run's transport
-rather than out of its answer -- whether the generation stopped at the model's
-output ceiling (`raven/agent/subagent/dag_verdict.py`). That fact is stated outside
-the untrusted fence the other three arrive in, because it does not come from the
+its prompt set, as changed by any follow-up it was sent after an earlier attempt
+fell short. Made by one constrained model call over the node's prompt and those
+follow-ups, its output, the tail of its transcript, and one fact read off the run's
+transport rather than out of its answer -- whether the generation stopped at the
+model's output ceiling (`raven/agent/subagent/dag_verdict.py`). The follow-ups are
+recorded beside the prompt, oldest first (`<node>.follow_ups.json`), and are part of
+the task: one that changes what the task asks for changes what is judged, and where
+two disagree the later one stands; a node never continued is judged on its prompt
+alone. The transport fact is stated outside
+the untrusted fences the rest arrive in, because it does not come from the
 text the sub-agent composed; the wording says whose report it is, since for a
 delegated agent it is that agent's own Stop Reason rather than a measurement made
 here. It explains a cut and never excuses unfinished work: `output_limit` is a
@@ -3262,7 +3557,8 @@ its absence is "not known to have been cut" and never "ran to completion". A nod
 not thereby successful; the verdict is what decides.
 _Avoid_: confusing with JudgeVerdict or Trajectory Verdict -- both name a different
 judgement (a turn's completion, an Attempt's pass/fail) made by a different
-subsystem; this one judges a single DAG node's output against its own prompt.
+subsystem; this one judges a single DAG node's output against its own prompt and
+follow-ups.
 
 **exception** (node status) -- a DAG node that did not accomplish its task and is
 waiting for the main agent to decide whether to continue, abandon, or replan it.
@@ -3272,6 +3568,71 @@ verdict said the task was not accomplished. Non-terminal: its dependents stay
 _Avoid_: it is not a synonym for a Python exception. A raised exception is only one
 of the two routes into this status, and `status[node.id] = "exception"` sits next to
 `except Exception as exc` in `_run_node` for that reason.
+
+**Decision node** (`routes` on `DagNodeSpec`, `raven/agent/subagent/dag_graph.py`):
+A node that decides where the graph goes next. `routes` maps a route name to the condition,
+in the graph author's own words, under which the node's answer selects it; the conditions
+are shown to the judge and never to the node.
+Nothing the node writes selects a route: the same constrained verdict call that judges it
+also picks the route, as a tool argument, and a selection is valid only if the judge reports
+one of the declared names, so a node that writes "route: bug" into its own answer has said
+nothing about the branch. `select` says how many an answer may take: `"one"` — exactly one,
+and what unset means once `routes` is set — or `"many"`, any number including none. A node
+may be a decision and guarded at once, which is a nested branch. Its selection is recorded
+per run (`selected_routes`, plus the judge's `route_evidence`) and read by clients beside
+the status. Where an ordinary node's judge failure or timeout reads as accomplished, a
+decision node whose route cannot be established fails ("The route could not be determined:
+..."), its output withdrawn and its dependents skipped, with no fallback route and no
+adjudication. For the same reason a graph declaring routes is refused on a host with no
+provider to judge with.
+
+**Route (DAG branch)** (a key of `routes`; `raven/agent/subagent/dag_graph.py`):
+One branch a decision node chooses between, named by the graph's author. A guard names it
+exactly as declared; the judge's report is matched to the declared names without regard to
+case and recorded under the declared spelling, which is why two names of one node may not
+differ only in case. The charset is the node id's, `^[A-Za-z0-9_-]+$`, since a route name is
+written into a guard beside a node id; `done` is reserved in any letter case because an atom
+ending in it means something else entirely; a condition cannot be blank; and the count is
+checked — at least two routes for `select: "one"`, at least one for `"many"`.
+_Avoid_: the routing-table rows of a **Routing entry** (`routes` on an agent table row,
+which pick the backend a task runs on), and the runner's unrelated `_route_available`
+(`raven/agent/subagent/dag_runner.py`), which asks whether the main agent has any way to
+call `resolve_dag_node` — neither is a branch of a graph.
+
+**Guard** (`when` on `DagNodeSpec`; `raven/agent/subagent/dag_guard.py`):
+The condition under which a node runs, as a three-valued expression over atoms
+`<node>.<route>` and `<node>.done`, combined with `not`, `and`, `or` and parentheses
+(`not` binds tightest, then `and`, then `or`; the keywords are lowercase). Parsed and
+evaluated by a hand-written parser, never `eval`. An atom may name only a decision node of
+this graph that is in the node's `depends_on`, and only a route that node declares or
+`done`; every decision node of the graph in `depends_on` must appear in the guard, since a
+node cannot depend on a decision and stay silent about it. Two guards that can never hold
+are refused at submission: two un-negated routes of one `select: "one"` node in one `and`
+chain, and `not <node>.done`. These checks preserve surrounding negation and disjunction:
+an impossible arm does not reject an `or` whose other arm can hold. The runner reads a guard
+once every dependency has settled,
+and a dependency that failed or was skipped skips the node first, whatever the guard says.
+Unknown is a value and not false: a route of a decision node that was never executed is
+unknown, so `not` over it does not hold. A blank or unset `when` is no guard.
+_Avoid_: the agent loop's guards (`NoProgressGuard`, the failure streak), which stop a call
+that keeps repeating; a Guard is a DAG node's run condition, read against what the decision
+nodes chose.
+
+**Not executed** (`not_executed`, `raven/agent/subagent/dag_runner.py`):
+A terminal node status for a node a branch left out: it was never dispatched, never took a
+concurrency slot, and wrote no output — no prompt file, no output file, no memory record.
+Distinct from `skipped`, which says something went wrong and poisons its dependents; a
+`not_executed` dependency poisons nothing, so a merge node with one input left out is not
+stopped by it and reads the fixed sentence in its place. Three reasons, recorded beside the
+status and read back as `reason`: `when_false` (the guard is false — the branch was not
+selected), `when_unknown` (the guard is unknown — a decision it names was never made), and
+`upstream_not_executed` (every dependency this node has in the graph was left out, which is
+decided before the guard and is why `<node>.done`, true whatever the decision did, cannot
+revive a node with no input left on that path). Terminal in every reader: it is never
+rewritten to `interrupted`, a replan and a stop leave it as it is, and a later run naming
+one is refused with "its branch was not selected, so it wrote no output" — the id stays
+claimed. The run's tally counts it only when there is one, so a run without branches tallies
+exactly as before.
 
 **replan** (adjudication decision; `raven/agent/subagent/dag_adjudication.py`) -- the answer
 to an exception report that replaces the plan instead of the node: the agent hands

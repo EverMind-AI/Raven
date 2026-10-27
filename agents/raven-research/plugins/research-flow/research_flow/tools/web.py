@@ -1,7 +1,7 @@
 """Web tools: ``web_search`` and ``web_fetch`` for the research flow.
 
 These replace the kernel's built-in tools of the same names. Both route through a
-vendor the deployment picks, the same seven search and five fetch backends the
+vendor the deployment picks, the same nine search and six fetch backends the
 built-ins offer, declared in :data:`SEARCH_PROVIDERS` and
 :data:`FETCH_PROVIDERS`; Serper and Jina remain the defaults and their wire
 traffic is byte-identical to what this pair has always sent. What the pair adds
@@ -191,12 +191,17 @@ class SearchProviderSpec:
 
     ``label`` is what an error line names when it must identify a vendor without
     quoting the request.
+
+    ``needs_key`` decides whether the tool may be advertised without a key:
+    Keenable searches unauthenticated (at a lower rate limit), the others refuse
+    without one.
     """
 
     vendor: str
     label: str
     env_var: str
     paginates: bool
+    needs_key: bool = True
 
 
 DEFAULT_SEARCH_PROVIDER = "serper"
@@ -263,6 +268,14 @@ SEARCH_PROVIDERS: dict[str, SearchProviderSpec] = {
         # ``start`` is a result offset like SerpApi's, so page N is start=(N-1)*num.
         paginates=True,
     ),
+    "keenable": SearchProviderSpec(
+        vendor="keenable",
+        label="Keenable",
+        env_var="KEENABLE_API_KEY",
+        # No documented result offset; ``max_results`` is honoured as asked.
+        paginates=False,
+        needs_key=False,
+    ),
 }
 
 
@@ -270,9 +283,9 @@ SEARCH_PROVIDERS: dict[str, SearchProviderSpec] = {
 class FetchProviderSpec:
     """One ``web_fetch`` backend.
 
-    ``needs_key`` decides whether the tool may be advertised at all: Jina reads
-    pages unauthenticated (at a lower rate limit), the others refuse without a
-    key. A tool that cannot run must not be registered - the model reaches for
+    ``needs_key`` decides whether the tool may be advertised at all: Jina and
+    Keenable read pages unauthenticated (at a lower rate limit), the others
+    refuse without a key. A tool that cannot run must not be registered - the model reaches for
     it, every call fails, and the error text naming a config path is relayed to
     whoever is on the other end of the channel.
 
@@ -330,6 +343,14 @@ FETCH_PROVIDERS: dict[str, FetchProviderSpec] = {
         extractor="firecrawl-scrape",
         # No anonymous tier.
         needs_key=True,
+    ),
+    "keenable": FetchProviderSpec(
+        vendor="keenable",
+        label="Keenable",
+        env_var="KEENABLE_API_KEY",
+        extractor="keenable-fetch",
+        # Reads pages without a key at a lower rate limit, like Jina.
+        needs_key=False,
     ),
 }
 
@@ -1030,7 +1051,7 @@ class WebSearchTool(Tool):
         making it one read makes them unable to disagree.
         """
         saturation = state.saturation
-        if not self.api_key:
+        if self.spec.needs_key and not self.api_key:
             return (
                 f"Error: {self.spec.label} API key not configured. Set it in "
                 '~/.raven/config.json under plugins.config["research-flow"].search.apiKey '
@@ -1245,6 +1266,18 @@ class WebSearchTool(Tool):
                 headers={"Accept": "application/json", "X-Api-Key": self.api_key},
                 timeout=10.0,
             )
+        if self.provider == "keenable":
+            # The public path answers without a key at a lower rate limit and
+            # wants the app named; a key moves the same request to the keyed path.
+            headers = {"Accept": "application/json", "Content-Type": "application/json", "X-Keenable-Title": "Raven"}
+            if key := self.api_key:
+                headers["x-api-key"] = key
+            return await client.post(
+                "https://api.keenable.ai/v1/search" if key else "https://api.keenable.ai/v1/search/public",
+                json={"query": query, "max_results": n},
+                headers=headers,
+                timeout=10.0,
+            )
         # AnySearch.
         return await client.post(
             "https://api.anysearch.com/v1/search",
@@ -1318,6 +1351,17 @@ class WebSearchTool(Tool):
         if self.provider == "serply":
             # Google SERP rows under ``results``; the snippet is ``description``.
             return {"organic": _rows(data.get("results"), url="link", snippet="description")}
+        if self.provider == "keenable":
+            # ``snippet`` is the page's own text, line breaks and all and often
+            # thousands of characters; ``description`` is empty. Collapsed and
+            # cut to the 300 characters Exa's highlights are bounded to, since
+            # ``_snippet_line`` renders whatever it is handed.
+            return {
+                "organic": [
+                    {**row, "snippet": " ".join(str(row["snippet"]).split())[:300]}
+                    for row in _rows(data.get("results"), url="url", snippet="snippet")
+                ]
+            }
         # AnySearch publishes the request shape but not the response. Parse
         # tolerantly: results may sit at the top level or inside the
         # ``{code, message, data}`` envelope its auth endpoint uses, and an item
@@ -2110,6 +2154,26 @@ class WebFetchTool(Tool):
             body = data.get("data") if isinstance(data.get("data"), dict) else {}
             if not (text := str(body.get("markdown") or "")):
                 raise _ProviderPageError("Firecrawl returned no page content")
+            return text, r.status_code
+
+        if self.provider == "keenable":
+            # Keyless on the public path, as for search; a key moves it to the keyed one.
+            headers = {"Accept": "application/json", "X-Keenable-Title": "Raven"}
+            if key := self.api_key:
+                headers["x-api-key"] = key
+
+            async def _send_keenable() -> httpx.Response:
+                async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
+                    return await client.get(
+                        "https://api.keenable.ai/v1/fetch" if key else "https://api.keenable.ai/v1/fetch/public",
+                        params={"url": url},
+                        headers=headers,
+                    )
+
+            r = await _send_with_retry(_send_keenable, op="fetch_retry", key=url, budget=budget)
+            data = r.json()
+            if not isinstance(data, dict) or not (text := str(data.get("content") or "")):
+                raise _ProviderPageError("Keenable returned no page content")
             return text, r.status_code
 
         # AnySearch. No cache-bust header is published, so the garbled-page

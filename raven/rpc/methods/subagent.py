@@ -50,6 +50,7 @@ from raven.agent.subagent.dag_store import REGISTRY_FILENAME
 from raven.agent.subagent.history import dag_root, nodes_root, session_history_root, spawn_live_key
 from raven.agent.subagent.instances import get_registry
 from raven.agent.subagent.tool_vocabulary import normalize_row
+from raven.config.agent_names import canonical_agent_name
 from raven.config.loader import load_config
 from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods.session import _map_to_wire, _safe_invoke_factory
@@ -130,7 +131,10 @@ def _spawn_node_ids(session_dir: Path) -> list[str]:
 
 
 def _read_meta(files: _NodeFiles) -> dict[str, Any]:
-    return _read_json(files.path("meta.json"))
+    meta = _read_json(files.path("meta.json"))
+    if isinstance(meta.get("agent"), str):
+        meta["agent"] = canonical_agent_name(meta["agent"])
+    return meta
 
 
 def _outcome(files: _NodeFiles) -> tuple[str | None, bool]:
@@ -240,7 +244,9 @@ def _root_for(session_id: str, agent_loop_factory: "AgentLoopFactory | None") ->
 
 # `manifest.json` statuses, on the left, and what a client renders on the right.
 # A node that never ran reads as queued rather than as running: the graph knows
-# the difference and so should the list.
+# the difference and so should the list. `not_executed` has no entry on purpose:
+# `_dag_rows` drops its row before this table is consulted, so an unmapped value
+# -- which would read as `run` -- is never reached.
 _DAG_WIRE_STATUS = {
     "pending": "queued",
     "running": "run",
@@ -322,11 +328,14 @@ def _dag_rows(root: Path, session_id: str, live_runs: set[str]) -> list[dict[str
             # clock -- a row for it pads the list with entries that open onto
             # nothing. The graph view still shows it, where "skipped because
             # its upstream failed" is legible structure rather than noise. A
-            # cancelled node is the opposite case: it ran, so its row opens
-            # onto a real transcript and stays.
-            if status == "skipped":
+            # not-executed node is the same: a branch that was not taken never
+            # called a sub-agent, and the stamps it carries only date the
+            # moment that was decided. A cancelled node is the opposite case:
+            # it ran, so its row opens onto a real transcript and stays.
+            if status in ("skipped", "not_executed"):
                 continue
             tools = entry.get("tool_calls")
+            agent = entry.get("subagent") or node.get("subagent")
             rows.append(
                 {
                     # Not addressable by `id` alone -- a node id is unique inside
@@ -338,7 +347,7 @@ def _dag_rows(root: Path, session_id: str, live_runs: set[str]) -> list[dict[str
                     "node": nid,
                     "label": str(node.get("node_summary") or "") or nid,
                     "status": _DAG_WIRE_STATUS.get(status, "run"),
-                    "agent": entry.get("subagent") or node.get("subagent"),
+                    "agent": canonical_agent_name(agent) if isinstance(agent, str) else agent,
                     "instance": entry.get("instance", node.get("instance")),
                     "started_at": _iso(entry.get("started_at")),
                     "ended_at": _iso(entry.get("ended_at")),

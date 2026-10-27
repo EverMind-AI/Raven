@@ -165,11 +165,53 @@ async def test_no_receiver_means_no_report(tmp_path, monkeypatch):
     assert (await _call(_dispatcher(), "bugreport.start", _start_params(["trace-a"])))["error"]["code"] == -32026
 
 
+async def test_the_probe_reports_a_reachable_receiver(tmp_path, monkeypatch):
+    from aiohttp.test_utils import TestServer
+
+    from raven.trajectory import receiver as rcv
+    from tests.bug_report_receiver_stub import clear_proxy_env
+
+    clear_proxy_env(monkeypatch)
+    server = TestServer(rcv.build_app(rcv.ReceiverConfig(save_dir=tmp_path / "inbox")))
+    await server.start_server(**rcv.RUNNER_OPTIONS)
+    url = f"http://{server.host}:{server.port}"
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", url)
+    try:
+        response = await _call(_dispatcher(), "bugreport.probe", {})
+    finally:
+        await server.close()
+    assert response["result"] == {"reachable": True, "target": url, "reason": ""}
+
+
+async def test_the_probe_reports_an_unreachable_receiver_as_an_answer(monkeypatch):
+    import socket
+
+    from tests.bug_report_receiver_stub import clear_proxy_env
+
+    clear_proxy_env(monkeypatch)
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    url = f"http://127.0.0.1:{sock.getsockname()[1]}"
+    sock.close()
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", url)
+    response = await _call(_dispatcher(), "bugreport.probe", {})
+    assert "error" not in response
+    result = response["result"]
+    assert result["reachable"] is False and result["target"] == url
+    assert "could not reach" in result["reason"]
+
+
+async def test_the_probe_needs_a_receiver(monkeypatch):
+    monkeypatch.delenv("RAVEN_BUGREPORT_URL")
+    assert (await _call(_dispatcher(), "bugreport.probe", {}))["error"]["code"] == -32026
+
+
 async def test_the_policy_off_refuses_every_method(tmp_path):
     tpol.arm(False)
     dispatcher = _dispatcher()
     assert (await _call(dispatcher, "bugreport.start", _start_params(["trace-a"])))["error"]["code"] == -32020
     for method, params in (
+        ("bugreport.probe", {}),
         ("bugreport.status", {"report_id": "x"}),
         ("bugreport.item", {"report_id": "x", "item_id": "y"}),
         ("bugreport.decide", {"report_id": "x", "decisions": [], "acknowledged": []}),

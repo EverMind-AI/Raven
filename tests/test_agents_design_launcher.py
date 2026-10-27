@@ -61,7 +61,11 @@ ENGINE_TOOLS = {"preview_file", "render_file", "update_task_state"}
 UNGATED = {"ask_user", "find_skill", "tool_call", "tool_search"}
 
 #: The host image section makes image_generate available in the grounded render.
-VENDORED_TOOL_FACE = FORK_CONFIG_INTENT | ENGINE_TOOLS | UNGATED | {"image_generate"}
+#: Trunk serves ``context_retrieve`` beside the default compacting history
+#: strategy, so the refs that strategy leaves in the window can be read back.
+TRUNK_HISTORY = {"context_retrieve"}
+
+VENDORED_TOOL_FACE = FORK_CONFIG_INTENT | ENGINE_TOOLS | UNGATED | {"image_generate"} | TRUNK_HISTORY
 #: Both ride the same vendor key: `image_search` is what a real logo, product
 #: shot or photograph of a real place is found with, and the lane registers it
 #: exactly when it registers `web_search`.
@@ -135,8 +139,8 @@ def test_the_roster_row_carries_the_forks_identity_verbatim():
     """The lane flips cli -> acp (the verdict's feature 10); the fork row's
     identity pair -- name, everos, output cap, timeout -- is carried
     byte-for-byte. Its description and owns are not: those two are rendered
-    three times a turn (the spawn and DAG tool descriptions, and the skill
-    gate), so this row states capability and role and leaves procedure to the
+    twice a turn (the roster at the end of the spawn tool's description, and the
+    skill gate), so this row states capability and role and leaves procedure to the
     engine's Skills. The fork's recommendedLlm is dropped as well: this product
     runs on the host's LLM and its launcher reads no key of its own, and a
     recommended model in the manifest is what told the wizard to take one and

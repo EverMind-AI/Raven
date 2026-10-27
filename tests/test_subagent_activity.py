@@ -5,9 +5,22 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from raven.agent.subagent import activity
+from raven.config.agent_names import GENERIC_AGENT
 
 KEY = ("s1", "Raven-Research-NG", "raven-research-ng-b3b872")
+
+
+@pytest.mark.parametrize("former", ["Raven", "raven"])
+def test_aliases_watch_the_same_live_instance_without_displacing_it(former):
+    with activity.collecting(instance=("s1", former, "h1")) as answering:
+        assert activity.live_instance("s1", GENERIC_AGENT, "h1") is answering
+        with activity.collecting(instance=("s1", GENERIC_AGENT, "h1")):
+            assert activity.live_instance("s1", former, "h1") is answering
+        assert activity.live_instance("s1", GENERIC_AGENT, "h1") is answering
+    assert activity.live_instance("s1", former, "h1") is None
 
 
 def test_the_first_lane_to_register_keeps_the_instance_slot():

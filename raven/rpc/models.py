@@ -253,7 +253,11 @@ class InstanceRow(_Strict):
 
     ``runId`` / ``nodeId`` name the DAG node an instance belongs to. They are on
     a ``dag-node`` row and also on the ordinary row of a stateful node, which is
-    what lets one invocation's two rows be reported as one.
+    what lets one invocation's two rows be reported as one. What a branch decided
+    about that node travels the same way: ``selectedRoutes`` / ``routeEvidence``
+    are on a decision node's ``dag-node`` row and on the ordinary row a stateful
+    node is reported on, and ``reason`` is on the ``dag-node`` row of a node that
+    was not executed.
 
     ``resumable`` is the exception to "verbatim": the registry does not store it,
     because whether a row can be talked to depends on the agent's configured
@@ -272,6 +276,28 @@ class InstanceRow(_Strict):
     agent_id: str | None = Field(default=None, alias="agentId")
     run_id: str | None = Field(default=None, alias="runId")
     node_id: str | None = Field(default=None, alias="nodeId")
+    reason: DagNotExecutedReason | None = Field(
+        default=None,
+        description="Why the node did not execute. Present only on the dag-node row of a node that was not executed.",
+    )
+    selected_routes: list[str] | None = Field(
+        default=None,
+        alias="selectedRoutes",
+        description=(
+            "The routes a decision node selected. An empty list is a decision that chose nothing, which a "
+            "'many' selection may. Present only on the row of a DAG node a branch decided: its dag-node "
+            "row, or the ordinary row a stateful node is reported on."
+        ),
+    )
+    route_evidence: str | None = Field(
+        default=None,
+        alias="routeEvidence",
+        description=(
+            "The judge's supporting quote for the selection, at most 500 characters. Present only when the "
+            "judge gave one, and only on the row of a DAG node a branch decided: its dag-node row, or the "
+            "ordinary row a stateful node is reported on."
+        ),
+    )
     created_at_ms: int | None = Field(default=None, alias="createdAtMs")
     updated_at_ms: int | None = Field(default=None, alias="updatedAtMs")
     resumable: bool | None = None
@@ -472,9 +498,8 @@ class TurnStartedDelegated(_Strict):
     node_id: str | None = Field(
         None,
         description=(
-            "Which node of the run this is about. Present only on `kind: dag` "
-            "with `status: exception`, where the report concerns one node rather "
-            "than the whole run."
+            "Which node of the run this is about. Present only on a `kind: dag` "
+            "node's own report, which concerns one node rather than the whole run."
         ),
     )
     content: str | None = Field(
@@ -482,7 +507,24 @@ class TurnStartedDelegated(_Strict):
         description=(
             "The text that re-entered the conversation, verbatim; a client shows "
             "the reader-facing part of it by keeping only what sits INSIDE the "
-            "untrusted fence."
+            "untrusted fence, or `output` instead where a node's report carries it."
+        ),
+    )
+    output: str | None = Field(
+        None,
+        description=(
+            "What a dag node itself returned on the attempt its report is about -- its error, "
+            "when it raised -- carried for the reader beside the report the model was given. "
+            "Set only on a node's own report, and present even when empty: an empty string is "
+            "a node that said nothing, an absent one a report about no attempt (a stall notice) "
+            "or a server that never sent it."
+        ),
+    )
+    output_truncated: bool | None = Field(
+        default=None,
+        description=(
+            "Whether output is limited to the first 20,000 characters. "
+            "Separate from the node's text; absent on older records and reports without output."
         ),
     )
 
@@ -830,9 +872,27 @@ class SubagentDeliveredPayload(_Strict):
         description=(
             "The text that re-entered the conversation, verbatim. A client shows the "
             "reader-facing part of it by keeping only what sits INSIDE the untrusted "
-            "fence -- and a client replaying this turn later reads the same string from "
+            "fence, or `output` instead where a node's report carries it -- and a client "
+            "replaying this turn later reads the same string from "
             "the stored entry's `text`, so one rule over one input keeps the live view "
             "and the reloaded one from disagreeing about what was delivered."
+        ),
+    )
+    output: str | None = Field(
+        default=None,
+        description=(
+            "What a dag node itself returned on the attempt its report is about -- its error, "
+            "when it raised -- carried for the reader beside the report the model was given. "
+            "Set only on a node's own report, and present even when empty: an empty string is "
+            "a node that said nothing, an absent one a report about no attempt (a stall notice) "
+            "or a server that never sent it."
+        ),
+    )
+    output_truncated: bool | None = Field(
+        default=None,
+        description=(
+            "Whether output is limited to the first 20,000 characters. "
+            "Separate from the node's text; absent on older records and reports without output."
         ),
     )
 
@@ -899,7 +959,11 @@ class SubagentStatusEvent(_Strict):
     payload: SubagentStatusPayload
 
 
-DagNodeStatus = Literal["pending", "running", "completed", "failed", "skipped", "cancelled", "exception"]
+DagNodeStatus = Literal[
+    "pending", "running", "completed", "failed", "skipped", "cancelled", "exception", "not_executed"
+]
+
+DagNotExecutedReason = Literal["when_false", "when_unknown", "upstream_not_executed"]
 
 
 class _FromAStint(_Strict):
@@ -936,6 +1000,27 @@ class DagRunStartedNode(_Strict):
     depends_on: list[str]
     instance: str | None = None
     node_summary: str | None = None
+    routes: list[str] | None = Field(
+        default=None,
+        description=(
+            "The route names a decision node chooses between, in declaration order; only the judge sees "
+            "their conditions. Absent on a node that decides nothing."
+        ),
+    )
+    select: Literal["one", "many"] | None = Field(
+        default=None,
+        description=(
+            "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). "
+            "Always sent with routes, 'one' where the graph left it unset."
+        ),
+    )
+    when: str | None = Field(
+        default=None,
+        description=(
+            "The guard: this node runs only if the expression holds once its dependencies settle. "
+            "Absent on a node with no guard."
+        ),
+    )
 
 
 class DagRunStartedPayload(_FromAStint):
@@ -963,6 +1048,22 @@ class DagNodeUpdatedPayload(_FromAStint):
     status: DagNodeStatus
     started_at: int | None = None
     ended_at: int | None = None
+    reason: DagNotExecutedReason | None = Field(
+        default=None,
+        description="Why the node did not execute. Sent only with status not_executed.",
+    )
+    selected_routes: list[str] | None = Field(
+        default=None,
+        description=(
+            "The routes a decision node selected, on the frame that finishes it. An empty list is a decision "
+            "that chose nothing, which a 'many' selection may. Absent on every other frame, and when the node "
+            "failed to decide."
+        ),
+    )
+    route_evidence: str | None = Field(
+        default=None,
+        description="The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.",
+    )
 
 
 class DagNodeUpdatedEvent(_Strict):
@@ -1004,13 +1105,40 @@ class DagRunSummary(_Strict):
     failed: int | None = None
     skipped: int | None = None
     cancelled: int | None = None
+    not_executed: int | None = Field(
+        default=None,
+        description=(
+            "Nodes a branch left out. Present only when there is at least one, so a run that never "
+            "branches carries the five counts it always did."
+        ),
+    )
 
 
 class DagRunFile(_Strict):
+    """One node of a finished run, as the completion frame closes the graph from it.
+
+    The reason and the selection repeat what the node's own frame said: a client
+    that settles every node from this list would otherwise overwrite them."""
+
     node: str
     status: DagNodeStatus
     output_file: str | None = None
     error: str | None = None
+    reason: DagNotExecutedReason | None = Field(
+        default=None,
+        description="Why the node did not execute. Sent only with status not_executed.",
+    )
+    selected_routes: list[str] | None = Field(
+        default=None,
+        description=(
+            "The routes a decision node selected. An empty list is a decision that chose nothing, which a "
+            "'many' selection may. Absent on a node that decides nothing, and on one that failed to decide."
+        ),
+    )
+    route_evidence: str | None = Field(
+        default=None,
+        description="The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.",
+    )
 
 
 class DagRunCompletedPayload(_FromAStint):
@@ -1034,7 +1162,7 @@ class DagRunCompletedEvent(_Strict):
 # server infers for a node the registry still calls running on a run nothing is
 # executing. Nothing on the event wire may claim that.
 DagSnapshotNodeStatus = Literal[
-    "pending", "running", "completed", "failed", "skipped", "cancelled", "interrupted", "exception"
+    "pending", "running", "completed", "failed", "skipped", "cancelled", "interrupted", "exception", "not_executed"
 ]
 
 
@@ -1056,6 +1184,45 @@ class DagSnapshotNode(_Strict):
         description=(
             "What this node was handed, per key: a literal string, {file: path}, or {node: id}. "
             "The other half of prompt_template -- a template's {{ inputs.k }} does not say where k came from."
+        ),
+    )
+    reason: DagNotExecutedReason | None = Field(
+        default=None,
+        description="Why the node did not execute. Present only with status not_executed.",
+    )
+    selected_routes: list[str] | None = Field(
+        default=None,
+        description=(
+            "The routes a decision node selected. An empty list is a decision that chose nothing, which a "
+            "'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, "
+            "and on one that failed to decide."
+        ),
+    )
+    route_evidence: str | None = Field(
+        default=None,
+        description=(
+            "The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none."
+        ),
+    )
+    routes: list[str] | None = Field(
+        default=None,
+        description=(
+            "The route names a decision node chooses between, in declaration order; only the judge sees "
+            "their conditions. Absent on a node that decides nothing."
+        ),
+    )
+    select: Literal["one", "many"] | None = Field(
+        default=None,
+        description=(
+            "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). "
+            "Always sent with routes, 'one' where the graph left it unset."
+        ),
+    )
+    when: str | None = Field(
+        default=None,
+        description=(
+            "The guard: this node runs only if the expression holds once its dependencies settle. "
+            "Absent on a node with no guard."
         ),
     )
 
@@ -1159,6 +1326,13 @@ class TaskCounts(_Strict):
             "is waiting on a decision, not working."
         ),
     )
+    not_executed: int = Field(
+        ...,
+        description=(
+            "Nodes a branch left out. They never ran, and an unselected branch does not move the task's "
+            "status: a run of completed and not_executed nodes is completed."
+        ),
+    )
 
 
 class TaskReplan(_Strict):
@@ -1206,6 +1380,45 @@ class TaskNode(_Strict):
     inputs: dict[str, Any] | None = None
     skills: list[str] | None = None
     mcps: list[str] | None = None
+    reason: DagNotExecutedReason | None = Field(
+        default=None,
+        description="Why the node did not execute. Present only with status not_executed.",
+    )
+    selected_routes: list[str] | None = Field(
+        default=None,
+        description=(
+            "The routes a decision node selected. An empty list is a decision that chose nothing, which a "
+            "'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, "
+            "and on one that failed to decide."
+        ),
+    )
+    route_evidence: str | None = Field(
+        default=None,
+        description=(
+            "The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none."
+        ),
+    )
+    routes: list[str] | None = Field(
+        default=None,
+        description=(
+            "The route names a decision node chooses between, in declaration order; only the judge sees "
+            "their conditions. Absent on a node that decides nothing."
+        ),
+    )
+    select: Literal["one", "many"] | None = Field(
+        default=None,
+        description=(
+            "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). "
+            "Always sent with routes, 'one' where the graph left it unset."
+        ),
+    )
+    when: str | None = Field(
+        default=None,
+        description=(
+            "The guard: this node runs only if the expression holds once its dependencies settle. "
+            "Absent on a node with no guard."
+        ),
+    )
     files: list[TaskFile]
 
 
@@ -1753,10 +1966,24 @@ class TurnCancelParams(_Strict):
     # handler looks up a key nothing was ever registered under and reports
     # "nothing to cancel" for a turn that is plainly running.
     target: DirectTarget | None = None
+    # The turn to cancel, by the id its opening frame carried. Present, the
+    # cancel reaches the lane's running turn only when that turn has this id,
+    # whoever opened it -- the one way to stop a turn the runtime opened (a
+    # delegated result re-entering), which binds no handle. Absent, the cancel
+    # reaches only what this surface bound: a turn.send turn or a pending inject.
+    turn_id: str | None = None
 
 
 class TurnCancelResult(_Strict):
     cancelled: bool
+    # Only on a refusal: whether the lane still has a turn to run -- the one
+    # that replaced the turn named, one queued, or a message waiting to run as
+    # a turn of its own. A client cannot learn it from the frames in time: the
+    # reply goes out as soon as the handler returns, while the frame opening a
+    # turn that has just started can still be waiting out the subscription's
+    # coalescing window. Absent from an accepted cancel, and from an older
+    # server, which is why it is optional.
+    busy: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1909,6 +2136,8 @@ class ModelOptionProvider(_Strict):
     #: The registry's ``image_api``: the image tool can run on this provider's
     #: address and key. The roles card offers the image role these providers.
     image_api: bool = False
+    #: The registry's ``video_api``, the same answer for the video tool.
+    video_api: bool = False
     #: Every model-id prefix that names this provider: its own name plus the
     #: ones it used to answer to (``ProviderSpec.route_names``). A client
     #: comparing two spellings of one model has to strip any of them, the way
@@ -1924,6 +2153,7 @@ class ModelOptionProvider(_Strict):
 
 class ModelOptionsParams(_Strict):
     session_id: str | None = None
+    include_providers: bool = True
 
 
 class ModelOptionsResult(_Strict):
@@ -2675,6 +2905,34 @@ class SubagentsListResult(_Strict):
     rows: list[SubagentRow]
 
 
+class SubagentsPresetsParams(_Strict):
+    pass
+
+
+class PresetChoice(_Strict):
+    """One preset as the machines tab's connect form offers it: what it is, and where an entry of it already runs."""
+
+    preset: str
+    name: str
+    kind: Literal["acp", "cli"]
+    description: str
+    connected_here: bool
+    """Whether an entry of this preset runs on this computer; one on a machine is a second entry, not a conflict."""
+    on_machines: list[str]
+    """The registered machines (ids) a connected entry of this preset runs on."""
+    off_on_machines: list[PresetOffEntry]
+    """The machines where an entry of this preset exists but is switched off, with that entry's name: it still holds the machine for the add, and is what the form offers to switch back on."""
+
+
+class PresetOffEntry(_Strict):
+    machine: str
+    name: str
+
+
+class SubagentsPresetsResult(_Strict):
+    presets: list[PresetChoice]
+
+
 class SubagentsAddParams(_Strict):
     preset: str
     name: str | None = None
@@ -2695,8 +2953,9 @@ class SubagentsAddParams(_Strict):
         description=(
             "A registered machine, by its id in the machine registry: an acp or cli preset's command is started "
             "there by the machine's Raven node and signed in there; an openai preset's endpoint is reached from "
-            "that machine through an ssh tunnel. The row's name defaults to <preset>@<machine>. Refused for a "
-            "built-in agent, and unless the machine is registered and usable."
+            "that machine through an ssh tunnel. The row's name defaults to <preset>@<machine>, and under that default a "
+            "preset the machine already has is refused, naming the entry there (give `name` to add a second one on "
+            "purpose). Refused for a built-in agent, and unless the machine is registered and usable."
         ),
     )
     remote_cwd: str | None = Field(
@@ -2838,9 +3097,16 @@ class MachineRow(_Strict):
     """Live while a link is up, else as recorded at the last install or contact; None when none is known."""
     node_current: bool
     """Whether that node is this Raven's own code, which a dispatch there needs."""
+    auth: Literal["key", "password"] | None = None
+    """How this computer logs in to an ssh row: with the key whose path the row carries, or with the password kept
+    here for it. Absent for a local row."""
     install: MachineInstall
     paths: list[str]
     problems: list[str]
+    agents_here: list[str]
+    """The connected agent entries that run on the machine, by name; what tells a reader the next step is on the agents side."""
+    agents_off_here: list[str]
+    """The agent entries on the machine that are switched off, by name: they still hold the machine for the add, so the card says so instead of counting them nowhere."""
 
 
 class MachinesListParams(_Strict):
@@ -2858,14 +3124,44 @@ class MachinesAddParams(_Strict):
     host: str
     port: int | None = None
     user: str
-    key: str
+    auth: Literal["key", "password"] | None = Field(
+        default=None,
+        description=(
+            "How Raven logs in: `key` (the default; `key` names the private key's path) or `password` (`password` "
+            "is kept here and used on every connection; such a row gets no ssh alias)."
+        ),
+    )
+    key: str | None = Field(
+        default=None,
+        description="Path to the private key on this computer; the path is stored, never the key. Required with auth `key`.",
+    )
+    password: str | None = Field(
+        default=None,
+        description=(
+            "The account's password, with auth `password`: kept on this computer for Raven's own logins, readable by "
+            "the owner alone and used on every connection; never in the registry, a log or an answer. Not offered on "
+            "Windows."
+        ),
+    )
     paths: list[str] | None = None
 
 
 class MachinesAddResult(_Strict):
     ok: bool
     detail: str
-    reason: Literal["", "unreachable", "login", "hostkey", "timeout", "nossh", "duplicate", "invalid", "registry"]
+    reason: Literal[
+        "",
+        "unreachable",
+        "login",
+        "prompt",
+        "hostkey",
+        "timeout",
+        "nossh",
+        "platform",
+        "duplicate",
+        "invalid",
+        "registry",
+    ]
     row: MachineRow | None = None
 
 
@@ -2902,6 +3198,15 @@ class MachinesRemoveResult(_Strict):
     removed: bool
     detail: str
     agents: list[str]
+
+
+class MachinesLocalKeysParams(_Strict):
+    pass
+
+
+class MachinesLocalKeysResult(_Strict):
+    keys: list[str]
+    """Private keys on this computer the register form proposes, as `~/.ssh/<name>` paths, ssh's own defaults first."""
 
 
 # ---------------------------------------------------------------------------
@@ -3546,6 +3851,23 @@ class TranscriptDelegated(_Strict):
         default=None,
         description="Set for a dag node's own message, so a client can place it against that row.",
     )
+    output: str | None = Field(
+        default=None,
+        description=(
+            "What a dag node itself returned on the attempt its report is about -- its error, "
+            "when it raised -- carried for the reader beside the report the model was given. "
+            "Set only on a node's own report, and present even when empty: an empty string is "
+            "a node that said nothing, an absent one a report about no attempt (a stall notice) "
+            "or a server that never sent it."
+        ),
+    )
+    output_truncated: bool | None = Field(
+        default=None,
+        description=(
+            "Whether output is limited to the first 20,000 characters. "
+            "Separate from the node's text; absent on older records and reports without output."
+        ),
+    )
 
 
 class TranscriptFileRemoval(_Strict):
@@ -3649,7 +3971,8 @@ class TranscriptMessage(_Strict):
             "re-entering the conversation. Same rule as `notice` and for the same "
             "reason -- the model reads `text`, a reader must not. Render the delivery "
             "row a live client draws from `subagent.delivered`, and take the readable "
-            "body from inside the untrusted fence in `text`; drawing `text` as prose "
+            "body from inside the untrusted fence in `text`, or from `delegated.output` "
+            "where a node's report carries it; drawing `text` as prose "
             "attributes to the user a question they never asked, fence markers "
             "included. `origin` names who opened the turn; this says which run came back."
         ),
@@ -4203,6 +4526,14 @@ class FsDirsResult(_Strict):
     parent: str | None = Field(..., description="One level up; null at the filesystem root.")
     home: str = Field(..., description="The user's home directory, where the browser starts.")
     ok: bool = Field(..., description="Whether the listed directory itself may be a session's working directory.")
+    roots: list[FsDirEntry] = Field(
+        default_factory=list,
+        description=(
+            "The filesystem roots, listed only while the directory listed is one: a root has no parent, "
+            "so on a host with several (Windows drives) they are reachable no other way. Every drive is "
+            "listed, the one the browser stands on included, each judged as a folder row is."
+        ),
+    )
     entries: list[FsDirEntry] = Field(
         ..., description="Subdirectories only, dotfiles omitted, sorted by name; at most the first 500 found."
     )
@@ -5492,7 +5823,8 @@ class PlaybookNode(_Strict):
     three are the fields an author may leave blank for the caller to fill at run
     time. ``skills`` / ``mcps`` are three-state -- null means the author said
     nothing, ``[]`` means the author wrote an empty list, and a list names what
-    to consider."""
+    to consider. ``routes`` / ``select`` / ``when`` declare a branch and are
+    absent unless the author wrote them."""
 
     id: str
     subagent: str
@@ -5503,6 +5835,21 @@ class PlaybookNode(_Strict):
     mcps: list[str] | None = None
     instance: str
     inputs: dict[str, Any]
+    routes: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "Makes this node a decision: route name -> the condition, in plain words, under which its "
+            "answer selects that route. Kept whole, because re-running the graph judges against the conditions."
+        ),
+    )
+    select: Literal["one", "many"] | None = Field(
+        default=None,
+        description="How many routes the decision selects, as the author wrote it. Absent means 'one'.",
+    )
+    when: str | None = Field(
+        default=None,
+        description="The guard, as the author wrote it: this node runs only if it holds once its dependencies settle.",
+    )
 
 
 class PlaybookRole(_Strict):
@@ -6152,6 +6499,9 @@ class TrajectoryEntry(_Strict):
     turn_number: int | None = None
     turn_start: bool
     origin: TrajectoryOrigin
+    subagent_scope: str | None = None
+    opens_subagent_scope: str | None = None
+    dispatched_by_subagent_scope: str | None = None
     sort_key: list[JsonValue]
     event_time: str
     preview: str | None = None
@@ -6330,6 +6680,16 @@ class BugReportProblem(_Strict):
     severity: Literal["", "low", "medium", "high", "critical"] = ""
     steps: str = ""
     reporter: str = ""
+
+
+class BugReportProbeParams(_StrictParams):
+    pass
+
+
+class BugReportProbeResult(_Strict):
+    reachable: bool
+    target: str
+    reason: str
 
 
 class BugReportStartParams(_StrictParams):
@@ -6629,6 +6989,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "trajectory.export_status": (TrajectoryExportStatusParams, TrajectoryExportStatusResult),
     "trajectory.export_cancel": (TrajectoryExportCancelParams, TrajectoryExportCancelResult),
     # bugreport.* -- the web page's bug report, held as a Report Session
+    "bugreport.probe": (BugReportProbeParams, BugReportProbeResult),
     "bugreport.start": (BugReportStartParams, BugReportStartResult),
     "bugreport.status": (BugReportStatusParams, BugReportStatusResult),
     "bugreport.item": (BugReportItemParams, BugReportItemResult),
@@ -6688,6 +7049,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "subagent.context": (SubagentContextParams, SubagentContextResult),
     # subagents.*
     "subagents.list": (SubagentsListParams, SubagentsListResult),
+    "subagents.presets": (SubagentsPresetsParams, SubagentsPresetsResult),
     "subagents.add": (SubagentsAddParams, SubagentsAddResult),
     "subagents.update": (SubagentsUpdateParams, SubagentsUpdateResult),
     "subagents.remove": (SubagentsRemoveParams, SubagentsRemoveResult),
@@ -6701,6 +7063,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "machines.install_node": (MachinesInstallNodeParams, MachinesInstallNodeResult),
     "machines.doctor": (MachinesDoctorParams, MachinesDoctorResult),
     "machines.remove": (MachinesRemoveParams, MachinesRemoveResult),
+    "machines.local_keys": (MachinesLocalKeysParams, MachinesLocalKeysResult),
     # subagents.instance*
     "subagents.instances": (SubagentsInstancesParams, SubagentsInstancesResult),
     "subagents.instance.create": (SubagentsInstanceCreateParams, SubagentsInstanceCreateResult),

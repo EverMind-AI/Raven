@@ -851,9 +851,13 @@ class WeixinChannel(ChannelBase):
             if text:
                 for chunk in split_message(text, p.MAX_MESSAGE_LEN):
                     await self._send_text(chat_id, chunk, ctx_token)
-        except Exception:
+        except Exception as e:
             logger.exception("Error sending message")
-            raise
+            # Only a transient failure goes back to the hub, which retries by
+            # replaying this whole send: a refusal would come back the same, with
+            # every part before it delivered again (raven.channels.errors).
+            if retryable_http(e):
+                raise
         finally:
             await self._typing.stop(chat_id, clear_remote=True)
 
@@ -888,11 +892,18 @@ class WeixinChannel(ChannelBase):
             msg["context_token"] = ctx_token
         return msg
 
+    def _raise_send_failure(self, data: dict, what: str) -> None:
+        """Raise unless the sendmessage verdict says delivered. iLink can fail
+        a send with a non-zero `ret` while `errcode` stays 0, so both are read
+        -- the same verdict `_poll_once` applies to its own answers."""
+        ret, errcode = data.get("ret", 0), data.get("errcode", 0)
+        if ret or errcode:
+            raise RuntimeError(f"WeChat send {what} error (ret={ret} errcode={errcode}): {data.get('errmsg', '')}")
+
     async def _send_text(self, to_user: str, text: str, ctx_token: str) -> None:
         item_list = [{"type": p.ITEM_TEXT, "text_item": {"text": text}}] if text else []
         data = await self._post("ilink/bot/sendmessage", {"msg": self._bot_msg(to_user, ctx_token, item_list)})
-        if errcode := data.get("errcode", 0):
-            raise RuntimeError(f"WeChat send text error (code {errcode}): {data.get('errmsg', '')}")
+        self._raise_send_failure(data, "text")
 
     async def _send_media_file(self, to_user: str, media_path: str, ctx_token: str) -> None:
         """Upload to the iLink CDN (AES-encrypted) and send it as a media message."""
@@ -964,5 +975,4 @@ class WeixinChannel(ChannelBase):
 
         item_list = [{"type": item_type, item_key: media_item}]
         data = await self._post("ilink/bot/sendmessage", {"msg": self._bot_msg(to_user, ctx_token, item_list)})
-        if errcode := data.get("errcode", 0):
-            raise RuntimeError(f"WeChat send media error (code {errcode}): {data.get('errmsg', '')}")
+        self._raise_send_failure(data, "media")

@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+
+import pytest
 
 from raven.agent.subagent.instance_log import (
     append_turn,
     build_turn,
+    instance_root,
     instance_title,
     open_instance_log,
     transcript_path,
 )
+from raven.config.agent_names import GENERIC_AGENT
 
 
 def test_turn_is_prompt_then_work_then_answer() -> None:
@@ -112,3 +117,48 @@ def test_an_unnamed_instance_still_opens(tmp_path: Path) -> None:
 
     assert transcript_path(tmp_path, "Coder", "h1").is_file()
     assert instance_title(tmp_path, "Coder", "h1") == ""
+
+
+def test_an_instance_logged_under_a_former_name_keeps_its_file(tmp_path: Path) -> None:
+    """The generic agent was renamed without moving the logs written before. A
+    continued instance appends where its earlier turns are, rather than opening a
+    second file under the new name that the viewer would show as a new instance."""
+    legacy = instance_root(tmp_path, "Raven") / "h1.jsonl"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(json.dumps({"_type": "metadata", "metadata": {"title": "Draft"}}) + "\n", encoding="utf-8")
+
+    assert transcript_path(tmp_path, GENERIC_AGENT, "h1") == legacy
+
+    append_turn(tmp_path, agent=GENERIC_AGENT, handle="h1", session_key="s1", kind="spawn", prompt="go", answer="ok")
+    assert not instance_root(tmp_path, GENERIC_AGENT).exists()
+    assert "ok" in legacy.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("latest", ["raven", "Raven"])
+def test_two_legacy_transcripts_choose_the_latest_write_for_every_alias(tmp_path: Path, latest: str) -> None:
+    older = instance_root(tmp_path, "raven") / "h1.jsonl"
+    newer = instance_root(tmp_path, "Raven") / "h1.jsonl"
+    older.parent.mkdir(parents=True)
+    newer.parent.mkdir(parents=True, exist_ok=True)
+    if older.parent.samefile(newer.parent):
+        pytest.skip("Two casing generations require a case-sensitive filesystem")
+    for path, title in ((older, "Older"), (newer, "Newer")):
+        path.write_text(json.dumps({"_type": "metadata", "metadata": {"title": title}}) + "\n", encoding="utf-8")
+    chosen = older if latest == "raven" else newer
+    other = newer if latest == "raven" else older
+    for path in (older, newer):
+        stamp = 2_000_000_000 if path == chosen else 1_000_000_000
+        os.utime(path, ns=(stamp, stamp))
+
+    for name in (GENERIC_AGENT, "Raven", "raven"):
+        assert transcript_path(tmp_path, name, "h1") == chosen
+        assert instance_title(tmp_path, name, "h1") == ("Older" if latest == "raven" else "Newer")
+        append_turn(tmp_path, agent=name, handle="h1", session_key="s1", answer=name)
+    assert len(chosen.read_text(encoding="utf-8").splitlines()) == 4
+    assert len(other.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_a_new_instance_is_logged_under_the_current_name(tmp_path: Path) -> None:
+    open_instance_log(tmp_path, agent="Raven", handle="old", session_key="s1", kind="spawn", title="Draft")
+
+    assert transcript_path(tmp_path, GENERIC_AGENT, "fresh").parent == instance_root(tmp_path, GENERIC_AGENT)

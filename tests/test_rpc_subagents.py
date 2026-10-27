@@ -11,6 +11,7 @@ import pytest
 
 from raven.agent.subagent.acp_registry_presets import ACP_REGISTRY_PRESETS
 from raven.agent.subagent.mirasim_presets import MIRASIM_PRESETS
+from raven.config.agent_names import GENERIC_AGENT
 from raven.config.schema import ThirdPartyCliSubagentConfig
 from raven.rpc.dispatcher import Dispatcher
 from raven.rpc.errors import ConfigFieldReadonlyError, ConfigValidationError, SubagentNotReadyError
@@ -19,10 +20,12 @@ from raven.rpc.methods.subagents import (
     _read_the_shell_again,
     register_subagents_methods,
     subagents_list,
+    subagents_presets,
     subagents_probe,
     subagents_test,
     subagents_test_cancel,
 )
+from raven.utils.commands import command_quote
 
 
 @pytest.fixture
@@ -151,6 +154,79 @@ async def test_a_preset_is_withheld_when_a_configured_row_holds_its_name(
     assert rows[0]["preset"] is None, "a hand-written row is not given provenance it did not declare"
     # Every other preset is still offered: the rule withholds one name, not the group.
     assert "OpenClaw" in {r["name"] for r in result["rows"]}
+
+
+async def test_presets_lists_what_a_machine_can_start_whether_or_not_an_entry_holds_it_and_where_each_runs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The machine sheet's connect form chooses from this: the roster hides a
+    preset once a row holds its name, but an entry is one preset on one
+    machine, so the same preset is still to be had on each machine."""
+    from raven.rpc.models import METHOD_MODELS
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {
+                            "name": "Coder",
+                            "preset": "claude_code",
+                            "kind": "cli",
+                            "command": "claude -p {prompt}",
+                            "enabled": True,
+                        },
+                        {
+                            "name": "Claude Code@box",
+                            "preset": "claude_code",
+                            "kind": "acp",
+                            "command": "npx -y @agentclientprotocol/claude-agent-acp@0.81.1",
+                            "machine": "box",
+                            "enabled": True,
+                        },
+                        {
+                            "name": "Researcher",
+                            "preset": "mirothinker",
+                            "kind": "openai",
+                            "baseUrl": "https://x.invalid/v1",
+                            "model": "m",
+                            "apiKey": "k",
+                        },
+                        {
+                            "name": "codex@box",
+                            "preset": "codex",
+                            "kind": "acp",
+                            "command": "npx -y @zed-industries/codex-acp",
+                            "machine": "box",
+                            "enabled": False,
+                        },
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+
+    out = await subagents_presets({})
+
+    METHOD_MODELS["subagents.presets"][1].model_validate(out)
+    by_key = {p["preset"]: p for p in out["presets"]}
+    # Held here AND on a machine: listed all the same, saying both.
+    assert by_key["claude_code"]["name"] == "Claude Code"
+    assert by_key["claude_code"]["connected_here"] is True
+    assert by_key["claude_code"]["on_machines"] == ["box"] and by_key["claude_code"]["off_on_machines"] == []
+    # Held on a machine but switched off: not "on" it -- the form would grey it as taken -- yet not
+    # nowhere either: the entry still holds the machine for the add, so it is offered back by name.
+    assert by_key["codex"]["connected_here"] is False and by_key["codex"]["on_machines"] == []
+    assert by_key["codex"]["off_on_machines"] == [{"machine": "box", "name": "codex@box"}]
+    # Only what a machine's node starts: no openai endpoint, no Mirasim shim, no built-in.
+    assert "mirothinker" not in by_key
+    assert not any(key.startswith("mirasim_") for key in by_key)
+    assert {p["kind"] for p in out["presets"]} <= {"acp", "cli"}
+    assert all(p["description"] for p in out["presets"])
 
 
 async def test_list_leaves_out_a_hidden_row(tmp_path: Path, monkeypatch) -> None:
@@ -334,7 +410,7 @@ async def test_list_with_probe_false_skips_the_network_probe(config_path: Path, 
     # so an overlay that omitted it would be hiding the agent every unnamed spawn
     # already dispatches to.
     assert set(by_name) == {
-        "Raven",
+        GENERIC_AGENT,
         "Coder",
         "Researcher",
         "Codex",
@@ -344,10 +420,10 @@ async def test_list_with_probe_false_skips_the_network_probe(config_path: Path, 
     } | {p["name"] for p in ACP_REGISTRY_PRESETS.values()} | {p["name"] for p in MIRASIM_PRESETS.values()}
     # Their own group, not installed/uninstalled: there is nothing to install, and
     # a row that could only ever read "uninstalled" would say the opposite.
-    assert by_name["Raven"]["group"] == "builtin"
-    assert by_name["Raven"]["builtin"] is True
-    assert by_name["Raven"]["configured"] is False
-    assert by_name["Raven"]["enabled"] is True
+    assert by_name[GENERIC_AGENT]["group"] == "builtin"
+    assert by_name[GENERIC_AGENT]["builtin"] is True
+    assert by_name[GENERIC_AGENT]["configured"] is False
+    assert by_name[GENERIC_AGENT]["enabled"] is True
     assert all(row["probe_status"] == "unknown" for row in result["rows"])
     assert all(row["probe_detail"] == "" for row in result["rows"])
     # group must still resolve correctly without a probe: openai keyed by its
@@ -2541,6 +2617,290 @@ async def test_cancel_still_reaches_the_first_call_while_a_second_is_refused(con
     assert _RUNNING == {}
 
 
+# --- the run that proves a connect is held like a test's ----------------------
+
+
+def _held_run(monkeypatch: pytest.MonkeyPatch) -> tuple[asyncio.Event, list[str]]:
+    """A `ping_agent` stand-in that runs until cancelled, and says when it was.
+
+    Returns the event set once the run is in flight, and the list the stub
+    appends ``"cancelled"`` to when the cancel reaches it -- which is the
+    whole point: a cancel that stops the wait but not the run would leave the
+    agent's process going on the machine.
+    """
+    import raven.rpc.methods.subagents as subagents_mod
+
+    in_flight = asyncio.Event()
+    seen: list[str] = []
+
+    async def _held(cfg):
+        in_flight.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            seen.append("cancelled")
+            raise
+        pytest.fail("the run should have been cancelled")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _held)
+    return in_flight, seen
+
+
+async def test_cancel_stops_the_run_that_proves_an_add_and_the_add_writes_nothing(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The machine form's Cancel is `subagents.test_cancel` on the name the add
+    would land under: the gate's one real prompt is held in `_RUNNING` the way a
+    test's is, so the cancel reaches it, the run on the agent ends, and the add
+    refuses with `cancelled` in its data rather than writing a row it never
+    proved -- a connect pressed in error no longer has to be waited out."""
+    from raven.rpc.methods.subagents import _RUNNING
+
+    in_flight, seen = _held_run(monkeypatch)
+    before = _stored(config_path)
+
+    adding = asyncio.ensure_future(subagents_add({"preset": "opencode"}))
+    await asyncio.wait_for(in_flight.wait(), timeout=5)
+    assert "OpenCode" in _RUNNING, "the run is held under the name the entry lands under"
+
+    assert await subagents_test_cancel({"name": "OpenCode"}) == {"cancelled": True}
+    with pytest.raises(SubagentNotReadyError) as caught:
+        await asyncio.wait_for(adding, timeout=5)
+
+    assert caught.value.data == {
+        "name": "OpenCode",
+        "field": "enabled",
+        "detail": "the run of sub-agent 'OpenCode' was cancelled before it answered, so it was not added",
+        "cancelled": True,
+    }
+    assert seen == ["cancelled"], "the cancel reaches the run on the agent, not only the wait"
+    assert _stored(config_path) == before, "a cancelled connect writes nothing"
+    assert _RUNNING == {}
+
+
+async def test_cancel_reaches_the_capability_record_after_the_answer_and_the_add_writes_nothing(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An acp row that answered is measured before the add writes, and that
+    record is a second launch and handshake of up to the preset's start window.
+    It is part of the same held run: during it the name is still in `_RUNNING`,
+    a cancel answers `cancelled: true` rather than finding nothing, and the add
+    refuses as for a cancel during the prompt -- where it used to answer
+    `cancelled: false` and the add went on to write the entry."""
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.rpc.methods.subagents import _RUNNING
+
+    recording = asyncio.Event()
+    seen: list[str] = []
+
+    async def _held_record(cfg):
+        recording.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            seen.append("cancelled")
+            raise
+        pytest.fail("the record should have been cancelled")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _pings_ok)
+    monkeypatch.setattr(subagents_mod, "capabilities_wanted", lambda cfg: True)
+    monkeypatch.setattr(subagents_mod, "record_capabilities", _held_record)
+    before = _stored(config_path)
+
+    adding = asyncio.ensure_future(subagents_add({"preset": "opencode"}))
+    await asyncio.wait_for(recording.wait(), timeout=5)
+    assert "OpenCode" in _RUNNING, "the record is held under the name, as the prompt before it is"
+
+    assert await subagents_test_cancel({"name": "OpenCode"}) == {"cancelled": True}
+    with pytest.raises(SubagentNotReadyError) as caught:
+        await asyncio.wait_for(adding, timeout=5)
+
+    assert caught.value.data["cancelled"] is True
+    assert caught.value.data["detail"] == (
+        "the run of sub-agent 'OpenCode' was cancelled after it answered, while its capabilities "
+        "were being recorded, so it was not added"
+    ), "the agent had answered, so the refusal does not say it was cancelled before it did"
+    assert seen == ["cancelled"], "the cancel ends the handshake, not only the wait"
+    assert _stored(config_path) == before, "a connect cancelled during its record writes nothing"
+    assert _RUNNING == {}
+
+
+async def test_a_test_is_refused_while_a_connect_records_the_capabilities_of_the_same_name(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One run per name covers the record too: a Test pressed while the connect
+    measures the row is refused as during its prompt, and the connect lands."""
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.rpc.methods.subagents import _RUNNING
+
+    recording = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _record_when_released(cfg):
+        recording.set()
+        await release.wait()
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _pings_ok)
+    monkeypatch.setattr(subagents_mod, "capabilities_wanted", lambda cfg: True)
+    monkeypatch.setattr(subagents_mod, "record_capabilities", _record_when_released)
+
+    adding = asyncio.ensure_future(subagents_add({"preset": "opencode"}))
+    await asyncio.wait_for(recording.wait(), timeout=5)
+    second = await subagents_test({"name": "OpenCode", "source": "config"})
+    assert second["ok"] is False and "already running" in second["detail"]
+
+    release.set()
+    assert await asyncio.wait_for(adding, timeout=5) == {"added": True, "name": "OpenCode"}
+    assert _RUNNING == {}
+
+
+async def test_cancel_stops_the_run_that_proves_a_switch_on_and_the_roster_says_it_is_running(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The form's Reconnect is the switch, so its run is held the same way; and
+    while it runs the roster reports `test_running` on the row, as it would for
+    a test, so a second surface sees the run and the Test press is kept off it."""
+    from raven.rpc.methods.subagents import _RUNNING
+
+    in_flight, seen = _held_run(monkeypatch)
+
+    switching = asyncio.ensure_future(subagents_toggle({"name": "Researcher", "enabled": True}))
+    await asyncio.wait_for(in_flight.wait(), timeout=5)
+    rows = (await subagents_list({}))["rows"]
+    assert next(r for r in rows if r["name"] == "Researcher")["test_running"] is True
+
+    assert await subagents_test_cancel({"name": "Researcher"}) == {"cancelled": True}
+    with pytest.raises(SubagentNotReadyError) as caught:
+        await asyncio.wait_for(switching, timeout=5)
+
+    assert caught.value.data["cancelled"] is True
+    assert caught.value.data["detail"].endswith(", so it was not switched on")
+    assert seen == ["cancelled"]
+    entry = next(e for e in _stored(config_path) if e["name"] == "Researcher")
+    assert entry["enabled"] is False, "the switch a cancel refused stays off"
+    assert _RUNNING == {}
+    rows_after = (await subagents_list({}))["rows"]
+    assert next(r for r in rows_after if r["name"] == "Researcher")["test_running"] is False
+
+
+async def test_a_test_is_refused_while_a_connect_proves_the_same_name_and_the_connect_lands(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One run per name at a time, whichever press started it: a Test pressed
+    during a connect's proof is refused the way a second Test is, and the
+    connect goes on to land once its run answers."""
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+    from raven.rpc.methods.subagents import _RUNNING
+
+    in_flight = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _answers_when_released(cfg):
+        in_flight.set()
+        await release.wait()
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _answers_when_released)
+
+    switching = asyncio.ensure_future(subagents_toggle({"name": "Researcher", "enabled": True}))
+    await asyncio.wait_for(in_flight.wait(), timeout=5)
+
+    second = await subagents_test({"name": "Researcher", "source": "config"})
+    assert second["ok"] is False and second["cancelled"] is False
+    assert "already running" in second["detail"] and "connect" in second["detail"]
+
+    release.set()
+    assert await asyncio.wait_for(switching, timeout=5) == {"enabled": True}
+    assert _RUNNING == {}
+
+
+async def test_a_connect_is_refused_while_a_test_of_the_same_name_runs_and_asks_the_agent_nothing(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other order: a connect pressed during a test would be a second real
+    prompt on the agent's quota, and whichever ended first would take the
+    other's entry out of the map. Refused before anything is spent, in a
+    sentence that says to wait or stop the run; the test goes on."""
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import TestResult
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_run_test(cfg, *, source):
+        started.set()
+        await release.wait()
+        return TestResult(cfg.name, source, "openai", True, "ok", "PONG", 1)
+
+    async def _never(cfg):
+        pytest.fail("a connect during a test asks the agent nothing")
+
+    monkeypatch.setattr(subagents_mod, "run_test", slow_run_test)
+    monkeypatch.setattr(subagents_mod, "ping_agent", _never)
+    testing = asyncio.ensure_future(subagents_test({"name": "Researcher", "source": "config"}))
+    await asyncio.wait_for(started.wait(), timeout=5)
+
+    with pytest.raises(SubagentNotReadyError) as caught:
+        await subagents_toggle({"name": "Researcher", "enabled": True})
+    said = caught.value.data["detail"]
+    assert "'Researcher' is already running" in said and "so it was not switched on" in said and "stop it" in said
+    assert "cancelled" not in caught.value.data
+    entry = next(e for e in _stored(config_path) if e["name"] == "Researcher")
+    assert entry["enabled"] is False
+
+    release.set()
+    assert (await asyncio.wait_for(testing, timeout=5))["ok"] is True
+
+
+async def test_a_connect_whose_own_call_is_cancelled_ends_its_run_and_writes_nothing(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The transport cancels a call whose connection went. That cancel is not a
+    Cancel pressed on the form: the call keeps unwinding as cancelled instead
+    of composing a refusal for a socket that is gone, and its run ends with it."""
+    from raven.rpc.methods.subagents import _RUNNING
+
+    in_flight, seen = _held_run(monkeypatch)
+    before = _stored(config_path)
+
+    adding = asyncio.ensure_future(subagents_add({"preset": "opencode"}))
+    await asyncio.wait_for(in_flight.wait(), timeout=5)
+    adding.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await adding
+
+    assert seen == ["cancelled"]
+    assert _stored(config_path) == before
+    assert _RUNNING == {}
+
+
+async def test_a_cancelled_connect_refuses_on_the_wire_with_cancelled_in_its_data(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What the page reads: the SubagentNotReady frame, its sentence under
+    `data.detail` and `data.cancelled` beside it, so the form can say the
+    connect was cancelled rather than that the agent failed."""
+    in_flight, _ = _held_run(monkeypatch)
+    dispatcher = Dispatcher()
+    register_subagents_methods(dispatcher, agent_loop_factory=lambda: None)
+
+    adding = asyncio.ensure_future(
+        dispatcher.dispatch({"jsonrpc": "2.0", "id": 7, "method": "subagents.add", "params": {"preset": "opencode"}})
+    )
+    await asyncio.wait_for(in_flight.wait(), timeout=5)
+    cancel = await dispatcher.dispatch(
+        {"jsonrpc": "2.0", "id": 8, "method": "subagents.test_cancel", "params": {"name": "OpenCode"}}
+    )
+    assert cancel["result"] == {"cancelled": True}
+
+    frame = await asyncio.wait_for(adding, timeout=5)
+    assert frame["error"]["code"] == SubagentNotReadyError.CODE
+    assert frame["error"]["message"] == "subagent_not_ready"
+    assert frame["error"]["data"]["cancelled"] is True
+    assert frame["error"]["data"]["detail"].endswith("was cancelled before it answered, so it was not added")
+
+
 async def test_a_builtin_row_cannot_be_switched_off(config_path: Path) -> None:
     """The switch is not the caller's to throw, so the RPC refuses rather than writes.
 
@@ -2550,7 +2910,7 @@ async def test_a_builtin_row_cannot_be_switched_off(config_path: Path) -> None:
     state change is owed the reason it did not happen.
     """
     with pytest.raises(ConfigFieldReadonlyError):
-        await subagents_toggle({"name": "Raven", "enabled": False})
+        await subagents_toggle({"name": GENERIC_AGENT, "enabled": False})
 
     # And the name it used to be written under is refused too: a guard that missed
     # it would write a config row under the old name, which lands on the table as a
@@ -2560,14 +2920,14 @@ async def test_a_builtin_row_cannot_be_switched_off(config_path: Path) -> None:
 
     # Nothing was written on the way out either time: the override row that used to
     # be created to carry the switch has no other reason to exist.
-    assert [e for e in _stored(config_path) if e["name"] in ("Raven", "raven")] == []
+    assert [e for e in _stored(config_path) if e["name"] in (GENERIC_AGENT, "Raven", "raven")] == []
 
     rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
-    assert rows["Raven"]["enabled"] is True
-    assert rows["Raven"]["group"] == "builtin"
+    assert rows[GENERIC_AGENT]["enabled"] is True
+    assert rows[GENERIC_AGENT]["group"] == "builtin"
     # The description still comes from the package's row, which is the only line
     # the model reads about this agent.
-    assert "in-process sub-agent" in rows["Raven"]["description"]
+    assert "in-process sub-agent" in rows[GENERIC_AGENT]["description"]
 
 
 async def test_a_switch_off_hand_written_into_config_does_not_take_it_off_the_roster(
@@ -2584,7 +2944,7 @@ async def test_a_switch_off_hand_written_into_config_does_not_take_it_off_the_ro
     config_path.write_text(json.dumps(raw))
 
     rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
-    assert rows["Raven"]["enabled"] is True
+    assert rows[GENERIC_AGENT]["enabled"] is True
     assert "raven" not in rows
 
 
@@ -2928,8 +3288,8 @@ async def test_building_a_name_no_folder_carries_is_refused(
 async def test_a_reserved_name_entry_is_reported_once_and_as_ignored(config_path: Path) -> None:
     """The roster is where a user learns their entry is dead, not the server log.
 
-    The capitalised spelling was accepted before the generic row was renamed to it,
-    so config can hold a cli entry of that name. It is inert at runtime, and the
+    `Raven` was accepted before the generic row took that name, and is a former name
+    of the row now, so config can hold a cli entry of that name. It is inert at runtime, and the
     list used to carry it beside the built-in row as a second enabled-looking agent
     of the same name -- a view that keys by name opens whichever comes first.
     """
@@ -2939,9 +3299,10 @@ async def test_a_reserved_name_entry_is_reported_once_and_as_ignored(config_path
     )
     config_path.write_text(json.dumps(raw))
 
-    rows = [r for r in (await subagents_list({"probe": False}))["rows"] if r["name"] == "Raven"]
+    rows = [r for r in (await subagents_list({"probe": False}))["rows"] if r["name"] in (GENERIC_AGENT, "Raven")]
 
     assert len(rows) == 1
+    assert rows[0]["name"] == GENERIC_AGENT
     assert rows[0]["kind"] == "builtin"
     assert rows[0]["enabled"] is True
 
@@ -3000,7 +3361,7 @@ async def test_list_marks_the_built_in_row_and_a_discovered_product_as_ravens_ow
     monkeypatch.setattr(va, "agents_root", lambda: root)
     rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
 
-    assert rows["Raven"]["own"] is True and rows["Raven"]["model_source"] == "raven"
+    assert rows[GENERIC_AGENT]["own"] is True and rows[GENERIC_AGENT]["model_source"] == "raven"
     # Ownership and the model rule are two facts: a discovered product is
     # raven's, and as a cli row it has no menu -- `update` refuses a model on it.
     assert rows["Raven-Probe"]["own"] is True and rows["Raven-Probe"]["model_source"] == "fixed"
@@ -3120,6 +3481,67 @@ async def test_list_marks_a_config_row_whose_handshake_named_raven_as_ravens_own
     assert rows["Raven-PPT"]["own"] is True and rows["Raven-PPT"]["model_source"] == "raven"
     assert rows["Raven-PPT"]["model_choices"] == []
     assert rows["Other-Quiet"]["own"] is False and rows["Other-Quiet"]["model_source"] == "agent"
+
+
+async def test_list_shows_the_model_menu_a_dispatch_relearned(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The row's picker follows the agent without anyone pressing Test.
+
+    The listing reads the stored snapshot, and the snapshot never expires by
+    age, so before a dispatch could refresh it the card went on offering the
+    ids the agent held at its last Test. One dispatch now carries the agent's
+    current menu to the card, under the same ``agent`` rule as before.
+    A spaced stub path exercises launch quoting on every test host.
+    """
+    from raven.acp_client.capabilities import AcpModelChoice, CapabilitySnapshot, SnapshotStore, snapshot_fingerprint
+    from raven.acp_client.pool import close_pool
+    from raven.agent.subagent.backends import build_third_party_backend
+    from raven.config.schema import SubagentsConfig
+
+    stub = tmp_path / "acp stub server.py"
+    stub.write_bytes(Path(__file__).with_name("acp_stub_server.py").read_bytes())
+    raw = json.loads(config_path.read_text())
+    raw["subagents"]["agents"].append(
+        {
+            "name": "Stubby",
+            "kind": "acp",
+            "command": f"{command_quote(sys.executable)} {command_quote(str(stub))}",
+            "env": {"ACP_STUB_MODE": "ok"},
+            "description": "d",
+            "enabled": True,
+        }
+    )
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    store_path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: store_path)
+    cfg = next(c for c in SubagentsConfig(agents=raw["subagents"]["agents"]).agents if c.name == "Stubby")
+    SnapshotStore(path=store_path).record(
+        CapabilitySnapshot(
+            agent="Stubby",
+            fingerprint=snapshot_fingerprint(cfg),
+            status="ready",
+            detail="",
+            measured_at_ms=1,
+            agent_name="stub-agent",
+            model_choices=(AcpModelChoice(value="stub:retired", name="retired", group="Stub"),),
+        )
+    )
+    before = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}["Stubby"]
+    assert before["model_choices"] == [{"value": "stub:retired", "name": "retired", "group": "Stub"}]
+
+    try:
+        reply = await build_third_party_backend(cfg).run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    finally:
+        await close_pool()
+    assert reply == "pong"
+
+    after = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}["Stubby"]
+    assert after["model_choices"] == [
+        {"value": "stub:model-a", "name": "model-a", "group": "Stub"},
+        {"value": "stub:model-b", "name": "model-b", "group": "Stub"},
+    ]
+    assert after["model_source"] == before["model_source"] == "agent"
 
 
 async def test_test_can_target_a_discovered_product(
@@ -3398,6 +3820,64 @@ async def test_add_on_a_machine_keeps_the_name_the_caller_chose(
     assert out == {"added": True, "name": "lab"}
     entry = next(e for e in _stored(config_path) if e["name"] == "lab")
     assert entry["machine"] == "ravenx2" and not entry.get("remoteCwd"), "unset: the node's default applies"
+
+
+async def test_add_on_a_machine_refuses_a_preset_the_machine_already_has_before_any_ping(
+    config_path: Path, registry: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Seen live: the page and the chat reach one machine by two routes and spell
+    the default name differently, so the second route made a second entry of the
+    same preset there. Judged on the preset and the machine, under the default
+    name only; a named add is a second entry on purpose."""
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", _no_record)
+    await subagents_add({"preset": "claude_code", "machine": "ravenx2", "name": "Claude Code@ravenx2"})
+    before = _stored(config_path)
+
+    async def _never(cfg: object) -> object:
+        pytest.fail("the duplicate is refused before the agent is pinged")
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _never)
+    with pytest.raises(ConfigValidationError) as caught:
+        await subagents_add({"preset": "claude_code", "machine": "ravenx2", "remote_cwd": "~/elsewhere"})
+
+    said = str(caught.value)
+    assert "'claude_code'" in said and "'ravenx2'" in said and "'Claude Code@ravenx2'" in said and "(connected)" in said
+    assert "203.0.113" not in said
+    assert caught.value.data == {"field": "machine", "machine": "ravenx2", "existing": "Claude Code@ravenx2"}
+    assert _stored(config_path) == before
+    # Named, it is a second entry on purpose: allowed, proved like any other.
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
+    out = await subagents_add({"preset": "claude_code", "machine": "ravenx2", "name": "lab-2", "remote_cwd": "~/b"})
+    assert out == {"added": True, "name": "lab-2"}
+    names = [e["name"] for e in _stored(config_path)]
+    assert names.count("Claude Code@ravenx2") == 1 and "lab-2" in names
+    # Another machine is another entry, under the default name.
+    registry.write_text(
+        json.dumps({"connections": [*_MACHINES, {**_MACHINES[0], "id": "ravenx", "display_name": "RavenX"}]}),
+        encoding="utf-8",
+    )
+    out = await subagents_add({"preset": "claude_code", "machine": "ravenx"})
+    assert out == {"added": True, "name": "claude_code@ravenx"}
+
+
+async def test_add_on_a_machine_names_the_switched_off_entry_of_the_preset_there(
+    config_path: Path, registry: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", _no_record)
+    await subagents_add({"preset": "claude_code", "machine": "ravenx2"})
+    doc = json.loads(config_path.read_text(encoding="utf-8"))
+    for entry in doc["subagents"]["agents"]:
+        if entry["name"] == "claude_code@ravenx2":
+            entry["enabled"] = False
+    config_path.write_text(json.dumps(doc), encoding="utf-8")
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await subagents_add({"preset": "claude_code", "machine": "ravenx2"})
+
+    assert "'claude_code@ravenx2' (switched off); switch that entry back on" in str(caught.value)
+    assert caught.value.data == {"field": "machine", "machine": "ravenx2", "existing": "claude_code@ravenx2"}
 
 
 async def test_add_on_a_machine_needs_no_debug_switch(config_path, registry, monkeypatch):

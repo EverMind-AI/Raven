@@ -92,6 +92,10 @@ IMAGE_SETTING_SLOTS = {
     "PPT_IMAGE_API_BASE": ("tools", "media", "image", "apiBase"),
     "PPT_IMAGE_MODEL": ("tools", "media", "image", "model"),
 }
+# The provider a deck's pictures run on, when it is not the host image role's:
+# the request shape follows a provider's name, which a pinned base alone does not
+# carry.
+IMAGE_PROVIDER_PIN = "PPT_IMAGE_PROVIDER"
 
 # Where the web tools take their proxy from, and the environment names that
 # stand in for it. The engine's fetch builds its client with `trust_env=False` on
@@ -211,6 +215,15 @@ def serper_key_in_force(config: dict) -> str:
     )
 
 
+def image_provider(name: str) -> str:
+    """The provider ``name`` spells, canonical, when the image tool can run on it; else ``""``."""
+    from raven.providers import registry
+
+    canonical = registry.canonical_provider_name(name)
+    spec = registry.find_by_name(canonical)
+    return canonical if spec is not None and getattr(spec, "image_api", False) else ""
+
+
 def configure_image_generation(config: dict, host: dict) -> None:
     """Give the deck a picture generator, on either LLM branch.
 
@@ -228,12 +241,21 @@ def configure_image_generation(config: dict, host: dict) -> None:
     its OpenRouter key for chat alone deliberately surfaces no media tool, so
     the deck asked for a key nobody had written and drew nothing.
 
-    The product's own ``PPT_IMAGE_API_BASE`` and ``PPT_IMAGE_MODEL`` pin a deck
-    endpoint or model over the inherited one, and any product pin (key, base or
-    model) also pins the section as rendered: a live host selection would
-    replace it whole on the next call. A pinned key or base leaves the inherited
-    headers behind, and a pinned base the inherited key too: the host resolved
-    both for its own key at its own address. The host's media proxy rides along.
+    This agent's own ``PPT_IMAGE_API_BASE`` and ``PPT_IMAGE_MODEL`` pin a deck
+    endpoint or model over the inherited one, and any pin of its own (key, base,
+    model or provider) also pins the section as rendered: a live host selection
+    would replace it whole on the next call. A pinned key or base leaves the
+    inherited headers behind, and a pinned base the inherited key too: the host
+    resolved both for its own key at its own address. The host's media proxy
+    rides along.
+
+    A pinned section on a named provider keeps the name, since the request shape
+    follows it, and is written to a file of its own that carries that provider's
+    endpoint: the deck resolves a name against the providers of the file it reads,
+    and its own render's are the ones its chat runs on. ``PPT_IMAGE_PROVIDER`` names
+    a provider other than the host image role's; the host's model and endpoint
+    belong to the host's, so neither crosses, and a base pinned without it is an
+    OpenAI-compatible endpoint, as before.
 
     The engine gets no copy: the deck's ``ppt_generate_image`` rides the host's
     ``image_generate`` and reads ``tools.media.image`` through the locator's
@@ -253,7 +275,6 @@ def configure_image_generation(config: dict, host: dict) -> None:
     image = section.model_dump(by_alias=True, exclude_unset=True) if section is not None else {}
     media_provider = getattr(schema, "media_provider", None)
     runs_on = media_provider(section) if media_provider is not None and section is not None else ""
-    named = "" if runs_on == "openrouter" else runs_on
     paid_by = "the host image section"
     pinned: list[str] = []
     for name, path in IMAGE_SETTING_SLOTS.items():
@@ -262,6 +283,54 @@ def configure_image_generation(config: dict, host: dict) -> None:
             pinned.append(name)
     key_pinned = bool(env_value("PPT_IMAGE_API_KEY"))
     base_pinned = "PPT_IMAGE_API_BASE" in pinned
+    # A raven from before render parts writes a pinned section inline, as it always
+    # did: its named image providers all took the OpenAI-compatible route.
+    rendered_part = getattr(render, "rendered_part", None)
+    if rendered_part is not None:
+        rendered_part(state_root(), "image").unlink(missing_ok=True)
+    switched = False
+    if asked := env_value(IMAGE_PROVIDER_PIN):
+        pinned.append(IMAGE_PROVIDER_PIN)
+        target = image_provider(asked) if media_provider is not None else ""
+        refusal = ""
+        if not target:
+            from raven.providers.registry import PROVIDERS
+
+            known = ", ".join(spec.name for spec in PROVIDERS if getattr(spec, "image_api", False)) or "none"
+            refusal = f"{IMAGE_PROVIDER_PIN}={asked} names no provider this raven's image tool runs on ({known})"
+        elif target != runs_on and "PPT_IMAGE_MODEL" not in pinned:
+            refusal = (
+                f"{IMAGE_PROVIDER_PIN}={asked} is not the provider the host's image role runs on "
+                f"({runs_on or 'none'}), whose model does not cross over: set PPT_IMAGE_MODEL"
+            )
+        if refusal:
+            config.setdefault("tools", {}).setdefault("media", {})["image"] = {}
+            log(f"[run] images: {refusal}; the deck keeps only the pictures it can find")
+            return
+        if target != runs_on:
+            # The host's address, key and headers were resolved for its own
+            # provider. The deck's are the host's endpoint for this one, unless
+            # a pinned base names the deck's own address.
+            switched, runs_on = True, target
+            for field in ("provider", "apiKey", "apiBase", "extraHeaders"):
+                if not (field == "apiBase" and base_pinned):
+                    image.pop(field, None)
+            if target != "openrouter" and not base_pinned:
+                found = schema.live_media_tool_config(
+                    {"provider": target, "model": image["model"]}, host.get("providers")
+                )
+                image.update(
+                    found.model_dump(
+                        by_alias=True, exclude_unset=True, include={"api_base", "api_key", "extra_headers"}
+                    )
+                )
+    named = "" if runs_on == "openrouter" else runs_on
+    own_file = (
+        rendered_part is not None
+        and bool(named)
+        and bool(pinned or key_pinned)
+        and (IMAGE_PROVIDER_PIN in pinned or not base_pinned)
+    )
     if key_pinned or base_pinned:
         # The inherited headers complete the inherited key at the inherited
         # address: a pinned base sends neither there, and a pinned key replaces
@@ -272,13 +341,13 @@ def configure_image_generation(config: dict, host: dict) -> None:
         # borrowed from OpenRouter -- was resolved for the host's address; the
         # slot below decides afresh for the deck's.
         image["apiKey"] = ""
-    if named and (pinned or key_pinned):
-        # A pin makes the section a snapshot the deck reads as written, with no
-        # host file behind it. It already holds what it took from the provider;
-        # what it must not keep is the provider's name, which would be resolved
-        # against this config's providers -- not the host's -- nor the
-        # provider's own prefix, which the bare address does not take.
-        del image["provider"]
+    if named and (pinned or key_pinned) and not own_file:
+        # A base pinned without a provider is an endpoint the deck reads as
+        # written, with no host file behind it: it must not keep the provider's
+        # name, which would be resolved against this config's providers -- not
+        # the host's -- nor the provider's own prefix, which that address does
+        # not take.
+        image.pop("provider", None)
         if "PPT_IMAGE_MODEL" not in pinned and image.get("model"):
             image["model"] = wire_model(image["model"], client_provider=named)
     if named and not (key_pinned or base_pinned):
@@ -287,7 +356,9 @@ def configure_image_generation(config: dict, host: dict) -> None:
         # it, and the host's own tool never sends it there.
         if image.get("apiKey"):
             paid_by = f"the host's providers.{named}"
-    elif resolved := render.dig(config, IMAGE_KEY_SLOT):
+    elif (resolved := render.dig(config, IMAGE_KEY_SLOT)) and (key_pinned or not switched):
+        # Unpinned, the slot holds the host image section's own key, which is
+        # the host provider's to use, not the one the deck switched to.
         image["apiKey"], paid_by = resolved, "PPT_IMAGE_API_KEY or the host image key"
     elif not image.get("apiKey") and _IMAGE_GATEWAY in (image.get("apiBase") or _IMAGE_GATEWAY):
         # Borrowed only towards OpenRouter. The host's image section may name
@@ -311,14 +382,23 @@ def configure_image_generation(config: dict, host: dict) -> None:
     if host_selects and not pinned:
         image["selectionConfig"] = str(render.raven_home() / render.CONFIG_FILENAME)
     media = config.setdefault("tools", {}).setdefault("media", {})
-    media["image"] = image
+    if own_file:
+        image["provider"] = named
+        endpoint = {"apiBase": image.get("apiBase") or "", "apiKey": image.get("apiKey") or ""}
+        if image.get("extraHeaders"):
+            endpoint["extraHeaders"] = image["extraHeaders"]
+        selection = {"providers": {named: endpoint}, "tools": {"media": {"image": image}}}
+        media["image"] = {"selectionConfig": str(render.write_rendered_part(selection, state_root(), "image"))}
+    else:
+        media["image"] = image
     if (proxy := (host_tools.get("media") or {}).get("proxy")) and not media.get("proxy"):
         media["proxy"] = proxy
     if not image.get("apiKey"):
         log("[run] images: no image key to draw with; the deck keeps only the pictures it can find")
         return
     pin_note = f", pinned by {', '.join(pinned)}" if pinned else ", following the host" if host_selects else ""
-    log(f"[run] images: {image.get('model') or 'the shipped default'}, paid by {paid_by}{pin_note}")
+    on = f" on {named}" if own_file else ""
+    log(f"[run] images: {image.get('model') or 'the shipped default'}{on}, paid by {paid_by}{pin_note}")
 
 
 def recommended_llm() -> str:
@@ -528,7 +608,21 @@ def render_config(source: Path) -> Path:
     nothing naming the credential. The window recalibration runs after both
     branches because it is a fact about whichever model won, not about whose
     key is paying for it.
+
+    The image section's own file is written before the steps that can still
+    refuse the launch, and a refused launch never reaches the sweep: whatever
+    ends the render early removes it. It is named by this pid, so it is this
+    run's alone to remove.
     """
+    try:
+        return _render_config(source)
+    except BaseException:
+        if (rendered_part := getattr(render, "rendered_part", None)) is not None:
+            rendered_part(state_root(), "image").unlink(missing_ok=True)
+        raise
+
+
+def _render_config(source: Path) -> Path:
     config = json.loads(source.read_text(encoding="utf-8"))
     host = render.host_config()
 

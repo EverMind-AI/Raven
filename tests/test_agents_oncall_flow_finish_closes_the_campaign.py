@@ -47,7 +47,7 @@ class _Cron:
         self.names.append(key)
         return SimpleNamespace(id=f"oncall-flow:{key}")
 
-    def pending_wakes(self, prefix=""):
+    def pending_wakes(self, prefix="", *, include_running=True):
         return [SimpleNamespace(id=f"oncall-flow:{k}") for k in self.names if k.startswith(prefix)]
 
     def advance_wake_to_now(self, key):

@@ -191,6 +191,13 @@ _SEARCH_REQUESTS: dict[str, tuple[str, str, dict[str, Any], dict[str, str]]] = {
         {"params": {"q": "q1", "num": 4}},
         {"X-Api-Key": "k"},
     ),
+    # Keyed, so the keyed path; the keyless one has its own test below.
+    "keenable": (
+        "POST",
+        "https://api.keenable.ai/v1/search",
+        {"json": {"query": "q1", "max_results": 4}},
+        {"x-api-key": "k", "X-Keenable-Title": "Raven"},
+    ),
 }
 
 
@@ -299,6 +306,7 @@ _SEARCH_PAYLOADS: dict[str, Any] = {
     "brave": {"web": {"results": [{"title": "T1", "url": "https://a.example", "description": "S1"}]}},
     "firecrawl": {"success": True, "data": [{"title": "T1", "url": "https://a.example", "description": "S1"}]},
     "serply": {"results": [{"title": "T1", "link": "https://a.example", "description": "S1"}]},
+    "keenable": {"results": [{"title": "T1", "url": "https://a.example", "description": "", "snippet": "S1"}]},
 }
 
 
@@ -328,6 +336,44 @@ async def test_an_empty_payload_is_a_dry_search_not_an_error(monkeypatch: pytest
     assert rendered == "No results for: q1"
 
 
+async def test_keenable_searches_without_a_key_on_its_public_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The one search vendor with an anonymous tier: no key is configured, the
+    tool counts as configured, and the request goes to the public path with the
+    app named and no credential header."""
+    assert WebSearchTool.is_configured(None, provider="keenable")
+    tool = WebSearchTool(provider="keenable")
+    assert tool.api_key == "" and tool.ready
+
+    with _patched(monkeypatch, _SEARCH_PAYLOADS["keenable"]) as client:
+        rendered = await tool.execute("q1", count=4)
+
+    method, url, kwargs = client.calls[0]
+    assert (method, url) == ("POST", "https://api.keenable.ai/v1/search/public")
+    assert kwargs["json"] == {"query": "q1", "max_results": 4}
+    assert kwargs["headers"]["X-Keenable-Title"] == "Raven"
+    assert "x-api-key" not in kwargs["headers"]
+    assert "1. T1\n   https://a.example\n   S1" in rendered
+
+
+async def test_keenable_snippets_are_collapsed_and_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keenable's snippet is page text, line breaks and all, and runs to
+    thousands of characters; the render path shows whatever lands in the slot."""
+    page = "# Heading\n\nA paragraph of page text.\n" * 200
+    payload = {"results": [{"title": "T1", "url": "https://a.example", "description": "", "snippet": page}]}
+    with _patched(monkeypatch, payload):
+        rendered = await WebSearchTool(provider="keenable").execute("q1")
+
+    snippet = rendered.split("https://a.example\n   ", 1)[1]
+    assert "\n" not in snippet and len(snippet) == 300
+    assert snippet.startswith("# Heading A paragraph of page text. # Heading")
+
+
+def test_keenable_is_the_one_search_vendor_offered_without_a_key() -> None:
+    assert {vendor for vendor, spec in SEARCH_PROVIDERS.items() if not spec.needs_key} == {"keenable"}
+    for vendor in SEARCH_PROVIDERS:
+        assert WebSearchTool(provider=vendor).ready is (vendor == "keenable")
+
+
 # --------------------------------------------------------------------------- #
 # Fetch: registration falls back to Jina when the selected reader cannot run
 
@@ -337,8 +383,9 @@ def test_a_keyed_reader_without_a_key_is_replaced_by_jina(monkeypatch: pytest.Mo
     assert WebFetchTool.effective_provider("firecrawl", "k") == "firecrawl"
     monkeypatch.setenv("FIRECRAWL_API_KEY", "from-env")
     assert WebFetchTool.effective_provider("firecrawl", None) == "firecrawl"
-    # Jina needs nothing, so it is never replaced.
+    # Jina and Keenable need nothing, so they are never replaced.
     assert WebFetchTool.effective_provider("jina", None) == "jina"
+    assert WebFetchTool.effective_provider("keenable", None) == "keenable"
 
 
 # --------------------------------------------------------------------------- #
@@ -383,6 +430,12 @@ _FETCH_CASES: dict[str, tuple[str, str, dict[str, Any], Any]] = {
         {"json": {"url": "https://a.example"}},
         {"code": 0, "data": {"content": "PAGE", "title": "T"}},
     ),
+    "keenable": (
+        "GET",
+        "https://api.keenable.ai/v1/fetch",
+        {"params": {"url": "https://a.example"}},
+        {"url": "https://a.example", "title": "T", "content": "PAGE", "description": ""},
+    ),
 }
 
 
@@ -406,6 +459,23 @@ async def test_each_reader_serves_the_page_through_one_envelope(
     assert envelope["text"] == "PAGE"
     assert envelope["extractor"] == FETCH_PROVIDERS[vendor].extractor
     assert envelope["length"] == 4 and envelope["truncated"] is False
+
+
+async def test_keenable_reads_pages_without_a_key_on_its_public_path(
+    monkeypatch: pytest.MonkeyPatch, _open_gate: None
+) -> None:
+    payload = {"url": "https://a.example", "title": "T", "content": "PAGE", "description": ""}
+    with _patched(monkeypatch, payload) as client:
+        raw = await WebFetchTool(provider="keenable").execute("https://a.example")
+
+    method, url, kwargs = client.calls[0]
+    assert (method, url) == ("GET", "https://api.keenable.ai/v1/fetch/public")
+    assert kwargs["params"] == {"url": "https://a.example"}
+    assert kwargs["headers"]["X-Keenable-Title"] == "Raven"
+    assert "x-api-key" not in kwargs["headers"]
+    envelope = json.loads(raw)
+    assert envelope["text"] == "PAGE" and envelope["title"] == "T"
+    assert envelope["extractor"] == "keenable-fetch"
 
 
 @pytest.mark.parametrize("vendor", sorted(FETCH_PROVIDERS))
@@ -911,11 +981,26 @@ def test_the_settings_page_offers_exactly_the_schemas_vendors() -> None:
     assert search["vendors"] == list(get_args(WebSearchProvider))
     assert fetch["vendors"] == list(get_args(WebFetchProvider))
     # Not vacuous: the parse found real lists, so an empty one cannot pass.
-    assert len(search["vendors"]) == 8 and len(fetch["vendors"]) == 5
+    assert len(search["vendors"]) == 9 and len(fetch["vendors"]) == 6
     assert search["fallback"] == DEFAULT_SEARCH_PROVIDER
     assert fetch["fallback"] == DEFAULT_FETCH_PROVIDER
     assert search["path"] == "tools.web.search.provider"
     assert fetch["path"] == "tools.web.fetch.provider"
+
+
+def _tsx_keyless(name: str) -> set[str]:
+    body = _SETTINGS_PAGE.read_text(encoding="utf-8")
+    found = re.search(rf"export const {name} = new Set\(\[(.*?)\]\)", body)
+    assert found, f"{name} is gone from {_SETTINGS_PAGE.name}"
+    return set(re.findall(r"'([^']+)'", found.group(1)))
+
+
+def test_the_settings_page_knows_which_vendors_need_no_key() -> None:
+    """The page decides whether a tool still lacks its key from these two sets;
+    one that disagrees with ``needs_key`` asks for a key the tool does not need,
+    or calls a tool ready that the loop withholds."""
+    assert _tsx_keyless("SEARCH_KEYLESS") == {v for v, s in SEARCH_PROVIDERS.items() if not s.needs_key}
+    assert _tsx_keyless("FETCH_KEYLESS") == {v for v, s in FETCH_PROVIDERS.items() if not s.needs_key}
 
 
 def test_the_settings_page_names_every_vendor_the_way_the_spec_table_does() -> None:
@@ -955,3 +1040,33 @@ def test_forbidding_extras_keeps_both_key_spellings() -> None:
     would reject the config file's own snake_case spelling."""
     assert WebProvidersConfig.model_validate({"tavily": {"apiKey": "sk-a"}}).key_for("tavily") == "sk-a"
     assert WebProvidersConfig.model_validate({"tavily": {"api_key": "sk-b"}}).key_for("tavily") == "sk-b"
+
+
+@pytest.mark.parametrize(
+    "queries,query,want",
+    [
+        ([], "a red fox", ["a red fox"]),
+        (["a blue bird"], "a red fox", ["a blue bird"]),
+        ([], None, []),
+        ([], "   ", []),
+    ],
+)
+async def test_registry_image_search_preserves_the_single_query_fallback(monkeypatch, queries, query, want):
+    from raven.agent.tools.registry import ToolRegistry
+
+    calls = []
+    tool = web_mod.ImageSearchTool(api_key="test-image-key")
+
+    async def search(said, count, floor, vendor, key):
+        calls.append(said)
+        return "picture found"
+
+    monkeypatch.setattr(tool, "_search_images", search)
+    registry = ToolRegistry()
+    registry.register(tool)
+    params = {"queries": queries, "query": query} if query is not None else {"queries": queries}
+    original = json.loads(json.dumps(params))
+    result = await registry.execute("image_search", params)
+    assert calls == want
+    assert params == original
+    assert ("Invalid parameters" in result) is (not want)

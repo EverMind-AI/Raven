@@ -1119,3 +1119,152 @@ describe('the pinned tab', () => {
     expect(details.get().arrival).toBeNull()
   })
 })
+
+/* ── the pane per Scope Tab ───────────────────────────────────────── */
+
+describe('the pane per Scope Tab', () => {
+  const A = 't:runA'
+  const X = 't:runX'
+  const scoped = (id: string, at: number, scope: string, over: Partial<TrajectoryEntry> = {}): TrajectoryEntry =>
+    ({ ...entry(id, at), subagent_scope: scope, ...over })
+
+  /* The main session's two rows, a run's two steps, and an external agent's run of two entries. */
+  async function tabs(): Promise<void> {
+    absorb(['trajectory-v1'])
+    list.install()
+    details.install()
+    unpitch()
+    list.sessionChanged('gui:a')
+    await list.refreshState()
+    list.setView('trajectory')
+    rows = [
+      entry('m0', 0), entry('m1', 1), scoped('a0', 2, A), scoped('a1', 3, A),
+      scoped('x0', 4, X, { span_name: 'subagent.external' }), scoped('x1', 5, X, { span_name: 'subagent.external' }),
+    ]
+    await list.load()
+  }
+
+  async function arrive(id: string, blocks: string[], source: 'click' | 'link' = 'click'): Promise<void> {
+    list.select(id, { source })
+    void details.loadDescriptor()
+    await answerDetail(descriptor(id, 1, blocks))
+  }
+
+  it('keeps the pane open or closed per tab', async () => {
+    await tabs()
+    list.select('m0', { source: 'click' })
+    expect(details.get().open).toBe(true)
+    list.openScope(A)
+    expect([details.get().open, details.get().swapped]).toEqual([false, true])
+    list.select('a0', { source: 'click' })
+    expect([details.get().open, details.get().swapped]).toEqual([true, false])
+    list.switchScope(null)
+    expect(list.get().selectedId).toBe('m0')
+    expect([details.get().open, details.get().swapped]).toEqual([true, false])
+    list.switchScope(A)
+    expect([list.get().selectedId, details.get().open]).toEqual(['a0', true])
+  })
+
+  it('keeps a pane the reader closed closed, and says the reader closed it', async () => {
+    await tabs()
+    list.select('m0', { source: 'click' })
+    list.openScope(A)
+    list.select('a0', { source: 'click' })
+    details.closeDetails()
+    expect([details.get().open, details.get().swapped]).toEqual([false, false])
+    list.switchScope(null)
+    expect(details.get().open).toBe(true)
+    list.switchScope(A)
+    expect([details.get().open, details.get().swapped]).toEqual([false, true])
+    details.openDetails()
+    expect([details.get().open, details.get().swapped]).toEqual([true, false])
+    list.switchScope(null)
+    list.switchScope(A)
+    list.select('a1', { source: 'click' })
+    expect(details.get().swapped).toBe(false)
+    /* Closed by the reader in the main session, it is still closed on the way back -- closed this time by the move. */
+    list.switchScope(null)
+    details.closeDetails()
+    list.switchScope(A)
+    expect(details.get().open).toBe(true)
+    list.switchScope(null)
+    expect([details.get().open, details.get().swapped]).toEqual([false, true])
+  })
+
+  it('does not count coming back to a tab as an arrival, so the pin leaves the entry where it was', async () => {
+    await tabs()
+    await arrive('m0', ['relations', 'usage'])
+    details.setTab('m0', 'relations')
+    details.togglePin('m0')
+    details.setTab('m0', 'usage')
+    list.openScope(A)
+    list.switchScope(null)
+    expect(details.get().arrival).toBeNull()
+    void details.loadDescriptor()
+    await flush()
+    expect(details.descriptor()?.entry_id).toBe('m0')
+    expect(details.tabOf('m0')).toBe('usage')
+  })
+
+  it('arrives at a row of another tab a link led to, and lets the pin decide there', async () => {
+    await tabs()
+    await arrive('m0', ['relations', 'usage'])
+    details.setTab('m0', 'relations')
+    details.togglePin('m0')
+    list.select('a1', { source: 'link' })
+    expect([list.get().scope, details.get().open, details.get().arrival]).toEqual([A, true, 'a1'])
+    void details.loadDescriptor()
+    await answerDetail(descriptor('a1', 1, ['relations', 'usage']))
+    expect(details.tabOf('a1')).toBe('relations')
+  })
+
+  it('opens on the first preferred block an entry has when no pin applies, once', async () => {
+    await tabs()
+    details.prefer('x0', ['transcript', 'frames'])
+    await arrive('x0', ['agent', 'transcript', 'frames'], 'link')
+    expect(details.tabOf('x0')).toBe('transcript')
+    expect(details.get().preferred).toEqual({})
+    details.prefer('x1', ['transcript', 'frames'])
+    await arrive('x1', ['agent', 'frames'], 'link')
+    expect(details.tabOf('x1')).toBe('frames')
+    /* Spent: the next arrival is the reader's own. */
+    details.setTab('x0', 'overview')
+    list.select('x1', { source: 'click' })
+    list.select('x0', { source: 'click' })
+    void details.loadDescriptor()
+    await flush()
+    expect(details.tabOf('x0')).toBe('overview')
+  })
+
+  it('lets a pin the entry has win over a preference, and spends the preference anyway', async () => {
+    await tabs()
+    await arrive('m0', ['agent'])
+    details.setTab('m0', 'agent')
+    details.togglePin('m0')
+    details.prefer('x0', ['transcript'])
+    await arrive('x0', ['agent', 'transcript'], 'link')
+    expect(details.tabOf('x0')).toBe('agent')
+    expect(details.get().preferred).toEqual({})
+  })
+
+  it('forgets every tab\'s pane and every preference with the conversation', async () => {
+    await tabs()
+    list.select('m0', { source: 'click' })
+    list.openScope(A)
+    details.prefer('x0', ['transcript'])
+    expect(Object.keys(details.get().openByScope)).toEqual([''])
+    list.sessionChanged('gui:b')
+    expect([details.get().openByScope, details.get().preferred, details.get().swapped]).toEqual([{}, {}, false])
+  })
+
+  it('lets a closed tab\'s pane go', async () => {
+    await tabs()
+    list.openScope(A)
+    list.select('a0', { source: 'click' })
+    list.switchScope(null)
+    expect(details.get().openByScope[A]).toBe(true)
+    list.closeScope(A)
+    list.openScope(X)
+    expect(details.get().openByScope[A]).toBeUndefined()
+  })
+})

@@ -38,9 +38,14 @@ from rich.table import Table
 # ``add`` reads them as its own globals -- which is also what a test that
 # stands in a reachable machine patches.
 from raven.ops.connection_add import NODE_FIELD, probe
+from raven.ops.connection_add import alias_collision as _alias_collision
+from raven.ops.connection_add import forget_password as _forget_password
+from raven.ops.connection_add import forget_unowned_password as _forget_unowned_password
 from raven.ops.connection_add import parse_probe as _parse_probe  # noqa: F401 -- re-export, the tests read it here
+from raven.ops.connection_add import password_auth as _password_auth
 from raven.ops.connection_add import remove as _remove
 from raven.ops.connection_add import remove_ssh_alias as _remove_ssh_alias
+from raven.ops.connection_add import store_registration_password as _store_registration_password
 from raven.ops.connection_add import write as _write
 from raven.ops.connection_add import write_ssh_alias as _write_ssh_alias
 
@@ -71,6 +76,17 @@ def add(  # noqa: PLR0913 -- one option per field of the row; a dict would hide 
     port: int = typer.Option(0, "--port"),
     user: str = typer.Option("", "--user"),
     key: str = typer.Option("", "--key", help="Path to the private key; the path is stored, not the key."),
+    auth: str = typer.Option(
+        "",
+        "--auth",
+        help="key (the default) or password: how Raven logs in. A password is kept on this computer, readable by "
+        "you alone, and used on every connection.",
+    ),
+    password_stdin: bool = typer.Option(
+        False,
+        "--password-stdin",
+        help="Read the password from the first line of stdin, before any question; implies --auth password.",
+    ),
     software: str = typer.Option("", "--software", help="What is installed, with paths."),
     budget_unit: str = typer.Option("", "--budget-unit", help="minute | core-minute | gpu-minute"),
     concurrency: int = typer.Option(0, "--concurrency", help="Jobs it will run at once."),
@@ -89,9 +105,28 @@ def add(  # noqa: PLR0913 -- one option per field of the row; a dict would hide 
     conversation and passes them through. Either way the machine is contacted
     before anything is written, and what it can say about itself is read off it.
     """
-    from raven.ops.connections import LOCAL, SSH, row_problems, store_path
+    import sys
 
+    import click
+
+    from raven.ops.connections import LOCAL, SSH, UNREADABLE, read, row_problems, store_path
+
+    if password_stdin and (auth or "password").strip().lower() != "password":
+        # Refused rather than ignored: the piped line would otherwise answer the
+        # first question, and the password would land in the registry as the
+        # machine's name.
+        console.print("[red]--password-stdin goes with --auth password. Nothing was written.[/red]")
+        raise typer.Exit(1)
+    auth = auth or ("password" if password_stdin else "")
     kind = (transport or SSH).strip().lower()
+    login = (auth or "key").strip().lower()
+    password = ""
+    if login == "password" and password_stdin:
+        # Read here, before the first question: piped in, the password must not
+        # be left to answer a question of its own -- it used to answer the
+        # machine's name (reviewed 2026-10-19). Never an option: a command line
+        # is readable by every account here.
+        password = click.get_text_stream("stdin").readline().rstrip("\r\n")
     if not non_interactive:
         console.print(f"[dim]writing to {store_path()}[/dim]")
         name = name or _ask("What do you call this machine")
@@ -101,57 +136,133 @@ def add(  # noqa: PLR0913 -- one option per field of the row; a dict would hide 
             host = host or _ask("Address")
             port = port or int(_ask("Port", "22"))
             user = user or _ask("Username", "root")
-            key = key or _ask("Private key path", "~/.ssh/id_rsa")
+            login = (auth or _ask("Log in with a key or a password? (key/password)", "key")).strip().lower()
+            if login == "password" and not password and sys.platform != "win32":
+                password = typer.prompt("Password (kept on this computer, readable by you alone)", hide_input=True)
+            elif login == "key":
+                key = key or _ask("Private key path", "~/.ssh/id_rsa")
     conn_id = conn_id or _slug(name)
     row: dict[str, Any] = {"id": conn_id, "display_name": name or conn_id, "transport": kind}
     if kind != LOCAL:
-        row.update({"host": host, "port": port, "user": user, "key": key})
-
-    if skip_probe:
-        console.print("[yellow]--skip-probe: this machine was not contacted, so nothing here is confirmed.[/yellow]")
-    else:
-        reached, message, found = probe(row)
-        if not reached:
-            console.print(f"[red]{message}[/red]")
-            console.print("Nothing was written. Fix the address, port, user or key and run this again.")
+        if login not in ("key", "password"):
+            console.print(f"[red]--auth must be key or password, not {login!r}. Nothing was written.[/red]")
             raise typer.Exit(1)
-        console.print(f"[green]{message}[/green]")
-        if found:
-            console.print("  " + "   ".join(f"{k} {v}" for k, v in found.items()))
-        row.update(found)
+        if login == "password":
+            if sys.platform == "win32":
+                console.print(
+                    "[red]registering with a password is not supported on Windows; use a key instead. "
+                    "Nothing was written.[/red]"
+                )
+                raise typer.Exit(1)
+            if not password:
+                console.print(
+                    "[red]registering with a password needs the password: pass --password-stdin, or run without "
+                    "--non-interactive to be asked. Nothing was written.[/red]"
+                )
+                raise typer.Exit(1)
+            row.update({"host": host, "port": port, "user": user, "auth": "password"})
+        else:
+            row.update({"host": host, "port": port, "user": user, "key": key})
 
-    for field, value in (("device", device), ("cores", cores), ("memory", memory), ("note", note)):
-        if value:
-            row[field] = value
-    if not non_interactive:
-        software = software or _ask("What is installed on it (write the paths in)", str(row.get("software") or ""))
-        budget_unit = budget_unit or _ask(
-            "Budget counted in", "gpu-minute" if row.get("kind") == "gpu" else "core-minute"
-        )
-        concurrency = concurrency or int(_ask("How many jobs at once", "1"))
-        if not paths:
-            answer = _ask("Directories on it that hold your work (space separated, blank for none)", required=False)
-            paths = shlex.split(answer)
-    row["software"] = software or row.get("software", "")
-    row["budget_unit"] = budget_unit
-    row["concurrency"] = concurrency
-    if paths:
-        row["paths"] = list(paths)
-
-    faults = row_problems(row)
-    blocking = [f for f in faults if f.blocking]
-    for fault in faults:
-        console.print(f"  [{'red' if fault.blocking else 'yellow'}]- {fault}[/]")
-    if blocking:
+    # Judged before anything is kept or reached, in the order machines.add
+    # uses: the row's own fields (its id above all, since a password file is
+    # named by it), a registry that reads, and an id not in use. A failed
+    # registration used to leave a password file behind -- under a path-shaped
+    # id even outside keys/ -- or to delete or replace the registered machine's
+    # (reviewed 2026-10-19). Remove, then register again.
+    early = [f for f in row_problems(row) if f.blocking]
+    if early:
+        for fault in early:
+            console.print(f"  [red]- {fault}[/]")
         console.print("[red]Nothing was written.[/red]")
         raise typer.Exit(1)
+    registry = read()
+    if registry.state == UNREADABLE:
+        console.print(f"[red]{registry.detail}[/red]")
+        console.print("[red]Nothing was written: fix the registry file first.[/red]")
+        raise typer.Exit(1)
+    if any(str(r.get("id") or "").strip() == conn_id for r in registry.rows):
+        console.print(
+            f"[red]a machine with id {conn_id!r} is already listed in {store_path()}; remove it first "
+            f"(raven ops connection remove {conn_id}). Nothing was written.[/red]"
+        )
+        raise typer.Exit(1)
+    if collision := _alias_collision(row, list(registry.rows)):
+        console.print(f"[red]{collision}. Nothing was written.[/red]")
+        raise typer.Exit(1)
+
+    kept = None
+    written = None
     try:
-        written = _write(row)
-    except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
-        console.print("[red]Nothing was written.[/red]")
-        raise typer.Exit(1) from None
+        if password:
+            # Kept before the probe, which reaches the machine the way every later connection will.
+            try:
+                kept = _store_registration_password(conn_id, password)
+            except ValueError as exc:
+                console.print(f"[red]{exc}. Nothing was written.[/red]")
+                raise typer.Exit(1) from None
+        if skip_probe:
+            console.print(
+                "[yellow]--skip-probe: this machine was not contacted, so nothing here is confirmed.[/yellow]"
+            )
+        else:
+            reached, message, found = probe(row, password=password) if password else probe(row)
+            if not reached:
+                if password:
+                    message = message.replace(password, "the password")
+                console.print(f"[red]{message}[/red]")
+                console.print("Nothing was written. Fix the address, port, user, key or password and run this again.")
+                raise typer.Exit(1)
+            console.print(f"[green]{message}[/green]")
+            if found:
+                console.print("  " + "   ".join(f"{k} {v}" for k, v in found.items()))
+            row.update(found)
+
+        for field, value in (("device", device), ("cores", cores), ("memory", memory), ("note", note)):
+            if value:
+                row[field] = value
+        if not non_interactive:
+            software = software or _ask("What is installed on it (write the paths in)", str(row.get("software") or ""))
+            budget_unit = budget_unit or _ask(
+                "Budget counted in", "gpu-minute" if row.get("kind") == "gpu" else "core-minute"
+            )
+            concurrency = concurrency or int(_ask("How many jobs at once", "1"))
+            if not paths:
+                answer = _ask("Directories on it that hold your work (space separated, blank for none)", required=False)
+                paths = shlex.split(answer)
+        row["software"] = software or row.get("software", "")
+        row["budget_unit"] = budget_unit
+        row["concurrency"] = concurrency
+        if paths:
+            row["paths"] = list(paths)
+
+        faults = row_problems(row)
+        blocking = [f for f in faults if f.blocking]
+        for fault in faults:
+            console.print(f"  [{'red' if fault.blocking else 'yellow'}]- {fault}[/]")
+        if blocking:
+            console.print("[red]Nothing was written.[/red]")
+            raise typer.Exit(1)
+        try:
+            written = _write(row, password=password) if password else _write(row)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            console.print("[red]Nothing was written.[/red]")
+            raise typer.Exit(1) from None
+    finally:
+        if kept is not None and written is None:
+            # Refused, aborted at a question, or the write failed: no row of
+            # this call's holds the password, so it is not kept either --
+            # unless a registration of the same id landed meanwhile, whose row
+            # it is now (`forget_unowned_password` has the rule).
+            _forget_unowned_password(conn_id, password, identity=kept)
     console.print(f"[green]wrote {row['id']} to {written}[/green]")
+    if password:
+        console.print(f"[green]password kept for {row['id']} (readable by you alone; used on every connection)[/green]")
+        console.print(
+            "No Host alias goes into ~/.ssh/config for a password machine: scp and rsync from a terminal ask for the "
+            "password, and an agent reaches its files through Raven's own file tools."
+        )
     try:
         alias = _write_ssh_alias(row)
     except (OSError, ValueError) as exc:
@@ -193,6 +304,8 @@ def list_connections(as_json: bool = typer.Option(False, "--json")) -> None:
         table.add_column(column)
     for row in found.rows:
         reach = "local" if str(row.get("transport") or "ssh") == "local" else f"{row.get('host')}:{row.get('port')}"
+        if _password_auth(row) and reach != "local":
+            reach += " (password)"
         what = " ".join(str(row.get(k)) for k in ("kind", "device", "cores") if row.get(k))
         table.add_row(
             str(row.get("id")),
@@ -262,7 +375,8 @@ def remove_connection(
     does not refuse the removal; it is named, since connecting it again is
     refused until the machine is registered again. What the install put on the machine is not touched:
     this computer stops knowing the way there, and ``<node_dir>`` on the
-    machine is the owner's to remove by hand.
+    machine is the owner's to remove by hand. The password kept here for a
+    machine registered with one is deleted with the row.
     """
     from pydantic import ValidationError
 
@@ -309,6 +423,9 @@ def remove_connection(
     console.print(
         "The Raven node installed on it, if any, stays there: remove its node directory on the machine by hand."
     )
+    if _forget_password(wanted):
+        # Whatever the row's login: a file kept under this id is nobody's once the row is gone.
+        console.print("[green]the password kept here for it is deleted[/green]")
     if named:
         console.print(
             f"[yellow]{', '.join(named)} still name{'s' if len(named) == 1 else ''} this machine and "
@@ -368,8 +485,9 @@ def install_node(
         console.print(f"Installed the Raven node {done.install_name} in {done.node_dir}{size}.")
         if not done.rg:
             console.print(
-                "[yellow]ripgrep-bin was not available from the machine's package index or PyPI; "
-                "grep there runs Raven's own Python search, as it does on a computer without rg.[/yellow]"
+                "[yellow]ripgrep-bin did not install there, from any package index it was tried on or in the "
+                "time a step has; grep there runs Raven's own Python search, as it does on a computer without "
+                "rg.[/yellow]"
             )
     if prune:
         try:

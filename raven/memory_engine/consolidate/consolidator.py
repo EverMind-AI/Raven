@@ -23,6 +23,7 @@ from loguru import logger
 
 from raven.observability import semconv
 from raven.providers.binding import ModelBinding, active_window, resolve
+from raven.session.refs import tool_result_view
 from raven.tracing import trace
 from raven.utils.paths import ensure_dir
 from raven.utils.tokens import estimate_message_tokens, estimate_prompt_tokens_chain
@@ -971,14 +972,22 @@ class MemoryStore:
 
     @staticmethod
     def _format_messages(messages: list[dict]) -> str:
+        """The transcript the annotator reads, one line per message.
+
+        A tool result goes in as :func:`~raven.session.refs.tool_result_view`:
+        the session files results whole for ``context_retrieve``, and one large
+        read would otherwise push the annotation prompt past the model's window,
+        which ``/new`` cannot get past.
+        """
         lines = []
         for message in messages:
-            if not message.get("content"):
+            content = message.get("content")
+            if not content:
                 continue
+            if message.get("role") == "tool" and isinstance(content, str):
+                content = tool_result_view(content)
             tools = f" [tools: {', '.join(message['tools_used'])}]" if message.get("tools_used") else ""
-            lines.append(
-                f"[{message.get('timestamp', '?')[:16]}] {message['role'].upper()}{tools}: {message['content']}"
-            )
+            lines.append(f"[{message.get('timestamp', '?')[:16]}] {message['role'].upper()}{tools}: {content}")
         return "\n".join(lines)
 
     @trace.instrument("memory.extract", extract=semconv.memory_extract)

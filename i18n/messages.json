@@ -492,8 +492,8 @@
       "zh": "失败"
     },
     "gui.deleg.self": {
-      "en": "Raven",
-      "zh": "Raven 分身"
+      "en": "Raven-General",
+      "zh": "Raven-General"
     },
     "gui.deleg.open_hint": {
       "en": "Open this run's transcript",
@@ -510,6 +510,10 @@
     "gui.deleg.body_cap": {
       "en": "What entered this turn",
       "zh": "注入本轮对话的内容"
+    },
+    "gui.deleg.body_cap_node": {
+      "en": "What the node returned",
+      "zh": "节点返回的内容"
     },
     "gui.deleg.body_hide": {
       "en": "Collapse",
@@ -538,6 +542,14 @@
     "gui.deleg.dlv_stopped": {
       "en": "Stopped",
       "zh": "已停止"
+    },
+    "gui.deleg.dlv_notice": {
+      "en": "Still running",
+      "zh": "仍在运行"
+    },
+    "gui.deleg.body_truncated": {
+      "en": "Showing the first 20,000 characters. Open the run to read the full output.",
+      "zh": "仅显示前 20,000 个字符。打开运行记录可查看完整输出。"
     },
     "gui.deleg.body_aria": {
       "en": "Show what the delegated run delivered",
@@ -582,6 +594,10 @@
     "gui.deleg.dag_skip": {
       "en": "{n} skipped",
       "zh": "跳过 {n}"
+    },
+    "gui.deleg.dag_not_executed": {
+      "en": "{n} not executed",
+      "zh": "未执行 {n}"
     },
     "gui.act.ing.text_to_speech": {
       "en": "Generating speech",
@@ -2163,6 +2179,14 @@
       "en": "Hide",
       "zh": "收起"
     },
+    "gui.transcript.nav": {
+      "en": "Turns",
+      "zh": "对话轮次"
+    },
+    "gui.transcript.nav_turn": {
+      "en": "Turn {n}",
+      "zh": "第 {n} 轮"
+    },
     "gui.freq.cron": {
       "en": "Custom",
       "zh": "自定义"
@@ -2915,6 +2939,30 @@
       "en": "A model ID the catalogue lacks",
       "zh": "目录里没有的 model ID，手动加"
     },
+    "gui.model.loading": {
+      "en": "Loading model...",
+      "zh": "正在加载模型..."
+    },
+    "gui.model.load_failed": {
+      "en": "Model unavailable",
+      "zh": "模型加载失败"
+    },
+    "gui.model.retry_load": {
+      "en": "Click to retry loading the model",
+      "zh": "点击重试加载模型"
+    },
+    "gui.model.choose": {
+      "en": "Choose a model",
+      "zh": "选择模型"
+    },
+    "gui.model.provider_catalogue_loading": {
+      "en": "The model list is still loading. Try again shortly.",
+      "zh": "模型列表正在加载，请稍后重试。"
+    },
+    "gui.model.provider_catalogue_failed": {
+      "en": "Could not load the model list. Click the model to retry.",
+      "zh": "模型列表加载失败，点击模型重试。"
+    },
     "gui.model.base_ph": {
       "en": "API base (optional, for your own gateway)",
       "zh": "API Base（可选，自建网关才填）"
@@ -3351,6 +3399,10 @@
       "en": "Channels",
       "zh": "渠道"
     },
+    "gui.hub.machines": {
+      "en": "Machines",
+      "zh": "机器"
+    },
     "gui.nav.conn": {
       "en": "Channels",
       "zh": "入口"
@@ -3578,6 +3630,10 @@
     "gui.page.conn_sub": {
       "en": "Raven joins the chat apps you already use, so you can hand it work and get results back from WeChat, Feishu, Telegram and more.",
       "zh": "Raven 可以接入你常用的聊天应用，在微信、飞书、Telegram 里也能直接给它派活、收结果"
+    },
+    "gui.page.machines_sub": {
+      "en": "The machines Raven can hand work to besides this computer: register one, put the node on it, then pick it when an agent is connected.",
+      "zh": "Raven 除本机之外还能把活派到这些机器上：先登记一台、装上节点，接入智能体时就能选它"
     },
     "gui.page.cron": {
       "en": "Schedules",
@@ -4544,8 +4600,12 @@
       "zh": "这个页面当前没有正在运行的 Raven 在托管，这里没有可以升级的对象。"
     },
     "gui.upg.why.unsupervised": {
-      "en": "This Raven was started by hand in a terminal, so nothing would bring it back after an upgrade. Run raven upgrade there, then start Raven again.",
-      "zh": "这个 Raven 是在终端里手动启动的，升级后没有守护进程能把它重新拉起来。请在那个终端里运行 raven upgrade，然后重新启动 Raven。"
+      "en": "This Raven was started by hand in a terminal, so nothing would bring it back after an upgrade. Stop it and upgrade it with the commands below, then start it again with raven web once the upgrade has finished. The upgrade does not stop Raven for you, and a raven web started beside the old one, or before the upgrade has finished, would not run the new version.",
+      "zh": "这个 Raven 是在终端里手动启动的，升级后没有守护进程能把它重新拉起来。请用下面的命令停掉它并升级，等升级完成后再用 raven web 重新启动。升级不会替你停掉它；在旧进程旁边、或在升级完成之前启动的 raven web 都不会运行新版本。"
+    },
+    "gui.upg.why.editable": {
+      "en": "This Raven is a source checkout, so released upgrades do not apply to it. Update it with git, then reinstall.",
+      "zh": "这个 Raven 是源码检出，发布的升级包对它不适用。请用 git 更新代码后重新安装。"
     },
     "gui.upg.working": {
       "en": "Upgrading Raven...",
@@ -5212,13 +5272,12 @@
       "zh": "{name} 的预设改成走 {to} 了 · 会先移除再按新预设装回来，已经在跑的会话句柄会失效"
     },
     "gui.agent.on_machine": {"en": "On the registered machine {id}", "zh": "在登记机器 {id} 上"},
-    "gui.machine.g_machines": {"en": "Machines", "zh": "机器"},
     "gui.machine.register": {"en": "Register a machine", "zh": "登记机器"},
     "gui.machine.none": {"en": "No machine is registered yet. Register one, then install the node on it.", "zh": "还没有登记机器。先登记一台，再在它上面安装节点。"},
     "gui.machine.state_connected": {"en": "{n} agents running", "zh": "{n} 个 Agent 在跑"},
-    "gui.machine.state_idle": {"en": "Link up, no agent", "zh": "链路在，没有 Agent"},
+    "gui.machine.state_idle": {"en": "Link up, no agent running", "zh": "链路在，没有 Agent 在跑"},
     "gui.machine.state_lost": {"en": "Link down; agents wait", "zh": "链路断了，Agent 在等"},
-    "gui.machine.state_off": {"en": "No link", "zh": "没有链路"},
+    "gui.machine.state_off": {"en": "Not connected; the link opens when work is sent", "zh": "未连接（派活时自动连上）"},
     "gui.machine.state_error": {"en": "Error", "zh": "出错"},
     "gui.machine.node_version": {"en": "Node {v}", "zh": "节点 {v}"},
     "gui.machine.node_none": {"en": "Node not installed", "zh": "节点未安装"},
@@ -5242,10 +5301,17 @@
     "gui.machine.f_host": {"en": "Address", "zh": "地址"},
     "gui.machine.f_port": {"en": "Port", "zh": "端口"},
     "gui.machine.f_user": {"en": "User", "zh": "用户名"},
+    "gui.machine.f_auth": {"en": "Login", "zh": "登录方式"},
+    "gui.machine.auth_key": {"en": "Key", "zh": "密钥"},
+    "gui.machine.auth_password": {"en": "Password", "zh": "密码"},
+    "gui.machine.auth_stored": {"en": "Password (kept on this computer)", "zh": "密码（保存在本机）"},
     "gui.machine.f_key": {"en": "Private key path", "zh": "私钥路径"},
     "gui.machine.key_note": {"en": "Only the path is stored. The key never leaves this computer.", "zh": "只记录路径，私钥不离开这台电脑。"},
+    "gui.machine.f_password": {"en": "Password", "zh": "密码"},
+    "gui.machine.password_note": {"en": "The password is kept on this computer, readable by your account alone, and handed to ssh on every connection: never on a command line, never in a log. The first connection records the machine's host key and then sends the password, so on a network you do not trust, ssh once from a terminal and check the fingerprint before registering. When the machine's password changes, remove the machine and register it again.", "zh": "密码保存在这台电脑上，只有你的账号能读；每次连接时读出来交给 ssh，不进命令行、不进日志。第一次连接会先记下机器的主机密钥再送出密码，所以在不信任的网络上，先在终端里 ssh 一次核对指纹，再登记。机器改了密码，先移除这台机器再重新登记。"},
+    "gui.machine.auth_note": {"en": "No ssh alias is written for it; an agent reads and writes its files through Raven's own file tools. When its password changes, remove the machine and register it again.", "zh": "没有写 ssh 别名；Agent 读写它上面的文件走 Raven 的文件工具。机器改了密码，先移除这台机器再重新登记。"},
     "gui.machine.f_paths": {"en": "Work directories on the machine, one per line (optional)", "zh": "机器上的工作目录，每行一个（可不填）"},
-    "gui.machine.add_hint": {"en": "The machine has to accept this key over ssh. Its host key is recorded at the first contact and checked after.", "zh": "机器要能用这把密钥 ssh 登录。第一次连接时记下它的主机密钥，之后每次核对。"},
+    "gui.machine.add_hint": {"en": "An ssh login, with a key or with a password. The machine's host key is recorded at the first contact and checked after.", "zh": "用密钥或密码 ssh 登录。第一次连接时记下它的主机密钥，之后每次核对。"},
     "gui.machine.add_do": {"en": "Reach it once and register", "zh": "连一次并登记"},
     "gui.machine.adding": {"en": "Reaching the machine", "zh": "正在连接机器"},
     "gui.machine.add_bad": {"en": "Not registered", "zh": "没有登记"},
@@ -5260,18 +5326,21 @@
     "gui.machine.update": {"en": "Update node", "zh": "更新节点"},
     "gui.machine.f_node_dir": {"en": "Install into (optional)", "zh": "安装到（可不填）"},
     "gui.machine.node_dir_hint": {"en": "Where the node lives on the machine: ~/.raven-node unless its home disk has no room.", "zh": "节点在机器上的存放目录：默认 ~/.raven-node，只有主目录所在磁盘放不下时才需要改。"},
-    "gui.machine.install_bad_hint": {"en": "Fix what the line says, then press Install node again. Nothing was left on the machine.", "zh": "按这一行的提示处理后，再点一次「安装节点」。机器上没有留下东西。"},
+    "gui.machine.install_bad_hint": {"en": "Fix what the line says, then press Install node again: the next try clears what this one left of the node first.", "zh": "按这一行的提示处理后，再点一次「安装节点」：下一次会先清掉这次没装完的节点。"},
     "gui.machine.remove_do": {"en": "Remove machine", "zh": "移除机器"},
     "gui.machine.remove_body": {"en": "{name} ({id}) is taken out of the registry and its ssh alias goes with it. Agent entries that run there have to be disconnected first. The node installed on the machine stays there.", "zh": "{name}（{id}）会从登记表里去掉，ssh 别名一起去掉；在它上面跑的 Agent 条目要先断开。装在机器上的节点会留在那里。"},
+    "gui.machine.remove_body_password": {"en": "{name} ({id}) is taken out of the registry and the password kept here for it is deleted. Agent entries that run there have to be disconnected first. The node installed on the machine stays there.", "zh": "{name}（{id}）会从登记表里去掉，为它保存的密码一起删掉；在它上面跑的 Agent 条目要先断开。装在机器上的节点会留在那里。"},
     "gui.machine.removing": {"en": "Removing", "zh": "正在移除"},
     "gui.machine.removed": {"en": "{name} was removed", "zh": "已移除 {name}"},
     "gui.machine.load_bad": {"en": "The machine list could not be read", "zh": "机器列表读不出来"},
     "gui.machine.file_problems": {"en": "The registry file", "zh": "登记表文件"},
     "gui.machine.why_unreachable": {"en": "The machine could not be reached: check the address and port, and that the machine is on and reachable from this computer.", "zh": "连不上这台机器：检查地址和端口，确认机器开着、从这台电脑能连到它。"},
-    "gui.machine.why_login": {"en": "The machine refused the login: check the user name and the private key path, and that the key's public half is on the machine.", "zh": "机器拒绝了登录：检查用户名和私钥路径，确认对应的公钥已经放到机器上。"},
+    "gui.machine.why_login": {"en": "The machine refused the login. With a key: check the user name and the private key path, and that the key's public half is on the machine. With a password: check it, and that the machine accepts password logins at all.", "zh": "机器拒绝了登录。用密钥时：检查用户名和私钥路径，确认对应的公钥已经放到机器上。用密码时：检查密码，并确认这台机器允许密码登录。"},
+    "gui.machine.why_prompt": {"en": "The machine asked something the kept password does not answer -- a one-time code, another account's password, or a password prompt that names a host other than the registered one -- so the password was not sent: see the line below.", "zh": "机器问的不是这个账号自己的密码提示（比如一次性验证码、别的账号的密码，或者提示里的主机不是登记的那台），所以没有发送密码：详见下一行。"},
     "gui.machine.why_hostkey": {"en": "The machine's host key differs from the one on record: check the machine before trusting it again, then take the old line out of ~/.ssh/known_hosts.", "zh": "机器的主机密钥和记录的不一样：先确认机器没问题，再把 ~/.ssh/known_hosts 里的旧记录删掉。"},
     "gui.machine.why_timeout": {"en": "The machine did not answer in time: check that it is on and that the port is open.", "zh": "机器没有按时应答：确认机器开着、端口放行。"},
     "gui.machine.why_nossh": {"en": "ssh is not installed on this computer: install OpenSSH, then try again.", "zh": "这台电脑没有 ssh：装好 OpenSSH 再试。"},
+    "gui.machine.why_platform": {"en": "This computer is Windows, where registering with a password is not available: pick Key, put the key's public half on the machine, and give the private key's path here.", "zh": "这台电脑是 Windows，不能用密码登记：改选「密钥」，把公钥放到机器上，再在这里填私钥路径。"},
     "gui.machine.why_duplicate": {"en": "That id is taken: pick another, or remove the machine listed under it first.", "zh": "这个 id 已经有机器在用：换一个，或者先移除原来那台。"},
     "gui.machine.why_invalid": {"en": "A field is missing or cannot be used: see the line below.", "zh": "有字段缺失或不能用：见下一行。"},
     "gui.machine.why_registry": {"en": "The registry file cannot be changed: fix it first, as the line below says.", "zh": "登记表文件改不了：先按下一行的提示处理。"},
@@ -5281,6 +5350,49 @@
     "gui.machine.remove_bad_said": {"en": "Not removed: {said}", "zh": "没有移除：{said}"},
     "gui.machine.err_no_node": {"en": "No Raven node on it yet: press Install node. {said}", "zh": "机器上还没有节点，点「安装节点」。{said}"},
     "gui.machine.err_stale_node": {"en": "Its node is another Raven's: press Update node. {said}", "zh": "节点是另一个版本的 Raven 装的，点「更新节点」。{said}"},
+    "gui.machine.agents_here": {"en": "Agents on this machine", "zh": "这台机器上的 Agent"},
+    "gui.machine.agents_here_none": {"en": "None yet", "zh": "还没有"},
+    "gui.machine.agents_line": {"en": "{n} on this machine: {names}", "zh": "这台机器上有 {n} 个 Agent：{names}"},
+    "gui.machine.agents_line_none": {"en": "No agent connected here yet", "zh": "还没有 Agent 接到这里"},
+    "gui.machine.next_title": {"en": "Next", "zh": "下一步"},
+    "gui.machine.next_body": {"en": "Connect an agent that runs on this machine. The agent itself has to be installed and signed in there; Raven's node only starts it.", "zh": "接一个跑在这台机器上的 Agent。Agent 本身要在那台机器上装好并登录，Raven 的节点只负责启动它。"},
+    "gui.machine.connect_here": {"en": "Connect an agent on this machine", "zh": "在这台机器上接入 Agent"},
+    "gui.machine.connect_title": {"en": "Connect an agent on {name}", "zh": "在 {name} 上接入 Agent"},
+    "gui.machine.connect_hint": {"en": "It is started there once first, as proof, and written only when it answers.", "zh": "先在那台机器上真跑一句作证明，答了才写入。"},
+    "gui.machine.f_preset": {"en": "Agent", "zh": "Agent"},
+    "gui.machine.preset_connected_here": {"en": "{name} (connected on this computer; this adds one on the machine)", "zh": "{name}（本机已接入，再接一份到机器）"},
+    "gui.machine.preset_on_machine": {"en": "{name} (already connected on this machine)", "zh": "{name}（已接在这台机器上）"},
+    "gui.machine.preset_off_entry": {"en": "{name} (connected on this machine as {entry}, switched off)", "zh": "{name}（已接在这台机器上，已断开：{entry}）"},
+    "gui.machine.off_suffix": {"en": "{name} (switched off)", "zh": "{name}（已断开）"},
+    "gui.machine.reconnect_do": {"en": "Reconnect", "zh": "重新接入"},
+    "gui.machine.reconnect_hint": {"en": "The entry is switched back on: it is started there once first, as proof.", "zh": "把这条条目重新启用：先在那台机器上真跑一句作证明。"},
+    "gui.machine.reconnected_said": {"en": "{name} is connected again; it is on the Agents page.", "zh": "已重新接入 {name}，到「智能体」页可以看到。"},
+    "gui.machine.preset_connecting": {"en": "{name} (being connected on this machine right now)", "zh": "{name}（正在接到这台机器上）"},
+    "gui.machine.connecting": {"en": "Starting it on the machine", "zh": "正在机器上启动它"},
+    "gui.machine.connecting_for": {"en": "Starting it on the machine, {s}s so far", "zh": "正在机器上启动它，已等 {s} 秒"},
+    "gui.machine.connecting_hint": {"en": "The node on the machine starts it, then it has to answer one test message: a few seconds to a minute as a rule, ten minutes at most. Cancel asks it to stop, and this form says whether anything was written.", "zh": "机器上的节点先启动它，再等它答一句测试消息：一般几秒到一分钟，最多等 10 分钟。点「取消」会请求停掉这一跑，这里会说有没有写入。"},
+    "gui.machine.cancelling": {"en": "Stopping", "zh": "正在停止"},
+    "gui.machine.connect_cancelled_head": {"en": "Cancelled", "zh": "已取消"},
+    "gui.machine.connect_cancelled": {"en": "Cancelled; nothing was written. It can be connected again.", "zh": "已取消，没有写入。可以再接一次。"},
+    "gui.machine.connect_timeout_head": {"en": "No answer", "zh": "没有等到答复"},
+    "gui.machine.connect_timeout": {"en": "No answer in ten minutes, so the form asked the run to stop. See the Agents page for whether it connected; if not, connect again.", "zh": "等了 10 分钟没有答复，已请求停止。到「智能体」页看它有没有接上；没有的话再接一次。"},
+    "gui.machine.connect_late_for": {"en": "Too late to cancel; waiting for it to finish, {s}s so far", "zh": "已经来不及取消，正在等它收尾，已等 {s} 秒"},
+    "gui.machine.connect_late_hint": {"en": "There was nothing left to stop: it had already answered, or had not started yet, so it may still be written. This form says how it ends.", "zh": "已经没有可停的了：它要么已经答过，要么还没开始，所以仍可能写入。结束后这里会说结果。"},
+    "gui.machine.connect_missed_head": {"en": "Not stopped", "zh": "没能停下"},
+    "gui.machine.connect_missed": {"en": "It was past the point where it could be cancelled, so it may have been written. See the Agents page for whether it connected; if not, connect again.", "zh": "已经过了能取消的时候，可能已经写入。到「智能体」页看它有没有接上；没有的话再接一次。"},
+    "gui.machine.connect_unconfirmed_head": {"en": "Cancel not confirmed", "zh": "取消未确认"},
+    "gui.machine.connect_unconfirmed": {"en": "The stop gave no answer, so it may still be written. See the Agents page for whether it connected; if not, connect again.", "zh": "停止请求没有答复，所以仍可能写入。到「智能体」页看它有没有接上；没有的话再接一次。"},
+    "gui.machine.connected_said": {"en": "{name} is connected; it is on the Agents page.", "zh": "已接入 {name}，到「智能体」页可以看到。"},
+    "gui.machine.connect_bad": {"en": "Not connected", "zh": "没有接入"},
+    "gui.machine.connect_bad_named": {"en": "Not connected: {name}", "zh": "没有接入 {name}"},
+    "gui.machine.connect_do": {"en": "Connect", "zh": "接入"},
+    "gui.machine.presets_none": {"en": "Nothing to connect: every agent that can run on a machine is already connected on this one.", "zh": "没有可接的：能跑在机器上的 Agent 都已经接在这台机器上了。"},
+    "gui.machine.presets_loading": {"en": "Reading the agents", "zh": "正在读取 Agent 列表"},
+    "gui.machine.presets_pending": {"en": "Something is still being connected on this machine; the choices come back when it ends.", "zh": "这台机器上还有接入在进行，结束后再选。"},
+    "gui.machine.keys_found": {"en": "Found on this computer and filled in; pick another or type a path.", "zh": "已填入这台电脑上找到的密钥，也可以换一把或自己填路径。"},
+    "gui.machine.keys_none": {"en": "No ssh key was found on this computer. Type a path, or pick Password: Raven then keeps the password on this computer and logs in with it.", "zh": "这台电脑上没找到 ssh 密钥。可以自己填路径，或改选「密码」：Raven 会把密码保存在本机，每次用它登录。"},
+    "gui.machine.missing_but_machine": {"en": "Not installed on this computer, but it can run on a registered machine where it is installed and signed in.", "zh": "本机没装也可以跑在一台登记机器上，那台机器上要装好并登录它。"},
+    "gui.machine.connect_on": {"en": "Connect on {name}", "zh": "接入到 {name}"},
     "gui.agent.tag_stale": {
       "en": "Moved",
       "zh": "需迁移"
@@ -8825,6 +8937,10 @@
       "en": "{n} not dispatched",
       "zh": "{n} 步没派"
     },
+    "gui.tasks.step_not_executed": {
+      "en": "{n} not executed",
+      "zh": "{n} 步未执行"
+    },
     "gui.tasks.running_n": {
       "en": "{n} running",
       "zh": "{n} 个任务在跑"
@@ -8877,6 +8993,38 @@
       "en": "Awaiting a decision",
       "zh": "待裁决"
     },
+    "gui.tasks.node_st_not_executed": {
+      "en": "Not executed",
+      "zh": "未执行"
+    },
+    "gui.tasks.node_reason_when_false": {
+      "en": "Not selected",
+      "zh": "分支未选中"
+    },
+    "gui.tasks.node_reason_when_unknown": {
+      "en": "Decision missing",
+      "zh": "缺少分支决策"
+    },
+    "gui.tasks.node_reason_upstream": {
+      "en": "Upstream not executed",
+      "zh": "上游未执行"
+    },
+    "gui.tasks.node_reason": {
+      "en": "Reason",
+      "zh": "原因"
+    },
+    "gui.tasks.node_guard": {
+      "en": "Runs only if",
+      "zh": "执行条件"
+    },
+    "gui.tasks.node_evidence": {
+      "en": "Route evidence",
+      "zh": "选路依据"
+    },
+    "gui.tasks.node_sel_none": {
+      "en": "(none)",
+      "zh": "（无）"
+    },
     "gui.tasks.tokens_n": {
       "en": "{n} tokens",
       "zh": "{n} tokens"
@@ -8924,6 +9072,10 @@
     "gui.tasks.ctx_none": {
       "en": "Not started yet.",
       "zh": "还没开始。"
+    },
+    "gui.tasks.ctx_not_executed": {
+      "en": "This step was not executed, so there is no record of it.",
+      "zh": "这一步没有执行，所以没有记录。"
     },
     "gui.tasks.ctx_console": {
       "en": "This node is running over the CLI channel, which keeps no live transcript.",
@@ -9144,6 +9296,14 @@
     "gui.wd.picking": {
       "en": "Choose the folder in the dialog that opened...",
       "zh": "在弹出的窗口里选择文件夹…"
+    },
+    "gui.wd.drives": {
+      "en": "Drives",
+      "zh": "盘符"
+    },
+    "gui.wd.typed": {
+      "en": "Type a folder path",
+      "zh": "输入文件夹路径"
     },
     "gui.picker.empty_provider": {
       "en": "No models under this account",
@@ -12421,6 +12581,66 @@
       "en": "Released to stay within memory; click to read it again",
       "zh": "内容已释放（内存上限），点击重新读取"
     },
+    "gui.trajectory.scope.strip": {
+      "en": "Trajectory tabs",
+      "zh": "轨迹页签"
+    },
+    "gui.trajectory.scope.main": {
+      "en": "Main",
+      "zh": "主会话"
+    },
+    "gui.trajectory.scope.untitled": {
+      "en": "Sub-agent",
+      "zh": "子智能体"
+    },
+    "gui.trajectory.scope.close_named": {
+      "en": "Close {title}",
+      "zh": "关闭 {title}"
+    },
+    "gui.trajectory.scope.open": {
+      "en": "Open trajectory",
+      "zh": "打开轨迹"
+    },
+    "gui.trajectory.scope.opens": {
+      "en": "Double-click or press Enter to open its trajectory",
+      "zh": "双击或按 Enter 打开轨迹"
+    },
+    "gui.trajectory.scope.from": {
+      "en": "From sub-agent: {title}",
+      "zh": "来自子智能体：{title}"
+    },
+    "gui.trajectory.scope.locate": {
+      "en": "Show in main",
+      "zh": "在主会话中定位"
+    },
+    "gui.trajectory.scope.dispatched_in": {
+      "en": "Dispatched in turn {n}",
+      "zh": "第 {n} 回合派出"
+    },
+    "gui.trajectory.scope.agent": {
+      "en": "Agent: {name}",
+      "zh": "智能体：{name}"
+    },
+    "gui.trajectory.scope.instance": {
+      "en": "Instance: {name}",
+      "zh": "实例：{name}"
+    },
+    "gui.trajectory.scope.reported": {
+      "en": "Started by a sub-agent's report",
+      "zh": "由子智能体回报触发"
+    },
+    "gui.trajectory.scope.empty_running": {
+      "en": "No steps recorded yet",
+      "zh": "还没有记录到步骤"
+    },
+    "gui.trajectory.scope.empty_done": {
+      "en": "No steps were recorded",
+      "zh": "没有记录到步骤"
+    },
+    "gui.trajectory.scope.gone": {
+      "en": "This sub-agent's records are no longer available",
+      "zh": "记录已不可用"
+    },
     "gui.settings.cloud.title": {
       "en": "Long-term memory: EverOS Cloud",
       "zh": "长期记忆：EverOS Cloud"
@@ -12700,6 +12920,34 @@
     "gui.export.unavailable": {
       "en": "No bug report receiver is configured on this gateway.",
       "zh": "该网关没有配置问题报告服务器。"
+    },
+    "gui.export.probe_down": {
+      "en": "The bug report service at {target} cannot be reached: {reason}",
+      "zh": "无法连接问题报告服务 {target}：{reason}"
+    },
+    "gui.export.probe_failed": {
+      "en": "The bug report service could not be checked: {error}",
+      "zh": "无法检查问题报告服务：{error}"
+    },
+    "gui.export.probe_late": {
+      "en": "The bug report service did not answer the check in time.",
+      "zh": "问题报告服务未能及时响应检查。"
+    },
+    "gui.export.probe_note": {
+      "en": "You can still go on: if the upload fails, the package stays on this machine and can be sent again later.",
+      "zh": "仍可继续：上传失败时，报告包会保留在本机，之后可以重新发送。"
+    },
+    "gui.export.probe_recheck": {
+      "en": "Check again",
+      "zh": "重新检查"
+    },
+    "gui.export.probe_checking": {
+      "en": "Checking the bug report service...",
+      "zh": "正在检查问题报告服务…"
+    },
+    "gui.export.probe_continue": {
+      "en": "Continue anyway",
+      "zh": "仍然继续"
     },
     "gui.export.report_limit": {
       "en": "Too many bug reports are in progress. Finish or cancel one first.",

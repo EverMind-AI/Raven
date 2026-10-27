@@ -46,7 +46,7 @@ async def _sampling_cb(context, params):
     )
 
 
-def _bridge_params(socket_path: Path) -> StdioServerParameters:
+def _bridge_params(socket_path: Path | str) -> StdioServerParameters:
     """How a sub-agent is told to reach the endpoint.
 
     ``PATH`` is emptied rather than inherited to keep the check honest: the
@@ -74,9 +74,13 @@ def _reap(pid_file: Path) -> None:
     except (OSError, ValueError):
         return
     try:
-        os.kill(pid, signal.SIGKILL)
+        os.kill(pid, signal.SIGTERM if sys.platform == "win32" else signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass
+    except OSError as exc:
+        # Windows reports an already-exited process as ERROR_INVALID_PARAMETER.
+        if getattr(exc, "winerror", None) != 87:
+            raise
 
 
 async def test_a_bridged_subagent_sees_the_real_server_and_its_reverse_requests_arrive():
@@ -141,7 +145,14 @@ async def test_an_upstream_that_goes_unreachable_closes_the_subagent_promptly(tm
     tells them apart.
     """
     pid_file = tmp_path / "upstream.pid"
-    cfg = MCPServerConfig(command=sys.executable, args=[str(_UPSTREAM), str(pid_file)])
+    # The Windows venv launcher holds another stdout handle until its child
+    # exits. Start the interpreter directly while retaining this environment,
+    # so closing the upstream's stdout really delivers EOF while it stays alive.
+    cfg = MCPServerConfig(
+        command=sys._base_executable if sys.platform == "win32" else sys.executable,
+        args=[str(_UPSTREAM), str(pid_file)],
+        env={"__PYVENV_LAUNCHER__": sys.executable} if sys.platform == "win32" else {},
+    )
     endpoints = McpEndpoints()
     try:
         path = await endpoints.open("e2e-silent", "upstream", cfg)

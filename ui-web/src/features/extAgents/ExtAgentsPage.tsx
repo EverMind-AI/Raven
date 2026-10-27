@@ -7,15 +7,16 @@ import { HubHead } from '../../components/HubHead'
 import { KeyInput } from '../../components/KeyInput'
 import { ModelPicker } from '../../components/ModelPicker'
 import { t } from '../../i18n/t'
+import { ago } from '../../lib/ago'
 import * as lang from '../../state/lang'
 import { defaultProviders as hostProviders, loadDefaultProviders } from '../model/source'
 import { offered, withCurrent } from '../model/types'
 import { byOf, familyOf, installOf, isOwnRow } from './catalogue'
 import { badOf, healthOf, kindOf, ledClass, pendingLabel, refusedWrite, shownOf } from './health'
-import { MachineSheet, MachinesGrid, RegisterSheet, WhereField } from './MachineCards'
+import { MachineConnectSheet, MachineSheet, MachinesGrid, RegisterSheet, WhereField } from './MachineCards'
 import * as machines from './machines'
-import { CardGrid, Spin, Tile, WaitGrid, ago, connect, oneLine, ordered, refusedLabel, whyOf } from './Rows'
-import { gridEntries, sectionOf, stageOf } from './source'
+import { CardGrid, Spin, Tile, WaitGrid, connect, oneLine, ordered, refusedLabel, whyOf } from './Rows'
+import { gridEntries, hasEntry, sectionOf, stageOf } from './source'
 import * as store from './store'
 
 import type { PickerProvider } from '../../components/ModelPicker'
@@ -237,8 +238,12 @@ function asAsked(row: ExtAgentRow, s: ExtAgentsState): ExtAgentRow {
    says the same, unless it is Raven's own, which really does follow; a model
    such a row still carries is shown with its clear control, since the clear is
    the one write left. A server that predates the model field draws no pill:
-   it has no model write. */
-function ModelPill({ row, busy }: { row: ExtAgentRow; busy: boolean }): JSX.Element | null {
+   it has no model write.
+
+   A row that is not on the roster has no entry to update -- the server answers
+   such a name with "no configured sub-agent named ..." -- so its pick waits for
+   the add that writes the row, the way the family drawer's pick waits. */
+function ModelPill({ row, busy, held }: { row: ExtAgentRow; busy: boolean; held?: string }): JSX.Element | null {
   const pill = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
   if (!row.model_source) return null
@@ -247,7 +252,12 @@ function ModelPill({ row, busy }: { row: ExtAgentRow; busy: boolean }): JSX.Elem
   const fixed = row.model_source === 'fixed'
   /* The built-in row's list may simply not have landed yet; its click loads it. */
   const menuless = fixed || (row.model_source === 'agent' && !provs.length)
-  const shown = fixed ? null : shownModel(row)
+  /* A preset not yet added has no entry of its own to write to, so its pick
+     waits for the add; a folder found on disk and Raven's own loop both have
+     somewhere to land. */
+  const pending = !hasEntry(row)
+  const shown = fixed ? null : shownModel(pending && held ? { ...row, model: held } : row)
+  const value = pending ? (held ?? '') : (row.model ?? '')
   /* `fixed` outranks ownership: one of raven's own whose folder carries its own
      chat credential runs on that key and the model beside it, so "follows the
      main Raven" was the one thing it does not do. */
@@ -294,7 +304,10 @@ function ModelPill({ row, busy }: { row: ExtAgentRow; busy: boolean }): JSX.Elem
             aria-label={t('gui.agent.model_clear')}
             className="extAgents-mx"
             disabled={busy}
-            onClick={() => void store.clearModel(row)}
+            onClick={() => {
+              if (pending) store.clearPicked(row.name)
+              else void store.clearModel(row)
+            }}
             type="button"
           >
             {'×'}
@@ -304,11 +317,15 @@ function ModelPill({ row, busy }: { row: ExtAgentRow; busy: boolean }): JSX.Elem
       {open ? (
         <ModelPicker
           anchor={pill.current}
-          current={shown ? { model: row.model_source === 'agent' ? row.model || '' : shown.id, provider: shown.provider } : null}
+          current={shown ? { model: row.model_source === 'agent' ? value : shown.id, provider: shown.provider } : null}
           emptyNote={t(row.model_source === 'raven' ? 'gui.agent.model_no_provider' : 'gui.agent.model_managed')}
           onClose={() => setOpen(false)}
           onPick={(model, provider) => {
             setOpen(false)
+            if (pending) {
+              store.pickModel(row, model)
+              return
+            }
             void store.setModel(row, model, row.model_source === 'raven' ? provider : undefined)
           }}
           providers={provs}
@@ -603,13 +620,32 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
     else connect(row)
   }
 
+  /* An absent agent can still be connected on a registered machine, where
+     it is installed: the machine picked in the sheet's "Runs on", if any.
+     Only a preset not yet on the roster, as the other "Runs on" below: a row
+     that exists connects by toggle, which takes no machine, so offering one
+     here would press a button that did another thing. */
+  const machinePicked = ms.rows.find(m => m.id === store.whereOf(row.name).machine)
+  const offersMachines = ms.rows.some(m => m.transport === 'ssh') && !row.configured && !row.builtin && !row.vendored
   let actions: JSX.Element | null
   if (shown === 'missing') {
     actions = (
-      <button className="mini go" disabled={s.loading} onClick={() => void store.recheck(row)}>
-        {s.loading ? <Spin /> : null}
-        {t(s.loading ? 'gui.agent.checking' : 'gui.agent.recheck')}
-      </button>
+      <>
+        <button
+          className={machinePicked ? 'mini' : 'mini go'}
+          disabled={s.loading}
+          onClick={() => void store.recheck(row)}
+        >
+          {s.loading ? <Spin /> : null}
+          {t(s.loading ? 'gui.agent.checking' : 'gui.agent.recheck')}
+        </button>
+        {machinePicked && offersMachines ? (
+          <button className="mini go" disabled={!!s.joining[row.name]} onClick={() => connect(row)}>
+            {s.joining[row.name] ? <Spin /> : null}
+            {t('gui.machine.connect_on', { name: machinePicked.name })}
+          </button>
+        ) : null}
+      </>
     )
   } else if (shown === 'on') {
     actions = row.builtin ? null : (
@@ -681,6 +717,12 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
             {s.stillMissing.includes(row.name) && !s.loading ? (
               <div className="extAgents-probe extAgents-probe-bad">{t('gui.agent.still_missing')}</div>
             ) : null}
+            {offersMachines ? (
+              <>
+                <div className="extAgents-about">{t('gui.machine.missing_but_machine')}</div>
+                <WhereField ms={ms} row={row} />
+              </>
+            ) : null}
           </>
         ) : (
           <>
@@ -690,7 +732,7 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
               row={row}
               saved={(!row.configured && !row.vendored && store.draftOf(row.name)) || row.description || ''}
             />
-            <ModelPill busy={shown === 'pending'} row={asAsked(row, s)} />
+            <ModelPill busy={shown === 'pending'} held={s.picked[row.name]} row={asAsked(row, s)} />
             {/* Only a preset not yet on the roster picks where it runs -- at
                 the add stage, or at the key stage an openai preset waits in
                 until its key is typed: the machine is written with the add,
@@ -719,17 +761,13 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
   )
 }
 
-type Tab = 'all' | Section | 'machines'
+type Tab = 'all' | Section
 
 const TABS: Array<{ tab: Tab; label: string; empty: string }> = [
   { tab: 'all', label: 'gui.filter.all', empty: 'gui.agent.none' },
   { tab: 'on', label: 'gui.agent.g_on', empty: 'gui.agent.none' },
   { tab: 'avail', label: 'gui.agent.g_avail', empty: 'gui.agent.none_avail' },
   { tab: 'missing', label: 'gui.agent.g_missing', empty: 'gui.agent.none_missing' },
-  /* Where the agents may run besides this computer: the registered machines,
-     their links and nodes. Always offered, like All and Connected: a reader
-     with no machine yet is the one the register form is for. */
-  { tab: 'machines', label: 'gui.machine.g_machines', empty: 'gui.machine.none' },
 ]
 
 /* One row of the family picker: the agent, the model to run it on, and the one
@@ -904,24 +942,63 @@ export function ExtAgentsApp(): JSX.Element {
     )
   const entries: Record<Section | 'all', GridEntry[]> = { all: [], on: by('on'), avail: by('avail'), missing: by('missing') }
   entries.all = [...entries.on, ...entries.avail, ...entries.missing]
-  /* The machines tab counts registry rows; every other tab counts its cards. */
-  const count = (x: Tab): number => (x === 'machines' ? ms.rows.length : entries[x].length)
+  /* The count is the number of CARDS, which is what the reader counts on the
+     grid, so a family of nine counts once. */
+  const count = (x: Tab): number => entries[x].length
   const current = TABS.find((x) => x.tab === tab)!
   /* Before the first answer only: a later reload keeps showing the rows it
      has, the way the wizard's step does. */
   const scanning = s.loading && s.rows.length === 0
   const sheetRow = s.sheet ? s.rows.find((x) => x.name === s.sheet) : undefined
   const machineRow = s.msheet && s.msheet !== 'new' ? ms.rows.find((x) => x.id === s.msheet) : undefined
+  const connectOn = s.mconnect ? ms.rows.find((x) => x.id === s.mconnect) : undefined
+  /* The drawer's content, whichever module is drawn: a machine's sheet or the
+     register form opens from the machines module, an agent's sheet or the
+     family picker from the agents module, and all of them portal into the one
+     drawer, so the page renders at most one. */
+  const sheets = (
+    <>
+      {connectOn ? (
+        /* Not remounted per `epoch`, like the picker: the form holds a choice
+           in progress, and its own write reloads the roster. */
+        <MachineConnectSheet key={`connect:${connectOn.id}`} row={connectOn} s={s} />
+      ) : s.msheet === 'new' ? (
+        <RegisterSheet key={`new:${s.epoch}`} ms={ms} />
+      ) : machineRow ? (
+        <MachineSheet key={`${machineRow.id}:${s.epoch}`} ms={ms} row={machineRow} />
+      ) : sheetRow ? (
+        <AgentSheet key={`${s.sheet}:${s.epoch}`} row={sheetRow} s={s} />
+      ) : null}
+      {s.picking ? <FamilyPicker family={s.picking} key={s.picking} s={s} /> : null}
+    </>
+  )
+  if (s.module === 'machines') {
+    /* Where the agents may run besides this computer: the registered
+       machines, their links and nodes. The hub's own tab, beside the agents
+       and the channels, with the register form as its one action: a reader
+       with no machine yet is the one that form is for. */
+    return (
+      <>
+        <HubHead current="machines" />
+        <div className="extAgents-tabs" role="toolbar">
+          <button className="mini extAgents-tabs-end" onClick={() => store.machineSheetOpen('new')} type="button">
+            {t('gui.machine.register')}
+          </button>
+        </div>
+        <MachinesGrid ms={ms} />
+        {sheets}
+      </>
+    )
+  }
   return (
     <>
       <HubHead current="agents" />
-      {/* All, Connected and Machines are always offered; the other two only
-          with agents in them, or while they are the tab being read -- so
-          connecting the last one leaves the reader on an emptied tab rather
-          than moving them. The count is the number of CARDS, which is what the
-          reader counts on the grid, so a family of nine counts once. */}
+      {/* All and Connected are always offered; the other two only with agents
+          in them, or while they are the tab being read -- so connecting the
+          last one leaves the reader on an emptied tab rather than moving
+          them. */}
       <div className="extAgents-tabs" role="tablist">
-        {TABS.filter((x) => x.tab === 'all' || x.tab === 'on' || x.tab === 'machines' || x.tab === tab || count(x.tab)).map((x) => (
+        {TABS.filter((x) => x.tab === 'all' || x.tab === 'on' || x.tab === tab || count(x.tab)).map((x) => (
           <button
             aria-selected={tab === x.tab}
             className="extAgents-tab"
@@ -931,24 +1008,12 @@ export function ExtAgentsApp(): JSX.Element {
             type="button"
           >
             {t(x.label)}
-            {scanning && x.tab !== 'machines' ? <span className="extAgents-wbar extAgents-wtn" /> : <span className="extAgents-tn">{String(count(x.tab))}</span>}
+            {scanning ? <span className="extAgents-wbar extAgents-wtn" /> : <span className="extAgents-tn">{String(count(x.tab))}</span>}
           </button>
         ))}
-        {tab === 'machines' ? (
-          <button className="mini extAgents-tabs-end" onClick={() => store.machineSheetOpen('new')} type="button">
-            {t('gui.machine.register')}
-          </button>
-        ) : null}
       </div>
-      {tab === 'machines' ? <MachinesGrid ms={ms} /> : scanning ? <WaitGrid /> : <CardGrid empty={t(current.empty)} entries={entries[tab]} s={s} />}
-      {s.msheet === 'new' ? (
-        <RegisterSheet key={`new:${s.epoch}`} ms={ms} />
-      ) : machineRow ? (
-        <MachineSheet key={`${machineRow.id}:${s.epoch}`} ms={ms} row={machineRow} />
-      ) : sheetRow ? (
-        <AgentSheet key={`${s.sheet}:${s.epoch}`} row={sheetRow} s={s} />
-      ) : null}
-      {s.picking ? <FamilyPicker family={s.picking} key={s.picking} s={s} /> : null}
+      {scanning ? <WaitGrid /> : <CardGrid empty={t(current.empty)} entries={entries[tab]} s={s} />}
+      {sheets}
     </>
   )
 }

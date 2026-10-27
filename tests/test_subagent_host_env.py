@@ -12,6 +12,7 @@ read; the sections at the end cover that capture and the launch that consumes it
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shlex
 import sys
@@ -21,7 +22,7 @@ from typing import Any, NoReturn
 import pytest
 
 import raven.agent.subagent.probe as probe_mod
-from raven.acp_client import leftovers, windows
+from raven.acp_client import leftovers, npx_fetch, windows
 from raven.acp_client.client import AcpClient
 from raven.acp_client.protocol import AcpConnectionError
 from raven.agent.subagent.backends import env as backend_env
@@ -101,6 +102,123 @@ async def test_acp_child_is_told_it_serves_as_a_subagent(tmp_path: Path, monkeyp
     # the written form alone would pass while the child ignored it.
     monkeypatch.setenv(SUBAGENT_ENV_VAR, arrived)
     assert is_subagent_process(), f"the child was handed {arrived!r}, which it does not read as a sub-agent role"
+
+
+async def _reported(observed: Path) -> str:
+    for _ in range(200):
+        if observed.exists():
+            break
+        await asyncio.sleep(0.01)
+    return observed.read_text(encoding="utf-8")
+
+
+def _launch_reporting_child(script: Path) -> str:
+    """A child that reports the arguments it got, staged and renamed like
+    :func:`_reporting_child`'s report."""
+    script.write_text(
+        "import json, os, pathlib, sys, time\n"
+        "target = pathlib.Path(os.environ['OUTPUT'])\n"
+        "partial = target.with_name(target.name + '.partial')\n"
+        "partial.write_text(json.dumps({'args': sys.argv[1:]}))\n"
+        "os.replace(partial, target)\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    return f"{shlex.quote(sys.executable)} {shlex.quote(str(script))}"
+
+
+async def test_an_acp_child_starts_the_way_the_mirror_fallback_says(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``uvx <agent>`` and ``npx <agent>`` fetch the agent the first time it
+    runs. The launch asks with the argv it is about to start, the environment
+    the child would get and the directory it starts in, and starts the argv it
+    is answered with."""
+    from raven.utils import mirrors
+
+    observed = tmp_path / "observed.json"
+    command = _launch_reporting_child(tmp_path / "child.py")
+    monkeypatch.setattr(backend_env, "login_shell_env", lambda: {"PATH": os.environ["PATH"], "OUTPUT": str(observed)})
+    asked: list[tuple[list[str], dict[str, str], str | None]] = []
+
+    def package_launch(
+        argv: list[str],
+        env: dict[str, str],
+        cwd: str | None = None,
+        *,
+        local: bool = True,
+        deadline: float | None = None,
+        cache_root: Path | None = None,
+    ) -> list[str]:
+        asked.append((list(argv), dict(env), cwd))
+        return [*argv, "--as-the-answer-says"]
+
+    monkeypatch.setattr(mirrors, "package_launch", package_launch)
+
+    client = await AcpClient.launch(name="mirror-probe", command=command, cwd=str(tmp_path), env={"FROM_ENTRY": "1"})
+    try:
+        arrived = json.loads(await _reported(observed))
+    finally:
+        await client.close()
+
+    assert arrived == {"args": ["--as-the-answer-says"]}
+    (argv, env, cwd), *_ = asked
+    assert argv[0] == sys.executable, "asked about the program the entry names"
+    assert (env["OUTPUT"], env["FROM_ENTRY"]) == (str(observed), "1"), "asked with the environment the child gets"
+    assert cwd == str(tmp_path), "and where it starts"
+
+
+async def test_an_acp_launch_asks_the_mirror_before_it_fetches_the_package(tmp_path, monkeypatch):
+    """The fetch goes to the default registry, the very one the mirror
+    fallback decides about: asked the other way round, the fetch fails
+    before the fallback can answer, and a launch on a machine that cannot
+    reach the registry never starts."""
+    from raven.acp_client import npx_fetch
+    from raven.utils import mirrors
+
+    observed = tmp_path / "observed.json"
+    child = tmp_path / "child.py"
+    child.write_text(
+        "import os, pathlib, sys, time\n"
+        "target = pathlib.Path(os.environ['OUTPUT'])\n"
+        "target.write_text(' '.join(sys.argv[1:]), encoding='utf-8')\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    started = [sys.executable, str(child)]
+    monkeypatch.setattr(backend_env, "login_shell_env", lambda: {"PATH": os.environ["PATH"], "OUTPUT": str(observed)})
+    asked: list[list[str]] = []
+
+    def package_launch(
+        argv: list[str],
+        env: dict[str, str],
+        cwd: str | None = None,
+        *,
+        local: bool = True,
+        deadline: float | None = None,
+        cache_root: Path | None = None,
+    ) -> list[str]:
+        asked.append(list(argv))
+        return [*started, "--as-the-answer-says"]
+
+    async def ensure_fetched(name, command, *, env, cwd) -> None:
+        asked.append([str(word) for word in command])
+
+    monkeypatch.setattr(mirrors, "package_launch", package_launch)
+    monkeypatch.setattr(npx_fetch, "ensure_fetched", ensure_fetched)
+
+    client = await AcpClient.launch(
+        name="mirror-probe", command="npx -y @scope/server", cwd=str(tmp_path), env={"FROM_ENTRY": "1"}
+    )
+    try:
+        arrived = await _reported(observed)
+    finally:
+        await client.close()
+
+    assert asked[0] == ["npx", "-y", "@scope/server"], "asked about the launch as it is configured"
+    assert asked[1] == [*started, "--as-the-answer-says"], (
+        "and the fetch is given the answer, so it does not go to the registry the fallback is about"
+    )
 
 
 @pytest.mark.parametrize("legacy", [True, False])
@@ -222,6 +340,77 @@ def windows_host(monkeypatch: pytest.MonkeyPatch) -> _FakeWinreg:
 
 def _no_shell(argv: list[str], **_: Any) -> NoReturn:
     raise AssertionError(f"no shell is started on Windows, got {argv}")
+
+
+# ---- the PATH a capture leaves for config to read ---------------------------------
+
+
+@pytest.fixture
+def no_capture_yet(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(backend_env, "_LOGIN_ENV", None)
+    monkeypatch.setattr(backend_env, "_LOGIN_ENV_FAILED", False)
+
+
+def test_a_capture_records_the_path_a_launch_gets_for_config_to_read(
+    no_capture_yet: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Config moves a row onto an adapter build only beside the agent that build needs, so it
+    reads that agent on the PATH a launch gets -- the login shell's, which only a capture can
+    tell, and config starts no process to take one."""
+    from raven.config import login_path
+
+    monkeypatch.setattr(backend_env, "_capture_now", lambda **_: {"PATH": "/the/login/shell/bin"})
+    assert login_path.recall() is None
+
+    backend_env.login_shell_env()
+
+    assert login_path.recall() == "/the/login/shell/bin"
+
+
+def test_a_capture_that_falls_back_records_ravens_own_path(
+    no_capture_yet: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A launch after a failed capture runs on raven's own environment, so that PATH is the one."""
+    from raven.config import login_path
+
+    monkeypatch.setenv("PATH", "/ravens/own/bin")
+    monkeypatch.setattr(backend_env, "_capture_now", lambda **_: None)
+
+    assert backend_env.login_shell_env()["PATH"] == "/ravens/own/bin"
+    assert login_path.recall() == "/ravens/own/bin"
+
+
+def test_a_refresh_records_the_path_it_took_and_a_failed_one_keeps_the_last(
+    no_capture_yet: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.config import login_path
+
+    monkeypatch.setattr(backend_env, "_capture_now", lambda **_: {"PATH": "/first"})
+    backend_env.login_shell_env()
+    monkeypatch.setattr(backend_env, "_capture_now", lambda **_: {"PATH": "/after/an/install"})
+    assert backend_env.refresh_login_shell_env() is True
+    assert login_path.recall() == "/after/an/install"
+
+    monkeypatch.setattr(backend_env, "_capture_now", lambda **_: None)
+    assert backend_env.refresh_login_shell_env() is False
+    assert login_path.recall() == "/after/an/install"
+
+
+def test_what_config_reads_is_nothing_until_a_well_formed_record_exists() -> None:
+    from raven.config import login_path
+    from raven.home import raven_home
+
+    record = raven_home() / "cache" / "login-path.json"
+    assert login_path.recall() is None
+    for written in ("", "not json", json.dumps(["/a"]), json.dumps({"PATH": 7}), json.dumps({"PATH": ""})):
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(written, encoding="utf-8")
+        assert login_path.recall() is None, written
+
+    login_path.remember("/a:/b")
+
+    assert json.loads(record.read_text(encoding="utf-8")) == {"PATH": "/a:/b"}
+    assert login_path.recall() == "/a:/b"
 
 
 def test_windows_capture_takes_path_from_the_stores_and_every_other_value_from_raven(
@@ -523,6 +712,10 @@ async def test_on_windows_an_acp_server_that_is_a_batch_file_starts_from_the_chi
     lets the batch file stand in, found on the child's PATH like any program.
     """
     npx = _executable(tmp_path / "npm", "npx.cmd")
+    # Fetched already, so the launch goes straight to the batch file (`npx_fetch`).
+    entry = tmp_path / "npm-cache" / "_npx" / npx_fetch.cache_key("@scope/server")
+    entry.mkdir(parents=True)
+    (entry / "package.json").write_text("{}")
     monkeypatch.setattr(backend_env, "_on_windows", lambda: True)
     monkeypatch.setattr(backend_env, "login_shell_env", lambda: {"PATH": str(npx.parent)})
     started: list[tuple[str, ...]] = []
@@ -530,7 +723,9 @@ async def test_on_windows_an_acp_server_that_is_a_batch_file_starts_from_the_chi
     monkeypatch.setattr(leftovers, "bind_to_host", _unbound)
 
     with pytest.raises(AcpConnectionError):
-        await AcpClient.launch(name="npm", command="npx -y @scope/server")
+        await AcpClient.launch(
+            name="npm", command="npx -y @scope/server", env={"npm_config_cache": str(tmp_path / "npm-cache")}
+        )
 
     assert started == [(str(npx), "-y", "@scope/server")]
 

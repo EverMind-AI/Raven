@@ -126,7 +126,11 @@ export async function refresh(): Promise<void> {
      agents lists, the deliveries shelf and the desk replay use. */
   if (key !== sessionCurrent()) return
   const answered = Array.isArray(got) ? got : []
-  if (tick === liveTick) { patch({ rows: answered, loaded: true }); return }
+  const held = new Map(store.get().rows.map((r) => [rowKey(r), r]))
+  if (tick === liveTick) {
+    patch({ rows: answered.map((r) => live.carryOutcome(held.get(rowKey(r)), r)), loaded: true })
+    return
+  }
   /* A frame landed while the read was out, so the answer is no longer the
      whole truth -- but only about the rows those frames named. Row by row:
      the answer speaks for everything it has not been overtaken on, and a
@@ -139,14 +143,13 @@ export async function refresh(): Promise<void> {
      for long, because every terminal frame DOES schedule one (`apply`'s
      refetch), so the richer copy lands a moment later of its own accord. */
   const fresher = (k: string): boolean => (liveAt.get(k) ?? 0) > tick
-  const held = new Map(store.get().rows.map((r) => [rowKey(r), r]))
   const merged: TaskRow[] = []
   for (const r of answered) {
     const k = rowKey(r)
-    if (!fresher(k)) { merged.push(r); continue }
+    if (!fresher(k)) { merged.push(live.carryOutcome(held.get(k), r)); continue }
     /* Held, or retired by that frame and deliberately not put back. */
-    const live = held.get(k)
-    if (live) merged.push(live)
+    const frame = held.get(k)
+    if (frame) merged.push(frame)
   }
   /* And the rows the answer has not caught up to at all, which is the case
      this whole branch was written for. Only the ones a frame actually put
@@ -230,7 +233,8 @@ export async function reconcile(kind: TaskKind, id: string): Promise<void> {
   if ((liveAt.get(rowKey(row)) ?? 0) > tick) return
   const now = store.get().rows
   const at = now.findIndex((r) => r.kind === kind && r.id === id)
-  patch({ rows: at >= 0 ? now.map((r, i) => (i === at ? row : r)) : [row, ...now] })
+  const next = at >= 0 ? now.map((r, i) => (i === at ? live.carryOutcome(r, row) : r)) : [row, ...now]
+  patch({ rows: next })
 }
 
 function apply(next: live.LiveResult): void {

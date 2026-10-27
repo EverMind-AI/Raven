@@ -7,6 +7,26 @@ tasks and stateful agent instances; they are different things.
 Set up agents first with [Agent Integrations](agent-integrations.md). This page
 covers using them, not installing their transports.
 
+## What the host does and what it hands over
+
+Raven itself works as your agent manager. It sorts a request into tasks, hands
+each to the sub-agent that fits it, keeps track of every task until you accept
+the result, and gathers what the agents report into one answer, where each task it
+covers gets its own section under a heading that names the task, whether that is the
+task's result or a single line on how it is going. When it asks you
+to decide several things and your reply settles only some of them, it acts on
+those and asks about the rest again at the end of every reply, until you decide
+each one, drop it or tell it to leave it for later. A later message
+about a task's work -- a correction, more work, or a question about why it was
+done that way -- goes back to the instance that did the work, which still has
+its context. Raven answers conversation, what it already knows and where your
+tasks stand itself; anything to produce, however small, goes to the agent that
+fits it, and to the built-in `Raven-General` agent only when none does. In a
+conversation running on a Harness with workers, such as a Persona, Raven hands work
+only to those workers; work none of them covers, it tells you about and asks how to
+go on instead of doing it itself. On a turn where both dispatch tools are disabled,
+Raven does the work itself.
+
 ## Work on a registered machine
 
 An agent entry that names a `machine` runs on that registered machine, works
@@ -15,17 +35,18 @@ there and leaves its files there; entries without one run locally as before.
 machine, installing its node, configuring the entry, and what to expect when
 the connection drops.
 
-On hosts with Unix-socket support, remote ACP agents can use the MCP servers
-granted to their entry through the Raven node. Server definitions and credentials
-stay on the host, as do tool restrictions and sandbox rules. The node tells which
-task a bridge belongs to by the process that opened it, and the host checks that
-task against the grant; another task cannot select a grant by name.
+Remote ACP agents can use the MCP servers granted to their entry through the
+Raven node. Server definitions and credentials stay on the host, as do tool
+restrictions and sandbox rules. The node tells which task a bridge belongs to by
+the process that opened it, and the host checks that task against the grant;
+another task cannot select a grant by name.
 
-On Windows hosts, remote MCP lending is currently withheld because the host
-endpoint transport requires Unix sockets. The remote task still runs and its
-reply explains that MCP was not provided. CLI agents on machines also continue
-without lent MCP. A host restart recovers the task result but does not restore
-its previous MCP connections.
+The host serves each granted server from a Unix socket where the system supports
+one. Otherwise, as on Windows, it listens on a port on `127.0.0.1` and opens the
+server only for a connection that presents that endpoint's random token; the
+token stays on the host. CLI agents on machines continue without lent MCP. A
+host restart recovers the task result but does not restore its previous MCP
+connections.
 
 ## Choose a collaboration shape
 
@@ -130,9 +151,21 @@ own menu. A mode override can take precedence over the host session's tier;
 clearing it restores inheritance. Clearing a model override returns to the
 agent's own choice. Neither setting grants new filesystem or tool permissions.
 
-Parallel instances do not imply independent working copies. For concurrent
-edits, give each agent explicit file ownership or separate worktrees. Raven-Code
-reports shared-workspace conditions, but that is not a filesystem lock.
+For coding work the host follows its built-in `multi-agent-coding` skill.
+When coding tasks run side by side in one Git
+project, the host asks each coding agent to create a git worktree of its own, on
+a branch named for its task, and to report the worktree's path and branch. The
+changes stay on those branches until you ask for them to be merged, and the
+worktrees stay until you ask for them to be removed. The same skill keeps one
+instance per task, sends a follow-up on an unfinished task to that task's
+instance, and moves a task to another coding agent when the first reports that
+its quota is used up.
+
+Worktree creation is a step performed by the coding agent under the host's
+instructions. Check the reported path and branch before concurrent edits.
+When constructing a graph yourself, assign working copies or explicit file
+ownership: the dispatcher does not create worktrees or lock files. Raven-Code's
+shared-workspace report helps identify overlap.
 
 ## Troubleshooting
 

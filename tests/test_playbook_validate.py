@@ -100,6 +100,20 @@ def test_param_refs_must_be_declared():
     )
 
 
+def test_route_condition_param_refs_must_be_declared():
+    errors = validate_structure(_spec([_node("a", routes={"go": "the deal is above ${params.ghost}"})]))
+    assert any("ghost" in e for e in errors), errors
+    assert (
+        validate_structure(
+            _spec(
+                [_node("a", routes={"go": "the deal is above ${params.floor}", "hold": "otherwise"})],
+                params={"floor": ParamSpec(description="the deal floor")},
+            )
+        )
+        == []
+    )
+
+
 def test_params_must_not_be_duplicated_into_node_inputs() -> None:
     params = {"project_path": ParamSpec(default=".", description="which project directory?")}
     duplicated = _node(
@@ -122,6 +136,46 @@ def test_params_must_not_be_duplicated_into_node_inputs() -> None:
 
     correct = _node("detect", template="inspect ${params.project_path}")
     assert validate_structure(_spec([correct], params=params)) == []
+
+
+def _decision_and_branch(*, depends_on):
+    return [
+        _node("triage", routes={"bug": "the issue is a defect", "other": "anything else"}),
+        _node("fix", depends_on=depends_on, when="triage.bug"),
+    ]
+
+
+def test_a_playbook_branch_is_refused_by_the_rules_a_submitted_graph_meets():
+    """Every entry a playbook passes through ends at the DAG's own static checks, so
+    a guard reading a node its step does not depend on is refused in the same
+    words -- at the library's door, where it is cheap, rather than at dispatch."""
+    stray = _decision_and_branch(depends_on=[])
+    with pytest.raises(DagValidationError) as submitted:
+        validate_and_order(SubAgentDagSpec(task_summary="triage the issue", nodes=stray))
+    refusal = str(submitted.value)
+    assert "guard names 'triage', which is not in its depends_on" in refusal
+
+    assert refusal in validate_structure(_spec(stray))
+    assert refusal in validate_structure(_spec(stray), allow_blank_fillable=True)
+    assert refusal in validate_graph_nodes(stray, set())
+
+    sound = _decision_and_branch(depends_on=["triage"])
+    assert validate_structure(_spec(sound)) == []
+    assert validate_graph_nodes(sound, set()) == []
+
+
+def test_the_library_refuses_a_playbook_whose_branch_cannot_hold(tmp_path):
+    from raven.playbook.store import PlaybookStore
+
+    store = PlaybookStore(tmp_path)
+    with pytest.raises(ValueError, match="not in its depends_on"):
+        store.save(_spec(_decision_and_branch(depends_on=[])))
+    assert not (tmp_path / "t").exists()
+
+    store.save(_spec(_decision_and_branch(depends_on=["triage"])))
+    loaded = store.load("t")
+    assert loaded.nodes[0].routes == {"bug": "the issue is a defect", "other": "anything else"}
+    assert loaded.nodes[1].when == "triage.bug"
 
 
 def test_cycles_and_unknown_deps_are_errors():

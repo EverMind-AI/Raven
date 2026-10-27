@@ -156,7 +156,7 @@ Raven-Code 的 `code-flow` 提供的不只是身份 prompt。每个任务都应�
 | `hermes` | `hermes acp --accept-hooks` | 原生认证；该标志接受之前未见的 Shell hook |
 | `openclaw` | `openclaw acp` | 自身网关、认证；启动使用较长握手等待 |
 | `mirothinker` | OpenAI-compatible HTTP | 端点、模型、key；预设关闭有状态重放 |
-| `mirasim_<agent>` | Raven 自带的 ACP 适配器，经 `mirasim ui-cli` 调用 | 已安装 Mirasim，且该 Agent 已在 Mirasim 中安装；以 `sessionMcp: false` 阻止每会话 MCP 下发 |
+| `mirasim_<agent>` | Raven 自带的 ACP 适配器，经 Mirasim host 的协议调用 | 本机装了 Mirasim 且正在运行，该 Agent 已在 Mirasim 中安装。Raven 找到 Mirasim 就会列出这些行：有能连上的 host（桌面应用的端口且令牌已写出，或 Mirasim 经 ssh 在本机跑的服务器的套接字，二者都要真的应答），否则看 Mirasim 写在自己目录下的启动器（`~/.mirasim/bin/mirasim`，它不会把这个目录放进 PATH）、登录 shell PATH 上的 `mirasim`，或某个 Mirasim 经 ssh 装到本机的服务器（`~/.mirasim-remote`）；装了但没在运行时，这一行会提示打开 Mirasim 应用，或让另一台电脑上的 Mirasim 应用重新连到本机。以 `sessionMcp: false` 阻止每会话 MCP 下发 |
 
 GitHub Copilot、Qwen Code、CodeBuddy、Qoder、Grok Build、Kimi Code 和 Pi 也有预设。
 适配器版本与精确命令维护在 `raven/agent/subagent/presets.py` 和
@@ -171,10 +171,32 @@ Agent，因此可以与同一 Agent 自己的预设并存。适配器随 Raven �
 Mirasim 为该 Agent 提供的列表，分为三组：Agent 自己名下的模型、`Mirasim`（平台额度）
 和 `Own key`（你在 Mirasim 中添加的 key）。Mirasim 平台也能运行 Claude Code、Codex、
 Kimi Code 和 ZCode CLI 的自有模型，因此这四个 Agent 的这些模型在前两组各列一次：
-选 Agent 名下的走你自己的账号，选 `Mirasim` 下的走平台额度。已有对话的会话改选另一组时，
-下一轮开始前会把同一段对话切到另一条路由。未选模型的会话使用 Mirasim 为该 Agent 设定的
-默认模型和默认路由。每轮回复在该轮结束后整体返回。
-该轮停下来等待的事项会在等待期间转交 Raven：工具审批以权限请求发出；提问——Mirasim
+选 Agent 名下的走你自己的账号，选 `Mirasim` 下的走平台额度。每一轮都会带上所选模型对应的
+路由，因此已有对话的会话改选另一组后，从下一轮起即切到那条路由。未选模型的会话使用 Mirasim
+为该 Agent 设定的默认模型和默认路由。
+
+适配器是本机已在运行的 Mirasim host 的又一个客户端——桌面端的 host，或 Mirasim 经 SSH
+接入的机器上的 host——自身不启动任何服务，Raven 发起的轮次在 Mirasim 应用中实时可见。
+每轮以流式返回：思考、正文、工具调用、计划和交付的文件随发生随送达 Raven，结束时报告
+所用上下文。取消会停止该轮。对 Claude Code、Codex、DSH、Pi 和 ZCode CLI，运行中追加的
+文字会并入当前轮。图片以内联方式送达 Claude Code；其他 Agent 收到以本地文件链接给出的
+图片时得到该文件的路径，内联图片则会被拒绝。会话可以列出（指定目录下该 Agent 的对话，
+包括在 Mirasim 中开启的）、续接、连同全部历史载入、关闭和删除；删除时 Mirasim 中的对话
+一并删除，Agent 自己保存的转录文件不会删除。Raven 持有的会话里由 Mirasim 自行发起的轮次
+（例如后台任务的报告）也会转给 Raven，这类轮次中的提问留给 Mirasim 应用处理。
+
+适配器按以下顺序查找 host：Mirasim 经 SSH 接入的机器上的 host socket
+（`~/.mirasim-remote/run/server.sock`，仅限 Linux 和 macOS），然后是桌面端在
+`127.0.0.1:4970` 上的 host，其 token 写在 Mirasim 状态目录（`MIRASIM_HOME`，否则为
+`~/.mirasim`）下的 `run/local-4970.token`。若 host 监听在其他位置，用
+`RAVEN_MIRASIM_HOST` 指明：socket 写作 `unix:<path>`（Windows 不支持，那里经桌面端的
+端口接入），本机回环端口写作 `<port>`、`127.0.0.1:<port>`、`localhost:<port>` 或
+`[::1]:<port>`。在 Linux 和 macOS 上，适配器使用的是登录 shell 的环境加上该行自己的
+`env`，而不是 Raven 进程的环境，所以请把这个变量写进 shell 配置文件，或写进要使用它的
+Mirasim 行的 `env`；只在启动 Raven 的 shell 里 export 是传不到适配器的。在 Windows 上，
+适配器继承 Raven 自己的环境，在启动 Raven 的地方设置即可。
+
+Raven 发起的轮次停下来等待的事项会在等待期间转交 Raven：工具审批以权限请求发出；提问——Mirasim
 开启 `askTool` 设置时 Claude Code 的 `AskUserQuestion`，或 MCP 服务器的表单——以
 elicitation 发出，由你或 Raven 的提问自动作答回答。不支持表单的客户端会跳过该提问，
 并在回复中写明所问内容。
@@ -247,6 +269,20 @@ HTTP 后端没有本地文件访问，应传有界内容而不是宿主路径。
 
 凭据不要放进 prompt 和共享 manifest。A2A 凭据按 origin 而不是显示名匹配；peer
 列表不是出站防火墙，详见[A2A 指南](agent-protocols.md#call-a-remote-a2a-peer)。
+
+原生 Agent 放在 ACP home 里的提示词文件（`agent_memory/profile/` 下的 `soul.md`、
+`agent.md`，以及 `TOOLS.md`）每次启动都会按当前版本和配置重新生成，直接修改不会保留。
+自己的内容请写进同目录的 `*.local.md`（例如 `agent_memory/profile/agent.local.md`），
+下次启动时会接在产品文本之后。只放仍然需要的内容：旧版本的文本可能与当前规则冲突。
+`*.local.md` 请保存为 UTF-8；其他编码（例如编辑器按 GBK 保存）会导致启动停止，报错会写明是哪个文件。
+被直接修改过的文件、或旧版本留下的文件，会在覆盖前保存为 `<name>.bak-<时间>-<pid>`，launcher
+日志会写明备份位置。重新生成的文件保留原文件的访问权限。在 Windows 上，备份是指向原文件的硬链接，
+因此同样保留这些权限；如果所在的卷不支持硬链接，启动会停止并给出文件名。备份不会被自动删除。
+
+Raven-PPT 有一点不同：它的 deck engine 可能和 host 共用同一个 home，所以只替换能证明是自己写的文件。
+本版本之前被修改过的 `soul.md`、`agent.md` 或 `TOOLS.md` 会保持原样，不做备份，对应的 `*.local.md`
+也不会生效。请把仍需要的内容移到 `*.local.md`，再删除修改过的文件，下一轮会重新写入。engine 写入失败时
+会记录日志并在下一轮重试，不会让本轮停止。
 
 ## 安全与排障 { #security-and-troubleshooting }
 

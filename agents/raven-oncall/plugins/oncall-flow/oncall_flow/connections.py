@@ -21,10 +21,13 @@ is. Three things follow:
     budget is counted in, and how many jobs it will run at once, were being
     restated in every campaign's meta and in the task statement itself.
 
-Credentials stay a reference -- a path to a key the owner already has. Passwords
-wait until there is a platform that needs them (2026-08-17, deliberate): storing
-one means a keychain or a master password, and neither is worth building before
-something asks for it.
+A credential in a campaign is never the secret itself. A key is a path to one
+the owner already has; a password is the one this computer keeps for the
+connection (trunk's registry says ``auth: password``), found by the
+connection's id. So a campaign's meta carries ``auth`` beside the address and
+never the password, and every ssh this plugin starts for such a machine, its
+rsync's included, logs in with trunk's options and trunk's askpass hook
+(:mod:`oncall_flow.transport`).
 
 Trunk's :mod:`raven.ops.connections` is the reader and
 :mod:`raven.ops.connection_add` the writer; both are imported here rather than
@@ -73,8 +76,10 @@ _SHOWN = SHOWN
 # this one changes nothing about which machine the work calls for, and a field
 # the agent can see is a field it can reason about wrongly -- here, by deciding
 # it may skip naming the machine at all, which loses the record of where a
-# command ran.
-_TRANSPORT = ("host", "port", "user", "key", "transport")
+# command ran. ``auth`` goes with the address because a machine that takes a
+# password has no key: a meta without it is logged in to with a key the machine
+# was never given, and refused at its first ssh.
+_TRANSPORT = ("host", "port", "user", "key", "transport", "auth")
 
 
 def get(conn_id: str) -> dict[str, Any] | None:

@@ -214,6 +214,10 @@ export function show(el: HTMLElement): void {
      long conversation name being renamed looked like. A textarea is a real
      scroller and keeps its bar. */
   if (el.tagName === 'INPUT') return
+  /* Nor on a scroller that declares it wants none: one that is its own
+     indicator of position (the transcript's turn nav keeps the mark being
+     read in view) would carry a second indicator saying the same thing. */
+  if (el.dataset.thumb === 'none') return
   const b = bars(el)
   for (const a of AXES) {
     const t = place(el, b, a)

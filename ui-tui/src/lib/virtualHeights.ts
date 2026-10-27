@@ -11,7 +11,7 @@ import { EMPTY_CALL_FOLDS, type CallFolds } from '../app/foldStore.js'
 import { cardDefaultOpen, detailBlockShape, foldedPreviewRows, segmentTurn } from '../domain/episodeSummary.js'
 import { layoutDagGraph } from './dagGraphLayout.js'
 import { dagNodeToggleKey } from './dagOpenNodes.js'
-import { dagDetailRoom, dagRowDetail, dagTraceBoxRows, dagTraceRows } from './dagStatus.js'
+import { dagDetailRoom, dagRowDetail, dagTraceBoxRows, dagTraceRows, hasDagRowDetail } from './dagStatus.js'
 import { transcriptBodyWidth } from './inputMetrics.js'
 import { hasMeaningfulReasoning } from './reasoning.js'
 import { spawnTraceOpen } from './spawnOpen.js'
@@ -48,7 +48,7 @@ export const messageHeightKey = (msg: Msg) => {
   // without `foldedPreviewRows` noticing, so it gets its own signature too.
   const dagSig = (dag: EpisodeTool['dag']) =>
     dag
-      ? `/${dag.nodes.length}.${dag.done ? 1 : 0}.${dag.dir ? 1 : 0}.${dag.nodes.filter(node => node.status === 'running').length}.${dag.nodes.reduce((n, node) => n + (node.error?.length ?? 0), 0)}`
+      ? `/${dag.nodes.length}.${dag.done ? 1 : 0}.${dag.dir ? 1 : 0}.${dag.nodes.filter(node => node.status === 'running').length}.${dag.nodes.reduce((n, node) => n + (node.error?.length ?? 0), 0)}.${dag.nodes.filter(node => node.status === 'not_executed' || node.selectedRoutes !== undefined).length}`
       : ''
   // A spawn panel's height moves with its run's status (the trace box grows
   // once the run settles, and its default open flips), so the status is part
@@ -145,7 +145,7 @@ const dagPanelRows = (run: NonNullable<EpisodeTool['dag']>, width: number, open:
   const details = run.nodes.reduce((rows, node) => {
     const detail = dagRowDetail(node, picture?.drawn ?? null, room)
 
-    return rows + (detail.summary || detail.deps || detail.error ? 1 : 0)
+    return rows + (hasDagRowDetail(detail) ? 1 : 0)
   }, 0)
 
   // Two border rows, the header, the two rules and the hint.

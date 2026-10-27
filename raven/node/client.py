@@ -55,9 +55,11 @@ from loguru import logger
 from raven.acp_client import remote
 from raven.acp_client.client import AcpClient
 from raven.acp_client.protocol import AcpConnectionError, AcpError, AcpRemoteError, AcpTimeoutError
-from raven.mcp.bridge import iter_raw_frames, unix_sockets_available
+from raven.mcp.bridge import iter_raw_frames
+from raven.mcp.transport import open_endpoint
 from raven.node import bundle, protocol
 from raven.ops import remote_path
+from raven.utils import mirrors
 
 #: Where a machine keeps its nodes when its registry row names nowhere else
 #: (``node_dir``). ``~`` is the registered user's home there.
@@ -78,7 +80,6 @@ LOST_RC = -1
 
 _HELLO_TIMEOUT_S = 60.0
 _CALL_TIMEOUT_S = 120.0
-_LAUNCH_TIMEOUT_S = 60.0
 _ATTACH_TIMEOUT_S = 30.0
 #: How many frames an endpoint holds for a link that is down before it gives up on it.
 _PENDING_FRAMES = 1000
@@ -451,6 +452,8 @@ class NodePool:
         self._reconnects: dict[str, asyncio.Task[None]] = {}
         self._parked: dict[str, list[ChannelEndpoint]] = {}
         """The endpoints waiting for a machine's link to come back, by machine."""
+        self._ending: set[asyncio.Task[None]] = set()
+        """The ends of agents whose launch's caller was cancelled before the answer, held until they are done."""
         self._idle_close_s = idle_close_s
         self._heartbeat_s = heartbeat_s
         self._lost_after_s = lost_after_s
@@ -584,7 +587,6 @@ class NodePool:
         ``name`` when the caller has none.
         """
         node = await self._acquire(machine_id)
-        label = node.target.label
         channel = node.next_channel
         node.next_channel += 1
         task = task or task_id(name)
@@ -592,14 +594,51 @@ class NodePool:
         # Registered before the launch, so a frame the agent writes at once has somewhere to go.
         node.channels[channel] = endpoint
         params = {"channel": channel, "task": task, "command": command, "cwd": cwd, "env": dict(env)}
+        # The host's own switch travels with the launch: the daemon decides
+        # the mirror on the machine it runs on, and it cannot read the host's
+        # environment. The launch's own environment keeps its own value, which
+        # the daemon reads as well.
+        if mirrors.opt_out():
+            params["no_mirror"] = True
+        launch = asyncio.ensure_future(self._launch_agent(machine_id, node, channel, name, params))
         try:
-            started = await node.client.request(protocol.AGENT_LAUNCH, params, timeout=_LAUNCH_TIMEOUT_S)
+            started = await asyncio.shield(launch)
+        except asyncio.CancelledError:
+            # The Raven node starts the agent before it answers, and a caller
+            # cancelled in between never holds the endpoint that ends it: the
+            # pool reads the answer and ends the agent it started, and the
+            # caller returns at once, out of reach of a second cancel.
+            ending = asyncio.create_task(self._end_once_launched(launch, endpoint), name=f"node-end-{task}")
+            self._ending.add(ending)
+            ending.add_done_callback(self._ending.discard)
+            raise
+        if isinstance(started, dict) and isinstance(started.get("pid"), int):
+            endpoint.pid = started["pid"]
+        node.used = time.monotonic()
+        logger.info("acp agent {!r}: started on {}", name, endpoint.describe())
+        return endpoint
+
+    @staticmethod
+    async def _end_once_launched(launch: asyncio.Future[Any], endpoint: ChannelEndpoint) -> None:
+        """End the agent ``launch`` started once the node has answered it; nothing for a launch it refused."""
+        with contextlib.suppress(NodeError):
+            await launch
+            await endpoint.end()
+
+    async def _launch_agent(self, machine_id: str, node: _Node, channel: int, name: str, params: dict[str, Any]) -> Any:
+        """The Raven node's answer to ``agent/launch`` on ``channel``, or :class:`NodeError` saying why there is none."""
+        label = node.target.label
+        try:
+            return await node.client.request(protocol.AGENT_LAUNCH, params, timeout=protocol.AGENT_LAUNCH_TIMEOUT_S)
         except AcpRemoteError as exc:
             node.channels.pop(channel, None)
             raise NodeError(self._refused_launch(node, name, exc)) from None
         except AcpTimeoutError:
             node.channels.pop(channel, None)
-            said = f"the Raven node on machine {label} did not answer {protocol.AGENT_LAUNCH} within {_LAUNCH_TIMEOUT_S:.0f}s"
+            said = (
+                f"the Raven node on machine {label} did not answer {protocol.AGENT_LAUNCH} "
+                f"within {protocol.AGENT_LAUNCH_TIMEOUT_S:.0f}s"
+            )
             await self._lost(machine_id, node, said)
             raise NodeError(said) from None
         except AcpConnectionError as exc:
@@ -607,11 +646,6 @@ class NodePool:
             said = self._ended(node.target, node.log, exc)
             await self._lost(machine_id, node, said)
             raise NodeError(said) from None
-        if isinstance(started, dict) and isinstance(started.get("pid"), int):
-            endpoint.pid = started["pid"]
-        node.used = time.monotonic()
-        logger.info("acp agent {!r}: started on {}", name, endpoint.describe())
-        return endpoint
 
     async def attach(
         self, machine_id: str, task: str, *, name: str, after: int = 0, stderr_after: int = 0
@@ -769,15 +803,8 @@ class NodePool:
                 node, protocol.MCP_CLOSE, {"stream": stream_id, "reason": f"server {server!r} is not lent to that run"}
             )
             return
-        if not unix_sockets_available():
-            await self._tell(
-                node,
-                protocol.MCP_CLOSE,
-                {"stream": stream_id, "reason": "the host does not support Unix-socket MCP endpoints"},
-            )
-            return
         try:
-            reader, writer = await asyncio.open_unix_connection(path)
+            reader, writer = await open_endpoint(path)
         except OSError as exc:
             await self._tell(
                 node,
@@ -880,8 +907,8 @@ class NodePool:
                     raise NodeError(said or f"the link to machine {node.target.label} was lost")
         return node
 
-    def _prepare(self, machine_id: str) -> tuple[remote.Machine, Path, list[str], str]:
-        """The machine, its ssh log (emptied), the ssh argv and the install name. Blocking: reads the registry."""
+    def _prepare(self, machine_id: str) -> tuple[remote.Machine, Path, list[str], dict[str, str], str]:
+        """The machine, its ssh log (emptied), the ssh argv, its environment and the install name. Blocking."""
         target = remote.machine(machine_id)
         install_name = bundle.install_name()
         log = remote.ssh_log_path(f"raven-node@{target.id}")
@@ -909,11 +936,13 @@ class NodePool:
             argv = remote.ssh_command(target, command, ssh_log=log)
         except ValueError as exc:
             raise remote.RemoteMachineError(f"machine {target.label}: {exc}") from None
-        return target, log, argv, install_name
+        # A password machine's ssh asks askpass; the environment names the
+        # helper and the file, never the password (``remote.ssh_environment``).
+        return target, log, argv, remote.ssh_environment(target), install_name
 
     async def _launch(self, machine_id: str) -> _Node:
         try:
-            target, log, argv, install_name = await asyncio.to_thread(self._prepare, machine_id)
+            target, log, argv, env, install_name = await asyncio.to_thread(self._prepare, machine_id)
         except remote.RemoteMachineError as exc:
             raise NodeError(str(exc)) from None
         channels: dict[int, ChannelEndpoint] = {}
@@ -925,7 +954,7 @@ class NodePool:
                 command=argv,
                 # Fixed rather than any caller's workspace: the ssh needs none.
                 cwd=str(Path.home()),
-                env={},
+                env=env,
                 on_notification=partial(self._notified, channels, machine_id),
             )
         except AcpConnectionError as exc:

@@ -10,6 +10,7 @@ export type ExportStatus = ResultOf<'trajectory.export_status'>
 export type ReportStatus = ResultOf<'bugreport.status'>
 export type ReportItem = NonNullable<ReportStatus['items']>[number]
 export type ReportContexts = ResultOf<'bugreport.item'>
+export type ReportProbe = ResultOf<'bugreport.probe'>
 export type Problem = ParamsOf<'bugreport.start'>['problem']
 export type Severity = NonNullable<Problem['severity']>
 export type Action = 'kept' | 'redacted'
@@ -25,6 +26,7 @@ export interface ExportSource {
   start(sessionKey: string, traceIds: string[], fileName: string): Promise<{ job_id: string }>
   status(jobId: string): Promise<ExportStatus>
   cancel(jobId: string): Promise<{ ok: boolean }>
+  reportProbe(): Promise<ReportProbe>
   reportStart(sessionKey: string, traceIds: string[], problem: Problem): Promise<{ report_id: string }>
   reportStatus(reportId: string): Promise<ReportStatus>
   reportItem(reportId: string, itemId: string): Promise<ReportContexts>

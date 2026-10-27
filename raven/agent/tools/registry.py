@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent import workdir
-from raven.agent.tools.params import cast_params, validate_params
+from raven.agent.tools.params import cast_params, render_param_errors, validate_params
 from raven.contracts.llm_provider import RunMeta, TruncationInfo
 from raven.contracts.tool import RAW_ARGUMENTS_KEY, Continuation, Tool, ToolOutput, ToolResult
 from raven.observability import semconv
@@ -347,6 +347,10 @@ class ToolRegistry:
         # consults it for dispatch, so the three cannot disagree).
         self._withheld: Callable[[], frozenset[str]] | None = None
         self._schema_hidden: set[str] = set()
+        # Placed at assembly, not by registering late: an MCP server connects,
+        # and a session brings its own tools, after the host wired its own, so
+        # registration order cannot keep anything at the end. See ``list_last``.
+        self._listed_last: tuple[str, ...] = ()
         # The tools a session brought with it, keyed by session, plus the
         # turn-local view of one session's set. Two halves because the two facts
         # have different lifetimes: the binding lives as long as the session, the
@@ -465,6 +469,18 @@ class ToolRegistry:
     def schema_hidden_names(self) -> frozenset[str]:
         """Every registered name withheld from the schema (still callable)."""
         return frozenset(self._schema_hidden)
+
+    def list_last(self, *names: str) -> None:
+        """Close the provider's tool array with these tools, in the order given.
+
+        The array is read top to bottom like the rest of the prompt, so where a
+        tool sits is part of what it says when another tool's text points at it:
+        ``run_subagent_dag`` names the roster at the end of ``spawn``'s
+        description instead of repeating it, which is only the next thing read
+        when the two close the array in that order. A name that is not on offer
+        leaves no gap; a later call replaces the earlier one.
+        """
+        self._listed_last = tuple(names)
 
     def set_channel(self, channel: str | None) -> None:
         """Record the channel this turn is answering on (turn-local).
@@ -821,14 +837,17 @@ class ToolRegistry:
         # served live -- declared dynamism, not silent widening. A session
         # overlay tool never passed the door and keeps its live schema.
         out: list[dict[str, Any]] = []
+        last: dict[str, dict[str, Any]] = {}
         for name, tool in self._visible_tools().items():
             if not self.offers(tool, withheld) or name in self._schema_hidden:
                 continue
             spec = self._specs.get(name)
-            if spec is None or spec.schema_dynamic:
-                out.append(tool.to_schema())
+            schema = tool.to_schema() if spec is None or spec.schema_dynamic else spec.schema
+            if name in self._listed_last:
+                last[name] = schema
             else:
-                out.append(spec.schema)
+                out.append(schema)
+        out.extend(last[name] for name in self._listed_last if name in last)
         return out
 
     def hidden_definition(self, name: str) -> dict[str, Any] | None:
@@ -986,7 +1005,7 @@ class ToolRegistry:
             # dispatch was briefed to do.
             errors += self._verifier_refusals(name, params)
             if errors:
-                return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + _hint
+                return f"Error: Invalid parameters for tool '{name}':" + render_param_errors(errors) + _hint
 
             # Post-validation, pre-dispatch, and ahead of the plugin gates:
             # platform authority precedes plugin policy. The refusal (or the

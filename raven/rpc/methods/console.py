@@ -17,7 +17,7 @@ import os
 import re
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Any, get_args
 
 from loguru import logger
@@ -483,13 +483,16 @@ async def cron_save(params: dict, *, agent_loop_factory=None) -> dict:
     # committed the deletion -- so a bad schedule did not fail the edit, it
     # deleted the job.
     old_id = str(params.get("id") or "")
+    previous = next((j for j in svc.list_jobs(include_disabled=True) if j.id == old_id), None) if old_id else None
     try:
         job = svc.add_job(
             name=name,
             schedule=schedule,
             message=message,
-            channel=LOCAL_CHANNEL,
-            to="default",
+            channel=previous.payload.channel if previous is not None else LOCAL_CHANNEL,
+            to=previous.payload.to if previous is not None else "default",
+            topic_tag=previous.payload.topic_tag if previous is not None else None,
+            fire_missed=previous.payload.fire_missed if previous is not None else False,
             delete_after_run=kind == "at",
             # Keep the id across an edit: run history lives in the
             # cron:<id> session and would orphan under a fresh id.
@@ -974,38 +977,50 @@ def _chk_pin_pair(parent: str, model_field: str, provider_field: str):
     return chk
 
 
-def _chk_image_selection(value: Any) -> dict:
-    """The image role's selection: model and quality, and the provider it runs on."""
-    if not isinstance(value, dict) or not {"model", "quality"} <= set(value) <= {"model", "quality", "provider"}:
-        raise ConfigValidationError("image selection must contain model and quality, and may name a provider")
-    return {k: _SETTINGS_SIMPLE_KEYS[f"tools.media.image.{k}"](v) for k, v in value.items()}
+def _chk_routed_selection(kind: str):
+    """The image or video role's selection: model and quality, and the provider it runs on."""
+
+    def chk(value: Any) -> dict:
+        if not isinstance(value, dict) or not {"model", "quality"} <= set(value) <= {"model", "quality", "provider"}:
+            raise ConfigValidationError(f"{kind} selection must contain model and quality, and may name a provider")
+        return {
+            k: _SETTINGS_SIMPLE_KEYS[f"tools.media.{kind if k == 'provider' else 'image'}.{k}"](v)
+            for k, v in value.items()
+        }
+
+    return chk
 
 
 def _chk_media_selection(value: Any) -> dict:
-    """Speech and video name no provider: their request shapes are OpenRouter's own."""
+    """Speech names no provider: its request shapes are OpenRouter's own."""
     if not isinstance(value, dict) or set(value) != {"model", "quality"}:
         raise ConfigValidationError("media selection must contain exactly model and quality")
     return {k: _SETTINGS_SIMPLE_KEYS[f"tools.media.image.{k}"](v) for k, v in value.items()}
 
 
-def _chk_image_provider(v: Any) -> str:
-    """The provider the image tool runs on, or empty for OpenRouter.
+def _chk_media_provider(kind: str):
+    """The provider the ``kind`` tool runs on, or empty for OpenRouter.
 
-    Only one the registry marks ``image_api``: any other connected provider would
-    save cleanly and then answer every picture with an error, which is the
-    failure the roles card exists to keep out of reach.
+    Only one the registry marks ``<kind>_api``: any other connected provider would
+    save cleanly and then answer every call with an error, which is the failure
+    the roles card exists to keep out of reach.
     """
-    text = _chk_str("tools.media.image.provider", 100)(v).strip()
-    if not text:
-        return ""
-    from raven.providers.registry import PROVIDERS, canonical_provider_name, find_by_name
+    key = f"tools.media.{kind}.provider"
 
-    slug = canonical_provider_name(text)
-    spec = find_by_name(slug)
-    if spec is None or not spec.image_api:
-        serving = ", ".join(s.label for s in PROVIDERS if s.image_api)
-        raise ConfigValidationError(f"tools.media.image.provider: the image tool runs on {serving}, not {text!r}")
-    return slug
+    def chk(v: Any) -> str:
+        text = _chk_str(key, 100)(v).strip()
+        if not text:
+            return ""
+        from raven.providers.registry import PROVIDERS, canonical_provider_name, find_by_name
+
+        slug = canonical_provider_name(text)
+        spec = find_by_name(slug)
+        if spec is None or not getattr(spec, f"{kind}_api"):
+            serving = ", ".join(s.label for s in PROVIDERS if getattr(s, f"{kind}_api"))
+            raise ConfigValidationError(f"{key}: the {kind} tool runs on {serving}, not {text!r}")
+        return slug
+
+    return chk
 
 
 # Low-risk hot-writable keys a settings surface may offer. Each entry is a
@@ -1045,8 +1060,9 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "tools.media.image.apiKey": _chk_str("tools.media.image.apiKey", 200),
     "tools.media.image.model": _chk_str("tools.media.image.model"),
     "tools.media.image.quality": _chk_enum("tools.media.image.quality", "", "low", "medium", "high"),
-    "tools.media.image": _chk_image_selection,
-    "tools.media.image.provider": _chk_image_provider,
+    "tools.media.image": _chk_routed_selection("image"),
+    "tools.media.image.provider": _chk_media_provider("image"),
+    "tools.media.video.provider": _chk_media_provider("video"),
     "channels.sendProgress": _chk_bool("channels.sendProgress"),
     "channels.sendToolHints": _chk_bool("channels.sendToolHints"),
     "memory.memoryTopK": _chk_int("memory.memoryTopK", 1, 50),
@@ -1082,10 +1098,10 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     # written a key at a time can be left half-changed by a dropped connection.
     "context": _chk_pin_pair("context", "curatorModel", "curatorProvider"),
     "skillForge": _chk_pin_pair("skillForge", "llmGateModel", "llmGateProvider"),
-    # The image tool's selection object without its provider: the three media
-    # tools share one config shape, and only the image tool runs elsewhere.
+    # The three media tools share one config shape; speech's has no provider,
+    # because only the image and video tools run elsewhere.
     "tools.media.speech": _chk_media_selection,
-    "tools.media.video": _chk_media_selection,
+    "tools.media.video": _chk_routed_selection("video"),
     "sessions.autoArchiveAfterDays": _chk_int_or_null("sessions.autoArchiveAfterDays", 1, 3650),
 }
 
@@ -1136,9 +1152,9 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
 
     Both halves read the same UsageTracker telemetry files
     (``~/.raven/telemetry/usage-YYYY-MM-DD.jsonl``, one JSON row per call, one
-    per tool call), so one range means one thing across the whole reply. The
-    scan is read-only and bounded by ``days`` (default 30, max 90). Session
-    transcripts are read for their titles only.
+    per tool call) in one streaming pass, so one range means one thing across
+    the whole reply. The scan is read-only and bounded by ``days`` (default
+    30, max 90). Session transcripts are read for their titles only.
     """
     from datetime import datetime
 
@@ -1148,6 +1164,7 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
     days = len(dates)
 
     from raven.providers.usage import reported_cost, token_count
+    from raven.token_wise.usage_tracker import read_usage_rows, row_root
 
     def empty_totals() -> dict[str, Any]:
         return {
@@ -1168,6 +1185,8 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
     selected_session = params.get("session_key") or None
     sessions: set[str] = set()
     models: dict[str, dict[str, Any]] = {}
+    tools: dict[str, int] = {}
+    tool_total = 0
     total = empty_totals()
     # The same resolution the writer uses (usage_tracker._default_telemetry_dir):
     # both used to hardcode ~/.raven, which held together only until RAVEN_HOME
@@ -1181,20 +1200,16 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
         p = tel_dir / f"usage-{day_key}.jsonl"
         if not p.is_file():
             continue
-        try:
-            lines = p.read_text(encoding="utf-8").splitlines()
-        except Exception:
-            continue
-        for line in lines:
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(row, dict):
-                continue
+        for row in read_usage_rows(p):
+            root = row_root(row)
             if row.get("_type") == "tool_call":
+                if selected_session and root != selected_session:
+                    continue
+                name = row.get("name")
+                if isinstance(name, str):
+                    tools[name] = tools.get(name, 0) + 1
+                    tool_total += 1
                 continue
-            root = row.get("root_session_key") or row.get("session_key")
             if isinstance(root, str) and root:
                 sessions.add(root)
             if selected_session and root != selected_session:
@@ -1219,27 +1234,7 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
                         target[key] = (target[key] or 0) + value
 
     session_titles: dict[str, str] = {}
-    tools: dict[str, int] = {}
-    tool_total = 0
     try:
-        for day in dates:
-            p = tel_dir / f"usage-{day.isoformat()}.jsonl"
-            if not p.is_file():
-                continue
-            try:
-                for line in p.read_text(encoding="utf-8").splitlines():
-                    row = json.loads(line)
-                    if row.get("_type") != "tool_call":
-                        continue
-                    root = row.get("root_session_key") or row.get("session_key")
-                    if selected_session and root != selected_session:
-                        continue
-                    name = row.get("name")
-                    if isinstance(name, str):
-                        tools[name] = tools.get(name, 0) + 1
-                        tool_total += 1
-            except Exception:
-                continue
         # Titles only. Tool calls were also counted from transcripts here, to
         # cover conversations older than the day tool rows started being
         # written, and a transcript counted as in-range when its file mtime
@@ -1271,7 +1266,7 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
                 if isinstance(key, str) and key in sessions and isinstance(title, str):
                     session_titles[key] = title
     except Exception:
-        logger.exception("settings.usage: tool scan failed")
+        logger.exception("settings.usage: session title scan failed")
 
     return {
         "days": days,
@@ -2026,9 +2021,10 @@ async def fs_dirs(params: dict, *, agent_loop_factory=None) -> dict:
     the picker lets such a row be entered and only withholds the pick.
 
     The cap counts directories FOUND, not names examined, so a folder is never
-    dropped for sorting late among its siblings: the picker offers no typed
-    path, and a subtree left out of the listing cannot be reached at all.
-    Bounding the input instead would buy speed with the answer. The scan is
+    dropped for sorting late among its siblings: bounding the names examined
+    instead would answer "no subfolders" for a subtree the reader can see, and
+    the page cannot tell that apart from an empty folder. Bounding the input
+    would buy speed with the answer. The scan is
     cheap regardless because the type comes off the dirent -- ``os.scandir``
     answers ``is_dir`` from what the kernel already returned, so a directory of
     thirty thousand files costs no stats at all. And the walk runs off the
@@ -2081,8 +2077,38 @@ def _walk_dirs(target: Path, agent_home: Path) -> dict:
         "parent": None if target.parent == target else str(target.parent),
         "home": str(Path.home()),
         "ok": allowed(target),
+        "roots": [{"name": root, "path": root, "ok": allowed(Path(root))} for root in _roots_at(target)],
         "entries": entries,
     }
+
+
+def _windows_drives() -> list[str]:
+    """Every drive this Windows host exposes, as ``C:\\``-style roots.
+
+    ``os.listdrives`` (3.12+) reads them from the system rather than probing
+    every letter, so a mapping added since boot shows up without a scan. A
+    drive that is not ready is still listed: Explorer shows it too, and asking
+    for it answers with the same error as any folder that is gone.
+    """
+    try:
+        return list(os.listdrives())
+    except (AttributeError, OSError):
+        return []
+
+
+def _roots_at(target: PurePath) -> list[str]:
+    """The other filesystem roots, offered only while standing on one.
+
+    A root has no parent, so the browser's upward walk ends there; on a host
+    with several roots (Windows drives) that would make every other root
+    unreachable from a picker that started in the user's home. Further down
+    the tree these are siblings of nothing, so the list is empty. Each root is
+    judged by the caller, as a folder row is: the drive holding agent home is
+    an ancestor of it, which ``session.create`` refuses.
+    """
+    if target.parent != target or not sys.platform.startswith("win"):
+        return []
+    return _windows_drives()
 
 
 async def _run_pick_dir(argv: list[str]) -> str | None:
@@ -2116,7 +2142,8 @@ async def fs_pick_dir(params: dict, *, agent_loop_factory=None) -> dict:
     is the reader's own desktop, which is the page's call to make -- it knows
     where it is being served from -- so the method itself does not refuse a
     remote caller; it would merely open a dialog nobody sees, and a host with
-    no dialog says so instead.
+    no dialog says so instead. Windows is one of those hosts: see
+    :mod:`raven.rpc.folder_dialog` for why it has no command here.
 
     The answer carries the same ``ok`` ``fs.dirs`` puts on every entry, so the
     page can decline a folder the create would refuse without a second call.

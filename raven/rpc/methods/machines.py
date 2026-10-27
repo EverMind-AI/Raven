@@ -6,9 +6,14 @@ that command behind a page -- list, add, install-node, remove, doctor --
 answering what the command prints, as data, with the one difference the
 contract states: nothing here carries an address, an account or a key path.
 A row says what a machine is, how this computer's link to it is doing
-(:meth:`raven.node.client.NodePool.status`) and whether its Raven node is
-this Raven's own code; the way onto it travels once, in ``machines.add``, and
-is not read back.
+(:meth:`raven.node.client.NodePool.status`), whether its Raven node is this
+Raven's own code, and which connected agent entries run on it
+(``agents_here``, from :func:`raven.config.update_subagents.agents_on_machine`)
+-- the one line that tells a reader whose machine is up and idle that the
+next step is on the agents side; the way onto it travels once, in
+``machines.add``, and is not read back. ``machines.local_keys`` names the
+private keys this computer has, for the register form to propose instead of
+a placeholder path.
 
 An install takes minutes and a page cannot hold a call that long, so
 ``machines.install_node`` starts one in the background and ``machines.list``
@@ -27,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -34,13 +40,15 @@ from loguru import logger
 from pydantic import ValidationError
 
 from raven.acp_client import remote
+from raven.config.loader import ConfigReadError
 from raven.config.update_subagents import agents_on_machine
 from raven.node import bundle
 from raven.node import install as node_install
 from raven.node.client import MachineStatus, NodeError, get_node_pool
 from raven.ops import connection_add, connections
 from raven.ops.connection_add import NODE_FIELD
-from raven.ops.connections import SSH, UNREADABLE, row_problems, transport_of
+from raven.ops.connections import SSH, UNREADABLE, password_auth, row_problems, transport_of
+from raven.ops.transport import ASKPASS_REFUSED
 from raven.rpc.errors import ConfigValidationError
 
 if TYPE_CHECKING:
@@ -82,11 +90,18 @@ def _scrubbed(text: str, row: dict[str, Any]) -> str:
     host = str(row.get("host") or "")
     user = str(row.get("user") or "")
     key = str(row.get("key") or "")
+    port = str(row.get("port") or "")
     out = text
     if host:
+        if user and port:
+            out = out.replace(f"{user}@{host}:{port}", "the machine")
         if user:
             out = out.replace(f"{user}@{host}", "the machine")
+        if port:
+            out = out.replace(f"{host}:{port}", "the machine")
         out = out.replace(host, "the machine")
+        # ssh names the login twice ("could not reach user@host:port: user@host: Permission denied"); once is enough.
+        out = out.replace("the machine: the machine:", "the machine:")
     if key:
         out = out.replace(key, "the key")
     return out
@@ -107,6 +122,7 @@ def _row_out(row: dict[str, Any]) -> dict[str, Any]:
     status = get_node_pool().status(conn_id) if transport_of(row) == SSH else MachineStatus("off")
     version, current = _node_of(row, status)
     install = _INSTALLS.get(conn_id)
+    on_here, off_here = _agents_here(conn_id)
     out: dict[str, Any] = {
         "id": conn_id,
         "name": str(row.get("display_name") or conn_id),
@@ -118,10 +134,36 @@ def _row_out(row: dict[str, Any]) -> dict[str, Any]:
         "install": install.as_json() if install is not None else dict(_NO_INSTALL),
         "paths": [str(x) for x in row["paths"]] if isinstance(row.get("paths"), list) else [],
         "problems": [p.text for p in row_problems(row) if p.blocking],
+        "agents_here": on_here,
+        "agents_off_here": off_here,
     }
     if version:
         out["node_version"] = version
+    if transport_of(row) == SSH:
+        out["auth"] = "password" if password_auth(row) else "key"
     return out
+
+
+def _agents_here(conn_id: str) -> tuple[list[str], list[str]]:
+    """The agent entries that name the machine: the connected ones, then the switched-off ones, by name.
+
+    Both lists, because the card and the connect form have to agree with the
+    add's own rule: a preset's entry on the machine, switched off, still holds
+    the machine (``subagents.add`` refuses a second under the default name,
+    saying to switch it back on), so a card that counted only connected
+    entries read "no agent connected here" beside a form that greyed the
+    preset as "already on this machine" (seen 2026-10-20). The connected ones
+    are what the agents page calls connected; the switched-off ones are shown
+    as such, and offered back. A malformed agents section, or a config file
+    that does not parse at all (a comment, a trailing comma), is the agents
+    page's to report: the machine is still what it is, with nothing listed.
+    """
+    try:
+        every = agents_on_machine(conn_id)
+        on = agents_on_machine(conn_id, only_enabled=True)
+    except (ValidationError, ConfigReadError):
+        return [], []
+    return on, [name for name in every if name not in on]
 
 
 def _registry() -> connections.Read:
@@ -172,7 +214,11 @@ async def machines_list(params: dict) -> dict:
 # Why a machine was not registered, as a kind the page explains in the reader's
 # language; the sentence itself stays, for the reader who wants ssh's words.
 _REASONS = (
-    (re.compile(r"ssh not found on this computer", re.IGNORECASE), "nossh"),
+    (re.compile(r"ssh(-keygen)? not found on this computer", re.IGNORECASE), "nossh"),
+    # Before ``login``: the askpass helper declined the prompt, so the refusal
+    # ssh reports after it says nothing about the password.
+    (re.compile(re.escape(ASKPASS_REFUSED)), "prompt"),
+    (re.compile(r"which is also the ssh alias Raven keeps"), "invalid"),
     (re.compile(r"REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed", re.IGNORECASE), "hostkey"),
     (re.compile(r"Permission denied|Too many authentication failures|publickey", re.IGNORECASE), "login"),
     (re.compile(r"no answer within|timed out", re.IGNORECASE), "timeout"),
@@ -191,10 +237,21 @@ def _refused(detail: str, reason: str) -> dict[str, Any]:
 
 
 async def machines_add(params: dict) -> dict:
-    """Reach an ssh machine once with the given login, then write its row and its ssh alias."""
+    """Reach an ssh machine once with the given login, then write its row and its ssh alias.
+
+    With ``auth: password`` the password is what Raven logs in with, every
+    time: kept on this computer for the owner alone
+    (``connection_add.store_password``) before the probe, which then reaches
+    the machine the way every later connection will, through ssh's askpass
+    hook; a password the machine refuses is forgotten again. It is in no
+    registry row, log or answer. Such a row gets no ssh alias. On Windows the
+    pick itself is refused, first of all, before anything is kept.
+    """
     conn_id = str(params.get("id") or "").strip()
     name = str(params.get("name") or "").strip()
     paths = [str(x).strip() for x in (params.get("paths") or []) if str(x).strip()]
+    by_password = str(params.get("auth") or "key").strip().lower() == "password"
+    password = str(params.get("password") or "")
     row: dict[str, Any] = {
         "id": conn_id,
         "display_name": name or conn_id,
@@ -206,6 +263,18 @@ async def machines_add(params: dict) -> dict:
     }
     if paths:
         row["paths"] = paths
+    if by_password:
+        if sys.platform == "win32":
+            # Judged before anything else the pick would set in motion: every
+            # password login rides OpenSSH's askpass, and the helper Raven
+            # writes is a POSIX script this computer cannot run, so nothing is
+            # kept and no 'nossh' asks for an OpenSSH that could not make the
+            # mode work either.
+            return _refused("registering with a password is not supported on Windows; use a key instead", "platform")
+        if not password:
+            return _refused("registering with a password needs the password; nothing was written", "invalid")
+        row["auth"] = "password"
+        del row["key"]
     faults = [p.text for p in row_problems(row) if p.blocking]
     if faults:
         return _refused("; ".join(faults), "invalid")
@@ -219,19 +288,52 @@ async def machines_add(params: dict) -> dict:
         return _refused(f"{found.detail} Give those entries an id (or remove them) first.", "registry")
     if any(str(r.get("id") or "").strip() == conn_id for r in found.rows):
         return _refused(f"a machine with id {conn_id!r} is registered already", "duplicate")
-    reached, message, detected = await asyncio.to_thread(connection_add.probe, row)
-    if not reached:
-        return _refused(_scrubbed(message, row), _reason(message))
-    row.update(detected)
-    row["software"] = ""
-    row["budget_unit"] = "gpu-minute" if row.get("kind") == "gpu" else "core-minute"
-    if not connections.resource_unit(row):
-        row["concurrency"] = 1
+    if collision := connection_add.alias_collision(row, list(found.rows)):
+        return _refused(collision, "invalid")
+    kept = None
+    if by_password:
+        # Kept before the probe, which reaches the machine the way every later
+        # connection will: through the askpass helper reading this file. Last
+        # of all the checks, so a refusal has nothing to clean up but this
+        # file -- which the finally below sees to.
+        try:
+            kept = connection_add.store_registration_password(conn_id, password)
+        except ValueError as exc:
+            return _refused(str(exc), "duplicate" if "already listed" in str(exc) else "invalid")
+    written = False
     try:
-        connection_add.write(row)
-    except ValueError as exc:
-        said = str(exc)
-        return _refused(said, "duplicate" if "already listed" in said else "registry")
+        if by_password:
+            reached, message, detected = await asyncio.to_thread(connection_add.probe, row, password=password)
+        else:
+            reached, message, detected = await asyncio.to_thread(connection_add.probe, row)
+        if not reached:
+            said = _scrubbed(message, row)
+            if by_password:
+                # ssh never echoes a password, but the replace is the
+                # guarantee rather than the belief.
+                said = said.replace(password, "the password")
+            return _refused(said, _reason(message))
+        row.update(detected)
+        row["software"] = ""
+        row["budget_unit"] = "gpu-minute" if row.get("kind") == "gpu" else "core-minute"
+        if not connections.resource_unit(row):
+            row["concurrency"] = 1
+        try:
+            if by_password:
+                connection_add.write(row, password=password)
+            else:
+                connection_add.write(row)
+        except ValueError as exc:
+            said = str(exc)
+            return _refused(said, "duplicate" if "already listed" in said else "registry")
+        written = True
+    finally:
+        if kept is not None and not written:
+            # No row was written -- the machine refused, or the registry did --
+            # so the password kept a moment ago goes too, unless a registration
+            # of the same id landed meanwhile: the file is keyed by id alone,
+            # and is that row's now (`forget_unowned_password` has the rule).
+            connection_add.forget_unowned_password(conn_id, password, identity=kept)
     said = [f"{detected['cores']} cores" if "cores" in detected else "", str(detected.get("memory") or "")]
     said.append(str(detected.get("device") or ""))
     detail = f"reached machine {_label(row)}: " + (
@@ -242,6 +344,19 @@ async def machines_add(params: dict) -> dict:
     except (OSError, ValueError) as exc:
         detail += f"; its ssh alias was not written to ~/.ssh/config ({exc}), so scp and rsync cannot address it by id"
     return {"ok": True, "detail": detail, "reason": "", "row": _row_out(row)}
+
+
+def _forget_password(row: dict[str, Any], conn_id: str) -> str:
+    """The password kept here under this id goes with the row; one clause when there was one, else none.
+
+    Whatever the row's login: a file kept under the id by a registration that
+    was later refused, or by a row since re-registered with a key, is nobody's
+    once the row is gone, and this is the one place that reaches it.
+    """
+    del row
+    if not connection_add.forget_password(conn_id):
+        return ""
+    return "; the password kept here for it is deleted"
 
 
 async def _install(conn_id: str, node_dir: str, rec: _Install) -> None:
@@ -260,7 +375,7 @@ async def _install(conn_id: str, node_dir: str, rec: _Install) -> None:
             size = f" ({done.size_kb // 1024} MB)" if done.size_kb else ""
             rec.detail = f"Installed the Raven node {done.install_name} in {done.node_dir}{size}."
             if not done.rg:
-                rec.detail += " ripgrep-bin was not available there; grep on it runs Raven's own Python search."
+                rec.detail += " ripgrep-bin did not install there; grep on it runs Raven's own Python search."
         learned: dict[str, Any] = {NODE_FIELD: plan.install_name}
         if node_dir and node_dir != str(plan.target.field("node_dir") or "").strip().rstrip("/"):
             learned["node_dir"] = node_dir
@@ -360,6 +475,7 @@ async def machines_remove(params: dict) -> dict:
     if transport_of(rows[0]) == SSH:
         await pool.close(conn_id)
         detail += "; the node installed on it stays there"
+        detail += _forget_password(rows[0], conn_id)
     _INSTALLS.pop(conn_id, None)
     if named:
         detail += (
@@ -374,6 +490,17 @@ async def machines_remove(params: dict) -> dict:
     return {"removed": True, "detail": detail, "agents": named + left}
 
 
+async def machines_local_keys(params: dict) -> dict:
+    """The private keys this computer has, as ``~/.ssh/<name>`` paths, ssh's own default identities first.
+
+    What the register form fills its key field with, and offers as the
+    choices, instead of a placeholder that names a key the owner may not have
+    (:func:`raven.ops.connection_add.local_keys`). Paths on this computer,
+    for its owner's own form; nothing about any machine.
+    """
+    return {"keys": connection_add.local_keys()}
+
+
 def register_machines_methods(dispatcher: "Dispatcher") -> None:
     """Register the ``machines.*`` methods on a dispatcher instance."""
     dispatcher.register("machines.list", machines_list)
@@ -381,12 +508,14 @@ def register_machines_methods(dispatcher: "Dispatcher") -> None:
     dispatcher.register("machines.install_node", machines_install_node)
     dispatcher.register("machines.doctor", machines_doctor)
     dispatcher.register("machines.remove", machines_remove)
+    dispatcher.register("machines.local_keys", machines_local_keys)
 
 
 __all__ = [
     "NODE_FIELD",
     "machines_add",
     "machines_doctor",
+    "machines_local_keys",
     "machines_install_node",
     "machines_list",
     "machines_remove",

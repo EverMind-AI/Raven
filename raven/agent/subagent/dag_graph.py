@@ -1,16 +1,26 @@
 # -*- coding: utf-8 -*-
 """The sub-agent DAG spec models and structural validation."""
 
+import os
+import re
 from collections.abc import Callable, Iterable, Mapping
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic.alias_generators import to_camel
 
-from raven.agent.subagent.dag_store import RUNNING, UNRECORDED, SessionNodes, duplicate_node_id, fold_node_id
+from raven.agent.subagent.dag_guard import DONE, Atom, Guard, GuardError, impossible_guard_errors, parse_guard
+from raven.agent.subagent.dag_store import (
+    NOT_EXECUTED,
+    RUNNING,
+    UNRECORDED,
+    SessionNodes,
+    duplicate_node_id,
+    fold_node_id,
+)
 from raven.agent.subagent.history import NODE_ID_PATTERN
 from raven.agent.subagent.prompt_errors import DagValidationError
-from raven.agent.subagent.prompt_paths import check_confined
+from raven.agent.subagent.prompt_paths import check_confined, resolve_reference, split_reference, within
 from raven.agent.subagent.prompt_placeholders import parse_placeholders
 from raven.agent.subagent.prompt_render import check_input_contract
 
@@ -18,6 +28,9 @@ from raven.agent.subagent.prompt_render import check_input_contract
 # it with its own copy of this charset before joining a web-supplied id into a
 # path), so it stays a closed set.
 _ID_PATTERN = NODE_ID_PATTERN
+# A route name is written into a guard beside a node id, so it takes the same charset.
+# Match it with `fullmatch`: the pattern's `$` would also accept a trailing newline.
+_ROUTE_NAME_RE = re.compile(NODE_ID_PATTERN)
 # An agent name, by contrast, is only ever a table key: looked up in the
 # registry, grouped for the capability check, and echoed into status
 # JSON. It reaches no path and no shell, so it accepts any name the config layer
@@ -101,6 +114,22 @@ class DagNodeSpec(BaseModel):
             Optional stateful sub-agent handle; a short, semantic name
             (e.g. ``researcher``) reused across nodes to continue one
             conversation.
+        routes (`dict[str, str] | None`):
+            Makes this node a decision: route name -> the condition, in plain
+            words, under which its answer selects that route. Only the judge
+            reads the conditions and only the judge selects; the node's own
+            text selects nothing. ``None`` is an ordinary node.
+        select (`Literal["one", "many"] | None`):
+            How many routes a decision selects: ``"one"`` -- exactly one, and
+            what ``None`` means once ``routes`` is set -- or ``"many"``, any
+            number, none included. Refused on a node with no ``routes``.
+        when (`str | None`):
+            Guard: this node runs only if it holds once its dependencies
+            settle. Atoms are ``<node>.<route>`` and ``<node>.done``, joined by
+            ``not``, ``and``, ``or`` and parentheses (see ``dag_guard``). Unset
+            or blank means unguarded, and ``None`` is how an unguarded node
+            serialises: the ``None`` is dropped from the dump, so the key is
+            absent rather than empty.
     """
 
     model_config = ConfigDict(extra="forbid", alias_generator=to_camel, populate_by_name=True)
@@ -122,6 +151,24 @@ class DagNodeSpec(BaseModel):
     mcps: list[str] | None = None
     inputs: dict[str, object] = Field(default_factory=dict)
     instance: Annotated[str, Field(min_length=1, pattern=r"^\S(?:.*\S)?$")] | None = None
+    routes: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "Makes this node a decision. Route name -> the condition, in plain words, under "
+            "which its answer selects that route. The judge picks; the node's own text selects nothing."
+        ),
+    )
+    select: Literal["one", "many"] | None = Field(
+        default=None,
+        description='"one" (default when routes are given): exactly one route. "many": any number, including none.',
+    )
+    when: str | None = Field(
+        default=None,
+        description=(
+            "Guard: run this node only if this holds once its dependencies settle. Atoms "
+            "<node>.<route> and <node>.done; not, and, or, parentheses."
+        ),
+    )
 
 
 class SubAgentDagSpec(BaseModel):
@@ -213,6 +260,63 @@ def graph_deps(node: DagNodeSpec, by_id: dict[str, DagNodeSpec]) -> list[str]:
     return [dep for dep in node.depends_on if dep in by_id]
 
 
+def guards_of(nodes: Iterable[DagNodeSpec]) -> dict[str, Guard]:
+    """Parse the ``when`` of every guarded node, keyed by node id.
+
+    A node whose ``when`` is unset or blank is unguarded and has no entry.
+
+    Args:
+        nodes (`Iterable[DagNodeSpec]`):
+            The graph's nodes.
+
+    Returns:
+        `dict[str, Guard]`:
+            The parsed guards, in node order.
+
+    Raises:
+        `GuardError`:
+            On the first ``when`` that does not parse. The message names a position in
+            the expression but not the node: a caller that validates first never sees
+            it, and ``collect_static_graph_errors`` reports every one of them by node.
+    """
+    guards: dict[str, Guard] = {}
+    for node in nodes:
+        if (source := _guard_source(node)) is not None:
+            guards[node.id] = parse_guard(source)
+    return guards
+
+
+def may_not_execute(nodes: list[DagNodeSpec], by_id: dict[str, DagNodeSpec]) -> frozenset[str]:
+    """Every node that may not run, given the whole graph.
+
+    A node may not execute when it has a guard, or when it has at least one
+    in-graph dependency and every one of them may not execute. Computed in
+    topological order, and deliberately an over-approximation: ``R.done`` counts as
+    a guard even though it always holds.
+
+    Args:
+        nodes (`list[DagNodeSpec]`):
+            The graph's nodes, as the caller holds them. Only ``by_id`` is read.
+        by_id (`dict[str, DagNodeSpec]`):
+            The same nodes, keyed by id; ids must be unique.
+
+    Returns:
+        `frozenset[str]`:
+            The ids of the nodes that may not execute.
+
+    Raises:
+        `DagValidationError`:
+            When the graph contains a cycle.
+    """
+    skippable: set[str] = set()
+    for node_id in _topological_order(by_id):
+        node = by_id[node_id]
+        deps = graph_deps(node, by_id)
+        if _guard_source(node) is not None or (deps and all(dep in skippable for dep in deps)):
+            skippable.add(node_id)
+    return frozenset(skippable)
+
+
 def collect_static_graph_errors(
     nodes: list[DagNodeSpec],
     *,
@@ -220,13 +324,23 @@ def collect_static_graph_errors(
     session_nodes: SessionNodes | None = None,
     allowed_blank_fields: frozenset[str] = frozenset(),
     check_paths: bool = True,
+    nodes_root: str | None = None,
 ) -> list[str]:
     """Collect DAG errors that can be found before any node is dispatched.
 
     This is the shared static contract for both an ordinary DAG call and a
     Playbook being generated or loaded. Agent-table capability checks remain
     with their callers because they need live registry data; graph shape,
-    references, input contracts and cycles do not.
+    references, input contracts, cycles, and the routes and guards of a
+    branching graph do not.
+
+    It collects and never raises: a check that cannot be answered for this
+    graph (the ``@nodes/`` rule on a cyclic one) is skipped, and the check that
+    owns the underlying fault reports it.
+
+    ``nodes_root`` is the directory ``@nodes/`` resolves against. Given with
+    ``roots``, a reference that reaches it by another spelling -- an absolute
+    path, or one out of the workdir -- is held to the ``@nodes/`` rule too.
     """
     errors: list[str] = []
 
@@ -284,8 +398,11 @@ def collect_static_graph_errors(
             )
         )
 
+    errors.extend(_branch_errors(nodes, by_id))
+
     if unique_ids:
         capture(lambda: _topological_order(by_id))
+        errors.extend(_nodes_path_errors(nodes, by_id, roots=roots, nodes_root=nodes_root))
     return errors
 
 
@@ -293,6 +410,8 @@ def validate_and_order(
     spec: SubAgentDagSpec,
     roots: tuple[str, ...] | None = None,
     session_nodes: SessionNodes | None = None,
+    *,
+    nodes_root: str | None = None,
 ) -> list[str]:
     """Validate graph structure and return a topological node order.
 
@@ -300,7 +419,9 @@ def validate_and_order(
     graph or to one an earlier run of this session completed; the graph
     is acyclic; every ``{{ dep.output* }}`` references a declared
     dependency (default-deny); every ``{{ inputs.key }}`` references a
-    declared input; every file reference lands inside ``roots``.
+    declared input; every file reference lands inside ``roots``; every
+    ``routes``, ``select`` and ``when`` is well formed and reads only what its
+    node depends on (see :func:`collect_static_graph_errors`).
 
     Args:
         spec (`SubAgentDagSpec`):
@@ -320,6 +441,10 @@ def validate_and_order(
             session, so this both refuses a graph that reuses one and
             makes an earlier run's *completed* node addressable by id
             alone.
+        nodes_root (`str | None`):
+            Where ``@nodes/`` resolves, inside the history root in ``roots``.
+            Given, a reference reaching a node's artifacts by any spelling is
+            checked as its ``@nodes/`` spelling is.
 
     Returns:
         `list[str]`:
@@ -329,7 +454,9 @@ def validate_and_order(
         `DagValidationError`:
             When any structural rule is violated.
     """
-    if errors := collect_static_graph_errors(spec.nodes, roots=roots, session_nodes=session_nodes):
+    if errors := collect_static_graph_errors(
+        spec.nodes, roots=roots, session_nodes=session_nodes, nodes_root=nodes_root
+    ):
         raise DagValidationError(errors[0])
     return _topological_order({node.id: node for node in spec.nodes})
 
@@ -500,10 +627,10 @@ def _unreadable(node_id: str, what: str, target: str, known: SessionNodes) -> st
     """Explain why a node this session has run cannot be read, if that is why.
 
     Which of these applies decides the caller's next move entirely -- retry the
-    work, fix an upstream, or wait -- and all three look identical from a
-    missing output file, which is what this is here to avoid. Returns ``None``
-    for an id no run ever claimed: that is not a state, and how to phrase it
-    depends on how the reference was written, which the caller knows.
+    work, fix an upstream, wait, or continue without it -- and all four look
+    identical from a missing output file, which is what this is here to avoid.
+    Returns ``None`` for an id no run ever claimed: that is not a state, and how
+    to phrase it depends on how the reference was written, which the caller knows.
 
     Args:
         node_id (`str`):
@@ -527,6 +654,11 @@ def _unreadable(node_id: str, what: str, target: str, known: SessionNodes) -> st
         return f"node '{node_id}' references {what}, which run '{owner}' skipped, so it wrote no output. Re-do it under a new id"
     if state == "cancelled":
         return f"node '{node_id}' references {what}, which was stopped mid-run in run '{owner}', so it wrote no output. Re-do it under a new id"
+    if state == NOT_EXECUTED:
+        return (
+            f"node '{node_id}' references {what}, which run '{owner}' did not execute -- its branch was "
+            f"not selected, so it wrote no output. Continue without it, or re-do that work under a new id"
+        )
     if state == RUNNING:
         # Deliberately not "put both in one graph": that node's id is taken, so
         # this graph cannot re-create it, and suggesting otherwise sends the
@@ -605,6 +737,337 @@ def _check_node_input(
             or f"node '{node.id}' input '{key}' names unknown node '{target}' -- add it to depends_on if it "
             f"is in this graph, else name a node an earlier run completed"
         )
+
+
+def _guard_source(node: DagNodeSpec) -> str | None:
+    """Return a node's ``when`` as written, or ``None`` when it has no guard.
+
+    Unset and blank mean the same thing. The text comes back unstripped because
+    ``parse_guard`` reports positions in it.
+
+    Args:
+        node (`DagNodeSpec`):
+            The node.
+
+    Returns:
+        `str | None`:
+            The guard's source, or ``None`` for an unguarded node.
+    """
+    return node.when if node.when and node.when.strip() else None
+
+
+def _branch_errors(nodes: list[DagNodeSpec], by_id: dict[str, DagNodeSpec]) -> list[str]:
+    """Check the fields that make a node a decision, and the guards that read one.
+
+    Node by node, so one node's errors stay together. A guard that does not
+    parse reports its syntax error and nothing more: its atoms are unknown, and
+    the rules that read them would only add errors that follow from that one.
+
+    Args:
+        nodes (`list[DagNodeSpec]`):
+            The graph's nodes, in the order their errors are reported.
+        by_id (`dict[str, DagNodeSpec]`):
+            The same nodes, keyed by id.
+
+    Returns:
+        `list[str]`:
+            One message per violated rule; empty for a graph with no ``routes``,
+            ``select`` or ``when``.
+    """
+    decision_ids = {node_id for node_id, node in by_id.items() if node.routes is not None}
+    errors: list[str] = []
+    for node in nodes:
+        if node.select is not None and node.routes is None:
+            errors.append(
+                f"node '{node.id}' sets 'select' but declares no 'routes' -- 'select' has nothing to choose from"
+            )
+        if node.routes is not None:
+            errors.extend(_route_errors(node))
+        names: dict[str, list[str]] = {}
+        if (source := _guard_source(node)) is not None:
+            try:
+                guard = parse_guard(source)
+            except GuardError as exc:
+                errors.append(f"node '{node.id}': {exc}")
+                continue
+            names = _atom_names_by_node(guard)
+            errors.extend(_atom_errors(node, names, by_id))
+            errors.extend(_never_true_errors(node, guard, by_id))
+        errors.extend(_dependency_errors(node, names, decision_ids))
+    return errors
+
+
+def _route_errors(node: DagNodeSpec) -> list[str]:
+    """Check how many routes a decision node declares, and what each is called and says.
+
+    Args:
+        node (`DagNodeSpec`):
+            A node with ``routes``.
+
+    Returns:
+        `list[str]`:
+            One message per violated rule.
+    """
+    routes = node.routes or {}
+    select = node.select or "one"
+    errors: list[str] = []
+    if len(routes) < (2 if select == "one" else 1):
+        needs = "at least two routes" if select == "one" else "at least one route"
+        errors.append(
+            f"node '{node.id}' declares {len(routes)} route(s); a decision node with select '{select}' needs {needs}"
+        )
+    folded: set[str] = set()
+    for name, condition in routes.items():
+        # In any letter case: a route `Done` would put `r.Done` one case away from `r.done`, which means settled.
+        if name.casefold() == DONE:
+            errors.append(
+                f"node '{node.id}': {name!r} is reserved as a route name -- it means the node settled, "
+                f"whatever it selected"
+            )
+        elif not _ROUTE_NAME_RE.fullmatch(name):
+            errors.append(f"node '{node.id}': route name {name!r} must use only [A-Za-z0-9_-]")
+        if name.casefold() in folded:
+            errors.append(
+                f"node '{node.id}': two route names differ only in case ({name!r}) -- "
+                f"they would be one name to a reader"
+            )
+        folded.add(name.casefold())
+        if not condition.strip():
+            errors.append(f"node '{node.id}': route '{name}' has no condition -- the judge needs one to choose by")
+    return errors
+
+
+def _atom_names_by_node(guard: Guard) -> dict[str, list[str]]:
+    """Collect what a guard asks of each node it names.
+
+    Args:
+        guard (`Guard`):
+            A parsed guard.
+
+    Returns:
+        `dict[str, list[str]]`:
+            Node id to the route names (or ``done``) asked of it, in source
+            order, each once.
+    """
+    names: dict[str, list[str]] = {}
+    for atom in guard.atoms:
+        asked = names.setdefault(atom.node, [])
+        if atom.name not in asked:
+            asked.append(atom.name)
+    return names
+
+
+def _atom_errors(node: DagNodeSpec, names: dict[str, list[str]], by_id: dict[str, DagNodeSpec]) -> list[str]:
+    """Check a guard reads only decision nodes of this graph its node depends on, and only routes they declare.
+
+    Args:
+        node (`DagNodeSpec`):
+            The guarded node.
+        names (`dict[str, list[str]]`):
+            What its guard asks of each node (see :func:`_atom_names_by_node`).
+        by_id (`dict[str, DagNodeSpec]`):
+            This graph's nodes, keyed by id.
+
+    Returns:
+        `list[str]`:
+            One message per node or route the guard cannot read.
+    """
+    errors: list[str] = []
+    for target_id, asked in names.items():
+        target = by_id.get(target_id)
+        if target is None:
+            errors.append(
+                f"node '{node.id}' guard names '{target_id}', which is not a node of this graph -- "
+                f"the routes of an earlier run are not recorded, so name a decision node of this graph"
+            )
+        elif target_id not in node.depends_on:
+            errors.append(
+                f"node '{node.id}' guard names '{target_id}', which is not in its depends_on -- "
+                f"a guard may only read a dependency"
+            )
+        elif target.routes is None:
+            errors.append(
+                f"node '{node.id}' guard names '{target_id}', which declares no 'routes' -- "
+                f"a guard can only name a decision node"
+            )
+        else:
+            declared = ", ".join(sorted(target.routes))
+            errors.extend(
+                f"node '{node.id}' guard names route '{name}', which node '{target_id}' "
+                f"does not declare (it declares: {declared})"
+                for name in asked
+                if name != DONE and name not in target.routes
+            )
+    return errors
+
+
+def _dependency_errors(node: DagNodeSpec, names: dict[str, list[str]], decision_ids: set[str]) -> list[str]:
+    """Check a node that depends on a decision node says, in its ``when``, which route it wants.
+
+    Args:
+        node (`DagNodeSpec`):
+            The dependent node, guarded or not.
+        names (`dict[str, list[str]]`):
+            What its guard asks of each node; empty when it has none.
+        decision_ids (`set[str]`):
+            The ids of this graph's decision nodes.
+
+    Returns:
+        `list[str]`:
+            One message per decision node the guard never names.
+    """
+    return [
+        f"node '{node.id}' depends on decision node '{dep}', which must appear in when -- "
+        f"write '{dep}.<route>' for the route(s) it runs on, or '{dep}.done' if it runs whichever route is selected"
+        for dep in sorted(set(node.depends_on) & decision_ids)
+        if dep not in names
+    ]
+
+
+def _never_true_errors(node: DagNodeSpec, guard: Guard, by_id: dict[str, DagNodeSpec]) -> list[str]:
+    """Refuse the two guards that cannot hold, without searching for satisfiability.
+
+    Two routes of one ``select: one`` node required together; and a negated
+    ``<node>.done``, since ``done`` is always true. Only declared routes count
+    towards the first. The expression walker preserves negation and requires
+    every arm of an ``or`` to be impossible before rejecting it.
+
+    Args:
+        node (`DagNodeSpec`):
+            The guarded node.
+        guard (`Guard`):
+            Its parsed guard.
+        by_id (`dict[str, DagNodeSpec]`):
+            This graph's nodes, keyed by id.
+
+    Returns:
+        `list[str]`:
+            Contradictions that prove the whole guard cannot hold.
+    """
+
+    def check_conjunction(positive: tuple[Atom, ...], negative: tuple[Atom, ...]) -> list[str]:
+        errors: list[str] = []
+        asked: dict[str, set[str]] = {}
+        for atom in positive:
+            asked.setdefault(atom.node, set()).add(atom.name)
+        for router_id, names in asked.items():
+            router = by_id.get(router_id)
+            if router is None or router.routes is None or router.select == "many":
+                continue
+            clashing = sorted(names.intersection(router.routes))
+            if len(clashing) > 1:
+                errors.append(
+                    f"node '{node.id}' guard requires {clashing} of single-select node "
+                    f"'{router_id}' at once, which can never be true"
+                )
+        errors.extend(
+            f"node '{node.id}' guard negates '{atom.node}.done', which is always true, so it can never be true"
+            for atom in negative
+            if atom.name == DONE
+        )
+        return errors
+
+    return impossible_guard_errors(guard, check_conjunction)
+
+
+def _nodes_path_errors(
+    nodes: list[DagNodeSpec],
+    by_id: dict[str, DagNodeSpec],
+    *,
+    roots: tuple[str, ...] | None = None,
+    nodes_root: str | None = None,
+) -> list[str]:
+    """Refuse a file reference to the artifacts of a node that may not execute.
+
+    A node that did not execute wrote no file, so the reader would fail while
+    rendering with a missing-file error that hides the cause. ``{{ <id>.output }}``
+    reads as the fixed "not executed" sentence instead.
+
+    Args:
+        nodes (`list[DagNodeSpec]`):
+            The graph's nodes; ids must be unique.
+        by_id (`dict[str, DagNodeSpec]`):
+            The same nodes, keyed by id.
+        roots (`tuple[str, ...] | None`):
+            The roots a reference may resolve into, the first being the base of
+            a relative one.
+        nodes_root (`str | None`):
+            Where ``@nodes/`` resolves (see :func:`_nodes_path_target`).
+
+    Returns:
+        `list[str]`:
+            One message per reference. Empty for a graph with a cycle, whose
+            order cannot be computed: the topological check reports that.
+    """
+    try:
+        skippable = {fold_node_id(node_id): node_id for node_id in may_not_execute(nodes, by_id)}
+    except DagValidationError:
+        return []
+    errors: list[str] = []
+    for node in nodes:
+        try:
+            placeholders = parse_placeholders(node.prompt_template)
+        except DagValidationError:
+            # `_validate_refs` reports a malformed placeholder.
+            placeholders = []
+        reads = [(ph.name, ph.raw) for ph in placeholders if ph.kind in ("ref", "ref_path")]
+        reads.extend(
+            (str(value["file"]), f"input '{key}'")
+            for key, value in node.inputs.items()
+            if isinstance(value, dict) and "file" in value
+        )
+        for path, what in reads:
+            target = _nodes_path_target(path, roots=roots, nodes_root=nodes_root)
+            if target is not None and target in skippable:
+                target = skippable[target]
+                errors.append(
+                    f"node '{node.id}' reads {what} of node '{target}', which may not execute in this graph -- "
+                    f"use {{{{ {target}.output }}}} instead, which reads as the fixed 'not executed' sentence "
+                    f"when it does not run"
+                )
+    return errors
+
+
+def _nodes_path_target(path: str, *, roots: tuple[str, ...] | None = None, nodes_root: str | None = None) -> str | None:
+    """Return the node whose artifacts a reference names.
+
+    Artifacts are flat files named ``<id>.`` plus a suffix and an id holds no
+    dot, so the id is whatever precedes the first one. For ``@nodes/``,
+    normalize separators and drives with the host's path rules, then fold the
+    id like the session namespace does. The artifact directory's case
+    sensitivity is not known here, and macOS can alias case even though its
+    path library does not. A drive-relative spelling is likewise matched by its
+    relative suffix.
+
+    Any other reference names a node when it lands in ``nodes_root``, resolved
+    as ``check_confined`` resolves it: the history root around the node root is
+    a reference root of its own, so the same files are reachable by absolute
+    path, the way a finish text prints them, or from the workdir.
+
+    Args:
+        path (`str`):
+            A ``ref:`` path or a ``{"file": ...}`` input value.
+        roots (`tuple[str, ...] | None`):
+            The roots a reference may resolve into; without them only
+            ``@nodes/`` is read.
+        nodes_root (`str | None`):
+            Where ``@nodes/`` resolves; without it only ``@nodes/`` is read.
+
+    Returns:
+        `str | None`:
+            The folded node id, or ``None`` for a path outside the node root.
+    """
+    root, relative = split_reference(path)
+    if root == "nodes":
+        _, relative = os.path.splitdrive(relative)
+        return fold_node_id(os.path.normpath(relative).split(".", 1)[0])
+    if not relative or not roots or not nodes_root:
+        return None
+    _, physical = resolve_reference(relative, roots)
+    artifacts = os.path.realpath(nodes_root)
+    if physical == artifacts or not within(physical, artifacts):
+        return None
+    return fold_node_id(physical[len(artifacts.rstrip("/")) + 1 :].split(".", 1)[0])
 
 
 def _topological_order(by_id: dict[str, DagNodeSpec]) -> list[str]:

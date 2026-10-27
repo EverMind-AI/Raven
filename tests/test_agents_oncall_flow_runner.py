@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parent.parent
 PLUGIN_DIR = REPO / "agents" / "raven-oncall" / "plugins" / "oncall-flow"
 sys.path.insert(0, str(PLUGIN_DIR))
@@ -22,6 +24,10 @@ from oncall_flow.runner import (  # noqa: E402
     run_adaptive_polling,
     run_grid,
 )
+
+from raven.ops.transport import PASSWORD_AUTH  # noqa: E402
+
+pytestmark = pytest.mark.usefixtures("no_real_ssh_g")
 
 
 class _FakeRun:
@@ -80,6 +86,53 @@ def test_make_ssh_sync_sets_connect_timeout(monkeypatch) -> None:
     ssh = captured["argv"][captured["argv"].index("-e") + 1]
     assert "ConnectTimeout=15" in ssh  # unreachable host fails fast, not hang on rsync
     assert "BatchMode=yes" in ssh  # never block on a password prompt
+
+
+def _capture_rsync(monkeypatch) -> dict:
+    captured: dict = {}
+
+    def fake_run(argv, **kw):
+        captured.update(argv=argv, kw=kw)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    return captured
+
+
+def test_a_key_sync_sends_what_it_always_sent(monkeypatch) -> None:
+    captured = _capture_rsync(monkeypatch)
+
+    make_ssh_sync("1.2.3.4", 2222, "/k", user="alice")("./app/", "/root/raven-ops/app")
+
+    assert captured["argv"] == [
+        "rsync",
+        "-az",
+        "-e",
+        "ssh -i /k -p 2222 -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new",
+        "./app/",
+        "alice@1.2.3.4:/root/raven-ops/app",
+    ]
+    assert captured["kw"].get("env") is None and not captured["kw"].get("start_new_session")
+
+
+def test_a_password_sync_lets_askpass_answer_from_a_session_with_no_terminal(monkeypatch) -> None:
+    """A machine registered with a password has no key to offer and must not be
+    told BatchMode, which forbids asking at all; the askpass helper answers,
+    named by the environment rsync hands its ssh. rsync runs in a session of its
+    own so no terminal is there to ask instead: an OpenSSH older than 8.4 reads
+    no SSH_ASKPASS_REQUIRE and goes to askpass only when it has none."""
+    captured = _capture_rsync(monkeypatch)
+    env = {"SSH_ASKPASS": "/rhome/keys/askpass", "SSH_ASKPASS_REQUIRE": "force"}
+
+    make_ssh_sync("1.2.3.4", 2222, "", user="alice", password=True, env=env)("./app/", "/root/raven-ops/app")
+
+    argv = captured["argv"]
+    ssh = argv[argv.index("-e") + 1]
+    assert " ".join(PASSWORD_AUTH) in ssh
+    assert "-i" not in ssh.split() and "BatchMode=yes" not in ssh
+    assert "-p 2222" in ssh and "ConnectTimeout=15" in ssh and "StrictHostKeyChecking=accept-new" in ssh
+    assert argv[-2:] == ["./app/", "alice@1.2.3.4:/root/raven-ops/app"]
+    assert captured["kw"]["env"] == env and captured["kw"]["start_new_session"] is True
 
 
 async def test_run_grid_returns_best(tmp_path: Path) -> None:

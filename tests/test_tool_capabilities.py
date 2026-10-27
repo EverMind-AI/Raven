@@ -28,6 +28,7 @@ from raven.agent.tools.capabilities import (
     is_configured,
     is_disabled,
     is_offered,
+    runs_keyless,
 )
 from raven.config.loader import load_config
 from raven.providers.base import LLMProvider, LLMResponse
@@ -201,6 +202,42 @@ def test_an_openrouter_key_alone_switches_nothing_on(workspace, tmp_path: Path) 
         assert not loop.tools.offers_by_name(cap.tool), cap.tool
 
 
+def test_a_search_vendor_that_needs_no_key_is_configured_without_a_credential(
+    workspace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keenable searches unauthenticated, so web_search on it is configured and
+    offered with no key. Readiness is not a key, though: a report that ticked
+    ``has_credential`` here would claim one that does not exist, and
+    ``runs_keyless`` is what keeps the row from reading as the media family's
+    configured-and-failing state instead."""
+    monkeypatch.delenv("KEENABLE_API_KEY", raising=False)
+    config = _config(tmp_path)
+    config.tools.web.search.provider = "keenable"
+    loop = _loop(workspace, config, web_search_provider="keenable")
+    cap = next(c for c in CAPABILITIES if c.tool == "web_search")
+
+    assert is_configured(cap, config) and loop.tools.offers_by_name("web_search")
+    assert not has_credential(cap, config)
+    assert runs_keyless(cap, config)
+    assert configured_from(cap, config) == ""
+
+    config.tools.web.providers.keenable.api_key = "kn"
+    assert has_credential(cap, config) and not runs_keyless(cap, config)
+    assert configured_from(cap, config) == "tools.web.providers.keenable.apiKey"
+
+
+def test_nothing_else_runs_keyless(tmp_path: Path) -> None:
+    """A keyed vendor is configured by its key and nothing else, so it never
+    reaches the keyless state with or without one; a media model with no key is
+    configured and broken, which is the state the warning is for."""
+    config = _config(tmp_path)
+    config.tools.media.image.model = "some/model"
+    assert not any(runs_keyless(c, config) for c in CAPABILITIES)
+
+    config.tools.web.search.api_key = "sk-serper"
+    assert not any(runs_keyless(c, config) for c in CAPABILITIES)
+
+
 def test_the_free_capability_needs_no_credential(workspace, tmp_path: Path) -> None:
     config = _config(tmp_path)
     loop = _loop(workspace, config)
@@ -345,6 +382,40 @@ def test_a_media_section_on_a_named_provider_is_paid_by_that_provider(workspace,
     assert is_configured(cap, config) and loop.tools.offers_by_name("image_generate")
     assert configured_from(cap, config) == "borrowed: providers.openai.apiKey"
     assert has_credential(cap, config)
+
+
+def test_a_video_section_on_minimax_is_paid_by_minimax(workspace, tmp_path: Path) -> None:
+    """The video section names a provider as the image one does: MiniMax's address and
+    key, with the OpenRouter key on the same install left alone."""
+    config = _config(tmp_path)
+    config.tools.media.video.model = "MiniMax-Hailuo-2.3"
+    config.tools.media.video.provider = "minimax"
+    config.providers.minimax.api_key = "sk-mm"
+    config.providers.openrouter.api_key = "sk-or-test"
+    loop = _loop(workspace, config)
+
+    cap = next(c for c in CAPABILITIES if c.tool == "video_generate")
+    resolved = _resolved(config, "video")
+    assert (resolved.api_base, resolved.api_key) == ("https://api.minimax.io/v1", "sk-mm")
+    assert is_configured(cap, config) and loop.tools.offers_by_name("video_generate")
+    assert configured_from(cap, config) == "borrowed: providers.minimax.apiKey"
+    assert has_credential(cap, config)
+
+
+def test_a_row_on_a_named_provider_names_that_provider_s_key_and_no_openrouter_terms(tmp_path: Path) -> None:
+    """OpenRouter's variable never reaches a section on another provider, and that
+    provider bills it, so the row a deployer reads names the provider's key and
+    neither the variable nor OpenRouter's credit."""
+    from raven.agent.tools.capabilities import resolve
+
+    config = _config(tmp_path)
+    config.tools.media.video.provider = "minimax"
+    cap = resolve(next(c for c in CAPABILITIES if c.tool == "video_generate"), config)
+    assert (cap.key_path, cap.env_var) == ("providers.minimax.apiKey", "")
+    assert cap.cost_note and "OpenRouter" not in cap.cost_note
+
+    on_openrouter = resolve(next(c for c in CAPABILITIES if c.tool == "image_generate"), config)
+    assert (on_openrouter.key_path, on_openrouter.env_var) == ("tools.media.image.apiKey", "OPENROUTER_API_KEY")
 
 
 def test_a_named_provider_whose_section_does_not_validate_lends_nothing_at_boot() -> None:

@@ -19,10 +19,9 @@ import asyncio
 import hashlib
 import json
 import os
-import shutil
+import secrets
 import signal
 import sys
-import tempfile
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -39,6 +38,8 @@ from raven.node import bundle, protocol
 from raven.node import client as node_client
 from raven.node.client import DEFAULT_NODE_DIR, ChannelEndpoint, NodeError, NodePool, _Node
 
+pytestmark = pytest.mark.usefixtures("no_real_ssh_g")
+
 HOST = "203.0.113.7"
 PORT = 58717
 
@@ -46,6 +47,10 @@ _FAKE_SSH = """#!{python}
 import json, os, sys
 here = os.path.dirname(os.path.abspath(__file__))
 args = sys.argv[1:]
+if "-G" in args:
+    # How a password machine's prompt resolves (transport.resolve_with_ssh): a config dump, not a launch.
+    print("hostname {host}")
+    sys.exit(0)
 with open(os.path.join(here, "calls"), "a") as f:
     f.write(json.dumps(args) + "\\n")
 mode = open(os.path.join(here, "mode")).read().strip()
@@ -58,6 +63,23 @@ if mode == "unreachable":
     else:
         sys.stderr.write(said + "\\n")
     sys.exit(255)
+expect = os.path.join(here, "password")
+if os.path.exists(expect):
+    # The machine takes a password: the way OpenSSH asks for one under SSH_ASKPASS_REQUIRE=force.
+    import subprocess as sp
+    log = args[args.index("-E") + 1] if "-E" in args else None
+    def refuse(said):
+        if log:
+            open(log, "a").write(said + "\\n")
+        else:
+            sys.stderr.write(said + "\\n")
+        sys.exit(255)
+    if "-i" in args or os.environ.get("SSH_ASKPASS_REQUIRE") != "force" or not os.environ.get("SSH_ASKPASS"):
+        refuse("worker@{host}: Permission denied (password).")
+    prompt = os.environ.get("RAVEN_MACHINE_PASSWORD_FOR", "") + "'s password: "
+    given = sp.run([os.environ["SSH_ASKPASS"], prompt], capture_output=True, text=True).stdout.rstrip("\\n")
+    if given != open(expect).read().strip():
+        refuse("worker@{host}: Permission denied (password).")
 command = args[args.index("--") + 1] if "--" in args else args[-1]
 os.chdir(home)
 # A daemon these tests start leaves soon after they do; the relay reads the idle time from its environment.
@@ -141,6 +163,10 @@ class Machine:
 
     def mode(self, mode: str) -> None:
         (self.bin / "mode").write_text(mode, encoding="utf-8")
+
+    def password(self, expected: str) -> None:
+        """The machine takes a password from now on, and only this one."""
+        (self.bin / "password").write_text(expected, encoding="utf-8")
 
     def node(self, where: Path | None = None, *, stub: str | None = None) -> Path:
         """Put a node of this Raven's code under ``where`` (the default node dir)."""
@@ -587,6 +613,83 @@ async def test_a_machine_full_of_agents_refuses_the_next_in_one_sentence(tmp_pat
     assert pool.live() == ["box"] and pool._nodes["box"].channels == {}
 
 
+async def test_a_cancel_while_the_launch_is_answered_still_ends_what_it_started(tmp_path):
+    pool = NodePool()
+    client = _live(pool, tmp_path, client=_HeldLaunch(result={"pid": 4242}))
+    opening = asyncio.ensure_future(pool.open_channel("box", name="a@box", command="agent", cwd="~", env={}))
+    await asyncio.wait_for(client.launching.wait(), 2)
+
+    opening.cancel()
+    client.answer.set()
+    with pytest.raises(asyncio.CancelledError):
+        await opening
+
+    await _until(lambda: not pool._ending, timeout=2)
+    (launch, params, _), (cancel, ended, _) = client.asked
+    assert (launch, cancel) == (protocol.AGENT_LAUNCH, protocol.AGENT_CANCEL)
+    assert ended == {"channel": params["channel"]}
+
+
+async def test_a_cancel_while_a_refused_launch_is_answered_leaves_no_channel(tmp_path):
+    pool = NodePool()
+    busy = AcpRemoteError(protocol.AGENT_LAUNCH, protocol.BUSY, "8 agents are already running on this machine")
+    client = _live(pool, tmp_path, client=_HeldLaunch(raises=busy))
+    pool._ending = ending = _Recorded()
+    opening = asyncio.ensure_future(pool.open_channel("box", name="b@box", command="agent", cwd="~", env={}))
+    await asyncio.wait_for(client.launching.wait(), 2)
+
+    opening.cancel()
+    client.answer.set()
+    with pytest.raises(asyncio.CancelledError):
+        await opening
+
+    await _until(lambda: not pool._ending, timeout=2)
+    (end,) = ending.ever
+    assert end.exception() is None, "a refused launch leaves the pool nothing to end, and no error"
+    assert [method for method, _, _ in client.asked] == [protocol.AGENT_LAUNCH]
+    assert pool.live() == ["box"] and pool._nodes["box"].channels == {}
+
+
+async def test_a_cancel_while_the_launch_is_unanswered_returns_at_once_and_the_agent_is_ended_on_the_answer(tmp_path):
+    pool = NodePool()
+    client = _live(pool, tmp_path, client=_HeldLaunch(result={"pid": 4242}))
+    opening = asyncio.ensure_future(pool.open_channel("box", name="a@box", command="agent", cwd="~", env={}))
+    await asyncio.wait_for(client.launching.wait(), 2)
+
+    opening.cancel()
+    await asyncio.wait({opening}, timeout=1)
+    assert opening.done(), "the cancelled caller does not wait for the node's answer"
+    assert [method for method, _, _ in client.asked] == [] and len(pool._ending) == 1
+
+    client.answer.set()
+    await _until(lambda: not pool._ending, timeout=2)
+    (launch, params, _), (cancel, ended, _) = client.asked
+    assert (launch, cancel) == (protocol.AGENT_LAUNCH, protocol.AGENT_CANCEL)
+    assert ended == {"channel": params["channel"]}
+    with pytest.raises(asyncio.CancelledError):
+        await opening
+
+
+async def test_a_second_cancel_while_the_launch_is_unanswered_still_ends_the_agent(tmp_path):
+    pool = NodePool()
+    client = _live(pool, tmp_path, client=_HeldLaunch(result={"pid": 4242}))
+    opening = asyncio.ensure_future(pool.open_channel("box", name="a@box", command="agent", cwd="~", env={}))
+    await asyncio.wait_for(client.launching.wait(), 2)
+
+    opening.cancel()
+    await asyncio.sleep(0.05)
+    opening.cancel()
+    await asyncio.sleep(0.05)
+    client.answer.set()
+    with pytest.raises(asyncio.CancelledError):
+        await opening
+
+    await _until(lambda: len(client.asked) == 2, timeout=2)
+    (launch, params, _), (cancel, ended, _) = client.asked
+    assert (launch, cancel) == (protocol.AGENT_LAUNCH, protocol.AGENT_CANCEL)
+    assert ended == {"channel": params["channel"]}
+
+
 @pytest.mark.slow
 async def test_a_link_that_goes_leaves_the_agent_running_and_the_turn_goes_on_once_it_is_back(box, pool):
     """The ssh is the way to the machine, not the agent's life: a request made while it is down is answered after."""
@@ -745,6 +848,33 @@ class _Client:
         self.alive = False
 
 
+class _HeldLaunch(_Client):
+    """A connection whose answer to ``agent/launch`` is held until the test lets it go."""
+
+    def __init__(self, **kw: Any) -> None:
+        super().__init__(**kw)
+        self.launching = asyncio.Event()
+        self.answer = asyncio.Event()
+
+    async def request(self, method: str, params: dict[str, Any], *, timeout: float) -> Any:
+        if method == protocol.AGENT_LAUNCH:
+            self.launching.set()
+            await self.answer.wait()
+        return await super().request(method, params, timeout=timeout)
+
+
+class _Recorded(set):
+    """A set that also keeps every task ever put in it, for a test to read how each ended."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.ever: list[Any] = []
+
+    def add(self, item: Any) -> None:
+        self.ever.append(item)
+        super().add(item)
+
+
 def _box(machine_id: str = "box") -> remote.Machine:
     return remote.Machine(id=machine_id, display_name="Lab box", _row=row(id=machine_id))
 
@@ -792,6 +922,50 @@ async def test_a_refused_call_keeps_the_node(tmp_path):
     with pytest.raises(NodeError) as changed:
         await pool.call("box", protocol.WRITE, {})
     assert changed.value.reason == "changed", "the node's own refusal, by name, for the file tools"
+
+
+async def test_the_hosts_own_opt_out_travels_with_the_launch(tmp_path, monkeypatch):
+    """The daemon decides the mirror on the machine it runs on and cannot read
+    the host's environment, so the host's switch travels with the launch."""
+    pool = NodePool()
+    client = _live(pool, tmp_path, result={"pid": 4242})
+    monkeypatch.setenv("RAVEN_NO_MIRROR", "1")
+
+    await pool.open_channel("box", name="echo@box", command="agent --acp", cwd="~", env={})
+
+    asked = [params for method, params, _timeout in client.asked if method == protocol.AGENT_LAUNCH]
+    assert asked and asked[0].get("no_mirror") is True, "the switch reaches the machine"
+
+
+async def test_a_launch_without_the_switch_carries_none(tmp_path, monkeypatch):
+    """The machine's own environment decides then, as it did before."""
+    pool = NodePool()
+    client = _live(pool, tmp_path, result={"pid": 4242})
+    monkeypatch.delenv("RAVEN_NO_MIRROR", raising=False)
+
+    await pool.open_channel("box", name="echo@box", command="agent --acp", cwd="~", env={})
+
+    asked = [params for method, params, _timeout in client.asked if method == protocol.AGENT_LAUNCH]
+    assert asked and "no_mirror" not in asked[0]
+
+
+async def test_the_launch_is_answered_within_the_budget_the_protocol_names(tmp_path):
+    """The host waits so long for the answer, and drops every agent of that
+    machine when it does not come."""
+    pool = NodePool()
+    client = _live(pool, tmp_path, result={"pid": 4242})
+
+    await pool.open_channel("box", name="echo@box", command="agent --acp", cwd="~", env={})
+
+    asked = [(method, timeout) for method, _params, timeout in client.asked if method == protocol.AGENT_LAUNCH]
+    assert asked == [(protocol.AGENT_LAUNCH, protocol.AGENT_LAUNCH_TIMEOUT_S)]
+
+
+def test_the_daemon_prepares_a_launch_within_the_time_the_host_waits():
+    """The host waits so long for the answer, and drops every agent of that
+    machine when it does not come; the daemon prepares a launch within that
+    time, so the answer comes in time."""
+    assert protocol.AGENT_LAUNCH_PREPARE_S < protocol.AGENT_LAUNCH_TIMEOUT_S
 
 
 async def test_a_call_that_timed_out_drops_the_node(tmp_path):
@@ -934,11 +1108,21 @@ async def test_a_heartbeat_unanswered_loses_the_link_tells_its_agents_and_reconn
     endpoint = ChannelEndpoint(client, 1, target=_box(), agent="echo@box")  # type: ignore[arg-type]
     node.channels[1] = endpoint
     tried: list[str] = []
+    back = asyncio.Event()
+    first = asyncio.Event()
 
     async def launch(machine_id: str) -> _Node:
         tried.append(machine_id)
         if len(tried) == 1:
+            # The failure is the test's to give: until then the reason the
+            # link lost carries is the heartbeat's, and the reconnect's own
+            # would replace it.
+            await first.wait()
             raise NodeError("machine 'Lab box' (box) could not be reached")
+        # The link stays lost until the test has read the state that says so:
+        # the backoff is ten milliseconds, and the state it leaves behind is
+        # the one the test is about.
+        await back.wait()
         return _Node(_Client(), _box(), log, {"home": "/h"}, {})  # type: ignore[arg-type]
 
     monkeypatch.setattr(pool, "_launch", launch)
@@ -953,6 +1137,8 @@ async def test_a_heartbeat_unanswered_loses_the_link_tells_its_agents_and_reconn
         "link lost: machine 'Lab box' (box) did not answer a heartbeat within 0s; "
         "1 task continues on the machine; reconnecting"
     )
+    back.set()
+    first.set()
     await _until(lambda: len(tried) == 2 and pool.live() == ["box"] and endpoint.detached is None)
     again = pool._nodes["box"].client
     # Among the new link's requests, not its last: a heartbeat may well follow the attach.
@@ -1387,30 +1573,33 @@ async def test_a_cancel_while_the_link_is_down_does_not_wait_the_settle_budget(m
 
 
 async def _endpoint(name: str = "pg") -> tuple[str, list[bytes], Any]:
-    """A unix socket standing in for a host endpoint: every line it is sent, and the writers back to each stream.
+    """An authenticated loopback endpoint, with the frames and writers it accepted."""
+    from raven.mcp.transport import TOKEN_BYTES, authenticate
 
-    In a directory of its own under the system's temporary one, short enough
-    for a socket's path, which pytest's is not on every system.
-    """
-    if not callable(getattr(asyncio, "start_unix_server", None)):
-        pytest.skip("this endpoint fixture needs a Unix-socket host")
-    base = Path(tempfile.mkdtemp(prefix="raven-ep-"))
-    path = str(base / f"{name}.sock")
+    token = secrets.token_hex(TOKEN_BYTES)
     got: list[bytes] = []
     writers: list[asyncio.StreamWriter] = []
 
     async def serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        writers.append(writer)
-        while line := await reader.readline():
-            got.append(line)
+        try:
+            if not await authenticate(reader, writer, token):
+                return
+            writers.append(writer)
+            while line := await reader.readline():
+                got.append(line)
+        finally:
+            writer.close()
 
-    listening = await asyncio.start_unix_server(serve, path=path)
+    listening = await asyncio.start_server(serve, "127.0.0.1", 0)
+    port = listening.sockets[0].getsockname()[1]
+    address = f"tcp://127.0.0.1:{port}/{token}"
 
     def close() -> None:
         listening.close()
-        shutil.rmtree(base, ignore_errors=True)
+        for writer in writers:
+            writer.close()
 
-    return path, got, SimpleNamespace(base=base, writers=writers, close=close)
+    return address, got, SimpleNamespace(writers=writers, close=close)
 
 
 def _told(client: _Client, method: str) -> list[dict[str, Any]]:
@@ -1469,7 +1658,7 @@ async def test_a_stream_the_host_cannot_serve_is_closed_with_the_reason_and_the_
     try:
         await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "task": "agent", "lend": "d1", "server": "pg"})
         assert _told(client, protocol.MCP_CLOSE) == [{"stream": 1, "reason": "server 'pg' is not lent to that run"}]
-        pool.lend("box", "d1", {"pg": str(endpoint.base / "gone.sock")}, task="agent")
+        pool.lend("box", "d1", {"pg": path.rsplit("/", 1)[0] + "/" + "0" * 64}, task="agent")
         await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 2, "task": "agent", "lend": "d1", "server": "pg"})
         gone = _told(client, protocol.MCP_CLOSE)[-1]
         assert gone["stream"] == 2 and gone["reason"].startswith("the host's endpoint for 'pg' is gone: ")
@@ -1577,7 +1766,7 @@ async def test_an_mcp_stream_without_a_task_is_refused_before_connecting(tmp_pat
     async def connected(*args, **kwargs):
         pytest.fail("a missing task reached the connection")
 
-    monkeypatch.setattr(asyncio, "open_unix_connection", connected, raising=False)
+    monkeypatch.setattr(node_client, "open_endpoint", connected)
     await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "lend": "d1", "server": "pg"})
     assert _told(client, protocol.MCP_CLOSE)
 
@@ -1602,8 +1791,7 @@ async def test_an_mcp_connection_opening_after_its_authorization_ended_is_discar
         await resume.wait()
         return asyncio.StreamReader(), writer
 
-    monkeypatch.setattr(asyncio, "open_unix_connection", opening, raising=False)
-    monkeypatch.setattr(node_client, "unix_sockets_available", lambda: True)
+    monkeypatch.setattr(node_client, "open_endpoint", opening)
     waiting = asyncio.create_task(
         pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "task": "agent", "lend": "d1", "server": "pg"})
     )
@@ -1620,16 +1808,32 @@ async def test_an_mcp_connection_opening_after_its_authorization_ended_is_discar
     assert _told(client, protocol.MCP_CLOSE)[-1]["reason"] == "the dispatch or link ended"
 
 
-async def test_a_host_without_unix_sockets_refuses_a_stream_in_one_sentence(tmp_path, monkeypatch):
+async def test_a_host_without_unix_sockets_lends_a_real_mcp_endpoint(tmp_path, monkeypatch):
+    from raven.config.schema import MCPServerConfig
+    from raven.mcp.endpoint import McpEndpoints
+
+    monkeypatch.delattr(asyncio, "start_unix_server", raising=False)
+    monkeypatch.delattr(asyncio, "open_unix_connection", raising=False)
     pool = NodePool()
     client = _live(pool, tmp_path)
-    pool.lend("box", "d1", {"pg": "/unused"}, task="agent")
-    monkeypatch.delattr(asyncio, "open_unix_connection", raising=False)
-    await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "task": "agent", "lend": "d1", "server": "pg"})
-    assert _told(client, protocol.MCP_CLOSE) == [
-        {"stream": 1, "reason": "the host does not support Unix-socket MCP endpoints"}
-    ]
-    assert not pool._nodes["box"].streams
+    endpoints = McpEndpoints()
+    cfg = MCPServerConfig(
+        command=sys.executable, args=["-c", "import sys; [print(line, end='', flush=True) for line in sys.stdin]"]
+    )
+    path = await endpoints.open("d1", "pg", cfg)
+    try:
+        pool.lend("box", "d1", {"pg": str(path)}, task="agent")
+        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "task": "agent", "lend": "d1", "server": "pg"})
+        frame = '{"jsonrpc":"2.0","id":1,"method":"ping"}'
+        await pool._on_stream("box", protocol.MCP_FRAME, {"stream": 1, "text": frame})
+        await _until(lambda: bool(_told(client, protocol.MCP_FRAME)))
+        assert json.loads(_told(client, protocol.MCP_FRAME)[0]["text"])["method"] == "ping"
+        await pool.unlend("box", "d1")
+        assert not pool._nodes["box"].streams
+        assert _told(client, protocol.MCP_CLOSE)[-1]["reason"] == "the dispatch ended"
+    finally:
+        await pool.close_all()
+        await endpoints.aclose()
 
 
 def test_lending_requires_a_nonempty_task():
@@ -1637,3 +1841,63 @@ def test_lending_requires_a_nonempty_task():
     with pytest.raises(ValueError, match="agent task"):
         pool.lend("box", "d1", {"pg": "/unused"}, task="")
     assert pool._lent == {}
+
+
+# ---- a machine registered with a password: the link logs in through askpass ------------
+
+
+def _password_row() -> dict[str, Any]:
+    return {k: v for k, v in row().items() if k != "key"} | {"auth": "password"}
+
+
+@pytest.mark.slow
+async def test_the_link_to_a_password_machine_logs_in_through_askpass_and_offers_no_key(
+    box, pool, monkeypatch, supported_host
+):
+    from raven.ops.connection_add import store_password
+
+    monkeypatch.setenv("RAVEN_HOME", str(box.root / "rhome"))
+    monkeypatch.setenv("PATH", f"{box.bin}{os.pathsep}{os.environ.get('PATH', '')}")
+    box.rows([_password_row()])
+    box.password("hunter2")
+    store_password("box", "hunter2")
+    box.node()
+
+    hello = await pool.hello("box")
+
+    assert hello["digest"] == bundle.digest()
+    (argv,) = box.launches()
+    assert "-i" not in argv and "PubkeyAuthentication=no" in argv and "hunter2" not in " ".join(argv)
+
+
+async def test_a_password_the_machine_refuses_ends_the_link_with_the_login_named_and_nothing_else(
+    box, pool, monkeypatch, supported_host
+):
+    from raven.ops.connection_add import store_password
+
+    monkeypatch.setenv("RAVEN_HOME", str(box.root / "rhome"))
+    monkeypatch.setenv("PATH", f"{box.bin}{os.pathsep}{os.environ.get('PATH', '')}")
+    box.rows([_password_row()])
+    box.password("hunter2")
+    store_password("box", "wrong-one")
+    box.node()
+
+    with pytest.raises(NodeError) as caught:
+        await pool.hello("box")
+
+    said = str(caught.value)
+    assert "refused the login" in said and "password" in said
+    assert HOST not in said and "wrong-one" not in said
+
+
+async def test_a_password_machine_whose_password_is_not_kept_here_is_refused_before_ssh_is_started(
+    box, pool, monkeypatch, supported_host
+):
+    monkeypatch.setenv("RAVEN_HOME", str(box.root / "rhome"))
+    box.rows([_password_row()])
+    box.node()
+
+    with pytest.raises(NodeError, match="no password is kept here for machine 'box'"):
+        await pool.hello("box")
+
+    assert box.launches() == [], "ssh never ran"

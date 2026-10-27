@@ -180,7 +180,7 @@ your local installation has passed a live task.
 | `hermes` | `hermes acp --accept-hooks` | Native authentication; the flag accepts previously unseen shell hooks |
 | `openclaw` | `openclaw acp` | Its gateway and authentication; startup has a longer handshake allowance |
 | `mirothinker` | OpenAI-compatible HTTP | Endpoint/model/key; preset opts out of stateful replay |
-| `mirasim_<agent>` | Raven's own ACP adapter over `mirasim ui-cli` | Mirasim installed, and the agent installed inside it; session MCP withheld via `sessionMcp: false` |
+| `mirasim_<agent>` | Raven's own ACP adapter over the Mirasim host's protocol | Mirasim installed on this computer and running, and the agent installed inside it. The rows are offered when Raven finds Mirasim: a host to reach (the desktop app's port with its token written, or the socket of a server Mirasim runs here over ssh, either one answering), else the launcher Mirasim writes under its home (`~/.mirasim/bin/mirasim`, which it puts on no PATH), `mirasim` on the login shell's PATH, or a server a Mirasim installed here over ssh (`~/.mirasim-remote`); a row whose Mirasim is installed but not running says to open the app, or to let the app on another computer reach this one again. Session MCP withheld via `sessionMcp: false` |
 
 GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi also
 have preset entries. Adapter versions and exact commands are maintained in
@@ -200,12 +200,43 @@ grouped under the agent's own name, `Mirasim` (the platform's quota) and `Own ke
 (keys you added to Mirasim). Mirasim's platform also runs the own models of Claude
 Code, Codex, Kimi Code and ZCode CLI, so for those four each such model is listed in
 both of the first two groups: under the agent's name it runs on your own account,
-under `Mirasim` on the platform's quota. Choosing the other one for a session that
-already has a conversation moves that conversation to the other route before its
-next turn. A session with no model chosen runs on Mirasim's default for the agent,
-route included. Each turn's
-reply arrives whole when the turn settles. What a turn stops to ask is put to
-Raven while the turn waits: a tool approval as a permission request, and a
+under `Mirasim` on the platform's quota. Every turn names the route its model
+runs on, so choosing the other one moves an existing conversation to that route
+from its next turn. A session with no model chosen runs on Mirasim's default for
+the agent, route included.
+
+The adapter is one more client of the Mirasim host already running on the
+machine -- the desktop app's, or the one Mirasim keeps on a machine it reaches
+over SSH -- so it starts nothing of its own, and Raven's turns show in the Mirasim
+app as they run. A turn streams: its thinking, text, tool calls, plan and the
+files it delivers reach Raven as they happen, and the context it used is reported
+when it ends. A cancel stops the turn. Text sent to a running turn is taken into
+it for Claude Code, Codex, DSH, Pi and ZCode CLI. Images reach Claude Code
+inline; another agent gets an image linked as a local file as that file's path,
+and refuses one sent inline. Sessions can be listed -- this agent's
+conversations in the given directory, including ones begun in Mirasim itself --
+resumed, loaded with their whole history, closed and deleted. Deleting one
+also deletes its Mirasim conversation; the agent's own transcript files stay
+where it keeps them. A turn Mirasim starts on its own in a session Raven holds,
+such as a background job's report, is forwarded to Raven too, and what it stops
+to ask is left to the Mirasim app.
+
+The adapter looks for the host in this order: the socket of the host Mirasim
+keeps on a machine it reaches over SSH (`~/.mirasim-remote/run/server.sock`,
+Linux and macOS only), then the desktop app on `127.0.0.1:4970` with the token
+it writes to `run/local-4970.token` under Mirasim's state directory
+(`MIRASIM_HOME`, else `~/.mirasim`). When the host listens anywhere else,
+`RAVEN_MIRASIM_HOST` names it: `unix:<path>` for a socket (not on Windows, where
+the desktop app's port is the way in), or a loopback port as `<port>`,
+`127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`. On Linux and macOS
+the adapter runs with the login shell's environment plus the row's own `env`,
+not Raven's, so set the variable in your shell profile, or in the `env` of the
+Mirasim rows that should use it; exported only in the shell that starts Raven,
+it does not reach them. On Windows the adapter inherits Raven's own
+environment, so setting it where Raven starts is enough.
+
+What a turn Raven started stops to ask is put to Raven while the turn
+waits: a tool approval as a permission request, and a
 question -- Claude Code's `AskUserQuestion` when Mirasim's `askTool` setting is
 on, or an MCP server's form -- as an elicitation, answered by you or by Raven's
 question autofill. A client without forms has the question skipped and named in
@@ -292,6 +323,30 @@ path; adding metadata does not make an external product share Raven's memory.
 Keep credentials out of prompts and shared manifests. A2A credentials are
 matched by origin, not by agent display name; its peer list is not an egress
 firewall. Follow the [A2A guide](agent-protocols.md#call-a-remote-a2a-peer).
+
+The prompt files a native agent keeps in its ACP home -- `soul.md` and
+`agent.md` under `agent_memory/profile/`, and `TOOLS.md` -- are regenerated
+from the release and its config on every launch, so editing them in place
+does not last. Put your own lines in the sibling `*.local.md` file
+(`agent_memory/profile/agent.local.md`, for example); the next launch appends
+it after the product text. Copy in only what you still need: text from an
+older release can contradict the current one. Save it as UTF-8; a file in
+another encoding (an editor's legacy code page, GBK for example) stops the
+launch, and the error names it. A file that was edited in place,
+or that an older release left behind, is saved as `<name>.bak-<time>-<pid>`
+before it is replaced, and the launcher log names the backup. The regenerated
+file keeps the access rights the old one had. On Windows the backup is a hard
+link to the file, so it keeps them too; on a volume that cannot hard-link, the
+launch stops and names the file instead.
+Backups are not deleted for you.
+
+Raven-PPT differs in one respect: its deck engine can share a home with the
+host, so it replaces only a file it can show it wrote. A `soul.md`, `agent.md`
+or `TOOLS.md` edited before this release is left as it is, without a backup,
+and its `*.local.md` is not applied. Move the lines you still need into the
+`*.local.md` file and delete the edited one; the next turn writes it fresh. A
+write the engine cannot make is logged and retried on the next turn instead
+of stopping it.
 
 ## Security and troubleshooting
 

@@ -122,11 +122,14 @@ A playbook with no variable inputs (e.g. "pull an issue triage once a week") omi
 | `mcps` | list[string] | Optional | The mcps this step wants to attach. **Playbook-only, and not in effect today**: subagent has no mcp channel; dispatch explicitly reports them ignored and does not write them into the prompt (writing them in would be a fake instruction the agent has no tools to execute) |
 | `instance` | string | Optional | The session handle; nodes with the same handle share one agent session |
 | `inputs` | map | Optional | Each key is a literal string, `{file: path}` or `{node: id}` -- **only these three, no run qualifier** (to pin a specific run, use the file form `{{ ref:@runs/<run_id>/... }}`, see section 6). The value is **structure**, not a unique capability: a key referenced by `{{ inputs.k }}` must be declared first (default-deny; inline `{{ ref: }}` cannot be validated at this level), and reading the node definition tells you what it reads without going through the prompt |
+| `routes` | map | Optional | Route name -> the condition under which this node's answer selects it. **Makes this node a decision**: after it finishes, the judge picks the route from its answer, and the conditions are shown to the judge, never to the step. Route names use the `id` charset, `done` is reserved in any letter case, and a `select: one` decision needs at least two of them |
+| `select` | enum | Optional | `one` (default where `routes` are given): exactly one route. `many`: any number, none included. Only on a node with `routes` |
+| `when` | string | Optional | Guard: run this step only if it holds once its dependencies settle. Atoms `<node>.<route>` and `<node>.done` -- a decision node of this graph that is in `dependsOn` -- joined by `not` / `and` / `or` and parentheses. Every decision node in `dependsOn` must appear in it. False, or unknown because a decision it names never ran, means the step does not run |
 
 **This table is the dag tool's node schema, not a separate set defined by the playbook.** Per-node configuration is a dag capability itself;
 once a playbook is loaded, its nodes are injected directly into the dag tool, so the model can write these fields when calling dag directly too.
 
-"The same set" refers to the field set and the semantics; two shape differences do not count as a separate set: the model-facing JSON Schema uses snake_case (`prompt_template` / `depends_on`) while this table is the camelCase written in the file; and at dispatch the `id` gets a `<playbook name>-<random 6 chars>-` prefix, with `dependsOn` and `{{ id.output }}` rewritten in sync -- because ids on the dag side are **unique within a session**, and without the rewrite, running the same playbook a second time in one session would be rejected by the uniqueness rule. The prefix lives only at run time; it never enters the file.
+"The same set" refers to the field set and the semantics; two shape differences do not count as a separate set: the model-facing JSON Schema uses snake_case (`prompt_template` / `depends_on`) while this table is the camelCase written in the file; and at dispatch the `id` gets a `<playbook name>-<random 6 chars>-` prefix, with `dependsOn`, `{{ id.output }}` and the node ids in `when` atoms rewritten in sync -- because ids on the dag side are **unique within a session**, and without the rewrite, running the same playbook a second time in one session would be rejected by the uniqueness rule. The prefix lives only at run time; it never enters the file.
 
 `instance` manages exactly one thing: **whether to carry the context forward**. `promptTemplate` is that injected prompt;
 no extra field exists, and a new prompt can still be injected when the context is carried forward.
@@ -238,6 +241,7 @@ The `output` vs `output_path` choice: local agents receive the path (they read i
 | `dependsOn: [a]` | Waits for a to finish |
 | `dependsOn: [a, b]` | Waits for both a and b to finish, merging |
 | Two nodes with the same upstream | No dependency between them; parallel, forking |
+| `when: <guard>` | Runs only if the guard holds; a step left out is `not_executed`, and a dependent that still runs reads the fixed "not executed" sentence in its place |
 
 ```yaml
 nodes:
@@ -253,13 +257,17 @@ scan_market -+
 scan_tech ---+
 ```
 
+A graph can branch: a node with `routes` is a **decision**, its judge picks the route its answer
+selects, and the steps behind each route carry a `when` guard over that choice (section 5). That is
+the one run-time decision a playbook can express, and it is written into the file like any other field.
+
 `dependsOn` is also reference authorization: the `x` in `{{ x.output }}` must be listed in this node's `dependsOn`, otherwise a compile-time error (default-deny).
 
 Graphs assembled in `prompt` mode are bound by the same rules; it is not an escape hatch.
 
-**Three things that cannot be expressed**: cycles (conditional fallback, e.g. "review fails, fall back to rewriting"), conditional skipping (no `when:`), per-playbook concurrency caps (governed by the runner's global config).
+**Two things that cannot be expressed**: cycles (conditional fallback, e.g. "review fails, fall back to rewriting"), and per-playbook concurrency caps (governed by the runner's global config).
 
-Note that `mode: prompt` **cannot** bypass these three. It is a graph generator, not a run-time orchestrator -- a graph is fixed once assembled; mid-run it cannot be changed based on intermediate results. So loops like "stop after two consecutive rounds without new findings" are beyond both modes; `prompts` can only spell "how to assemble this graph", not "how to judge once it runs".
+Note that `mode: prompt` **cannot** bypass these two. A branch is a value in the assembled graph, not a change to it; what no mode can do is change a running graph based on intermediate results -- the steps a branch left out are decided by the guard's own value, not by a new plan. So loops like "stop after two consecutive rounds without new findings" are beyond both modes; `prompts` can only spell "how to assemble this graph", not "how to judge once it runs".
 
 ---
 
@@ -408,7 +416,7 @@ prompts: |
 ```
 ````
 
-`prompts` spells out **how to assemble this graph** -- how many layers, which agent pairs with which skills/mcps at each layer, who dependsOn whom, how data flows between nodes. Do not write "how to judge once it runs": the graph is fixed once assembled; there are no decision points at run time.
+`prompts` spells out **how to assemble this graph** -- how many layers, which agent pairs with which skills/mcps at each layer, who dependsOn whom, how data flows between nodes. A step that decides where the graph goes next is still something `prompts` writes: give it `routes`, and guard what follows with `when`. What `prompts` cannot do is change the graph once it runs -- a branch is decided by the values the guards read, not by a new plan assembled mid-run.
 
 ---
 
@@ -421,7 +429,7 @@ block top-level taskSummary | version | mode | confirm | triggers | params | nod
   triggers    keywords
   params.<key> type | required | default | enum | description
   nodes[]     id | subagent | nodeSummary | promptTemplate | dependsOn |
-              skills | mcps | instance | inputs
+              skills | mcps | instance | inputs | routes | select | when
 
 placeholders  ${params.x}
               {{ dep.output }} | {{ dep.output_path }}

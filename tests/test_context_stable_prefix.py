@@ -2,10 +2,11 @@
 
 A prompt cache keys on every block up to its breakpoint, and the system message
 is rebuilt each turn from segments -- the first of which (identity, the bootstrap
-files) read the same every time, while the rest (memory recall, the skill
-router's hits, the Curator's working state) are derived from what the user just
-said. One breakpoint at the end of that message therefore changes key on every
-new turn and re-bills the stable head in front of it.
+files) read the same every time, while the rest (the Curator's working state,
+and with turn scratch off the memory recall and the skill router's hits) are
+derived from what the user just said. One breakpoint at the end of that message
+therefore changes key on every new turn and re-bills the stable head in front
+of it.
 
 These pin the boundary the assembler measures for a second breakpoint: that it
 falls between segments, that one volatile segment ends the run for every stable
@@ -43,9 +44,9 @@ class TestTheRunOfStableSegments:
         assert whole[chars:] == "RECALL"
 
     def test_one_volatile_segment_ends_the_run_for_everything_behind_it(self):
-        """The reason `active_skills` gains nothing where it sits today.
+        """The reason `active_skills` is ordered ahead of `memory`.
 
-        It does not depend on the message, but `memory` is in front of it, so a
+        It does not depend on the message, but with `memory` in front of it a
         breakpoint any later than `memory` keys on text that changes anyway.
         """
         parts = _parts(("IDENT", True), ("RECALL", False), ("ALWAYS-ON SKILLS", True))
@@ -201,6 +202,7 @@ class TestTheAssemblerDeclaresIt:
         eng = ContextAssembler(
             [_Seg("identity", 1, "IDENT", True), _Seg("boot", 2, "BOOT", True), _Seg("recall", 3, "RECALL", False)],
             lambda: [],
+            turn_scratch=False,
         )
 
         ac = await eng.assemble(
@@ -223,10 +225,41 @@ class TestTheAssemblerDeclaresIt:
             async def build(self, ctx: AssemblyContext) -> Segment:
                 return Segment(text="RECALL")
 
-        eng = ContextAssembler([_Seg()], lambda: [])
+        eng = ContextAssembler([_Seg()], lambda: [], turn_scratch=False)
 
         ac = await eng.assemble(
             "s", [], TokenBudget(100_000, 4_000, 2_000, 1_000, 93_000), turn=TurnContext(current_message="hi")
         )
 
         assert STABLE_PREFIX_KEY not in ac.messages[0]
+
+    async def test_under_turn_scratch_the_volatile_segment_leaves_the_system_message(self):
+        """With the volatile segment moved to the user tail, the system message
+        is the stable run alone: its end is the boundary, so no head is declared
+        and the end-of-message mark is the one that survives a turn."""
+        from raven.context_engine import ContextAssembler, TurnContext
+        from raven.context_engine.scratch import TURN_SCRATCH_TAG
+        from raven.contracts.assembled import TokenBudget
+        from raven.contracts.context import AssemblyContext, Segment
+
+        class _Seg:
+            def __init__(self, name, order, text, stable):
+                self.name, self.order, self.text, self.stable = name, order, text, stable
+                self.needs_prefix = False
+
+            async def build(self, ctx: AssemblyContext) -> Segment:
+                return Segment(text=self.text)
+
+        eng = ContextAssembler(
+            [_Seg("identity", 1, "IDENT", True), _Seg("boot", 2, "BOOT", True), _Seg("recall", 3, "RECALL", False)],
+            lambda: [],
+        )
+
+        ac = await eng.assemble(
+            "s", [], TokenBudget(100_000, 4_000, 2_000, 1_000, 93_000), turn=TurnContext(current_message="hi")
+        )
+
+        system = ac.messages[0]
+        assert system["content"] == "IDENT" + _SEG_SEP + "BOOT"
+        assert STABLE_PREFIX_KEY not in system
+        assert ac.messages[-1]["content"].endswith(f"{TURN_SCRATCH_TAG}\n\nRECALL")

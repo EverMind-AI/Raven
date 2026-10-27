@@ -29,7 +29,12 @@ from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_ba
 from raven.agent.subagent.backends.base import optional_keyword
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
-from raven.agent.subagent.mirasim_presets import MIRASIM_AGENTS
+from raven.agent.subagent.mirasim_presets import (
+    MIRASIM_AGENTS,
+    MIRASIM_EXECUTABLE,
+    MIRASIM_INSTALL_HINT,
+    MIRASIM_SHIM_PRESETS,
+)
 from raven.agent.subagent.node_runtime import NodeTooOld, node_too_old
 from raven.agent.subagent.presets import (
     SHIM_REQUIRED_EXECUTABLES,
@@ -263,13 +268,42 @@ def _refusal_detail(cfg: Any, said: str, answer: str | None = None) -> str:
     return _refusal(cfg, said, answer)[0]
 
 
+_PI_TOO_OLD = re.compile(r"get_available_thinking_levels failed: Unknown command")
+"""pi-acp 0.0.34 asks pi for its model's thinking levels as a session opens, an RPC
+pi answers from 0.81.0; an older pi refuses it by name, and no session opens until
+pi is upgraded (measured 2026-10-23 on pi 0.80.10)."""
+
+
+def _pi_too_old(cfg: Any, said: str, judged: str | None = None) -> tuple[str, Remedy] | None:
+    """pi-acp's refusal over a pi older than it needs, and the fix, or ``None`` for any other text.
+
+    One reading for every surface that shows the refusal: a connect (`_refusal`),
+    the Test button and the roster, the last two over the handshake's record
+    (`_process_refusal`, `_probe_acp`). The floor it names is config's
+    (`raven.config.loader.shim_agent_floor`), the one the pin migration reads.
+    """
+    if getattr(cfg, "preset", None) != "pi" or not _PI_TOO_OLD.search(said if judged is None else judged):
+        return None
+    from raven.config.loader import shim_agent_floor
+
+    floor = shim_agent_floor("pi")
+    first = f"older than {'.'.join(map(str, floor.oldest))}, the first pi" if floor else "older than the first pi"
+    up = upgrade_hint_for(cfg)
+    how = f" with `{up}`" if up else ""
+    return (
+        f"its pi is {first} that answers what its adapter asks as a session opens; "
+        f"upgrade pi{how} and connect again. It said: {said}"
+    )[:_DETAIL_CAP], Remedy("upgrade", up)
+
+
 def _refusal(cfg: Any, said: str, answer: str | None = None) -> tuple[str, Remedy | None]:
     """`_refusal_detail`'s sentence, and the remedy it was written from.
 
     One decision with two renderings: the sentence is the record the log, the
     CLI and the TUI read, and the remedy is the same verdict as data a page can
-    put in its reader's language. ``None`` for a refusal that is not about a
-    credential, whose words are passed through as they came.
+    put in its reader's language. ``None`` for a refusal that is neither about a
+    credential nor an agent's own measured sentence, whose words are passed
+    through as they came.
     """
     from raven.acp_client.capabilities import looks_like_auth
 
@@ -280,6 +314,8 @@ def _refusal(cfg: Any, said: str, answer: str | None = None) -> tuple[str, Remed
     # first so a bad API key is not told to sign in.
     if github_copilot.applies(cfg) and (named := github_copilot.read(judged)) is not None:
         return named[0][:_DETAIL_CAP], named[1]
+    if (named := _pi_too_old(cfg, said, judged)) is not None:
+        return named
     if not looks_like_auth(judged):
         # Read off the agent's answer only: a launch that died says nothing
         # about a provider, and its stderr can name an unreachable host that is
@@ -399,9 +435,10 @@ def _provider_refusal(cfg: Any, said: str, answer: str) -> tuple[str, Remedy] | 
     return None
 
 
-_EXITED = re.compile(r"connection ended \(exit -?\d+\); stderr tail:\s*(?!<empty>)\S")
-"""A launch that quit and said why on its way out. One that quit without a word
-is left unnamed: pointing a reader at what it said would point at nothing."""
+_EXITED = re.compile(r"(?:connection ended|npx could not fetch \S+) \(exit -?\d+\); stderr tail:\s*(?!<empty>)\S")
+"""A launch that quit and said why on its way out, or the npx fetch ahead of it. One
+that quit without a word is left unnamed: pointing a reader at what it said would
+point at nothing."""
 
 _NO_ACP_FLAG = re.compile(
     r"(?:unknown|no such|unexpected) (?:argument|option|flag|command)s?:?\s*['\"]?-{0,2}acp\b",
@@ -436,11 +473,23 @@ def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy | None] | None:
     on a Node.js older than its package declares was run on the wrong one
     (`_stale_node`). A timed-out prompt or an empty turn carries nothing, and is
     named only for an agent measured to go silent that way
-    (`presets.DIAGNOSE_HINTS`), with the command that makes it say why.
+    (`presets.DIAGNOSE_HINTS`), with the command that makes it say why. pi-acp's
+    refusal over a pi too old for it is read here as a connect reads it
+    (`_pi_too_old`), since the Test button reads the handshake's record here.
 
     Runs ``node --version`` for a Node.js agent that quit, so its callers keep it
     off the event loop.
+
+    An npx cache entry left without its package.json comes first: npm says so in
+    a line of its own, every later start of that spec fails the same way, and the
+    one fix is npm's own command for removing the entry
+    (`npx_fetch.incomplete_entry`).
     """
+    from raven.acp_client.capabilities import npx_incomplete_lead
+    from raven.acp_client.npx_fetch import incomplete_entry
+
+    if (entry := incomplete_entry(shown)) is not None:
+        return f"{npx_incomplete_lead(entry)}. It said: {shown}"[:_DETAIL_CAP], Remedy("exited", entry.clear_command)
     if _EXITED.search(shown):
         if _NO_ACP_FLAG.search(shown) or (getattr(cfg, "preset", None) == "grok" and _GROK_NO_AGENT.search(shown)):
             up = upgrade_hint_for(cfg)
@@ -460,6 +509,8 @@ def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy | None] | None:
                 f"{stale.found} ({stale.node}); upgrade Node.js{how} and connect again. It said: {shown}"
             )[:_DETAIL_CAP], Remedy("runtime", stale.upgrade, needs=stale.needs, found=stale.found)
         return shown[:_DETAIL_CAP], Remedy("exited")
+    if (named := _pi_too_old(cfg, shown)) is not None:
+        return named
     if _PROMPT_TIMEOUT.search(shown):
         run = diagnose_hint_for(cfg)
         if run:
@@ -537,6 +588,15 @@ def _stale_node(cfg: Any) -> NodeTooOld | None:
         return None
     path = (getattr(cfg, "env", None) or {}).get("PATH") or _login_path()
     return node_too_old(argv[0], path)
+
+
+def _mirasim_env(cfg: Any) -> dict[str, str]:
+    """The environment a Mirasim row's adapter would find its host in: the login shell's, the row's own over it.
+
+    The spawn path's order (``{**login_shell_env(), **cfg.env}``), so the host the
+    probe looks for is the one the adapter would reach.
+    """
+    return {**login_shell_env(), **(getattr(cfg, "env", None) or {})}
 
 
 def _missing_detail(exe: str, hint: str | None) -> str:
@@ -621,6 +681,31 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
                 off,
             )
         return replace(done("missing", _missing_exe_detail(cfg, exe), exe), absent=exe)
+    if getattr(cfg, "preset", None) in MIRASIM_SHIM_PRESETS:
+        # The adapter runs no executable of Mirasim's; it reaches the host. So the
+        # row is read by whether a host is there to reach, then by whether
+        # Mirasim is installed at all -- told apart, because the reader's next
+        # move differs: open the app (or let the app on another computer reach
+        # this one again), or install it. Both sentences cover both ways a host
+        # comes to be here, as the adapter's own refusal does.
+        state, where = mirasim_presets.presence(_mirasim_env(cfg), path=cfg_path or path)
+        if state == "absent":
+            return replace(
+                done(
+                    "missing",
+                    f"Mirasim is not installed on this computer; install {MIRASIM_INSTALL_HINT} and open it, "
+                    "or let the Mirasim app on another computer reach this one over ssh",
+                    MIRASIM_EXECUTABLE,
+                ),
+                absent=MIRASIM_EXECUTABLE,
+            )
+        if state == "installed":
+            return done(
+                "attention",
+                f"Mirasim is installed ({where}) but no host of it is running: open the Mirasim app, or let the "
+                "Mirasim app on another computer reach this one again, then check again",
+                where,
+            )
     requirement = shim_requirement_for(cfg)
     if requirement is not None:
         agent_exe, install = requirement
@@ -655,7 +740,9 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
             f"installed at {resolved}, but its model menu has not been measured yet -- run a test",
             resolved,
         )
-    return done(snapshot.status, snapshot.detail, resolved)
+    # The record of a refusal reads as Test and a connect read it.
+    named = _pi_too_old(cfg, snapshot.detail)
+    return done(snapshot.status, named[0] if named else snapshot.detail, resolved)
 
 
 def _model_ids(payload: Any) -> list[str] | None:
@@ -876,13 +963,14 @@ def _ping_bounds(cfg: Any) -> tuple[int, int, float]:
     The answer is capped at `_ENABLE_PING_TIMEOUT_SECONDS`, the number a
     person waiting on a switch can stand. The handshake is not: an acp row
     starts within its own ``readyTimeoutMs``, the window every dispatch of it
-    gets (`AcpAgentBackend`), and for an ``npx`` command that window is where
-    the first download happens. Capping it too turned two things into "it did
-    not answer within 60s" -- a first download on a slow line (a cold fetch of
-    the Claude Code adapter is about 260 MB unpacked; 20s on a good line,
-    measured 2026-09-23), and npm's own "cannot reach the registry", which it
-    reports only after about 70s of retries (measured the same day), so the
-    reader never saw it.
+    gets (`AcpAgentBackend`). The first download of an ``npx`` row is in
+    neither: `ping_agent` has npx fetch the package before they start
+    (`npx_fetch`), because a cold fetch of the Claude Code adapter is 288 MB
+    (measured 2026-10-23), and a bound that ran out on one ended npx
+    half-installed. An ``npx`` command the fetch cannot repeat
+    (`npx_fetch.fetchable_package`) still downloads inside this window, and so
+    does a row on a registered machine, whose Raven node starts it with no fetch
+    ahead.
 
     The wait is the two added together, which keeps what the cap once kept:
     neither inner bound is ever cancelled from outside before the backend can
@@ -1022,6 +1110,7 @@ async def ping_agent(cfg: Any) -> PingResult:
     """
     # Function-level like the rest of this module's acp imports: the client family
     # is future shelf cargo and must not be named at import time.
+    from raven.acp_client import npx_fetch
     from raven.acp_client import pool as acp_pool
 
     ready_ms, answer_s, wait_s = _ping_bounds(cfg)
@@ -1050,6 +1139,16 @@ async def ping_agent(cfg: Any) -> PingResult:
         # handle; one shared by every check leaves one directory there
         # rather than one per press.
         checked = {"instance": remote_check_handle()} if machine else {}
+        if not machine and getattr(cfg, "kind", None) == "acp":
+            # Ahead of the bounds, not inside them: a first download is npx's
+            # work, not the handshake's, and one a bound ran out on was ended
+            # half-installed (`npx_fetch`). The launch below then finds it done.
+            await npx_fetch.ensure_fetched(
+                getattr(cfg, "name", "") or "",
+                getattr(cfg, "command", "") or "",
+                env=getattr(cfg, "env", None),
+                cwd=getattr(cfg, "cwd", None) or str(scratch.path),
+            )
         reply = await asyncio.wait_for(
             backend.run(
                 PROBE_PROMPT,
@@ -1318,7 +1417,7 @@ def _test_record(snapshot: Any, previous: Any) -> Any:
 
     A usable result keeps the previous menu too when it could not read its own
     (``model_menu_measured`` false): an agent that answered while its catalog
-    read failed -- a Mirasim cold start -- has measured nothing about its models.
+    read failed -- a Mirasim host that did not answer it -- has measured nothing about its models.
     """
     if previous is not None and snapshot.usable and not snapshot.model_menu_measured:
         if previous.model_menu_measured:
@@ -1349,7 +1448,7 @@ def _measured_at(snapshot: Any) -> int | None:
     """When the record's verdict was measured; ``None`` for no record.
 
     Every measurement stamps its own time (``_test_record`` carries it over), and
-    a modes relearn keeps the stamp it found, so a changed stamp means a newer
+    a menu relearn keeps the stamp it found, so a changed stamp means a newer
     verdict and nothing else does.
     """
     return None if snapshot is None else getattr(snapshot, "measured_at_ms", 0)
@@ -1389,11 +1488,12 @@ def _unconfigured_acp_preset_rows(configured: set[str], *, path: str | None) -> 
     half's already. A non-acp preset has no handshake to record -- an openai
     row's credential is settled by the free ``/models`` probe and a cli row is
     never handshaken at all. And a command that does not resolve -- or a shim
-    whose agent does not (``SHIM_REQUIRED_EXECUTABLES``), which ``_probe_acp``
-    reads as missing just the same -- is one whose verdict the free probe
-    already reached for nothing: launching it to learn the same thing is the
-    cost this filter exists to refuse. The shim half matters most where the
-    command is Raven's own interpreter, which resolves on every machine.
+    whose agent does not (``SHIM_REQUIRED_EXECUTABLES``), or a Mirasim row with
+    no host to reach (``mirasim_presets.presence``), which ``_probe_acp`` reads
+    as missing or as waiting on the app just the same -- is one whose verdict
+    the free probe already reached for nothing: launching it to learn the same
+    thing is the cost this filter exists to refuse. The shim half matters most
+    where the command is Raven's own interpreter, which resolves on every machine.
 
     ``path`` is the login shell's, captured once by the caller -- the same PATH
     ``_probe_acp`` resolves against. Reading this process's instead would answer
@@ -1408,6 +1508,7 @@ def _unconfigured_acp_preset_rows(configured: set[str], *, path: str | None) -> 
         if preset.get("kind") == "acp" and preset.get("name") not in configured
     ]
     here = []
+    mirasim: tuple[str, str] | None = None
     for preset in wanted:
         try:
             argv = command_argv((preset.get("command") or "").strip())
@@ -1415,9 +1516,17 @@ def _unconfigured_acp_preset_rows(configured: set[str], *, path: str | None) -> 
             continue
         if not argv or shutil.which(argv[0], path=path or None) is None:
             continue
-        requirement = SHIM_REQUIRED_EXECUTABLES.get(str(preset.get("preset") or ""))
+        key = str(preset.get("preset") or "")
+        requirement = SHIM_REQUIRED_EXECUTABLES.get(key)
         if requirement is not None and shutil.which(requirement[0], path=path or None) is None:
             continue
+        if key in MIRASIM_SHIM_PRESETS:
+            # Asked once for all of Mirasim's rows: what their handshake needs is a
+            # host to reach, and `_probe_acp` reads a row without one as not here.
+            if mirasim is None:
+                mirasim = mirasim_presets.presence(login_shell_env(), path=path or None)
+            if mirasim[0] != "running":
+                continue
         here.append(preset)
     if not here:
         return []
@@ -1490,7 +1599,7 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
         path = await _captured_login_path()
         rows = [*rows, *_unconfigured_acp_preset_rows(configured, path=path)]
     # Asked once, and only once a Mirasim preset is about to be handshaken: the
-    # question starts a Mirasim server of its own.
+    # question launches the adapter, which waits for the host's agent list to settle.
     mirasim_has: frozenset[str] | None = None
     mirasim_asked = False
     store = SnapshotStore()
@@ -1536,17 +1645,18 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
                 if not mirasim_asked:
                     mirasim_asked = True
                     mirasim_has = await mirasim_presets.installed_agents(path=path)
-                if mirasim_has is not None and agent[0] not in mirasim_has:
-                    logger.debug("acp agent {!r}: Mirasim has no {} installed; not handshaken", name, agent[0])
+                own_host = any(key in (getattr(cfg, "env", None) or {}) for key in mirasim_presets.HOST_ENV_KEYS)
+                if mirasim_has is not None and agent[0] not in mirasim_has and not own_host:
+                    logger.debug("acp agent {!r}: Mirasim lists no {} on its host; not handshaken", name, agent[0])
                     continue
             result = await verify_agent(cfg, **_launch_kw(cfg))
             _note_menu_re_measured(result, name)
             # Read again with nothing awaited between here and the write: the
             # handshake held the row for up to the ready timeout. A measurement
             # recorded meanwhile -- a manual Test, a connect -- is newer evidence
-            # than this one and stands. A dispatch relearning the agent's modes
+            # than this one and stands. A dispatch relearning the agent's menus
             # measures nothing and keeps the stamp, so it does not stop this
-            # write, and a failure below is kept over the re-read record, modes
+            # write, and a failure below is kept over the re-read record, menus
             # included.
             current = acp_snapshot_for(cfg)
             if _measured_at(current) != _measured_at(snapshot):

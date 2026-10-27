@@ -18,9 +18,13 @@ Two verdicts, asked in that order. The client library keeps a copy of the value
 it renamed (``provider_specific_fields["native_finish_reason"]``, written in
 ``Choices.__init__``), so wherever a response was assembled through that
 constructor the upstream's own word is still readable and nothing has to be
-inferred. Where it was not -- several vendors map the reason and assign it to an
-already-built choice, destroying the original -- the accounting evidence is all
-there is.
+inferred. OpenRouter puts the same field in every choice of its own body -- its
+backend's reason, rename or not -- and the library's dict conversion passes
+every non-standard choice field through, so from that gateway a plain ``stop``
+arrives under this name as well; the allow list below names it, so an empty
+reply from there reads as the silent model it is and not as a failure. Where no
+copy exists -- several vendors map the reason and assign it to an already-built
+choice, destroying the original -- the accounting evidence is all there is.
 
 Either way a response that delivered something is left alone: the invariant is
 that a failure must be *visible*, not that a usable answer be thrown away.
@@ -43,13 +47,17 @@ if TYPE_CHECKING:
 _UPSTREAM_SENTINELS = ("<|endoftext|>", "<|im_end|>", "<|eot_id|>")
 
 #: Upstream spellings of a normal end that the client library renames to
-#: ``stop``. Any *other* value it renamed to ``stop`` did not say this call
-#: ended normally. An allow list rather than a list of failures, because the
-#: spellings of "finished" are finite and stable across vendors while the
-#: dialects for "failed" are invented per gateway -- so an unrecognised value
-#: has to land on the side that keeps the failure visible.
+#: ``stop`` -- and ``stop`` itself, because OpenRouter reports its backend's
+#: reason as ``native_finish_reason`` on every choice, rename or not, and the
+#: library passes that field through, so a plain ``stop`` reaches the verdict
+#: under this name from there. Any *other* value renamed to ``stop`` did not
+#: say this call ended normally. An allow list rather than a list of failures,
+#: because the spellings of "finished" are finite and stable across vendors
+#: while the dialects for "failed" are invented per gateway -- so an
+#: unrecognised value has to land on the side that keeps the failure visible.
 _NORMAL_STOP_ALIASES = frozenset(
     {
+        "stop",
         "stop_sequence",
         "end_turn",
         "COMPLETE",
@@ -123,11 +131,14 @@ def prompt_chars(messages: list[dict[str, Any]]) -> int:
 
 
 def native_finish_reason(choice: Any) -> str | None:
-    """The finish reason the upstream sent, where the library kept a copy of it.
+    """The finish reason the upstream sent, where a copy of it was kept.
 
-    Read defensively on purpose: the field is written only when the mapping
-    actually renamed something, so on an ordinary ``stop`` the attribute is
-    absent from the choice altogether and reaching for it raises.
+    Read defensively on purpose: the library writes the field only when its
+    mapping actually renamed something, so on an ordinary ``stop`` from most
+    vendors the attribute is absent from the choice altogether and reaching for
+    it raises. OpenRouter is the exception -- its body carries the field on
+    every choice and the library passes it through -- which is why a value of
+    ``stop`` can come back from here.
     """
     fields = getattr(choice, "provider_specific_fields", None) or {}
     value = fields.get("native_finish_reason") if isinstance(fields, dict) else None
@@ -140,6 +151,41 @@ def _stripped(text: str | None) -> str:
     for sentinel in _UPSTREAM_SENTINELS:
         out = out.replace(sentinel, "")
     return out.strip()
+
+
+def without_sentinels(content: str | None) -> str | None:
+    """``content`` with a reply that is nothing but sentinels folded to nothing.
+
+    The loop's own emptiness test reads visible text, and a bare ``<|im_end|>``
+    is visible text to it: with the verdict rightly stepping aside for a native
+    ``stop``, such a reply was delivered to the user as the answer, where the
+    same reply with a space in it took the empty-response recovery. Folded at
+    both response exits, so the loop is handed an empty reply either way and
+    runs the recovery it has for one. A sentinel beside a real answer is left
+    exactly as it came: that is an answer, and this is not editing.
+    """
+    if content is None:
+        return None
+    return content if _stripped(content) else ""
+
+
+def may_fold_to_nothing(streamed: str) -> bool:
+    """Whether a reply that has streamed ``streamed`` so far can still be one
+    ``without_sentinels`` folds to nothing.
+
+    The streaming exit holds a reply back from the watcher while this is true,
+    so a reply that is only a sentinel is never shown and then taken away. A
+    sentinel can arrive split across deltas, and ``<|im_`` read on its own is
+    text, so the tail that begins a sentinel without completing it is set aside
+    before the rest is tested: only the next delta can say whether it was one.
+    """
+    pending = 0
+    for sentinel in _UPSTREAM_SENTINELS:
+        for size in range(len(sentinel) - 1, pending, -1):
+            if streamed.endswith(sentinel[:size]):
+                pending = size
+                break
+    return not _stripped(streamed[: len(streamed) - pending])
 
 
 def said_nothing(content: str | None, tool_calls: list["ToolCallRequest"]) -> bool:
@@ -281,4 +327,11 @@ def transport_failure_message(evidence: str) -> str:
     )
 
 
-__all__ = ["flag_transport_failure", "prompt_chars", "said_nothing", "transport_failure_message"]
+__all__ = [
+    "flag_transport_failure",
+    "may_fold_to_nothing",
+    "prompt_chars",
+    "said_nothing",
+    "transport_failure_message",
+    "without_sentinels",
+]

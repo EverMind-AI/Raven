@@ -117,7 +117,12 @@ def nodes_root(session_dir: Path) -> Path:
     conversation: giving each run a directory made the same id resolvable only
     through the index that knew which run owned it.
     """
-    return session_history_root(session_dir) / _NODES_DIRNAME
+    return nodes_root_in(session_history_root(session_dir))
+
+
+def nodes_root_in(history_root: Path | str) -> Path:
+    """The node-artifact root inside a history root, as :func:`session_history_root` names one."""
+    return Path(history_root) / _NODES_DIRNAME
 
 
 def spawn_live_key(root: Path, node_id: str) -> str:

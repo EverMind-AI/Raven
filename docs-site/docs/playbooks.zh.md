@@ -34,7 +34,7 @@ raven playbook validate brief-review
 运行前检查生成的参数和步骤：生成结果不保证与下方示例完全一致。
 `get` 将文件输出到 stdout，将来源路径输出到 stderr。
 
-**新建 Playbook 会立即可用**，尽管旧 CLI help 仍描述为创建后禁用。
+**新建 Playbook 会立即可用。**
 审核期间可用 `raven playbook disable brief-review` 暂停提供给模型。
 如果需要先审核、后发现，应在库目录之外编写，按路径校验，准备好后再安装。
 
@@ -72,13 +72,13 @@ params:
     description: The brief to inspect
 nodes:
   - id: inspect
-    subagent: raven
+    subagent: Raven-General
     nodeSummary: Identify gaps
     skills: []
     mcps: []
     promptTemplate: "Find gaps in this brief: {{ params.brief }}. Do not edit files or contact external services."
   - id: summarize
-    subagent: raven
+    subagent: Raven-General
     nodeSummary: Prioritize feedback
     dependsOn: [inspect]
     skills: []
@@ -87,7 +87,7 @@ nodes:
 ```
 ````
 
-`raven` 是通用内置 Agent。如需 Raven-Code 等专用 Agent，替换为已注册的名称，
+`Raven-General` 是通用内置 Agent。如需 Raven-Code 等专用 Agent，替换为已注册的名称，
 并按[Agent 集成](agent-integrations.md)检查配置。保存的 Playbook 使用底层
 Agent registry，而不是临时组图时向模型展示的 worker label。
 
@@ -161,7 +161,9 @@ CLI `--fill` 用于字符串字段；列表形式的 Skill/MCP fills 应通过�
 节点字段遵循[DAG 契约](orchestration.md#node-contract-and-data-flow)。
 省略 `skills` 或 `mcps` 保留该 Agent 的菜单或默认选择；`[]` 请求不附加任何项。
 非空列表请求指定选择，具体取决于后端支持。共享 `instance` 要求有状态 Agent，
-且节点以依赖链顺序使用同一个 Agent。并行不会自动提供独立工作副本。
+且节点以依赖链顺序使用同一个 Agent。并行写入时，应在工作流中提供独立工作副本
+或明确文件所有权。宿主的编码 skill 会要求编码 Agent 创建 worktree，DAG 调度器本身
+不会创建它们。详见[与子 Agent 协作](agent-collaboration.md#models-modes-and-shared-files)。
 
 DAG Playbook 可以携带使用宿主 MCP 配置 schema 的 `mcpServers` 定义。
 本次运行中，它的定义优先于宿主同名服务。以下片段可加入 DAG Playbook；

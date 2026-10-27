@@ -33,6 +33,22 @@ PORT = 58717
 
 ROW = {"id": "box", "display_name": "Lab box", "host": HOST, "port": PORT, "user": "worker", "key": "/keys/id_test"}
 
+_TUNA, _ALIYUN = install.MIRRORS
+
+
+@pytest.fixture(autouse=True)
+def _untimed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No look times an index from here: under a real shell its curl would reach PyPI and the mirrors.
+
+    The look each test was written against; the tests of the timing clear it (``timed``).
+    """
+    monkeypatch.setenv(install.NO_MIRROR_ENV, "1")
+
+
+@pytest.fixture
+def timed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(install.NO_MIRROR_ENV, raising=False)
+
 
 @pytest.fixture
 def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -69,8 +85,10 @@ def _plan(**fields: Any) -> Plan:
 class Machine:
     """Answers each step by name, records what it was sent, and fails where told."""
 
-    def __init__(self, **answers: tuple[int, str]) -> None:
+    def __init__(self, *, plan: Plan | None = None, **answers: tuple[int, str]) -> None:
         self.answers = answers
+        self.plans = [plan] if plan is not None else [_plan(), _plan(python="", uv="/usr/bin/uv")]
+        """The plans whose steps are answered by name."""
         self.sent: list[str] = []
         self.pushed: list[bytes] = []
         self.pushed_by: list[tuple[str, bytes]] = []
@@ -78,7 +96,7 @@ class Machine:
         self.check = json.dumps({"protocol": protocol.PROTOCOL, "digest": bundle.digest()})
 
     def _answer(self, command: str) -> tuple[int, str]:
-        for name, cmd in install.steps(_plan()) + install.steps(_plan(python="", uv="/usr/bin/uv")):
+        for name, cmd in [step for p in self.plans for step in install.steps(p)]:
             if command == cmd and name in self.answers:
                 return self.answers[name]
         if command.endswith("-I -m raven.node --version"):
@@ -211,6 +229,242 @@ def test_a_machine_that_is_not_registered_is_refused_before_any_ssh(registry):
         install.plan("elsewhere", run=lambda target, command: pytest.fail("no ssh for an unknown machine"))
 
 
+# --- the index timed from the machine, and the mirrors ------------------------------
+
+_LOOK = "PYTHON=/usr/bin/python3.12\nUV=/usr/bin/uv\nUV_VERSION=0.13.0\nFETCH=/usr/bin/curl\nFREE_KB=2097152\n"
+
+
+def _says(look: str, mirrors: str = "", mirrors_rc: int = 0) -> tuple[list[str], Any]:
+    """A machine that answers the look with ``look`` and the mirrors' timing with ``mirrors``."""
+    sent: list[str] = []
+
+    def run(target: remote.Machine, command: str) -> tuple[int, str]:
+        sent.append(command)
+        return (mirrors_rc, mirrors) if command == install.mirror_script() else (0, look)
+
+    return sent, run
+
+
+def test_an_index_slow_from_the_machine_gives_way_to_the_fastest_mirror_and_the_plan_says_why(registry, timed):
+    """Measured 2026-10-23 on an Alibaba Cloud machine in Shanghai whose pip named PyPI: pillow's page at 31 KB/s
+    from pypi.org, cut off at six seconds, and whole within a second from either mirror."""
+    sent, run = _says(
+        _LOOK + "INDEX=https://pypi.org/simple\nSPEED=28 200 190464 6.000000\n",
+        f"MIRROR=0 200 1165208 0.081513 {_ALIYUN}\nMIRROR=0 200 1165206 0.760254 {_TUNA}\n",
+    )
+
+    p = install.plan("box", run=run)
+
+    assert (p.index, p.mirror, p.passed_over) == ("https://pypi.org/simple", _ALIYUN, "served 31 KB/s")
+    look, mirrors = sent
+    assert "curl -K - " in look and mirrors == install.mirror_script()
+    assert all(m in mirrors for m in install.MIRRORS)
+    assert (
+        f"from {_ALIYUN} (a PyPI mirror in mainland China, the fastest from the machine: https://pypi.org/simple, the "
+        "index pip is configured with there, served 31 KB/s, and is tried after it), and this Raven's code"
+    ) in p.describe()
+
+
+@pytest.mark.parametrize("rc", sorted(install._UNREACHED_RC))
+def test_pypi_the_network_kept_curl_from_gives_way_to_any_mirror_that_answers(registry, timed, rc):
+    _, run = _says(
+        _LOOK + f"SPEED={rc} 000 0 5.001234\n",
+        f"MIRROR=28 200 81920 6.000000 {_TUNA}\nMIRROR=7 000 0 5.001000 {_ALIYUN}\n",
+    )
+
+    p = install.plan("box", run=run)
+
+    assert (p.index, p.mirror, p.passed_over) == ("", _TUNA, "could not be reached")
+    assert "PyPI, which pip uses there, could not be reached, and is tried after it" in p.describe()
+
+
+def test_a_mirror_that_answers_with_an_error_is_not_taken_however_quick(registry, timed):
+    """A 404 arrives fast; a mirror that does not carry the page carries none of the packages."""
+    _, run = _says(
+        _LOOK + "SPEED=7 000 0 5.001234\n",
+        f"MIRROR=0 404 50000 0.010000 {_TUNA}\nMIRROR=28 200 300000 6.000000 {_ALIYUN}\n",
+    )
+
+    assert install.plan("box", run=run).mirror == _ALIYUN
+
+
+_OLD_UV = "PYTHON=/usr/bin/python3.12\nUV=/usr/bin/uv\nUV_VERSION=0.4.0\nFETCH=/usr/bin/curl\nFREE_KB=2097152\n"
+
+
+def test_a_mirror_is_never_the_index_a_uv_too_old_to_read_one_is_given(registry, timed):
+    """0xKT, 2026-10-23: with pip naming no index and PyPI passed over, the mirror reaches uv only through
+    UV_DEFAULT_INDEX, which a uv older than 0.4.23 ignores -- so the plan said the mirror while both tries went to
+    PyPI. The uv the steps use is settled after the mirror now, and such a uv is fetched first."""
+    _, run = _says(
+        _OLD_UV + "SPEED=7 000 0 5.001000\n",
+        f"MIRROR=0 200 1165206 0.760254 {_TUNA}\n",
+    )
+
+    p = install.plan("box", run=run)
+
+    assert (p.index, p.mirror, p.uv_too_old, p.uv_from) == ("", _TUNA, True, "fetched")
+    assert "the machine has uv 0.4.0, and only uv 0.4.23 or later installs from the index an install gives it" in (
+        p.describe()
+    )
+    commands = dict(install.steps(p))
+    assert "uv" in commands and 'uv="$dir/.uv/uv"; ' in commands["packages"], "the pinned uv runs the packages"
+    # A uv new enough reads the mirror as it is, and is not replaced.
+    _, run = _says(_LOOK + "SPEED=7 000 0 5.001000\n", f"MIRROR=0 200 1165206 0.760254 {_TUNA}\n")
+    new = install.plan("box", run=run)
+    assert (new.mirror, new.uv_too_old, new.uv_from) == (_TUNA, False, "machine")
+    assert "uv" not in dict(install.steps(new))
+
+
+def test_a_mirror_the_steps_give_an_old_uv_takes_the_one_an_earlier_install_fetched(registry, timed):
+    look = (
+        "PYTHON=/usr/bin/python3.12\nUV=/usr/local/bin/uv\nUV_VERSION=0.4.22\n"
+        "NODE_UV=/home/worker/.raven-node/.uv/uv\nNODE_UV_VERSION=0.13.0\nFETCH=/usr/bin/curl\n"
+        "FREE_KB=2097152\nSPEED=7 000 0 5.001000\n"
+    )
+    _, run = _says(look, f"MIRROR=0 200 1165206 0.760254 {_TUNA}\n")
+
+    p = install.plan("box", run=run)
+
+    assert (p.mirror, p.uv, p.uv_from) == (_TUNA, "/home/worker/.raven-node/.uv/uv", "machine")
+    assert "uv" not in dict(install.steps(p)), "nothing is fetched twice"
+    assert "uv=/home/worker/.raven-node/.uv/uv; " in dict(install.steps(p))["packages"]
+
+
+def test_a_mirror_for_an_old_uv_with_nothing_to_fetch_one_with_is_refused():
+    p = _plan(index="", mirror=_TUNA, uv="/usr/bin/uv", uv_version="0.4.0", fetch="")
+
+    assert install.refusal(p) == (
+        "machine 'Lab box' (box) has uv 0.4.0, and only uv 0.4.23 or later installs from the index an install "
+        f"gives it there; with no curl or wget to fetch uv {install.UV_VERSION}, upgrade uv there "
+        f"({install.UV_INSTALLER}), then run this again"
+    )
+
+
+@pytest.mark.parametrize(
+    ("mirrors", "rc"),
+    [
+        (f"MIRROR=28 200 300000 6.000000 {_TUNA}\nMIRROR=7 000 0 5.000000 {_ALIYUN}\n", 0),
+        (f"MIRROR=0 404 120 0.100000 {_TUNA}\nMIRROR=60 000 0 0.300000 {_ALIYUN}\n", 0),
+        ("MIRROR=0 200 1165208 0.081513 https://elsewhere.example/simple\nMIRROR=0 200 garbage\n", 0),
+        ("", 255),
+    ],
+    ids=["no faster", "no answer", "not one of the mirrors", "the look failed"],
+)
+def test_a_slow_index_no_mirror_beats_is_kept_and_the_plan_says_how_it_was_timed(registry, timed, mirrors, rc):
+    _, run = _says(_LOOK + "INDEX=https://mirror.example/simple\nSPEED=28 200 600000 6.000000\n", mirrors, rc)
+
+    p = install.plan("box", run=run)
+
+    assert (p.mirror, p.passed_over) == ("", "served 97 KB/s"), "100000 B/s, rounded down"
+    assert (
+        "from https://mirror.example/simple (the index pip is configured with there; it served 97 KB/s from the "
+        "machine, and no PyPI mirror in mainland China did better), and this Raven's code"
+    ) in p.describe()
+    assert install.steps(p) == install.steps(dataclasses.replace(p, passed_over="")), "the steps are as untimed"
+
+
+@pytest.mark.parametrize(
+    "speed",
+    [
+        "0 200 1919633 0.699450",
+        "28 200 1700000 6.000000",
+        "0 200 5400 0.157000",
+        "0 404 120 0.200000",
+        "28 503 2048 6.000000",
+        "0 401 0 0.200000",
+        "60 000 0 0.400000",
+        "1 000 0 0.010000",
+        "127",
+        None,
+    ],
+    ids=[
+        "whole in under a second",
+        "cut off at 277 KB/s",
+        "a small page, quickly",
+        "an error status",
+        "an error status, slowly",
+        "a sign-in curl did not have",
+        "a certificate the machine does not trust",
+        "a curl that cannot speak https",
+        "curl said nothing",
+        "not timed: no curl there",
+    ],
+)
+def test_an_index_that_serves_or_answered_is_kept_and_no_mirror_is_asked(registry, timed, speed):
+    """Only an index the network kept curl from, or one that answers slowly, is passed over: one that answered
+    with an error or asked for a sign-in is the owner's to mend, one curl failed on for a reason of its own was
+    not timed, and a mirror would hide why the install failed."""
+    sent, run = _says(_LOOK + "INDEX=https://pypi.org/simple\n" + (f"SPEED={speed}\n" if speed else ""))
+
+    p = install.plan("box", run=run)
+
+    assert (p.mirror, p.passed_over) == ("", "") and len(sent) == 1
+
+
+@pytest.mark.parametrize("value", ["1", "true", " Yes ", "ON"])
+def test_raven_no_mirror_times_nothing_and_asks_no_mirror(registry, monkeypatch, value):
+    monkeypatch.setenv(install.NO_MIRROR_ENV, value)
+    sent, run = _says(_LOOK + "SPEED=7 000 0 5.000000\n")
+
+    p = install.plan("box", run=run)
+
+    assert (p.mirror, p.passed_over) == ("", "") and len(sent) == 1
+    assert "curl -K - " not in sent[0] and "SPEED=" not in sent[0]
+
+
+def test_the_switch_is_the_runtime_s_own(registry, monkeypatch):
+    """The install and the runtime's mirror fallback read one switch, in one
+    place: the name it names is the runtime's."""
+    from raven.utils import mirrors
+
+    assert install.NO_MIRROR_ENV == mirrors.OPT_OUT_ENV
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows keeps one name for a variable")
+@pytest.mark.parametrize("name", ["RAVEN_NO_MIRROR", "raven_no_mirror"])
+def test_the_switch_is_read_in_either_case(registry, monkeypatch, name):
+    """A name in another case turns the install off. Windows keeps one name
+    for a variable, so only another system can hold the switch in another
+    case, and there it is read."""
+    monkeypatch.delenv(install.NO_MIRROR_ENV, raising=False)
+    monkeypatch.setenv(name, "1")
+    sent, run = _says(_LOOK + "SPEED=7 000 0 5.000000\n")
+
+    p = install.plan("box", run=run)
+
+    assert (p.mirror, p.passed_over) == ("", "") and len(sent) == 1
+    assert "curl -K - " not in sent[0] and "SPEED=" not in sent[0]
+
+
+def test_a_machine_that_has_the_node_or_cannot_take_one_asks_no_mirror(registry, timed):
+    for look in (
+        "PRESENT=1\nUV=/usr/bin/uv\nSPEED=7 000 0 5.000000\n",
+        "PYTHON=/usr/bin/python3.12\nSPEED=7 000 0 5.000000\nFREE_KB=2097152\n",
+        _LOOK.replace("FREE_KB=2097152", "FREE_KB=1024") + "SPEED=7 000 0 5.000000\n",
+    ):
+        sent, run = _says(look)
+        p = install.plan("box", run=run)
+        assert p.mirror == "" and len(sent) == 1
+        assert p.present or install.refusal(p) is not None
+
+
+@pytest.mark.parametrize(
+    ("said", "timing"),
+    [
+        ("28 200 662835 6.000473", (28, 200, 662835, 6.000473)),
+        ("0 200 1165206 0,760254", (0, 200, 1165206, 0.760254)),
+        ("7 000 0 5.001", (7, 0, 0, 5.001)),
+        ("127", None),
+        ("", None),
+        ("0 200 x 0.1", None),
+    ],
+)
+def test_a_timing_is_read_as_curl_and_the_shell_said_it(said, timing):
+    got = install._timing(said)
+
+    assert (got and (got.rc, got.status, got.size, got.seconds)) == timing
+
+
 # --- what an install would do -----------------------------------------------------
 
 
@@ -294,6 +548,8 @@ def test_an_install_that_cannot_go_ahead_says_why(fields, said):
 _UV_ENV = 'UV_CACHE_DIR="$dir/.uv-cache" UV_PYTHON_INSTALL_DIR="$dir/.uv-python"'
 # node_dir made owner-only only when the step makes it; one that is there is left as it is.
 _MADE = '[ -d "$dir" ] || { mkdir -p "$dir" && chmod 700 "$dir"; }; '
+# The half-made Raven node a step given up on left behind, gone before uv venv, which refuses a directory that is there.
+_CLEARED = 'rm -rf "$node" && '
 
 
 def test_the_steps_build_a_virtualenv_with_uv_then_fill_it_with_uv():
@@ -304,8 +560,10 @@ def test_the_steps_build_a_virtualenv_with_uv_then_fill_it_with_uv():
     assert all(command.startswith(head) for _, command in steps)
     commands = dict(steps)
     assert commands["virtualenv"] == (
-        head + _MADE + f'{_UV_ENV} "$uv" venv --quiet --python \'/opt/py 3.12/bin/python3\' "$node"'
+        head + _MADE + _CLEARED + f'{_UV_ENV} "$uv" venv --quiet --python \'/opt/py 3.12/bin/python3\' "$node"'
     )
+    present = dict(install.steps(_plan(python="/opt/py 3.12/bin/python3", uv="/opt/uv", present=True)))
+    assert "rm -rf" not in present["virtualenv"], "a Raven node the look found working is never removed"
     pip = f'{_UV_ENV} "$uv" pip install --quiet --python "$node/bin/python"'
     assert commands["packages"] == head + f"{pip} " + " ".join(bundle.pinned(protocol.REQUIREMENTS))
     assert "--default-index" not in " ".join(commands.values()), "no index configured for pip: uv's own default"
@@ -337,7 +595,7 @@ def test_uv_makes_its_python_inside_the_node_dir():
     commands = dict(install.steps(_plan(python="", uv="/root/.local/bin/uv")))
 
     assert commands["virtualenv"].endswith(
-        f'uv=/root/.local/bin/uv; {_MADE}{_UV_ENV} "$uv" venv --quiet --python 3.12 "$node"'
+        f'uv=/root/.local/bin/uv; {_MADE}{_CLEARED}{_UV_ENV} "$uv" venv --quiet --python 3.12 "$node"'
     )
 
 
@@ -395,6 +653,79 @@ def test_a_sign_in_inside_the_index_url_reaches_uv_only_on_stdin_never_a_command
     assert "s3cret-pw" not in failed and "https://mirror.example:8443/simple/loguru/" in failed
     assert install._shown_index("https://mirror.example/simple") == "https://mirror.example/simple"
     assert install._shown_index("http://u:p@[::1]:8080/simple") == "http://[::1]:8080/simple"
+
+
+def test_a_mirror_comes_first_on_the_step_s_stdin_and_the_index_it_stands_in_for_second(small_tarball):
+    """A mirror that lacks a pinned version fails a step's first try; the machine's own index -- PyPI when pip
+    names none -- is its second, as it would have been its only one."""
+    for index, then in (("https://user:s3cret-pw@mirror.example:8443/simple", ""), ("", protocol.PUBLIC_INDEX)):
+        p = _plan(index=index, mirror=_TUNA, passed_over="could not be reached")
+        machine = Machine(plan=p)
+
+        assert install.install(p, run=machine.run, push=machine.push).rg is True
+
+        fed = f"{_TUNA}\n{then or index}\n".encode()
+        names = {command: name for name, command in install.steps(p)}
+        assert [(names[command], data) for command, data in machine.pushed_by] == [
+            ("packages", fed),
+            ("search", fed),
+            ("code", small_tarball),
+        ]
+        assert not any(word in command for command in machine.sent for word in ("s3cret-pw", "mirror.example", _TUNA))
+    commands = dict(install.steps(_plan(mirror=_TUNA)))
+    head = "dir=~/.raven-node; id=" + bundle.install_name() + '; node="$dir/$id"; uv=/usr/bin/uv; '
+    pip = f'{_UV_ENV} "$uv" pip install --quiet --python "$node/bin/python"'
+    take = "IFS= read -r UV_DEFAULT_INDEX && IFS= read -r own && export UV_DEFAULT_INDEX && "
+    pins = " ".join(bundle.pinned(protocol.REQUIREMENTS))
+    assert commands["packages"] == head + take + f'{{ {pip} {pins} || UV_DEFAULT_INDEX="$own" {pip} {pins}; }}'
+    (rg,) = bundle.pinned((protocol.SEARCH_REQUIREMENT,))
+    assert commands["search"] == head + take + (
+        f'{{ {pip} {rg} || UV_DEFAULT_INDEX="$own" {pip} --extra-index-url {protocol.PUBLIC_INDEX} {rg}; }}'
+        " >/dev/null 2>&1 && echo RG=1 || echo RG=0"
+    )
+
+
+@pytest.mark.parametrize(
+    ("fields", "step", "said"),
+    [
+        ({}, "packages", "the packages step: it did not finish within 15 minutes, installing packages from PyPI"),
+        (
+            {"index": "https://user:s3cret-pw@mirror.example/simple"},
+            "packages",
+            "the packages step: it did not finish within 15 minutes, installing packages from "
+            "https://mirror.example/simple",
+        ),
+        (
+            {"index": "https://pypi.org/simple", "mirror": _ALIYUN},
+            "packages",
+            f"the packages step: it did not finish within 15 minutes, installing packages from {_ALIYUN}, then "
+            "https://pypi.org/simple",
+        ),
+        ({}, "code", "the code step: it did not finish within 15 minutes"),
+    ],
+    ids=["from PyPI", "from the index pip names", "from a mirror, then the index", "no packages"],
+)
+def test_a_step_out_of_time_says_so_and_where_its_packages_were_coming_from(small_tarball, fields, step, said):
+    """Measured 2026-10-22: a packages step still downloading pillow from a slow index when its 15 minutes ran out
+    was reported as a machine that did not answer in time."""
+    p = _plan(**fields)
+    machine = Machine(plan=p, **{step: (124, "")})
+
+    with pytest.raises(InstallError) as caught:
+        install.install(p, run=machine.run, push=machine.push)
+
+    assert str(caught.value) == f"installing the Raven node on machine 'Lab box' (box) failed at {said}"
+    assert machine.sent[-1].endswith('rm -rf "$node"')
+
+
+def test_a_search_package_out_of_time_is_left_out_and_the_install_goes_on(small_tarball):
+    machine = Machine(search=(124, ""))
+
+    done = install.install(_plan(), run=machine.run, push=machine.push)
+
+    assert done.rg is False
+    assert not any(command.endswith('rm -rf "$node"') for command in machine.sent)
+    assert machine.sent[-1].endswith('du -sk "$node" 2>/dev/null | cut -f1')
 
 
 # ---- E2: a port pip's configuration holds that is not a port ---------------------------------
@@ -510,7 +841,7 @@ def test_a_machine_uv_that_would_ignore_the_configured_index_is_not_the_one_used
     if not uv_from:
         said = f"uv {version}" if version else "a uv that does not say which version it is"
         assert install.refusal(p) == (
-            f"machine 'Lab box' (box) has {said}, and only uv 0.4.23 or later installs from the package index pip is "
+            f"machine 'Lab box' (box) has {said}, and only uv 0.4.23 or later installs from the index pip is "
             f"configured with there; with no curl or wget to fetch uv {install.UV_VERSION}, upgrade uv there "
             f"({install.UV_INSTALLER}), then run this again"
         )
@@ -602,7 +933,7 @@ def test_an_install_runs_every_step_and_measures_what_it_made(small_tarball):
     assert machine.sent[:-1] == [command for _, command in install.steps(_plan())]
     assert machine.sent[-1].endswith('du -sk "$node" 2>/dev/null | cut -f1')
     assert machine.pushed == [small_tarball]
-    assert not any('rm -rf "$node"' in command for command in machine.sent)
+    assert not any(command.endswith('rm -rf "$node"') for command in machine.sent), "no cleanup after a step"
 
 
 def test_an_install_without_rg_still_finishes(small_tarball):
@@ -649,7 +980,12 @@ def test_a_size_that_cannot_be_read_is_left_unsaid(small_tarball, du):
             (1, ""),
             "installing the Raven node on machine 'Lab box' (box) failed at the path step: exit 1",
         ),
-        ("check", (124, ""), "installing the Raven node: machine 'Lab box' (box) did not answer in time"),
+        (
+            "check",
+            (124, ""),
+            "installing the Raven node on machine 'Lab box' (box) failed at the check step: it did not finish "
+            "within 15 minutes",
+        ),
     ],
 )
 def test_a_step_that_fails_stops_the_install_and_removes_the_half_made_node(small_tarball, step, answer, said):
@@ -800,6 +1136,7 @@ def test_the_probe_finds_the_node_a_new_enough_python_uv_and_the_room(shell):
     assert seen["UV"] == str(tools / "uv")
     assert seen["FETCH"] == str(tools / "curl")
     assert seen["FREE_KB"].isdigit()
+    assert "SPEED" not in seen, "a machine that has this Raven node installs nothing, so its index is not timed"
 
 
 @pytest.mark.slow
@@ -861,7 +1198,7 @@ def test_the_probe_reads_the_index_pip_is_configured_with_as_pip_reads_it(shell)
 @pytest.mark.slow
 def test_a_node_dir_that_was_there_keeps_its_mode_and_one_the_install_makes_is_owner_only(shell, tmp_path):
     home, tools = shell
-    for name in ("mkdir", "chmod"):
+    for name in ("mkdir", "chmod", "rm"):
         (tools / name).symlink_to(shutil.which(name) or name)
     uv = _script(tools / "uv", "exit 0\n")
     theirs = tmp_path / "theirs"
@@ -973,6 +1310,106 @@ def test_the_index_reaches_uv_through_its_environment_and_never_its_argv_under_a
     # No line on stdin: the step fails, rather than install from PyPI behind the owner's back.
     nothing = _sh_in(commands["packages"], home, str(tools), "")
     assert nothing.returncode != 0 and len(calls.read_text(encoding="utf-8").splitlines()) == 3
+
+
+@pytest.mark.slow
+def test_a_mirror_that_fails_a_step_is_followed_by_the_index_it_stands_in_for_under_a_real_shell(shell, tmp_path):
+    home, tools = shell
+    calls = tmp_path / "uv-calls"
+    # The mirror fails every try, as one that lacks a pinned version would.
+    uv = _script(
+        tools / "uv",
+        f'echo "ARGV=$* INDEX=$UV_DEFAULT_INDEX" >> "{calls}"\n'
+        'case "$UV_DEFAULT_INDEX" in *tuna*) exit 1 ;; esac\nexit 0\n',
+    )
+    index = "https://user:s3cret-pw@mirror.example:8443/simple"
+    commands = dict(
+        install.steps(
+            _plan(node_dir=str(tmp_path / "nodes"), install_name="0.1-x", uv=str(uv), index=index, mirror=_TUNA)
+        )
+    )
+    fed = f"{_TUNA}\n{index}\n"
+
+    packages = _sh_in(commands["packages"], home, str(tools), fed)
+    search = _sh_in(commands["search"], home, str(tools), fed)
+
+    assert packages.returncode == 0, packages.stderr
+    assert search.returncode == 0 and search.stdout.strip() == "RG=1", search.stderr
+    asked = calls.read_text(encoding="utf-8").splitlines()
+    assert [line.split(" INDEX=")[1] for line in asked] == [_TUNA, index, _TUNA, index]
+    assert not any("s3cret-pw" in line.split(" INDEX=")[0] for line in asked), "no argv of uv's carries it"
+    assert f"--extra-index-url {protocol.PUBLIC_INDEX}" in asked[3]
+    # Without the second line the step fails, rather than install from an index it was not given.
+    lone = _sh_in(commands["packages"], home, str(tools), f"{_TUNA}\n")
+    assert lone.returncode != 0 and len(calls.read_text(encoding="utf-8").splitlines()) == 4
+
+
+@pytest.mark.slow
+def test_the_probe_times_the_index_with_curl_reading_its_url_off_stdin(shell, tmp_path):
+    """curl's argv is what another account's ``ps`` shows, and pip takes a sign-in inside the URL."""
+    home, tools = shell
+    (tools / "cat").symlink_to(shutil.which("cat") or "cat")
+    calls = tmp_path / "curl-calls"
+    _script(tools / "curl", f'echo "ARGV=$*" >> "{calls}"; cat >> "{calls}"; printf "200 190464 6.000473"; exit 28\n')
+    probe = install.probe_script("~/.raven-node", "0.1-x", "d")
+    index = "https://user:s3cret-pw@mirror.example:8443/simple/"
+
+    seen = _lines(_sh(probe, home, str(tools), PIP_INDEX_URL=index))
+
+    assert (seen["INDEX"], seen["SPEED"]) == (index, "28 200 190464 6.000473")
+    argv, config = calls.read_text(encoding="utf-8").splitlines()
+    assert argv.startswith("ARGV=-K - -sL ") and "s3cret-pw" not in argv and "mirror.example" not in argv
+    assert config == 'url = "https://user:s3cret-pw@mirror.example:8443/simple/pillow/"'
+    calls.unlink()
+    # pip names no index: PyPI is what uv would install from, and what is timed.
+    seen = _lines(_sh(probe, home, str(tools)))
+    assert "INDEX" not in seen and seen["SPEED"] == "28 200 190464 6.000473"
+    assert calls.read_text(encoding="utf-8").splitlines()[1] == f'url = "{protocol.PUBLIC_INDEX}/pillow/"'
+    calls.unlink()
+    # One that a config line cannot carry is not timed, and so is kept; nor is one the look is not asked to time.
+    for odd in ('https://mirror.example/sim"ple', "https://mirror.example/sim\\ple"):
+        assert "SPEED" not in _lines(_sh(probe, home, str(tools), PIP_INDEX_URL=odd))
+    untimed = install.probe_script("~/.raven-node", "0.1-x", "d", timed=False)
+    assert "SPEED" not in _lines(_sh(untimed, home, str(tools), PIP_INDEX_URL=index))
+    assert not calls.exists()
+
+
+@pytest.mark.slow
+def test_the_mirrors_are_timed_at_once_each_line_naming_its_mirror(shell):
+    home, tools = shell
+    _script(
+        tools / "curl",
+        'case "$*" in *tuna*) printf "200 1165206 0.760254"; exit 0 ;; esac\nprintf "000 0 5.001000"; exit 7\n',
+    )
+
+    out = _sh(install.mirror_script(), home, str(tools))
+
+    assert sorted(line for line in out.splitlines() if line.startswith("MIRROR=")) == [
+        f"MIRROR=0 200 1165206 0.760254 {_TUNA}",
+        f"MIRROR=7 000 0 5.001000 {_ALIYUN}",
+    ]
+
+
+@pytest.mark.slow
+def test_the_virtualenv_step_clears_a_half_made_node_and_nothing_beside_it(shell, tmp_path):
+    """Measured 2026-10-22: the packages step's uv went on after its ssh was given up, and wrote site-packages back
+    ten seconds after the cleanup; uv venv refuses a directory that is there and is not a virtualenv."""
+    home, tools = shell
+    for name in ("mkdir", "chmod", "rm"):
+        (tools / name).symlink_to(shutil.which(name) or name)
+    nodes = tmp_path / "nodes"
+    (nodes / "0.1-x" / "lib" / "python3.12" / "site-packages" / "PIL").mkdir(parents=True)
+    (nodes / ".uv-cache" / "wheels-v6").mkdir(parents=True)
+    seen = tmp_path / "seen"
+    uv = _script(
+        tools / "uv", f'for a; do last=$a; done; [ -e "$last" ] && echo there > "{seen}" || echo gone > "{seen}"\n'
+    )
+    plan = _plan(node_dir=str(nodes), install_name="0.1-x", uv=str(uv), python=sys.executable)
+
+    _sh(dict(install.steps(plan))["virtualenv"], home, str(tools))
+
+    assert seen.read_text(encoding="utf-8").strip() == "gone", "uv venv found the half-made Raven node still there"
+    assert sorted(path.name for path in nodes.iterdir()) == [".uv-cache"]
 
 
 @pytest.mark.slow

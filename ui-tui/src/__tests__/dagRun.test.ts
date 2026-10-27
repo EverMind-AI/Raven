@@ -142,7 +142,7 @@ describe('foldDagEvent', () => {
   })
 
   it('reports a node still called running on a finished run as interrupted', () => {
-    // The runner only ever reports the four terminal states, so a node left
+    // The runner only ever reports the five terminal states, so a node left
     // running when the run closed means its terminal write never arrived.
     const completed: DagRunCompletedEvent = {
       type: 'dag.run_completed',
@@ -235,6 +235,167 @@ describe('foldDagEvent', () => {
   })
 })
 
+describe('foldDagEvent on a branching run', () => {
+  const BRANCHING: DagRunStartedEvent['payload']['nodes'] = [
+    { id: 'triage', subagent: 'echo', depends_on: [], routes: ['docs', 'bug'], select: 'one' },
+    { id: 'fix', subagent: 'echo', depends_on: ['triage'], when: 'triage.bug' },
+    { id: 'plain', subagent: 'echo', depends_on: [] }
+  ]
+
+  const open = () => foldDagEvent(null, started(BRANCHING))
+
+  const completion = (files: DagRunCompletedEvent['payload']['files'], summary = {}): DagRunCompletedEvent => ({
+    type: 'dag.run_completed',
+    payload: { run_id: 'dag-1', dir: '/w/mas_dag/dag-1', summary: { total: 3, ...summary }, files }
+  })
+
+  const nodeOf = (run: ReturnType<typeof open>, id: string) => run?.nodes.find(n => n.id === id)
+
+  it('keeps the reason, the selection and the guard', () => {
+    const run = foldDagEvent(open(), {
+      type: 'dag.node_updated',
+      payload: { run_id: 'dag-1', node: 'fix', status: 'not_executed', reason: 'when_false' }
+    })
+
+    expect(nodeOf(run, 'fix')).toMatchObject({ reason: 'when_false', status: 'not_executed', when: 'triage.bug' })
+  })
+
+  it('learns from the start frame which node decides and which is guarded', () => {
+    const run = open()
+
+    expect(nodeOf(run, 'triage')).toMatchObject({ routes: ['docs', 'bug'], select: 'one' })
+    expect(nodeOf(run, 'fix')?.when).toBe('triage.bug')
+  })
+
+  it('leaves a plain node with no branch key at all', () => {
+    // A key present and undefined would still be a shape no ordinary run had.
+    expect(nodeOf(open(), 'plain')).toStrictEqual({
+      id: 'plain',
+      subagent: 'echo',
+      dependsOn: [],
+      status: 'pending'
+    })
+  })
+
+  it('keeps what a decision node selected, and the evidence it gave', () => {
+    const run = foldDagEvent(open(), {
+      type: 'dag.node_updated',
+      payload: {
+        run_id: 'dag-1',
+        node: 'triage',
+        status: 'completed',
+        ended_at: 9,
+        selected_routes: ['docs'],
+        route_evidence: 'it asks how to configure the proxy'
+      }
+    })
+
+    expect(nodeOf(run, 'triage')).toMatchObject({
+      routeEvidence: 'it asks how to configure the proxy',
+      selectedRoutes: ['docs'],
+      status: 'completed'
+    })
+  })
+
+  it('keeps an empty selection, which is a decision that chose nothing', () => {
+    // Copied by presence, not truthiness: `[]` is a selection of nothing, and
+    // dropping it would read as a decision never made.
+    const run = foldDagEvent(open(), {
+      type: 'dag.node_updated',
+      payload: { run_id: 'dag-1', node: 'triage', status: 'completed', selected_routes: [] }
+    })
+
+    expect(nodeOf(run, 'triage')?.selectedRoutes).toStrictEqual([])
+  })
+
+  it('gives no selection to a node whose frame carried none', () => {
+    const run = foldDagEvent(open(), updated('triage', 'completed'))
+
+    expect(nodeOf(run, 'triage')).not.toHaveProperty('selectedRoutes')
+    expect(nodeOf(run, 'triage')).not.toHaveProperty('routeEvidence')
+    expect(nodeOf(run, 'triage')).not.toHaveProperty('reason')
+  })
+
+  it('does not lose the selection to a later frame that does not repeat it', () => {
+    const decided = foldDagEvent(open(), {
+      type: 'dag.node_updated',
+      payload: { run_id: 'dag-1', node: 'triage', status: 'completed', selected_routes: [], route_evidence: 'none' }
+    })
+    const run = foldDagEvent(decided, updated('triage', 'completed'))
+
+    expect(nodeOf(run, 'triage')).toMatchObject({ routeEvidence: 'none' })
+    expect(nodeOf(run, 'triage')?.selectedRoutes).toStrictEqual([])
+  })
+
+  it('takes the reason, the selection and the evidence from the manifest, an empty selection included', () => {
+    const run = foldDagEvent(
+      open(),
+      completion(
+        [
+          { node: 'triage', status: 'completed', selected_routes: [], route_evidence: 'no route applies' },
+          { node: 'fix', status: 'not_executed', reason: 'when_unknown' },
+          { node: 'plain', status: 'completed' }
+        ],
+        { completed: 2, not_executed: 1 }
+      )
+    )
+
+    expect(nodeOf(run, 'triage')).toMatchObject({ routeEvidence: 'no route applies' })
+    expect(nodeOf(run, 'triage')?.selectedRoutes).toStrictEqual([])
+    expect(nodeOf(run, 'fix')).toMatchObject({ reason: 'when_unknown', status: 'not_executed' })
+    expect(nodeOf(run, 'plain')).toStrictEqual({
+      id: 'plain',
+      subagent: 'echo',
+      dependsOn: [],
+      status: 'completed'
+    })
+  })
+
+  it('counts the nodes a branch left out in the summary', () => {
+    const run = foldDagEvent(
+      open(),
+      completion([{ node: 'fix', status: 'not_executed' }], { completed: 2, not_executed: 1 })
+    )
+
+    expect(run?.summary).toEqual({ total: 3, completed: 2, not_executed: 1 })
+  })
+
+  it('does not drop what the updated frames said when the manifest repeats none of it', () => {
+    const live = foldDagEvent(
+      foldDagEvent(open(), {
+        type: 'dag.node_updated',
+        payload: { run_id: 'dag-1', node: 'triage', status: 'completed', selected_routes: ['bug'], route_evidence: 'x' }
+      }),
+      {
+        type: 'dag.node_updated',
+        payload: { run_id: 'dag-1', node: 'fix', status: 'not_executed', reason: 'when_false' }
+      }
+    )
+    const run = foldDagEvent(
+      live,
+      completion([
+        { node: 'triage', status: 'completed' },
+        { node: 'fix', status: 'not_executed' }
+      ])
+    )
+
+    expect(nodeOf(run, 'triage')).toMatchObject({ routeEvidence: 'x', selectedRoutes: ['bug'] })
+    expect(nodeOf(run, 'fix')?.reason).toBe('when_false')
+  })
+
+  it('does not share the selection array with the event it came from', () => {
+    const selected = ['docs']
+    const run = foldDagEvent(open(), {
+      type: 'dag.node_updated',
+      payload: { run_id: 'dag-1', node: 'triage', status: 'completed', selected_routes: selected }
+    })
+
+    selected.push('bug')
+
+    expect(nodeOf(run, 'triage')?.selectedRoutes).toEqual(['docs'])
+  })
+})
+
 describe('foldDagSnapshot', () => {
   const snapshot = (files: DagRunSnapshot['files'], over: Partial<DagRunSnapshot> = {}): DagRunSnapshot => ({
     run_id: 'dag-1',
@@ -322,5 +483,127 @@ describe('foldDagSnapshot', () => {
     const run = foldDagSnapshot(live, snapshot([{ node: 'a', status: 'completed' }]))
 
     expect(run.nodes[0]!.promptTemplate).toBe('read the file')
+  })
+
+  describe('on a branching run', () => {
+    const BRANCHED: DagRunSnapshot['files'] = [
+      {
+        node: 'triage',
+        status: 'completed',
+        subagent: 'echo',
+        depends_on: [],
+        routes: ['docs', 'bug'],
+        select: 'many',
+        selected_routes: [],
+        route_evidence: 'no route applies'
+      },
+      {
+        node: 'fix',
+        status: 'not_executed',
+        subagent: 'echo',
+        depends_on: ['triage'],
+        when: 'triage.bug',
+        reason: 'when_false'
+      },
+      { node: 'plain', status: 'completed', subagent: 'echo', depends_on: [] }
+    ]
+
+    it('carries what each node asked and what was decided, an empty selection included', () => {
+      const run = foldDagSnapshot(null, snapshot(BRANCHED))
+
+      expect(run.nodes[0]).toMatchObject({
+        routeEvidence: 'no route applies',
+        routes: ['docs', 'bug'],
+        select: 'many'
+      })
+      expect(run.nodes[0]!.selectedRoutes).toStrictEqual([])
+      expect(run.nodes[1]).toMatchObject({ reason: 'when_false', status: 'not_executed', when: 'triage.bug' })
+    })
+
+    it('leaves a plain node with no branch key at all', () => {
+      expect(foldDagSnapshot(null, snapshot(BRANCHED)).nodes[2]).toStrictEqual({
+        id: 'plain',
+        subagent: 'echo',
+        dependsOn: [],
+        status: 'completed'
+      })
+    })
+
+    it('counts the nodes a branch left out in the summary', () => {
+      const run = foldDagSnapshot(null, snapshot(BRANCHED, { summary: { total: 3, completed: 2, not_executed: 1 } }))
+
+      expect(run.summary).toEqual({ total: 3, completed: 2, not_executed: 1 })
+    })
+
+    it('keeps the outcome the live frames reported when an unfinished run has none on disk yet', () => {
+      // A run still going has no manifest, so `dag.get` answers from the
+      // registry, where a write is best-effort and can be dropped. Letting it win
+      // outright would blank a selection and a reason that were reading fine a
+      // moment ago.
+      const live = foldDagEvent(
+        foldDagEvent(
+          foldDagEvent(
+            null,
+            started([
+              { id: 'triage', subagent: 'echo', depends_on: [], routes: ['docs', 'bug'] },
+              { id: 'fix', subagent: 'echo', depends_on: ['triage'], when: 'triage.bug' }
+            ])
+          ),
+          {
+            type: 'dag.node_updated',
+            payload: {
+              run_id: 'dag-1',
+              node: 'triage',
+              status: 'completed',
+              selected_routes: ['docs'],
+              route_evidence: 'it asks how to configure the proxy'
+            }
+          }
+        ),
+        {
+          type: 'dag.node_updated',
+          payload: { run_id: 'dag-1', node: 'fix', status: 'not_executed', reason: 'when_false' }
+        }
+      )
+
+      const run = foldDagSnapshot(
+        live,
+        snapshot(
+          [
+            { node: 'triage', status: 'completed', routes: ['docs', 'bug'], select: 'one' },
+            { node: 'fix', status: 'not_executed', when: 'triage.bug' }
+          ],
+          { finalized: false }
+        )
+      )
+
+      expect(run.nodes[0]).toMatchObject({
+        routeEvidence: 'it asks how to configure the proxy',
+        selectedRoutes: ['docs']
+      })
+      expect(run.nodes[1]!.reason).toBe('when_false')
+    })
+
+    it('renders a not-executed node with no reason as it came, without inventing one', () => {
+      const run = foldDagSnapshot(null, snapshot([{ node: 'fix', status: 'not_executed' }], { finalized: false }))
+
+      expect(run.nodes[0]).toStrictEqual({ id: 'fix', subagent: '', dependsOn: [], status: 'not_executed' })
+    })
+
+    it('takes the disk over what the live frames said when both have an answer', () => {
+      const live = foldDagEvent(
+        foldDagEvent(null, started([{ id: 'triage', subagent: 'echo', depends_on: [], routes: ['docs', 'bug'] }])),
+        {
+          type: 'dag.node_updated',
+          payload: { run_id: 'dag-1', node: 'triage', status: 'completed', selected_routes: ['docs'] }
+        }
+      )
+      const run = foldDagSnapshot(
+        live,
+        snapshot([{ node: 'triage', status: 'completed', selected_routes: ['bug'], route_evidence: 'later' }])
+      )
+
+      expect(run.nodes[0]).toMatchObject({ routeEvidence: 'later', selectedRoutes: ['bug'] })
+    })
   })
 })

@@ -97,8 +97,10 @@ LEDGER = {
         "RAW_ARGUMENTS_KEY",
         "RunMeta",
         "SKIPPED_AFTER_BLOCKED_CALL",
+        "OverflowOutcome",
         "Segment",
         "SegmentBuilder",
+        "SessionRevision",
         "ChatDelta",
         "Allow",
         "ApprovalChoice",
@@ -288,7 +290,7 @@ def test_import_guard_bites_machinery_and_spares_type_checking(tmp_path):
 # The contract tier is versioned: its shape moves only with a version bump
 # ---------------------------------------------------------------------------
 
-PINNED_CONTRACT_SURFACE = ("37", "f092f5184346913fad10f77e6adde79d986d50d17d2d999ae92578a1b86dab75")
+PINNED_CONTRACT_SURFACE = ("39", "888d720a919b86b341832a77d73893c4baedc31bef84743f84cab3075385a153")
 
 
 def _render(node) -> str:

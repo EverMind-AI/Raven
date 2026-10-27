@@ -33,6 +33,7 @@ from raven.agent.subagent.presets import (
     third_party_subagent_presets,
 )
 from raven.agent.subagent.probe import (
+    PingResult,
     ProbeResult,
     capabilities_wanted,
     ping_agent,
@@ -457,7 +458,10 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     backend, and a refusal in the agent's own words when nothing answers. So
     this spends one call on that agent's own quota, and can hold the add for up
     to the row's own start window plus `_ENABLE_PING_TIMEOUT_SECONDS`
-    (`probe._ping_bounds`). `force: true` bypasses it, as on the
+    (`probe._ping_bounds`), then, for an acp row, up to two start windows more
+    for the capability record (`_record_after_the_answer`); while it runs, `subagents.test_cancel` on the name
+    the entry would land under stops it, and the add refuses with `cancelled`
+    in its data (`_run_once`). `force: true` bypasses it, as on the
     switch. A refusal stores nothing at all -- not the row disabled -- because
     the surface that calls this offers one verb per row: an added row is
     connected, and a row that could not be proved has to stay one Connect away
@@ -512,10 +516,13 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     # would run for an add that could never land -- and for a duplicate name it
     # would run against the *stored* row of that name, because the schema keeps
     # the first of two, so it would prove a row this call is not writing.
+    existing = _read_agents()
+    if machine and not name:
+        _refuse_a_second_entry_there(existing, preset_name, machine)
     try:
         reject_unsupported_openai_fields([entry])
         reject_unsupported_acp_fields([entry])
-        entries = [*_read_agents(), entry]
+        entries = [*existing, entry]
         validate_agents(entries, config_path=get_config_path())
     except (ValueError, ValidationError) as exc:
         _raise_config_error(exc)
@@ -536,6 +543,35 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
         _raise_config_error(exc)
     _hot_apply(agent_loop_factory)
     return {"added": True, "name": entry["name"]}
+
+
+def _refuse_a_second_entry_there(existing: list[dict], preset_name: str, machine: str) -> None:
+    """Refuse a default-named add of a preset the machine already carries.
+
+    One preset is added once per machine -- that is what the default name
+    says -- and the machine is reached by more than one route: the chat's
+    ``raven_config``, the preset's own sheet, the machine's sheet. Seen live
+    (2026-10-19): one route had put Claude Code on a machine under one name,
+    and the next would have put it there again under the default, two rows of
+    one agent on one machine with nothing to tell them apart. Judged on the
+    preset and the machine, not the name, since the routes spell the name
+    differently; judged before the ping, so no prompt is spent on it; and
+    only under the default name -- a caller that names the new entry means a
+    second one (two working directories, say), and is allowed it. The entry
+    the machine has is named, switched off or not: switched off, the fix is
+    to switch it back on rather than to make another.
+    """
+    for row in existing:
+        if str(row.get("preset") or "") != preset_name or str(row.get("machine") or "").strip() != machine:
+            continue
+        held = str(row.get("name") or "")
+        on = row.get("enabled", True)
+        raise ConfigValidationError(
+            f"preset {preset_name!r} is already on machine {machine!r} as {held!r} "
+            + ("(connected); use that entry" if on else "(switched off); switch that entry back on")
+            + ", or give this one a name of its own",
+            data={"field": "machine", "machine": machine, "existing": held},
+        )
 
 
 def _refuse_unless_it_can_run_there(entry: dict, machine: str, *, remote_cwd: str = "") -> None:
@@ -1124,19 +1160,8 @@ async def _refuse_unless_it_answers(entries: list[dict], name: str, *, refusal: 
         return
     if getattr(cfg, "kind", None) not in _PINGED_KINDS:
         return
-    await _read_the_shell_again(cfg)
-    result = await ping_agent(cfg)
+    result = await _run_once(cfg, name, refusal=refusal)
     if result.ok:
-        if getattr(cfg, "kind", None) == "acp" and capabilities_wanted(cfg):
-            # It answered, so it can be measured: the record its statefulness,
-            # menu and modes are read from is written now rather than left to
-            # the Test button or the next restart. Best effort -- the agent has
-            # already proved itself, and a handshake that fails afterwards is
-            # not a reason to refuse the connect.
-            try:
-                await record_capabilities(cfg)
-            except Exception as exc:  # noqa: BLE001 - the connect stands on the ping
-                logger.warning("subagents: {!r} answered but its capabilities could not be recorded: {}", name, exc)
         return
     # `detail` is repeated inside `data` deliberately: the dispatcher fills
     # `data` from `detail` only when a handler passed no `data` of its own, so a
@@ -1163,6 +1188,85 @@ async def _refuse_unless_it_answers(entries: list[dict], name: str, *, refusal: 
             if models:
                 data["models"] = models[:20]
     raise SubagentNotReadyError(detail, data=data)
+
+
+async def _record_after_the_answer(cfg: Any, name: str) -> None:
+    """Measure an acp row that has just answered the gate's prompt, when its record wants it.
+
+    It answered, so it can be measured: the record its statefulness, menu and
+    modes are read from is written now rather than left to the Test button or
+    the next restart. Best effort -- the agent has already proved itself, and
+    a handshake that fails afterwards is not a reason to refuse the connect. A
+    cancel is not a failure of the handshake and is not caught here: it ends
+    the run, and the gate refuses as for a cancel during the prompt.
+    """
+    if getattr(cfg, "kind", None) != "acp" or not capabilities_wanted(cfg):
+        return
+    try:
+        await record_capabilities(cfg)
+    except Exception as exc:  # noqa: BLE001 - the connect stands on the ping
+        logger.warning("subagents: {!r} answered but its capabilities could not be recorded: {}", name, exc)
+
+
+async def _run_once(cfg: Any, name: str, *, refusal: str) -> PingResult:
+    """The gate's one real prompt, held in `_RUNNING` under the entry's name while it runs.
+
+    The same map a test's run is held in, so `subagents.test_cancel` reaches
+    this run the same way -- the machine form's Cancel is that call, on the
+    name the entry lands under -- and the roster's `test_running` says the
+    agent is being run whichever press started it. One run per name at a
+    time, as for a test: a second would be a second real prompt on the agent's
+    own quota, and whichever ended first would take the other's entry out of
+    the map, leaving that one uncancellable for the rest of its timeout.
+
+    Cancelled, the gate refuses with `cancelled` in its data and the caller
+    writes nothing: a run that was stopped proved nothing either way. Only a
+    cancel of this run reads that way. A cancel of the call itself -- its
+    connection went, and the transport cancels what that connection had in
+    flight -- keeps unwinding, so no frame is composed for a socket that is
+    gone; the run is cancelled with it, since the call was awaiting it.
+
+    The login shell's capture is inside the task, as it is for a test, so a
+    cancel pressed during it ends the wait too. So is the capability record an
+    acp row that answered is measured with (`_record_after_the_answer`): that
+    is a second launch and handshake, two requests of up to the preset's start window each, and
+    outside the task it ran after the name had left `_RUNNING` -- a cancel then
+    answered `cancelled: false` and the caller went on to write. Inside it, the
+    whole stretch between the press and the write is one run a cancel reaches.
+    """
+    live = _RUNNING.get(name)
+    if live is not None and not live.done():
+        detail = f"sub-agent {name!r} is already running (a test, or a connect proving it), {refusal}; wait for it to end, or stop it"
+        raise SubagentNotReadyError(detail, data={"name": name, "field": "enabled", "detail": detail})
+
+    answered = False
+
+    async def _run() -> PingResult:
+        nonlocal answered
+        await _read_the_shell_again(cfg)
+        result = await ping_agent(cfg)
+        if result.ok:
+            answered = True
+            await _record_after_the_answer(cfg, name)
+        return result
+
+    task = asyncio.ensure_future(_run())
+    _RUNNING[name] = task
+    try:
+        return await task
+    except asyncio.CancelledError:
+        current = asyncio.current_task()
+        if current is not None and current.cancelling():
+            raise
+        when = "after it answered, while its capabilities were being recorded" if answered else "before it answered"
+        detail = f"the run of sub-agent {name!r} was cancelled {when}, {refusal}"
+        raise SubagentNotReadyError(
+            detail, data={"name": name, "field": "enabled", "detail": detail, "cancelled": True}
+        ) from None
+    finally:
+        # Identity-checked, as for a test: only this call's own entry comes out.
+        if _RUNNING.get(name) is task:
+            _RUNNING.pop(name, None)
 
 
 def _read_agents() -> list[dict]:
@@ -1258,7 +1362,8 @@ async def subagents_toggle(params: dict, *, agent_loop_factory: "AgentLoopFactor
     answers: the roster's entry criterion is that the agent works now, not that
     it is installed. So this spends one call on that agent's own quota and can
     hold the switch for up to the row's own start window plus
-    `_ENABLE_PING_TIMEOUT_SECONDS` (`probe._ping_bounds`). Exempt: switching
+    `_ENABLE_PING_TIMEOUT_SECONDS` (`probe._ping_bounds`), then, for an acp
+    row, up to two start windows more for the capability record. Exempt: switching
     off, a `builtin` row (this process, with no backend to reach), and
     `force: true`, the operator's override for an agent whose provider is
     briefly down. A refusal writes nothing.
@@ -1321,7 +1426,9 @@ async def subagents_remove(params: dict, *, agent_loop_factory: "AgentLoopFactor
     return {"removed": removed}
 
 
-# name -> the in-flight test task, so `subagents.test_cancel` can reach it.
+# name -> the agent's in-flight run, so `subagents.test_cancel` can reach it:
+# a test's (`subagents_test`), or the one real prompt a connect proves the
+# entry with (`_run_once`, under the name the entry has or lands under).
 # Cancelling the task is what kills the subprocess: `CliAgentBackend` catches
 # `asyncio.CancelledError` and killpg's the whole process group
 # (`backends/cli_agent.py:170`), and `run_test` catches only `Exception`, so the
@@ -1397,12 +1504,13 @@ async def subagents_test(params: dict, *, agent_loop_factory: "AgentLoopFactory 
     # entry, so whichever run finished first would pop the *other* run's entry out
     # from under it, leaving that survivor both undispatchable-a-verdict and
     # uncancellable for up to the full test timeout. Refusing keeps one running
-    # test per name, which keeps `subagents.test_cancel` able to reach it.
+    # test per name, which keeps `subagents.test_cancel` able to reach it. The
+    # run in flight may be a connect's proof (`_run_once`) rather than a test.
     existing = _RUNNING.get(name)
     if existing is not None and not existing.done():
         return {
             "ok": False,
-            "detail": f"a test is already running for {name!r}",
+            "detail": f"{name!r} is already running (a test, or a connect proving it)",
             "elapsed_ms": 0,
             "reply": None,
             "cancelled": False,
@@ -1467,18 +1575,78 @@ async def subagents_test(params: dict, *, agent_loop_factory: "AgentLoopFactory 
 
 
 async def subagents_test_cancel(params: dict) -> dict:
-    """Cancel an in-flight test. Only the asyncio task is cancelled here.
+    """Cancel the named agent's in-flight run. Only the asyncio task is cancelled here.
 
-    What that reaps belongs to the measurement it interrupts: a cli test unwinds
-    into the backend, which kills the agent's process group; an acp test unwinds
-    into the closes its handshake and its ping each hold, and each of those ends
-    the child it launched. Neither leaves a process behind.
+    The run is a test's, or the proof prompt a connect sends together with the
+    capability record an acp row is measured with once it answers (`_run_once`):
+    that connect -- `subagents.add`, `subagents.toggle`, `subagents.update` --
+    then refuses with `cancelled` in its data and writes nothing, where a test
+    answers `cancelled: true`. What the cancel reaps belongs to the measurement
+    it interrupts: a cli run unwinds into the backend, which kills the agent's
+    process group; an acp run unwinds into the closes its handshake and its
+    ping each hold, and each of those ends the child it launched, on this
+    computer or through the machine's node. Neither leaves a process behind.
     """
     task = _RUNNING.get(params.get("name", ""))
     if task is None or task.done():
         return {"cancelled": False}
     task.cancel()
     return {"cancelled": True}
+
+
+async def subagents_presets(params: dict) -> dict:
+    """The presets an entry can be made from on a registered machine, and where each already is.
+
+    What the machines tab's "connect an agent on this machine" form chooses
+    from. Unlike ``subagents.list``, a preset is listed here whether or not an
+    entry already holds it: an entry is one preset on one machine, so a preset
+    connected on this computer is still to be had on each machine, under
+    the add's default ``<preset>@<machine id>`` -- the roster withholds it only because two
+    rows of one NAME would be unusable there. Only the kinds a machine's node
+    starts are listed (acp, cli): a built-in agent is this process's own loop,
+    a Mirasim shim runs on this host's interpreter, and an openai endpoint
+    takes a key this form does not. The page greys a preset the machine
+    already has connected (``on_machines``), offers one it has switched off
+    back under its entry's name (``off_on_machines``), and says when this
+    computer has it too (``connected_here``), so the add's own refusals are
+    not the first word.
+    """
+    configured = _as_configs(_read_agents())
+    presets: list[dict[str, Any]] = []
+    for preset in third_party_subagent_presets():
+        key = str(preset.get("preset") or "")
+        kind = preset.get("kind")
+        if kind not in ("acp", "cli") or key in BUNDLED_SHIM_PRESETS:
+            continue
+        name = str(preset.get("name") or key)
+        holders = [c for c in configured if getattr(c, "preset", None) == key or getattr(c, "name", "") == name]
+        # (machine, switched on, entry name) per holder: a machine's entry that
+        # is switched off still holds the machine for the add's duplicate rule,
+        # so the form has to see it -- as something to switch back on, by name
+        # -- rather than count it nowhere.
+        wheres = [
+            (
+                (getattr(c, "machine", None) or "").strip(),
+                bool(getattr(c, "enabled", True)),
+                str(getattr(c, "name", "")),
+            )
+            for c in holders
+        ]
+        presets.append(
+            {
+                "preset": key,
+                "name": name,
+                "kind": kind,
+                "description": str(preset.get("description") or ""),
+                "connected_here": any(not where for where, _on, _name in wheres),
+                "on_machines": sorted({where for where, on, _name in wheres if where and on}),
+                "off_on_machines": sorted(
+                    ({"machine": where, "name": held} for where, on, held in wheres if where and not on),
+                    key=lambda entry: (entry["machine"], entry["name"]),
+                ),
+            }
+        )
+    return {"presets": presets}
 
 
 def register_subagents_methods(
@@ -1489,6 +1657,7 @@ def register_subagents_methods(
     """Register the ``subagents.*`` methods on a dispatcher instance."""
     dispatcher.register("subagents.list", subagents_list)
     dispatcher.register("subagents.probe", subagents_probe)
+    dispatcher.register("subagents.presets", subagents_presets)
 
     async def _add(params: dict) -> dict:
         return await subagents_add(params, agent_loop_factory=agent_loop_factory)

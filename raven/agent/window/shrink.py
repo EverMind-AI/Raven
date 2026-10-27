@@ -27,8 +27,12 @@ from raven.agent.window.images import (
     wire_image_bytes,
     withdrawn_image_note,
 )
+from raven.agent.window.turn_log import STAND_IN_KEY
+from raven.config.raven import PRUNE_LINE_MAX_CHARS
+from raven.context_engine.history.markers import HISTORY_PINNED_KEY
 from raven.providers.capabilities import image_placeholder_text
 from raven.utils.images import is_image_part
+from raven.utils.refs import REF_PATTERN
 from raven.utils.tokens import estimate_prompt_tokens
 
 # Max emergency context shrinks per turn before a context overflow is fatal.
@@ -70,6 +74,11 @@ IMAGE_WINDOW_RECENT_MESSAGES = 2
 # are elided (their bodies are the bulk of mid-turn context growth).
 SHRINK_KEEP_RECENT_TOOL_RESULTS = 3
 
+# What an elided tool body becomes. The copy is marked a stand-in, so the turn's
+# record keeps the body itself (see ``turn_log``) and this text only ever lives
+# in the window.
+ELIDED_TOOL_OUTPUT = "[earlier tool output elided to fit the context window]"
+
 # Image-bearing messages kept intact when emergency-shrinking. Tighter than
 # the tool-result count because one image can cost 1568 tokens: the picture
 # the model is currently reasoning about is worth keeping, older ones are the
@@ -93,8 +102,18 @@ def emergency_shrink(messages: list[dict]) -> tuple[list[dict], int]:
     """
     messages, elided = elide_older_images(messages)
 
-    placeholder = "[earlier tool output elided to fit the context window]"
-    tool_idxs = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    placeholder = ELIDED_TOOL_OUTPUT
+    # A pinned result is held whatever its age: the history strategy kept it
+    # because a missing copy is silently wrong, and an elided one is missing.
+    # So is a pruned body's record -- one short line carrying a ref: eliding it
+    # saves a line and loses the way back. Only a short one: a long result that
+    # merely opens on a ref (what ``context_retrieve`` returns) is bulk like any
+    # other, and holding it would leave an overflow nothing to give up.
+    tool_idxs = [
+        i
+        for i, m in enumerate(messages)
+        if m.get("role") == "tool" and not m.get(HISTORY_PINNED_KEY) and not _carries_ref(m.get("content"))
+    ]
     shrunk = messages
     if len(tool_idxs) > SHRINK_KEEP_RECENT_TOOL_RESULTS:
         elide = set(tool_idxs[:-SHRINK_KEEP_RECENT_TOOL_RESULTS])
@@ -103,6 +122,7 @@ def emergency_shrink(messages: list[dict]) -> tuple[list[dict], int]:
             if i in elide and m.get("content") and m.get("content") != placeholder:
                 clean = dict(m)
                 clean["content"] = placeholder
+                clean[STAND_IN_KEY] = True
                 shrunk.append(clean)
                 elided += 1
             else:
@@ -116,6 +136,10 @@ def emergency_shrink(messages: list[dict]) -> tuple[list[dict], int]:
     out = list(shrunk)
     changed, _ = window_images(out, SHRINK_KEEP_RECENT_IMAGES, reason="context", any_role=True)
     return (out, changed) if changed else (shrunk, 0)
+
+
+def _carries_ref(content: Any) -> bool:
+    return isinstance(content, str) and len(content) <= PRUNE_LINE_MAX_CHARS and REF_PATTERN.search(content) is not None
 
 
 def demote_tool_images(messages: list[dict]) -> tuple[list[dict], int]:

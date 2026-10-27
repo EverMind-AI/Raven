@@ -24,9 +24,10 @@ import { useRef, useSyncExternalStore } from 'react'
 import { Icon } from '../components/Icon'
 import { ProviderIcon } from '../components/ProviderMark'
 import { paint } from '../features/model/chip'
-import { openModelsForMissingProvider } from '../features/model/source'
+import { openModelsForMissingProvider, retryFailedLoad } from '../features/model/source'
 import * as model from '../features/model/store'
 import { sameModel } from '../features/model/types'
+import { t } from '../i18n/t'
 
 import type { Provider } from '../features/model/types'
 import type { JSX } from 'react'
@@ -65,17 +66,24 @@ export function ModelChip(): JSX.Element {
   useSyncExternalStore(paint.subscribe, paint.get)
   const me = useRef<HTMLButtonElement>(null)
   const current = model.current()
-  const at = serving(current)
-  const label = at?.provider.labels?.[at.id]?.label || model.short(current)
+  const status = model.loadStatus()
+  const at = status === 'ready' ? serving(current) : null
+  const label = status === 'loading' ? t('gui.model.loading')
+    : status === 'error' ? t('gui.model.load_failed')
+      : status === 'empty' ? t('gui.model.choose')
+        : at?.provider.labels?.[at.id]?.label || model.short(current)
   return (
     <button
       ref={me}
       className="chip model"
       id="modelChip"
-      title={current}
+      title={status === 'error' ? t('gui.model.retry_load') : current}
+      disabled={status === 'loading'}
+      aria-busy={status === 'loading'}
       aria-haspopup="true"
       aria-expanded={model.openedFrom(me.current) ? 'true' : 'false'}
       onClick={() => {
+        if (retryFailedLoad()) return
         if (openModelsForMissingProvider()) return
         model.open(null)
       }}

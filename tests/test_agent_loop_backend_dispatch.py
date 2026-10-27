@@ -157,6 +157,31 @@ class TestDispatcher:
         assert call["session_id"] == "session-key-x"
         assert call["messages"] == slice_
 
+    async def test_a_large_tool_result_goes_over_as_the_view_main_filed(self, tmp_path: Path) -> None:
+        """The session files tool results whole for ``context_retrieve``; the
+        cloud backend skips any single message over 250,000 bytes and still
+        reports success, so the backend is handed what main always filed."""
+        from raven.session.refs import TOOL_RESULT_VIEW_MAX_CHARS, tool_result_view
+
+        b = _FakeBackend()
+        agent = _make_loop(tmp_path, backend=b)
+        cjk = chr(0x5B57) * 128_000
+        slice_ = [
+            {"role": "user", "content": "read it"},
+            {"role": "tool", "tool_call_id": "c1", "name": "read_file", "content": cjk},
+            {"role": "assistant", "content": "done"},
+        ]
+        agent._dispatch_backend_store("s", slice_)
+        await agent.drain_backend_stores(timeout=5.0)
+
+        sent = b.store_calls[0]["messages"]
+        assert sent[1]["content"] == tool_result_view(cjk)
+        assert sent[1]["content"].startswith(cjk[:TOOL_RESULT_VIEW_MAX_CHARS])
+        assert len(json.dumps(sent[1], ensure_ascii=False).encode()) < 250_000
+        assert [sent[0], sent[2]] == [slice_[0], slice_[2]]
+        assert sent[1]["name"] == "read_file" and sent[1]["tool_call_id"] == "c1"
+        assert slice_[1]["content"] == cjk
+
     async def test_backend_exception_is_retried_not_raised(self, tmp_path: Path, monkeypatch) -> None:
         """A backend failure must not derail the AgentLoop. The turn is already
         saved to the session log; plugin-side indexing is best-effort."""
@@ -666,11 +691,15 @@ class TestTheGiveUpMessageIsHonest:
 class TestWhatGetsIndexedMatchesWhatWasSaved:
     """Two copies of one turn is one copy too many.
 
-    The slice handed to the backend was the raw one; the session log holds the
-    trimmed one. A hundred kilobytes of tool output belongs in neither.
+    The slice handed to the backend was the raw one; it is the saved one, with
+    each tool result cut to the view every copy of the session gets (the log
+    keeps results whole for ``context_retrieve``; a backend may refuse a single
+    message that large).
     """
 
     async def test_a_huge_tool_result_reaches_the_backend_trimmed(self, tmp_path: Path) -> None:
+        from raven.session.refs import tool_result_view
+
         b = _FakeBackend()
         agent = _make_loop(tmp_path, backend=b)
         session = agent.sessions.get_or_create("cli:t")
@@ -686,7 +715,8 @@ class TestWhatGetsIndexedMatchesWhatWasSaved:
         await agent.drain_backend_stores(timeout=5.0)
 
         sent = b.store_calls[0]["messages"]
-        assert sent == session.messages[prev_len:]
+        saved = session.messages[prev_len:]
+        assert sent == [saved[0], {**saved[1], "content": tool_result_view(saved[1]["content"])}]
         assert len(sent[1]["content"]) < len(huge)
 
 

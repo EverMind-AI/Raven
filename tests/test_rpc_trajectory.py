@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from aiohttp.test_utils import make_mocked_request
+from jsonschema import Draft202012Validator
 
 from raven.rpc.dispatcher import Dispatcher
 from raven.rpc.methods import trajectory as rpc_trajectory
@@ -239,6 +240,70 @@ async def test_list_pages_then_changes_catch_up(state):
         dispatcher, "trajectory.changes", {"session_key": SESSION, "epoch": "other", "after_revision": 0}
     )
     assert stale["result"]["reset_required"] is True
+
+
+_SCOPE_FIELDS = ("subagent_scope", "opens_subagent_scope", "dispatched_by_subagent_scope")
+
+
+def _entry_validator() -> Draft202012Validator:
+    schema = json.loads((Path(__file__).resolve().parent.parent / "rpc-schema" / "openrpc.json").read_text())
+    return Draft202012Validator({"$ref": "#/components/schemas/TrajectoryEntry", "components": schema["components"]})
+
+
+def _spawned_session() -> list[dict]:
+    """A turn that spawned a run with one step, and the turn its report started."""
+    link = {"trace.dispatched_in_trace_id": "t", "trace.dispatched_by_span_id": "run"}
+    run = {"subagent.task": "look", "subagent.label": "look", "subagent.dispatch": "spawn"}
+    run.update({"subagent.in_progress": False, "subagent.outcome": "completed"})
+    return [
+        _span("t", "turn", "session.turn", start=0, end=50, attrs={"turn.input_preview": "go"}),
+        _span("t", "spawn", "tool.call", parent="turn", start=1, end=2, attrs={"tool.name": "spawn"}),
+        _span("t", "run", "subagent.run", parent="spawn", start=2, end=20, attrs=run),
+        _span("t", "step", "llm.call", parent="run", start=3, end=4, attrs={"llm.output_preview": "seen"}),
+        _span("r", "report", "session.turn", start=30, end=40, attrs={"turn.input_preview": "done", **link}),
+    ]
+
+
+async def test_every_entry_on_the_wire_names_its_sub_agent_scope(state):
+    _append(state, _spawned_session())
+    tpol.arm(True)
+    dispatcher = _dispatcher()
+    entries, first = await _list_all(dispatcher)
+    TrajectoryListResult.model_validate(first)
+    validator = _entry_validator()
+
+    def fields(entry: dict) -> tuple:
+        return tuple(entry[name] for name in _SCOPE_FIELDS)
+
+    for entry in entries:
+        assert set(_SCOPE_FIELDS) <= set(entry), entry
+        assert not list(validator.iter_errors(json.loads(json.dumps(entry)))), entry["entry_id"]
+    by_span: dict[str, set[tuple]] = {}
+    for entry in entries:
+        by_span.setdefault(entry["span_id"], set()).add(fields(entry))
+    assert by_span == {
+        "turn": {(None, None, None)},
+        "spawn": {(None, None, None)},
+        "run": {(None, "t:run", None)},
+        "step": {("t:run", None, None)},
+        "report": {(None, None, "t:run")},
+    }
+
+    _append(
+        state,
+        [_span("t", "step2", "tool.call", parent="run", start=5, end=6, attrs={"tool.name": "read_file"})],
+    )
+    tidx.indexer_for(state).session(SESSION).refresh_sync(None)
+    batch = await _call(
+        dispatcher,
+        "trajectory.changes",
+        {"session_key": SESSION, "epoch": first["epoch"], "after_revision": first["snapshot_revision"]},
+    )
+    TrajectoryChangesResult.model_validate(batch["result"])
+    upserts = batch["result"]["upserts"]
+    assert upserts and {e["span_id"] for e in upserts} == {"step2"}
+    assert {fields(e) for e in upserts} == {("t:run", None, None)}
+    assert not [error for e in upserts for error in validator.iter_errors(json.loads(json.dumps(e)))]
 
 
 async def test_detail_and_block_round_trip(state):

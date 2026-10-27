@@ -395,6 +395,18 @@ jobs:
       - name: Install the test environment
         run: uv sync --frozen --python 3.13 --extra dev
 
+      - name: Test that the suite keeps out of the runner's own home
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_conftest_home.py -q -n 0 --tb=short
+
+      - name: Test SSH probes and configuration with portable subprocesses
+        run: >-
+          uv run --frozen --python 3.13 --no-sync pytest
+          tests/test_ops_connection_add.py::test_a_machine_that_answers_and_then_goes_silent_is_given_up_on
+          tests/test_ops_connection_add.py::test_a_machine_that_refuses_says_what_ssh_said
+          tests/test_ops_connection_add.py::test_ssh_defaults_reads_what_ssh_resolves_and_keeps_only_keys_that_exist
+          tests/test_ops_connection_add.py::test_ssh_defaults_is_empty_when_ssh_cannot_answer
+          -q -n 0 --tb=short
+
       - name: Test ACP handshakes and bundled launchers
         run: uv run --frozen --python 3.13 --no-sync pytest tests/integration/test_acp_stdio_smoke.py -m integration -q -n 0 --tb=short
 
@@ -407,18 +419,43 @@ jobs:
       - name: Test Windows ACP teardown
         run: uv run --frozen --python 3.13 --no-sync pytest tests/test_subagent_acp.py -k close_without_killpg -q -n 0 --tb=short
 
-      # The CreateProcess command-line budget and the venv redirector's second
-      # launch are Windows-only facts, and the unit shards exclude
-      # tests/integration by norecursedirs -- so without this they are only ever
-      # exercised by hand, and only on a native host.
-      - name: Test the native command-line limit
-        run: uv run --frozen --python 3.13 --no-sync pytest tests/integration/test_acp_mirasim_real_process.py -m integration -q -n 0 --tb=short
+      - name: Test conditional DAG paths
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_subagent_dag_core.py -k at_nodes -q -n 0 --tb=short
+
+      - name: Test DAG finish-text paths
+        run: |
+          $env:PATH = (Join-Path $env:ProgramFiles 'Git\usr\bin') + ';' + $env:PATH
+          uv run --frozen --python 3.13 --no-sync pytest tests/test_subagent_dag_runner.py -k 'test_the_finish_text or test_branch_e2e_one_tool_call' -q -n 0 --tb=short
+
+      # A launch rewrites the agents' prompt files. Keeping a private file's
+      # DACL and recovering from a read-only one are Windows facts the Linux
+      # shards skip.
+      - name: Test regenerated prompt files
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_config_product_render.py tests/test_atomic_io.py::test_a_failed_replace_takes_its_tmp_with_it tests/test_atomic_io.py::test_a_read_only_tmp_a_dead_writer_left_does_not_block_the_replace -q -n 0 --tb=short
+
+      # On Windows the Mirasim desktop host is reached over the loopback port
+      # and its token file, never a unix socket, and the unit shards run on
+      # Linux only -- so the adapter's own road is exercised natively here.
+      - name: Test the Mirasim adapter over the loopback port
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_acp_mirasim_host.py tests/test_acp_mirasim_server.py tests/test_subagent_mirasim.py tests/test_acp_client_teardown.py -q -n 0 --tb=short
 
       - name: Test Raven-Code file diagnostics and worker limits on Windows
         run: uv run --frozen --python 3.13 --no-sync pytest tests/test_agents_code_diagnostic_workers.py tests/test_agents_code_tools_plugin.py -q -n 0 --tb=short
 
       - name: Test Raven-Code exec diagnostics with the native Windows executor
         run: uv run --frozen --python 3.13 --no-sync pytest tests/test_agents_code_flow_exec.py -k test_exec_ -q -n 0 --tb=short
+
+      - name: Test Windows MCP lending and endpoint lifetimes
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_mcp_transport.py tests/test_mcp_bridge.py tests/test_mcp_endpoint.py tests/test_cli_mcp_commands.py tests/test_subagent_acp_mcp_lifecycle.py tests/test_node_client.py -q -n 0 --tb=short
+
+      - name: Test Windows MCP bridge against a real server
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/integration/test_mcp_bridge_e2e.py -m integration -q -n 0 --tb=short
+
+      # Which sub-agent a trajectory entry belongs to is read from span ancestry
+      # in a log the trace store writes with CRLF line ends here, and the unit
+      # shards run on Linux only.
+      - name: Test the trajectory projection and index on Windows
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_trajectory_entries.py tests/test_trajectory_index.py -q -n 0 --tb=short
 
   core-wheel:
     name: kernel wheel smoke

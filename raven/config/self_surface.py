@@ -42,6 +42,7 @@ from typing import Any
 from pydantic import BaseModel
 from pydantic.alias_generators import to_camel, to_snake
 
+from raven.config.agent_names import GENERIC_AGENT
 from raven.config.keys import key_as_written as _spelled
 from raven.config.loader import EXTENSION_KEYS, get_config_path, read_raw_or_raise
 from raven.providers.registry import PROVIDERS
@@ -148,9 +149,9 @@ class Section:
 
 
 _REASONING = ("minimal", "low", "medium", "high")
-_WEB_SEARCH = ("serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl", "serply")
-_WEB_FETCH = ("jina", "anysearch", "tavily", "exa", "firecrawl")
-_WEB_VENDORS = ("serper", "anysearch", "serpapi", "jina", "tavily", "exa", "brave", "firecrawl", "serply")
+_WEB_SEARCH = ("serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl", "serply", "keenable")
+_WEB_FETCH = ("jina", "anysearch", "tavily", "exa", "firecrawl", "keenable")
+_WEB_VENDORS = ("serper", "anysearch", "serpapi", "jina", "tavily", "exa", "brave", "firecrawl", "serply", "keenable")
 
 _E = Effect
 
@@ -303,7 +304,7 @@ SECTIONS: tuple[Section, ...] = (
             Setting("tools.exec.pathAppend", "Directories appended to PATH for shell commands", "str", _E.RELOAD),
             Setting(
                 "tools.web.search.provider",
-                "Web search vendor; web_search runs only once this vendor's key is set",
+                "Web search vendor; web_search runs only once this vendor's key is set (keenable needs none)",
                 "enum",
                 _E.NEXT_TURN,
                 writer="settings",
@@ -311,7 +312,7 @@ SECTIONS: tuple[Section, ...] = (
             ),
             Setting(
                 "tools.web.fetch.provider",
-                "Web page fetch vendor; a keyless vendor (jina) works without one",
+                "Web page fetch vendor; a keyless vendor (jina, keenable) works without one",
                 "enum",
                 _E.NEXT_TURN,
                 writer="settings",
@@ -356,13 +357,16 @@ SECTIONS: tuple[Section, ...] = (
                 writer="settings",
                 choices=("", "low", "medium", "high"),
             ),
-            Setting(
-                "tools.media.image.provider",
-                "Provider the image tool runs on, its address and key together; empty is OpenRouter",
-                "enum",
-                _E.NEXT_TURN,
-                writer="settings",
-                choices=("", *(spec.name for spec in PROVIDERS if spec.image_api)),
+            *(
+                Setting(
+                    f"tools.media.{medium}.provider",
+                    f"Provider the {medium} tool runs on, its address and key together; empty is OpenRouter",
+                    "enum",
+                    _E.NEXT_TURN,
+                    writer="settings",
+                    choices=("", *(spec.name for spec in PROVIDERS if getattr(spec, f"{medium}_api"))),
+                )
+                for medium in ("image", "video")
             ),
             *(
                 Setting(
@@ -569,14 +573,20 @@ SECTIONS: tuple[Section, ...] = (
         (
             Setting(
                 "context",
-                "Model that curates long history",
+                "Model that curates long history (curator strategy only)",
                 "pin",
                 _E.NEXT_TURN,
                 writer="settings",
                 note='value is {"curatorModel": "<model>", "curatorProvider": "<provider>"}',
                 keys=("curatorModel", "curatorProvider"),
             ),
-            Setting("context.protectFirstN", "Leading messages never archived", "int", _E.RELOAD, low=0),
+            Setting(
+                "context.protectFirstN",
+                "Leading messages never archived (curator strategy only)",
+                "int",
+                _E.RELOAD,
+                low=0,
+            ),
             Setting("context.pinnedSkillIds", "Skills kept in context once read", "list", _E.RELOAD),
         ),
     ),
@@ -634,7 +644,7 @@ SECTIONS: tuple[Section, ...] = (
                 _E.IMMEDIATE,
                 writer="subagents",
                 sensitive="the dispatching model reads it every turn, so it can steer what is sent where",
-                note="the built-in Raven row's description is fixed",
+                note=f"the built-in {GENERIC_AGENT} row's description is fixed",
             ),
             Setting(
                 "subagents.*.enabled",
@@ -1247,6 +1257,7 @@ _VENDOR_NAMES = {
     "brave": "Brave",
     "firecrawl": "Firecrawl",
     "serply": "Serply",
+    "keenable": "Keenable",
 }
 
 

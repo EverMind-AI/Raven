@@ -96,9 +96,10 @@ the next save; until then every item is asked.
 ### The receiver
 
 A Bug Report Receiver is a small HTTP service that takes Bug Report Packages
-in, checks them, stores them by day, and answers with a receipt. It does
-nothing else: it authenticates nobody, and it serves no listing or download.
-Who can reach it is decided by the network it listens on.
+in, checks them, stores them by day, and answers with a receipt. It takes only
+uploads that answer its challenge (see [The upload challenge](#the-upload-challenge)),
+and it serves no listing or download. Who can reach it is still decided by the
+network it listens on.
 
 ```bash
 raven trajectory receiver --save-dir /srv/raven-bugreports
@@ -129,14 +130,52 @@ same package sent twice returns the receipt already stored; a different
 package under the same report id is refused. Retention is the operator's job
 -- the per-day directories make `find -mtime` cleanup trivial.
 
+### The upload challenge
+
+The receiver answers four requests:
+
+| Request | Answer |
+| --- | --- |
+| `GET /v1/hello` | `{"service": "raven-bug-report-receiver", "protocol": 1}`; clients ask it before a report starts |
+| `POST /v1/challenge` | `{"challenge": "...", "expires_in": 300}`: a fresh challenge for one upload |
+| `POST /v1/bugreports` | the upload, carrying `X-Raven-Challenge` and `X-Raven-Response` next to the report id and sha256 |
+| `GET /healthz` | `{"status": "ok"}` for an operator's liveness check |
+
+A challenge is sealed with a key the receiver holds only in memory, so it keeps
+no table of them and a restart retires them all; it is valid for 300 seconds
+and is not used up. A Raven client answers it with an HMAC, under a constant
+built into Raven, of the challenge together with the package's report id,
+sha256 and size. The receiver checks both headers before it reads the body: a
+missing, forged, expired or mismatched answer gets `401` with
+`WWW-Authenticate: Raven-Challenge` and the error `unauthorized` (or
+`challenge_expired`), nothing is written, and the attempt still counts against
+the sender's rate limit.
+
+This is a shallow gate, not authentication. The constant is published with the
+source and is not configurable; it identifies nobody.
+
+| Who tries | What happens |
+| --- | --- |
+| `curl`, a script or a scanner posting a file | `401`, nothing stored |
+| A captured upload replayed with another package | `401`: the answer is bound to the report id, digest and size |
+| A captured upload replayed as it was | at most the receipt already stored for that package |
+| Someone who has read Raven's source (it is public) | not stopped, by design |
+| Raven itself sending junk | bounded by the package checks, rate limits and daily budgets |
+
+Upgrade the receiver and its clients together. An older receiver has no
+`/v1/hello` or `/v1/challenge`: a newer client says it does not answer as a
+Raven receiver before a report starts, and an upload fails with "the receiver
+does not issue challenges"; the package is kept either way.
+
 ### Deployment
 
 The receiver speaks plain HTTP and binds loopback by default. Anything beyond
 this machine belongs behind a TLS-terminating proxy; never expose the port
-itself to the public internet. An nginx location that works:
+itself to the public internet. An nginx location that works -- it covers all of
+`/v1/`, since clients ask `/v1/hello` and `/v1/challenge` as well as uploading:
 
 ```nginx
-location /v1/bugreports {
+location /v1/ {
     proxy_pass http://127.0.0.1:18795;
     proxy_request_buffering off;
     client_max_body_size 64m;      # at least --max-package-mib
@@ -147,7 +186,8 @@ location /v1/bugreports {
 Add `--trusted-proxy 127.0.0.0/8` (or the proxy's network) so rate limiting
 and the sidecar's `client` address follow the real sender instead of the proxy;
 without it every upload through the proxy shares one bucket. `GET /healthz`
-answers `{"status": "ok"}` for probes. Run the receiver as an unprivileged
+answers `{"status": "ok"}` for liveness checks; clients probe `/v1/hello`
+instead, under their base URL. Run the receiver as an unprivileged
 user and treat `--save-dir` as holding sensitive material: packages are
 redacted for credentials, not anonymized.
 
@@ -173,6 +213,22 @@ with:
 ```bash
 raven trajectory upload-bug-report REPORT_ID
 ```
+
+With a URL in place, `report-bug` and the browser's *Report a bug* first ask
+the receiver's `/v1/hello`, before anything is collected. When it does not
+answer, the reason is printed, and then:
+
+- on a TTY without `--yes`, you are asked whether to continue (default no;
+  declining collects and pins nothing);
+- with `--yes`, on a TTY or not, the command says it is continuing and goes
+  on; if the upload then fails, the package is kept for `upload-bug-report`;
+- without a TTY and without `--yes`, the existing rule stops the command
+  first (`--yes is required without a TTY`): nothing is probed or packaged.
+
+The browser's *Report a bug* runs on a TTY and asks the same question; Esc
+counts as no. The WebUI's *Report a problem* checks when its wizard opens; see
+[Export and report a problem](webui.md#export-and-report-a-problem).
+`upload-bug-report` does not probe: the upload itself names what went wrong.
 
 ### What the receiver checks
 

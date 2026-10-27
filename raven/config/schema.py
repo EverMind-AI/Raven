@@ -5,7 +5,16 @@ from typing import Annotated, Any, Literal
 from urllib.parse import urlparse
 
 from loguru import logger
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -649,6 +658,7 @@ class ProvidersConfig(Base):
     aionly: ProviderConfig = Field(default_factory=ProviderConfig)
     atlascloud: ProviderConfig = Field(default_factory=ProviderConfig)
     radeon_cloud: ProviderConfig = Field(default_factory=ProviderConfig)
+    opper: ProviderConfig = Field(default_factory=ProviderConfig)
     # Self-hosted servers, reached by address like the three above.
     gpustack: ProviderConfig = Field(default_factory=ProviderConfig)
     ovms: ProviderConfig = Field(default_factory=ProviderConfig)  # OpenVINO Model Server
@@ -998,8 +1008,10 @@ class GatewayConfig(Base):
     page: GatewayPageConfig = Field(default_factory=GatewayPageConfig)
 
 
-WebSearchProvider = Literal["serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl", "serply"]
-WebFetchProvider = Literal["jina", "anysearch", "tavily", "exa", "firecrawl"]
+WebSearchProvider = Literal[
+    "serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl", "serply", "keenable"
+]
+WebFetchProvider = Literal["jina", "anysearch", "tavily", "exa", "firecrawl", "keenable"]
 
 #: The bare environment variable each web vendor's tool falls back to when the
 #: config slot is empty, and the name ``~/.raven/env`` mirrors the slot out as.
@@ -1013,6 +1025,7 @@ WEB_VENDOR_ENV_VARS: dict[str, str] = {
     "brave": "BRAVE_API_KEY",
     "firecrawl": "FIRECRAWL_API_KEY",
     "serply": "SERPLY_API_KEY",
+    "keenable": "KEENABLE_API_KEY",
 }
 
 
@@ -1025,7 +1038,7 @@ class WebProviderKey(Base):
 class WebProvidersConfig(Base):
     """Credentials keyed by vendor, not by the tool that happens to use them.
 
-    AnySearch, Tavily, Exa and Firecrawl each serve both ``web_search`` and
+    AnySearch, Tavily, Exa, Firecrawl and Keenable each serve both ``web_search`` and
     ``web_fetch`` off one account, so a key held per tool would have to be
     pasted twice and could drift into two values for the same credential. Named
     fields rather than a free dict so a misspelled vendor fails validation
@@ -1045,6 +1058,7 @@ class WebProvidersConfig(Base):
     brave: WebProviderKey = Field(default_factory=WebProviderKey)
     firecrawl: WebProviderKey = Field(default_factory=WebProviderKey)
     serply: WebProviderKey = Field(default_factory=WebProviderKey)
+    keenable: WebProviderKey = Field(default_factory=WebProviderKey)
 
     def key_for(self, vendor: str) -> str:
         """One vendor's configured key, or an empty string for an unknown vendor."""
@@ -1167,19 +1181,30 @@ class MediaToolConfig(Base):
     quality: Literal["", "low", "medium", "high"] = ""
     # Sent with every request, beside the key; secret like a provider's own.
     extra_headers: dict[str, str] = Field(default_factory=dict, json_schema_extra={"secret": True})
-    selection_config: str = Field(default="", description="Host config path for live model and quality inheritance")
+    selection_config: str = Field(
+        default="",
+        description="Config file this section is read from, live, against that file's providers: "
+        "the host's, or a pinned deck's own",
+    )
 
 
 class ImageToolConfig(MediaToolConfig):
-    """The image tool's section, the one media section that can name a provider.
+    """The image tool's section, one of the two media sections that can name a provider.
 
     ``provider`` names another configured provider to run on instead, whose
     address, key and headers replace this section's -- see
-    :func:`borrow_media_credentials`. Only the image tool has a request path for
-    such a provider (OpenAI's Images API); speech and video keep to OpenRouter's
-    request shapes, so their sections have no such field, and a ``provider``
-    written there is ignored like any key their class does not declare.
+    :func:`borrow_media_credentials`. The image and video tools have request
+    paths for such a provider (OpenAI's Images API, MiniMax's image and video
+    APIs); speech keeps to OpenRouter's request shapes, so its section has no
+    such field, and a ``provider`` written there is ignored like any key its
+    class does not declare.
     """
+
+    provider: str = ""  # empty (or "openrouter") is the OpenRouter default
+
+
+class VideoToolConfig(MediaToolConfig):
+    """The video tool's section; ``provider`` works as on :class:`ImageToolConfig`."""
 
     provider: str = ""  # empty (or "openrouter") is the OpenRouter default
 
@@ -1189,22 +1214,23 @@ class MediaGenConfig(Base):
 
     OpenRouter is the default backend: image + speech via chat-completions output
     modalities, and video via the async ``/videos`` endpoint (Kling). The image
-    tool also runs on a provider serving OpenAI's Images API, named by
-    ``image.provider``; speech and video keep to OpenRouter's request shapes.
+    tool also runs on a provider serving OpenAI's Images API or on MiniMax, named
+    by ``image.provider``, and the video tool on MiniMax, named by
+    ``video.provider``; speech keeps to OpenRouter's request shapes.
     """
 
     image: ImageToolConfig = Field(default_factory=ImageToolConfig)
     speech: MediaToolConfig = Field(default_factory=MediaToolConfig)
-    video: MediaToolConfig = Field(default_factory=MediaToolConfig)
+    video: VideoToolConfig = Field(default_factory=VideoToolConfig)
     proxy: str | None = None  # HTTP/SOCKS proxy for media API calls
     output_subdir: str = "generated"  # where generated files are written under workspace
 
-    @field_validator("image", mode="before")
+    @field_validator("image", "video", mode="before")
     @classmethod
-    def _plain_section_is_an_image_section(cls, value: Any) -> Any:
-        """A plain ``MediaToolConfig`` is still an image section, one naming no
-        provider: an embedder handing ``AgentLoop`` one keeps working."""
-        if isinstance(value, MediaToolConfig) and not isinstance(value, ImageToolConfig):
+    def _plain_section_takes_its_kind(cls, value: Any, info: ValidationInfo) -> Any:
+        """A plain ``MediaToolConfig`` is still an image or video section, one naming
+        no provider: an embedder handing ``AgentLoop`` one keeps working."""
+        if isinstance(value, MediaToolConfig) and not isinstance(value, cls.model_fields[info.field_name].annotation):
             return value.model_dump(exclude_unset=True)
         return value
 
@@ -1761,9 +1787,9 @@ class ThirdPartyOpenAISubagentConfig(Base):
     ``OpenAIApiBackend`` has no tools and no filesystem access of its own, so
     no channel exists through which the endpoint could open a path -- being
     served from this host does not change that. The value is not inert:
-    ``format_agent_listing`` renders it into the spawn / DAG tool descriptions
-    as a ``local-files`` tag, which is the dispatching model's licence to hand
-    this agent a path."""
+    ``format_agent_listing`` renders it into the roster that closes the ``spawn``
+    tool's description as a ``local-files`` tag, which is the dispatching model's
+    licence to hand this agent a path."""
     system_prompt: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
@@ -2070,8 +2096,8 @@ class ThirdPartyAcpSubagentConfig(Base):
 
     Three-valued. ``None`` is "not declared", and it resolves to the measured
     answer for the preset this row was created from -- ``False`` for opencode,
-    and for the agents Mirasim runs, whose ``ui-cli`` takes no MCP servers at
-    all; ``True`` for everything else. Not a plain ``True`` default, because the field
+    and for the agents Mirasim runs, whose host takes no MCP servers for one
+    session; ``True`` for everything else. Not a plain ``True`` default, because the field
     arrived after rows were already on disk: an ``opencode`` row written before it
     existed carries no key, and a permissive default would leave exactly the agent
     this is about delivering as if it isolated. See
@@ -2116,8 +2142,8 @@ class ThirdPartyAcpSubagentConfig(Base):
     machine's Raven node: the agent runs the node's bridge as a stdio server
     and the node carries its frames over the link to the server here, which
     stays here with its definition and keys. The host authorizes each dispatch's
-    endpoints against the acquired agent task. Hosts without Unix-socket support
-    withhold MCP and explain that limitation without refusing the task.
+    endpoints against the acquired agent task. A host without Unix sockets opens
+    them on loopback behind a per-endpoint token, which stays on the host.
     Files are not handed to it, and
     what it writes stays on that machine. See :mod:`raven.node.client` and
     :mod:`raven.acp_client.remote`."""
@@ -2834,7 +2860,7 @@ def borrow_media_credentials(tool: MediaToolConfig, providers: Any) -> None:
 
 def media_section_class(kind: str) -> type[MediaToolConfig]:
     """The class ``MediaGenConfig`` declares for ``kind``'s section, for a reader
-    validating a raw one: only the image section has a provider."""
+    validating a raw one: the image and video sections have a provider."""
     return MediaGenConfig.model_fields[kind].annotation
 
 

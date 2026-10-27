@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -295,6 +296,30 @@ def test_home_implements_the_layout_paper(tmp_path, monkeypatch) -> None:
     assert home.get_config_path() == tmp_path / CONFIG_FILENAME
     monkeypatch.setenv(HOME_ENV_VAR, "   ")
     assert home.raven_home() == Path.home() / DEFAULT_HOME_DIRNAME
+
+
+def test_the_oauth_store_path_has_one_definition(tmp_path, monkeypatch) -> None:
+    """The store's path is computed once, in ``raven.home``.
+
+    The writers ask ``config.paths.oauth_dir``; the redaction pass asks
+    ``home.oauth_home``. Both have to answer the same path, or a token is
+    written into one directory and the reader looks in another -- the failure
+    the single definition exists to prevent. The two answers are compared
+    here, so moving one of them without the other fails in this file rather
+    than in a redaction test that would pass over it.
+    """
+    from pathlib import Path
+
+    from raven import home
+    from raven.config.paths import oauth_dir
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "elsewhere"))
+    assert home.oauth_home() == tmp_path / "elsewhere" / "oauth"
+    assert oauth_dir() == home.oauth_home()
+
+    monkeypatch.setenv("RAVEN_HOME", "   ")
+    assert home.oauth_home() == Path.home() / ".raven" / "oauth"
+    assert oauth_dir() == home.oauth_home()
 
 
 def test_the_workspace_follows_raven_home_too(tmp_path, monkeypatch) -> None:
@@ -1409,6 +1434,48 @@ def _claude_row(command: object, **extra: object) -> dict:
     }
 
 
+def _pi_row(command: object, **extra: object) -> dict:
+    return {"name": "Pi", "kind": "acp", "preset": "pi", "command": command, "readyTimeoutMs": 120000, **extra}
+
+
+_PI_PACKAGE = "@earendil-works/pi-coding-agent"
+
+
+def _pi_install(prefix: Path, version: str | None) -> str:
+    """A PATH holding only a pi laid out the way `npm i -g` lays one out, or no pi at all.
+
+    Its build folder carries a nameless package.json of its own, as many ESM builds
+    ship one, so the version is read from the package's and not the first found."""
+    bin_dir = prefix / "bin"
+    bin_dir.mkdir(parents=True)
+    if version is not None:
+        package = prefix / "lib" / "node_modules" / _PI_PACKAGE
+        (package / "dist").mkdir(parents=True)
+        (package / "package.json").write_text(json.dumps({"name": _PI_PACKAGE, "version": version}))
+        (package / "dist" / "package.json").write_text(json.dumps({"type": "module"}))
+        cli = package / "dist" / "cli.js"
+        cli.write_text("#!/usr/bin/env node\n")
+        cli.chmod(0o755)
+        (bin_dir / "pi").symlink_to(os.path.relpath(cli, bin_dir))
+    return str(bin_dir)
+
+
+def _launches_run_on(path: str) -> None:
+    """What a capture of the login shell records: the PATH a launch here gets."""
+    from raven.config import login_path
+
+    login_path.remember(path)
+
+
+# The stock commands the second floor retired: what each shim preset shipped
+# between floor 11 and floor 15.
+_SECOND_RETIRED = (
+    "npx -y @agentclientprotocol/claude-agent-acp@0.81.1",
+    "npx -y @agentclientprotocol/codex-acp@1.13.1",
+    "npx -y pi-acp@0.0.33",
+)
+
+
 def test_rows_on_a_retired_shim_pin_follow_their_preset_in_the_file(tmp_path: Path) -> None:
     """The shim pin decides which models the agent can reach -- codex-acp 1.1.14
     bundles a codex whose ``model/list`` stops at GPT-5.6, claude-agent-acp 0.66.0
@@ -1511,14 +1578,305 @@ def test_the_retired_pin_table_leads_to_the_command_its_preset_ships_now() -> No
     from raven.config import loader
 
     assert loader._RETIRED_SHIM_COMMANDS, "nothing to carry: drop the migration rather than this test"
-    for preset, (retired, current) in loader._RETIRED_SHIM_COMMANDS.items():
+    for preset, current in loader._SHIM_COMMANDS.items():
         assert preset in SHIM_LAUNCHED_PRESETS, f"{preset} is not a shim: its row runs the user's own install"
         assert current == THIRD_PARTY_SUBAGENT_PRESETS[preset]["command"], (
             f"the {preset} pin moved to {THIRD_PARTY_SUBAGENT_PRESETS[preset]['command']!r} without its "
-            f"migration: rows configured on {current!r} would keep it. Add that command to the retired set "
-            "and give the migration a new floor."
+            f"migration: rows configured on {current!r} would keep it. Retire that command under a new "
+            "floor and point the preset's entry here at the new one."
         )
-        assert retired and current not in retired, preset
+    for floor, retired in loader._RETIRED_SHIM_COMMANDS.items():
+        for preset, commands in retired.items():
+            assert preset in loader._SHIM_COMMANDS, (floor, preset)
+            assert commands and loader._SHIM_COMMANDS[preset] not in commands, (floor, preset)
+
+
+def test_a_config_past_the_first_pin_floor_moves_only_the_pins_the_next_floor_retired(tmp_path: Path) -> None:
+    """A config through floor 11 has had its rows moved once. A later floor moves
+    the pins it retired itself and no others: an older stock pin on such a config is
+    one its owner put back after the first move, which the watermark exists to let
+    stand. A config already at the new floor keeps even its stock row.
+
+    The floors are literals, for the reason
+    test_the_retired_deep_research_section_goes_and_its_disabled_entry_stays gives.
+    """
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+    from raven.config import loader
+
+    _launches_run_on(_pi_install(tmp_path / "pi", "0.81.0"))
+    claude, codex, pi = (THIRD_PARTY_SUBAGENT_PRESETS[key]["command"] for key in ("claude_code", "codex", "pi"))
+    put_back = _claude_row(_RETIRED_CLAUDE[1], name="Claude-put-back")
+    loader._migration_notices.clear()
+    data = {
+        "subagents": {
+            "agents": [
+                _claude_row(_SECOND_RETIRED[0]),
+                _codex_row(_SECOND_RETIRED[1]),
+                _pi_row(_SECOND_RETIRED[2]),
+                json.loads(json.dumps(put_back)),
+            ]
+        }
+    }
+    loader._migrate_config(data, from_version=14)
+
+    assert data["subagents"]["agents"] == [_claude_row(claude), _codex_row(codex), _pi_row(pi), put_back]
+    assert sorted(n.split("]")[0] for n in loader.drain_migration_notices()) == [
+        "Migrated: subagents.agents[Claude Code",
+        "Migrated: subagents.agents[Codex",
+        "Migrated: subagents.agents[Pi",
+    ]
+
+    at_floor = {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2])]}}
+    loader._migrate_config(at_floor, from_version=15)
+    assert at_floor == {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2])]}}
+    assert loader.drain_migration_notices() == []
+
+
+def test_a_pi_row_stays_on_the_adapter_its_pi_can_answer(tmp_path: Path) -> None:
+    """pi-acp 0.0.34 asks pi for its model's thinking levels as a session opens, which a
+    pi older than 0.81.0 refuses as an unknown command, so no session opens (measured
+    2026-10-23 on pi 0.80.10). Moved over such a pi, a working row would stop working:
+    it stays on the build that works with it, and its owner is told what to upgrade."""
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS, upgrade_hint_for
+    from raven.config import loader
+
+    _launches_run_on(_pi_install(tmp_path / "pi", "0.80.10"))
+    loader._migration_notices.clear()
+    data = {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2])]}}
+
+    loader._migrate_config(data, from_version=14)
+
+    assert data == {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2])]}}
+    (notice,) = loader.drain_migration_notices()
+    assert notice.startswith(f"Kept: subagents.agents[Pi] still launches `{_SECOND_RETIRED[2]}`")
+    assert "pi 0.80.10" in notice
+    assert f"`{upgrade_hint_for(SimpleNamespace(preset='pi'))}`" in notice
+    assert f"`{THIRD_PARTY_SUBAGENT_PRESETS['pi']['command']}`" in notice
+
+
+@pytest.mark.parametrize("where", ["no pi on the launch PATH", "a pi npm did not install", "on a machine"])
+def test_a_pi_row_whose_pi_cannot_be_read_stays_where_it_works(tmp_path: Path, where: str) -> None:
+    """Moving it would be a guess about a pi nobody looked at, and the build it is on
+    works with every pi. Its owner is told what the newer one needs, not told to upgrade.
+
+    A pi with no npm package behind it -- another installer's shim, or another program
+    by that name -- is one nobody looked at either."""
+    from raven.config import loader
+
+    row = _pi_row(_SECOND_RETIRED[2])
+    if where == "on a machine":
+        _launches_run_on(_pi_install(tmp_path / "pi", "0.81.0"))
+        row = _pi_row(_SECOND_RETIRED[2], machine="box")
+    elif where == "a pi npm did not install":
+        launch_path = _pi_install(tmp_path / "pi", None)
+        shim = Path(launch_path) / "pi"
+        shim.write_text('#!/bin/sh\nexec somewhere-else "$@"\n')
+        shim.chmod(0o755)
+        _launches_run_on(launch_path)
+    else:
+        _launches_run_on(_pi_install(tmp_path / "pi", None))
+    loader._migration_notices.clear()
+    data = {"subagents": {"agents": [json.loads(json.dumps(row))]}}
+
+    loader._migrate_config(data, from_version=14)
+
+    assert data == {"subagents": {"agents": [row]}}
+    (notice,) = loader.drain_migration_notices()
+    assert notice.startswith(f"Kept: subagents.agents[Pi] still launches `{_SECOND_RETIRED[2]}`")
+    assert "pi 0.81.0 or newer" in notice
+    assert "npm install" not in notice, "no pi was read, so none is called too old"
+
+
+def test_a_pi_installed_beside_an_npm_shim_is_read_too(tmp_path: Path) -> None:
+    """npm on Windows writes `pi.cmd` beside `node_modules` rather than linking into the package."""
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+    from raven.config import loader
+
+    prefix = tmp_path / "npm"
+    package = prefix / "node_modules" / _PI_PACKAGE
+    package.mkdir(parents=True)
+    (package / "package.json").write_text(json.dumps({"name": _PI_PACKAGE, "version": "0.81.0"}))
+    shim = prefix / "pi"
+    shim.write_text("#!/bin/sh\n")
+    shim.chmod(0o755)
+    _launches_run_on(str(prefix))
+    data = {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2])]}}
+
+    loader._migrate_config(data, from_version=14)
+
+    assert data == {"subagents": {"agents": [_pi_row(THIRD_PARTY_SUBAGENT_PRESETS["pi"]["command"])]}}
+
+
+@pytest.mark.parametrize(
+    ("ravens_own", "launched_with", "moves"), [("0.82.3", "0.80.10", False), ("0.80.10", "0.82.3", True)]
+)
+def test_the_pi_read_is_the_one_a_launch_runs_not_ravens_own(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ravens_own: str, launched_with: str, moves: bool
+) -> None:
+    """A launch runs on the login shell's PATH, not on raven's. Read off raven's, with the
+    login shell's pi at 0.80.10 and raven's at 0.82.3, the row moved beside the pi that
+    refuses it; the other way round it stayed, told to upgrade a pi already new."""
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+    from raven.config import loader
+
+    monkeypatch.setenv("PATH", _pi_install(tmp_path / "ravens", ravens_own))
+    _launches_run_on(_pi_install(tmp_path / "launched", launched_with))
+    data = {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2])]}}
+
+    loader._migrate_config(data, from_version=14)
+
+    expected = THIRD_PARTY_SUBAGENT_PRESETS["pi"]["command"] if moves else _SECOND_RETIRED[2]
+    assert data == {"subagents": {"agents": [_pi_row(expected)]}}
+
+
+def test_a_row_that_sets_its_own_path_is_read_on_it(tmp_path: Path) -> None:
+    """A launch lays the row's own env over the login shell's, so its PATH is the one that runs."""
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+    from raven.config import loader
+
+    _launches_run_on(_pi_install(tmp_path / "login", "0.80.10"))
+    own = {"PATH": _pi_install(tmp_path / "own", "0.81.0")}
+    data = {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2], env=own)]}}
+
+    loader._migrate_config(data, from_version=14)
+
+    assert data == {"subagents": {"agents": [_pi_row(THIRD_PARTY_SUBAGENT_PRESETS["pi"]["command"], env=own)]}}
+
+
+@pytest.mark.parametrize(
+    ("version", "moves"),
+    [
+        ("0.81.0", True),
+        ("0.80.10", False),
+        ("0.81.0-beta.1", False),
+        ("0.82.0-beta.1", True),
+        ("0.9.0", False),
+        ("0.100.0", True),
+        ("1.4.0", True),
+    ],
+)
+def test_a_pi_row_moves_only_beside_a_pi_at_or_past_the_floor(tmp_path: Path, version: str, moves: bool) -> None:
+    """Compared as versions: a pre-release of the floor comes before it, and 0.9 before 0.81."""
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+    from raven.config import loader
+
+    _launches_run_on(_pi_install(tmp_path / "pi", version))
+    data = {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2])]}}
+
+    loader._migrate_config(data, from_version=14)
+
+    expected = THIRD_PARTY_SUBAGENT_PRESETS["pi"]["command"] if moves else _SECOND_RETIRED[2]
+    assert data == {"subagents": {"agents": [_pi_row(expected)]}}
+
+
+def test_a_pi_row_waits_for_a_launch_path_before_it_moves_or_stays(tmp_path: Path) -> None:
+    """Before the first capture nothing here knows which pi a launch runs, and starting the
+    login shell is not something loading a config does. So the row is left as it is,
+    unannounced, and the floor stays open until a load that knows decides it once."""
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+
+    pi = THIRD_PARTY_SUBAGENT_PRESETS["pi"]["command"]
+    p = tmp_path / "config.json"
+    _write(p, {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2])]}})
+    _stamp_path(p).write_text(json.dumps({"version": 14}), encoding="utf-8")
+    drain_migration_notices()
+
+    assert [a.command for a in load_config(p).subagents.agents] == [_SECOND_RETIRED[2]]
+    assert json.loads(p.read_text(encoding="utf-8"))["subagents"]["agents"] == [_pi_row(_SECOND_RETIRED[2])]
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": 14}
+    assert drain_migration_notices() == []
+
+    _launches_run_on(_pi_install(tmp_path / "pi", "0.81.0"))
+
+    assert [a.command for a in load_config(p).subagents.agents] == [pi]
+    assert json.loads(p.read_text(encoding="utf-8"))["subagents"]["agents"] == [_pi_row(pi)]
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    assert [n.split("]")[0] for n in drain_migration_notices()] == ["Migrated: subagents.agents[Pi"]
+    load_config(p)
+    assert drain_migration_notices() == []
+
+
+def test_a_row_kept_while_another_waits_is_announced_once_when_the_floor_passes(tmp_path: Path) -> None:
+    """While one row waits, the floor re-runs on every load, and a row it keeps would be
+    announced on each of them. Its notice comes with the load that passes the floor."""
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "subagents": {
+                "agents": [_pi_row(_SECOND_RETIRED[2]), _pi_row(_SECOND_RETIRED[2], name="Pi-box", machine="box")]
+            }
+        },
+    )
+    _stamp_path(p).write_text(json.dumps({"version": 14}), encoding="utf-8")
+    drain_migration_notices()
+
+    for _load in range(2):
+        load_config(p)
+        assert drain_migration_notices() == []
+
+    _launches_run_on(_pi_install(tmp_path / "pi", "0.81.0"))
+    load_config(p)
+    assert sorted(n.split("]")[0] for n in drain_migration_notices()) == [
+        "Kept: subagents.agents[Pi-box",
+        "Migrated: subagents.agents[Pi",
+    ]
+    load_config(p)
+    assert drain_migration_notices() == []
+
+
+def test_a_file_whose_pi_row_stays_back_still_passes_the_floor(tmp_path: Path) -> None:
+    """Run once, as every floor is: the owner is told once, and a row they then move by
+    hand -- or move back -- is theirs."""
+    _launches_run_on(_pi_install(tmp_path / "pi", "0.80.10"))
+    p = tmp_path / "config.json"
+    _write(p, {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2])]}})
+    _stamp_path(p).write_text(json.dumps({"version": 14}), encoding="utf-8")
+    drain_migration_notices()
+
+    cfg = load_config(p)
+
+    assert [a.command for a in cfg.subagents.agents] == [_SECOND_RETIRED[2]]
+    assert json.loads(p.read_text(encoding="utf-8"))["subagents"]["agents"] == [_pi_row(_SECOND_RETIRED[2])]
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    assert [n.split("]")[0] for n in drain_migration_notices()] == ["Kept: subagents.agents[Pi"]
+    load_config(p)
+    assert drain_migration_notices() == []
+
+
+def test_each_adapter_floor_names_the_agent_its_preset_drives_and_how_to_upgrade_it() -> None:
+    """Spelled out in config, which does not import the agent package: held here to the
+    preset's own executable and upgrade, so the two cannot name different programs."""
+    from raven.agent.subagent.presets import shim_requirement_for, upgrade_hint_for
+    from raven.config import loader
+
+    assert loader._SHIM_COMMAND_NEEDS, "nothing waits on an agent's version: drop the gate rather than this test"
+    for command, need in loader._SHIM_COMMAND_NEEDS.items():
+        (preset,) = [key for key, current in loader._SHIM_COMMANDS.items() if current == command]
+        assert loader.shim_agent_floor(preset) == need, preset
+        row = SimpleNamespace(preset=preset)
+        requirement = shim_requirement_for(row)
+        assert requirement is not None and requirement[0] == need.executable, preset
+        assert requirement[1].split()[-1] == need.package, preset
+        assert upgrade_hint_for(row) == need.upgrade, preset
+    assert loader.shim_agent_floor("codex") is None, "a build that brings its own agent waits on none"
+
+
+def test_a_file_past_the_first_pin_floor_has_its_second_floor_pins_carried_in_the_file(tmp_path: Path) -> None:
+    """The file pass gates on the same floors as the in-memory one, so the two owe each other nothing."""
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+
+    p = tmp_path / "config.json"
+    _write(p, {"subagents": {"agents": [_codex_row(_SECOND_RETIRED[1])]}})
+    _stamp_path(p).write_text(json.dumps({"version": 14}), encoding="utf-8")
+
+    drain_migration_notices()
+    cfg = load_config(p)
+
+    codex = THIRD_PARTY_SUBAGENT_PRESETS["codex"]["command"]
+    assert [a.command for a in cfg.subagents.agents] == [codex]
+    assert json.loads(p.read_text(encoding="utf-8"))["subagents"]["agents"] == [_codex_row(codex)]
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
 
 
 def test_an_address_the_settings_dialog_only_showed_leaves_the_file_once(tmp_path: Path) -> None:
@@ -1832,3 +2190,80 @@ def test_a_row_naming_another_interpreter_that_still_exists_is_left_alone(tmp_pa
 
     assert [a.command for a in cfg.subagents.agents] == [command]
     assert p.read_bytes() == before
+
+
+def test_the_verdict_switch_goes_and_says_why(tmp_path: Path) -> None:
+    """Up to this release `subagentDag.verdictEnabled` could turn node judgement off.
+    Judgement is always on now, and the strict config models refuse an unknown key, so
+    a config that still carries it would not load at all. The floor drops either
+    spelling, tells the user once, and leaves the neighbours alone."""
+    p = tmp_path / "config.json"
+    _write(p, {"subagentDag": {"verdictEnabled": False, "verdictModel": "cheap/tier"}})
+    _stamp_path(p).write_text(json.dumps({"version": 13}), encoding="utf-8")
+
+    drain_migration_notices()
+    load_config(p)
+
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["subagentDag"] == {"verdictModel": "cheap/tier"}
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    notices = drain_migration_notices()
+    assert len([n for n in notices if "verdictEnabled" in n]) == 1, notices
+
+    load_config(p)
+    assert drain_migration_notices() == []
+
+
+def test_the_verdict_switch_goes_under_its_snake_spelling_too() -> None:
+    from raven.config import loader
+
+    loader._migration_notices.clear()
+    snake = {"subagent_dag": {"verdict_enabled": True, "max_continuations": 3}}
+    assert loader._migrate_retired_verdict_switch(snake, notify=True) is True
+    assert snake == {"subagent_dag": {"max_continuations": 3}}
+    assert len(loader.drain_migration_notices()) == 1
+
+
+def test_the_verdict_switch_is_dropped_from_the_extension_blocks_in_memory_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`load_raven_config` reads the file again for the extension blocks, after the
+    base loader has persisted its rewrite. Its pass has to drop the retired switch
+    itself: the file it reads may still carry it, and the extension model forbids
+    unknown keys, so a pass that only persisted would raise instead of loading."""
+    from raven.config import loader
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"subagentDag": {"verdictEnabled": False, "verdictModel": "cheap/tier"}})
+    _stamp_path(p).write_text(json.dumps({"version": 13}), encoding="utf-8")
+    # The disk rewrite is not what is under test here, and a file left as it is
+    # keeps the in-memory pass's own strip the only thing that can make this load.
+    monkeypatch.setattr(loader, "_persist_migrations", lambda *args, **kwargs: None)
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    assert cfg.subagent_dag.verdict_model == "cheap/tier"
+    assert json.loads(p.read_text(encoding="utf-8"))["subagentDag"]["verdictEnabled"] is False, (
+        "the disk rewrite was switched off, so a load that succeeded proves the in-memory strip"
+    )
+    assert len([n for n in drain_migration_notices() if "verdictEnabled" in n]) == 1
+
+
+def test_the_verdict_switch_set_again_after_its_floor_still_loads(tmp_path: Path) -> None:
+    """The switch can come back to a config its floor already cleaned: the build before
+    this one reads the stamp as current, keeps it, and accepts the key, so a rollback, or
+    a second install sharing the home, can write it again. The extension model would then
+    refuse the whole config, so the strip holds on every load, without a second notice."""
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"subagentDag": {"verdictEnabled": False, "verdictModel": "cheap/tier"}})
+    _stamp_path(p).write_text(json.dumps({"version": CURRENT_CONFIG_VERSION}), encoding="utf-8")
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    assert cfg.subagent_dag.verdict_model == "cheap/tier"
+    assert [n for n in drain_migration_notices() if "verdictEnabled" in n] == []

@@ -49,8 +49,39 @@ const withOpenAI = (): ReturnType<typeof snap> => {
     : p))
   return data
 }
+/* MiniMax connected with one video model; the registry marks it for both media
+   tools. */
+const withMiniMax = (data = snap()): ReturnType<typeof snap> => {
+  data.providers = [...data.providers, {
+    id: 'minimax', name: 'MiniMax (Global)', models: ['MiniMax-Hailuo-2.3'], configured: ['MiniMax-Hailuo-2.3'],
+    on: true, kind: 'key', acceptsKey: true, imageApi: true, videoApi: true,
+    labels: { 'MiniMax-Hailuo-2.3': { label: 'MiniMax-Hailuo-2.3', kind: 'video' } },
+  }]
+  return data
+}
 
 describe('model roles', () => {
+  it.each([
+    ['title', 'claude-sonnet-4-5', 'Anthropic'],
+    ['embedding', 'text-embedding-3-small', 'OpenRouter'],
+  ])('allows the %s role to change during a composer provider catalogue refresh', async (slot, model, provider) => {
+    const { calls } = install()
+    setSources({ model: {
+      providers: modelSource.providers,
+      persist: modelSource.persist,
+      openSettings: modelSource.openSettings,
+      loading: () => true,
+    } })
+    await mount('model')
+    await pick(`gui.settings.roles.${slot}`, model, provider)
+    expect(calls).toEqual(slot === 'title' ? [
+      ['set', { key: 'sessionTitle.model', value: 'claude-sonnet-4-5' }],
+      ['set', { key: 'sessionTitle.provider', value: 'anthropic' }],
+    ] : [
+      ['everosSet', { section: 'embedding', model: 'text-embedding-3-small', provider: 'openrouter' }],
+    ])
+  })
+
   it('a keyed role writes its model then its provider; clearing writes null to both', async () => {
     const { calls } = install()
     await mount('model')
@@ -97,11 +128,28 @@ describe('model roles', () => {
     ])
   })
 
-  it('the image role offers the connected providers the image tool can run on; speech and video keep to OpenRouter', () => {
-    const data = withOpenAI()
-    expect(roleProviders(role('image'), data).map((p) => p.id)).toEqual(['openrouter', 'openai'])
+  it('the image and video roles offer the connected providers their tools run on; speech keeps to OpenRouter', () => {
+    const data = withMiniMax(withOpenAI())
+    expect(roleProviders(role('image'), data).map((p) => p.id)).toEqual(['openrouter', 'openai', 'minimax'])
     expect(roleProviders(role('speech'), data).map((p) => p.id)).toEqual(['openrouter'])
-    expect(roleProviders(role('video'), data).map((p) => p.id)).toEqual(['openrouter'])
+    expect(roleProviders(role('video'), data).map((p) => p.id)).toEqual(['openrouter', 'minimax'])
+  })
+
+  it('a video pick writes the provider it runs on, empty for OpenRouter', async () => {
+    /* Empty rather than left out: a pick back to OpenRouter has to move the role
+       off MiniMax, or the next call sends a Kling id to MiniMax. */
+    const data = withMiniMax()
+    data.providers = data.providers.map((p) => (p.id === 'openrouter'
+      ? { ...p, models: [...p.models, 'kwaivgi/kling-v3.0-std'], configured: [...(p.configured || []), 'kwaivgi/kling-v3.0-std'],
+          labels: { ...p.labels, 'kwaivgi/kling-v3.0-std': { label: 'kling-v3.0-std', kind: 'video' } } }
+      : p))
+    const { calls } = install(data)
+    await mount('model')
+    await pick('gui.settings.roles.video', 'MiniMax-Hailuo-2.3', 'MiniMax')
+    expect(sets(calls)[0]).toEqual({ key: 'tools.media.video', value: { model: 'MiniMax-Hailuo-2.3', quality: '', provider: 'minimax' } })
+    calls.length = 0
+    await pick('gui.settings.roles.video', 'kling-v3.0-std', 'OpenRouter')
+    expect(sets(calls)[0]).toEqual({ key: 'tools.media.video', value: { model: 'kwaivgi/kling-v3.0-std', quality: '', provider: '' } })
   })
 
   it('an image pick on another provider writes that provider into the selection', async () => {

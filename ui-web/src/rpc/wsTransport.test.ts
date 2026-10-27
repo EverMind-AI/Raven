@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { resetCapabilities, supportsModelSelectionOnly } from './capabilities'
 import { RpcError } from './transport'
 import { probeHealth, WsTransport } from './wsTransport'
 
@@ -183,11 +184,41 @@ const failure = async (answer: Promise<unknown>): Promise<RpcError> => {
 }
 
 beforeEach(() => {
+  resetCapabilities()
   vi.useFakeTimers()
 })
 
 afterEach(() => {
   vi.useRealTimers()
+})
+
+describe('model selection capability negotiation', () => {
+  it('replaces selection-only support when reconnecting to a legacy gateway', async () => {
+    const { h, ws } = await connected()
+    const hello = async (socket: FakeSocket, capabilities: string[]) => {
+      const reply = h.transport.call('system.hello', { client_version: '0.1.0' })
+      const id = socket.sent.at(-1)!.id
+      socket.receive(JSON.stringify({
+        jsonrpc: '2.0', id,
+        result: {
+          server_version: '0.1.0', server_capabilities: capabilities,
+          session: { default_channel: 'gui', default_session_key: '' },
+        },
+      }))
+      await reply
+    }
+    await hello(ws, ['model.options.selection_only'])
+    expect(supportsModelSelectionOnly()).toBe(true)
+    h.transport.close()
+    const joined = h.transport.connect()
+    const rejoined = socketAt(h, 1)
+    rejoined.opened()
+    await joined
+    await hello(rejoined, ['jsonrpc-2.0'])
+    expect(supportsModelSelectionOnly()).toBe(false)
+    await hello(rejoined, ['model.options.selection_only'])
+    expect(supportsModelSelectionOnly()).toBe(true)
+  })
 })
 
 describe('a call made before the socket is open', () => {

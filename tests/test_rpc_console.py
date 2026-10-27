@@ -11,7 +11,7 @@ import asyncio
 import shutil
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import SimpleNamespace
 
 import pytest
@@ -54,7 +54,18 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         "tools.web.fetch.provider",
         *(
             f"tools.web.providers.{vendor}.apiKey"
-            for vendor in ("serper", "anysearch", "serpapi", "jina", "tavily", "exa", "brave", "firecrawl", "serply")
+            for vendor in (
+                "serper",
+                "anysearch",
+                "serpapi",
+                "jina",
+                "tavily",
+                "exa",
+                "brave",
+                "firecrawl",
+                "serply",
+                "keenable",
+            )
         ),
         "tools.media.image.apiKey",
         "tools.media.image.model",
@@ -65,6 +76,9 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         # configured for that provider, and the name is checked against the ones
         # whose image API the tool can call. It names no address and carries no key.
         "tools.media.image.provider",
+        # The video tool's, on the same terms, checked against the providers whose
+        # video API the tool can call.
+        "tools.media.video.provider",
         "channels.sendProgress",
         "channels.sendToolHints",
         "memory.memoryTopK",
@@ -351,6 +365,11 @@ async def test_cron_save_creates_a_job(tmp_path: Path) -> None:
 
     assert r["job"]["name"] == "hourly"
     assert r["job"]["id"]
+    job = loop.cron_service.list_jobs()[0]
+    assert job.payload.channel == "tui"
+    assert job.payload.to == "default"
+    assert job.payload.topic_tag is None
+    assert job.payload.fire_missed is False
     assert [j["name"] for j in (await console_module.cron_list({}, agent_loop_factory=lambda: loop))["jobs"]] == [
         "hourly"
     ]
@@ -384,6 +403,86 @@ async def test_cron_save_edits_in_place_and_keeps_the_id(tmp_path: Path) -> None
     jobs = (await console_module.cron_list({}, agent_loop_factory=lambda: loop))["jobs"]
     assert len(jobs) == 1
     assert jobs[0]["name"] == "two-hourly"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "channel,to",
+    [("telegram", "chat-a"), ("feishu", "chat-b"), ("tui", "direct"), ("tui", "default"), (None, None)],
+)
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_cron_save_preserves_delivery_and_metadata(
+    tmp_path: Path, channel: str | None, to: str | None, enabled: bool
+) -> None:
+    from raven.proactive_engine.schedulers.cron.service import CronService
+    from raven.proactive_engine.schedulers.cron.types import CronSchedule
+
+    loop = _cron_loop(tmp_path)
+    service = loop.cron_service
+    original = service.add_job(
+        "summary",
+        CronSchedule(kind="every", every_ms=3_600_000),
+        "Summarize the project",
+        channel=channel,
+        to=to,
+        topic_tag="project-summary",
+    )
+    service.enable_job(original.id, enabled)
+
+    result = await console_module.cron_save(
+        {"id": original.id, "kind": "every", "every_seconds": 7200, "name": "updated", "message": "New summary"},
+        agent_loop_factory=lambda: loop,
+    )
+
+    stored = CronService(service.store_path).list_jobs(include_disabled=True)
+    assert len(stored) == 1
+    edited = stored[0]
+    assert edited.id == result["job"]["id"] == original.id
+    assert edited.payload.channel == channel
+    assert edited.payload.to == to
+    assert edited.payload.topic_tag == "project-summary"
+    assert edited.enabled is enabled
+    assert edited.created_at_ms == original.created_at_ms
+    assert edited.name == "updated"
+    assert edited.payload.message == "New summary"
+    assert edited.schedule.every_ms == 7_200_000
+
+
+@pytest.mark.asyncio
+async def test_cron_save_preserves_a_keyed_wakes_direct_target_and_missed_fire_policy(tmp_path: Path) -> None:
+    from raven.proactive_engine.schedulers.cron.service import CronService
+
+    loop = _cron_loop(tmp_path)
+    service = loop.cron_service
+    original = service.schedule_wake(
+        "ops:campaign",
+        service._now_ms() + 60_000,
+        "Check the campaign",
+        channel="tui",
+        to="campaign-chat",
+        direct_agent="operator",
+        direct_handle="campaign",
+    )
+
+    await console_module.cron_save(
+        {
+            "id": original.id,
+            "kind": "at",
+            "at_iso": "2099-01-01T12:00:00+00:00",
+            "name": "wake",
+            "message": "Check again",
+        },
+        agent_loop_factory=lambda: loop,
+    )
+
+    edited = CronService(service.store_path).pending_wakes()[0]
+    assert edited.id == original.id
+    assert edited.payload.channel == "tui"
+    assert edited.payload.to == "campaign-chat"
+    assert edited.payload.direct_agent == "operator"
+    assert edited.payload.direct_handle == "campaign"
+    assert edited.payload.fire_missed is True
+    assert edited.delete_after_run is True
 
 
 @pytest.mark.asyncio
@@ -2184,6 +2283,49 @@ async def test_the_image_role_may_run_on_volcengine(settings_cfg):
     assert (image["model"], image["provider"]) == ("doubao-seedream-5-0-pro", "volcengine")
 
 
+@pytest.mark.parametrize("provider", ["minimax", "minimax_cn_api"])
+async def test_the_image_role_may_run_on_minimax(settings_cfg, provider):
+    """MiniMax's image route is one the image tool speaks, so either of its API-key
+    sections is a provider the roles card may save for the image role."""
+    import json
+
+    selection = {"model": "image-01", "quality": "", "provider": provider}
+    await console_module.settings_set({"key": "tools.media.image", "value": selection})
+    image = json.loads(settings_cfg.read_text())["tools"]["media"]["image"]
+    assert (image["model"], image["provider"]) == ("image-01", provider)
+
+
+async def test_the_video_role_may_run_on_minimax(settings_cfg):
+    """MiniMax's video API is one the video tool speaks, so the roles card's pick of
+    it is saved with the selection; an OpenRouter pick names no provider."""
+    import json
+
+    selection = {"model": "MiniMax-Hailuo-2.3", "quality": "", "provider": "minimax"}
+    await console_module.settings_set({"key": "tools.media.video", "value": selection})
+    video = json.loads(settings_cfg.read_text())["tools"]["media"]["video"]
+    assert (video["model"], video["provider"]) == ("MiniMax-Hailuo-2.3", "minimax")
+
+    back = {"model": "kwaivgi/kling-v3.0-std", "quality": "", "provider": ""}
+    await console_module.settings_set({"key": "tools.media.video", "value": back})
+    assert json.loads(settings_cfg.read_text())["tools"]["media"]["video"]["provider"] == ""
+
+
+@pytest.mark.parametrize(
+    ("value", "saved"), [("minimax", True), ("minimax_cn_api", True), ("openai", False), ("anthropic", False)]
+)
+async def test_the_video_provider_takes_only_a_provider_the_video_tool_runs_on(settings_cfg, value, saved):
+    import json
+
+    before = settings_cfg.read_bytes()
+    if saved:
+        await console_module.settings_set({"key": "tools.media.video.provider", "value": value})
+        assert json.loads(settings_cfg.read_text())["tools"]["media"]["video"]["provider"] == value
+        return
+    with pytest.raises(console_module.ConfigValidationError):
+        await console_module.settings_set({"key": "tools.media.video.provider", "value": value})
+    assert settings_cfg.read_bytes() == before
+
+
 @pytest.mark.parametrize(
     "key,value",
     [
@@ -2199,7 +2341,7 @@ async def test_the_image_role_may_run_on_volcengine(settings_cfg):
         ("tools.media.image", {"model": "new", "quality": "", "provider": "no-such-vendor"}),
         ("tools.media.image.provider", "anthropic"),
         ("tools.media.image.provider", 7),
-        # Speech and video keep to OpenRouter: their request shapes are its own.
+        # Speech keeps to OpenRouter, video to the providers it has a request path for.
         ("tools.media.speech", {"model": "new", "quality": "", "provider": "openai"}),
         ("tools.media.video", {"model": "new", "quality": "", "provider": "openai"}),
     ],
@@ -2283,6 +2425,92 @@ async def test_fs_dirs_marks_the_listed_directory_itself(tmp_path: Path, monkeyp
     assert above["ok"] is False
     beside = await console_module.fs_dirs({"path": str(tmp_path / "proj")})
     assert beside["ok"] is True
+
+
+async def test_fs_dirs_hands_back_a_non_ascii_folder_unchanged(tmp_path: Path, monkeypatch) -> None:
+    """The walk is the whole Windows path now, so a folder whose name is not
+    ASCII has to survive it exactly. The native dialog read its answer off a
+    console stream whose code page the gateway did not share, and a name
+    outside ASCII came back as replacement characters that matched no
+    directory. Escapes, not literals, so this file stays English source."""
+    outer, inner = "\u9879\u76ee", "\u5de5\u4f5c"
+    (tmp_path / outer / inner).mkdir(parents=True)
+    _agent_home(monkeypatch, tmp_path / ".raven" / "workspace")
+
+    r = await console_module.fs_dirs({"path": str(tmp_path)})
+    entry = next(e for e in r["entries"] if e["name"] == outer)
+    assert entry["path"] == str((tmp_path / outer).resolve())
+    assert entry["ok"] is True
+    inside = await console_module.fs_dirs({"path": entry["path"]})
+    assert inside["path"] == entry["path"]
+    assert [e["name"] for e in inside["entries"]] == [inner]
+
+
+async def test_fs_dirs_at_a_root_offers_the_way_to_every_other_root(tmp_path: Path, monkeypatch) -> None:
+    """A root has no parent, so the upward walk stops there and every other
+    filesystem is unreachable: a project on D: cannot be picked by a browser
+    that started under C:. The other roots are offered as rows instead, and
+    only at a root -- further down they are siblings of nothing. A host with
+    one root (the POSIX ones) offers none: its parent walk reaches that root
+    already."""
+    _agent_home(monkeypatch, tmp_path / ".raven" / "workspace")
+    monkeypatch.setattr(console_module.sys, "platform", "linux")
+
+    r = await console_module.fs_dirs({"path": str(Path(tmp_path.anchor))})
+    assert r["parent"] is None
+    assert r["roots"] == []
+
+    below = await console_module.fs_dirs({"path": str(tmp_path)})
+    assert below["roots"] == []
+
+
+def test_fs_dirs_lists_the_drives_of_a_windows_host(monkeypatch) -> None:
+    """Every drive by its own name, while the browser stands on a root: a
+    project on another drive is reachable only from this list, since no folder
+    has it as a child. Empty anywhere below a root. Windows paths whatever host
+    runs the suite: on a POSIX one `Path("C:/")` is a relative path."""
+    monkeypatch.setattr(console_module.sys, "platform", "win32")
+    monkeypatch.setattr(console_module, "_windows_drives", lambda: ["C:\\", "D:\\", "E:\\"])
+
+    assert console_module._roots_at(PureWindowsPath("C:/")) == ["C:\\", "D:\\", "E:\\"]
+    assert console_module._roots_at(PureWindowsPath("D:/projects")) == []
+    monkeypatch.setattr(console_module.sys, "platform", "linux")
+    assert console_module._roots_at(PurePosixPath("/")) == []
+
+
+def test_windows_drives_reads_the_system_list_and_survives_its_absence(monkeypatch) -> None:
+    """The one call the drive list rests on, driven on any host: a Windows
+    interpreter answers with `os.listdrives`, and one that lacks it or fails
+    leaves the browser without the list rather than failing the listing."""
+    monkeypatch.setattr(console_module.os, "listdrives", lambda: ["C:\\", "D:\\"], raising=False)
+    assert console_module._windows_drives() == ["C:\\", "D:\\"]
+
+    def refuse() -> list[str]:
+        raise OSError("the drive table could not be read")
+
+    monkeypatch.setattr(console_module.os, "listdrives", refuse, raising=False)
+    assert console_module._windows_drives() == []
+    monkeypatch.delattr(console_module.os, "listdrives", raising=False)
+    assert console_module._windows_drives() == []
+
+
+async def test_fs_dirs_judges_every_root_it_offers(tmp_path: Path, monkeypatch) -> None:
+    """A root row carries the same `ok` as a folder row. The drive holding the
+    agent's own data is an ancestor of agent home, which `session.create`
+    refuses, so its row is greyed like any other ancestor -- and still a way
+    in, since its other folders may be fine working directories."""
+    home = tmp_path / "raven-drive" / ".raven" / "workspace"
+    home.mkdir(parents=True)
+    (tmp_path / "other-drive").mkdir()
+    _agent_home(monkeypatch, home)
+    held, other = str(tmp_path / "raven-drive"), str(tmp_path / "other-drive")
+    monkeypatch.setattr(console_module, "_roots_at", lambda target: [held, other])
+
+    r = await console_module.fs_dirs({"path": str(tmp_path)})
+    assert r["roots"] == [
+        {"name": held, "path": held, "ok": False},
+        {"name": other, "path": other, "ok": True},
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -2381,18 +2609,35 @@ async def test_fs_pick_dir_reports_a_dialog_that_would_not_start(monkeypatch) ->
 
 
 def test_fs_pick_dir_knows_a_dialog_for_each_desktop(monkeypatch) -> None:
-    """One command per platform, the Linux one only where a tool is on PATH and
-    there is a display to show it on (see the next case)."""
+    """One command per desktop, the Linux one only where a tool is on PATH and
+    there is a display to show it on (see the next case). Windows has a dialog
+    to offer -- FolderBrowserDialog -- but it opens behind the browser, so it
+    answers None like a headless host: see the case below."""
     monkeypatch.setattr(folder_dialog.sys, "platform", "darwin")
     assert folder_dialog.pick_dir_argv()[0] == "osascript"
     monkeypatch.setattr(folder_dialog.sys, "platform", "win32")
-    assert folder_dialog.pick_dir_argv()[0] == "powershell"
+    assert folder_dialog.pick_dir_argv() is None
     monkeypatch.setattr(folder_dialog.sys, "platform", "linux")
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setattr(folder_dialog.shutil, "which", lambda name: name == "kdialog")
     assert folder_dialog.pick_dir_argv()[0] == "kdialog"
     monkeypatch.setattr(folder_dialog.shutil, "which", lambda name: False)
     assert folder_dialog.pick_dir_argv() is None
+
+
+def test_fs_pick_dir_finds_no_dialog_on_windows(monkeypatch) -> None:
+    """Windows ships a folder dialog, but a gateway is a background process and
+    Windows will not let one take the foreground: the dialog is created behind
+    the browser and the click reads as nothing happening. So the host answers
+    as a hostless one does and the page walks the folders instead -- the
+    failure this replaces, measured with the gateway's own spawn on
+    2026-10-22. A display variable, which a Windows
+    host does not set, must not reach the Linux tools either."""
+    monkeypatch.setattr(folder_dialog.sys, "platform", "win32")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(folder_dialog.shutil, "which", lambda name: True)
+    assert folder_dialog.pick_dir_argv() is None
+    assert folder_dialog.folder_dialog_available() is False
 
 
 def test_fs_pick_dir_finds_no_dialog_on_a_linux_host_with_no_display(monkeypatch) -> None:
@@ -2439,7 +2684,7 @@ async def test_fs_dirs_reports_a_directory_it_cannot_read(tmp_path: Path, monkey
 async def test_fs_dirs_finds_a_directory_that_sorts_past_the_files(tmp_path: Path, monkeypatch) -> None:
     """The cap counts directories found, so the files a folder sits behind
     cannot hide it. Bounding the names examined instead would answer "no
-    subfolders" here, and the picker has no typed path to reach it by."""
+    subfolders" for a folder that plainly has one."""
     _agent_home(monkeypatch, tmp_path / "home")
     root = tmp_path / "root"
     root.mkdir()

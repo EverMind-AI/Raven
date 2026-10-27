@@ -276,6 +276,24 @@ def test_the_reply_rules_are_the_host_s_alone(workspace, monkeypatch: pytest.Mon
     assert "## How you reply" not in render.identity_text(workspace)
 
 
+def test_the_manager_role_is_the_host_s_alone(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A launched child does the work it was handed. Telling it that it runs the
+    work through a roster would contradict the registry it was given, which holds
+    no tool that hands work on -- so the child keeps the identity it had before.
+
+    Asserted with ``identity_text``'s default dispatch paths on purpose: the role
+    has to follow the process, not only the tool table it is told about.
+    """
+    plain = render.identity_text(workspace)
+    assert "## Your role" in plain
+
+    monkeypatch.setenv("RAVEN_SUBAGENT", "1")
+    child = render.identity_text(workspace)
+
+    assert "## Your role" not in child
+    assert "You are Raven, a helpful AI assistant." in child
+
+
 def test_the_reply_rules_leave_one_blank_line_either_side(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
     """The joint in both roles. The section is spliced in by a helper that renders
     empty for a child, and a stray newline on either branch would ship unseen in
@@ -304,6 +322,71 @@ def test_the_reply_rules_do_not_choose_the_reply_language(workspace, monkeypatch
     assert plain.index("Always respond in") < plain.index("## How you reply")
     section = plain.split("## How you reply", 1)[1].split("\n\nReply directly", 1)[0]
     assert "not which language you write in" in section
+
+
+def test_the_reply_rules_close_every_reply_with_the_decisions_still_open(workspace) -> None:
+    """The role keeps a decision open until the user settles it; this is what puts it
+    at the end of a reply about something else. Replayed on synthetic conversations
+    (glm-5.3-flash), a one-line answer to an unrelated question carried the open
+    decisions in 0 of 6 runs with the role alone -- the simple-answer and
+    stop-when-the-content-stops rules above read the reminder as a closing recap --
+    and in 7 of 12 with this line. Its sentence on what the user dropped or put off
+    keeps a deferral: a wording without it asked again about what the user had just
+    put off."""
+    plain = render.identity_text(workspace)
+    section = plain.split("## How you reply", 1)[1].split("\n\nReply directly", 1)[0]
+
+    assert "Decisions you put to the user that are still open close every reply" in section
+    assert "a reply that only passes a question on" in section
+    assert "not a recap or a sign-off" in section
+    assert "One the user dropped or put off for later is no longer open." in section
+
+
+def test_a_turn_without_the_role_still_reads_a_passed_over_offer_as_declined(
+    workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reply rules render on every turn of the host's process, the role only on a
+    turn that holds a dispatch path: a Persona's generating turn holds none, nor does
+    an install that withholds `spawn` and `run_subagent_dag`. There the open-decision
+    line is the rule's only statement, so it carries the role's carve-out in the same
+    words; without it a closing "shall I ...?" the user moved past reads as a decision
+    still open, to be asked again on every reply."""
+    clause = "An offer of yours that they pass over is declined, not open."
+
+    host = render.identity_text(workspace)
+    assert clause in host.split("## Your role", 1)[1].split("\n## ", 1)[0]
+    assert clause in host.split("## How you reply", 1)[1].split("\n\nReply directly", 1)[0]
+
+    no_role = render.identity_text(workspace, dispatch_tools=())
+    rules = no_role.split("## How you reply", 1)[1].split("\n\nReply directly", 1)[0]
+    assert "## Your role" not in no_role
+    assert "Decisions you put to the user that are still open close every reply" in rules
+    assert clause in rules
+
+    monkeypatch.setenv("RAVEN_SUBAGENT", "1")
+    child = render.identity_text(workspace)
+    assert "You are Raven, a helpful AI assistant." in child
+    assert clause not in child
+
+
+def test_the_reply_rules_head_each_task_a_reply_covers(workspace) -> None:
+    """Every task a reply covers gets its own section under a heading that names it,
+    whether the reply carries its result or a line of its progress. Results arrive one
+    turn each, so the common reply is one task's result plus a line on each task still
+    running; a rule scoped to "the results of several tasks" left that reply
+    unsectioned. The heading syntax is spelled out because the model kept the task
+    name inline otherwise: asked only for "a short heading on a line of its own", it
+    wrote "**Pricing** -- the report ..." on one line in 4 of 7. The decision list
+    stays one list, so the rule does not turn it into a section per decision."""
+    plain = render.identity_text(workspace)
+    section = plain.split("## How you reply", 1)[1].split("\n\nReply directly", 1)[0]
+
+    assert "When a reply covers more than one task -- a result, progress, a one-line status, a late notice" in section
+    assert "a markdown heading naming the task on a line of its own (`### <task>`)" in section
+    assert "even when the section is a single sentence" in section
+    assert "never put two tasks in one paragraph or one list" in section
+    assert "The open decisions that close the reply stay one list after the last section." in section
+    assert "When one reply reports the results of several tasks" not in section
 
 
 def test_both_sub_agent_paths_withhold_the_same_tools(workspace, monkeypatch: pytest.MonkeyPatch) -> None:

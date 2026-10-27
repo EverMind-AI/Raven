@@ -147,6 +147,10 @@ class CronService:
         # Job ids whose claim-skip was already logged (one INFO line per job,
         # not one per tick). Cleared per job on successful claim.
         self._skip_logged: set[str] = set()
+        # Job id -> the schedule.at_ms of the run executing it, from before its
+        # callback until its writeback ends. A wake re-armed during its own run
+        # carries a different at_ms, the same test the writeback applies.
+        self._in_flight: dict[str, int | None] = {}
         self._running = False
         # Optional fake-clock injection for benchmark harnesses (longrun).
         # When provided, all internal time reads route through this callable
@@ -503,10 +507,18 @@ class CronService:
                 self._save_store()
 
         for job in my_jobs:
+            await self._run_claimed(job, my_pid)
+
+    async def _run_claimed(self, job: CronJob, my_pid: int) -> None:
+        """Execute a claimed job and write its run back, the one path for both entrances."""
+        self._in_flight[job.id] = job.schedule.at_ms
+        try:
             await self._execute_job(job)
             # Shielded so a stop() mid-writeback cannot skip the post-run
             # flush (claim would leak and one-shots could re-fire).
             await asyncio.shield(self._writeback_after_run(job, my_pid))
+        finally:
+            self._in_flight.pop(job.id, None)
 
     async def _writeback_after_run(self, job: CronJob, my_pid: int) -> None:
         """Post-run flush + clear claim, under lock so a concurrent reader
@@ -730,29 +742,44 @@ class CronService:
         direct_handle: str | None = None,
         fire_missed: bool = False,
     ) -> CronJob:
-        """Add a new job, or update an existing job with the same
-        (schedule, channel, to) triple — agents often re-register the
-        same recurring reminder with slightly different wording across
-        conversations; without dedup the user gets N near-identical
-        fires per scheduled tick.
+        """Add a new job, or update an existing job that is the *same
+        reminder* — agents often re-register the same reminder across
+        conversations; without dedup the user gets N near-identical fires
+        per scheduled tick.
 
-        Two cross-kind dedup layers also apply (in order):
+        Three layers answer "is this the same reminder as some existing
+        job", in this order, and the first one that matches decides:
 
-        1. **Message-equal dedup**: if any existing enabled job for the
-           same (channel, to) has a *byte-identical* ``payload.message``,
-           return it. Catches the case where the LLM creates the same
-           reminder N times across the simulation horizon (e.g. a
-           medication-reminder string appearing as both an ``at`` shot
-           today and a ``cron_expr`` recurring tomorrow — identical
-           text, different fire times).
+        1. **topic_tag dedup**: a caller-supplied ``topic_tag`` that an
+           enabled job for the same (channel, to) already carries. The
+           tag IS the identity for "what this reminder is about", so the
+           existing job's message and schedule are updated in place even
+           when the wording or the schedule moved.
 
-        2. **Time-window dedup**: if any existing enabled job for the
-           same (channel, to) is scheduled to fire within 15 minutes of
-           this new schedule's next fire (regardless of schedule kind),
-           return it. Catches the case where the LLM creates both a
-           recurring ``cron_expr`` AND a same-day ``at`` shot for the
-           same intent (e.g. "daily 8:00 take meds" + "today 8:00 take
-           meds").
+        2. **Message-equal dedup**: a *byte-identical* ``payload.message``
+           on an enabled job for the same (channel, to) whose next fire
+           is still ahead. Catches the LLM re-asking for the same
+           reminder N times across the horizon (e.g. one ``at`` shot
+           today and a ``cron_expr`` recurring tomorrow — identical text,
+           different fire times).
+
+        3. **Same-schedule dedup**: an enabled job for the same (channel,
+           to) whose schedule is identical (same ``cron`` expr + zone,
+           same ``every_ms``, or the same ``at`` instant) *and* whose
+           message is byte-identical. Layer 2 answers for such a job while
+           its fire is still ahead, so this layer is the one that reuses a
+           job whose fire has passed or was cleared. The message test is
+           what keeps two adds that land on one slot from replacing each
+           other: two reminders can genuinely share a slot, so the slot
+           alone is not identity. A shared ``topic_tag`` never gets this
+           far: layer 1 matches it first.
+
+        Adding a job edits nothing but the job that layer matched. A
+        distinct reminder is always stored as a new job, however close
+        its fire is to an existing one: no layer matches on fire time
+        alone, because nearness cannot tell a repeat from a second
+        reminder that falls due close by, and dropping that second one
+        would go unseen by the caller.
 
         ``job_id`` edits one named job rather than adding: if a job with that id
         exists it is updated in place, otherwise the id is used for the new job.
@@ -819,10 +846,10 @@ class CronService:
             # catches the caregiver-style failure mode where the LLM
             # creates near-identical med-reminder crons with subtly
             # different schedule offsets (11:20 + 11:30) or message
-            # wording — message-equal dedup and 15min window dedup both
-            # miss them. The topic_tag IS the identity for "what topic
-            # is this reminder about", so two crons with the same
-            # topic_tag are by definition the same logical reminder.
+            # wording — message-equal dedup misses those. The topic_tag
+            # IS the identity for "what topic is this reminder about", so
+            # two crons with the same topic_tag are by definition the
+            # same logical reminder.
             # Update the existing job's message/schedule in-place rather
             # than spawn a parallel one.
             if topic_tag:
@@ -854,8 +881,8 @@ class CronService:
 
             # Message-equal dedup (covers same-intent reminders the LLM
             # re-asks for across days, possibly with different schedule
-            # kinds). Stricter than time-window: byte-equality on full
-            # message text → false-positive rate ~0.
+            # kinds). Byte-equality on full message text → false-positive
+            # rate ~0.
             for j in store.jobs:
                 if not j.enabled:
                     continue
@@ -877,39 +904,12 @@ class CronService:
                 self._signal_wake()
                 return j
 
-            # Cross-kind time-window dedup (covers caregiver-style
-            # "expr + at for the same intent" double-add). Window is
-            # generous (15min) because two genuinely-distinct reminders
-            # less than 15min apart are almost always an LLM mistake;
-            # the rare legitimate case (two distinct meds at 8:00 and
-            # 8:10) loses one fire — acceptable trade-off given the
-            # spam alternative.
-            new_next = _compute_next_run(schedule, now)
-            if new_next is not None:
-                for j in store.jobs:
-                    if not j.enabled:
-                        continue
-                    if j.payload.channel != channel or j.payload.to != to:
-                        continue
-                    existing_next = j.state.next_run_at_ms
-                    if existing_next is None:
-                        continue
-                    if abs(existing_next - new_next) <= 15 * 60 * 1000:
-                        logger.info(
-                            "Cron: skipped duplicate add — existing job '{}' "
-                            "({}) fires within 15min of new request "
-                            "(same channel/to, kinds={}/{})",
-                            j.name,
-                            j.id,
-                            j.schedule.kind,
-                            schedule.kind,
-                        )
-                        self._signal_wake()
-                        return j
-
-            # Dedup: same recurring schedule + same channel + same recipient
-            # → update message in place rather than create a duplicate.
-            existing = self._find_duplicate_schedule(store.jobs, schedule, channel, to)
+            # Dedup: same schedule slot + same channel + recipient + the
+            # same message → reuse that job rather than create a duplicate.
+            # A slot alone is not identity: two distinct reminders may
+            # legitimately share one fire time, and overwriting either would
+            # lose a reminder the caller asked for.
+            existing = self._find_duplicate_schedule(store.jobs, schedule, channel, to, message=message)
             if existing is not None:
                 existing.payload.message = message
                 existing.name = name
@@ -921,7 +921,7 @@ class CronService:
                     existing.state.next_run_at_ms = _compute_next_run(schedule, now)
                 self._save_store()
                 logger.info(
-                    "Cron: updated existing job '{}' ({}) with new message (dedup on schedule+channel+to)",
+                    "Cron: reused existing job '{}' ({}) for the same message on the same schedule",
                     existing.name,
                     existing.id,
                 )
@@ -959,14 +959,28 @@ class CronService:
         schedule: CronSchedule,
         channel: str | None,
         to: str | None,
+        *,
+        message: str,
     ) -> CronJob | None:
-        """Return an existing enabled job whose (schedule, channel, to)
-        matches — used by add_job for dedup. ``at`` jobs (one-shot) are
-        only deduped if their at_ms is identical (same instant)."""
+        """Return an existing enabled job that is the *same reminder* as this
+        add on the *same schedule slot*, or None.
+
+        The slot alone does not make two adds the same: a repeated ``cron``
+        expr + zone, ``every_ms``, or ``at`` instant is matched only when the
+        message is byte-identical too. Anything else is a distinct reminder
+        that must be stored beside the existing job rather than overwrite
+        it. A shared ``topic_tag`` is not checked here: when the add carries
+        one, the topic_tag layer in ``add_job`` has already returned any
+        enabled job for the same (channel, to) that shares it.
+
+        ``at`` jobs (one-shot) are matched only at the identical instant.
+        """
         for j in jobs:
             if not j.enabled:
                 continue
             if j.payload.channel != channel or j.payload.to != to:
+                continue
+            if j.payload.message != message:
                 continue
             s = j.schedule
             if s.kind != schedule.kind:
@@ -1082,10 +1096,20 @@ class CronService:
         self._signal_wake()
         return True
 
-    def pending_wakes(self, prefix: str = "") -> list[CronJob]:
-        """Every pending keyed wake, optionally narrowed to a key prefix."""
+    def pending_wakes(self, prefix: str = "", *, include_running: bool = True) -> list[CronJob]:
+        """Every pending keyed wake, optionally narrowed to a key prefix.
+
+        A one-shot stays in the store until its run's writeback, so a turn the
+        wake itself started still finds it here. ``include_running=False``
+        leaves out the wake this process is executing right now, unless the
+        run re-armed it: a re-arm moves ``schedule.at_ms``, and that later
+        wake is still pending. Another process's runs are not known here.
+        """
         want = self._WAKE_PREFIX + prefix
-        return [j for j in self.list_jobs() if j.id.startswith(want)]
+        return [j for j in self.list_jobs() if j.id.startswith(want) and (include_running or not self._is_this_run(j))]
+
+    def _is_this_run(self, job: CronJob) -> bool:
+        return job.id in self._in_flight and job.schedule.kind == "at" and job.schedule.at_ms == self._in_flight[job.id]
 
     def cancel_wake(self, key: str) -> bool:
         """Remove the pending wake for ``key``; False when none existed."""
@@ -1129,8 +1153,7 @@ class CronService:
             target.state.claimed_at_ms = self._now_ms()
             self._save_store()
 
-        await self._execute_job(target)
-        await asyncio.shield(self._writeback_after_run(target, my_pid))
+        await self._run_claimed(target, my_pid)
         self._signal_wake()
         return True
 

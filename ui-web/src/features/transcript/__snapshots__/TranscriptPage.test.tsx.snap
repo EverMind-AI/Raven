@@ -2,7 +2,7 @@
 
 exports[`transcript island, history > keeps its rendered shape 1`] = `
 "div[data-tsl=1]
-  div.turn.me.in
+  div.turn.me.in[data-ask=1]
     div.msg.me
     div.ansfoot
       div.acts

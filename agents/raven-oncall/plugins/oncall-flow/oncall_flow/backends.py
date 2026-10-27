@@ -106,24 +106,48 @@ def prepare_from_meta(meta: dict[str, Any], *, app_dir: str) -> None:
         return
     from oncall_flow.docker_backend import make_ssh_runner
     from oncall_flow.runner import make_ssh_sync, prepare_remote
+    from oncall_flow.transport import logs_in_by_password, password_env, password_row, runner_from
 
     # Same seam as backend_from_meta: a campaign that names a connection has no
     # address of its own, and reading meta["host"] here raised KeyError on the
     # first campaign an agent created for itself (2026-08-18).
     meta = _resolve(meta)
-    key_path = os.path.expanduser(meta.get("key", "~/.ssh/id_rsa"))
-    host, port = meta["host"], int(meta.get("port", 22))
     remote_dir = meta.get("remote_dir", "/root/raven-ops")
+    if logs_in_by_password(meta):
+        run = runner_from(meta)
+        row = password_row(meta)
+        sync = make_ssh_sync(row["host"], row["port"], "", user=row["user"], password=True, env=password_env(row))
+    else:
+        key_path = os.path.expanduser(meta.get("key", "~/.ssh/id_rsa"))
+        host, port = meta["host"], int(meta.get("port", 22))
+        run, sync = make_ssh_runner(host, port, key_path), make_ssh_sync(host, port, key_path)
     prepare_remote(
-        make_ssh_runner(host, port, key_path),
-        make_ssh_sync(host, port, key_path),
+        run,
+        sync,
         image=meta.get("image", "python:3.12-slim"),
         app_local=os.path.abspath(app_dir) + "/",
         app_remote=f"{remote_dir}/app",
     )
 
 
+def _runs_here_on_windows(meta: dict[str, Any]) -> bool:
+    # Locality is the transport seam's call, not this module's: a meta that
+    # names a connection the registry no longer has carries neither host nor
+    # transport, and must reach runner_from's refusal rather than run here.
+    if os.name != "nt":
+        return False
+    from oncall_flow.transport import LOCAL, transport_of
+
+    return transport_of(meta) == LOCAL
+
+
 def _process_from_meta(meta: dict[str, Any]) -> JobBackend:
+    # The process launcher is a /bin/sh script; on a Windows machine raven runs
+    # on there is no sh to run it, and the job would sit in RUNNING forever. The
+    # agent declares 'process' because that is what a command on the owner's
+    # machine is -- the native launcher is how that runs here.
+    if _runs_here_on_windows(meta):
+        return _windows_from_meta(meta)
     from oncall_flow.process_backend import process_from_meta
 
     return process_from_meta(meta)
@@ -135,17 +159,27 @@ def _openfoam_from_meta(meta: dict[str, Any]) -> JobBackend:
     return openfoam_from_meta(meta)
 
 
+def _windows_from_meta(meta: dict[str, Any]) -> JobBackend:
+    from oncall_flow.windows_backend import windows_from_meta
+
+    return windows_from_meta(meta)
+
+
 def _docker_from_meta(meta: dict[str, Any]) -> JobBackend:
     # Imported inside the factory so the module-level name stays patchable by
     # tests that swap the SSH runner.
     from oncall_flow.docker_backend import DockerExecutor, make_ssh_runner
+    from oncall_flow.transport import logs_in_by_password, runner_from
 
-    run = make_ssh_runner(
-        meta["host"],
-        int(meta.get("port", 22)),
-        os.path.expanduser(meta.get("key", "~/.ssh/id_rsa")),
-        user=str(meta.get("user") or "root"),
-    )
+    if logs_in_by_password(meta):
+        run = runner_from(meta)
+    else:
+        run = make_ssh_runner(
+            meta["host"],
+            int(meta.get("port", 22)),
+            os.path.expanduser(meta.get("key", "~/.ssh/id_rsa")),
+            user=str(meta.get("user") or "root"),
+        )
     return DockerExecutor(
         run,
         image=meta.get("image", "python:3.12-slim"),
@@ -156,3 +190,4 @@ def _docker_from_meta(meta: dict[str, Any]) -> JobBackend:
 register_backend(DEFAULT_BACKEND, _docker_from_meta)
 register_backend("process", _process_from_meta)
 register_backend("openfoam", _openfoam_from_meta)
+register_backend("windows", _windows_from_meta)

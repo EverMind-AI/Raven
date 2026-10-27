@@ -104,10 +104,10 @@ export function roleValue(r: Role, snap: SettingsSnapshot): RoleValue | null {
   return null
 }
 
-/* Which connected providers may serve a role: the image role those the image
-   tool can run on (the registry's `image_api`, OpenRouter among them), speech
-   and video OpenRouter, whose request shapes they speak; an EverOS role takes
-   whichever vendors can actually serve it, the rest take any.
+/* Which connected providers may serve a role: the image and video roles those
+   their tools can run on (the registry's `image_api` and `video_api`, OpenRouter
+   among them), speech OpenRouter, whose request shapes it speaks; an EverOS role
+   takes whichever vendors can actually serve it, the rest take any.
 
    Capability, not auth shape. The filter used to ask `kind === 'key'`, which is
    how the rerank slot came to offer OpenAI -- and, once a self-hosted endpoint
@@ -116,7 +116,9 @@ export function roleValue(r: Role, snap: SettingsSnapshot): RoleValue | null {
    is a separate question, refused at the save with a sentence naming it. */
 export function roleProviders(r: Role, snap: SettingsSnapshot): ProviderRow[] {
   const on = snap.providers.filter((p) => p.on)
-  if (r.media) return on.filter((p) => (r.media === 'image' ? !!p.imageApi : p.id === MEDIA_PROVIDER))
+  if (r.media === 'image') return on.filter((p) => !!p.imageApi)
+  if (r.media === 'video') return on.filter((p) => !!p.videoApi)
+  if (r.media) return on.filter((p) => p.id === MEDIA_PROVIDER)
   if (r.everos) {
     if (snap.everos?.available === false) return []
     const role = r.everos
@@ -224,13 +226,15 @@ async function setRole(r: Role, model: string, provider: string, typed: boolean,
 }
 
 /* The whole selection the checker wants -- model and quality, and for an image
-   pick the provider it runs on, empty for the OpenRouter default -- keeping the
-   quality already chosen. An empty model is how the selection is cleared: the
-   key takes no null, and a clear names no provider, so the one chosen stays. */
+   or video pick the provider it runs on, empty for the OpenRouter default --
+   keeping the quality already chosen. An empty model is how the selection is
+   cleared: the key takes no null, and a clear names no provider, so the one
+   chosen stays. */
 function mediaSelection(kind: string, model: string, provider?: string): { model: string; quality: string; provider?: string } {
   const cur = (dig(store.get().snap.raw, `tools.media.${kind}`) as { quality?: unknown } | undefined) || {}
   const sel = { model, quality: typeof cur.quality === 'string' ? cur.quality : '' }
-  return kind === 'image' && provider !== undefined ? { ...sel, provider: provider === MEDIA_PROVIDER ? '' : provider } : sel
+  const routed = kind === 'image' || kind === 'video'
+  return routed && provider !== undefined ? { ...sel, provider: provider === MEDIA_PROVIDER ? '' : provider } : sel
 }
 
 async function clearRole(r: Role): Promise<SettingsSnapshot | void> {
@@ -310,7 +314,7 @@ export function RolePill({ role, setup }: { role: Role; setup?: boolean }): JSX.
              names it into the state the switch is about to wipe.
              A media role's default is OpenRouter, the one provider every media
              tool runs on, so open that row rather than leaving the reader to
-             find it among fifty-five. */
+             find it among fifty-six. */
           store.setTab('provider')
           if (role.media) store.set({ provider: MEDIA_PROVIDER, provAdd: MEDIA_PROVIDER })
         }}>

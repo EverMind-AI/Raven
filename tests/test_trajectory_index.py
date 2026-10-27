@@ -727,6 +727,159 @@ def test_skeleton_disappears_when_all_descendants_are_trimmed(state, clock):
     assert all(e.turn_number is not None for e in index.entries())
 
 
+def _run_span(*, end, **attrs):
+    attrs = {"subagent.task": "look", "subagent.label": "look", "subagent.task_id": "k1", **attrs}
+    return _span("t", "run", "subagent.run", parent="spawn", start=2, end=end, attrs=attrs)
+
+
+def _run_checkpoint():
+    return _run_span(end=5, **{"subagent.in_progress": True})
+
+
+def _run_final():
+    return _run_span(end=90, **{"subagent.in_progress": False, "subagent.outcome": "completed"})
+
+
+def _spawned(run, *, later=0):
+    """A turn whose spawn call dispatched ``run``, a step of that run, then ``later`` turns."""
+    spans = [_turn("t", "turn", start=0, end=100), _tool("t", "spawn", "turn", start=1, end=2), run]
+    spans.append(_tool("t", "step", "run", start=50, end=51))
+    return spans + [_turn("t", f"later{i}", start=200 + i, end=200 + i) for i in range(later)]
+
+
+def _kept(index: tidx.SessionIndex, key: tuple[str, str]) -> dict:
+    return index.spans.get(key) or index.skeletons[key]
+
+
+def test_a_subagent_run_s_final_record_updates_its_entry_and_leaves_its_steps_alone(state, clock):
+    _append(state, _spawned(_run_checkpoint()))
+    index = _index(state, clock)
+    _refresh_until_ready(index, clock)
+    running = index.entry("t:run:subagent.run")
+    steps = [e for e in index.entries() if e.span_id == "step"]
+    assert running.operation_status == "running" and steps
+
+    _append(state, [_run_final()])
+    _refresh_until_ready(index, clock)
+
+    finished = index.entry("t:run:subagent.run")
+    assert finished.operation_status == "ok"
+    assert finished.revision > running.revision
+    assert [e for e in index.entries() if e.span_id == "step"] == steps
+
+
+def test_a_trimmed_running_subagent_run_keeps_its_in_progress_mark(state, clock):
+    _append(state, _spawned(_run_checkpoint(), later=6))
+    index = _index(state, clock, entries=15)
+    _refresh_until_ready(index, clock)
+
+    assert ("t", "run") not in index.spans
+    assert index.skeletons[("t", "run")]["attributes"]["subagent.in_progress"] is True
+    assert any(e.span_id == "step" for e in index.entries())
+
+
+@pytest.mark.parametrize(
+    ("key", "late"),
+    [
+        (("t", "run"), _run_checkpoint()),
+        (("t", "turn"), _turn("t", "turn", start=0, end=3, in_progress=True)),
+    ],
+    ids=["subagent_run", "session_turn"],
+)
+def test_a_late_checkpoint_does_not_displace_a_trimmed_final_record(state, clock, key, late):
+    _append(state, _spawned(_run_final(), later=6))
+    index = _index(state, clock, entries=15)
+    _refresh_until_ready(index, clock)
+    assert key in index.skeletons and key not in index.spans
+
+    _append(state, [late])
+    _refresh_until_ready(index, clock)
+
+    assert not tent.in_progress_attrs(_kept(index, key)["attributes"])
+    assert not any(e.span_id == key[1] and e.operation_status == "running" for e in index.entries())
+
+
+def test_a_trimmed_checkpoint_still_takes_its_final_record(state, clock):
+    _append(state, _spawned(_run_checkpoint(), later=6))
+    index = _index(state, clock, entries=15)
+    _refresh_until_ready(index, clock)
+    assert ("t", "run") in index.skeletons
+
+    _append(state, [_run_final()])
+    _refresh_until_ready(index, clock)
+
+    assert not tent.in_progress_attrs(_kept(index, ("t", "run"))["attributes"])
+    assert all(e.operation_status == "ok" for e in index.entries() if e.span_id == "run")
+
+
+def test_a_step_written_before_its_run_moves_into_the_run_s_scope_under_a_new_revision(state, clock):
+    _append(state, [span for span in _spawned(_run_final()) if span["spanId"] != "run"])
+    index = _index(state, clock)
+    _refresh_until_ready(index, clock)
+    page = index.list_page(None, 500)
+    before = {e.entry_id: e for e in index.entries() if e.span_id == "step"}
+    assert before and all(e.subagent_scope is None for e in before.values())
+
+    _append(state, [_run_final()])
+    _refresh_until_ready(index, clock)
+
+    after = {e.entry_id: e for e in index.entries() if e.span_id == "step"}
+    assert after.keys() == before.keys()
+    assert all(e.subagent_scope == "t:run" and e.revision > before[e.entry_id].revision for e in after.values())
+    batch = index.changes(page.epoch, page.snapshot_revision, 500)
+    moved = {e.entry_id: e for e in batch.upserts if e.span_id == "step"}
+    assert moved.keys() == after.keys() and all(e.subagent_scope == "t:run" for e in moved.values())
+    assert index.entry("t:run:subagent.run").opens_subagent_scope == "t:run"
+
+
+def test_a_trimmed_run_leaves_its_steps_in_its_scope_with_no_entry_to_open_it(state, clock):
+    _append(state, _spawned(_run_final(), later=6))
+    index = _index(state, clock, entries=15)
+    _refresh_until_ready(index, clock)
+
+    assert ("t", "run") in index.skeletons and ("t", "run") not in index.spans
+    steps = [e for e in index.entries() if e.span_id == "step"]
+    assert steps and {e.subagent_scope for e in steps} == {"t:run"}
+    assert not any(e.span_id == "run" for e in index.entries())
+
+
+def test_trimmed_graph_calls_keep_their_tool_name_and_their_steps_scope(state, clock):
+    def graph(span_id, tool, start):
+        attrs = {"tool.name": tool, "tool.args_preview": "{}", "tool.result_preview": "started"}
+        return _span("t", span_id, "tool.call", parent="turn", start=start, end=start + 1, attrs=attrs)
+
+    spans = [
+        _turn("t", "turn", start=0, end=100),
+        graph("dag", "run_subagent_dag", 1),
+        graph("resolve", "resolve_dag_node", 3),
+        _tool("t", "work", "dag", start=50, end=51),
+        _tool("t", "again", "resolve", start=60, end=61),
+    ]
+    _append(state, spans + [_turn("t", f"later{i}", start=200 + i, end=200 + i) for i in range(6)])
+    index = _index(state, clock, entries=17)
+    _refresh_until_ready(index, clock)
+
+    assert {("t", "dag"), ("t", "resolve")} <= set(index.skeletons)
+    assert index.skeletons[("t", "dag")]["attributes"]["tool.name"] == "run_subagent_dag"
+    assert index.skeletons[("t", "resolve")]["attributes"]["tool.name"] == "resolve_dag_node"
+    scopes = {e.span_id: e.subagent_scope for e in index.entries() if e.span_id in ("work", "again")}
+    assert scopes == {"work": "t:dag", "again": "t:resolve"}
+
+
+def test_a_span_log_with_crlf_line_ends_gives_the_same_scopes(state, clock):
+    """The trace store writes its log in text mode, so on Windows every record ends in CRLF."""
+    _log(state).parent.mkdir(parents=True, exist_ok=True)
+    with _log(state).open("wb") as fh:
+        for span in _spawned(_run_final()):
+            fh.write(json.dumps(span).encode() + b"\r\n")
+    index = _index(state, clock)
+    _refresh_until_ready(index, clock)
+
+    fields = {(e.span_id, e.subagent_scope, e.opens_subagent_scope) for e in index.entries()}
+    assert {("run", None, "t:run"), ("step", "t:run", None)} <= fields
+    assert ("turn", None, None) in fields
+
+
 # ── eviction, restart, refresh ─────────────────────────────────────────
 
 

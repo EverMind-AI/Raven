@@ -52,6 +52,7 @@ const src: ExportSource = {
     return next
   },
   cancel: async (jobId) => { cancels.push(jobId); return { ok: true } },
+  reportProbe: async () => ({ reachable: true, target: 'https://bugs.example', reason: '' }),
   reportStart: () => Promise.reject(new Error('not scripted')),
   reportStatus: () => Promise.reject(new Error('not scripted')),
   reportItem: () => Promise.reject(new Error('not scripted')),

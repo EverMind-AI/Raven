@@ -218,17 +218,23 @@ def asked_for(messages: list[dict], origin=None) -> str:
 
     The metadata block is prepended to the user content by the assembler, and it
     is separated from the message by a blank line -- so a request that begins
-    with it is split there and the rest kept.
+    with it is split there and the rest kept. The turn scratch the assembler
+    appended is cut off the other end.
 
     ``origin`` is the turn's. A re-injected turn (``reinjected``) has no request
     of the owner's to read, so it reads as none and no judgement is paid for it.
     """
     if origin is not None and reinjected(origin):
         return ""
+    # Deferred: ``raven.context_engine`` imports back out of the agent tier.
+    from raven.context_engine.scratch import strip_turn_scratch
+
     for msg in reversed(messages or []):
         if msg.get("role") != "user":
             continue
-        content = msg.get("content")
+        # The turn scratch at the end of the envelope is recalled memory and
+        # routed skills, not the owner's request.
+        content = strip_turn_scratch(msg)
         if isinstance(content, list):
             content = " ".join(str(part.get("text", "")) for part in content if isinstance(part, dict))
         text = str(content or "")

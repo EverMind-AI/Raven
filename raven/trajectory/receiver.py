@@ -2,9 +2,12 @@
 
 A receiver accepts a package, checks it (:mod:`raven.trajectory.package_check`),
 lands the original bytes under ``<save_dir>/<UTC date>/`` beside a receipt
-sidecar, and answers with an Upload Receipt. It does nothing else: no
-authentication, no listing, no download — what reaches the port is governed by
-the network it listens on.
+sidecar, and answers with an Upload Receipt. It takes only uploads that answer
+its Upload Challenge (:mod:`raven.trajectory.receiver_auth`), a gate that keeps
+out HTTP clients that are not Raven and identifies nobody; it serves no listing
+and no download, and what reaches the port is still governed by the network it
+listens on. A challenge is sealed rather than stored, so admitting an upload
+needs no state beyond a key held in memory.
 
 Landing order is the one invariant readers rely on. The sidecar is written
 first and the package is moved into place last, so a package in a date
@@ -18,6 +21,11 @@ Package inspection hashes up to the configured unpacked limit, so it runs in a
 worker thread. Cancelling the request — a client that went away, a timeout,
 shutdown — stops that thread cooperatively and waits for it before the
 temporary file is removed, so no thread ever reads a file from under itself.
+
+A client asks ``/v1/hello`` before a report starts, to learn that what answers
+at the URL it was given is a Raven receiver and which protocol it speaks.
+``/healthz`` only says that something is alive, and it sits at the root, not
+under the path prefix a client's base URL may carry.
 """
 
 from __future__ import annotations
@@ -48,11 +56,18 @@ from loguru import logger
 
 from raven.trajectory.bugreport import is_report_id
 from raven.trajectory.package_check import PackageError, PackageLimits, PackageSummary, inspect_package
+from raven.trajectory.receiver_auth import CHALLENGE_EXPIRED, challenge_problem, issue_challenge, response_matches
 
 ENDPOINT_PATH = "/v1/bugreports"
 HEALTH_PATH = "/healthz"
+HELLO_PATH = "/v1/hello"
+CHALLENGE_PATH = "/v1/challenge"
+SERVICE_NAME = "raven-bug-report-receiver"
+PROTOCOL_VERSION = 1
 REPORT_ID_HEADER = "X-Raven-Report-Id"
 SHA256_HEADER = "X-Raven-Package-Sha256"
+CHALLENGE_HEADER = "X-Raven-Challenge"
+RESPONSE_HEADER = "X-Raven-Response"
 GZIP_TYPES = ("application/gzip", "application/x-gzip")
 RECEIPT_SCHEMA = "bug_report_receipt"
 RECEIPT_SCHEMA_VERSION = 1
@@ -70,6 +85,8 @@ RECEIPT_ID = re.compile(r"^rc-[0-9a-f]{12}$")
 _RECEIPT_ID = RECEIPT_ID
 _RECEIPT_FIELDS = ("receipt_id", "report_id", "sha256", "size_bytes", "received_at")
 _HTTP_CODES = {404: "not_found", 405: "method_not_allowed"}
+_NO_STORE = {"Cache-Control": "no-store"}
+_CHALLENGE_REFUSED = {"WWW-Authenticate": "Raven-Challenge"}
 _BUSY_RETRY_AFTER = 5
 _SHUTDOWN_TIMEOUT = 30.0
 _monotonic = time.monotonic
@@ -107,21 +124,40 @@ class ReceiverConfig:
     concurrency: int = 4
     idle_timeout: float = 30.0
     total_timeout: float = 600.0
+    challenge_ttl: float = 300.0
     clock: Callable[[], datetime] = _utcnow
 
 
 class ReceiverError(Exception):
-    def __init__(self, status: int, code: str, message: str = "", *, retry_after: int | None = None) -> None:
+    def __init__(
+        self,
+        status: int,
+        code: str,
+        message: str = "",
+        *,
+        retry_after: int | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(f"{status} {code}: {message}")
         self.status = status
         self.code = code
         self.message = message
         self.retry_after = retry_after
+        self.headers = headers
 
 
-def _json_error(status: int, code: str, message: str = "", *, retry_after: int | None = None) -> web.Response:
-    headers = {"Retry-After": str(retry_after)} if retry_after is not None else None
-    return web.json_response({"error": code, "message": message}, status=status, headers=headers)
+def _json_error(
+    status: int,
+    code: str,
+    message: str = "",
+    *,
+    retry_after: int | None = None,
+    headers: dict[str, str] | None = None,
+) -> web.Response:
+    merged = dict(headers or {})
+    if retry_after is not None:
+        merged["Retry-After"] = str(retry_after)
+    return web.json_response({"error": code, "message": message}, status=status, headers=merged or None)
 
 
 @dataclass(frozen=True)
@@ -650,6 +686,7 @@ class Receiver:
         self._ledger = DailyLedger(
             config.save_dir, max_bytes=config.max_daily_bytes, max_count=config.max_daily_count, clock=config.clock
         )
+        self._challenge_key = secrets.token_bytes(32)
 
     @property
     def config(self) -> ReceiverConfig:
@@ -673,6 +710,16 @@ class Receiver:
 
     async def handle_health(self, request: web.Request) -> web.Response:
         return web.json_response({"status": "ok"})
+
+    async def handle_hello(self, request: web.Request) -> web.Response:
+        return web.json_response({"service": SERVICE_NAME, "protocol": PROTOCOL_VERSION}, headers=_NO_STORE)
+
+    def issue_challenge(self) -> str:
+        return issue_challenge(self._challenge_key, self._config.clock().timestamp())
+
+    async def handle_challenge(self, request: web.Request) -> web.Response:
+        payload = {"challenge": self.issue_challenge(), "expires_in": int(self._config.challenge_ttl)}
+        return web.json_response(payload, headers=_NO_STORE)
 
     async def handle_upload(self, request: web.Request) -> web.Response:
         started = _monotonic()
@@ -712,6 +759,7 @@ class Receiver:
                 )
             report_id, declared, expected = self._check_headers(request)
             upload.report_id, upload.declared = report_id, declared
+            self._check_challenge(request, report_id, expected, declared)
             accounting_date = self._config.clock().astimezone(timezone.utc).strftime("%Y-%m-%d")
             upload.reservation = self._ledger.reserve(accounting_date, declared)
             self._check_disk()
@@ -719,7 +767,7 @@ class Receiver:
                 return await self._receive(request, upload, report_id, declared, expected, accounting_date)
         except ReceiverError as exc:
             upload.code = exc.code
-            return _json_error(exc.status, exc.code, exc.message, retry_after=exc.retry_after)
+            return _json_error(exc.status, exc.code, exc.message, retry_after=exc.retry_after, headers=exc.headers)
         except TimeoutError:
             upload.code = "timeout"
             return _json_error(
@@ -822,6 +870,25 @@ class Receiver:
             raise ReceiverError(400, "bad_request", f"{SHA256_HEADER} is missing or not a lowercase sha256")
         return report_id, declared, expected
 
+    def _check_challenge(self, request: web.Request, report_id: str, sha256: str, declared: int) -> None:
+        """Refuse an upload that does not answer a live challenge for exactly this package.
+
+        It runs before the budget is reserved and the body is read, so a refused
+        request leaves nothing behind; it has already spent a rate-limit token.
+        """
+        challenge = request.headers.get(CHALLENGE_HEADER, "")
+        response = request.headers.get(RESPONSE_HEADER, "")
+        now = self._config.clock().timestamp()
+        problem = challenge_problem(challenge, self._challenge_key, now, self._config.challenge_ttl)
+        if problem == CHALLENGE_EXPIRED:
+            raise ReceiverError(401, problem, "the challenge expired; ask for a new one", headers=_CHALLENGE_REFUSED)
+        if problem is not None or not response_matches(
+            challenge, response, report_id=report_id, sha256=sha256, size_bytes=declared
+        ):
+            raise ReceiverError(
+                401, "unauthorized", "this receiver only takes uploads from Raven", headers=_CHALLENGE_REFUSED
+            )
+
     async def _receive_body(self, request: web.Request, part: Path, declared: int) -> str:
         digest = hashlib.sha256()
         received = 0
@@ -877,13 +944,15 @@ async def _json_errors(request: web.Request, handler: Any) -> web.StreamResponse
 
 
 def build_app(config: ReceiverConfig, *, store: ReceiverStore | None = None) -> web.Application:
-    """The aiohttp application: prepares the store, then serves the two routes."""
+    """The aiohttp application: prepares the store, then serves its routes."""
     receiver = Receiver(config, store=store)
     receiver.store.prepare()
     app = web.Application(middlewares=[_json_errors])
     app[RECEIVER_KEY] = receiver
     app.router.add_post(ENDPOINT_PATH, receiver.handle_upload)
     app.router.add_get(HEALTH_PATH, receiver.handle_health)
+    app.router.add_get(HELLO_PATH, receiver.handle_hello)
+    app.router.add_post(CHALLENGE_PATH, receiver.handle_challenge)
     return app
 
 
@@ -942,11 +1011,17 @@ def run_receiver(config: ReceiverConfig, *, ready: Callable[[str, int], None] | 
 
 
 __all__ = [
+    "CHALLENGE_HEADER",
+    "CHALLENGE_PATH",
     "ENDPOINT_PATH",
     "HEALTH_PATH",
+    "HELLO_PATH",
+    "PROTOCOL_VERSION",
     "RECEIVER_KEY",
     "REPORT_ID_HEADER",
+    "RESPONSE_HEADER",
     "RUNNER_OPTIONS",
+    "SERVICE_NAME",
     "SHA256_HEADER",
     "DailyLedger",
     "Receiver",

@@ -67,6 +67,7 @@ EXPECTED_PROVIDER_NAMES = {
     "aionly",
     "atlascloud",
     "radeon_cloud",
+    "opper",
     "gpustack",
     "ovms",
     "bigmodel",

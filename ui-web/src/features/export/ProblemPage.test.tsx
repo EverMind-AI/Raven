@@ -8,7 +8,7 @@ import { resetSources, setSources } from '../../state/sources'
 import { ExportApp } from './ExportApp'
 import * as store from './store'
 
-import type { ExportSource, ExportTurn, Problem, ReportStatus } from './types'
+import type { ExportSource, ExportTurn, Problem, ReportProbe, ReportStatus } from './types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -17,6 +17,10 @@ const turn = (n: number): ExportTurn => ({
 })
 
 let filed: Problem[]
+let probes: number
+let onProbe: () => Promise<ReportProbe>
+const REACHABLE: ReportProbe = { reachable: true, target: 'https://bugs.example', reason: '' }
+const DOWN: ReportProbe = { reachable: false, target: 'https://bugs.example', reason: 'could not reach bugs.example' }
 const collecting: ReportStatus = {
   report_id: 'rs-1', bug_report_id: null, phase: 'collecting', error: null,
   history: { state: 'on', auto_kept: 0, auto_redacted: 0, warning: null }, items: null, summary: null, receipt: null, record_dir: null,
@@ -27,6 +31,7 @@ const src: ExportSource = {
   start: () => Promise.reject(new Error('not scripted')),
   status: () => Promise.reject(new Error('not scripted')),
   cancel: async () => ({ ok: true }),
+  reportProbe: () => { probes += 1; return onProbe() },
   reportStart: async (_key, _ids, problem) => { filed.push(problem); return { report_id: 'rs-1' } },
   reportStatus: async () => collecting,
   reportItem: () => Promise.reject(new Error('not scripted')),
@@ -59,6 +64,8 @@ async function atProblem(): Promise<void> {
 beforeEach(() => {
   vi.useFakeTimers()
   filed = []
+  probes = 0
+  onProbe = async () => REACHABLE
   setSources({ export: src })
   setTranslator((key, vars) => (vars ? `${key}:${JSON.stringify(vars)}` : key))
 })
@@ -142,5 +149,73 @@ describe('the problem page', () => {
     expect(fields()[0]!.value).toBe('it hangs')
     expect(fields()[3]!.value).toBe('click export')
     expect($('.export-primary').hasAttribute('disabled')).toBe(false)
+  })
+})
+
+
+describe('the receiver check', () => {
+  const notice = (): HTMLElement | null => document.querySelector<HTMLElement>('.export-probe')
+  const recheck = (): HTMLButtonElement => $<HTMLButtonElement>('.export-probe .export-btn')
+
+  it('says nothing while the receiver answers', async () => {
+    await atProblem()
+    expect(probes).toBe(1)
+    expect(notice()).toBeNull()
+    expect($('.export-primary').textContent).toBe('gui.export.next')
+  })
+
+  it('warns that the receiver is down, and starts only when the reader goes on', async () => {
+    onProbe = async () => DOWN
+    await atProblem()
+    expect(notice()!.getAttribute('role')).toBe('status')
+    expect(notice()!.textContent).toContain(
+      'gui.export.probe_down:{"target":"https://bugs.example","reason":"could not reach bugs.example"}',
+    )
+    expect(notice()!.textContent).toContain('gui.export.probe_note')
+    type(fields()[0]!, 'it hangs')
+    expect($('.export-primary').textContent).toBe('gui.export.probe_continue')
+    press('.export-primary')
+    await settle()
+    expect(filed).toHaveLength(1)
+    expect(notice()).toBeNull()
+  })
+
+  it('checks again on request, with the button off while it checks', async () => {
+    onProbe = async () => DOWN
+    await atProblem()
+    let answer: (value: ReportProbe) => void = () => undefined
+    onProbe = () => new Promise<ReportProbe>((resolve) => { answer = resolve })
+    act(() => { fireEvent.click(recheck()) })
+    expect(probes).toBe(2)
+    expect(recheck().disabled).toBe(true)
+    expect(notice()!.textContent).toContain('gui.export.probe_down')
+    await act(async () => { answer(REACHABLE) })
+    await settle()
+    expect(notice()).toBeNull()
+    expect($('.export-primary').textContent).toBe('gui.export.next')
+  })
+
+  it('says when the check got no answer in time', async () => {
+    onProbe = () => new Promise<ReportProbe>(() => undefined)
+    await atProblem()
+    await settle(store.PROBE_WAIT_MS)
+    expect(notice()!.textContent).toContain('gui.export.probe_late')
+    expect($('.export-primary').textContent).toBe('gui.export.probe_continue')
+  })
+
+  it('shows a start waiting on the check, with no way back meanwhile', async () => {
+    let answer: (value: ReportProbe) => void = () => undefined
+    onProbe = () => new Promise<ReportProbe>((resolve) => { answer = resolve })
+    await atProblem()
+    type(fields()[0]!, 'it hangs')
+    expect(document.querySelector('.export-ghost')).not.toBeNull()
+    press('.export-primary')
+    expect($('.export-primary').textContent).toBe('gui.export.probe_checking')
+    expect($('.export-primary').hasAttribute('disabled')).toBe(true)
+    expect(notice()!.textContent).toContain('gui.export.probe_checking')
+    expect(document.querySelector('.export-foot .export-ghost')).toBeNull()
+    await act(async () => { answer(REACHABLE) })
+    await settle()
+    expect(filed).toHaveLength(1)
   })
 })

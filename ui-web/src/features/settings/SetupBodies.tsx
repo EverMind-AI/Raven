@@ -9,11 +9,11 @@ import { useSyncExternalStore } from 'react'
 import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
 import { Card, Chip, InlineErr, Row, Rov } from './Fields'
-import { KeyRow, VendorSelect } from './pages/Tools'
+import { KeyRow, VendorSelect, blocker } from './pages/Tools'
 import { Providers } from './providers/Providers'
 import { RoleRows, Roles } from './providers/Roles'
 import { SetupWait } from './Skeletons'
-import { FETCH_KEYLESS, WEB_VENDOR, WEB_VENDOR_LABEL, WEB_VENDOR_URL, keySet, legacyKey, vendorKey, webVendor } from './source'
+import { FETCH_KEYLESS, SEARCH_KEYLESS, WEB_VENDOR, WEB_VENDOR_LABEL, WEB_VENDOR_URL, keySet, legacyKey, vendorKey, webVendor } from './source'
 import * as store from './store'
 
 import type { JSX } from 'react'
@@ -60,9 +60,13 @@ export function WebStepBody(): JSX.Element {
   const fetchPick = WEB_VENDOR.web_fetch!
   const searchVendor = webVendor('web_search', raw)
   const fetchVendor = webVendor('web_fetch', raw)
-  const searchReady = keySet('web_search', searchVendor, raw)
+  const searchReady = !blocker('web_search', raw)
+  const searchOptional = SEARCH_KEYLESS.has(searchVendor)
   const fetchOptional = FETCH_KEYLESS.has(fetchVendor)
   const fetchReady = fetchOptional || keySet('web_fetch', fetchVendor, raw)
+  const searchLabel = searchOptional
+    ? `${t('gui.settings.tools.vendor_key', { name: WEB_VENDOR_LABEL[searchVendor] || searchVendor })} · ${t('gui.settings.roles.optional')}`
+    : t('gui.settings.tools.vendor_key', { name: WEB_VENDOR_LABEL[searchVendor] || searchVendor })
   const fetchLabel = fetchOptional
     ? `${t('gui.settings.tools.vendor_key', { name: WEB_VENDOR_LABEL[fetchVendor] || fetchVendor })} · ${t('gui.settings.roles.optional')}`
     : t('gui.settings.tools.vendor_key', { name: WEB_VENDOR_LABEL[fetchVendor] || fetchVendor })
@@ -79,9 +83,10 @@ export function WebStepBody(): JSX.Element {
               <VendorSelect keyName={searchPick.path} value={searchVendor} opts={searchPick.vendors.map((v) => [v, WEB_VENDOR_LABEL[v] || v])} />
             </Row>
             <KeyRow
-              label={t('gui.settings.tools.vendor_key', { name: WEB_VENDOR_LABEL[searchVendor] || searchVendor })}
+              label={searchLabel}
               keyName={vendorKey(searchVendor)} legacy={legacyKey('web_search', searchVendor)} url={WEB_VENDOR_URL[searchVendor]} raw={raw}
             />
+            {searchOptional && <Row><Rov>{t('gui.settings.setup.keyless_hint')}</Rov></Row>}
           </Card>
           <Card title={t('gui.settings.setup.web_fetch')}>
             <Row label={<>

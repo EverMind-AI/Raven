@@ -43,6 +43,29 @@ cd Raven
 也会安装已发布的 wheel 包。如需在管道安装时指定本地源码目录，请设置
 `RAVEN_LOCAL_SRC=<dir>`。
 
+### 下载源连不上时 { #when-a-download-host-cannot-be-reached }
+
+安装脚本、`raven resources`、`raven upgrade`，以及 Raven 通过 `uvx` 或 `npx` 启动的
+智能体和 MCP 服务，都会先从默认地址下载。默认地址完全连不上时，改从中国大陆的镜像下载：
+Hugging Face 用 hf-mirror.com，GitHub 上的文件用 jsDelivr，PyPI 和 LibreOffice 用清华
+TUNA 镜像，Node.js、npm、Playwright 以及 uv 安装的 Python 用 npmmirror。默认地址返回
+HTTP 错误或证书校验失败时都不会切换。经过代理时，代理拒绝连接该地址（403 或 407）同样
+不会切换；代理返回 5xx，或 SOCKS 代理连不通，都算作连不上。uv 自带的安装脚本和
+Playwright 下载 Chromium 时说不清失败原因，所以会再探测它们下载用的那几个地址，全都连不上
+时才改从镜像下载；LibreOffice 和字体文件有固定的摘要校验，默认地址都失败后会改从镜像下载。
+
+你自己配置的下载地址会保留：`HF_ENDPOINT`，写在 `UV_DEFAULT_INDEX` 或 `uv.toml` 里的 uv
+索引，为 uv 安装脚本或 uv 安装的 Python 指定的下载源（如 `UV_INSTALLER_GITHUB_BASE_URL`、
+`UV_PYTHON_INSTALL_MIRROR`），`PLAYWRIGHT_DOWNLOAD_HOST`，以及 npm 能读到的任何一处
+registry 设置。`uvx` 和 `npx` 只在镜像连得上时才切换，所以缓存里已有的包离线时照样能启动。
+`uvx` 的镜像只写在这次启动的命令行上，它启动的工具看不到。npx 会把 registry 传给它启动的
+所有进程，在那里会盖过项目自己指定的 registry，所以这种情况下 Raven 不运行 npx：它从镜像把
+包装进自己的目录（`~/.raven/cache/npx`；Raven 节点会放在节点自己的目录下），再从那里启动包的
+命令，环境仍是这次启动原本的环境。项目里或 npm 全局已经装好的包仍由 npx 启动，项目的 `.npmrc`
+指定了 registry 时也一样。设置 `RAVEN_NO_MIRROR=1` 可让所有下载都只使用默认地址。这个开关在
+启动自带的环境里也会被读到，Raven 节点也会收到宿主机的这个值，所以跑在另一台机器上的智能体
+同样只用自己的地址。Raven 自己的发布文件来自 GitHub Releases，没有镜像。
+
 ## 更新 Raven { #update-raven }
 
 按安装时的方式更新 Raven。再次运行安装脚本时，它会先停止正在运行的 WebUI，

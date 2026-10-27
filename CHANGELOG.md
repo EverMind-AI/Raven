@@ -6,6 +6,26 @@ All notable changes to Raven are documented here.
 
 ### Added
 
+- The history slot is filled by a **history strategy**, `context.history.strategy`:
+  `compacting` (the new default) or `curator` (the previous behaviour, one
+  setting away). Compacting keeps the conversation verbatim until the window
+  nears a trigger that scales with its size, then replaces large tool results
+  with a one-line record and a `[[ref ...]]` the model can read back with the
+  new `context_retrieve` tool, folds what it drops, and past that writes an
+  eight-section checkpoint that survives a restart. An opt-in
+  `context.cache.compactionBreakpoint` (off by default) marks, on a
+  breakpoint-style prompt cache (Anthropic), where the next summary is expected
+  to end; it costs a cache write of the history on every turn past the target
+  (1.07x to 2.0x the cost in review), so it stays off. Memory and routed skills
+  move from the system prompt to the end of the turn's user message
+  (`context.cache.turnScratch`), tool results are filed up to
+  `context.toolResultMaxChars` (1,000,000 characters) instead of 16,000, and a
+  request near the window asks for no more reply than fits beside its prompt.
+  Sessions carry a revision (`log_id` and generation) so a ref minted before an
+  undo or `/new` never names another message. A turn is now filed from its own
+  record, so an in-turn summary or an elided tool body no longer reaches the
+  session file. `CONTRACTS_VERSION` moves to 39.
+
 - The Agent Hub has a **Machines** tab: the registered machines with the state
   of each one's link and Raven node, a form that registers one (it reaches the
   machine first, like `raven ops connection add`, and explains a refusal by
@@ -15,8 +35,79 @@ All notable changes to Raven are documented here.
   working directory there. `raven ops connection remove <id>` is the command
   behind the removal, and `install-node` now records the node it put on the
   machine (`node_install` on the row), which is how the tab says a machine has
-  the node before any link is up. New RPC group
-  `machines.{list,add,install_node,doctor,remove}`.
+  the node before any link is up. The form, and `raven ops connection add
+  --non-interactive --auth password --password-stdin`, register a machine by
+  password as well: the password (at least six characters, or the scrubber
+  would pass it as ordinary text) is kept on this computer for Raven's own
+  logins (`~/.raven/keys/<id>.password`, readable by the owner alone), handed
+  to ssh on every connection through its askpass hook, and never on a command
+  line, in a log or in an answer; such a machine gets no ssh alias and no jump
+  host, its password answers the registered account's own password prompt (at
+  the address as ssh resolves it, so a `Host` alias from the owner's ssh config
+  works too, though not one Raven wrote for another machine that sends ssh
+  elsewhere: such a pair is refused at registration in either order and again
+  on connecting, while a key machine whose alias names its own id as the
+  address, `gpu1` at `gpu1`, leaves a password machine at `gpu1` free to
+  register, and a password connection never canonicalizes the host)
+  and no other, Oncall campaigns run on it as Raven's own
+  connections do and at
+  the registered address alone, and the mode is not offered on Windows. A failed
+  or cancelled registration preserves the password written by another pending
+  registration of the same machine, including when both passwords are identical.
+  New RPC group `machines.{list,add,install_node,doctor,remove}`.
+
+- The Machines tab says what to do next. A card names the agent entries
+  connected on the machine (*No agent connected here yet* until one is; the
+  state line now reads *Link up, no agent running*), and a machine whose node
+  is up has **Connect an agent on this machine** in its sheet: pick the agent
+  and its working directory there, and **Connect** adds `<preset>@<machine id>`
+  with one proof prompt run on the machine. The list has every preset a node
+  can start, including one already connected on this computer. `subagents.add`
+  now refuses a preset the machine already has when no name is given, naming
+  the entry there, so the page and a chat cannot add the same agent on one
+  machine twice between them; a named add is still a second entry. A preset
+  that is not installed on this computer can be connected onto a machine from
+  its own sheet (*Runs on*); a row that already exists, switched off, connects
+  by its own button as before. While an add is still running on a machine, a
+  form opened again on that machine greys the preset rather than adding it
+  twice. The register form fills the private-key path with the key ssh would
+  try first (`id_rsa` before `id_ed25519`) instead of a placeholder. New read-only RPCs
+  `subagents.presets` and `machines.local_keys`; `machines.list` rows carry
+  `agents_here`.
+
+- A machine's switched-off agent entries are shown, not counted nowhere. A
+  card that listed only connected entries read *No agent connected here yet*
+  beside a connect form that greyed the preset as *already connected on this
+  machine*, because the entry still holds the machine for the add. The card,
+  the sheet and the form now show such an entry marked *switched off* (the
+  card line reads *N on this machine*, not *connected here*); in the
+  form each such entry is a choice of its own, by name, with **Reconnect**,
+  which switches that entry back on (with the same proof prompt) instead of
+  adding a second one. `machines.list` rows carry `agents_off_here`; `subagents.presets`
+  lists `on_machines` (connected) apart from `off_on_machines` (switched off,
+  with the entry's name).
+
+- The Machines tab's connect form can be waited on and stopped. Its line
+  counts the seconds, the hint says what the wait is for and its limit, and
+  **Cancel** stops the run on the machine and writes nothing:
+  `subagents.test_cancel` now reaches the proof prompt a `subagents.add`,
+  `subagents.toggle` or `subagents.update` sends, under the entry's name --
+  and the capability record an acp row is measured with once it answers --
+  and that call then refuses with `cancelled: true` in its error data. A
+  Cancel that finds nothing left to stop is not said as a cancel: the form
+  says it is too late to cancel and waits for the connect's own answer, and
+  one whose stop gives no answer is said as not confirmed, since only the
+  stop's answer says whether anything was written. While the
+  proof runs the row reports `test_running`, a Test on it is refused as a
+  second test is, and a connect pressed during a Test is refused the same
+  way, before anything is spent. A wait with no answer ends after ten
+  minutes -- above the server's own worst case, the capability record
+  included -- with the run asked to stop and the
+  Agents page named as where to look, instead of one line that never changed
+  (seen once on 2026-10-20, after the socket dropped without saying so). A
+  machine nobody has reached yet reads *Not connected; the link opens when
+  work is sent* instead of *No link*, which read as a fault on every card
+  when the tab opened.
 
 - The bug report review remembers your redaction decisions. Every keep or
   replace answer is stored in `redaction_history.json` under the Raven home
@@ -30,12 +121,19 @@ All notable changes to Raven are documented here.
 - Bug Report Packages can be sent to a Bug Report Receiver. `raven trajectory
   receiver --save-dir DIR` runs the receiver: it checks each package in a
   stream without extracting it, stores the original bytes by UTC day next to
-  a receipt sidecar, answers the same package with the same receipt, and
-  bounds abuse with per-address rate limits, daily budgets, a free-disk
-  reserve and timeouts rather than with authentication. `report-bug` and the
-  browser's *Report a bug* upload the package as soon as it lands when
+  a receipt sidecar, and answers the same package with the same receipt. It
+  takes only uploads that answer its Upload Challenge -- a shallow gate that
+  keeps out HTTP clients that are not Raven, built on a constant published
+  with the source, not a credential -- and bounds abuse with per-address rate
+  limits, daily budgets, a free-disk reserve and timeouts. `report-bug` and
+  the browser's *Report a bug* upload the package as soon as it lands when
   `RAVEN_BUGREPORT_URL` names a receiver, and `raven trajectory
-  upload-bug-report` sends a filed report again.
+  upload-bug-report` sends a filed report again. Before a report starts,
+  `report-bug`, the browser and the WebUI's *Report a problem* ask the
+  receiver's `/v1/hello` and say so when it does not answer: an interactive
+  run asks whether to go on (the WebUI offers *Continue anyway*), and
+  `report-bug --yes` goes on and keeps the package if the upload fails. A
+  proxy in front of the receiver must forward all of `/v1/`.
 
 - Memory runs on native Windows. EverOS 1.4.0 runs there without WSL, so
   the memory plugin's pin moves to `everos[multimodal]==1.4.1` and the
@@ -75,6 +173,17 @@ All notable changes to Raven are documented here.
   sub-agent's search tool routes through it too and pages with a result
   offset like SerpApi.
 
+- Keenable joins the `web_search` and `web_fetch` vendors:
+  `tools.web.search.provider: keenable` and `tools.web.fetch.provider:
+  keenable`, with an optional key under `tools.web.providers.keenable.apiKey`
+  (or `KEENABLE_API_KEY`). It is the one search vendor that answers without a
+  key, at a lower rate limit, so `web_search` on it is offered keyless the way
+  `web_fetch` on Jina is; a key moves both requests to the keyed endpoints and
+  lifts the limit. Its snippets are page text, collapsed and cut to 300
+  characters. The research sub-agent's two tools route through it too, and its
+  launcher starts with Keenable selected and no key. The defaults are
+  unchanged.
+
 - Two dark templates join the bundled catalogue, cut from user uploads: a
   near-black circuit-board deck for product launches and a green aurora deck
   for trend reports. Hidden vendor pages are gone, vendor marks are stripped,
@@ -83,7 +192,43 @@ All notable changes to Raven are documented here.
   style outright: it takes one when the request asks for dark, black, night or
   a technology register.
 
+- A DAG graph can decide where it goes next in one run. A node that declares
+  `routes` is a decision node: the verdict call then also picks, from the
+  node's answer and the conditions the graph's author wrote, the route it
+  selects -- for `select: many`, any number of routes, none included. A
+  downstream node carries `when`, a guard over `<node>.<route>` and
+  `<node>.done` atoms with `not`, `and`, `or` and parentheses, evaluated once
+  its dependencies settle. A node a branch left out ends `not_executed` with
+  its reason and is never dispatched; a node of the same graph that reads one
+  gets a fixed sentence in place of the missing output and a note naming the
+  inputs that may be missing, and a file reference to such a node's files,
+  however its path is spelled, is refused. A decision node whose route cannot be determined fails rather than
+  guessing. Playbooks carry the same three fields, and the TUI's DAG panel and
+  the web tasks list show what each node's branch did.
+
+- The image and video roles run on MiniMax. Settings > Model offers MiniMax's
+  two API-key providers (`minimax`, `minimax_cn_api`) for both roles, and a
+  section naming one takes that provider's address and key and calls
+  MiniMax's own APIs: `/v1/image_generation`, where an input image is the
+  character to keep, and the video APIs, text-to-video or from a
+  `first_frame_image`. The video section takes a `provider` as the image
+  section does; one written there by hand was ignored before and is honoured
+  now. Raven-PPT's pinned image settings keep the provider they run on, and
+  `PPT_IMAGE_PROVIDER` puts a deck's pictures on a provider of its own. See
+  `docs/minimax-media.md`.
+
 ### Changed
+
+- A complete install now carries the `everos-cloud-memory` plugin, so the
+  hosted EverOS is a memory backend a user can pick rather than a wheel
+  attached to the release with no install path: the one-line installer,
+  `raven upgrade`, the beta channel and the Docker image all name it beside
+  the local `everos-memory`, and the rung that drops the product engines when
+  a native build refuses keeps both memory backends rather than only the local
+  one. Installed is not selected -- `memory.backend` still decides, and an
+  install that never picks the cloud behaves exactly as before, except that
+  `raven onboard` now asks which memory backend to use instead of taking the
+  only one installed.
 
 - Memory runs on EverOS 1.4.2, which fixes what a memory server that stays up
   for days ran into: a LanceDB index reader leaked file descriptors until
@@ -145,11 +290,10 @@ All notable changes to Raven are documented here.
   terminal shows as raw tags. The shape gate, the clarify exemption and
   `scripts/research_report_audit.py` read the new layout, and the old
   three-heading layout stays the class default (`finalShape.reportLayout`).
-  An install that has already run Raven-Research keeps the contract it seeded
-  into its workspace (`agent_memory/profile/agent.md`), because seeding is
-  once-only so that an operator's edits survive; it moves to the new layout
-  when that file is deleted, and until then the gate still accepts its
-  three-heading replies.
+  An install that has already run Raven-Research moves to the new layout at
+  its next launch, since the contract in its workspace
+  (`agent_memory/profile/agent.md`) is now regenerated on every launch (see
+  Fixed); the gate still accepts three-heading replies.
   The identity no longer carries the measured-guidance block, whose short-run
   and one-answer numbers came from a short-answer benchmark
   (`measuredGuidance` off). The product label moves to
@@ -198,6 +342,17 @@ All notable changes to Raven are documented here.
   handed back the picture the author had just rejected. A call generates; the
   file name is unchanged so the new picture arrives without the page being
   edited.
+
+- Node judgement is always on. `subagentDag.verdictEnabled` no longer exists,
+  and a load-time migration removes it from the config file and says so once;
+  set again later, by an older build sharing the config, it is dropped on every
+  load. A config that turned judgement off now has every finished node judged:
+  one more model call per node, and a node judged not to have accomplished its
+  task can suspend as `exception` and report, as it does wherever judgement was
+  on. `raven playbook run` judges its nodes too, on the same `subagentDag`
+  settings; with nobody there to answer, a node judged not to have accomplished
+  its task fails on the judge's reason. A host with no model to judge with
+  refuses a graph that declares routes.
 
 ### Removed
 
@@ -274,6 +429,220 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- A sub-agent of the in-process or OpenAI-API kind whose model ends its turn
+  with nothing visible -- the one-space
+  reply OpenRouter hands back for an empty turn, or the empty reply of a
+  vendor that keeps no native finish reason -- no longer completes with that
+  as its answer. The in-process backend read only a missing reply as no
+  answer, so a blank one was recorded completed, a spawn told the parent it
+  returned, and a DAG node was left to its judge with nothing to judge. A
+  blank reply now gets the one wrap-up call a run out of rounds gets, worded
+  for what happened, and a run that answers nothing twice fails with
+  `SubagentNoAnswerError` saying so, rather than that it used all its rounds.
+  The OpenAI-API backend handed a blank reply back as the answer too; it now
+  fails the run as one with no answer. A cli entry's answer is what it
+  printed, and is not changed here.
+  In a direct chat an answer the backend waited for rather than streamed --
+  the wrap-up's, on either path, or the one it asks for again after a cut
+  stream -- now streams like any other reply: once anything had streamed
+  before it, the turn sent no closing text, and the answer was recorded but
+  never shown.
+
+- In the TUI on native Windows, typing with a Chinese IME no longer duplicates
+  characters. The console was told to re-encode keys through Kitty keyboard /
+  modifyOtherKeys, which doubles IME commits before they reach Raven's input
+  parser; native Windows now leaves input in the terminal's raw encoding.
+  Shift+Enter no longer inserts a newline on native Windows, because the
+  console no longer reports the modifier; Alt+Enter, Ctrl+Enter and Ctrl+J
+  still do.
+
+- Leaving the TUI with Ctrl+C on Windows conpty restores the primary screen
+  once. The final frame no longer overlaps the shell prompt because the Ink
+  instance and React's unmount cleanup now share one idempotent alternate-screen
+  exit, ordered before the remaining terminal resets.
+
+- Installing the Raven node on a machine whose package index crawls there no
+  longer stalls the install. The index pip is configured with (else PyPI) is
+  timed from the machine first; when it cannot be reached there, or serves
+  slower than 256 KB/s, the packages come from the faster of two PyPI mirrors
+  in mainland China (Tsinghua's TUNA, Alibaba Cloud's), with the machine's own
+  index tried after it, and the plan says so; `RAVEN_NO_MIRROR=1` keeps every
+  install on the machine's index. The **Machines** tab now waits for as long as
+  an install runs, where a fifteen-minute deadline of its own gave up just before
+  the gateway reported a step out of time and left the card spinning; such a
+  step now names itself and the index it was downloading from instead of
+  saying the machine did not answer; a half-made Raven node left by a step
+  given up on no longer fails the next attempt; and the optional search package
+  running out of time no longer fails the install.
+
+- A turn's sub-agent marking in the trajectory view, and whether the export
+  and bug-report turn picker lists it, now depend on that turn alone. A
+  message sent after a sub-agent had reported into an idle session was
+  recorded as dispatched by that sub-agent -- drawn as a sub-agent turn and
+  missing from the picker -- and a second report queued behind the first was
+  attributed to the first sub-agent, while a report that arrived during a
+  running turn carried no attribution at all. Each report now names the run
+  that sent it, or the call that dispatched its graph, whether the session
+  was idle or busy, so a report that arrives during a running turn is now
+  exported with the turn that dispatched it instead of being listed on its
+  own. A report turn no longer acts in the finished sub-agent's browser tab
+  either. Turns recorded before this keep the attribution they were recorded
+  with.
+
+- In the web UI, the **What came back** fold of a DAG node that stopped on
+  a decision no longer opens onto the brief written for the model -- the
+  `resolve_dag_node` calls it may make and that tool's whole schema, all in
+  one paragraph. It shows what the node itself returned on that attempt (its
+  error, when it crashed), under the caption *What the node returned*. The
+  model's text is unchanged: the node's output travels beside it as `output`
+  on the delivery mark (`subagent.delivered`, `turn.started`, and a stored
+  entry's `delegated`), cut at 20,000 characters with a separate
+  `output_truncated` flag. The web fold shows the truncation notice outside
+  the node's words and limits its height, with keyboard-accessible scrolling.
+  A node that has already
+  failed is marked `error` and reads **Failed** instead of **Waiting on a
+  decision**; a stall notice about a node still running reads **Still
+  running**, and a cancelled run **Stopped**, where both used to read
+  **Finished**. The TUI also labels a stall notice **Still running** in live
+  and replayed rows. Conversations stored before this keep the fold they had.
+
+- The trajectory view shows a spawned sub-agent while it runs. Its entry
+  appears as running as soon as the run starts -- including the time it
+  waits behind the concurrency gate -- instead of only once it has ended,
+  and the steps it has already taken carry the number of the turn that
+  dispatched it instead of being marked as belonging to no known turn. A
+  finished run's entry now says how it ended: a run that failed, or that
+  stopped on a terminal safety decision, is an error and gets the failure
+  dot; a cancelled run reads cancelled; a run left going on its registered
+  machine when the process stopped reads unknown. Every run used to read as
+  successful. The `subagent.run` span carries `subagent.agent`,
+  `subagent.instance`, `subagent.handle`, `subagent.dispatch`,
+  `subagent.in_progress` and `subagent.outcome`; runs recorded before this
+  keep the entries they had. A checkpoint read after the view trimmed the
+  finished record of its turn or run no longer turns it back into running.
+
+- The trajectory view gives each attempt of a DAG node an entry of its own,
+  as it does a spawned sub-agent. The node's model and tool calls, its
+  external agent's run and its judge's model calls nest under that entry,
+  where they used to sit as siblings under the graph's tool call and the
+  steps of nodes running side by side could not be told apart. The entry
+  reads running as soon as the node starts and then says how the attempt
+  ended: completed; failed, waiting on a decision, or sent back by its judge
+  with a follow-up -- each an error, with the reason -- or cancelled. A node
+  continued or sent back gets an entry per attempt, and a node that never
+  ran gets none. The tool schema of a node's tool call, which could not be
+  traced while another node's model calls overlapped its own, now names the
+  model call that made it. A report a node sends -- one that needs a
+  decision, or a stall notice -- starts a turn that links to the attempt
+  that sent it rather than to the call that dispatched the graph; a graph
+  dispatched outside any turn still reports with no link. The attempt's
+  `subagent.run` span carries `subagent.dispatch` (`dag`),
+  `subagent.dag_run_id`, `subagent.node_id` and `subagent.attempt`; graphs
+  recorded before this keep the entries they had.
+
+- The trajectory view knows which sub-agent each entry belongs to. Every
+  entry names its Sub-agent Scope (`subagent_scope`): the `subagent.run` of
+  the spawned run or DAG node attempt it nests under or, for a graph recorded
+  before node attempts had spans of their own, the `run_subagent_dag` or
+  `resolve_dag_node` call it ran under; null for the main session. A run's
+  entry, and a graph call's while its scope holds steps, names the scope it
+  opens (`opens_subagent_scope`), and a turn a sub-agent's report started
+  names the scope that sent it (`dispatched_by_subagent_scope`) while staying
+  a turn of the main session. Attribution follows the span tree alone, so a
+  run still working through later turns keeps its steps, and they keep their
+  scope when the view trims the run's own entry. What a model input adds is
+  measured within its own scope: a report turn's first input continues the
+  main session rather than reading as a first call, and a busy sub-agent no
+  longer pushes the main session's previous input out of reach. A turn's end
+  is compared only with the main session's last model output, so a sub-agent
+  answering after the turn ended no longer keeps a repeated reply from being
+  hidden. A DAG node attempt's entry also carries `dag_run_id`, `node_id` and
+  `attempt`, and the detail's relations block lists the three fields;
+  `origin` is unchanged and still says only whether a trace was dispatched.
+
+- The trajectory view on the web page gives each sub-agent run a tab of its
+  own. The main session's tab no longer interleaves the steps of runs working
+  in the background: a run's entry stays where it was dispatched, says how the
+  run stands and for how long, and opens the run's tab on a double click, on
+  Enter, or from **Open trajectory** in the details head; the first row of a
+  turn a sub-agent's report started opens the run that sent it. A run's tab
+  lists and charges that run's steps alone, names the agent, the task, the
+  state and the turn that dispatched it, and leads back to the run's entry with
+  **Show in main**; the tab is marked while the run is running, has failed or
+  was cancelled, and the mark follows the run live. An external agent's tab
+  opens on its transcript, or on its frames for an ACP agent. Every tab keeps
+  its own selection, place, zoom and details pane, a link in the details moves
+  to the tab its entry is in, and another conversation starts on the main
+  session's tab alone.
+
+- An empty reply from a model behind OpenRouter (`content: " "`,
+  `finish_reason: stop`) is no longer reported as an upstream transport
+  failure and retried for minutes before the verdict's own sentence is
+  delivered as the answer. OpenRouter names its backend's reason
+  (`native_finish_reason`) on every choice, `stop` included, and the verdict
+  now reads that plain `stop` as the normal end it is, so the turn goes to
+  the loop's empty-response recovery (prefill, nudge, retry) instead. A reply
+  that is nothing but an upstream sentinel (`<|im_end|>`) reaches the loop
+  empty on both response paths and takes the same recovery, rather than being
+  delivered as the answer. A streamed reply no longer shows the sentinel on
+  screen first: the opening of a reply is held back while it could still be
+  only a sentinel, even one split across chunks, and goes out unchanged the
+  moment it cannot.
+
+- The TUI no longer loses or scrambles the rest of a line after an emoji
+  made of several code points, such as the black bird (U+1F426 U+200D
+  U+2B1B) the assistant signs with, a skin-tone modifier or a flag. The
+  layout gives such a glyph two columns, but Terminal.app walks its code
+  points and advances five for the bird (eight for a three-person family),
+  xterm.js and pyte four, so every cell the renderer wrote after it on that
+  row landed that far to the right: a Chinese reply showed whole spans
+  missing or replaced by stale thinking text, while a reply without the
+  emoji was fine. The renderer now pins the cursor to the column after any
+  multi-code-point glyph, the way it already did for new emoji and VS16
+  sequences, and writes the glyph with auto-wrap off so a terminal that
+  overruns near the right margin clamps on the same row instead of wrapping
+  the rest of the frame one row down. Terminals that size the glyph
+  correctly see no change.
+
+- A continued DAG node is judged against what it was told after an attempt
+  fell short, not only against its first prompt. The judge read the task as
+  first given and nothing else, so when the user answered a stuck node by
+  choosing another deliverable through `resolve_dag_node` -- a replacement
+  pull request instead of a push to the original, say -- every attempt that
+  delivered it was judged not accomplished until the node ran out of
+  continuations and failed. Each continue message is now recorded beside the
+  node's prompt, oldest first (`<node>.follow_ups.json`), and the judge reads
+  them as part of the task, the later one standing where two disagree. A node
+  without a conversation of its own is sent every continue message so far on a
+  retry, not only the latest, so it works to the task its judge holds it to. A
+  node that was never continued is judged exactly as before.
+- The `<agent>-Mirasim` presets reach the Mirasim host again. The adapter sent
+  the host's access token in a header, which a Mirasim host from 0.0.571 on
+  answers with 401 (measured against 0.0.571, 0.0.576 and 0.0.585; the hosts
+  the adapter was written against, 0.0.537 to 0.0.558, read the header), so
+  every row's Test ended in a refusal the roster read as the agent needing a
+  sign-in. The token now travels in the upgrade request's query, where the
+  host reads it and where Mirasim's own clients send it, and in the header as
+  well; the one URL that carries it is never logged or quoted, a refused
+  upgrade is worded from its status, and a host that turns the token away is
+  told apart from one that is not running, in words the roster does not read
+  as a sign-in.
+
+- The `<agent>-Mirasim` presets no longer read as *Not installed on this
+  computer* on a computer that has Mirasim. The probe asked after a `mirasim`
+  executable on the login shell's PATH, which Mirasim's installer never puts
+  there (its CLI lives under `~/.mirasim/bin`), and the adapter runs no such
+  executable anyway. The rows now ask after Mirasim itself: a host to reach --
+  the desktop app's port with its token written and something listening, a
+  host named in `RAVEN_MIRASIM_HOST`, or a server Mirasim runs on this computer
+  over ssh whose socket answers -- counts as running; the launcher under
+  Mirasim's home, `mirasim` on the PATH or a server Mirasim installed here
+  over ssh counts as installed, and such a row says to open the Mirasim app or
+  to let the app on another computer reach this one again; neither is still
+  *Not installed*, with the download link. A killed host leaves its token file
+  or its socket behind, so neither alone counts as a running host, and a blank
+  token file is no token, as the adapter reads it.
+
 - What an agent on a registered machine writes on stderr reaches Raven even
   when no link held the agent at the time. The node kept those lines but, when
   a link attached, replayed only the agent's output: a run picked up after a
@@ -286,6 +655,43 @@ All notable changes to Raven are documented here.
   asks the replay from the line its record kept as the prompt went out, not
   from the agent's first line; a CLI pick-up, whose task is the command's
   own, reads from the first line.
+
+- A password machine at the name of a key machine whose ssh alias names that
+  same address (key machine `gpu1` at `gpu1`, password machine `gpu1-shared`
+  at `gpu1`) registers and logs in. The check that keeps a `Host` alias Raven
+  wrote from taking another machine's password refused every such pair by
+  name; it now refuses only an alias that would send ssh elsewhere (another
+  `HostName`, a keyword Raven does not write, a block cut short), and its
+  refusal suggests the machine's IP address or full domain name rather than
+  the address it already had. The Oncall event watcher builds a password
+  machine's backend off the event loop as the ops tools do, so the `ssh -G`
+  that build runs no longer holds up the rest of Raven, for up to 10 seconds
+  on each pass.
+
+- The research, code, oncall and ppt agents follow an upgrade or a config
+  change into the prompt files they keep in their workspace (`soul.md`,
+  `agent.md`, `TOOLS.md`). Those files were written only when absent, so the
+  model kept reading the text of the first launch while the gates enforced
+  the current release: a research contract seeded before the reader layout
+  still asked for the three-heading report. They are now rewritten on every
+  launch. Your own lines go in the sibling `*.local.md` file
+  (`agent_memory/profile/agent.local.md`, for example) and are appended after
+  the product text; a `*.local.md` must be UTF-8, and one that is not stops
+  the launch with the file named. A file edited in place, or left by an older
+  release, is saved as `<name>.bak-<time>-<pid>` before it is replaced, never
+  readable by more accounts than the file was, and the launcher log names the
+  backup. The ppt engine, whose plugin can be granted a host's or another
+  product's home, replaces only a file it can show it wrote: in Raven-PPT's
+  own home a seat edited before this release stays until it is deleted.
+
+- A file Raven saves by replacing it -- `config.json`, an agent's prompt
+  files, state files -- keeps its own access rights from the first byte of the
+  new text. On Windows the replacement took its folder's inherited ACL, so a
+  file kept private in a folder other accounts may read came back readable by
+  them; on POSIX the new text sat in a umask-default temp file until the
+  target's mode was copied over. On Windows a save refused by a read-only
+  target also left a read-only temp file that failed every later save, even
+  after the target was made writable again.
 
 - A task on a registered machine ends the way it ended, whatever happened on
   either side. A Raven node killed outright (`kill -9`) used to leave its
@@ -1425,13 +1831,9 @@ All notable changes to Raven are documented here.
   first and fall back to `task`, so a transcript recorded before this rename keeps labeling
   its delegation rows correctly.
 
-## v0.1.0 - Public Preview - 2026-06-30
+## v0.1.0 - 2026-06-30
 
 Raven is now available as an Apache-2.0 open-source project.
-
-This is the first public preview release: stable enough for developers to try,
-inspect, and build around, while the CLI surface, plugin contracts, and runtime
-internals may still evolve before v1.0.
 
 ### Highlights
 
@@ -1454,14 +1856,11 @@ curl -fsSL https://raven.evermind.ai/install.sh | bash
 
 - Version: `0.1.0`
 - Tag: `v0.1.0`
-- Stability: public preview
 - License: Apache-2.0
 
 ### Notes
 
-- Raven is not yet API stable.
 - The public install endpoint and package distribution flow should be verified
   before publishing the GitHub Release.
 - Future releases should use semantic versioning: patch releases for fixes,
-  minor releases for new capabilities, and v1.0 once the public CLI and plugin
-  contracts are stable.
+  minor releases for new capabilities, and major releases for breaking changes.

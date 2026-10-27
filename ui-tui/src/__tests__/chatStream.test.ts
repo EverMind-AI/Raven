@@ -1182,6 +1182,18 @@ describe('createChatStream — delegated delivery wording', () => {
     vi.useRealTimers()
   })
 
+  it('announces a live notice as still running', async () => {
+    const fake = makeFakeRpc()
+    const sysCalls: string[] = []
+    const stream = createChatStream({ rpcClient: fake, sessionKey: 'tui:default', sys: m => sysCalls.push(m) })
+    await stream.attach()
+
+    fake.__pushEvent({ type: 'subagent.delivered', payload: { label: 'working-node', status: 'notice' } })
+
+    expect(sysCalls).toContain('↩ working-node — Still running')
+    expect(sysCalls.some(m => m.includes('Finished'))).toBe(false)
+  })
+
   it('tells a waiting node it is waiting, not that it finished', async () => {
     // announce_dag_exception reports status "exception" on this same event --
     // a suspended node still open for adjudication, not a completed delivery.

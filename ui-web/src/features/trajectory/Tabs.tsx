@@ -24,6 +24,16 @@ import type { JSX, KeyboardEvent as ReactKeyboardEvent } from 'react'
 /** How much of the strip one arrow press scrolls: most of what is in view. */
 export const ARROW_STEP = 0.8
 
+/* Brings a tab into its strip's view by scrolling the strip alone. The
+   browser's own way scrolls every ancestor that can scroll as well, and on a
+   page wider than the window that slides the whole page sideways. */
+export function keepInStrip(strip: HTMLElement, tab: HTMLElement): void {
+  const box = strip.getBoundingClientRect()
+  const at = tab.getBoundingClientRect()
+  if (at.left < box.left) strip.scrollLeft -= box.left - at.left
+  else if (at.right > box.right) strip.scrollLeft += at.right - box.right
+}
+
 export const tabId = (tab: details.Tab): string => `trajectory-tab-${tab}`
 export const panelId = (tab: details.Tab): string => `trajectory-panel-${tab}`
 
@@ -61,7 +71,9 @@ export function Tabs({ entryId, blocks }: { entryId: string; blocks: TrajectoryB
      when the arrows come or go, since they take their room from the strip: a
      tab brought to the edge before they appeared would end up under one. */
   useLayoutEffect(() => {
-    strip.current?.querySelector<HTMLElement>(`#${tabId(current)}`)?.scrollIntoView?.({ inline: 'nearest', block: 'nearest' })
+    const el = strip.current
+    const tab = el?.querySelector<HTMLElement>(`#${tabId(current)}`)
+    if (el && tab) keepInStrip(el, tab)
     measure()
   }, [current, over, measure])
   const nudge = (direction: -1 | 1): void => {

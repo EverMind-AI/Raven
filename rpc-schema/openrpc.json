@@ -805,6 +805,14 @@
           "schema": {
             "$ref": "#/components/schemas/DirectTarget"
           }
+        },
+        {
+          "name": "turn_id",
+          "description": "The turn to cancel, by the id its opening frame carried. Present, the lane's running turn is cancelled only when it has this id, whoever opened it -- the way to stop a turn the runtime opened, which binds no handle. Absent, only a turn.send turn or a pending inject is reached.",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -818,6 +826,10 @@
           "properties": {
             "cancelled": {
               "type": "boolean"
+            },
+            "busy": {
+              "type": "boolean",
+              "description": "Only on a refusal: whether the lane still has a turn to run -- the one that replaced the turn named, one queued, or a message waiting to run as a turn of its own. A client cannot learn it from the frames in time: this reply goes out as soon as the handler returns, while the frame opening a turn that has just started can still be waiting out the subscription's coalescing window. Absent from an accepted cancel, and from an older server."
             }
           }
         }
@@ -1051,6 +1063,15 @@
           "required": false,
           "schema": {
             "type": "string"
+          }
+        },
+        {
+          "name": "include_providers",
+          "required": false,
+          "description": "Return the provider catalogue. When false, return only the current selection with an empty providers list.",
+          "schema": {
+            "type": "boolean",
+            "default": true
           }
         }
       ],
@@ -2112,8 +2133,91 @@
       ]
     },
     {
+      "name": "subagents.presets",
+      "summary": "The presets an agent entry can be made from on a registered machine, whether or not one already holds them, and where each already runs.",
+      "description": "What the machines tab's connect form chooses from. A preset connected on this computer is listed too: an entry is one preset on one machine, so it is still to be had on each machine, under the add's default <preset>@<machine id> (claude_code@gpu1). Only the kinds a machine's node starts (acp, cli): no built-in agent, no Mirasim shim, no openai endpoint.",
+      "params": [],
+      "result": {
+        "name": "SubagentsPresetsResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "presets"
+          ],
+          "properties": {
+            "presets": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "preset",
+                  "name",
+                  "kind",
+                  "description",
+                  "connected_here",
+                  "on_machines",
+                  "off_on_machines"
+                ],
+                "properties": {
+                  "preset": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "acp",
+                      "cli"
+                    ]
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "connected_here": {
+                    "type": "boolean",
+                    "description": "An entry of this preset runs on this computer; one on a machine is a second entry, not a conflict."
+                  },
+                  "on_machines": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "The registered machines (ids) a connected entry of this preset runs on."
+                  },
+                  "off_on_machines": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "machine",
+                        "name"
+                      ],
+                      "properties": {
+                        "machine": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "description": "The machines where an entry of this preset exists but is switched off, with that entry's name: it still holds the machine for the add, and is what the form offers to switch back on."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "name": "subagents.add",
-      "summary": "Install a sub-agent from a preset into the running config. A preset that would land enabled first has one real prompt sent through that agent, and the add is refused, reporting why, when it does not answer: that spends one call on the agent's own quota, can take up to 60s, and a refusal stores nothing at all. Only a builtin preset and force: true are exempt.",
+      "summary": "Install a sub-agent from a preset into the running config. A preset that would land enabled first has one real prompt sent through that agent, and the add is refused, reporting why, when it does not answer: that spends one call on the agent's own quota, can take up to the preset's start window plus 60s, then for an acp preset up to two start windows more to record its capabilities (an acp preset on a machine: its node launch, a 120s start window and 60s for the answer, then up to 240s for the record), and a refusal stores nothing at all. While it runs, subagents.test_cancel on the name the entry would land under stops it and the add refuses with cancelled: true in its error data. Only a builtin preset and force: true are exempt.",
       "params": [
         {
           "name": "preset",
@@ -2155,7 +2259,7 @@
         {
           "name": "machine",
           "required": false,
-          "description": "A registered machine, by its id in the machine registry: an acp or cli preset's command is started there by the machine's Raven node and signed in there; an openai preset's endpoint is reached from that machine through an ssh tunnel. The row's name defaults to <preset>@<machine>. Refused for a built-in agent, and unless the machine is registered and usable.",
+          "description": "A registered machine, by its id in the machine registry: an acp or cli preset's command is started there by the machine's Raven node and signed in there; an openai preset's endpoint is reached from that machine through an ssh tunnel. The row's name defaults to <preset>@<machine>, and under that default a preset the machine already has is refused, naming the entry there (give `name` to add a second one on purpose). Refused for a built-in agent, and unless the machine is registered and usable.",
           "schema": {
             "type": "string"
           }
@@ -2233,7 +2337,7 @@
     },
     {
       "name": "subagents.update",
-      "summary": "Rename / redescribe / re-key an already-configured sub-agent. Changing the key or the model of a row that is already enabled first sends one real prompt through it, and the change is refused, reporting why, when it does not answer: that spends one call on the agent's own quota and can take up to 60s. A row that is off is exempt, as is every other field.",
+      "summary": "Rename / redescribe / re-key an already-configured sub-agent. Changing the key or the model of a row that is already enabled first sends one real prompt through it, and the change is refused, reporting why, when it does not answer: that spends one call on the agent's own quota and can take up to the row's start window plus 60s, then for an acp row up to two start windows more to record its capabilities; subagents.test_cancel on the name stops it meanwhile, and the change refuses with cancelled: true in its error data. A row that is off is exempt, as is every other field.",
       "params": [
         {
           "name": "name",
@@ -2424,7 +2528,7 @@
     },
     {
       "name": "subagents.toggle",
-      "summary": "Enable or disable a configured sub-agent. Switching a sub-agent on first sends one real prompt through that agent and refuses the enable, reporting why, when it does not answer: that spends one call on the agent's own quota and can take up to 60s. Switching off, a builtin row and force: true are exempt.",
+      "summary": "Enable or disable a configured sub-agent. Switching a sub-agent on first sends one real prompt through that agent and refuses the enable, reporting why, when it does not answer: that spends one call on the agent's own quota and can take up to the row's start window plus 60s, then for an acp row up to two start windows more to record its capabilities; subagents.test_cancel on the name stops it meanwhile, and the enable refuses with cancelled: true in its error data. Switching off, a builtin row and force: true are exempt.",
       "params": [
         {
           "name": "name",
@@ -2567,7 +2671,7 @@
     },
     {
       "name": "subagents.test_cancel",
-      "summary": "Cancel an in-flight subagents.test call for the named sub-agent.",
+      "summary": "Cancel the named sub-agent's run in flight: a subagents.test, which then answers cancelled: true, or the one proof prompt a subagents.add, subagents.toggle or subagents.update sends before writing, together with the capability record an acp row is measured with once it answers, which then refuses with SubagentNotReady carrying cancelled: true in its data and writes nothing. The agent's process ends with the run, on this computer or through the machine's node.",
       "params": [
         {
           "name": "name",
@@ -3078,12 +3182,32 @@
           }
         },
         {
+          "name": "auth",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "key",
+              "password"
+            ]
+          },
+          "description": "How Raven logs in: key (the default; `key` names the private key's path) or password (`password` is kept here and used on every connection; such a row gets no ssh alias)."
+        },
+        {
           "name": "key",
-          "required": true,
+          "required": false,
           "schema": {
             "type": "string"
           },
-          "description": "Path to the private key on this computer; the path is stored, never the key."
+          "description": "Path to the private key on this computer; the path is stored, never the key. Required with auth `key`."
+        },
+        {
+          "name": "password",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "description": "The account's password, with auth `password`: kept on this computer for Raven's own logins, readable by the owner alone and used on every connection; never in the registry, a log or an answer. Not offered on Windows."
         },
         {
           "name": "paths",
@@ -3121,14 +3245,16 @@
                 "",
                 "unreachable",
                 "login",
+                "prompt",
                 "hostkey",
                 "timeout",
                 "nossh",
+                "platform",
                 "duplicate",
                 "invalid",
                 "registry"
               ],
-              "description": "Why the row was not written, as a kind the page can explain: the machine could not be reached, refused the login, presented a changed host key, did not answer in time, ssh is missing here, the id is taken, the fields are not usable, or the registry file cannot be changed. Empty when it was written."
+              "description": "Why the row was not written, as a kind the page can explain: the machine could not be reached, refused the login, asked a question the kept password does not answer (so the password was not sent), presented a changed host key, did not answer in time, ssh is missing here, this computer cannot use the login picked (a password on Windows), the id is taken, the fields are not usable, or the registry file cannot be changed. Empty when it was written."
             },
             "row": {
               "$ref": "#/components/schemas/MachineRow"
@@ -3266,6 +3392,29 @@
                 "type": "string"
               },
               "description": "The agent entries that name the machine: the connected ones to disconnect first when the removal was refused over them; after a removal, the ones left pointing at nothing."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "machines.local_keys",
+      "summary": "The private keys this computer has, as ~/.ssh/<name> paths, ssh's own default identities first; what the register form proposes instead of a placeholder path.",
+      "params": [],
+      "result": {
+        "name": "MachinesLocalKeysResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "keys"
+          ],
+          "properties": {
+            "keys": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           }
         }
@@ -5779,6 +5928,13 @@
             "ok": {
               "type": "boolean",
               "description": "Whether the listed directory itself may be a session's working directory."
+            },
+            "roots": {
+              "description": "The filesystem roots, listed only while the directory listed is one: a root has no parent, so on a host with several (Windows drives) they are reachable no other way. Every drive is listed, the one the browser stands on included, each judged as a folder row is.",
+              "items": {
+                "$ref": "#/components/schemas/FsDirEntry"
+              },
+              "type": "array"
             },
             "entries": {
               "description": "Subdirectories only, dotfiles omitted, sorted by name; at most the first 500 found.",
@@ -11405,6 +11561,36 @@
       }
     },
     {
+      "name": "bugreport.probe",
+      "summary": "Ask whether the configured bug report receiver answers, before a report starts; an unreachable receiver is an answer, not an error.",
+      "params": [],
+      "result": {
+        "name": "BugReportProbeResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reachable",
+            "target",
+            "reason"
+          ],
+          "properties": {
+            "reachable": {
+              "type": "boolean"
+            },
+            "target": {
+              "type": "string",
+              "description": "The receiver's scheme and host, as the page may show it."
+            },
+            "reason": {
+              "type": "string",
+              "description": "Why the receiver cannot be used; empty when it is reachable."
+            }
+          }
+        }
+      }
+    },
+    {
       "name": "bugreport.start",
       "summary": "Validate the problem fields and the turn selection, then start collecting a bug report; an invalid selection is refused with invalid_params naming each turn.",
       "params": [
@@ -12313,6 +12499,17 @@
           "node_id": {
             "type": "string",
             "description": "Set for a dag node's own message, so a client can place it against that row."
+          },
+          "output": {
+            "type": "string",
+            "description": "What a dag node itself returned on the attempt its report is about -- its error, when it raised -- carried for the reader beside the report the model was given. Set only on a node's own report, and present even when empty: an empty string is a node that said nothing, an absent one a report about no attempt (a stall notice) or a server that never sent it."
+          },
+          "output_truncated": {
+            "description": "Whether output is limited to the first 20,000 characters. Separate from the node's text; absent on older records and reports without output.",
+            "type": [
+              "boolean",
+              "null"
+            ]
           }
         },
         "required": [
@@ -13993,6 +14190,10 @@
             "type": "boolean",
             "description": "The registry's image_api: the image tool can run on this provider's address and key. The roles card offers the image role these providers; absent means false."
           },
+          "video_api": {
+            "type": "boolean",
+            "description": "The registry's video_api: the video tool can run on this provider's address and key. The roles card offers the video role these providers; absent means false."
+          },
           "route_names": {
             "type": "array",
             "items": {
@@ -14219,6 +14420,21 @@
             "type": "string"
           },
           "nodeId": {
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why the node did not execute. Present only on the dag-node row of a node that was not executed.",
+            "$ref": "#/components/schemas/DagNotExecutedReason"
+          },
+          "selectedRoutes": {
+            "description": "The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Present only on the row of a DAG node a branch decided: its dag-node row, or the ordinary row a stateful node is reported on.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "routeEvidence": {
+            "description": "The judge's supporting quote for the selection, at most 500 characters. Present only when the judge gave one, and only on the row of a DAG node a branch decided: its dag-node row, or the ordinary row a stateful node is reported on.",
             "type": "string"
           },
           "createdAtMs": {
@@ -14510,15 +14726,26 @@
                     ]
                   },
                   "node_id": {
-                    "description": "Which node of the run this is about. Present only on `kind: dag` with `status: exception`, where the report concerns one node rather than the whole run.",
+                    "description": "Which node of the run this is about. Present only on a `kind: dag` node's own report, which concerns one node rather than the whole run.",
                     "type": "string"
                   },
                   "run_id": {
                     "type": "string"
                   },
                   "content": {
-                    "description": "The text that re-entered the conversation, verbatim; a client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence.",
+                    "description": "The text that re-entered the conversation, verbatim; a client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence, or `output` instead where a node's report carries it.",
                     "type": "string"
+                  },
+                  "output": {
+                    "description": "What a dag node itself returned on the attempt its report is about -- its error, when it raised -- carried for the reader beside the report the model was given. Set only on a node's own report, and present even when empty: an empty string is a node that said nothing, an absent one a report about no attempt (a stall notice) or a server that never sent it.",
+                    "type": "string"
+                  },
+                  "output_truncated": {
+                    "description": "Whether output is limited to the first 20,000 characters. Separate from the node's text; absent on older records and reports without output.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
                   }
                 }
               },
@@ -15281,12 +15508,23 @@
                 "type": "string"
               },
               "content": {
-                "description": "The text that re-entered the conversation, verbatim. A client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence -- and a client replaying this turn later reads the same string from the stored entry's `text`, so one rule over one input keeps the live view and the reloaded one from disagreeing about what was delivered.",
+                "description": "The text that re-entered the conversation, verbatim. A client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence, or `output` instead where a node's report carries it -- and a client replaying this turn later reads the same string from the stored entry's `text`, so one rule over one input keeps the live view and the reloaded one from disagreeing about what was delivered.",
                 "type": "string"
               },
               "node_id": {
                 "type": "string",
                 "description": "Set for a dag node's own message, so a client can place it against that row."
+              },
+              "output": {
+                "type": "string",
+                "description": "What a dag node itself returned on the attempt its report is about -- its error, when it raised -- carried for the reader beside the report the model was given. Set only on a node's own report, and present even when empty: an empty string is a node that said nothing, an absent one a report about no attempt (a stall notice) or a server that never sent it."
+              },
+              "output_truncated": {
+                "description": "Whether output is limited to the first 20,000 characters. Separate from the node's text; absent on older records and reports without output.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
               }
             }
           }
@@ -15358,7 +15596,7 @@
         }
       },
       "DagNodeStatus": {
-        "description": "Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal.",
+        "description": "Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal.",
         "type": "string",
         "enum": [
           "pending",
@@ -15367,11 +15605,12 @@
           "failed",
           "skipped",
           "cancelled",
-          "exception"
+          "exception",
+          "not_executed"
         ]
       },
       "DagSnapshotNodeStatus": {
-        "description": "Per-node status in a run read back off disk. Unlike the event vocabulary this includes 'interrupted', which the server infers for a node the registry still calls running on a run nothing is executing. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal.",
+        "description": "Per-node status in a run read back off disk. Unlike the event vocabulary this includes 'interrupted', which the server infers for a node the registry still calls running on a run nothing is executing. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal.",
         "type": "string",
         "enum": [
           "pending",
@@ -15381,7 +15620,17 @@
           "skipped",
           "cancelled",
           "interrupted",
-          "exception"
+          "exception",
+          "not_executed"
+        ]
+      },
+      "DagNotExecutedReason": {
+        "description": "Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.",
+        "type": "string",
+        "enum": [
+          "when_false",
+          "when_unknown",
+          "upstream_not_executed"
         ]
       },
       "DagSnapshotNode": {
@@ -15438,6 +15687,40 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/JsonValue"
             }
+          },
+          "reason": {
+            "description": "Why the node did not execute. Present only with status not_executed.",
+            "$ref": "#/components/schemas/DagNotExecutedReason"
+          },
+          "selected_routes": {
+            "description": "The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "route_evidence": {
+            "description": "The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.",
+            "type": "string"
+          },
+          "routes": {
+            "description": "The route names a decision node chooses between, in declaration order; only the judge sees their conditions. Absent on a node that decides nothing.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "select": {
+            "description": "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.",
+            "type": "string",
+            "enum": [
+              "one",
+              "many"
+            ]
+          },
+          "when": {
+            "description": "The guard: this node runs only if the expression holds once its dependencies settle. Absent on a node with no guard.",
+            "type": "string"
           }
         }
       },
@@ -15508,6 +15791,10 @@
                 "type": "integer"
               },
               "cancelled": {
+                "type": "integer"
+              },
+              "not_executed": {
+                "description": "Nodes a branch left out. Present only when there is at least one, so a run that never branches carries the five counts it always did.",
                 "type": "integer"
               }
             }
@@ -15639,6 +15926,25 @@
                     "node_summary": {
                       "description": "One line, for the user, on what this node was asked to do. Absent on a run that predates the field.",
                       "type": "string"
+                    },
+                    "routes": {
+                      "description": "The route names a decision node chooses between, in declaration order; only the judge sees their conditions. Absent on a node that decides nothing.",
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "select": {
+                      "description": "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.",
+                      "type": "string",
+                      "enum": [
+                        "one",
+                        "many"
+                      ]
+                    },
+                    "when": {
+                      "description": "The guard: this node runs only if the expression holds once its dependencies settle. Absent on a node with no guard.",
+                      "type": "string"
                     }
                   }
                 }
@@ -15698,6 +16004,21 @@
               },
               "ended_at": {
                 "type": "integer"
+              },
+              "reason": {
+                "description": "Why the node did not execute. Sent only with status not_executed.",
+                "$ref": "#/components/schemas/DagNotExecutedReason"
+              },
+              "selected_routes": {
+                "description": "The routes a decision node selected, on the frame that finishes it. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on every other frame, and when the node failed to decide.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "route_evidence": {
+                "description": "The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.",
+                "type": "string"
               }
             }
           }
@@ -15845,6 +16166,10 @@
                   },
                   "cancelled": {
                     "type": "integer"
+                  },
+                  "not_executed": {
+                    "description": "Nodes a branch left out. Present only when there is at least one, so a run that never branches carries the five counts it always did.",
+                    "type": "integer"
                   }
                 }
               },
@@ -15868,6 +16193,21 @@
                       "type": "string"
                     },
                     "error": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "description": "Why the node did not execute. Sent only with status not_executed.",
+                      "$ref": "#/components/schemas/DagNotExecutedReason"
+                    },
+                    "selected_routes": {
+                      "description": "The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, and on one that failed to decide.",
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "route_evidence": {
+                      "description": "The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.",
                       "type": "string"
                     }
                   }
@@ -16594,6 +16934,25 @@
               "$ref": "#/components/schemas/JsonValue"
             },
             "type": "object"
+          },
+          "routes": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "description": "Makes this node a decision: route name -> the condition, in plain words, under which its answer selects that route. Kept whole, because re-running the graph judges against the conditions."
+          },
+          "select": {
+            "enum": [
+              "one",
+              "many"
+            ],
+            "type": "string",
+            "description": "How many routes the decision selects, as the author wrote it. Absent means 'one'."
+          },
+          "when": {
+            "type": "string",
+            "description": "The guard, as the author wrote it: this node runs only if it holds once its dependencies settle."
           }
         },
         "required": [
@@ -16606,7 +16965,7 @@
           "inputs"
         ],
         "type": "object",
-        "description": "One step, whole. ``subagent`` / ``node_summary`` / ``prompt_template`` may\nbe empty: those three are the fields an author may leave blank for the\ncaller to fill at run time. ``skills`` / ``mcps`` are three-state -- null\nmeans the author said nothing, ``[]`` means the author wrote an empty list,\nand a list names what to consider."
+        "description": "One step, whole. ``subagent`` / ``node_summary`` / ``prompt_template`` may\nbe empty: those three are the fields an author may leave blank for the\ncaller to fill at run time. ``skills`` / ``mcps`` are three-state -- null\nmeans the author said nothing, ``[]`` means the author wrote an empty list,\nand a list names what to consider. ``routes`` / ``select`` / ``when`` declare a branch and are absent unless the author wrote them."
       },
       "PlaybookDetail": {
         "additionalProperties": false,
@@ -16853,7 +17212,7 @@
         ]
       },
       "TaskStatus": {
-        "description": "A task's state, derived from its nodes' recorded states, first rule that matches: a run superseded by a replan that started is cancelled (one that did not start is failed); any failed node -> failed; any interrupted -> interrupted; any pending/running/exception -> running; any cancelled or skipped -> cancelled; else completed. A spawn is its one node's state.",
+        "description": "A task's state, derived from its nodes' recorded states, first rule that matches: a run superseded by a replan that started is cancelled (one that did not start is failed); any failed node -> failed; any interrupted -> interrupted; any pending/running/exception -> running; any cancelled or skipped -> cancelled; else completed. A spawn is its one node's state. A node a branch left out (not_executed) sits on none of these rungs: an unselected branch does not stop a run.",
         "type": "string",
         "enum": [
           "running",
@@ -16864,7 +17223,7 @@
         ]
       },
       "TaskCounts": {
-        "description": "How many of the task's nodes sit in each state. Counted from graph.json, so skipped nodes are counted too.",
+        "description": "How many of the task's nodes sit in each state. Counted from graph.json, so skipped and not_executed nodes are counted too.",
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -16876,7 +17235,8 @@
           "skipped",
           "cancelled",
           "interrupted",
-          "exception"
+          "exception",
+          "not_executed"
         ],
         "properties": {
           "total": {
@@ -16906,6 +17266,10 @@
           "exception": {
             "type": "integer",
             "description": "Nodes suspended on a verdict, waiting for resolve_dag_node. A running row with one of these is waiting on a decision, not working."
+          },
+          "not_executed": {
+            "type": "integer",
+            "description": "Nodes a branch left out. They never ran, and an unselected branch does not move the task's status: a run of completed and not_executed nodes is completed."
           }
         }
       },
@@ -17109,6 +17473,40 @@
               "type": "string"
             },
             "description": "Same three-valued reading as skills."
+          },
+          "reason": {
+            "description": "Why the node did not execute. Present only with status not_executed.",
+            "$ref": "#/components/schemas/DagNotExecutedReason"
+          },
+          "selected_routes": {
+            "description": "The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "route_evidence": {
+            "description": "The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.",
+            "type": "string"
+          },
+          "routes": {
+            "description": "The route names a decision node chooses between, in declaration order; only the judge sees their conditions. Absent on a node that decides nothing.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "select": {
+            "description": "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.",
+            "type": "string",
+            "enum": [
+              "one",
+              "many"
+            ]
+          },
+          "when": {
+            "description": "The guard: this node runs only if the expression holds once its dependencies settle. Absent on a node with no guard.",
+            "type": "string"
           },
           "files": {
             "type": "array",
@@ -17739,7 +18137,28 @@
               "main",
               "subagent"
             ],
-            "description": "Whether the trace is the session's own or a dispatched sub-agent's."
+            "description": "Whether the entry's trace was dispatched from another trace (a follow-up turn such as a sub-agent's report, or a trace linked in from another session). Not the sub-agent boundary: see subagent_scope."
+          },
+          "subagent_scope": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Sub-agent Scope the entry belongs to: trace_id:span_id of the nearest sub-agent boundary above its span (a subagent.run span, or a run_subagent_dag / resolve_dag_node tool call; a boundary's own entries, and the permission reviewer's llm.call recorded under the call it reviews, look only for a subagent.run above). Null for the main session. Decided by span ancestry, never by time; kept when the boundary is trimmed to a skeleton."
+          },
+          "opens_subagent_scope": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On a boundary's own entries, the Sub-agent Scope it opens: always for a subagent.run, for a graph tool call only while at least one entry belongs to that scope. Null otherwise."
+          },
+          "dispatched_by_subagent_scope": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On the root entries of a dispatched session.turn trace, the Sub-agent Scope that dispatched it: the dispatching span when it is a boundary, else that span's own subagent_scope. Null when the span is unknown or in the main session, or names a graph scope no entry belongs to. The turn itself belongs to the main session."
           },
           "sort_key": {
             "type": "array",
@@ -18122,7 +18541,9 @@
           "node_current",
           "install",
           "paths",
-          "problems"
+          "problems",
+          "agents_here",
+          "agents_off_here"
         ],
         "properties": {
           "id": {
@@ -18164,6 +18585,14 @@
             "type": "boolean",
             "description": "Whether the node named by node_version is this Raven's own code, which a dispatch there needs; false when none is known."
           },
+          "auth": {
+            "type": "string",
+            "enum": [
+              "key",
+              "password"
+            ],
+            "description": "How this computer logs in to an ssh row: key (the path the row carries) or password (kept on this computer for Raven's own logins). Absent for a local row."
+          },
           "install": {
             "type": "object",
             "additionalProperties": false,
@@ -18197,6 +18626,20 @@
               "type": "string"
             },
             "description": "What the registry's doctor says about this row, one sentence each; empty when nothing."
+          },
+          "agents_here": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The connected agent entries that run on the machine, by name: empty on a machine whose next step is to connect one."
+          },
+          "agents_off_here": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The agent entries on the machine that are switched off, by name: they still hold the machine for the add, so the card says so instead of counting them nowhere."
           }
         }
       }

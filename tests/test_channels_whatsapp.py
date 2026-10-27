@@ -381,6 +381,55 @@ def test_ensure_bridge_dir_rebuilds_a_build_that_does_not_match_the_source(
     assert (built / "src" / "index.ts").exists()
 
 
+def test_the_bridge_install_fetches_from_a_mirror_when_npm_cannot_be_reached(tmp_path, monkeypatch):
+    """`npm install` is the one step of the build that needs the registry, and
+    the only one started with the mirror in its environment. Asked about the
+    directory it installs in, raven's own, whose lockfile is raven's too."""
+    from raven.utils import mirrors
+
+    source = _bridge_source_tree(tmp_path / "source")
+    built = _installed_build(tmp_path / "installed", None)
+    runs: list[tuple[list[str], object, object]] = []
+    asked: list[object] = []
+    monkeypatch.setattr(wb, "_find_bridge_source", lambda: source)
+    monkeypatch.setattr("raven.config.paths.get_bridge_install_dir", lambda: built)
+    monkeypatch.setattr(wb.shutil, "which", lambda _name: "/usr/bin/npm")
+    monkeypatch.setattr(
+        wb.subprocess, "run", lambda cmd, **kwargs: runs.append((list(cmd[1:]), kwargs.get("env"), kwargs.get("cwd")))
+    )
+
+    def npm_registry_env(env, cwd=None):
+        asked.append(cwd)
+        return {"npm_config_registry": mirrors.NPM_REGISTRY}
+
+    monkeypatch.setattr(mirrors, "npm_registry_env", npm_registry_env)
+
+    wb.ensure_bridge_dir()
+
+    (install, install_env, install_cwd), (build, build_env, _build_cwd) = runs
+    assert install == ["install"] and install_env["npm_config_registry"] == mirrors.NPM_REGISTRY
+    assert "PATH" in install_env or "Path" in install_env, "the rest of the environment comes along"
+    assert asked == [str(install_cwd)], "asked about the directory npm installs in"
+    assert build == ["run", "build"] and build_env is None
+
+
+def test_the_bridge_install_inherits_the_environment_when_npm_answers(tmp_path, monkeypatch):
+    from raven.utils import mirrors
+
+    source = _bridge_source_tree(tmp_path / "source")
+    built = _installed_build(tmp_path / "installed", None)
+    envs: list[object] = []
+    monkeypatch.setattr(wb, "_find_bridge_source", lambda: source)
+    monkeypatch.setattr("raven.config.paths.get_bridge_install_dir", lambda: built)
+    monkeypatch.setattr(wb.shutil, "which", lambda _name: "/usr/bin/npm")
+    monkeypatch.setattr(wb.subprocess, "run", lambda cmd, **kwargs: envs.append(kwargs.get("env")))
+    monkeypatch.setattr(mirrors, "npm_registry_env", lambda env, cwd=None: {})
+
+    wb.ensure_bridge_dir()
+
+    assert envs == [None, None]
+
+
 def test_source_fingerprint_follows_a_changed_src_file(tmp_path):
     source = _bridge_source_tree(tmp_path / "source")
     before = wb.source_fingerprint(source)
@@ -441,8 +490,11 @@ def test_ensure_bridge_dir_keeps_a_build_it_cannot_check(tmp_path, monkeypatch):
 def test_ensure_bridge_dir_raises_without_the_packaged_source(tmp_path, monkeypatch):
     monkeypatch.setattr(wb, "_find_bridge_source", lambda: None)
     monkeypatch.setattr("raven.config.paths.get_bridge_install_dir", lambda: tmp_path / "absent")
-    with pytest.raises(RuntimeError, match="bridge source not found"):
+    with pytest.raises(RuntimeError) as exc:
         wb.ensure_bridge_dir()
+    assert "official installer" in str(exc.value)
+    assert "pip install" not in str(exc.value)
+    assert "uv tool install raven" not in str(exc.value)
 
 
 def test_ensure_bridge_dir_raises_without_npm(tmp_path, monkeypatch):
@@ -602,6 +654,9 @@ class _FakeBridge:
         await ws.wait_closed()
 
     async def emit(self, frame: dict) -> None:
+        # The adapter sets _bridge_up once its auth frame is sent, which can be
+        # before _serve has read it; a frame emitted then reaches no one.
+        await _wait_for(lambda: bool(self.clients))
         for ws in self.clients:
             await ws.send(json.dumps(frame))
 
@@ -961,7 +1016,7 @@ async def test_cancelling_during_the_reconnect_wait_does_not_orphan_its_bridge(t
 
     task = asyncio.create_task(ch.start())
     try:
-        await _wait_for(lambda: ch._bridge_up)
+        await _wait_for(lambda: ch._bridge_up and bool(fake.clients))
         for ws in fake.clients:
             await ws.close()
         await asyncio.wait_for(reconnecting.wait(), timeout=5)
@@ -993,6 +1048,9 @@ async def test_a_restart_after_expiry_pairs_again(tmp_path, monkeypatch):
     await _wait_for(lambda: ch._bridge_up)
     await fake.emit({"type": "status", "status": "pairing_expired"})
     await asyncio.wait_for(first, timeout=5)
+    # start() swallows the cancel wait_for sends on timeout, so only the
+    # stopped flag shows the first start() ended on the expiry frame.
+    assert ch.is_running is False
     fake.clients.clear()
 
     second = asyncio.create_task(ch.start())

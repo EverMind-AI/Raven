@@ -2966,12 +2966,13 @@ def test_bug_report_uploads_when_configured(state, workspace, monkeypatch, capsy
     monkeypatch.setenv("RAVEN_BUGREPORT_URL", receiver_url)
     _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
 
-    _bug_flow(monkeypatch, workspace, ["it broke", False, True, _CANCEL])
+    fake = _bug_flow(monkeypatch, workspace, ["it broke", False, True, _CANCEL])
 
     out = capsys.readouterr().out
     assert f"Will upload to {receiver_url} after the package is created." in out
     assert "Uploaded — receipt rc-" in out
     assert "Not uploaded" not in out
+    assert all(message != tbrowse.tcmd._CONTINUE_WITHOUT_RECEIVER for _kind, message, _titles in fake.prompts)
     _record_dir, record = _single_report(state)
     assert record["upload"]["state"] == "uploaded"
 
@@ -2980,13 +2981,38 @@ def test_bug_report_upload_failure_is_shown(state, workspace, monkeypatch, capsy
     monkeypatch.setenv("RAVEN_BUGREPORT_URL", _dead_url())
     _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
 
-    _bug_flow(monkeypatch, workspace, ["it broke", False, True, _CANCEL])
+    fake = _bug_flow(monkeypatch, workspace, [True, "it broke", False, True, _CANCEL])
 
     out = capsys.readouterr().out
+    assert "is not reachable" in out
+    assert [message for kind, message, _titles in fake.prompts if kind == "confirm"][0] == (
+        tbrowse.tcmd._CONTINUE_WITHOUT_RECEIVER
+    )
     assert "✗ Upload failed:" in out
     assert 'Retry from this attempt\'s "Bug reports" entry (Upload).' in out
     _record_dir, record = _single_report(state)
     assert record["status"] == "local_ready" and record["upload"]["state"] == "failed"
+
+
+@pytest.mark.parametrize("answer", [False, _BACK], ids=["no", "escape"])
+def test_bug_report_unreachable_receiver_declined_returns_to_the_menu(
+    state, workspace, monkeypatch, capsys, _no_machine_secrets, no_proxy_env, answer
+):
+    from raven.trajectory import bugreport as breport
+
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", _dead_url())
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+
+    fake = _bug_flow(monkeypatch, workspace, [answer, _CANCEL])
+
+    out = capsys.readouterr().out
+    assert "is not reachable" in out and tbrowse._CANCELLED_MESSAGE in out
+    kinds = [kind for kind, _message, _titles in fake.prompts]
+    asked = kinds.index("confirm")
+    assert fake.prompts[asked][1] == tbrowse.tcmd._CONTINUE_WITHOUT_RECEIVER
+    assert "text" not in kinds[asked:]
+    assert not breport.bugreports_root(state).exists()
+    assert tstore.pins(state) == {}
 
 
 @pytest.mark.parametrize("url", ["http://10.1.2.3", "https://[broken", "https://ops.example:notaport"])

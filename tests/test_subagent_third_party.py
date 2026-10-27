@@ -472,6 +472,52 @@ async def test_cli_backend_uses_login_env_and_per_agent_env_wins(
     assert out == "yes/agent"
 
 
+async def test_cli_backend_starts_the_way_the_mirror_fallback_says(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    """A CLI agent started through ``uvx`` or ``npx`` fetches itself first,
+    like an ACP agent. The launch asks with the argv it starts, the environment
+    the agent gets and the directory it starts in, and starts the argv it is
+    answered with."""
+    from raven.utils import mirrors
+
+    captured = f"PATH={os.environ['PATH']}\0SYSTEMROOT={os.environ.get('SYSTEMROOT', '')}\0".encode()
+    monkeypatch.setattr(
+        env_mod.subprocess, "run", lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, captured, b"")
+    )
+    asked: list[tuple[list[str], dict[str, str], str | None]] = []
+
+    def package_launch(
+        argv: list[str],
+        env: dict[str, str],
+        cwd: str | None = None,
+        *,
+        local: bool = True,
+        deadline: float | None = None,
+        cache_root: Path | None = None,
+    ) -> list[str]:
+        asked.append((list(argv), dict(env), cwd))
+        return [*argv, "--as-the-answer-says"]
+
+    monkeypatch.setattr(mirrors, "package_launch", package_launch)
+    script = tmp_path / "show_args.py"
+    script.write_text("import sys\nprint(' '.join(sys.argv[1:]), end='')\n", encoding="utf-8")
+    be = CliAgentBackend(
+        name="envcheck",
+        command=f"{command_quote(sys.executable)} {command_quote(str(script))}",
+        env={"FROM_ENTRY": "yes"},
+        registry=InstanceRegistry(path=tmp_path / "inst.json"),
+    )
+
+    out = await be.run("task", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert out == "--as-the-answer-says"
+    (argv, env, cwd), *_ = asked
+    assert argv[0] == sys.executable
+    assert env["FROM_ENTRY"] == "yes", "asked with the environment the agent gets"
+    assert cwd == str(tmp_path), "and where it starts"
+
+
 async def test_cli_backend_on_windows_starts_a_bare_program_from_the_childs_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1280,14 +1326,25 @@ def test_spawn_tool_omits_the_delegation_preference_when_no_specialist_exists(tm
     assert "is not a specialist" not in desc
 
 
-def test_spawn_tool_states_the_preference_between_the_roster_and_the_dag_pointer(tmp_path: Path) -> None:
-    """Order is the whole point: a rule about which agent to name has to sit
-    with the roster it applies to, and ahead of the pointer that sends the
-    model to a different tool."""
+def test_spawn_tool_ends_with_the_roster_and_the_rule_that_picks_from_it(tmp_path: Path) -> None:
+    """Order is the whole point. The roster is the last thing spawn says, which
+    makes it the last thing the tool array says: spawn is listed after every other
+    tool and ``run_subagent_dag`` points here rather than repeating it. The rule
+    about which agent to name sits right before the roster it applies to, so the
+    DAG pointer and the record guidance come first, and nothing comes between."""
     cli = ThirdPartyCliSubagentConfig(name="Scribe", command="scribe {prompt}", description="builds decks")
-    desc = SpawnTool(manager=_mgr(tmp_path, [cli])).description
-    assert desc.index("choose deliberately from") < desc.index("Prefer delegation")
-    assert desc.index("Prefer delegation") < desc.index("run_subagent_dag")
+    mgr = _mgr(tmp_path, [cli])
+    desc = SpawnTool(manager=mgr).description
+    listing = format_agent_listing(mgr.list_agents())
+
+    assert desc.endswith(
+        "Pick the agent for the job with `subagent` -- there is no default, so choose deliberately from "
+        f"the roster, which `run_subagent_dag` nodes pick from as well: {listing}."
+    )
+    assert desc.count(listing) == 1
+    assert desc.index("use `run_subagent_dag` instead") < desc.index("The result names a `Record:` path")
+    assert desc.index("The result names a `Record:` path") < desc.index("Prefer delegation")
+    assert "only when no specialist covers the work. Pick the agent for the job" in desc
 
 
 async def test_spawn_tool_forwards_agent(tmp_path: Path) -> None:
@@ -1995,6 +2052,41 @@ async def test_registry_upsert_dag_node_roundtrip(tmp_path: Path) -> None:
     assert rows[0]["createdAtMs"] == created
 
 
+async def test_registry_dag_node_row_carries_a_branch_outcome_until_a_write_without_one(tmp_path: Path) -> None:
+    """Until the manifest is written, the row is the only record of what a branch
+    decided. Each key is there only when given -- an empty selection is given -- and
+    the row is rebuilt on every write, so it says what the latest write said."""
+    path = tmp_path / "inst.json"
+    reg = InstanceRegistry(path=path)
+    await reg.upsert_dag_node(
+        "web:s1", "run-1", "triage", "claude_code", "completed", selected_routes=["docs"], route_evidence="asks how"
+    )
+    await reg.upsert_dag_node("web:s1", "run-1", "scan", "claude_code", "completed", selected_routes=[])
+    await reg.upsert_dag_node("web:s1", "run-1", "fix", "claude_code", "not_executed", reason="when_false")
+
+    rows = {r["nodeId"]: r for r in InstanceRegistry(path=path).list_instances("web:s1")}
+    assert (rows["triage"]["selectedRoutes"], rows["triage"]["routeEvidence"]) == (["docs"], "asks how")
+    assert "reason" not in rows["triage"]
+    assert rows["scan"]["selectedRoutes"] == [], "a decision that chose nothing has still decided"
+    assert "routeEvidence" not in rows["scan"]
+    assert rows["fix"]["reason"] == "when_false"
+    assert not {"selectedRoutes", "routeEvidence"} & set(rows["fix"])
+
+    await reg.upsert_dag_node("web:s1", "run-1", "triage", "claude_code", "running")
+    row = next(r for r in reg.list_instances("web:s1") if r["nodeId"] == "triage")
+    assert set(row) == {
+        "kind",
+        "sessionKey",
+        "agent",
+        "handle",
+        "runId",
+        "nodeId",
+        "status",
+        "createdAtMs",
+        "updatedAtMs",
+    }, "a write without an outcome leaves none behind"
+
+
 async def test_registry_dag_node_persists_and_coexists_with_cli(tmp_path: Path) -> None:
     path = tmp_path / "inst.json"
     reg = InstanceRegistry(path=path)
@@ -2619,8 +2711,9 @@ def test_only_the_measured_non_isolating_preset_withholds_session_mcp() -> None:
     assert declared["OpenCode"] is False
     # And nothing else withholds. Asserted as "the only false" rather than by
     # listing every other preset, so adding one cannot quietly arrive as a false.
-    # The Mirasim rows are a measured exception of another kind: ui-cli takes no
-    # MCP servers at all, so withholding them is the honest declaration there.
+    # The Mirasim rows are a measured exception of another kind: the Mirasim host
+    # takes no MCP servers for one session, so withholding them is the honest
+    # declaration there.
     mirasim = {row["name"] for row in MIRASIM_PRESETS.values()}
     assert {name for name, isolates in declared.items() if not isolates} == {"OpenCode"} | mirasim
 
@@ -2653,7 +2746,6 @@ def test_a_row_written_before_the_field_existed_still_gets_the_measured_answer()
     assert session_mcp_for(_cfg(name="mine", sessionMcp=False)) is False
 
 
-@pytest.mark.usefixtures("unix_socket_host")
 def test_the_roster_row_advertises_the_verdict_the_dispatch_will_reach() -> None:
     """The registry row, not just the backend, has to carry the effective answer.
 
@@ -5315,6 +5407,9 @@ def test_the_upgrade_is_the_install_pinned_to_latest(monkeypatch: pytest.MonkeyP
 
     assert presets_mod.upgrade_hint_for(SimpleNamespace(preset="qwen_code")) == "npm i -g @qwen-code/qwen-code@latest"
     assert presets_mod.upgrade_hint_for(SimpleNamespace(preset="claude_code")) is None, "no install hint, no upgrade"
+    assert presets_mod.upgrade_hint_for(SimpleNamespace(preset="pi")) == (
+        "npm install -g @earendil-works/pi-coding-agent@latest"
+    ), "a shim's upgrade is the agent it drives"
     for hint, upgrade in (
         ("npm install -g plain-agent", "npm install -g plain-agent@latest"),
         ("npm i -g @scope/agent@1.2.3", None),

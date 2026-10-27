@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from google.protobuf.json_format import MessageToDict
 
 from raven import __version__ as raven_version
@@ -172,15 +173,14 @@ def test_the_extended_card_does_not_name_the_host_as_its_own_sub_agent():
     assert [row["name"] for row in _roster_of(card)] == ["Raven-Code"]
 
 
-def test_the_seed_is_dropped_under_its_legacy_spelling_too():
+@pytest.mark.parametrize("legacy", sorted(name for name, seed in LEGACY_AGENT_ALIASES.items() if seed == GENERIC_AGENT))
+def test_the_seed_is_dropped_under_its_legacy_spelling_too(legacy: str):
     """Matched with `is_builtin_agent_name`, not against `GENERIC_AGENT`.
 
-    Direct-chat records and instance rows written before the row was capitalised
-    spell it lowercase, so a roster built from one carries that name and the
+    Direct-chat records and instance rows written before either rename of the row
+    spell it the old way, so a roster built from one carries that name and the
     filter has to resolve the alias rather than compare strings.
     """
-    (legacy,) = (name for name, seed in LEGACY_AGENT_ALIASES.items() if seed == GENERIC_AGENT)
-
     card = build_extended_agent_card(A2aConfig(), base_url="/a2a", agents=[_Agent(legacy, "The same row.")])
 
     assert [s.id for s in card.skills] == ["general"]

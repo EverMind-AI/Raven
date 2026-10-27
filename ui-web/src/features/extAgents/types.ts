@@ -113,6 +113,25 @@ export interface ExtAgentActArgs {
   remote_cwd?: string
 }
 
+/* One preset as the machine sheet's connect form offers it: what it is, and
+   where an entry of it already runs. Listed whether or not this computer has
+   it connected -- an entry is one preset on one machine -- which is what the
+   roster's own rows cannot say, since they withhold a preset once a row holds
+   its name. */
+export interface PresetChoice {
+  preset: string
+  name: string
+  kind: 'acp' | 'cli'
+  description: string
+  connected_here: boolean
+  /* Machines (ids) a connected entry of it runs on: the form greys these. */
+  on_machines: string[]
+  /* Machines where an entry of it exists but is switched off, with that
+     entry's name: it still holds the machine for the add (the server refuses
+     a second), so the form offers it back under its own name instead. */
+  off_on_machines: Array<{ machine: string; name: string }>
+}
+
 export interface ExtAgentsSource {
   /* `rescan` also has the server take the login shell's environment again before
      it probes: the one answer to an agent installed since the gateway started,
@@ -120,6 +139,25 @@ export interface ExtAgentsSource {
      re-check sends it -- the capture runs the user's login shell. */
   load(probe?: boolean, rescan?: boolean): Promise<ExtAgentRow[]>
   act(op: ExtAgentOp, row: ExtAgentRow, args?: ExtAgentActArgs): Promise<ExtAgentRow[]>
+  /* The presets an entry can be made from on a registered machine. */
+  presets(): Promise<PresetChoice[]>
+  /* Connect `choice` on `machine` under the server's default name,
+     `<preset>@<machine>`, in the working directory there (`''` for the
+     default); the server starts it there once as proof, and refuses a preset
+     the machine already has. The name it landed under, or the refusal --
+     `cancelled` when the refusal is that the run was stopped (`cancelRun`),
+     which the form says as a cancel rather than as the agent failing. */
+  connectOnMachine(
+    choice: PresetChoice,
+    machine: string,
+    remoteCwd: string
+  ): Promise<{ name: string } | { refused: string; cancelled?: boolean }>
+  /* Stop the run in flight under `name` -- the proof prompt of a connect
+     pressed from the machine form, by the name the entry has or lands under;
+     the same call that stops a test. True when there was one to stop; false
+     when nothing was running, which leaves the connect past the point where
+     it can be cancelled rather than cancelled (`awaitRun`). */
+  cancelRun(name: string): Promise<boolean>
 }
 
 /* What fixes a refusal, as the server classified it: which kind of fix, and
@@ -180,11 +218,22 @@ export interface MachineRow {
      which a dispatch there needs. '' when none is known. */
   node_version: string
   node_current: boolean
+  /* How this computer logs in to an ssh row: with the key whose path the
+     registry carries, or with the password kept here for it. '' for a local
+     row. The path and the password themselves never reach the page. */
+  auth: 'key' | 'password' | ''
   /* The last node install asked for from this page: in flight, or how it ended. */
   install: { running: boolean; ok: boolean | null; detail: string }
   paths: string[]
   /* What blocks the row, one sentence each, as the registry's doctor says it. */
   problems: string[]
+  /* The connected agent entries that run on this machine, by name: the line
+     that tells a reader whose machine is up and idle where the next step is.
+     Empty on a machine nothing is connected on yet. */
+  agents_here: string[]
+  /* The entries on this machine that are switched off, by name: shown as
+     such, since they still hold the machine for the add. */
+  agents_off_here: string[]
 }
 
 export interface MachineProblem {
@@ -196,7 +245,7 @@ export interface MachineProblem {
 
 /* Why a machine was not registered, as a kind the page explains in the
    reader's language; '' when it was. */
-export type RegisterReason = '' | 'unreachable' | 'login' | 'hostkey' | 'timeout' | 'nossh' | 'duplicate' | 'invalid' | 'registry'
+export type RegisterReason = '' | 'unreachable' | 'login' | 'prompt' | 'hostkey' | 'timeout' | 'nossh' | 'platform' | 'duplicate' | 'invalid' | 'registry'
 
 export interface RegisterForm {
   id: string
@@ -204,7 +253,12 @@ export interface RegisterForm {
   host: string
   port: number
   user: string
+  /* How Raven logs in, now and on every connection after: with the private
+     key at `key`, or with `password`, which the server keeps on this computer
+     for the owner alone. Both travel once, in `add`, and are not read back. */
+  auth: 'key' | 'password'
   key: string
+  password: string
   paths: string[]
 }
 
@@ -217,4 +271,7 @@ export interface MachinesSource {
   installNode(id: string, nodeDir?: string): Promise<{ started: boolean; detail: string }>
   doctor(): Promise<MachineProblem[]>
   remove(id: string): Promise<{ removed: boolean; detail: string; agents: string[] }>
+  /* The private keys this computer has, as `~/.ssh/<name>` paths, ssh's own
+     first: what the register form fills in instead of a placeholder. */
+  localKeys(): Promise<string[]>
 }

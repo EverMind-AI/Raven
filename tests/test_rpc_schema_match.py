@@ -461,6 +461,35 @@ def test_schema_match_the_boundary_a_suspended_dag_node_emits(schema: dict[str, 
         TypeAdapter(TurnEvent).validate_python(shape)
 
 
+@pytest.mark.parametrize("truncated", [True, False, None])
+def test_the_output_cut_flag_survives_each_published_delivery_shape(schema: dict[str, Any], truncated) -> None:
+    import jsonschema
+
+    from raven.rpc.models import SubagentDeliveredPayload, TranscriptDelegated, TurnStartedDelegated
+
+    mark = {"kind": "dag", "label": "r1", "status": "exception", "output": "the node's words"}
+    if truncated is not None:
+        mark["output_truncated"] = truncated
+    components = schema["components"]
+    cases = [
+        (TranscriptDelegated, components["schemas"]["TranscriptDelegated"], mark),
+        (
+            TurnStartedDelegated,
+            components["schemas"]["TurnStartedEvent"]["properties"]["payload"]["properties"]["delegated"],
+            {**mark, "content": "model brief"},
+        ),
+        (
+            SubagentDeliveredPayload,
+            components["schemas"]["SubagentDeliveredEvent"]["properties"]["payload"],
+            {**mark, "content": "model brief"},
+        ),
+    ]
+    for model, published, data in cases:
+        actual = model.model_validate(data).model_dump(exclude_none=True)
+        assert actual.get("output_truncated") is truncated
+        jsonschema.validate(actual, {**published, "components": components})
+
+
 def test_schema_match_the_stall_notice_progress_event(schema: dict[str, Any]) -> None:
     """`dag.node_stalled` is what the stall watcher's progress event becomes on
     the wire (`raven.rpc.spine._DAG_WIRE_EVENT`); it is the only frame a bound
@@ -475,6 +504,141 @@ def test_schema_match_the_stall_notice_progress_event(schema: dict[str, Any]) ->
     event = {"type": _DAG_WIRE_EVENT["dag_node_stalled"], "payload": payload}
     jsonschema.validate(event, {**schema["components"]["schemas"]["TurnEvent"], "components": schema["components"]})
     TypeAdapter(TurnEvent).validate_python(event)
+
+
+def test_schema_match_the_frames_a_run_that_branches_emits(schema: dict[str, Any]) -> None:
+    """Every frame a graph with decisions and guards puts on the wire is valid
+    against the published contract AND the Pydantic model.
+
+    The payload-fields sweep below compares only each payload's own property
+    names, so the objects nested inside it -- a started frame's nodes, a
+    completed frame's summary and files, a node frame's status enum -- were never
+    held to both sides by what a run really sends. Both declare
+    ``additionalProperties: false`` / ``extra="forbid"``, so one side missing a
+    field or a status makes a validating consumer drop the whole frame, not the
+    unknown key.
+
+    Built through ``_dag_payload`` from the dicts the runner emits, so a field the
+    runner sends and the sink forgets to carry is a different test's failure.
+    """
+    import jsonschema
+    from pydantic import TypeAdapter
+
+    from raven.rpc.models import TurnEvent
+    from raven.rpc.spine import _DAG_WIRE_EVENT, _dag_payload
+
+    summary = {"total": 3, "completed": 2, "failed": 0, "skipped": 0, "cancelled": 0, "not_executed": 1}
+    frames = [
+        (
+            "dag_run_started",
+            {
+                "run_id": "r1",
+                "nodes": [
+                    {"id": "triage", "subagent": "x", "depends_on": [], "routes": ["bug", "docs"], "select": "one"},
+                    {"id": "fix", "subagent": "x", "depends_on": ["triage"], "when": "triage.bug"},
+                    {
+                        "id": "audit",
+                        "subagent": "x",
+                        "depends_on": ["fix"],
+                        "routes": ["a"],
+                        "select": "many",
+                        "when": "fix.done",
+                    },
+                ],
+            },
+        ),
+        ("dag_node_updated", {"run_id": "r1", "node": "fix", "status": "not_executed", "reason": "when_false"}),
+        ("dag_node_updated", {"run_id": "r1", "node": "fix", "status": "not_executed", "reason": "when_unknown"}),
+        (
+            "dag_node_updated",
+            {"run_id": "r1", "node": "fix", "status": "not_executed", "reason": "upstream_not_executed"},
+        ),
+        (
+            "dag_node_updated",
+            {
+                "run_id": "r1",
+                "node": "triage",
+                "status": "completed",
+                "started_at": 1,
+                "ended_at": 2,
+                "selected_routes": ["docs"],
+                "route_evidence": "the reporter asks how to configure it",
+            },
+        ),
+        ("dag_node_updated", {"run_id": "r1", "node": "audit", "status": "completed", "selected_routes": []}),
+        (
+            "dag_run_completed",
+            {
+                "run_id": "r1",
+                "manifest": {
+                    "dir": "/w/r1",
+                    "summary": summary,
+                    "files": [
+                        {
+                            "node": "triage",
+                            "status": "completed",
+                            "output_file": "/w/r1/triage.out.md",
+                            "selected_routes": ["docs"],
+                            "route_evidence": "the reporter asks how to configure it",
+                        },
+                        {"node": "audit", "status": "completed", "selected_routes": []},
+                        {"node": "fix", "status": "not_executed", "reason": "when_false"},
+                        {"node": "patch", "status": "not_executed", "reason": "when_unknown"},
+                        {"node": "notify", "status": "not_executed", "reason": "upstream_not_executed"},
+                    ],
+                },
+            },
+        ),
+    ]
+    mapping = schema["components"]["schemas"]["TurnEvent"]["discriminator"]["mapping"]
+    for name, payload in frames:
+        event = {"type": _DAG_WIRE_EVENT[name], "payload": _dag_payload(name, payload)}
+        # Against the variant the discriminator names, not the union: a oneOf
+        # failure says only "not valid under any of the given schemas".
+        variant = {**_resolve_ref(mapping[event["type"]], schema), "components": schema["components"]}
+        jsonschema.validate(event, variant)
+        TypeAdapter(TurnEvent).validate_python(event)
+
+
+def _where_shapes_part(oas: Any, pyd: Any, path: str = "") -> list[str]:
+    """Every place two normalised shapes disagree, as paths a reader can go to."""
+    if not (isinstance(oas, dict) and isinstance(pyd, dict)):
+        return [] if oas == pyd else [f"{path}: schema={oas} vs pydantic={pyd}"]
+    out: list[str] = []
+    for key in sorted(set(oas) | set(pyd)):
+        if key not in oas:
+            out.append(f"{path}/{key}: only in pydantic")
+        elif key not in pyd:
+            out.append(f"{path}/{key}: only in schema")
+        else:
+            out += _where_shapes_part(oas[key], pyd[key], f"{path}/{key}")
+    return out
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        "DagRunStartedEvent",
+        "DagNodeUpdatedEvent",
+        "DagRunReplannedEvent",
+        "DagNodeStalledEvent",
+        "DagRunCompletedEvent",
+    ],
+)
+def test_schema_match_a_dag_event_agrees_down_to_its_nested_objects(event: str, schema: dict[str, Any]) -> None:
+    """The payload-fields sweep below stops at a payload's own property names, so
+    the objects nested in a dag frame -- a started frame's nodes, a completed
+    frame's summary and files -- and every enum on them were compared nowhere.
+    Both sides forbid extra keys, so a field or a status one side lacks makes a
+    validating consumer drop the whole frame. Walked the way the method sweep
+    walks a result, naming each place the two part."""
+    import raven.rpc.models as models
+
+    oas = _normalize_oas_type({"$ref": f"#/components/schemas/{event}"}, schema)
+    pyd_schema = getattr(models, event).model_json_schema()
+    pyd = _normalize_pyd_type(pyd_schema, pyd_schema)
+
+    assert not _where_shapes_part(oas, pyd), f"drift in {event}: " + "; ".join(_where_shapes_part(oas, pyd))
 
 
 def test_schema_match_turn_event_payload_fields(schema: dict[str, Any]) -> None:

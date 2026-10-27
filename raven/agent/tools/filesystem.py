@@ -128,6 +128,25 @@ def _machine_of(path: str) -> str | None:
     return where.machine if where is not None else None
 
 
+def _is_a_device_spelling(path: str) -> bool:
+    """Whether ``path`` names a Windows device itself, colon spelling included (``NUL:``).
+
+    ``looks_remote`` reads the colon in ``NUL:`` as a machine prefix, so on a
+    Windows host this lets the reserved-name fence answer before the remote
+    path does. Only the head of a remote spelling -- the machine's id or
+    ``user@address``, before the separator -- can be the device instead of a
+    machine: everything after the separator is a path on that machine, where
+    ``nul`` and ``aux`` are ordinary file names and must reach it. On a POSIX
+    host this is ``False`` and the remote answer runs as it always did.
+    """
+    if not _WINDOWS or _url_argument(path):
+        return False
+    if not remote_path.looks_remote(path):
+        return any(_windows_device_stem(part) in _WINDOWS_DEVICE_NAMES for part in _supplied_components(Path(path)))
+    raw = path.strip()
+    return _windows_device_stem(raw.partition(":")[0]) in _WINDOWS_DEVICE_NAMES
+
+
 def _unified(before: str, after: str, name: str) -> str | None:
     """Unified diff of one write, or None when there is nothing useful to show.
 
@@ -152,6 +171,77 @@ def _unified(before: str, after: str, name: str) -> str | None:
     return "\n".join(out)
 
 
+# A DOS device name opens the device, not a file: ``nul`` maps to NUL in every
+# directory on every Windows version (CPython issue 95486). ``Path.resolve()``
+# cannot catch one: on Windows that is ``ntpath.realpath``, which maps only a
+# path that is exactly ``nul`` to ``\\.\NUL`` and hands ``<workspace>\nul``
+# back unchanged, so the allowed-dir check then accepts it. Windows' naming
+# rules hold for every path component, not only the last, and reach further
+# than the bare devices: a device name with or without a first extension
+# (``subdir/nul.md``), the superscript spellings (``COM¹.txt``, ``LPT²``), a
+# trailing dot or space (the bytes land in ``notes.md`` while the receipt
+# names ``notes.md.``), and a colon (``notes.md:hidden`` is an NTFS stream no
+# directory listing shows; ``NUL:`` is the device itself). The set and the
+# per-component order mirror CPython 3.13's ``ntpath.isreserved``, which
+# Python 3.12 cannot call: Microsoft's naming rules list COM/LPT 1-9 only, so
+# ``com0.txt`` is an ordinary file and stays one.
+_WINDOWS_DEVICE_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+    | {f"COM{s}" for s in "¹²³"}
+    | {f"LPT{s}" for s in "¹²³"}
+)
+
+
+def _is_reserved_windows_component(part: str) -> bool:
+    """Whether one path component is a reserved Windows name in one of its spellings."""
+    if part in (".", ".."):
+        return False
+    if part[-1:] in (".", " "):
+        return True
+    if ":" in part:
+        return True
+    return part.partition(".")[0].rstrip(" ").upper() in _WINDOWS_DEVICE_NAMES
+
+
+def _supplied_components(p: Path) -> tuple[str, ...]:
+    """The path components the caller wrote; the anchor (drive and root) is skipped.
+
+    The anchor names an operator-installed location, while Windows applies its
+    naming rules to everything the caller supplies, directory components
+    included.
+    """
+    return p.parts[1:] if (p.drive or p.root) else p.parts
+
+
+def _windows_device_stem(part: str) -> str:
+    """The device a component could name: its stem, before any stream colon or first extension."""
+    return part.partition(":")[0].partition(".")[0].rstrip(" ").upper()
+
+
+def _has_reserved_windows_component(p: Path) -> bool:
+    """Whether any component the caller supplied is a reserved Windows name."""
+    return any(_is_reserved_windows_component(part) for part in _supplied_components(p))
+
+
+def _url_argument(path: str) -> bool:
+    """Whether ``path`` is a URL rather than a path on this machine.
+
+    ``_URL_SCHEME_RE`` accepts a one-letter scheme, and Windows reads
+    ``C://work/nul`` as the drive path ``C:\\work\\nul`` -- a drive letter is a
+    local path, not a scheme, so the exemption needs two letters.
+    """
+    match = _URL_SCHEME_RE.match(path.strip())
+    return match is not None and len(match.group("scheme")) > 1
+
+
+# Read once: the platform of a process never changes, and keying the fence on
+# the module global keeps it testable off Windows (where ``os.name = "nt"``
+# cannot be patched without breaking ``Path`` itself).
+_WINDOWS = os.name == "nt"
+
+
 def resolve_path(
     path: str,
     workspace: Path | None = None,
@@ -163,6 +253,11 @@ def resolve_path(
     if any(unicodedata.category(c) in ("Cc", "Zl", "Zp") for c in str(path)):
         raise PermissionError(f"Path {path!r} contains a line break or control character")
     p = Path(path).expanduser()
+    # A URL argument is not a path on this machine, so its scheme colon is not
+    # a stream spelling; the tool's not-found answer is the one that names the
+    # tool which can actually serve it, and this fence must not answer first.
+    if _WINDOWS and not _url_argument(path) and _has_reserved_windows_component(p):
+        raise PermissionError(f"Path {path!r} is a reserved name on Windows; choose a different name")
     if not p.is_absolute() and workspace:
         p = workspace / p
     resolved = p.resolve()
@@ -336,7 +431,10 @@ class ReadFileTool(_FsTool):
 
     async def execute(self, path: str, offset: int = 1, limit: int | None = None, **kwargs: Any) -> str | ToolResult:
         # A file on a registered machine is read there, by its Raven node.
-        if (remote := await remote_files.answer("read_file", path, {"offset": offset, "limit": limit})) is not None:
+        if (
+            not _is_a_device_spelling(path)
+            and (remote := await remote_files.answer("read_file", path, {"offset": offset, "limit": limit})) is not None
+        ):
             return remote
         try:
             fp = self._resolve(path)
@@ -519,7 +617,11 @@ class WriteFileTool(_FsTool):
         if mode == "append" and not content:
             return "Error: write_file with mode=append needs content; refusing to append nothing."
         # A file on a registered machine is written there, by its Raven node.
-        if (remote := await remote_files.answer("write_file", path, {"content": content, "mode": mode})) is not None:
+        if (
+            not _is_a_device_spelling(path)
+            and (remote := await remote_files.answer("write_file", path, {"content": content, "mode": mode}))
+            is not None
+        ):
             return remote
         try:
             fp = self._resolve(path)
@@ -685,7 +787,10 @@ class EditFileTool(_FsTool):
     ) -> str | ToolResult:
         # A file on a registered machine is edited there, by its Raven node.
         sent = {"old_text": old_text, "new_text": new_text, "replace_all": replace_all}
-        if (remote := await remote_files.answer("edit_file", path, sent)) is not None:
+        if (
+            not _is_a_device_spelling(path)
+            and (remote := await remote_files.answer("edit_file", path, sent)) is not None
+        ):
             return remote
         try:
             fp = self._resolve(path)
@@ -804,7 +909,10 @@ class ListDirTool(_FsTool):
         **kwargs: Any,
     ) -> str:
         params = {"recursive": recursive, "max_entries": max_entries}
-        if (remote := await remote_files.answer("list_dir", path, params)) is not None:
+        if (
+            not _is_a_device_spelling(path)
+            and (remote := await remote_files.answer("list_dir", path, params)) is not None
+        ):
             return str(remote)
         try:
             dp = self._resolve(path)

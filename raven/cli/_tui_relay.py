@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import signal
 import socket
 import subprocess
 import sys
@@ -380,6 +379,7 @@ def run_subprocess_attached(
         _RPC_HANDSHAKE_EXIT_CODE,
         _RPC_HANDSHAKE_TIMEOUT_S,
         _accept_with_timeout,
+        _forward_signals_to,
         _run_rpc_server_until_done,
         _spawn_with_rpc_socket,
     )
@@ -387,17 +387,7 @@ def run_subprocess_attached(
     proc, server_sock, auth_token = _spawn_with_rpc_socket(node_path, args, cwd)
 
     if forward_signals:
-
-        def _forward(sig, _frame):
-            try:
-                proc.send_signal(sig)
-            except ProcessLookupError:
-                pass
-
-        signal.signal(signal.SIGINT, _forward)
-        signal.signal(signal.SIGTERM, _forward)
-        if hasattr(signal, "SIGHUP"):
-            signal.signal(signal.SIGHUP, _forward)
+        _forward_signals_to(proc)
 
     proc_done = asyncio.Event()
     _loop_holder: dict[str, asyncio.AbstractEventLoop] = {}

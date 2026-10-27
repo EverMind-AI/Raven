@@ -14,6 +14,8 @@ import stat
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from raven.acp_client.journal import CALL, FRAME, FrameJournal, enabled, open_journal, prune, redact_acp_frame
 
 
@@ -65,13 +67,15 @@ def test_the_file_is_unreadable_to_anyone_else(tmp_path: Path) -> None:
     assert stat.S_IMODE(journal.path.stat().st_mode) == 0o600
 
 
-def test_mcp_secrets_are_redacted_without_mutating_the_wire_frame() -> None:
+@pytest.mark.parametrize("method", ["session/new", "session/load"])
+def test_mcp_secrets_are_redacted_without_mutating_the_wire_frame(method) -> None:
     frame = {
-        "method": "session/load",
+        "method": method,
         "params": {
             "mcpServers": [
                 {
                     "name": "private",
+                    "args": ["mcp", "bridge", "tcp://127.0.0.1:1234/endpoint-secret"],
                     "env": [{"name": "TOKEN", "value": "stdio-secret"}],
                     "headers": [{"name": "Authorization", "value": "header-secret"}],
                 }
@@ -84,6 +88,8 @@ def test_mcp_secrets_are_redacted_without_mutating_the_wire_frame() -> None:
     server = redacted["params"]["mcpServers"][0]
     assert server["env"][0]["value"] == "<redacted>"
     assert server["headers"][0]["value"] == "<redacted>"
+    assert server["args"] == ["mcp", "bridge", "tcp://127.0.0.1:1234/<redacted>"]
+    assert frame["params"]["mcpServers"][0]["args"][-1] == "tcp://127.0.0.1:1234/endpoint-secret"
     assert frame["params"]["mcpServers"][0]["env"][0]["value"] == "stdio-secret"
     assert frame["params"]["mcpServers"][0]["headers"][0]["value"] == "header-secret"
 

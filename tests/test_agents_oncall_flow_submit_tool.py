@@ -68,7 +68,7 @@ class _FakeCron:
         self.advanced.append(key)
         return any(j["key"] == key for j in self.jobs)
 
-    def pending_wakes(self, prefix=""):
+    def pending_wakes(self, prefix="", *, include_running=True):
         return [SimpleNamespace(id=f"oncall-flow:{j['key']}") for j in self.jobs if j["key"].startswith(prefix)]
 
     def cancel_wake(self, key):
@@ -128,6 +128,49 @@ async def test_submit_records_ledger_and_schedules_wake(monkeypatch, tmp_path: P
     assert job["at_ms"] > 0
     assert "ops_submit" in job["message"] and "round=1" in job["message"]
     assert "Submitted 1 job(s)" in out and "Scheduled a wake" in out
+
+
+async def test_round_zero_sets_up_and_builds_its_backend_off_the_loop(monkeypatch, tmp_path: Path) -> None:
+    """A password machine's setup and runner ask a local ``ssh -G`` which host its prompt names; built on the
+    loop, that wait held every other turn (reviewed 2026-10-20)."""
+    from oncall_flow import backends
+
+    _patch_remote(monkeypatch)
+    where: list[tuple[str, bool]] = []
+    for name in ("prepare_from_meta", "backend_from_meta"):
+        real = getattr(backends, name)
+
+        def recorded(*a, _real=real, _name=name, **k):
+            where.append((_name, _on_the_loop()))
+            return _real(*a, **k)
+
+        monkeypatch.setattr(backends, name, recorded)
+    tool = _bound(OpsSubmitTool(), _FakeCron())
+    tool.set_context("cli", "direct")
+
+    out = await tool.execute(
+        host="1.2.3.4",
+        configs=[{"k1": 1.5}],
+        objective="max ndcg",
+        ledger=str(tmp_path / "l.json"),
+        eta_seconds=120,
+        round=0,
+        metric="ndcg",
+        campaign="bm25",
+    )
+
+    assert "Submitted 1 job(s)" in out
+    assert where == [("prepare_from_meta", False), ("backend_from_meta", False)]
+
+
+def _on_the_loop() -> bool:
+    import asyncio
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
 
 
 async def test_submit_batch_runs_all_configs(monkeypatch, tmp_path: Path) -> None:

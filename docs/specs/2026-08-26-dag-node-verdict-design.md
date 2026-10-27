@@ -97,6 +97,13 @@ transcript -- the cli lane publishes only `note_console`, which is live-only and
 reaches a file -- degrade to prompt + output, and the report carries an
 evidence-incomplete marker so Raven knows the judgement was made on less.
 
+> **Amended 2026-10-20.** A continued node's follow-ups are inputs too. The rendered
+> prompt stays as first rendered, and each continue message is recorded beside
+> it, oldest first (`<node>.follow_ups.json`); the judge reads them as part of the
+> task, the later one standing where two disagree. Judged on the prompt alone, a node
+> whose user chose another deliverable in a continue message failed every attempt
+> that delivered it.
+
 **Where it lives.** A new `raven/agent/subagent/dag_verdict.py`: prompt construction,
 tool schema, parsing, and evidence truncation. `runner.py` only calls it. Keeping it
 out of the runner is what makes it testable without a graph.
@@ -178,7 +185,10 @@ out of scope.
 A new `announce_dag_exception(run_id, node_id, report, origin)` carries a mark with
 `"status": "exception"` and the `node_id`, so TUI and web clients can tell it apart
 from a run's closing announce. The existing mark's own contract permits this: its
-comment states that `status` is for placement, not verdict.
+comment states that `status` is for placement, not verdict. A report about a node that
+has already failed is marked `error` and a stall notice `notice`; a report about an
+attempt also carries `output`, what the node returned on it, which is what a client
+shows a reader, since the report itself is written for the model.
 
 **The report carries** the judge's structured fields plus facts the runner supplies:
 

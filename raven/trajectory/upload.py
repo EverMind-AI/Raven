@@ -20,11 +20,25 @@ flag agrees with the status code. Anything else — a captive portal's 200, a
 proxy's HTML, a receiver that was pointed at the wrong directory — is a
 failure that keeps the package on disk, never a success.
 
+Every upload first asks the receiver for an Upload Challenge and sends,
+with the package, an answer bound to its report id, digest and size
+(:mod:`raven.trajectory.receiver_auth`). A 401 then means one of two things:
+the challenge expired on the way, which another attempt fixes, or the
+receiver does not take this client's answer, which no retry fixes -- the
+receiver and this Raven are most likely different versions.
+
 The whole exchange runs under one wall-clock deadline that cancels the
 request outright. Per-operation socket timeouts alone cannot bound a transfer:
 a peer that trickles a byte before each one expires can hold a call open
 forever, and that holds whether it is slow to send response headers, slow to
 send the body, or slow to read the upload.
+
+Before a report starts, :func:`probe_receiver` asks the URL's ``/v1/hello``
+and accepts only an answer that names a Raven receiver speaking this
+protocol, so a wrong port, a proxy's default page or an older receiver shows
+up before anyone has reviewed a redaction. ``/healthz`` would not tell: anything
+alive answers ok there, and it is not under the base URL's path prefix. The
+probe runs under one deadline for the whole exchange, for the same reason.
 """
 
 from __future__ import annotations
@@ -33,6 +47,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -51,15 +66,31 @@ from raven.trajectory.bugreport import (
     load_record,
     save_record,
 )
-from raven.trajectory.receiver import ENDPOINT_PATH, RECEIPT_ID, REPORT_ID_HEADER, SHA256_HEADER
+from raven.trajectory.receiver import (
+    CHALLENGE_HEADER,
+    CHALLENGE_PATH,
+    ENDPOINT_PATH,
+    HELLO_PATH,
+    PROTOCOL_VERSION,
+    RECEIPT_ID,
+    REPORT_ID_HEADER,
+    RESPONSE_HEADER,
+    SERVICE_NAME,
+    SHA256_HEADER,
+)
+from raven.trajectory.receiver_auth import CHALLENGE_EXPIRED, client_response
 
 DEFAULT_UPLOAD_URL = ""
 UPLOAD_URL_ENV = "RAVEN_BUGREPORT_URL"
 ALLOW_HTTP_ENV = "RAVEN_BUGREPORT_ALLOW_HTTP"
 MAX_RESPONSE_BYTES = 64 * 1024
+PROBE_TIMEOUT = 5.0
 
 _TRUTHY = {"1", "true", "yes", "on"}
 _CHUNK = 64 * 1024
+_REDIRECT_CHARS = 200
+# The client treats a challenge as opaque and only checks that it is safe to send back as a header.
+_OPAQUE_CHALLENGE = re.compile(r"[A-Za-z0-9._~-]{1,256}", re.ASCII)
 _RETRYABLE_STATUSES = (408, 429)
 _RECEIPT_FIELDS = ("receipt_id", "report_id", "sha256", "size_bytes", "received_at", "duplicate")
 
@@ -76,6 +107,15 @@ class UploadError(Exception):
         self.reason = reason
         self.status = status
         self.retryable = retryable
+
+
+class ProbeError(Exception):
+    """The receiver URL does not lead to a Raven bug report receiver that answers in time."""
+
+    def __init__(self, reason: str, *, status: int | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.status = status
 
 
 @dataclass(frozen=True)
@@ -219,12 +259,48 @@ def _parse_json(body: bytes) -> Any:
         return _NOT_JSON
 
 
+def _redirect_target(location: str) -> str:
+    """Where a redirect points, cut to what an error message may show; "" when nothing is left.
+
+    A Location comes from whatever stands in front of the receiver, and a
+    sign-in gateway puts tickets in the query and credentials before an ``@``.
+    It is cut on the string, not parsed, so no spelling of a URL (``//host``,
+    backslashes, no scheme) carries userinfo past it: the query and fragment
+    go first, then everything up to the last ``@``.
+    """
+    location = location.strip()
+    cut = min((i for i in (location.find("?"), location.find("#")) if i != -1), default=len(location))
+    head = location[:cut].rpartition("@")[2][:_REDIRECT_CHARS]
+    if not head:
+        return ""
+    return head + ("..." if cut < len(location) else "")
+
+
 def _rejection(status: int, body: bytes) -> str:
     payload = _parse_json(body)
     if isinstance(payload, dict) and isinstance(payload.get("error"), str):
         message = payload.get("message")
         return f"server rejected ({status} {payload['error']}): {message if isinstance(message, str) else ''}"
     return f"server returned {status}"
+
+
+def _unauthorized(body: bytes) -> UploadError:
+    payload = _parse_json(body)
+    fields = payload if isinstance(payload, dict) else {}
+    code = fields.get("error") if isinstance(fields.get("error"), str) else ""
+    if code == CHALLENGE_EXPIRED:
+        return UploadError(
+            "the challenge expired before the upload reached the receiver (401 challenge_expired); try again",
+            status=401,
+            retryable=True,
+        )
+    message = fields.get("message") if isinstance(fields.get("message"), str) else ""
+    detail = "401" + (f" {code}" if code else "") + (f": {message}" if message else "")
+    return UploadError(
+        f"the receiver did not accept this client ({detail}); the receiver and this Raven may be different versions",
+        status=401,
+        retryable=False,
+    )
 
 
 def _receipt_problem(payload: Any, *, report_id: str, sha256: str, size: int, duplicate: bool) -> str | None:
@@ -258,6 +334,8 @@ async def _receipt_of(response: httpx.Response, *, report_id: str, sha256: str, 
             retryable=False,
         )
     body = await _read_bounded(response)
+    if status == 401:
+        raise _unauthorized(body)
     if status not in (200, 201):
         retryable = status in _RETRYABLE_STATUSES or status >= 500
         raise UploadError(_rejection(status, body), status=status, retryable=retryable)
@@ -270,6 +348,39 @@ async def _receipt_of(response: httpx.Response, *, report_id: str, sha256: str, 
     if problem is not None:
         raise UploadError(f"malformed receipt: {problem}", status=status, retryable=False)
     return UploadReceipt(**{key: payload[key] for key in _RECEIPT_FIELDS})
+
+
+async def _fetch_challenge(client: httpx.AsyncClient, base_url: str, host: str) -> str:
+    """A fresh Upload Challenge from the receiver, or :class:`UploadError`."""
+    headers = {"Accept": "application/json", "Accept-Encoding": "identity", "User-Agent": f"raven/{__version__}"}
+    async with client.stream("POST", base_url.rstrip("/") + CHALLENGE_PATH, headers=headers) as response:
+        status = response.status_code
+        if 300 <= status < 400:
+            target = _redirect_target(response.headers.get("Location", ""))
+            where = (
+                f"redirected the challenge request to {target}"
+                if target
+                else "answered the challenge request with a redirect"
+            )
+            raise UploadError(
+                f"{host} {where}; point {UPLOAD_URL_ENV} at the receiver itself", status=status, retryable=False
+            )
+        body = await _read_bounded(response)
+        if status == 404:
+            raise UploadError(
+                f"the receiver does not issue challenges (HTTP 404 on {CHALLENGE_PATH}); it is older than this Raven",
+                status=status,
+                retryable=False,
+            )
+        if status != 200:
+            retryable = status in _RETRYABLE_STATUSES or status >= 500
+            raise UploadError(_rejection(status, body), status=status, retryable=retryable)
+        is_json = response.headers.get("Content-Type", "").lower().startswith("application/json")
+        payload = _parse_json(body) if is_json else _NOT_JSON
+        challenge = payload.get("challenge") if isinstance(payload, dict) else None
+        if not isinstance(challenge, str) or _OPAQUE_CHALLENGE.fullmatch(challenge) is None:
+            raise UploadError("malformed challenge", status=status, retryable=False)
+        return challenge
 
 
 async def upload_package_async(
@@ -304,6 +415,11 @@ async def upload_package_async(
     try:
         async with asyncio.timeout(total_timeout):
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+                challenge = await _fetch_challenge(client, base_url, host)
+                headers[CHALLENGE_HEADER] = challenge
+                headers[RESPONSE_HEADER] = client_response(
+                    challenge, report_id=report_id, sha256=sha256, size_bytes=size
+                )
                 async with client.stream("POST", url, content=_body(package), headers=headers) as response:
                     return await _receipt_of(response, report_id=report_id, sha256=sha256, size=size)
     except TimeoutError as exc:
@@ -348,6 +464,72 @@ def upload_package(
             total_timeout=total_timeout,
         )
     )
+
+
+async def _check_hello(response: httpx.Response, host: str) -> None:
+    status = response.status_code
+    if 300 <= status < 400:
+        target = _redirect_target(response.headers.get("Location", ""))
+        where = f"redirected to {target}" if target else "answered with a redirect"
+        raise ProbeError(f"{host} {where}; point {UPLOAD_URL_ENV} at the receiver itself", status=status)
+    not_receiver = f"{host} does not answer as a Raven bug report receiver"
+    try:
+        body = await _read_bounded(response)
+    except UploadError as exc:
+        raise ProbeError(f"{not_receiver}: {exc.reason}", status=status) from exc
+    if status != 200:
+        raise ProbeError(f"{not_receiver} (HTTP {status} on {HELLO_PATH})", status=status)
+    is_json = response.headers.get("Content-Type", "").lower().startswith("application/json")
+    payload = _parse_json(body) if is_json else _NOT_JSON
+    if (
+        not isinstance(payload, dict)
+        or payload.get("service") != SERVICE_NAME
+        or type(payload.get("protocol")) is not int
+    ):
+        raise ProbeError(not_receiver, status=status)
+    if payload["protocol"] != PROTOCOL_VERSION:
+        raise ProbeError(
+            f"the receiver at {host} speaks protocol {payload['protocol']}; this Raven speaks {PROTOCOL_VERSION}",
+            status=status,
+        )
+
+
+async def probe_receiver_async(base_url: str, *, timeout: float = PROBE_TIMEOUT) -> None:
+    """Check that a Raven receiver speaking this protocol answers at ``base_url``.
+
+    Raises :class:`ProbeError` with a reason a person can act on. ``timeout``
+    bounds the whole exchange, the response body and closing the connection
+    included; the per-operation timeouts inside it cannot bound it alone.
+    """
+    url = base_url.rstrip("/") + HELLO_PATH
+    host = urlsplit(url).netloc
+    headers = {"Accept": "application/json", "Accept-Encoding": "identity", "User-Agent": f"raven/{__version__}"}
+    try:
+        async with asyncio.timeout(timeout):
+            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout), follow_redirects=False) as client:
+                async with client.stream("GET", url, headers=headers) as response:
+                    await _check_hello(response, host)
+    except (TimeoutError, httpx.TimeoutException) as exc:
+        raise ProbeError(f"no answer from {host} within {timeout}s") from exc
+    except httpx.TransportError as exc:
+        raise ProbeError(f"could not reach {host}: {exc}") from exc
+    except httpx.HTTPError as exc:
+        raise ProbeError(str(exc)) from exc
+
+
+def probe_receiver(base_url: str, *, timeout: float = PROBE_TIMEOUT) -> None:
+    """Blocking :func:`probe_receiver_async`, on an event loop of its own.
+
+    From async code either await :func:`probe_receiver_async` directly or
+    run this in a worker thread (``asyncio.to_thread``).
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("run probe_receiver in a worker thread, or await probe_receiver_async")
+    asyncio.run(probe_receiver_async(base_url, timeout=timeout))
 
 
 def _now_iso() -> str:
@@ -406,10 +588,14 @@ __all__ = [
     "ALLOW_HTTP_ENV",
     "DEFAULT_UPLOAD_URL",
     "MAX_RESPONSE_BYTES",
+    "PROBE_TIMEOUT",
     "UPLOAD_URL_ENV",
+    "ProbeError",
     "UploadConfigError",
     "UploadError",
     "UploadReceipt",
+    "probe_receiver",
+    "probe_receiver_async",
     "resolve_upload_url",
     "upload_package",
     "upload_package_async",

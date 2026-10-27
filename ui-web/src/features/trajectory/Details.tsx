@@ -2,7 +2,8 @@
  * -- or over it, when the area is too narrow for two.
  *
  * Three fixed parts and one that scrolls: a head (the kind's tag, the short
- * name the descriptor gives it, and the way out), the tab strip, and the
+ * name the descriptor gives it, the way to the sub-agent tab the entry leads
+ * to when it leads to one, and the way out), the tab strip, and the
  * pane the current tab fills with its own scroll position. The grip on its
  * left edge resizes it, by pointer or by arrow key, within the bounds the
  * store clamps to. Closing keeps the selection; the list gets the focus back
@@ -18,6 +19,7 @@ import { BlockView } from './BlockView'
 import * as details from './detailStore'
 import { Overview } from './Overview'
 import { kindClass, kindLabel } from './palette'
+import * as scopes from './scopes'
 import * as list from './store'
 import { panelId, tabId, Tabs } from './Tabs'
 
@@ -130,6 +132,12 @@ export function Details(): JSX.Element | null {
   const pin = details.pinned(s)
   const here = value !== null && pin !== null && pin === details.tabOf(entryId)
   const pinLabel = t(here ? 'gui.trajectory.details.unpin' : 'gui.trajectory.details.pin')
+  const target = entry ? scopes.openTarget(entry) : null
+  const jump = target === null || entry === null
+    ? null
+    : list.opensOf(entry) !== null
+      ? t('gui.trajectory.scope.open')
+      : t('gui.trajectory.scope.from', { title: scopes.scopeTitle(scopes.scopeDoor(l, target)) })
   return (
     <aside
       className={narrow ? 'trajectory-details trajectory-details-over' : 'trajectory-details'}
@@ -140,6 +148,11 @@ export function Details(): JSX.Element | null {
       <div className="trajectory-head">
         {kind ? <span className={`trajectory-tag ${kindClass(kind)}`}>{kindLabel(kind)}</span> : null}
         <span className="trajectory-head-name" title={value ? shortName(value, entry) : undefined}>{value ? shortName(value, entry) : (entry?.span_name ?? '')}</span>
+        {jump !== null && entry ? (
+          <button className="trajectory-scope-jump" title={jump} onClick={() => { if (scopes.openFromEntry(entry)) scopes.focusTab() }}>
+            {jump}
+          </button>
+        ) : null}
         {value ? (
           <button className="trajectory-pin" aria-pressed={here} aria-label={pinLabel} title={pinLabel} onClick={() => details.togglePin(entryId)}>
             <Icon icon={Pin02Icon} size={15} />

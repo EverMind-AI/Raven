@@ -107,12 +107,12 @@ const nullStatus = (messages: TranscriptMessage[]) => {
   return { calls, rpc: rpc as never }
 }
 
-const finishedEmpty = () => {
+const finishedEmpty = (status: DagNodeDetail['status'] = 'completed') => {
   const calls: Record<string, unknown>[] = []
   const rpc = async (_method: string, params?: Record<string, unknown>) => {
     calls.push(params ?? {})
 
-    return nodeResult({ messages: [], status: 'completed' })
+    return nodeResult({ messages: [], status })
   }
 
   return { calls, rpc: rpc as never }
@@ -405,6 +405,24 @@ describe('useDagNodePoll', () => {
     // A node that never ran (skipped/cancelled) settles this way too, but with
     // nothing in flight -- messages stays empty and only status carries the news.
     const { calls, rpc } = finishedEmpty()
+
+    mount(rpc, [run(node('a', 'running'))], OPEN_A)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(calls).toHaveLength(1)
+    expect(getDagNodeTrace(dagNodeKey('r1', 'a'))?.settled).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(DAG_NODE_POLL_MS * 3 + 10)
+
+    expect(calls).toHaveLength(1)
+  })
+
+  it('settles a node whose response says a branch left it out, instead of polling it forever', async () => {
+    // Nothing ever ran, so there are no messages and only the status carries the
+    // news. It is shown as running here, which is the case only the response can
+    // end: a status this set did not know would read as "not finished yet" and
+    // be read twice a second for as long as the node stays open.
+    const { calls, rpc } = finishedEmpty('not_executed')
 
     mount(rpc, [run(node('a', 'running'))], OPEN_A)
     await vi.advanceTimersByTimeAsync(0)

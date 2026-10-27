@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 245 methods, 137 component schemas.
+// 248 methods, 138 component schemas.
 
 /* eslint-disable */
 /**
@@ -11,12 +11,19 @@
  */
 export type JsonValue = string | number | boolean | null | unknown[] | {};
 /**
- * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal.
+ * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal.
  */
 export type DagNodeStatus =
-  'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled' | 'exception';
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'skipped'
+  | 'cancelled'
+  | 'exception'
+  | 'not_executed';
 /**
- * Per-node status in a run read back off disk. Unlike the event vocabulary this includes 'interrupted', which the server infers for a node the registry still calls running on a run nothing is executing. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal.
+ * Per-node status in a run read back off disk. Unlike the event vocabulary this includes 'interrupted', which the server infers for a node the registry still calls running on a run nothing is executing. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal.
  */
 export type DagSnapshotNodeStatus =
   | 'pending'
@@ -26,7 +33,12 @@ export type DagSnapshotNodeStatus =
   | 'skipped'
   | 'cancelled'
   | 'interrupted'
-  | 'exception';
+  | 'exception'
+  | 'not_executed';
+/**
+ * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+ */
+export type DagNotExecutedReason = 'when_false' | 'when_unknown' | 'upstream_not_executed';
 /**
  * Discriminated union of turn streaming events. The 'type' field is the discriminator.
  */
@@ -61,7 +73,7 @@ export type TurnEvent =
  */
 export type TaskKind = 'spawn' | 'dag';
 /**
- * A task's state, derived from its nodes' recorded states, first rule that matches: a run superseded by a replan that started is cancelled (one that did not start is failed); any failed node -> failed; any interrupted -> interrupted; any pending/running/exception -> running; any cancelled or skipped -> cancelled; else completed. A spawn is its one node's state.
+ * A task's state, derived from its nodes' recorded states, first rule that matches: a run superseded by a replan that started is cancelled (one that did not start is failed); any failed node -> failed; any interrupted -> interrupted; any pending/running/exception -> running; any cancelled or skipped -> cancelled; else completed. A spawn is its one node's state. A node a branch left out (not_executed) sits on none of these rungs: an unselected branch does not stop a run.
  */
 export type TaskStatus = 'running' | 'completed' | 'failed' | 'interrupted' | 'cancelled';
 
@@ -329,6 +341,14 @@ export interface TranscriptDelegated {
    * Set for a dag node's own message, so a client can place it against that row.
    */
   node_id?: string;
+  /**
+   * What a dag node itself returned on the attempt its report is about -- its error, when it raised -- carried for the reader beside the report the model was given. Set only on a node's own report, and present even when empty: an empty string is a node that said nothing, an absent one a report about no attempt (a stall notice) or a server that never sent it.
+   */
+  output?: string;
+  /**
+   * Whether output is limited to the first 20,000 characters. Separate from the node's text; absent on older records and reports without output.
+   */
+  output_truncated?: boolean | null;
 }
 export interface ExtPluginRow {
   id: string;
@@ -1018,6 +1038,10 @@ export interface ModelOptionProvider {
    */
   image_api?: boolean;
   /**
+   * The registry's video_api: the video tool can run on this provider's address and key. The roles card offers the video role these providers; absent means false.
+   */
+  video_api?: boolean;
+  /**
    * Every model-id prefix that names this provider: its own name plus the ones it used to answer to (ProviderSpec.route_names). A client comparing two spellings of one model strips any of them, the way providers/wire.py's merge_key does. Absent means the provider's own name alone.
    */
   route_names?: string[];
@@ -1115,6 +1139,18 @@ export interface InstanceRow {
   agentId?: string;
   runId?: string;
   nodeId?: string;
+  /**
+   * Why the node did not execute. Present only on the dag-node row of a node that was not executed.
+   */
+  reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
+  /**
+   * The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Present only on the row of a DAG node a branch decided: its dag-node row, or the ordinary row a stateful node is reported on.
+   */
+  selectedRoutes?: string[];
+  /**
+   * The judge's supporting quote for the selection, at most 500 characters. Present only when the judge gave one, and only on the row of a DAG node a branch decided: its dag-node row, or the ordinary row a stateful node is reported on.
+   */
+  routeEvidence?: string;
   createdAtMs?: number;
   updatedAtMs?: number;
   /**
@@ -1252,14 +1288,22 @@ export interface TurnStartedEvent {
       label: string;
       status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled';
       /**
-       * Which node of the run this is about. Present only on `kind: dag` with `status: exception`, where the report concerns one node rather than the whole run.
+       * Which node of the run this is about. Present only on a `kind: dag` node's own report, which concerns one node rather than the whole run.
        */
       node_id?: string;
       run_id?: string;
       /**
-       * The text that re-entered the conversation, verbatim; a client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence.
+       * The text that re-entered the conversation, verbatim; a client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence, or `output` instead where a node's report carries it.
        */
       content?: string;
+      /**
+       * What a dag node itself returned on the attempt its report is about -- its error, when it raised -- carried for the reader beside the report the model was given. Set only on a node's own report, and present even when empty: an empty string is a node that said nothing, an absent one a report about no attempt (a stall notice) or a server that never sent it.
+       */
+      output?: string;
+      /**
+       * Whether output is limited to the first 20,000 characters. Separate from the node's text; absent on older records and reports without output.
+       */
+      output_truncated?: boolean | null;
     };
     target?: DirectTarget;
   };
@@ -1517,13 +1561,21 @@ export interface SubagentDeliveredEvent {
      */
     run_id?: string;
     /**
-     * The text that re-entered the conversation, verbatim. A client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence -- and a client replaying this turn later reads the same string from the stored entry's `text`, so one rule over one input keeps the live view and the reloaded one from disagreeing about what was delivered.
+     * The text that re-entered the conversation, verbatim. A client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence, or `output` instead where a node's report carries it -- and a client replaying this turn later reads the same string from the stored entry's `text`, so one rule over one input keeps the live view and the reloaded one from disagreeing about what was delivered.
      */
     content?: string;
     /**
      * Set for a dag node's own message, so a client can place it against that row.
      */
     node_id?: string;
+    /**
+     * What a dag node itself returned on the attempt its report is about -- its error, when it raised -- carried for the reader beside the report the model was given. Set only on a node's own report, and present even when empty: an empty string is a node that said nothing, an absent one a report about no attempt (a stall notice) or a server that never sent it.
+     */
+    output?: string;
+    /**
+     * Whether output is limited to the first 20,000 characters. Separate from the node's text; absent on older records and reports without output.
+     */
+    output_truncated?: boolean | null;
   };
 }
 /**
@@ -1577,6 +1629,30 @@ export interface DagSnapshotNode {
   inputs?: {
     [k: string]: JsonValue;
   };
+  /**
+   * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+   */
+  reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
+  /**
+   * The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.
+   */
+  selected_routes?: string[];
+  /**
+   * The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.
+   */
+  route_evidence?: string;
+  /**
+   * The route names a decision node chooses between, in declaration order; only the judge sees their conditions. Absent on a node that decides nothing.
+   */
+  routes?: string[];
+  /**
+   * How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.
+   */
+  select?: 'one' | 'many';
+  /**
+   * The guard: this node runs only if the expression holds once its dependencies settle. Absent on a node with no guard.
+   */
+  when?: string;
 }
 /**
  * One run rebuilt from its run dir. 'finalized' is false while it is still executing, in which case per-node state came from the instance registry overlay rather than a manifest.
@@ -1600,6 +1676,10 @@ export interface DagRunSnapshot {
     failed?: number;
     skipped?: number;
     cancelled?: number;
+    /**
+     * Nodes a branch left out. Present only when there is at least one, so a run that never branches carries the five counts it always did.
+     */
+    not_executed?: number;
   };
 }
 /**
@@ -1615,9 +1695,17 @@ export interface DagNodeDetail {
   output_chars: number;
   output_truncated: boolean;
   /**
-   * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal.
+   * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal.
    */
-  status?: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled' | 'exception';
+  status?:
+    | 'pending'
+    | 'running'
+    | 'completed'
+    | 'failed'
+    | 'skipped'
+    | 'cancelled'
+    | 'exception'
+    | 'not_executed';
   /**
    * Why the node failed. A failed node has no output, so without this it reads as unanswered.
    */
@@ -1663,6 +1751,18 @@ export interface DagRunStartedEvent {
        * One line, for the user, on what this node was asked to do. Absent on a run that predates the field.
        */
       node_summary?: string;
+      /**
+       * The route names a decision node chooses between, in declaration order; only the judge sees their conditions. Absent on a node that decides nothing.
+       */
+      routes?: string[];
+      /**
+       * How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.
+       */
+      select?: 'one' | 'many';
+      /**
+       * The guard: this node runs only if the expression holds once its dependencies settle. Absent on a node with no guard.
+       */
+      when?: string;
     }[];
   };
 }
@@ -1690,6 +1790,18 @@ export interface DagNodeUpdatedEvent {
     status: DagNodeStatus;
     started_at?: number;
     ended_at?: number;
+    /**
+     * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+     */
+    reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
+    /**
+     * The routes a decision node selected, on the frame that finishes it. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on every other frame, and when the node failed to decide.
+     */
+    selected_routes?: string[];
+    /**
+     * The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.
+     */
+    route_evidence?: string;
   };
 }
 /**
@@ -1744,12 +1856,28 @@ export interface DagRunCompletedEvent {
       failed?: number;
       skipped?: number;
       cancelled?: number;
+      /**
+       * Nodes a branch left out. Present only when there is at least one, so a run that never branches carries the five counts it always did.
+       */
+      not_executed?: number;
     };
     files: {
       node: string;
       status: DagNodeStatus;
       output_file?: string;
       error?: string;
+      /**
+       * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+       */
+      reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
+      /**
+       * The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, and on one that failed to decide.
+       */
+      selected_routes?: string[];
+      /**
+       * The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.
+       */
+      route_evidence?: string;
     }[];
   };
 }
@@ -2032,7 +2160,7 @@ export interface PlaybookParam {
  * be empty: those three are the fields an author may leave blank for the
  * caller to fill at run time. ``skills`` / ``mcps`` are three-state -- null
  * means the author said nothing, ``[]`` means the author wrote an empty list,
- * and a list names what to consider.
+ * and a list names what to consider. ``routes`` / ``select`` / ``when`` declare a branch and are absent unless the author wrote them.
  */
 export interface PlaybookNode {
   id: string;
@@ -2046,6 +2174,20 @@ export interface PlaybookNode {
   inputs: {
     [k: string]: JsonValue;
   };
+  /**
+   * Makes this node a decision: route name -> the condition, in plain words, under which its answer selects that route. Kept whole, because re-running the graph judges against the conditions.
+   */
+  routes?: {
+    [k: string]: string;
+  };
+  /**
+   * How many routes the decision selects, as the author wrote it. Absent means 'one'.
+   */
+  select?: 'one' | 'many';
+  /**
+   * The guard, as the author wrote it: this node runs only if it holds once its dependencies settle.
+   */
+  when?: string;
 }
 /**
  * One whole playbook: its identity, its runtime inputs, and the shape it runs as -- the graph (``mode: dag``), the assembly guidance a model turns into one (``mode: prompt``), or the roles and stopping rules of a multi-round run (``mode: stint``, under ``rounds``). ``path`` is the file this was read from.
@@ -2173,7 +2315,7 @@ export interface OkResult {
   ok: boolean;
 }
 /**
- * How many of the task's nodes sit in each state. Counted from graph.json, so skipped nodes are counted too.
+ * How many of the task's nodes sit in each state. Counted from graph.json, so skipped and not_executed nodes are counted too.
  */
 export interface TaskCounts {
   total: number;
@@ -2188,6 +2330,10 @@ export interface TaskCounts {
    * Nodes suspended on a verdict, waiting for resolve_dag_node. A running row with one of these is waiting on a decision, not working.
    */
   exception: number;
+  /**
+   * Nodes a branch left out. They never ran, and an unselected branch does not move the task's status: a run of completed and not_executed nodes is completed.
+   */
+  not_executed: number;
 }
 /**
  * Present only on a run a replan superseded, read from graph.json's top-level replan entry. started=false means the successor never began; error says why.
@@ -2287,6 +2433,30 @@ export interface TaskNode {
    * Same three-valued reading as skills.
    */
   mcps?: string[];
+  /**
+   * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+   */
+  reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
+  /**
+   * The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.
+   */
+  selected_routes?: string[];
+  /**
+   * The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.
+   */
+  route_evidence?: string;
+  /**
+   * The route names a decision node chooses between, in declaration order; only the judge sees their conditions. Absent on a node that decides nothing.
+   */
+  routes?: string[];
+  /**
+   * How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.
+   */
+  select?: 'one' | 'many';
+  /**
+   * The guard: this node runs only if the expression holds once its dependencies settle. Absent on a node with no guard.
+   */
+  when?: string;
   files: TaskFile[];
 }
 /**
@@ -2454,9 +2624,21 @@ export interface TrajectoryEntry {
   turn_number?: number | null;
   turn_start: boolean;
   /**
-   * Whether the trace is the session's own or a dispatched sub-agent's.
+   * Whether the entry's trace was dispatched from another trace (a follow-up turn such as a sub-agent's report, or a trace linked in from another session). Not the sub-agent boundary: see subagent_scope.
    */
   origin: 'main' | 'subagent';
+  /**
+   * The Sub-agent Scope the entry belongs to: trace_id:span_id of the nearest sub-agent boundary above its span (a subagent.run span, or a run_subagent_dag / resolve_dag_node tool call; a boundary's own entries, and the permission reviewer's llm.call recorded under the call it reviews, look only for a subagent.run above). Null for the main session. Decided by span ancestry, never by time; kept when the boundary is trimmed to a skeleton.
+   */
+  subagent_scope?: string | null;
+  /**
+   * On a boundary's own entries, the Sub-agent Scope it opens: always for a subagent.run, for a graph tool call only while at least one entry belongs to that scope. Null otherwise.
+   */
+  opens_subagent_scope?: string | null;
+  /**
+   * On the root entries of a dispatched session.turn trace, the Sub-agent Scope that dispatched it: the dispatching span when it is a boundary, else that span's own subagent_scope. Null when the span is unknown or in the main session, or names a graph scope no entry belongs to. The turn itself belongs to the main session.
+   */
+  dispatched_by_subagent_scope?: string | null;
   sort_key: JsonValue[];
   event_time: string;
   /**
@@ -2592,6 +2774,10 @@ export interface MachineRow {
    */
   node_current: boolean;
   /**
+   * How this computer logs in to an ssh row: key (the path the row carries) or password (kept on this computer for Raven's own logins). Absent for a local row.
+   */
+  auth?: 'key' | 'password';
+  /**
    * The last node install asked for from this page: in flight, or how it ended.
    */
   install: {
@@ -2607,6 +2793,14 @@ export interface MachineRow {
    * What the registry's doctor says about this row, one sentence each; empty when nothing.
    */
   problems: string[];
+  /**
+   * The connected agent entries that run on the machine, by name: empty on a machine whose next step is to connect one.
+   */
+  agents_here: string[];
+  /**
+   * The agent entries on the machine that are switched off, by name: they still hold the machine for the add, so the card says so instead of counting them nowhere.
+   */
+  agents_off_here: string[];
 }
 export interface SessionListParams {
   /**
@@ -2869,9 +3063,14 @@ export interface TurnUnsubscribeResult {
 export interface TurnCancelParams {
   session_key: string;
   target?: DirectTarget;
+  turn_id?: string;
 }
 export interface TurnCancelResult {
   cancelled: boolean;
+  /**
+   * Only on a refusal: whether the lane still has a turn to run -- the one that replaced the turn named, one queued, or a message waiting to run as a turn of its own. A client cannot learn it from the frames in time: this reply goes out as soon as the handler returns, while the frame opening a turn that has just started can still be waiting out the subscription's coalescing window. Absent from an accepted cancel, and from an older server.
+   */
+  busy?: boolean;
 }
 export interface McpListParams {}
 export interface McpListResult {
@@ -2914,6 +3113,7 @@ export interface SkillUnpinResult {
 }
 export interface ModelOptionsParams {
   session_id?: string;
+  include_providers?: boolean;
 }
 export interface ModelOptionsResult {
   model: string;
@@ -3133,6 +3333,30 @@ export interface SubagentsListParams {
 export interface SubagentsListResult {
   rows: SubagentRow[];
 }
+export interface SubagentsPresetsParams {}
+export interface SubagentsPresetsResult {
+  presets: {
+    preset: string;
+    name: string;
+    kind: 'acp' | 'cli';
+    description: string;
+    /**
+     * An entry of this preset runs on this computer; one on a machine is a second entry, not a conflict.
+     */
+    connected_here: boolean;
+    /**
+     * The registered machines (ids) a connected entry of this preset runs on.
+     */
+    on_machines: string[];
+    /**
+     * The machines where an entry of this preset exists but is switched off, with that entry's name: it still holds the machine for the add, and is what the form offers to switch back on.
+     */
+    off_on_machines: {
+      machine: string;
+      name: string;
+    }[];
+  }[];
+}
 export interface SubagentsAddParams {
   preset: string;
   name?: string;
@@ -3339,7 +3563,9 @@ export interface MachinesAddParams {
   host: string;
   port?: number;
   user: string;
-  key: string;
+  auth?: 'key' | 'password';
+  key?: string;
+  password?: string;
   paths?: string[];
 }
 export interface MachinesAddResult {
@@ -3349,15 +3575,17 @@ export interface MachinesAddResult {
    */
   detail: string;
   /**
-   * Why the row was not written, as a kind the page can explain: the machine could not be reached, refused the login, presented a changed host key, did not answer in time, ssh is missing here, the id is taken, the fields are not usable, or the registry file cannot be changed. Empty when it was written.
+   * Why the row was not written, as a kind the page can explain: the machine could not be reached, refused the login, asked a question the kept password does not answer (so the password was not sent), presented a changed host key, did not answer in time, ssh is missing here, this computer cannot use the login picked (a password on Windows), the id is taken, the fields are not usable, or the registry file cannot be changed. Empty when it was written.
    */
   reason:
     | ''
     | 'unreachable'
     | 'login'
+    | 'prompt'
     | 'hostkey'
     | 'timeout'
     | 'nossh'
+    | 'platform'
     | 'duplicate'
     | 'invalid'
     | 'registry';
@@ -3393,6 +3621,10 @@ export interface MachinesRemoveResult {
    * The agent entries that name the machine: the connected ones to disconnect first when the removal was refused over them; after a removal, the ones left pointing at nothing.
    */
   agents: string[];
+}
+export interface MachinesLocalKeysParams {}
+export interface MachinesLocalKeysResult {
+  keys: string[];
 }
 export interface SessionSetHarnessParams {
   session_key: string;
@@ -4255,6 +4487,10 @@ export interface FsDirsResult {
    * Whether the listed directory itself may be a session's working directory.
    */
   ok: boolean;
+  /**
+   * The filesystem roots, listed only while the directory listed is one: a root has no parent, so on a host with several (Windows drives) they are reachable no other way. Every drive is listed, the one the browser stands on included, each judged as a folder row is.
+   */
+  roots?: FsDirEntry[];
   /**
    * Subdirectories only, dotfiles omitted, sorted by name; at most the first 500 found.
    */
@@ -6052,6 +6288,18 @@ export interface TrajectoryExportCancelParams {
 export interface TrajectoryExportCancelResult {
   ok: boolean;
 }
+export interface BugreportProbeParams {}
+export interface BugreportProbeResult {
+  reachable: boolean;
+  /**
+   * The receiver's scheme and host, as the page may show it.
+   */
+  target: string;
+  /**
+   * Why the receiver cannot be used; empty when it is reachable.
+   */
+  reason: string;
+}
 export interface BugreportStartParams {
   session_key: string;
   trace_ids: string[];
@@ -6232,6 +6480,7 @@ export interface RpcMethods {
   'subagent.list': { params: SubagentListParams; result: SubagentListResult };
   'subagent.context': { params: SubagentContextParams; result: SubagentContextResult };
   'subagents.list': { params: SubagentsListParams; result: SubagentsListResult };
+  'subagents.presets': { params: SubagentsPresetsParams; result: SubagentsPresetsResult };
   'subagents.add': { params: SubagentsAddParams; result: SubagentsAddResult };
   'subagents.update': { params: SubagentsUpdateParams; result: SubagentsUpdateResult };
   'subagents.remove': { params: SubagentsRemoveParams; result: SubagentsRemoveResult };
@@ -6252,6 +6501,7 @@ export interface RpcMethods {
   'machines.install_node': { params: MachinesInstallNodeParams; result: MachinesInstallNodeResult };
   'machines.doctor': { params: MachinesDoctorParams; result: MachinesDoctorResult };
   'machines.remove': { params: MachinesRemoveParams; result: MachinesRemoveResult };
+  'machines.local_keys': { params: MachinesLocalKeysParams; result: MachinesLocalKeysResult };
   'session.set_harness': { params: SessionSetHarnessParams; result: SessionSetHarnessResult };
   'session.set_mode': { params: SessionSetModeParams; result: SessionSetModeResult };
   'session.set_knowledge': { params: SessionSetKnowledgeParams; result: SessionSetKnowledgeResult };
@@ -6426,6 +6676,7 @@ export interface RpcMethods {
   'trajectory.export': { params: TrajectoryExportParams; result: TrajectoryExportResult };
   'trajectory.export_status': { params: TrajectoryExportStatusParams; result: TrajectoryExportStatusResult };
   'trajectory.export_cancel': { params: TrajectoryExportCancelParams; result: TrajectoryExportCancelResult };
+  'bugreport.probe': { params: BugreportProbeParams; result: BugreportProbeResult };
   'bugreport.start': { params: BugreportStartParams; result: BugreportStartResult };
   'bugreport.status': { params: BugreportStatusParams; result: BugreportStatusResult };
   'bugreport.item': { params: BugreportItemParams; result: BugreportItemResult };
@@ -6460,6 +6711,7 @@ export const RPC_METHODS = [
   "bugreport.cancel",
   "bugreport.decide",
   "bugreport.item",
+  "bugreport.probe",
   "bugreport.retry_upload",
   "bugreport.start",
   "bugreport.status",
@@ -6539,6 +6791,7 @@ export const RPC_METHODS = [
   "machines.doctor",
   "machines.install_node",
   "machines.list",
+  "machines.local_keys",
   "machines.remove",
   "mcp.list",
   "mcp.test",
@@ -6660,6 +6913,7 @@ export const RPC_METHODS = [
   "subagents.instance.steer",
   "subagents.instances",
   "subagents.list",
+  "subagents.presets",
   "subagents.probe",
   "subagents.remove",
   "subagents.test",

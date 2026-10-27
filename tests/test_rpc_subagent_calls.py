@@ -701,6 +701,72 @@ async def test_a_cancelled_node_keeps_its_row(workspace: Path) -> None:
     assert by_node["survey"]["status"] == "cancelled"
 
 
+async def test_a_not_executed_node_is_not_a_row(workspace: Path) -> None:
+    """Like a skipped one, a node on a branch nobody took never called a
+    sub-agent -- and the stamps the runner puts on it are not a clock it ever had.
+    A status this list has no word for reads as running, so a row left in would
+    show an agent working on that branch. A cancelled node, by contrast, did
+    run and keeps its row."""
+    _write_run(
+        workspace,
+        "20260812T120000Z-deadbeef",
+        nodes=[
+            {"id": "triage", "subagent": "Researcher", "routes": {"bug": "a defect", "docs": "a question"}},
+            {"id": "fix", "subagent": "Writer", "depends_on": ["triage"], "when": "triage.bug"},
+            {"id": "reply", "subagent": "Writer", "depends_on": ["triage"]},
+            {"id": "gone", "subagent": "Writer"},
+        ],
+        manifest={
+            "triage": {
+                "status": "completed",
+                "subagent": "Researcher",
+                "started_at": 1_700_000_000_000,
+                "ended_at": 1_700_000_004_000,
+                "selected_routes": ["docs"],
+            },
+            "fix": {
+                "status": "not_executed",
+                "subagent": "Writer",
+                "reason": "when_false",
+                "started_at": 1_700_000_005_000,
+                "ended_at": 1_700_000_005_000,
+            },
+            "reply": {"status": "completed", "subagent": "Writer", "started_at": 1_700_000_005_000},
+            "gone": {"status": "cancelled", "subagent": "Writer", "started_at": 1_700_000_005_000},
+        },
+    )
+
+    items = (await subagent_list({"session_id": SESSION}))["items"]
+
+    by_node = {i["node"]: i for i in items if i["kind"] == "dag"}
+    assert set(by_node) == {"triage", "reply", "gone"}
+    assert by_node["gone"]["status"] == "cancelled"
+    assert by_node["reply"]["status"] == "ok"
+
+
+async def test_a_not_executed_node_the_registry_recorded_is_not_a_row_either(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unfinalized run has no manifest, so its status comes from the instance
+    registry -- the path a branch decided while the run is still going takes."""
+    from raven.rpc.methods import subagent as subagent_module
+
+    _write_run(workspace, "20260812T120000Z-deadbeef")
+
+    class _Registry:
+        def list_instances(self, session_key=None):
+            return [
+                {"kind": "dag-node", "runId": "20260812T120000Z-deadbeef", "nodeId": nid, "status": status}
+                for nid, status in (("survey", "completed"), ("write", "not_executed"))
+            ]
+
+    monkeypatch.setattr(subagent_module, "get_registry", lambda: _Registry())
+
+    items = (await subagent_list({"session_id": SESSION}))["items"]
+
+    assert {i["node"] for i in items if i["kind"] == "dag"} == {"survey"}
+
+
 async def test_an_exception_node_is_reported_as_error(workspace: Path) -> None:
     """A node with exception status (waiting for the caller to decide) is
     reported as 'error' over the wire: lossy but honest that this one needs

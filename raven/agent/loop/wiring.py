@@ -191,7 +191,7 @@ class WiringMixin:
         unchanged: a media tool counts as configured only when its own section
         names a model or a key -- an OpenRouter key set for chat alone must not
         surface tools that bill per call -- and web_search counts a key from
-        the file or the environment.
+        the file or the environment, or a selected vendor that needs none.
 
         Gates the built-in INSTANCE, by identity: plugin tools register last
         precisely so one can shadow a built-in by name -- subclassing it or
@@ -219,7 +219,7 @@ class WiringMixin:
         # environment variable. A predicate spelled out again here was reading
         # SERPER_API_KEY whatever the deployment had chosen, which withheld a
         # keyed Tavily search.
-        if search is not None and search is gated.get(WebSearchTool.name) and not search.api_key:
+        if search is not None and search is gated.get(WebSearchTool.name) and not search.ready:
             names.add(WebSearchTool.name)
         pictures = self.tools.get(ImageSearchTool.name)
         if pictures is not None and pictures is gated.get(ImageSearchTool.name) and not pictures.api_key:
@@ -342,13 +342,57 @@ class WiringMixin:
         folder supplying nothing is configured from the host's
         ``tools.media.image`` -- so the two readers cannot disagree about a lane
         that was going to inherit anyway.
+
+        A folder pinning its pictures to a provider is answered for that provider
+        (:meth:`_pinned_lane_generates_images`).
         """
-        from raven.agent.subagent.vendored_agents import product_image_key
+        from raven.agent.subagent.vendored_agents import product_image_key, product_image_pin
         from raven.agent.tools.media_gen import _OpenRouterMediaTool
 
+        host = self._live_media_config("image", self.media_config.image)
+        provider, model = product_image_pin(target)
+        if provider:
+            return self._pinned_lane_generates_images(target, provider, model, host)
         if product_image_key(target):
             return True
-        return _OpenRouterMediaTool.has_key(self._live_media_config("image", self.media_config.image))
+        return _OpenRouterMediaTool.has_key(host)
+
+    def _pinned_lane_generates_images(self, target: str, provider: str, model: str, host) -> bool:
+        """Whether a lane pinned to ``provider`` draws, by the launcher's rule for the pin.
+
+        A mirror of ``configure_image_generation`` in the agent launchers, not a
+        call into it: a launcher can run on an older raven, so the rule is stated
+        twice and a test renders each case through both. The launcher refuses a
+        provider the image tool cannot run on, and a switch off the host's image
+        provider without a model of the lane's own. A switch leaves the host's
+        image key behind with the rest of its endpoint: the lane pays with its own
+        image key or the host's key for the provider it switched to, and with no
+        key at a base of its own. Only OpenRouter takes the key that pays for the
+        lane's words, which on the lane's own key is the only OpenRouter key its
+        render holds. Read-only, like every readiness question.
+        """
+        from raven.agent.subagent.vendored_agents import product_image_key, product_llm_key, product_secret
+        from raven.agent.tools.media_gen import _OpenRouterMediaTool
+        from raven.config.schema import live_media_tool_config, media_provider
+        from raven.providers.registry import canonical_provider_name, find_by_name
+
+        wanted = canonical_provider_name(provider)
+        spec = find_by_name(wanted)
+        if spec is None or not getattr(spec, "image_api", False):
+            return False
+        runs_on = media_provider(host) if host is not None else ""
+        if wanted != runs_on and not model:
+            return False
+        if product_image_key(target):
+            return True
+        if product_secret(target, "IMAGE_API_BASE"):
+            return False
+        if wanted == runs_on:
+            return _OpenRouterMediaTool.has_key(host)
+        if wanted == "openrouter" and product_llm_key(target):
+            return False
+        found = live_media_tool_config({"provider": wanted, "model": model}, self._live_config.get("providers"))
+        return _OpenRouterMediaTool.has_key(found)
 
     def _lane_searches_images(self, target: str) -> bool:
         """Whether ``target`` can search for pictures: its vendor's key, its own or the host's.
@@ -1189,6 +1233,15 @@ class WiringMixin:
         allowed_dirs = (self.workspace,) if self.restrict_to_workspace else ()
         for cls in (ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, GrepTool, FindTool):
             self.tools.register(cls(workspace=self.workspace, allowed_dirs=allowed_dirs))
+        # Only beside a history strategy that puts refs where the model reads
+        # them: next to one that does not, the tool is a capability the model
+        # reaches for and is always told "found nothing". Read with a default
+        # because an engine slotted in through the runtime door need not
+        # subclass the contract.
+        if getattr(self.context_engine, "mints_source_refs", False):
+            from raven.agent.tools.context_retrieve import ContextRetrieveTool
+
+            self.tools.register(ContextRetrieveTool(self.sessions))
         if self._deliverables is not None:
             from raven.agent.tools.deliver import DeliverFilesTool
 
@@ -1497,9 +1550,14 @@ class WiringMixin:
                 control_advert=self.dag_control_advert,
                 provider_for=self._verdict_provider,
                 binding_for=self._turn_binding,
+                spawn_offered=lambda: self.tools.offers_by_name("spawn"),
                 verdict_config=self.subagent_dag_config,
             )
         )
+        # The two close the array, in this order, so the roster spawn's
+        # description ends with is the last thing the array says and the graph
+        # tool's pointer to it lands on the tool read right after.
+        self.tools.list_last("run_subagent_dag", "spawn")
         # The graph tool's own acceptance text is the only advertisement these
         # three get: hidden from the schema so the per-turn tool list carries
         # nothing a conversation that never starts a DAG has any use for, they
@@ -1880,12 +1938,9 @@ class WiringMixin:
         credential -- a bare model id sent through another vendor's provider
         fails, and the judge fails open, so verdicts would go quietly off.
         """
-        pinned = self.subagent_dag_config.verdict_model
-        if pinned and self._provider_pool is not None:
-            binding = self._provider_pool.bind_pin(pinned)
-            if binding is not None:
-                return binding.provider
-        return self.provider
+        from raven.agent.subagent.dag_verdict import judge_provider
+
+        return judge_provider(self.provider, self._provider_pool, self.subagent_dag_config.verdict_model)
 
     async def _confirm_graph(self, conversation_id: str, question: str) -> bool:
         """The graph-level ``confirm`` gate's route to a human.
@@ -2050,6 +2105,7 @@ class WiringMixin:
             "dag_status",
             "cancel_dag",
             "resolve_dag_node",
+            "context_retrieve",
         ):
             if tool := self.tools.get(name):
                 if not hasattr(tool, "set_context"):
@@ -2063,6 +2119,7 @@ class WiringMixin:
                     "dag_status",
                     "cancel_dag",
                     "resolve_dag_node",
+                    "context_retrieve",
                 ):
                     tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
                 else:

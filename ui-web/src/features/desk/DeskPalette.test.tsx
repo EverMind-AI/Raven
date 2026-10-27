@@ -40,7 +40,7 @@ const task = (id: string): TaskRow => ({
   id, kind: 'spawn', task_summary: id, status: 'running', agent: 'raven', handle: id,
   counts: {
     total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0,
-    interrupted: 0, exception: 0,
+    interrupted: 0, exception: 0, not_executed: 0,
   },
   nodes: [],
 })
@@ -1460,6 +1460,110 @@ describe('resizing by the corner grab', () => {
       await relayout()
 
       expect(palette()?.style.height).toBe(shortOfTheCard)
+    })
+  })
+
+  /* Widened leftward with its bottom level with the card's, the palette's left
+     edge runs toward the card's right edge -- and the reserve is what moves the
+     card out of its way, by exactly the width the palette gained. Measured in a
+     browser before this was fixed, the gesture went in three beats: the bottom
+     edge jumped up above the card, the card slid left, and the bottom dropped
+     back. The height had been measured against the card where it stood before
+     the reserve grew, and the card's own slide was a 190ms transition that
+     restarts on every frame of a drag and so does not move until the hand
+     pauses. Only a browser shows the pixels; these pin the two causes. */
+  describe('widening across the composer card', () => {
+    /* A chat wide enough to spare the reserve at both widths, and a card whose
+       right edge sits where the stylesheet puts it once the reserve applies:
+       the chat's right edge, less the dock's own 36px and the reserve. */
+    const chatRight = 1024
+    const besideTheReserve = (): void => {
+      const chat = document.querySelector('.chat') as HTMLElement
+      chat.getBoundingClientRect = (() => ({
+        left: 0, right: chatRight, top: 0, bottom: 740, width: chatRight, height: 740, x: 0, y: 0,
+      })) as never
+      const card = document.querySelector('.chat > .dock > .dock-in') as HTMLElement
+      card.getBoundingClientRect = (() => {
+        const reserve = parseFloat(document.documentElement.style.getPropertyValue('--desk-reserve')) || 0
+        const right = chatRight - 36 - reserve
+        return { left: 36, right, top: 568, bottom: 700, width: right - 36, height: 132, x: 36, y: 568 }
+      }) as never
+    }
+    /* Every height the palette was drawn with, not only the last: a frame at a
+       different height and back is the fault, and the end state alone would
+       pass it. */
+    const heightsDuring = async (gesture: () => Promise<void>): Promise<string[]> => {
+      const seen: string[] = []
+      const watch = new MutationObserver((records) => {
+        for (const r of records) seen.push(/height:\s*([^;]+)/.exec(r.oldValue || '')?.[1] ?? '')
+      })
+      watch.observe(palette()!, { attributes: true, attributeFilter: ['style'], attributeOldValue: true })
+      await gesture()
+      await act(async () => {})
+      watch.disconnect()
+      seen.push(palette()!.style.height)
+      return seen
+    }
+
+    it('keeps its bottom edge still while the card makes room', async () => {
+      launcherAt(42)
+      composerAt(700)
+      besideTheReserve()
+      await shelf()
+      /* Settled the way a conversation the reader has been sitting on is: the
+         window's resize re-measures against the card the reserve has already
+         moved. */
+      await act(async () => { window.dispatchEvent(new Event('resize')) })
+      await pull(1000)
+      const level = `${700 - (42 + DESK_ANCHOR_GAP)}px`
+      expect(palette()?.style.height).toBe(level)
+
+      /* 100px in one move: well past the 48px the reserve leaves between the
+         palette's left edge and the card's right one. */
+      const heights = await heightsDuring(() => pull(0, -100))
+
+      expect(palette()?.style.width).toBe(`${DESK_DEFAULT_WIDTH + 100}px`)
+      expect(new Set(heights)).toEqual(new Set([level]))
+    })
+
+    it('holds the inset still while the hand sets the width', async () => {
+      /* The flag the stylesheet keys `transition: none` on, for the length of
+         the gesture and no longer: the slide is right for a desk opening and
+         closing, and wrong for one the hand is sizing frame by frame. */
+      await shelf()
+      const root = document.documentElement
+      grab().setPointerCapture = () => {}
+      await act(async () => {
+        grab().dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true, cancelable: true, pointerId: 1, clientX: 500, clientY: 500,
+        }))
+      })
+      expect(root.dataset.deskResize).toBe('true')
+      await act(async () => {
+        window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX: 450, clientY: 500 }))
+      })
+      expect(root.dataset.deskResize).toBe('true')
+
+      await act(async () => {
+        window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: 450, clientY: 500 }))
+      })
+
+      expect(root.dataset.deskResize).toBeUndefined()
+    })
+
+    it('lets the inset slide again if the palette goes mid-gesture', async () => {
+      const view = await shelf()
+      grab().setPointerCapture = () => {}
+      await act(async () => {
+        grab().dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true, cancelable: true, pointerId: 1, clientX: 500, clientY: 500,
+        }))
+      })
+      expect(document.documentElement.dataset.deskResize).toBe('true')
+
+      await act(async () => { view.unmount() })
+
+      expect(document.documentElement.dataset.deskResize).toBeUndefined()
     })
   })
 })

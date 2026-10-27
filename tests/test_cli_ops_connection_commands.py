@@ -15,6 +15,8 @@ has to still have the last word in it.
 from __future__ import annotations
 
 import json
+import os
+import sys
 
 import pytest
 from typer.testing import CliRunner
@@ -22,6 +24,8 @@ from typer.testing import CliRunner
 from raven.cli.ops_connection_commands import connection_app
 from raven.ops import connections
 from tests._home import point_home
+
+pytestmark = pytest.mark.usefixtures("no_real_ssh_g")
 
 FULL = [
     "--non-interactive",
@@ -611,6 +615,38 @@ def test_remove_asks_then_takes_the_row_and_its_alias_out_and_says_the_node_stay
     assert "Host box" not in (tmp_path / ".ssh" / "config").read_text(encoding="utf-8")
 
 
+def test_remove_forgets_the_password_kept_for_a_password_row(store, monkeypatch, tmp_path):
+    point_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    _named(monkeypatch)
+    from raven.ops.connection_add import password_path, store_password
+
+    store_password("box", "hunter2")
+    _box_row(store, auth="password")
+
+    out = remove("box", answer="y\n")
+
+    assert out.exit_code == 0, out.output
+    assert "the password kept here for it is deleted" in said(out) and "hunter2" not in out.output
+    assert not password_path("box").exists()
+    assert json.loads(store.read_text(encoding="utf-8"))["connections"] == []
+
+
+def test_remove_of_a_key_row_deletes_a_password_file_left_under_its_id(store, monkeypatch, tmp_path):
+    point_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    from raven.ops.connection_add import password_path, store_password
+
+    _box_row(store)
+    store_password("box", "left-behind-1")
+
+    out = CliRunner().invoke(connection_app, ["remove", "box", "--yes"])
+
+    assert out.exit_code == 0, out.output
+    assert "the password kept here for it is deleted" in said(out)
+    assert not password_path("box").exists()
+
+
 def test_remove_refuses_while_agent_entries_name_the_machine_unless_forced(store, monkeypatch, tmp_path):
     point_home(monkeypatch, tmp_path)
     _named(monkeypatch, "claude_code@box")
@@ -704,3 +740,523 @@ def test_add_reports_an_incomplete_managed_block_as_a_warning_and_still_writes_t
     assert out.exit_code == 0, out.output
     assert "wrote gpu" in said(out) and "ssh alias not written (the managed 'Host gpu' block" in said(out)
     assert json.loads(store.read_text(encoding="utf-8"))["connections"][0]["id"] == "gpu"
+
+
+# --- add with a password: kept here, used on every connection -----------------------
+
+PW_ADD = ["add", "--id", "box", "--name", "Box", "--host", "14.103.100.27", "--port", "58717", "--user", "root"]
+
+
+def test_add_with_a_password_from_stdin_keeps_it_here_and_writes_a_row_with_no_key_and_no_alias(
+    store, reached, monkeypatch, tmp_path
+):
+    point_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    monkeypatch.setattr(sys, "platform", "linux")
+    from raven.ops.connection_add import password_path
+
+    out = CliRunner().invoke(
+        connection_app, [*PW_ADD, "--auth", "password", "--password-stdin", *FULL], input="hunter2\n"
+    )
+
+    assert out.exit_code == 0, out.output
+    row = json.loads(store.read_text(encoding="utf-8"))["connections"][0]
+    assert row["auth"] == "password" and "key" not in row and "password" not in row
+    assert password_path("box").read_text(encoding="utf-8") == "hunter2\n"
+    assert "password kept for box" in said(out)
+    assert "hunter2" not in out.output and "ssh alias" not in out.output
+    assert not (tmp_path / ".ssh" / "config").exists()
+
+
+def test_a_failed_re_add_under_an_id_in_use_leaves_the_registered_password_alone(
+    store, unreachable, monkeypatch, tmp_path
+):
+    """The id is judged before anything is kept or reached: the registered row's password survives a re-add that fails."""
+    point_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    monkeypatch.setattr(sys, "platform", "linux")
+    from raven.ops.connection_add import password_path, store_password
+
+    _box_row(store, auth="password", user="root")
+    store_password("box", "working-old")
+    before = store.read_text(encoding="utf-8")
+
+    out = CliRunner().invoke(
+        connection_app, [*PW_ADD, "--auth", "password", "--password-stdin", *FULL], input="wrong-new\n"
+    )
+
+    assert out.exit_code == 1, out.output
+    assert "already listed" in said(out) and "remove it first" in said(out)
+    assert password_path("box").read_text(encoding="utf-8") == "working-old\n"
+    assert store.read_text(encoding="utf-8") == before
+    assert "wrong-new" not in out.output
+
+
+def _nothing_kept(rhome) -> bool:
+    """No password file anywhere under the Raven home, keys/ included, and no askpass helper either."""
+    return not list(rhome.rglob("*.password")) and not list(rhome.rglob("askpass"))
+
+
+@pytest.mark.parametrize(
+    ("bad_id", "said"),
+    [
+        ("../escape", "id must be lowercase"),
+        ("My Box", "id must be lowercase"),
+        ("Box", "id must be lowercase"),
+    ],
+)
+def test_add_by_password_judges_the_id_before_it_keeps_anything(store, reached, monkeypatch, tmp_path, bad_id, said):
+    """A path-shaped id used to put the password file outside keys/ (nothing scrubs or removes it there) and an
+    id with a space or a capital left an orphan file no `remove` could reach; both are refused with nothing kept."""
+    point_home(monkeypatch, tmp_path)
+    rhome = tmp_path / "rhome"
+    monkeypatch.setenv("RAVEN_HOME", str(rhome))
+    monkeypatch.setattr(sys, "platform", "linux")
+
+    out = CliRunner().invoke(
+        connection_app,
+        [
+            "add",
+            "--id",
+            bad_id,
+            "--name",
+            "Box",
+            "--host",
+            "14.103.100.27",
+            "--port",
+            "58717",
+            "--user",
+            "root",
+            "--auth",
+            "password",
+            "--password-stdin",
+            "--skip-probe",
+            *FULL,
+        ],
+        input="hunter2\n",
+    )
+
+    assert out.exit_code == 1, out.output
+    assert said in out.output and "Nothing was written" in out.output
+    assert _nothing_kept(rhome) and not (rhome / "escape.password").exists()
+    assert not store.exists()
+
+
+def test_add_by_password_on_a_case_insensitive_disk_leaves_the_registered_machines_password_alone(
+    store, unreachable, monkeypatch, tmp_path
+):
+    """`Box` is refused as an id before anything is kept, so on a disk where Box.password and box.password are one
+    file the registered machine's password is neither deleted by the refusal nor replaced by the new one."""
+    point_home(monkeypatch, tmp_path)
+    rhome = tmp_path / "rhome"
+    monkeypatch.setenv("RAVEN_HOME", str(rhome))
+    monkeypatch.setattr(sys, "platform", "linux")
+    from raven.ops.connection_add import password_path, store_password
+
+    _box_row(store, auth="password", user="root")
+    store_password("box", "working-old")
+
+    out = CliRunner().invoke(
+        connection_app,
+        [
+            "add",
+            "--id",
+            "Box",
+            "--name",
+            "Box",
+            "--host",
+            "14.103.100.27",
+            "--port",
+            "58717",
+            "--user",
+            "root",
+            "--auth",
+            "password",
+            "--password-stdin",
+            *FULL,
+        ],
+        input="wrong-new\n",
+    )
+
+    assert out.exit_code == 1, out.output
+    assert password_path("box").read_text(encoding="utf-8") == "working-old\n"
+    assert "wrong-new" not in out.output
+
+
+def test_add_by_password_refuses_an_unreadable_registry_before_it_keeps_anything(store, reached, monkeypatch, tmp_path):
+    """`load()` reads an unreadable file as empty, so the duplicate check alone would let the password be kept for a
+    registration the write then refuses; the registry has to read first, as `machines.add` demands."""
+    point_home(monkeypatch, tmp_path)
+    rhome = tmp_path / "rhome"
+    monkeypatch.setenv("RAVEN_HOME", str(rhome))
+    monkeypatch.setattr(sys, "platform", "linux")
+    broken = '{"connections": [{"id": "gpu",}]}'
+    store.write_text(broken, encoding="utf-8")
+
+    out = CliRunner().invoke(
+        connection_app, [*PW_ADD, "--auth", "password", "--password-stdin", *FULL], input="hunter2\n"
+    )
+
+    assert out.exit_code == 1, out.output
+    said = " ".join(out.output.split())  # the console wraps a long path mid-phrase
+    assert "Nothing was written" in said and "not valid JSON" in said
+    assert _nothing_kept(rhome) and store.read_text(encoding="utf-8") == broken
+
+
+def test_a_write_refused_because_the_id_landed_meanwhile_leaves_the_password_file_to_that_row(
+    store, reached, monkeypatch, tmp_path
+):
+    """Between the duplicate check and the write another registration of the same id can land, with its own
+    password under the same file name: the file is that row's now, and the refused registration leaves it."""
+    point_home(monkeypatch, tmp_path)
+    rhome = tmp_path / "rhome"
+    monkeypatch.setenv("RAVEN_HOME", str(rhome))
+    monkeypatch.setattr(sys, "platform", "linux")
+    import raven.cli.ops_connection_commands as cli
+    from raven.ops.connection_add import password_path, store_password
+
+    def refuse(row, **kwargs):
+        store_password(row["id"], "rpc-pw-2222")  # the competitor's, kept under the same id
+        raise ValueError(f"a machine with id {row['id']!r} is already listed in {store}")
+
+    monkeypatch.setattr(cli, "_write", refuse)
+
+    out = CliRunner().invoke(
+        connection_app, [*PW_ADD, "--auth", "password", "--password-stdin", *FULL], input="hunter2\n"
+    )
+
+    assert out.exit_code == 1, out.output
+    assert "already listed" in out.output and "Nothing was written" in out.output
+    assert password_path("box").read_text(encoding="utf-8") == "rpc-pw-2222\n"
+
+
+def test_an_add_aborted_after_another_registration_of_the_id_landed_leaves_that_rows_password(
+    store, reached, monkeypatch, tmp_path
+):
+    """An interactive add parked at a later question, `machines.add` registered the same id with its own
+    password meanwhile, the add was aborted -- and its cleanup deleted the landed row's password."""
+    point_home(monkeypatch, tmp_path)
+    rhome = tmp_path / "rhome"
+    monkeypatch.setenv("RAVEN_HOME", str(rhome))
+    monkeypatch.setattr(sys, "platform", "linux")
+    import typer
+
+    import raven.cli.ops_connection_commands as cli
+    from raven.ops.connection_add import password_path, store_password
+
+    answers = {
+        "What do you call this machine": "Box",
+        "Reached over ssh, or is it this computer? (ssh/local)": "ssh",
+        "Short id for it": "box",
+        "Address": "14.103.100.27",
+        "Port": "58717",
+        "Username": "root",
+        "Log in with a key or a password? (key/password)": "password",
+    }
+
+    def ask(label, default="", *, required=True):
+        if label.startswith("What is installed on it"):
+            # The other registration lands while this one is parked here: its row, and its password.
+            _box_row(store)
+            store_password("box", "rpc-pw-2222")
+            raise typer.Abort()
+        return answers[label]
+
+    monkeypatch.setattr(cli, "_ask", ask)
+    monkeypatch.setattr(cli.typer, "prompt", lambda label, **kw: "cli-pw-1111")
+
+    out = CliRunner().invoke(connection_app, ["add"])
+
+    assert out.exit_code == 1 and "Aborted" in out.output
+    assert password_path("box").read_text(encoding="utf-8") == "rpc-pw-2222\n", "the landed row's password stays"
+
+
+def test_an_aborted_add_keeps_the_same_password_of_a_registration_that_has_not_written_its_row(
+    store, reached, monkeypatch, tmp_path, supported_host
+):
+    import typer
+
+    import raven.cli.ops_connection_commands as cli
+    from raven.ops import connection_add
+    from raven.ops.transport import ssh_env
+
+    point_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    password = "same-password-1"
+
+    def reach(row, **kwargs):
+        assert kwargs["password"] == password
+        return True, "reached", {}
+
+    monkeypatch.setattr(cli, "probe", reach)
+
+    def ask(label, default="", *, required=True):
+        assert label.startswith("What is installed on it")
+        connection_add.store_password("box", password)
+        assert not store.exists(), "the other registration is still probing"
+        raise typer.Abort()
+
+    monkeypatch.setattr(cli, "_ask", ask)
+    out = CliRunner().invoke(
+        connection_app,
+        ["add", "--id", "box", "--name", "Box", "--transport", "ssh", *SSH, "--password-stdin"],
+        input=password + "\n",
+    )
+
+    assert out.exit_code == 1 and "Aborted" in out.output
+    row = {"id": "box", "host": "192.0.2.10", "port": 22, "user": "alice", "auth": "password"}
+    connection_add.write(row)
+    assert connection_add.password_path("box").is_file(), "the pending registration still owns the password"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / "ssh").write_text('#!/bin/sh\n[ "$1" = -G ] && echo "hostname 192.0.2.10"\n', encoding="utf-8")
+    (bin_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    assert ssh_env(row)
+
+
+def test_an_add_aborted_at_a_later_question_leaves_no_password_behind(store, reached, monkeypatch, tmp_path):
+    """Interactive: the password is kept before the probe, and the owner stops at a question after it (Ctrl-C is an
+    Abort); the file does not outlive the registration that never happened."""
+    point_home(monkeypatch, tmp_path)
+    rhome = tmp_path / "rhome"
+    monkeypatch.setenv("RAVEN_HOME", str(rhome))
+    monkeypatch.setattr(sys, "platform", "linux")
+    import typer
+
+    import raven.cli.ops_connection_commands as cli
+
+    answers = {
+        "What do you call this machine": "Box",
+        "Reached over ssh, or is it this computer? (ssh/local)": "ssh",
+        "Short id for it": "box",
+        "Address": "14.103.100.27",
+        "Port": "58717",
+        "Username": "root",
+        "Log in with a key or a password? (key/password)": "password",
+    }
+
+    def ask(label, default="", *, required=True):
+        if label.startswith("What is installed on it"):
+            raise typer.Abort()
+        return answers[label]
+
+    monkeypatch.setattr(cli, "_ask", ask)
+    monkeypatch.setattr(cli.typer, "prompt", lambda label, **kw: "hunter2")
+
+    out = CliRunner().invoke(connection_app, ["add"])
+
+    assert out.exit_code == 1, out.output
+    assert "Aborted" in out.output
+    assert _nothing_kept(rhome) and not store.exists()
+
+
+def test_add_by_password_refuses_a_password_shorter_than_the_scrubbers_floor(store, reached, monkeypatch, tmp_path):
+    point_home(monkeypatch, tmp_path)
+    rhome = tmp_path / "rhome"
+    monkeypatch.setenv("RAVEN_HOME", str(rhome))
+    monkeypatch.setattr(sys, "platform", "linux")
+
+    out = CliRunner().invoke(connection_app, [*PW_ADD, "--auth", "password", "--password-stdin", *FULL], input="root\n")
+
+    assert out.exit_code == 1, out.output
+    assert "shorter than 6 characters cannot be kept" in said(out) and "Nothing was written" in out.output
+    assert _nothing_kept(rhome) and not store.exists()
+
+
+def test_password_stdin_is_read_before_the_first_question_without_non_interactive(
+    store, reached, monkeypatch, tmp_path
+):
+    """Piped in, the password must not be left to answer a question of its own: without --non-interactive the first
+    question used to eat it and the password became the machine's name (reviewed 2026-10-19)."""
+    point_home(monkeypatch, tmp_path)
+    rhome = tmp_path / "rhome"
+    monkeypatch.setenv("RAVEN_HOME", str(rhome))
+    monkeypatch.setattr(sys, "platform", "linux")
+    asked: list[str] = []
+
+    def ask(label, default="", *, required=True):
+        asked.append(label)
+        return {"What do you call this machine": "Box"}.get(label, default or "x")
+
+    import raven.cli.ops_connection_commands as cli
+
+    monkeypatch.setattr(cli, "_ask", ask)
+    monkeypatch.setattr(cli.typer, "prompt", lambda *a, **kw: pytest.fail("the password came from the prompt"))
+
+    out = CliRunner().invoke(
+        connection_app,
+        [
+            "add",
+            "--id",
+            "box",
+            "--host",
+            "14.103.100.27",
+            "--port",
+            "58717",
+            "--user",
+            "root",
+            "--auth",
+            "password",
+            "--password-stdin",
+            "--software",
+            "OpenFOAM (/opt/openfoam)",
+            "--budget-unit",
+            "core-minute",
+            "--concurrency",
+            "1",
+        ],
+        input="hunter2\n",
+    )
+
+    assert out.exit_code == 0, out.output
+    assert asked[0] == "What do you call this machine", "the password was not left to answer it"
+    row = json.loads(store.read_text(encoding="utf-8"))["connections"][0]
+    assert row["display_name"] == "Box", "the password was not left to answer the name"
+    from raven.ops.connection_add import password_path
+
+    assert password_path("box").read_text(encoding="utf-8") == "hunter2\n"
+
+
+def test_add_by_password_needs_the_password_and_a_refused_one_is_not_kept(store, unreachable, monkeypatch, tmp_path):
+    point_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    monkeypatch.setattr(sys, "platform", "linux")
+    from raven.ops.connection_add import password_path
+
+    out = CliRunner().invoke(connection_app, [*PW_ADD, "--auth", "password", *FULL])
+    assert out.exit_code == 1 and "needs the password" in said(out) and not store.exists()
+
+    out = CliRunner().invoke(
+        connection_app, [*PW_ADD, "--auth", "password", "--password-stdin", *FULL], input="hunter2\n"
+    )
+    assert out.exit_code == 1 and "could not reach" in said(out)
+    assert not password_path("box").exists() and not store.exists()
+
+
+def test_add_by_password_is_refused_on_windows_before_anything_is_kept(store, monkeypatch, tmp_path):
+    point_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr("raven.cli.ops_connection_commands.probe", lambda row, **kw: pytest.fail("reached the machine"))
+
+    out = CliRunner().invoke(
+        connection_app, [*PW_ADD, "--auth", "password", "--password-stdin", *FULL], input="hunter2\n"
+    )
+
+    assert out.exit_code == 1 and "not supported on Windows" in said(out)
+    assert not (tmp_path / "rhome" / "keys").exists() and not store.exists()
+
+
+def test_add_asks_for_the_password_when_the_login_pick_says_so(store, reached, monkeypatch, tmp_path):
+    point_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    monkeypatch.setattr(sys, "platform", "linux")
+    from raven.ops.connection_add import password_path
+
+    answers = (
+        "\n".join(
+            ["Box", "ssh", "box", "14.103.100.27", "58717", "root", "password", "hunter2", "OpenFOAM", "", "", ""]
+        )
+        + "\n"
+    )
+    out = CliRunner().invoke(connection_app, ["add"], input=answers)
+
+    assert out.exit_code == 0, out.output
+    row = json.loads(store.read_text(encoding="utf-8"))["connections"][0]
+    assert row["auth"] == "password" and "key" not in row
+    assert password_path("box").read_text(encoding="utf-8") == "hunter2\n"
+    assert "hunter2" not in out.output
+
+
+def test_list_says_which_machines_log_in_with_a_password(store):
+    store.write_text(
+        json.dumps(
+            {
+                "connections": [
+                    {"id": "pw", "display_name": "PW", "host": "h", "port": 22, "user": "u", "auth": "password"}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    out = run("list")
+
+    assert out.exit_code == 0, out.output
+    assert "(password)" in said(out)
+
+
+# --- --password-stdin says how the machine is logged in to -------------------------------
+
+
+def _password_home(monkeypatch, tmp_path):
+    point_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    monkeypatch.setattr(sys, "platform", "linux")
+    return tmp_path / "rhome"
+
+
+def test_password_stdin_without_auth_registers_by_password(store, reached, monkeypatch, tmp_path):
+    """Piping a password in says how the machine is logged in to; without --auth it used to be read as a key
+    login, and the piped line was left unread."""
+    rhome = _password_home(monkeypatch, tmp_path)
+
+    out = CliRunner().invoke(connection_app, [*PW_ADD, "--password-stdin", *FULL], input="hunter2\n")
+
+    assert out.exit_code == 0, out.output
+    (row,) = json.loads(store.read_text(encoding="utf-8"))["connections"]
+    assert row["auth"] == "password" and "key" not in row
+    assert (rhome / "keys" / "box.password").read_text(encoding="utf-8") == "hunter2\n"
+
+
+def test_password_stdin_with_a_key_login_is_refused_and_nothing_is_written(store, reached, monkeypatch, tmp_path):
+    """With a key login the piped line would be left to answer a question of its own -- the machine's name, when
+    asked -- and the password would land in the registry in the clear."""
+    rhome = _password_home(monkeypatch, tmp_path)
+
+    out = CliRunner().invoke(
+        connection_app,
+        [*PW_ADD, "--auth", "key", "--key", "~/.ssh/id_rsa", "--password-stdin", *FULL],
+        input="hunter2\n",
+    )
+
+    assert out.exit_code == 1, out.output
+    assert "--password-stdin goes with --auth password" in said(out) and "Nothing was written" in out.output
+    assert _nothing_kept(rhome) and not store.exists()
+    assert "hunter2" not in out.output
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="password machines are refused on Windows")
+@pytest.mark.parametrize("order", ["key-after-password", "password-after-key"])
+def test_add_refuses_a_pair_one_machine_s_alias_would_redirect_even_without_a_probe(
+    store, monkeypatch, tmp_path, order
+):
+    """``--skip-probe`` writes with no connection at all, so the registry write is where the pair is judged:
+    a key machine whose ``Host`` alias would take a registered password machine's logins, or a password machine
+    at a registered key machine's id. Nothing is kept or written (reviewed 2026-10-20)."""
+    point_home(monkeypatch, tmp_path)
+    rhome = tmp_path / "rhome"
+    monkeypatch.setenv("RAVEN_HOME", str(rhome))
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("raven.cli.ops_connection_commands.probe", lambda row, **kw: pytest.fail("reached it"))
+    if order == "key-after-password":
+        theirs = {"id": "lab", "transport": "ssh", "host": "LabBox", "user": "alice", "auth": "password"}
+        argv = ["add", "--id", "labbox", "--name", "Lab box", *SSH, "--skip-probe", *FULL]
+        given = None
+        named = "password machine 'lab'"
+    else:
+        theirs = {"id": "labbox", "transport": "ssh", "host": "198.51.100.66", "user": "root", "key": "~/k"}
+        argv = [*PW_ADD[:6], "labbox", *PW_ADD[7:], "--auth", "password", "--password-stdin", "--skip-probe", *FULL]
+        given = "hunter2\n"
+        named = "key machine 'labbox'"
+    store.write_text(json.dumps({"connections": [theirs]}), encoding="utf-8")
+
+    out = CliRunner().invoke(connection_app, argv, input=given)
+
+    assert out.exit_code == 1, out.output
+    said = " ".join(out.output.split())
+    assert named in said and "Nothing was written" in said
+    assert [r["id"] for r in json.loads(store.read_text())["connections"]] == [theirs["id"]]
+    assert not (rhome / "keys" / "box.password").exists()
+    assert not (tmp_path / ".ssh" / "config").exists()

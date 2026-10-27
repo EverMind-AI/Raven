@@ -34,13 +34,14 @@ from typing import Any, Literal
 
 from loguru import logger
 
-from raven.acp_client import protocol, remote
+from raven.acp_client import npx_fetch, protocol, remote
 from raven.acp_client.client import AcpClient
 from raven.acp_client.permissions import auto_approver
 from raven.acp_client.protocol import (
     MENU_UNREAD_META,
     SESSION_MCP_CAPABILITY,
     STEER_CAPABILITY,
+    AcpConnectionError,
     AcpError,
     AcpRemoteError,
     reason_of,
@@ -53,8 +54,9 @@ from raven.utils.scratch import ScratchDir
 
 _FILENAME = "subagent_acp_capabilities.json"
 
-# Teardown budget. A killpg'd process group should be reaped at once; the bound
-# exists so a wedged child can never hold a verify open indefinitely.
+# Teardown budget. A close gives the agent its grace (at most five seconds, and
+# none past the moment it exits), then ends the tree, so this bound only exists so
+# a wedged child can never hold a verify open indefinitely.
 _CLOSE_TIMEOUT_S = 10.0
 
 # The same four values as ``probe.ProbeStatus``, deliberately: the /subagents UI
@@ -395,6 +397,49 @@ class SnapshotStore:
         except OSError as exc:  # a snapshot is a cache, never a dependency
             logger.warning("acp capability snapshot write failed (not remembered): {}", exc)
 
+    def revise(self, snapshot: CapabilitySnapshot, **changes: Any) -> tuple[CapabilitySnapshot, bool] | None:
+        """Apply ``changes`` to the stored record ``snapshot`` was read from.
+
+        For a write that re-measured some fields of a record, so only those are
+        written, onto the row as it stands inside the lock: another holder of
+        the same record may have revised a different field since ``snapshot``
+        was read, and writing the caller's whole copy back would undo it.
+
+        Nothing is written when the stored row carries another measurement
+        stamp than ``snapshot``. A Test or the boot backfill that recorded in
+        the meantime is newer evidence about everything, the same "newest
+        measurement wins" rule the boot backfill applies to its own late
+        verdicts. With no stored row, ``snapshot`` itself is the base.
+
+        Returns the record now stored and whether this call wrote it, so a
+        caller that stood down holds the newer record and builds its next
+        revision on that stamp rather than being refused again for as long as
+        it lives. Flagged stale when it was measured under another launch
+        config than ``snapshot``, or when ``snapshot`` already was: for the
+        caller's launch it proves no more than that. ``None`` when the store
+        could not be written, or holds only a row that cannot be read back.
+        """
+
+        def merge(current: str | None) -> tuple[str | None, tuple[CapabilitySnapshot, bool] | None]:
+            rows = self._parse(current)
+            stored = next((r for r in rows if r.get("agent") == snapshot.agent), None)
+            if stored is not None and int(stored.get("measuredAtMs") or 0) != snapshot.measured_at_ms:
+                newer = CapabilitySnapshot.from_row(stored)
+                if newer is None:
+                    return None, None
+                return None, (replace(newer, stale=snapshot.stale or newer.fingerprint != snapshot.fingerprint), False)
+            base = (CapabilitySnapshot.from_row(stored) if stored is not None else None) or snapshot
+            updated = replace(base, stale=snapshot.stale, **changes)
+            rows = [r for r in rows if r.get("agent") != snapshot.agent]
+            rows.append(updated.to_row())
+            return self._dump(rows), (updated, True)
+
+        try:
+            return atomic_update(self._path, merge)
+        except OSError as exc:  # a snapshot is a cache, never a dependency
+            logger.warning("acp capability snapshot write failed (not remembered): {}", exc)
+            return None
+
     def load(self, configs: Sequence[Any], *, allow_stale: bool = False) -> dict[str, CapabilitySnapshot]:
         """Snapshots for these configs, keyed by agent name.
 
@@ -669,43 +714,72 @@ def _read_session_modes(result: Any) -> tuple[AcpMode, ...]:
     )
 
 
-def relearn_session_modes(
+def relearn_session_menus(
     snapshot: CapabilitySnapshot | None,
     result: Any,
     *,
     store: SnapshotStore | None = None,
 ) -> CapabilitySnapshot | None:
-    """Re-record an agent's modes from a live session response, if they moved.
+    """Re-record an agent's modes and model menu from a live session response, if they moved.
 
-    The menu is measured once at probe time and cached, but the agent
-    re-advertises it on every route into a session (``_with_modes`` in the
-    fork's ACP methods), so the response a dispatch already holds is newer
+    Both menus are measured once at probe time and cached, but the agent
+    re-advertises them on its way into a session -- the modes on every route
+    (``_with_modes`` in the fork's ACP methods), the models at least on
+    ``session/new`` -- so the response a dispatch already holds is newer
     evidence than the snapshot. Without this the cache only ever moves when
     someone presses Test: ``snapshot_fingerprint`` covers how the agent is
-    LAUNCHED, and an agent that reworded its own modes launches identically, so
-    nothing marks the stored text stale and the dispatching model goes on
-    reading a menu the agent no longer serves.
+    LAUNCHED, and an agent that reworded its own modes or renamed its models
+    launches identically, so nothing marks the stored menus stale -- the
+    dispatching model goes on reading modes the agent no longer serves, and the
+    row's picker goes on offering model ids it no longer takes.
 
-    The stored fingerprint is kept rather than recomputed. Only the modes were
-    re-measured here, and claiming a fresh handshake would clear a staleness
-    flag the rest of the snapshot has not earned.
+    Read with the probe's own parsers, from the response this route was sending
+    for anyway: nothing here opens a session or starts a process.
+
+    The stored fingerprint and measurement stamp are kept rather than renewed.
+    Only the menus were re-measured here, and claiming a fresh handshake would
+    clear a staleness flag the rest of the snapshot has not earned. Only the
+    menus this response reported are written, and none when a newer
+    measurement has replaced the record ``snapshot`` was read from
+    (``SnapshotStore.revise``). That newer record is returned instead, unrevised:
+    this response may predate it, so its menus are not taken over it, but the
+    caller's next response is then judged against the stamp actually stored.
 
     ``None`` when there was nothing to learn, which includes a response carrying
-    no modes at all. That is read as "this route did not report them", never as
-    "the agent dropped them": erasing the menu takes the ``mode`` argument out
-    of the spawn schema entirely, and a stale description is the smaller harm.
+    neither menu. Each menu is judged on its own, and an absent or empty one is
+    read as "this route did not report it", never as "the agent dropped it":
+    erasing the modes takes the ``mode`` argument out of the spawn schema, and
+    erasing the models takes the picker off the row, both worse than a stale
+    entry. A model menu the agent flagged as unread is not taken either, for
+    the reason ``_read_session_menu_unread`` gives.
     """
     if snapshot is None:
         return None
+    changes: dict[str, Any] = {}
     modes = _read_session_modes(result)
-    if not modes or modes == snapshot.available_modes:
+    if modes and modes != snapshot.available_modes:
+        changes["available_modes"] = modes
+    choices = () if _read_session_menu_unread(result) else _read_session_model_choices(result)
+    if choices and choices != snapshot.model_choices:
+        changes["model_choices"] = choices
+        changes["model_menu_measured"] = True
+    if not changes:
         return None
-    updated = replace(snapshot, available_modes=modes)
-    (store or SnapshotStore()).record(updated)
+    revised = (store or SnapshotStore()).revise(snapshot, **changes)
+    if revised is None:
+        return None
+    updated, written = revised
+    if not written:
+        logger.info(
+            "acp agent {!r}: session menus not re-recorded over a newer measurement; building on that one next",
+            snapshot.agent,
+        )
+        return updated
     logger.info(
-        "acp agent {!r}: re-recorded {} mode(s) from a session response",
+        "acp agent {!r}: re-recorded {} mode(s) and {} model(s) from a session response",
         snapshot.agent,
-        len(modes),
+        len(updated.available_modes),
+        len(updated.model_choices),
     )
     return updated
 
@@ -782,8 +856,9 @@ def npx_fetch_failure(command: str, exc: BaseException, stderr: str | None = Non
     out of time while npx still had it, ``None`` for everything else.
 
     Needed because both look like something else from above. A fetch that
-    fails is a process that exits before the handshake, so it arrives as
-    "connection ended (exit 1)" with npm's stack trace under it; and npm spends
+    fails is an npx that exits before any handshake -- the fetch run ahead of
+    the launch (`npx_fetch`), or the launch itself when no fetch could run --
+    so it arrives as an exit with npm's stack trace under it; and npm spends
     about 70s retrying an unreachable registry before it says so (measured),
     which is past a budget that did not allow for it -- so what the reader saw
     was "it did not answer within 60s", about an agent that never started.
@@ -795,8 +870,15 @@ def npx_fetch_failure(command: str, exc: BaseException, stderr: str | None = Non
     (``AcpConnectionError.stderr``, or ``stderr`` for a caller that holds the
     client) because npm prints that line first. The timeout is the one reading
     without such a line, and it is kept to an ``initialize`` that ran out on an
-    ``npx`` command -- an agent that has not finished starting, where a first
-    download is the likeliest cause and the one the reader can act on.
+    ``npx`` command whose package was not fetched ahead of the handshake
+    (`npx_fetch.fetchable_package`) -- an agent that has not finished starting,
+    where a first download is the likeliest cause and the one the reader can act
+    on. One that was fetched ahead had its download over before the handshake
+    began, so running out there is the agent's own start. Every caller reads a
+    launch on this computer, where that fetch runs: an agent on a registered
+    machine, whose Raven node starts it with no fetch ahead, has its failure
+    reported as the machine gave it before any of them is reached
+    (`verify_agent`, `probe.ping_agent`).
     """
     if not launches_with_npx(command):
         return None
@@ -805,7 +887,7 @@ def npx_fetch_failure(command: str, exc: BaseException, stderr: str | None = Non
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         if isinstance(current, protocol.AcpTimeoutError) and current.method == "initialize":
-            return "timeout"
+            return None if npx_fetch.fetchable_package(command_argv(command)) else "timeout"
         if isinstance(current, protocol.AcpConnectionError) and current.stderr:
             stderr = stderr or current.stderr
         current = current.__cause__
@@ -825,6 +907,14 @@ def npx_fetch_lead(verdict: str) -> str:
     if verdict == "timeout":
         return "it did not finish starting in time, and npx may still have been downloading it"
     return f"npx could not download it ({verdict}); check the network, the npm registry or the proxy"
+
+
+def npx_incomplete_lead(entry: npx_fetch.IncompleteEntry) -> str:
+    """The sentence an npx cache entry left without its package.json is reported with, and its fix."""
+    return (
+        "npx's copy of it is incomplete -- a download of it was cut off part-way -- and npx cannot start it "
+        f"until that copy ({entry.directory}) is removed; run `{entry.clear_command}` and connect again"
+    )
 
 
 class _NotThereError(Exception):
@@ -955,9 +1045,23 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
                 return done("attention", str(exc))
             client = AcpClient.over(endpoint, name=name, on_request=auto_approver(name))
         else:
-            client = await AcpClient.launch(
-                name=name, command=command, cwd=getattr(cfg, "cwd", None), env=agent_env, on_request=auto_approver(name)
-            )
+            try:
+                client = await AcpClient.launch(
+                    name=name,
+                    command=command,
+                    cwd=getattr(cfg, "cwd", None),
+                    env=agent_env,
+                    on_request=auto_approver(name),
+                )
+            except AcpConnectionError as exc:
+                # The npx fetch ahead of the agent fails here, before any handshake,
+                # and is read the way a handshake that died under npx is read below:
+                # neither is an install the roster's installer would bring.
+                if (entry := npx_fetch.incomplete_entry(str(exc))) is not None:
+                    return done("attention", f"{npx_incomplete_lead(entry)}; {exc}")
+                if (unfetched := npx_fetch_failure(command, exc)) is not None:
+                    return done("attention", f"{npx_fetch_lead(unfetched)}; {exc}", unfetched=True)
+                raise
         try:
             init = await client.request("initialize", protocol.initialize_params(), timeout=budget)
         except AcpRemoteError as exc:
@@ -1078,7 +1182,8 @@ __all__ = [
     "looks_like_auth",
     "npx_fetch_failure",
     "npx_fetch_lead",
-    "relearn_session_modes",
+    "npx_incomplete_lead",
+    "relearn_session_menus",
     "snapshot_fingerprint",
     "steer_offered",
     "verify_agent",

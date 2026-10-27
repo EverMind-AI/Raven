@@ -2131,11 +2131,11 @@ class TestSubagentSandboxLifecycle:
         assert req.delegated == {"kind": "spawn", "label": "label", "status": "ok"}
 
     async def test_announce_dag_result_marks_the_turn_and_the_event_alike(self, mock_provider, tmp_path):
-        """A graph's announce is the other injection shape -- the whole content is
-        the fence, with none of a spawn's framing -- and it has to carry the same
-        identity on the request AND on the event. A client watching live reads it
-        from the event; a client replaying the session reads it off the stored
-        entry, and the two must agree."""
+        """A graph's announce is the other injection shape -- the summary inside the
+        fence with none of a spawn's framing, only the reply-rules note after it --
+        and it has to carry the same identity on the request AND on the event. A
+        client watching live reads it from the event; a client replaying the
+        session reads it off the stored entry, and the two must agree."""
         from raven.agent.subagent import SubagentManager
 
         captured: dict = {}

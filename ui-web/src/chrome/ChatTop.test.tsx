@@ -95,11 +95,13 @@ describe('the chat column chrome', () => {
     /* Nothing portals into the seam: it has no interior, which is why it is
        the one region of the five this step leaves entirely to page.html. */
     expect(el('wsGrip').childNodes).toHaveLength(0)
+    /* Handed over empty: the transcript island's turn nav roots itself there. */
+    expect(el('turnNav').childNodes).toHaveLength(0)
   })
 
   it('renders every id the chrome, the islands and the writers reach for, once each', () => {
     render()
-    for (const id of ['title', 'wdTag', 'wsBtn', 'wsBdg', 'bannerHost', 'flash', 'stage', 'trajHost']) {
+    for (const id of ['title', 'wdTag', 'wsBtn', 'wsBdg', 'bannerHost', 'flash', 'stage', 'trajHost', 'turnNav']) {
       expect(document.querySelectorAll(`#${id}`), id).toHaveLength(1)
     }
   })
@@ -206,6 +208,7 @@ describe('the chat column chrome and the trajectory view', () => {
     start: () => Promise.reject(new Error('not scripted')),
     status: () => Promise.reject(new Error('not scripted')),
     cancel: async () => ({ ok: true }),
+    reportProbe: async () => ({ reachable: true, target: 'https://bugs.example', reason: '' }),
     reportStart: () => Promise.reject(new Error('not scripted')),
     reportStatus: () => Promise.reject(new Error('not scripted')),
     reportItem: () => Promise.reject(new Error('not scripted')),

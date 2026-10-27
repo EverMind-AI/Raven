@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterable
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from raven.agent.tools.skill_hub import (
     ReadSkillTool,
@@ -41,6 +45,12 @@ class _FakeRegistry:
     def invalidate_source(self, source: str) -> None:
         self.invalidated.append(source)
 
+    def names(self) -> list[str]:
+        return [name for _, name in self._metas]
+
+    def layer_roots(self) -> list[tuple[Path, str]]:
+        return [(Path("/fake/home/skills"), "workspace")]
+
 
 class _FakeClient:
     """SkillHubClient stand-in capturing calls and returning canned data."""
@@ -74,6 +84,19 @@ def _meta(tmp: Path, name: str, content: str, *, with_scripts: bool) -> object:
     if with_scripts:
         (skill_dir / "scripts").mkdir(exist_ok=True)
     return SimpleNamespace(name=name, content=content, path=skill_dir / "SKILL.md")
+
+
+def _registry_with(tmp_path: Path, *, workspace: Iterable[str] = (), builtin: Iterable[str] = ()):
+    """A real SkillRegistry over a temp home, so a miss reads real layer roots."""
+    from raven.memory_engine.skill_local import SkillRegistry
+
+    home = tmp_path / "home"
+    for root, names in ((home / "skills", workspace), (tmp_path / "builtin", builtin)):
+        root.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            (root / name).mkdir()
+            (root / name / "SKILL.md").write_text(f"---\nname: {name}\ndescription: d\n---\n\nbody\n", encoding="utf-8")
+    return SkillRegistry(home, builtin_skills_dir=tmp_path / "builtin")
 
 
 class TestSplitQualifiedId:
@@ -170,6 +193,110 @@ class TestReadSkill:
             skill_id="local/nope",
         )
         assert out.startswith("Error")
+
+
+@pytest.mark.parametrize("tool_cls", [ReadSkillTool, UseSkillTool])
+class TestLocalMiss:
+    """What a ``local/`` miss tells the model, from either tool.
+
+    ``# Skills`` and ``# Active Skills`` render from the registry these tools
+    read, so a local id it lacks has no body in context to fall back on. When
+    another tool's skill folder was listed beside Raven's, the model tried each
+    name there as ``local/<name>``, and every read failed until it opened the
+    file itself.
+    """
+
+    async def test_it_names_the_directories_local_ids_come_from(self, tool_cls, tmp_path: Path) -> None:
+        registry = _registry_with(tmp_path, workspace=["raven-dev-conventions"])
+        out = await tool_cls(registry=registry).execute(skill_id="local/confirming-pr-review")
+        assert out.startswith("Error: no local skill 'confirming-pr-review' found")
+        assert str(tmp_path / "home" / "skills") in out
+        assert str(tmp_path / "builtin") in out
+
+    async def test_it_says_a_skill_file_outside_them_opens_with_read_file(self, tool_cls, tmp_path: Path) -> None:
+        out = await tool_cls(registry=_registry_with(tmp_path)).execute(skill_id="local/confirming-pr-review")
+        assert "read_file" in out
+
+    async def test_it_does_not_send_the_model_to_the_skills_context(self, tool_cls, tmp_path: Path) -> None:
+        out = await tool_cls(registry=_registry_with(tmp_path)).execute(skill_id="local/confirming-pr-review")
+        assert out.startswith("Error: no local skill 'confirming-pr-review' found")
+        assert "# Skills" not in out
+        assert "already in your context" not in out
+
+    async def test_it_offers_no_ids_when_none_is_close(self, tool_cls, tmp_path: Path) -> None:
+        registry = _registry_with(tmp_path, workspace=["raven-dev-conventions"])
+        out = await tool_cls(registry=registry).execute(skill_id="local/confirming-pr-review")
+        assert out.startswith("Error: no local skill 'confirming-pr-review' found")
+        assert "Closest local ids" not in out
+
+    async def test_a_tool_without_a_registry_still_answers_a_local_miss(self, tool_cls) -> None:
+        out = await tool_cls().execute(skill_id="local/confirming-pr-review")
+        assert out.startswith("Error: no local skill 'confirming-pr-review' found")
+        assert "read_file" in out
+        assert "Local ids cover" not in out
+
+    async def test_it_offers_the_closest_local_ids(self, tool_cls, tmp_path: Path) -> None:
+        registry = _registry_with(tmp_path, workspace=["raven-dev-conventions"], builtin=["weather"])
+        out = await tool_cls(registry=registry).execute(skill_id="local/raven-dev-convention")
+        assert "local/raven-dev-conventions" in out
+        assert "local/weather" not in out
+
+    async def test_it_offers_no_id_the_operator_blocked(self, tool_cls, tmp_path: Path) -> None:
+        """The same tool refuses a blocklisted id, so offering one sends the
+        model from one error straight into the next."""
+        registry = _registry_with(tmp_path, workspace=["raven-dev-conventions"], builtin=["raven-dev-guide"])
+        tool = tool_cls(registry=registry, blocklist=["Raven-Dev-Conventions"])
+        out = await tool.execute(skill_id="local/raven-dev-convention")
+        assert "local/raven-dev-guide" in out
+        assert "local/raven-dev-conventions" not in out
+
+    async def test_it_offers_at_most_three_ids(self, tool_cls, tmp_path: Path) -> None:
+        registry = _registry_with(tmp_path, builtin=[f"deck-{i:03d}" for i in range(300)])
+        out = await tool_cls(registry=registry).execute(skill_id="local/deck-0000")
+        assert len(re.findall(r"local/deck-\d{3}\b", out)) == 3
+
+    async def test_it_still_searches_a_library_at_the_limit(self, tool_cls) -> None:
+        from raven.agent.tools.skill_hub import _NEAR_ID_SEARCH_LIMIT
+
+        metas = {("builtin", f"deck-{i:05d}"): object() for i in range(_NEAR_ID_SEARCH_LIMIT)}
+        out = await tool_cls(registry=_FakeRegistry(metas)).execute(skill_id="local/deck-000000")
+        assert "Closest local ids: local/deck-" in out
+
+    async def test_it_offers_no_ids_from_a_library_too_large_to_search_cheaply(self, tool_cls, tmp_path: Path) -> None:
+        from raven.agent.tools.skill_hub import _NEAR_ID_SEARCH_LIMIT
+
+        metas = {("builtin", f"deck-{i:05d}"): object() for i in range(_NEAR_ID_SEARCH_LIMIT + 1)}
+        out = await tool_cls(registry=_FakeRegistry(metas)).execute(skill_id="local/deck-000000")
+        assert out.startswith("Error: no local skill 'deck-000000' found")
+        assert "Closest local ids" not in out
+        assert "read_file" in out
+
+    async def test_it_does_not_rescan_a_source_the_watcher_marked_dirty(
+        self, tool_cls, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The miss reads the index the lookup just used. A rebuild here ran
+        inside the async tool call: about a second at 5000 skills."""
+        registry = _registry_with(tmp_path, builtin=["weather"])
+        assert registry.get("weather") is not None
+        registry.invalidate_source("builtin")
+        scanned: list[Path] = []
+        walk = registry._iter_skill_dirs
+        monkeypatch.setattr(registry, "_iter_skill_dirs", lambda root, **kw: scanned.append(root) or walk(root, **kw))
+        out = await tool_cls(registry=registry).execute(skill_id="local/weathr")
+        assert "local/weather" in out
+        assert scanned == []
+
+
+@pytest.mark.parametrize(
+    ("tool_cls", "hint"),
+    [(ReadSkillTool, "'# Skills' context"), (UseSkillTool, "already in your context")],
+)
+async def test_a_memory_backend_miss_still_points_at_the_injected_body(tool_cls, hint: str, tmp_path: Path) -> None:
+    """The router injects a memory-backend hit with its body, and that skill
+    need not be on disk, so for that source the context hint holds."""
+    out = await tool_cls(registry=_registry_with(tmp_path)).execute(skill_id="everos/abc123")
+    assert out.startswith("Error: no everos skill 'abc123' found")
+    assert hint in out
 
 
 class TestUseSkill:

@@ -23,6 +23,7 @@ from raven.agent.subagent.dag_adjudication import ABANDON, CONTINUE, DECISIONS, 
 from raven.agent.subagent.dag_live import awaiting_decision, cancel_run, live_run_ids, owning_tool, resolve_node
 from raven.agent.subagent.dag_reader import DagReadError
 from raven.agent.subagent.dag_resume import read_run_reconciled
+from raven.agent.subagent.dag_store import format_tally
 from raven.agent.subagent.dag_tool import _with_notices
 from raven.contracts.tool import Tool, ToolResult
 
@@ -476,10 +477,9 @@ def _render_run(run: dict[str, Any]) -> str:
     """One run's tallies and per-node details, in the finished-summary's shape."""
     summary = run.get("summary") or {}
     total = summary.get("total") or len(run.get("files", []))
+    tally = format_tally({**summary, "total": total})
     lines = [
-        f"DAG run {run['run_id']}: "
-        f"{summary.get('completed', 0)} completed, {summary.get('failed', 0)} failed, "
-        f"{summary.get('cancelled', 0)} cancelled, {summary.get('skipped', 0)} skipped (of {total}).",
+        f"DAG run {run['run_id']}: {tally}.",
         f"task_summary: {run.get('task_summary') or '(none)'}",
     ]
     for entry in run.get("files", []):
@@ -496,6 +496,11 @@ def _render_run(run: dict[str, Any]) -> str:
         lines += _field("ended_at", _raw(entry, "ended_at"))
         if entry.get("error"):
             lines += _field("error", str(entry["error"]))
+        if entry.get("reason"):
+            lines += _field("reason", str(entry["reason"]))
+        # `is not None`, not truthiness: an empty selection is still a decision.
+        if entry.get("selected_routes") is not None:
+            lines += _field("selected_routes", ", ".join(entry["selected_routes"]) or "(none)")
     if run.get("dir"):
         lines.append(f"Run dir: {run['dir']}")
     return "\n".join(lines)

@@ -190,6 +190,10 @@ export const dagCommands: SlashCommand[] = [
         return
       }
 
+      // `dag.node` knows nothing of branches; the run this command found the
+      // node in is where its guard, selection, reason and evidence live.
+      const entry = owner.nodes.find(item => item.id === target)
+
       gateway
         .rpc<DagNodeResult>('dag.node', {
           max_output_chars: NODE_OUTPUT_CHARS,
@@ -199,7 +203,7 @@ export const dagCommands: SlashCommand[] = [
         })
         .then(
           ctx.guarded<DagNodeResult>(result => {
-            transcript.page(formatDagNodeDetail(result.node), `${target} @ ${owner.runId}`)
+            transcript.page(formatDagNodeDetail(result.node, entry), `${target} @ ${owner.runId}`)
           })
         )
         .catch((err: unknown) => {

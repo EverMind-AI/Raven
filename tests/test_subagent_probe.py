@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import socket
+import sys
 from contextlib import closing
 from pathlib import Path
 
@@ -366,8 +367,8 @@ async def test_openai_probe_does_send_for_a_keyless_configured_entry() -> None:
 
 
 def test_openai_config_coerces_declared_local_file_access_away() -> None:
-    # `reads_local_files` is rendered into the spawn / DAG tool descriptions as a
-    # `local-files` tag, so honouring it here would licence the dispatching model
+    # `reads_local_files` is rendered into the roster that closes the spawn tool's
+    # description as a `local-files` tag, so honouring it here would licence the dispatching model
     # to hand this agent a path that nothing can open. It is coerced rather than
     # rejected because the older web form defaulted the checkbox to true and
     # rendered it for both kinds: rejecting on load would raise inside the whole
@@ -1156,15 +1157,22 @@ class TestAutomaticSnapshotVerification:
 
     @staticmethod
     def _mirasim_boot(
-        monkeypatch: pytest.MonkeyPatch, snapshot: object, installed: frozenset[str]
+        monkeypatch: pytest.MonkeyPatch, snapshot: object, installed: frozenset[str], own_host: str | None = None
     ) -> tuple[list, list]:
-        """A boot whose unconfigured presets are three Mirasim agents and one other; what it verified and asked."""
+        """A boot whose unconfigured presets are three Mirasim agents and one other; what it verified and asked.
+
+        ``own_host`` names the one Mirasim row whose ``env`` points it at a host of its own.
+        """
         from raven.agent.subagent import mirasim_presets
         from raven.agent.subagent.presets import third_party_subagent_preset
         from raven.config.schema import SubagentsConfig
 
         keys = ("mirasim_claude", "mirasim_zcode", "mirasim_qwen")
-        configs = SubagentsConfig(agents=[third_party_subagent_preset(key) for key in keys]).agents
+        rows = [
+            {**third_party_subagent_preset(key), **({"env": {"RAVEN_MIRASIM_HOST": "4971"}} if key == own_host else {})}
+            for key in keys
+        ]
+        configs = SubagentsConfig(agents=rows).agents
         verified: list[str] = []
         asked: list[str | None] = []
 
@@ -1195,7 +1203,7 @@ class TestAutomaticSnapshotVerification:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Its handshake fails and a preset's failure is not kept, so verifying it would handshake it again at
-        every start: two Mirasim servers or more started for nothing, per such agent. Mirasim is asked once
+        every start: two adapter launches or more for nothing, per such agent. Mirasim is asked once
         instead."""
         from raven.agent.subagent.probe import schedule_snapshot_verification
 
@@ -1204,10 +1212,21 @@ class TestAutomaticSnapshotVerification:
         assert verified == ["Claude Code-Mirasim", "Qwen Code-Mirasim", "a-preset"]
         assert len(asked) == 1
 
+    async def test_with_no_mirasim_host_running_only_a_row_that_names_its_own_host_is_handshaken(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every other handshake would fail on the same missing host, and be tried again at the next start."""
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        verified, asked = self._mirasim_boot(monkeypatch, None, frozenset(), own_host="mirasim_qwen")
+        await schedule_snapshot_verification(_FakeManager([]))
+        assert verified == ["Qwen Code-Mirasim", "a-preset"]
+        assert len(asked) == 1
+
     async def test_mirasim_is_asked_only_when_one_of_its_presets_is_to_be_handshaken(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The question starts a Mirasim server of its own, which a boot with every preset measured never needs."""
+        """The question launches the adapter and waits out the host's agent list, which a fully measured boot never needs."""
         from raven.agent.subagent.probe import schedule_snapshot_verification
 
         measured = type("S", (), {"status": "ready", "stale": False, "needs_auth": False})()
@@ -1763,11 +1782,95 @@ def test_a_shim_preset_whose_agent_is_absent_is_not_offered_for_verification(
     present = {"/venv/bin/python", "npx", "pi"}
     monkeypatch.setattr(probe_mod, "third_party_subagent_presets", lambda: presets)
     monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: f"/bin/{exe}" if exe in present else None)
+    monkeypatch.setattr(probe_mod, "login_shell_env", lambda: {"MIRASIM_HOME": "/mirasim"})
+    asked: list[tuple[dict[str, str], str | None]] = []
+    state = "installed"
 
-    assert [row.name for row in probe_mod._unconfigured_acp_preset_rows(set(), path=None)] == ["Pi"]
-    present.add("mirasim")
-    rows = probe_mod._unconfigured_acp_preset_rows(set(), path=None)
+    def fake_presence(env: dict[str, str], *, path: str | None) -> tuple[str, str]:
+        asked.append((env, path))
+        return state, "/mirasim/bin/mirasim"
+
+    monkeypatch.setattr(probe_mod.mirasim_presets, "presence", fake_presence)
+
+    # Installed but no host to reach: its handshake would fail on that, and `_probe_acp` already says so.
+    assert [row.name for row in probe_mod._unconfigured_acp_preset_rows(set(), path="/login/bin")] == ["Pi"]
+    state = "running"
+    rows = probe_mod._unconfigured_acp_preset_rows(set(), path="/login/bin")
     assert [row.name for row in rows] == ["Claude Code-Mirasim", "Pi"]
+    # Asked in the login shell's environment, against its PATH, once per boot however many Mirasim rows.
+    assert asked == [({"MIRASIM_HOME": "/mirasim"}, "/login/bin")] * 2
+
+
+async def test_a_mirasim_row_is_read_by_whether_mirasim_is_here_not_by_an_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mirasim puts its CLI on no PATH, and the adapter runs none: the row read as *Not installed* on every
+    computer that had Mirasim. Three states now, each with the reader's next move."""
+    from raven.agent.subagent import mirasim_presets as mp
+
+    home = tmp_path / "mirasim"
+    (tmp_path / "bin").mkdir()
+    monkeypatch.setattr(probe_mod, "login_shell_env", lambda: {"RAVEN_MIRASIM_HOST": "", "MIRASIM_HOME": "/elsewhere"})
+    monkeypatch.setattr(mp, "remote_root", lambda: tmp_path / "no-remote")
+    monkeypatch.setattr(mp, "_listening", lambda port: False)
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+    cfg = ThirdPartyAcpSubagentConfig(
+        name="Claude Code-Mirasim",
+        preset="mirasim_claude",
+        command=f"{sys.executable} -P -m raven.acp.mirasim --agent claude",
+        env={"MIRASIM_HOME": str(home)},  # the row's own wins over the login shell's, as at launch
+    )
+
+    res = await probe_one(cfg, source="preset", path=str(tmp_path / "bin"))
+    assert res.status == "missing"
+    assert res.absent == "mirasim" and res.target == "mirasim", "what the page offers to install is read from this"
+    assert res.detail == (
+        "Mirasim is not installed on this computer; install the Mirasim app from https://mirasim.ai/download "
+        "and open it, or let the Mirasim app on another computer reach this one over ssh"
+    )
+
+    launcher = home.joinpath(*mp.LAUNCHER)
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    res = await probe_one(cfg, source="preset", path=str(tmp_path / "bin"))
+    assert res.status == "attention" and res.absent is None
+    assert res.detail == (
+        f"Mirasim is installed ({launcher}) but no host of it is running: open the Mirasim app, or let the "
+        "Mirasim app on another computer reach this one again, then check again"
+    )
+    assert res.target == str(launcher)
+
+    mp.token_file(cfg.env).parent.mkdir(parents=True)
+    mp.token_file(cfg.env).write_text("desk\n", encoding="utf-8")
+    monkeypatch.setattr(mp, "_listening", lambda port: True)
+    res = await probe_one(cfg, source="preset", path=str(tmp_path / "bin"))
+    assert res.status == "attention" and "have not been recorded yet" in res.detail
+
+
+async def test_a_mirasim_row_is_judged_in_the_login_shells_environment_when_its_own_names_no_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`MIRASIM_HOME` exported in the shell rc alone is where the adapter would look, so the probe looks there."""
+    from raven.agent.subagent import mirasim_presets as mp
+
+    home = tmp_path / "mirasim"
+    launcher = home.joinpath(*mp.LAUNCHER)
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (tmp_path / "bin").mkdir()
+    monkeypatch.setattr(probe_mod, "login_shell_env", lambda: {"MIRASIM_HOME": str(home)})
+    monkeypatch.setattr(mp, "remote_root", lambda: tmp_path / "no-remote")
+    monkeypatch.setattr(mp, "_listening", lambda port: False)
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+    cfg = ThirdPartyAcpSubagentConfig(
+        name="Claude Code-Mirasim",
+        preset="mirasim_claude",
+        command=f"{sys.executable} -P -m raven.acp.mirasim --agent claude",
+    )
+
+    res = await probe_one(cfg, source="preset", path=str(tmp_path / "bin"))
+
+    assert res.status == "attention" and res.target == str(launcher)
 
 
 async def test_a_hand_written_npx_row_is_not_held_to_a_shims_requirement(
@@ -2042,7 +2145,7 @@ async def test_a_modes_relearn_during_the_boot_verify_does_not_stop_its_write(tm
     manager = _FakeManager(rows, with_refresh=True)
     boot = asyncio.ensure_future(probe_mod._verify_missing_snapshots(manager, rows))
     await asyncio.wait_for(boot_parked.wait(), 2)
-    relearned = caps.relearn_session_modes(
+    relearned = caps.relearn_session_menus(
         store.load([cfg])[cfg.name],
         {"sessionId": "s1", "modes": {"availableModes": [{"id": "fast", "name": "Fast"}], "currentModeId": "fast"}},
         store=store,
@@ -2085,7 +2188,7 @@ def _menu_records() -> tuple[object, object]:
 
 
 def test_a_ready_answer_whose_menu_went_unread_keeps_the_menu_it_had() -> None:
-    """A connect or a Test during Mirasim's cold start is answered menuless: a read that failed, not a measured none."""
+    """A connect or a Test the Mirasim host leaves unanswered is menuless: a read that failed, not a measured none."""
     measured, unread = _menu_records()
     saved = probe_mod._test_record(unread, measured)
     assert (saved.model_choices, saved.available_modes) == (measured.model_choices, measured.available_modes)

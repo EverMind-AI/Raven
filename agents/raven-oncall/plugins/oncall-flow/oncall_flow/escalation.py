@@ -10,9 +10,12 @@ everything about escalation that is a fact on disk rather than a tool face:
     fixed setup, quiet hours and ask budget included); the counts come from
     ``interruptions.json`` (what has happened so far).
   - **the question trail.** Which question the owner has not come back on is
-    read from the events and closed by a later note -- the same records a
-    grader and a later turn read anyway, so there is no second place to keep
-    in sync.
+    read from the events and notes -- the same records a grader and a later
+    turn read anyway, so there is no second place to keep in sync. A question
+    carries an ``ask_id``; it is closed by the owner speaking (an answer to it,
+    or anything typed after it), by the loop settling it on the default it
+    named, or by the campaign withdrawing it. A note the loop writes about its
+    own work does not close it.
 
 Per the seam-one final ruling the fork's owner-window store machinery is not
 rebuilt; the contract is enforced plugin-side, in front of whatever delivery
@@ -70,7 +73,7 @@ def save_guard(cdir: Path, guard: ContractGuard) -> None:
     tmp.replace(cdir / GUARD_FILE)
 
 
-def append_note(campaign_dir: Path, note: str, *, source: str = "agent") -> None:
+def append_note(campaign_dir: Path, note: str, *, source: str = "agent", ask_id: str = "") -> None:
     """Append one instruction to the campaign's notes.
 
     ``source`` says who it came from. A note the owner typed and a note the loop
@@ -91,6 +94,8 @@ def append_note(campaign_dir: Path, note: str, *, source: str = "agent") -> None
         pass
     campaign_dir.mkdir(parents=True, exist_ok=True)
     row = {"ts": datetime.now().isoformat(timespec="seconds"), "note": note, "source": source}
+    if ask_id:
+        row["ask_id"] = ask_id
     if rnd is not None:
         row["trials_at_the_time"] = rnd
     with open(campaign_dir / NOTES_FILE, "a", encoding="utf-8") as f:
@@ -103,6 +108,64 @@ def append_owner_answer(cdir: Path, answer: str) -> None:
     append_note(cdir, answer[:2000], source="owner")
 
 
+# The events that end a question, each naming the ask it ends.
+_CLOSING_EVENTS = frozenset({"owner_answered", "ask_settled", "ask_withdrawn"})
+
+
+def _rows(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def open_question(cdir: Path) -> dict[str, Any] | None:
+    """The latest allowed question, while nobody has closed it; else None.
+
+    ``{"ask_id", "question", "blocks_progress", "ts"}``. Only the latest ask
+    counts: a new question supersedes the one before it.
+
+    An ask with an id is closed by an event naming that id, or by the owner
+    speaking after it -- a note of theirs that answers no other question.
+    The loop's own notes do not close it: a progress note is not the owner's
+    answer, and taking it for one let the loop end its own question without
+    saying so. An ask recorded before ids existed keeps
+    the old reading, where any later note closes it.
+    """
+    ask: dict[str, Any] | None = None
+    events = _rows(cdir / "events.jsonl")
+    for e in events:
+        if e.get("kind") == "ask_owner" and e.get("allowed") is not False:
+            ask = e
+    if ask is None:
+        return None
+    asked_at = str(ask.get("ts") or "")
+    ask_id = str(ask.get("ask_id") or "")
+    for e in events:
+        if ask_id and e.get("kind") in _CLOSING_EVENTS and e.get("ask_id") == ask_id:
+            return None
+    for n in _rows(cdir / NOTES_FILE):
+        if str(n.get("ts") or "") < asked_at:
+            continue
+        if not ask_id:
+            return None
+        if n.get("source") == "owner" and n.get("ask_id") in (None, "", ask_id):
+            return None
+    return {
+        "ask_id": ask_id,
+        "question": str(ask.get("question") or "a question"),
+        "blocks_progress": bool(ask.get("blocks_progress")),
+        "ts": asked_at,
+    }
+
+
 def blocking_question_open(cdir: Path) -> str:
     """An unanswered question the loop itself marked as blocking, or "".
 
@@ -110,70 +173,36 @@ def blocking_question_open(cdir: Path) -> str:
     reading, not on ours -- it said nothing worth doing was left, so spending
     compute contradicts it.
     """
-    path = cdir / "events.jsonl"
-    if not path.exists():
-        return ""
-    asked_at, question = "", ""
-    for line in path.read_text(encoding="utf-8").splitlines():
-        try:
-            e = json.loads(line)
-        except ValueError:
-            continue
-        if e.get("kind") == "ask_owner" and e.get("allowed") is not False:
-            if e.get("blocks_progress"):
-                asked_at, question = str(e.get("ts") or ""), str(e.get("question") or "a question")
-            else:
-                asked_at, question = "", ""
-    if not question:
-        return ""
-    notes = cdir / NOTES_FILE
-    if notes.exists():
-        for line in notes.read_text(encoding="utf-8").splitlines():
-            try:
-                n = json.loads(line)
-            except ValueError:
-                continue
-            if str(n.get("ts") or "") >= asked_at:
-                return ""
-    return question
+    q = open_question(cdir)
+    return q["question"] if q and q["blocks_progress"] else ""
 
 
 def unanswered_question(cdir: Path) -> str:
-    """The question the owner has not come back on, or "".
+    """The question the owner has not come back on, or "" (see ``open_question``)."""
+    q = open_question(cdir)
+    return q["question"] if q else ""
 
-    Read from the events, which is what a grader and a later turn read anyway; a
-    second place to keep this in sync is a second place for it to be wrong. An
-    owner's note closes it, and so does one the loop writes to say the question
-    no longer matters -- both are a statement on the record that the answer is no
-    longer being waited for.
+
+def decided_without_owner(cdir: Path) -> list[dict[str, str]]:
+    """Questions the loop settled on its default, with the owner never answering.
+
+    ``[{"question", "reason"}]``, oldest first. A report reads these out, so a
+    decision the owner was asked for and never made is on the page rather than
+    only in the trail.
     """
-    path = cdir / "events.jsonl"
-    if not path.exists():
-        return ""
-    asked_at, question = "", ""
-    for line in path.read_text(encoding="utf-8").splitlines():
-        try:
-            e = json.loads(line)
-        except ValueError:
-            continue
-        if e.get("kind") == "ask_owner" and e.get("allowed") is not False:
-            asked_at, question = str(e.get("ts") or ""), str(e.get("question") or "a question")
-    if not question:
-        return ""
-    # Any note written after the question closes it: the owner's answer arrives
-    # as one (captured from the chat), and so does the loop saying the answer no
-    # longer matters. Timestamps rather than a flag, because notes.jsonl is where
-    # both already land.
-    notes = cdir / NOTES_FILE
-    if notes.exists():
-        for line in notes.read_text(encoding="utf-8").splitlines():
-            try:
-                n = json.loads(line)
-            except ValueError:
-                continue
-            if str(n.get("ts") or "") >= asked_at:
-                return ""
-    return question
+    events = _rows(cdir / "events.jsonl")
+    asked = {
+        str(e.get("ask_id")): str(e.get("question") or "")
+        for e in events
+        if e.get("kind") == "ask_owner" and e.get("ask_id")
+    }
+    answered = {str(e.get("ask_id")) for e in events if e.get("kind") == "owner_answered" and e.get("ask_id")}
+    out = []
+    for e in events:
+        ask_id = str(e.get("ask_id") or "")
+        if e.get("kind") == "ask_settled" and ask_id in asked and ask_id not in answered:
+            out.append({"question": asked[ask_id], "reason": str(e.get("reason") or "")})
+    return out
 
 
 def anything_running(cdir: Path) -> bool:
@@ -193,7 +222,9 @@ __all__ = [
     "append_note",
     "append_owner_answer",
     "blocking_question_open",
+    "decided_without_owner",
     "load_guard",
+    "open_question",
     "save_guard",
     "unanswered_question",
 ]

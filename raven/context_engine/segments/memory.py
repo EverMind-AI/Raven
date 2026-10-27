@@ -1,4 +1,4 @@
-"""Segment 3 — ``# Memory``. Host user.md ⊕ EverOS recall(user).
+"""Segment 4 — ``# Memory``. Host user.md ⊕ EverOS recall(user).
 
 The one composite segment: a single ``# Memory`` heading whose body
 merges the host's slow-changing ``user.md`` dump with the backend's
@@ -29,10 +29,11 @@ _RECALL_BUDGET_S: float = 5.0
 
 class MemorySegmentBuilder:
     name = "memory"
-    order = 3
+    order = 4
     needs_prefix = False
     # Host memory is picked per message and EverOS recall is a query against
-    # it, so this segment answers to the user's latest words.
+    # it, so this segment answers to the user's latest words -- which is also
+    # what puts it in the turn scratch rather than the system prompt.
     stable = False
 
     def __init__(

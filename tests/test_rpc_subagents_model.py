@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from raven.config.agent_names import GENERIC_AGENT
 from raven.rpc.errors import ConfigFieldReadonlyError, ConfigValidationError
 from raven.rpc.methods.subagents import subagents_list, subagents_update
 
@@ -153,9 +154,9 @@ async def test_update_materializes_a_builtin_override_and_checks_its_model_again
     names a provider raven knows, and that provider holds a credential."""
     _with_providers(config_path, {"openai": {"apiKey": "sk-test"}})
 
-    out = await subagents_update({"name": "Raven", "model": "openai/gpt-5"})
-    assert out == {"updated": True, "name": "Raven"}
-    entry = next(e for e in _stored(config_path) if e["name"] == "Raven")
+    out = await subagents_update({"name": GENERIC_AGENT, "model": "openai/gpt-5"})
+    assert out == {"updated": True, "name": GENERIC_AGENT}
+    entry = next(e for e in _stored(config_path) if e["name"] == GENERIC_AGENT)
     assert entry["kind"] == "builtin"
     assert entry["model"] == "openai/gpt-5"
 
@@ -168,8 +169,8 @@ async def test_update_accepts_a_builtin_model_a_configured_section_lists_by_hand
         config_path, {"custom": {"apiBase": "http://127.0.0.1:8000/v1", "apiKey": "k", "models": ["my-local-model"]}}
     )
 
-    await subagents_update({"name": "Raven", "model": "my-local-model"})
-    entry = next(e for e in _stored(config_path) if e["name"] == "Raven")
+    await subagents_update({"name": GENERIC_AGENT, "model": "my-local-model"})
+    entry = next(e for e in _stored(config_path) if e["name"] == GENERIC_AGENT)
     assert entry["model"] == "custom/my-local-model"
 
 
@@ -184,8 +185,8 @@ async def test_update_accepts_a_pick_under_a_section_no_spec_matches_when_sent_w
         config_path, {"mylocal": {"apiBase": "http://127.0.0.1:8000/v1", "apiKey": "k", "models": ["my-local-model"]}}
     )
 
-    await subagents_update({"name": "Raven", "model": "my-local-model", "provider": "mylocal"})
-    entry = next(e for e in _stored(config_path) if e["name"] == "Raven")
+    await subagents_update({"name": GENERIC_AGENT, "model": "my-local-model", "provider": "mylocal"})
+    entry = next(e for e in _stored(config_path) if e["name"] == GENERIC_AGENT)
     assert entry["model"] == "mylocal/my-local-model"
 
 
@@ -197,7 +198,7 @@ async def test_update_rejects_an_id_a_section_no_spec_matches_does_not_list(conf
     )
 
     with pytest.raises(ConfigValidationError, match="none of them can serve 'mylocal/other-model'"):
-        await subagents_update({"name": "Raven", "model": "other-model", "provider": "mylocal"})
+        await subagents_update({"name": GENERIC_AGENT, "model": "other-model", "provider": "mylocal"})
 
 
 async def test_update_stores_a_bare_id_claimed_by_keyword_naming_its_provider(config_path: Path) -> None:
@@ -206,8 +207,8 @@ async def test_update_stores_a_bare_id_claimed_by_keyword_naming_its_provider(co
     keyword on every dispatch instead of naming the pair once."""
     _with_providers(config_path, {"openai": {"apiKey": "sk-test"}})
 
-    await subagents_update({"name": "Raven", "model": "gpt-5"})
-    entry = next(e for e in _stored(config_path) if e["name"] == "Raven")
+    await subagents_update({"name": GENERIC_AGENT, "model": "gpt-5"})
+    entry = next(e for e in _stored(config_path) if e["name"] == GENERIC_AGENT)
     assert entry["model"] == "openai/gpt-5"
 
 
@@ -228,8 +229,8 @@ def test_host_pair_lets_an_unreadable_config_raise_rather_than_blame_the_pick(mo
 
 async def test_update_rejects_a_builtin_model_no_provider_of_ravens_serves(config_path: Path) -> None:
     with pytest.raises(ConfigValidationError, match="none of them can serve 'nonsense-model-xyz'"):
-        await subagents_update({"name": "Raven", "model": "nonsense-model-xyz"})
-    assert not any(e["name"] == "Raven" for e in _stored(config_path)), (
+        await subagents_update({"name": GENERIC_AGENT, "model": "nonsense-model-xyz"})
+    assert not any(e["name"] == GENERIC_AGENT for e in _stored(config_path)), (
         "a rejected write must not leave a half-made override behind"
     )
 
@@ -243,7 +244,7 @@ async def test_update_rejects_a_builtin_model_whose_provider_holds_no_credential
     model with one log line to say so. Refused instead."""
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(ConfigValidationError, match="no usable credentials"):
-        await subagents_update({"name": "Raven", "model": "openai/gpt-5"})
+        await subagents_update({"name": GENERIC_AGENT, "model": "openai/gpt-5"})
 
 
 async def test_update_stores_a_builtin_model_naming_the_provider_it_was_picked_under(config_path: Path) -> None:
@@ -253,8 +254,8 @@ async def test_update_stores_a_builtin_model_naming_the_provider_it_was_picked_u
     host's."""
     _with_providers(config_path, {"openrouter": {"apiKey": "sk-or-test"}})
 
-    await subagents_update({"name": "Raven", "model": "gpt-5", "provider": "openrouter"})
-    entry = next(e for e in _stored(config_path) if e["name"] == "Raven")
+    await subagents_update({"name": GENERIC_AGENT, "model": "gpt-5", "provider": "openrouter"})
+    entry = next(e for e in _stored(config_path) if e["name"] == GENERIC_AGENT)
     assert entry["model"] == "openrouter/gpt-5"
 
 
@@ -384,7 +385,7 @@ async def test_update_edits_a_builtin_override_stored_under_the_legacy_spelling_
     raw["subagents"]["agents"].append({"name": "raven", "kind": "builtin", "skills": ["one", "two"]})
     config_path.write_text(json.dumps(raw), encoding="utf-8")
 
-    await subagents_update({"name": "Raven", "model": "openai/gpt-5"})
+    await subagents_update({"name": GENERIC_AGENT, "model": "openai/gpt-5"})
 
     builtin = [e for e in _stored(config_path) if e.get("kind") == "builtin"]
     assert [e["name"] for e in builtin] == ["raven"]
@@ -404,7 +405,7 @@ async def test_update_edits_a_legacy_spelled_acp_transport_override_in_place(
     config_path.write_text(json.dumps(raw), encoding="utf-8")
     monkeypatch.setattr("raven.rpc.methods.subagents.agent_meta", _fake_agent_meta(("vendor/a",)))
 
-    await subagents_update({"name": "Raven", "model": "vendor/a"})
+    await subagents_update({"name": GENERIC_AGENT, "model": "vendor/a"})
 
     of_name = [e for e in _stored(config_path) if e["name"].lower() == "raven"]
     assert [(e["name"], e["kind"], e.get("model")) for e in of_name] == [("raven", "acp", "vendor/a")]
@@ -416,12 +417,12 @@ async def test_update_refuses_a_builtin_name_config_holds_an_ignored_row_for(con
     the name; editing the cli row would change nothing anyone sees. Refused,
     naming the row to remove."""
     raw = json.loads(config_path.read_text())
-    raw["subagents"]["agents"].append({"name": "Raven", "kind": "cli", "command": "echo {prompt}"})
+    raw["subagents"]["agents"].append({"name": GENERIC_AGENT, "kind": "cli", "command": "echo {prompt}"})
     config_path.write_text(json.dumps(raw), encoding="utf-8")
 
     with pytest.raises(ConfigFieldReadonlyError, match="'cli' row of that name"):
-        await subagents_update({"name": "Raven", "model": "openai/gpt-5"})
-    assert [e["kind"] for e in _stored(config_path) if e["name"] == "Raven"] == ["cli"]
+        await subagents_update({"name": GENERIC_AGENT, "model": "openai/gpt-5"})
+    assert [e["kind"] for e in _stored(config_path) if e["name"] == GENERIC_AGENT] == ["cli"]
 
 
 async def test_update_refuses_to_rename_a_materialized_builtin_override(config_path: Path) -> None:
@@ -429,7 +430,7 @@ async def test_update_refuses_to_rename_a_materialized_builtin_override(config_p
     built-in agent with nothing behind it."""
     _with_providers(config_path, {"openai": {"apiKey": "sk-test"}})
     with pytest.raises(ConfigFieldReadonlyError):
-        await subagents_update({"name": "Raven", "new_name": "Scribe", "model": "openai/gpt-5"})
+        await subagents_update({"name": GENERIC_AGENT, "new_name": "Scribe", "model": "openai/gpt-5"})
     assert not any(e.get("kind") == "builtin" for e in _stored(config_path))
 
 
@@ -485,16 +486,16 @@ async def test_update_clearing_the_description_with_explicit_null_puts_a_builtin
 
     raw = json.loads(config_path.read_text())
     raw["subagents"]["agents"].append(
-        {"name": "Raven", "kind": "builtin", "description": "a retuned blurb", "enabled": True}
+        {"name": GENERIC_AGENT, "kind": "builtin", "description": "a retuned blurb", "enabled": True}
     )
     config_path.write_text(json.dumps(raw), encoding="utf-8")
 
-    await subagents_update({"name": "Raven", "description": None})
+    await subagents_update({"name": GENERIC_AGENT, "description": None})
 
-    entry = next(e for e in _stored(config_path) if e["name"] == "Raven")
+    entry = next(e for e in _stored(config_path) if e["name"] == GENERIC_AGENT)
     assert entry["description"] == ""
-    seed = next(s for s in builtin_agent_seeds() if s.name == "Raven")
-    listed = next(r for r in (await subagents_list({"probe": False}))["rows"] if r["name"] == "Raven")
+    seed = next(s for s in builtin_agent_seeds() if s.name == GENERIC_AGENT)
+    listed = next(r for r in (await subagents_list({"probe": False}))["rows"] if r["name"] == GENERIC_AGENT)
     assert listed["description"] == seed.description
 
 

@@ -42,7 +42,6 @@ from raven.agent.subagent.probe_state import fingerprint
 from raven.agent.subagent.registry import _row_for
 from raven.config.schema import MCPServerConfig, ThirdPartyAcpSubagentConfig
 from raven.config.update_subagents import reject_unsupported_acp_fields
-from raven.mcp.bridge import unix_sockets_available
 from raven.node import bundle
 from raven.node.client import NodePool
 from raven.ops import remote_path
@@ -223,6 +222,24 @@ def _alive(pid: int | None) -> bool:
     return True
 
 
+def _hold_launch_answers(monkeypatch: pytest.MonkeyPatch, answered: asyncio.Event) -> None:
+    """``agent/launch`` answers wait half a second once they are in: a cancel in that wait
+    lands before the answer reaches ``NodePool.open_channel``, with the agent already running."""
+    from raven.acp_client.client import AcpClient
+    from raven.node import protocol
+
+    original = AcpClient.request
+
+    async def held(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        answer = await original(self, method, *args, **kwargs)
+        if method == protocol.AGENT_LAUNCH:
+            answered.set()
+            await asyncio.sleep(0.5)
+        return answer
+
+    monkeypatch.setattr(AcpClient, "request", held)
+
+
 def remote_config(*, mode: str = "ok", command: str | None = None, **kw: Any) -> ThirdPartyAcpSubagentConfig:
     return ThirdPartyAcpSubagentConfig(
         name=kw.pop("name", "stub@box"),
@@ -397,9 +414,6 @@ async def test_a_connection_that_ends_mid_turn_is_reported_as_it_ended(box, tmp_
         await backend.run("hi", task_id="t1", workspace=tmp_path, executor=None)
 
 
-@pytest.mark.skipif(
-    not unix_sockets_available(), reason="MCP lending rides on unix sockets, which this computer has not"
-)
 async def test_granted_mcp_servers_are_lent_through_the_node_and_named_in_the_reply(box, tmp_path):
     backend = build_third_party_backend(remote_config(mode="echo_blocks"))
     grant = McpGrant(granted=(GrantedServer("pg", "stdio", MCPServerConfig(command="/bin/true")),))
@@ -414,11 +428,14 @@ _HANDOFF_AGENT = Path(__file__).with_name("mcp_handoff_acp_stub.py")
 _HANDOFF_SERVER = Path(__file__).with_name("mcp_handoff_stub_server.py")
 
 
-@pytest.mark.skipif(
-    not unix_sockets_available(), reason="MCP lending rides on unix sockets, which this computer has not"
-)
-async def test_an_mcp_server_the_host_holds_is_reached_from_the_machine_through_its_node(box, tmp_path):
+@pytest.mark.parametrize("transport", ["native", "tcp"])
+async def test_an_mcp_server_the_host_holds_is_reached_from_the_machine_through_its_node(
+    box, tmp_path, monkeypatch, transport
+):
     """The agent there runs the node's bridge as a stdio server; the call reaches the server here, and its answer goes back."""
+    if transport == "tcp":
+        monkeypatch.delattr(asyncio, "start_unix_server", raising=False)
+        monkeypatch.delattr(asyncio, "open_unix_connection", raising=False)
     ledger, receipt = tmp_path / "ledger.jsonl", tmp_path / "receipt.jsonl"
     upstream = MCPServerConfig(
         command=sys.executable, args=[str(_HANDOFF_SERVER)], env={"MCP_HANDOFF_LEDGER": str(ledger)}
@@ -451,9 +468,6 @@ async def test_an_mcp_server_the_host_holds_is_reached_from_the_machine_through_
 # ---- what it is given, and how ----------------------------------------------------
 
 
-@pytest.mark.skipif(
-    not unix_sockets_available(), reason="MCP lending rides on unix sockets, which this computer has not"
-)
 def test_mcp_is_lent_to_an_agent_on_a_machine_through_its_node_and_the_reply_says_so():
     cfg = remote_config()
     backend = build_third_party_backend(cfg)
@@ -773,6 +787,36 @@ async def test_a_stop_that_lands_under_a_pick_up_leaves_the_run_for_the_start_af
     (said,) = manager.announced
     assert said["status"] == "ok" and said["result"].split("\n\n[raven]")[0] == "pong"
     assert remote_runs.pending() == [] and _agent_pid() == agent
+
+
+async def test_a_cancel_while_the_acp_launch_answer_waits_ends_the_agent_too(box, tmp_path, monkeypatch):
+    """The turn is cancelled after the daemon started its agent but before ``agent/launch``'s answer
+    reaches :meth:`NodePool.open_channel`: the agent is ended and the channel dropped all the same."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    answered = asyncio.Event()
+    _hold_launch_answers(monkeypatch, answered)
+    backend = build_third_party_backend(remote_config())
+    turn = asyncio.ensure_future(
+        backend.run("hi", task_id="t1", workspace=tmp_path, executor=None, session_key="tui:s1")
+    )
+    deadline = time.monotonic() + 20
+    while not box.agents_left():
+        assert time.monotonic() < deadline and not turn.done(), "the agent never started"
+        await asyncio.sleep(0.01)
+    await asyncio.wait_for(answered.wait(), 10)
+
+    turn.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await turn
+
+    deadline = time.monotonic() + 10
+    while box.agents_left():
+        assert time.monotonic() < deadline, "the agent stayed on the machine"
+        await asyncio.sleep(0.05)
+    deadline = time.monotonic() + 10
+    while box.nodes._nodes["box"].channels:
+        assert time.monotonic() < deadline, "the channel of a launch left waiting is dropped"
+        await asyncio.sleep(0.05)
 
 
 async def test_a_reply_the_caller_reports_keeps_its_record_and_a_host_that_stops_before_the_announce_reads_it_again(
@@ -1115,9 +1159,6 @@ def test_the_machine_note_is_kept_whole_inside_the_cap():
 # ---- one owner for "session MCP on a machine" ---------------------------------------------
 
 
-@pytest.mark.skipif(
-    not unix_sockets_available(), reason="MCP lending rides on unix sockets, which this computer has not"
-)
 def test_the_one_mcp_predicate_answers_for_a_machine_row_too(monkeypatch):
     from raven.agent.subagent.backends import session_mcp_delivered
 
@@ -1128,10 +1169,10 @@ def test_the_one_mcp_predicate_answers_for_a_machine_row_too(monkeypatch):
     assert session_mcp_delivered(session_mcp=True, snapshot=None, machine="") is True
     assert session_mcp_delivered(session_mcp=True, snapshot=None) is True
 
-    # Without the transport (a Windows host), neither side is promised what the dispatch would withhold.
+    # A Windows host uses loopback endpoints for both dispatch paths.
     monkeypatch.delattr(asyncio, "start_unix_server", raising=False)
-    assert session_mcp_delivered(session_mcp=True, snapshot=None, machine="box") is False
-    assert session_mcp_delivered(session_mcp=True, snapshot=None) is False
+    assert session_mcp_delivered(session_mcp=True, snapshot=None, machine="box") is True
+    assert session_mcp_delivered(session_mcp=True, snapshot=None) is True
 
 
 # ---- the write doors ------------------------------------------------------------------------
@@ -1229,12 +1270,12 @@ async def test_a_daemon_killed_outright_mid_turn_ends_the_turn_with_the_reason_a
     assert not _alive(agent), "the agent the killed daemon left behind was ended by the new one"
 
 
-async def test_a_remote_turn_runs_without_lent_mcp_when_the_host_has_no_unix_socket_api(box, tmp_path, monkeypatch):
+async def test_a_remote_turn_lends_mcp_when_the_host_has_no_unix_socket_api(box, tmp_path, monkeypatch):
     monkeypatch.delattr(asyncio, "start_unix_server", raising=False)
     monkeypatch.delattr(asyncio, "open_unix_connection", raising=False)
     backend = build_third_party_backend(remote_config())
     grant = McpGrant(granted=(GrantedServer("pg", "stdio", MCPServerConfig(command="must-not-start")),))
     reply = await backend.run("hi", task_id="no-host-socket", workspace=tmp_path, executor=None, mcp_grant=grant)
     assert reply.split("\n\n[raven]")[0] == "pong"
-    assert "this computer does not support Unix-socket MCP endpoints" in reply
-    assert not box.nodes._lent
+    assert "MCP servers 'pg' were lent to acp agent 'stub@box'" in reply
+    assert not box.nodes._lent.get("box")

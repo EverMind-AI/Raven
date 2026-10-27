@@ -18,6 +18,7 @@ export const exportSource: ExportSource = {
     gateway().call('trajectory.export', { session_key: sessionKey, trace_ids: traceIds, file_name: fileName }),
   status: (jobId) => gateway().call('trajectory.export_status', { job_id: jobId }),
   cancel: (jobId) => gateway().call('trajectory.export_cancel', { job_id: jobId }),
+  reportProbe: () => gateway().call('bugreport.probe', {}),
   reportStart: (sessionKey, traceIds, problem) =>
     gateway().call('bugreport.start', { session_key: sessionKey, trace_ids: traceIds, problem }),
   reportStatus: (reportId) => gateway().call('bugreport.status', { report_id: reportId }),

@@ -228,8 +228,9 @@ otherwise set it to false. Never put `confirm` on an individual node.
 Describe how to assemble the graph: how many layers, how many nodes per
 layer, which agent with which skills/mcps, who dependsOn whom, how nodes
 pass data with {{ }}, and what criteria each node's work order must state.
-Never write run-time decision rules: the graph is fixed once assembled, so
-loops and conditional fallbacks cannot be expressed — do not write them.
+Never write run-time decision rules *other than a branch*: the graph is fixed once
+assembled, so a loop cannot be expressed -- do not write one. A conditional branch can:
+give a step routes, and guard what follows with when.
 
 # Open items (report honestly)
 
@@ -327,6 +328,22 @@ def build_repair_prompt(spec_json: dict[str, Any], errors: list[str]) -> str:
     )
 
 
+_BRANCH_FIELDS = ("routes", "select", "when")
+
+
+def _playbook_as_revised(current: PlaybookSpec) -> dict[str, Any]:
+    """``current`` as the revise round reads it: every field, nulls included -- except a
+    node's branch fields, which are shown only on a node that sets one. Three ``null``
+    lines on every step would add nothing to a playbook that has no branch.
+    """
+    shown = current.model_dump(by_alias=True)
+    for node in shown.get("nodes") or []:
+        for field in _BRANCH_FIELDS:
+            if node.get(field) is None:
+                node.pop(field, None)
+    return shown
+
+
 def build_revise_prompt(
     current: PlaybookSpec,
     user_feedback: str,
@@ -338,7 +355,7 @@ def build_revise_prompt(
         "the playbook per the feedback and call emit_playbook again with the "
         "complete result.\n\n"
         f"# Available agents and runtime-effective capabilities\n{_render_agents(agent_profiles)}\n\n"
-        f"# Current playbook\n{json.dumps(current.model_dump(by_alias=True), ensure_ascii=False, indent=2)}\n\n"
+        f"# Current playbook\n{json.dumps(_playbook_as_revised(current), ensure_ascii=False, indent=2)}\n\n"
         f"# User feedback\n{user_feedback.strip()}"
     )
 
@@ -409,7 +426,8 @@ def build_compose_prompt(
     return (
         "Assemble a task graph following the guidance below and submit the "
         "node list through emit_graph (camelCase fields:\n"
-        "id / subagent / nodeSummary / promptTemplate / dependsOn / skills / mcps / inputs / instance).\n"
+        "id / subagent / nodeSummary / promptTemplate / dependsOn / skills / mcps / inputs / instance / "
+        "routes / select / when).\n"
         "Rules: subagent must come from the available list; agent capabilities "
         "are hard constraints: use instance only when stateful=true, path placeholders "
         "only when readsLocalFiles=true, skills only when injectableSkills=true, and "
@@ -418,9 +436,10 @@ def build_compose_prompt(
         "must omit skills; mcps is resolved per dispatch and may be replaced or "
         "cleared by a continuation node; every "
         "{{ <upstreamId>.output }} reference must have that upstream in the "
-        "node's dependsOn;\n"
+        "node's dependsOn; a node that depends on a decision node (one with routes) "
+        "must name it in its when, as <id>.<route> or <id>.done;\n"
         "nodes with no dependency between them run in parallel; the graph is "
-        "fixed once assembled, so design no run-time branches or loops.\n"
+        "fixed once assembled, so design no run-time loops (a conditional branch is expressible).\n"
         f"Params are already substituted (original param names: "
         f"{', '.join(param_names) if param_names else 'none'}); "
         "no ${params.*} may appear anywhere in the graph. Every declared input "

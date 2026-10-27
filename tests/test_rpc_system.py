@@ -50,6 +50,7 @@ async def test_hello_returns_versions():
     assert isinstance(result["server_capabilities"], list)
     assert "jsonrpc-2.0" in result["server_capabilities"]
     assert "trajectory-v1" in result["server_capabilities"]
+    assert "model.options.selection_only" in result["server_capabilities"]
     assert "session" in result
     assert result["session"]["default_channel"] == "tui"
     assert result["session"]["default_session_key"].startswith("tui:")
@@ -237,6 +238,7 @@ def _plan(tmp_path, monkeypatch):
         target=upgrade_commands.ToolInstallTarget(tool_dir=tmp_path / "tools", bin_dir=bin_dir),
     )
     monkeypatch.setattr(upgrade_commands, "plan_upgrade", lambda: plan)
+    monkeypatch.setattr(upgrade_commands, "_is_editable_install", lambda: False)
     spawned: dict[str, object] = {}
     monkeypatch.setattr(
         upgrade_commands,
@@ -303,13 +305,23 @@ class TestUpgradingFromAGatewayHostedPage:
 
         assert spawned["parent_pid"] == 4242
 
-    async def test_it_refuses_a_gateway_nothing_would_bring_back(self, monkeypatch, tmp_path):
+    @pytest.mark.parametrize(
+        ("windows", "command"),
+        [
+            (False, "raven web --stop\nraven upgrade\nraven web"),
+            (True, "raven web --stop\nraven upgrade"),
+        ],
+        ids=["posix", "windows"],
+    )
+    async def test_it_refuses_a_gateway_nothing_would_bring_back(self, monkeypatch, tmp_path, windows, command):
         """Started by hand, or under `raven web --foreground`: no supervisor.
         Installing would end with nothing running at all."""
         from raven.cli.serve_commands import SERVE
+        from raven.rpc.methods import system
         from raven.rpc.methods.system import system_upgrade
 
         _bin_dir, spawned = _plan(tmp_path, monkeypatch)
+        monkeypatch.setattr(system, "_on_windows", lambda: windows)
         SERVE.arm_hosted(18792, "tok", "cookie")
         SERVE.hand_over(lambda: pytest.fail("stopped an unsupervised gateway"), lambda: None, None)
         try:
@@ -319,7 +331,131 @@ class TestUpgradingFromAGatewayHostedPage:
             SERVE.disarm()
 
         assert excinfo.value.data["reason"] == "unsupervised"
+        assert excinfo.value.data["command"] == command
         assert spawned == {}
+
+    async def test_it_classifies_a_checkout_before_the_unsupervised_refusal(self, monkeypatch, tmp_path):
+        """An editable install under a hand-started gateway is both at once, and
+        the checkout answer has to win: `raven upgrade` refuses a checkout, so
+        the unsupervised recovery's first command can never work there."""
+        from raven.cli.serve_commands import SERVE
+        from raven.rpc.methods.system import system_upgrade
+        from raven.updates import upgrade as upgrade_commands
+
+        def plan() -> None:
+            raise AssertionError("a checkout should be refused before the release lookup")
+
+        monkeypatch.setattr(upgrade_commands, "_is_editable_install", lambda: True)
+        monkeypatch.setattr(upgrade_commands, "editable_checkout", lambda: tmp_path)
+        monkeypatch.setattr(upgrade_commands, "plan_upgrade", plan)
+        SERVE.arm_hosted(18792, "tok", "cookie")
+        SERVE.hand_over(lambda: pytest.fail("stopped an unsupervised gateway"), lambda: None, None)
+        try:
+            with pytest.raises(ConfigValidationError) as excinfo:
+                await system_upgrade({})
+        finally:
+            SERVE.disarm()
+
+        assert excinfo.value.data["reason"] == "editable", excinfo.value.data
+        assert "git pull" in excinfo.value.data["command"].splitlines()
+
+    async def _probe_answers(self, monkeypatch, distribution, reason, detail=None):
+        """Drive system_upgrade with the real editable probe: only the metadata
+        boundary is faked, so _is_editable_install and its reads run for real
+        and every refusal has to come from the actual failure."""
+        import asyncio
+
+        from raven.cli.serve_commands import SERVE
+        from raven.rpc.methods.system import system_upgrade
+        from raven.updates import upgrade as upgrade_commands
+
+        monkeypatch.setattr(upgrade_commands.metadata, "distribution", distribution)
+
+        def plan() -> None:
+            raise AssertionError("the install cannot be classified before the release lookup runs")
+
+        monkeypatch.setattr(upgrade_commands, "plan_upgrade", plan)
+        SERVE.arm(18792, "tok", "cookie", asyncio.Event())
+        try:
+            with pytest.raises(ConfigValidationError) as excinfo:
+                await system_upgrade({})
+        finally:
+            SERVE.disarm()
+
+        assert excinfo.value.data["reason"] == reason, excinfo.value.data
+        if detail is not None:
+            assert detail in excinfo.value.data["detail"], excinfo.value.data["detail"]
+        return excinfo.value.data
+
+    async def test_an_install_replacement_window_answers_in_progress_not_an_error(self, monkeypatch, tmp_path):
+        """An upgrade already running has uv mid-replacement of the environment,
+        and metadata.distribution itself reports the package gone. Letting that
+        escape answers internal_error, whose card falls back to the default
+        command this branch exists to withhold."""
+        from importlib.metadata import PackageNotFoundError
+
+        def gone(_name):
+            raise PackageNotFoundError("raven")
+
+        await self._probe_answers(monkeypatch, gone, "in_progress")
+
+    async def test_malformed_install_metadata_answers_not_upgradable(self, monkeypatch, tmp_path):
+        """direct_url.json that is not valid JSON is refused by the probe's own
+        validation; the detail proves the refusal came from the real reads, not
+        from a stub raising on the probe's behalf."""
+
+        class _Dist:
+            def read_text(self, _name):
+                return "{ not json"
+
+        data = await self._probe_answers(
+            monkeypatch, lambda _n: _Dist(), "not_upgradable", "Malformed Raven installation metadata"
+        )
+        # Explicitly none, not merely absent: no command can work on this
+        # install, and the card drops the row instead of offering the default.
+        assert "command" in data and data["command"] is None, data
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            OSError("disk gone"),
+            UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+        ],
+        ids=["unreadable", "undecodable"],
+    )
+    async def test_an_unreadable_probe_classifies_as_not_a_checkout(self, monkeypatch, tmp_path, failure):
+        """Reading direct_url.json can fail below JSON entirely -- an IO error,
+        or bytes that are not the utf-8 the file promises. The probe only
+        classifies a checkout, so an unreadable probe is not one: no refusal
+        comes from the guard, and the flow continues to the release lookup
+        (whose stub is the marker this pins)."""
+        import asyncio
+
+        from raven.cli.serve_commands import SERVE
+        from raven.rpc.methods.system import system_upgrade
+        from raven.updates import upgrade as upgrade_commands
+
+        class _Dist:
+            def read_text(self, _name):
+                raise failure
+
+        monkeypatch.setattr(upgrade_commands.metadata, "distribution", lambda _n: _Dist())
+
+        def plan() -> None:
+            raise AssertionError("the flow continued past the probe to the release lookup")
+
+        monkeypatch.setattr(upgrade_commands, "plan_upgrade", plan)
+        SERVE.arm(18792, "tok", "cookie", asyncio.Event())
+        try:
+            with pytest.raises(ConfigValidationError) as excinfo:
+                await system_upgrade({})
+        finally:
+            SERVE.disarm()
+
+        # No refusal came from the guard: the flow continued to the release
+        # lookup, whose own handler answered -- carrying the marker through.
+        assert excinfo.value.data["reason"] == "check_failed", excinfo.value.data
+        assert "continued past the probe" in excinfo.value.data["detail"], excinfo.value.data["detail"]
 
     async def test_it_refuses_while_work_the_page_cannot_see_is_running(self, monkeypatch, tmp_path):
         """The page checks its own turn. An IM turn or a sub-agent on the same
@@ -386,9 +522,10 @@ async def test_upgrade_refuses_when_the_install_cannot_self_upgrade(monkeypatch:
     from raven.updates import upgrade as upgrade_commands
 
     def refuse() -> None:
-        raise upgrade_commands.UpgradeError("Editable Raven installations cannot be upgraded automatically")
+        raise upgrade_commands.UpgradeError("This Raven installation is not managed by uv")
 
     monkeypatch.setattr(upgrade_commands, "plan_upgrade", refuse)
+    monkeypatch.setattr(upgrade_commands, "_is_editable_install", lambda: False)
     SERVE.arm(18792, "tok", "cookie", asyncio.Event())
     try:
         with pytest.raises(ConfigValidationError) as excinfo:
@@ -396,6 +533,206 @@ async def test_upgrade_refuses_when_the_install_cannot_self_upgrade(monkeypatch:
     finally:
         SERVE.disarm()
     assert excinfo.value.data["reason"] == "not_upgradable"
+
+
+@pytest.mark.parametrize(
+    ("windows", "checkout", "command"),
+    [
+        (False, "/srv/raven dev", "cd '/srv/raven dev'\ngit pull\n./install.sh"),
+        (
+            True,
+            "C:\\Users\\o'neil\\Raven",
+            "raven web --stop\nSet-Location -LiteralPath 'C:\\Users\\o''neil\\Raven'\ngit pull\n.\\install.ps1",
+        ),
+    ],
+    ids=["posix", "windows"],
+)
+async def test_upgrade_names_a_checkouts_own_recovery_and_stops_there(
+    monkeypatch: pytest.MonkeyPatch, windows, checkout, command
+):
+    """A source checkout is never upgradable through releases, and the page's
+    default `raven upgrade` fallback refuses it too, so the card has to name
+    the steps that do work instead -- in the checkout itself, since a bare
+    `git pull` updates whichever repository the terminal happens to be in."""
+    import asyncio
+
+    from raven.cli.serve_commands import SERVE
+    from raven.rpc.methods import system
+    from raven.rpc.methods.system import system_upgrade
+    from raven.updates import upgrade as upgrade_commands
+
+    def plan() -> None:
+        raise AssertionError("a checkout should be refused before the release lookup")
+
+    monkeypatch.setattr(system, "_on_windows", lambda: windows)
+    monkeypatch.setattr(upgrade_commands, "_is_editable_install", lambda: True)
+    monkeypatch.setattr(upgrade_commands, "editable_checkout", lambda: checkout)
+    monkeypatch.setattr(upgrade_commands, "plan_upgrade", plan)
+    SERVE.arm(18792, "tok", "cookie", asyncio.Event())
+    try:
+        with pytest.raises(ConfigValidationError) as excinfo:
+            await system_upgrade({})
+    finally:
+        SERVE.disarm()
+
+    assert excinfo.value.data["reason"] == "editable"
+    assert excinfo.value.data["command"] == command
+
+
+def test_a_windows_checkout_recovery_stops_raven_before_it_reinstalls():
+    """Windows cannot delete a running executable, and `uv tool install --force`
+    replaces the environment this Raven runs from. The installer's own `--stop`
+    runs in `Start-Web`, after that install, so the recovery has to stop it
+    before the installer starts."""
+    from raven.rpc.methods.system import _checkout_recovery
+
+    lines = _checkout_recovery("C:\\Raven", True).splitlines()
+
+    assert lines[0] == "raven web --stop"
+    assert lines.index("raven web --stop") < lines.index(".\\install.ps1")
+
+
+def test_a_posix_checkout_recovery_leaves_the_running_page_alone():
+    """POSIX replaces a running executable in place, and `install.sh` stops and
+    restarts the gateway itself once the new install is in: stopping first
+    would only take the page down for the whole build."""
+    from raven.rpc.methods.system import _checkout_recovery
+
+    assert "raven web --stop" not in _checkout_recovery("/srv/raven", False)
+
+
+async def test_a_checkout_whose_path_cannot_be_read_gets_no_command(monkeypatch: pytest.MonkeyPatch):
+    """Without the checkout's path the only command left is a `git pull` in
+    whatever directory the terminal is in, so the card drops the row and keeps
+    the sentence."""
+    import asyncio
+
+    from raven.cli.serve_commands import SERVE
+    from raven.rpc.methods.system import system_upgrade
+    from raven.updates import upgrade as upgrade_commands
+
+    def unreadable():
+        raise upgrade_commands.UpgradeError("Editable source checkout must be a local directory")
+
+    def plan() -> None:
+        raise AssertionError("a checkout should be refused before the release lookup")
+
+    monkeypatch.setattr(upgrade_commands, "_is_editable_install", lambda: True)
+    monkeypatch.setattr(upgrade_commands, "editable_checkout", unreadable)
+    monkeypatch.setattr(upgrade_commands, "plan_upgrade", plan)
+    SERVE.arm(18792, "tok", "cookie", asyncio.Event())
+    try:
+        with pytest.raises(ConfigValidationError) as excinfo:
+            await system_upgrade({})
+    finally:
+        SERVE.disarm()
+
+    assert excinfo.value.data["reason"] == "editable"
+    assert "command" in excinfo.value.data and excinfo.value.data["command"] is None
+
+
+@pytest.mark.parametrize("quote", ["'", "\u2018", "\u2019", "\u201a", "\u201b"])
+def test_a_windows_checkout_path_cannot_close_its_quotes(quote):
+    """PowerShell reads the curly single quotes as quotes too, so a profile
+    folder spelled with one would end the literal early and run the rest of
+    the path as code unless every one of them is doubled."""
+    from raven.rpc.methods.system import _checkout_recovery
+
+    command = _checkout_recovery(f"C:\\Users\\O{quote}Neil\\Raven", True)
+
+    literal = next(line for line in command.splitlines() if line.startswith("Set-Location"))
+    assert literal == f"Set-Location -LiteralPath 'C:\\Users\\O{quote}{quote}Neil\\Raven'"
+
+
+@pytest.mark.parametrize("windows", [False, True], ids=["posix", "windows"])
+def test_the_unsupervised_sentence_names_every_step_its_command_runs(windows):
+    """The sentence tells the reader to stop Raven first; a command that leaves
+    the stop out sends them into an upgrade under a Raven still running."""
+    from raven.rpc.methods.system import _unsupervised_recovery
+
+    detail, command = _unsupervised_recovery(windows)
+
+    assert command.splitlines()[0] == "raven web --stop"
+    for line in command.splitlines():
+        assert f"`{line}`" in detail, (line, detail)
+
+
+def test_a_windows_unsupervised_command_never_starts_raven_beside_the_install():
+    """On Windows `raven upgrade` returns once its helper is started, before the
+    install has run; a `raven web` right behind it lands in the middle of that
+    install. The start belongs to the reader, after the upgrade reports done."""
+    from raven.rpc.methods.system import _unsupervised_recovery
+
+    detail, command = _unsupervised_recovery(True)
+    after_upgrade = command.splitlines()[command.splitlines().index("raven upgrade") + 1 :]
+
+    assert after_upgrade == []
+    assert "`raven web`" in detail
+
+
+def test_a_posix_unsupervised_command_starts_raven_after_the_install():
+    """POSIX `raven upgrade` runs the install in its own process and returns only
+    once it is done, so the start can follow it on the next line."""
+    from raven.rpc.methods.system import _unsupervised_recovery
+
+    _detail, command = _unsupervised_recovery(False)
+
+    assert command.splitlines() == ["raven web --stop", "raven upgrade", "raven web"]
+
+
+@pytest.mark.parametrize(("name", "windows"), [("nt", True), ("posix", False)])
+def test_the_platform_switch_reads_os_name(monkeypatch: pytest.MonkeyPatch, name, windows):
+    import os
+
+    from raven.rpc.methods.system import _on_windows
+
+    with monkeypatch.context() as patched:
+        patched.setattr(os, "name", name)
+        answer = _on_windows()
+
+    assert answer is windows
+
+
+async def test_upgrade_names_a_checkouts_recovery_when_only_the_engine_read_finds_it(monkeypatch: pytest.MonkeyPatch):
+    """The pre-check takes an unreadable probe as "not a checkout" and lets the
+    upgrade go on; plan_upgrade reads the metadata again and refuses the
+    checkout. That second refusal must reach the page as the same `editable`
+    answer, or the card falls back to `raven upgrade`, which a checkout refuses."""
+    import asyncio
+    import os
+    from pathlib import Path
+
+    from raven.cli.serve_commands import SERVE
+    from raven.rpc.methods.system import system_upgrade
+    from raven.updates import upgrade as upgrade_commands
+
+    reads: list[str] = []
+
+    def probe() -> bool:
+        reads.append("read")
+        if len(reads) == 1:
+            raise OSError("metadata read raced the install")
+        return True
+
+    def tripwire(*_args, **_kwargs) -> None:
+        raise AssertionError("a checkout should be refused before the release lookup")
+
+    monkeypatch.setattr(upgrade_commands, "_is_editable_install", probe)
+    monkeypatch.setattr(upgrade_commands, "editable_checkout", lambda: Path("/srv/raven"))
+    monkeypatch.setattr(upgrade_commands, "fetch_latest_for_channel", tripwire)
+    monkeypatch.setattr(upgrade_commands, "spawn_detached_upgrade", tripwire)
+    SERVE.arm(18792, "tok", "cookie", asyncio.Event())
+    try:
+        with pytest.raises(ConfigValidationError) as excinfo:
+            await system_upgrade({})
+    finally:
+        SERVE.disarm()
+
+    assert len(reads) == 2
+    assert excinfo.value.data["reason"] == "editable"
+    command = excinfo.value.data["command"]
+    assert "git pull" in command
+    assert (".\\install.ps1" if os.name == "nt" else "./install.sh") in command
 
 
 async def test_upgrade_names_an_install_already_in_flight(monkeypatch: pytest.MonkeyPatch):
@@ -414,6 +751,7 @@ async def test_upgrade_names_an_install_already_in_flight(monkeypatch: pytest.Mo
         raise md.PackageNotFoundError("raven")
 
     monkeypatch.setattr(upgrade_commands, "plan_upgrade", mid_replacement)
+    monkeypatch.setattr(upgrade_commands, "_is_editable_install", lambda: False)
     SERVE.arm(18792, "tok", "cookie", asyncio.Event())
     try:
         with pytest.raises(ConfigValidationError) as excinfo:
@@ -438,6 +776,7 @@ async def test_upgrade_hands_off_then_stops_the_gateway(monkeypatch: pytest.Monk
         target=upgrade_commands.ToolInstallTarget(tool_dir=tmp_path / "tools", bin_dir=bin_dir),
     )
     monkeypatch.setattr(upgrade_commands, "plan_upgrade", lambda: plan)
+    monkeypatch.setattr(upgrade_commands, "_is_editable_install", lambda: False)
     spawned: dict[str, object] = {}
     monkeypatch.setattr(
         upgrade_commands,

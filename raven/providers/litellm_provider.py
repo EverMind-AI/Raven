@@ -49,6 +49,7 @@ from raven.providers.transport_failure import (
     prompt_chars,
     said_nothing,
     transport_failure_message,
+    without_sentinels,
 )
 from raven.providers.usage import merge_usage, reported_cost, token_count
 from raven.providers.wire import wire_model
@@ -1093,6 +1094,9 @@ class LiteLLMProvider(LLMProvider):
         if not reasoning_content and isinstance(content, str) and self.emits_unparsed_reasoning():
             split_reasoning, content = split_orphan_think(content)
             reasoning_content = split_reasoning or reasoning_content
+        # A reply that is only an upstream sentinel is handed on as empty, so the
+        # loop's recovery owns it rather than the user reading `<|im_end|>`.
+        content = without_sentinels(content)
 
         # Asked here rather than by the caller: this is the response exit, and
         # by the time the ladder in `base.py` reads `finish_reason` the only

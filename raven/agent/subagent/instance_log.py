@@ -43,6 +43,7 @@ from typing import Any
 
 from loguru import logger
 
+from raven.agent.subagent.instance_paths import stored_instance_path
 from raven.utils.paths import safe_path_segment
 from raven.utils.portable_lock import file_lock
 
@@ -55,8 +56,13 @@ def instance_root(session_dir: Path, agent: str) -> Path:
 
 
 def transcript_path(session_dir: Path, agent: str, handle: str) -> Path:
-    """The instance's conversation, in the session log's own format."""
-    return instance_root(session_dir, agent) / f"{safe_path_segment(handle)}.jsonl"
+    """The instance's conversation, in the session log's own format.
+
+    Former names share the most recently written log, so a continued turn lands
+    beside the latest history instead of opening a second instance log.
+    """
+    filename = f"{safe_path_segment(handle)}.jsonl"
+    return stored_instance_path(Path(session_dir) / "subagents" / _INSTANCES_DIRNAME, agent, filename)
 
 
 def _header(*, session_key: str, agent: str, handle: str, kind: str, title: str = "") -> dict[str, Any]:

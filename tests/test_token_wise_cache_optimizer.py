@@ -6,6 +6,7 @@ import copy
 
 import pytest
 
+from raven.providers.prompt_cache import COMPACTION_BOUNDARY_KEY
 from raven.token_wise.cache_optimizer import CacheOptimizer
 
 # Anthropic models support cache_control per the provider registry.
@@ -215,6 +216,77 @@ async def test_idempotent_repeated_application():
     twice_m, _, _ = await opt.before_llm_call(once_m, None, ANTHROPIC_MODEL)
     # Same cache count; the marker is overwritten not duplicated.
     assert _count_breakpoints(once_m, None) == _count_breakpoints(twice_m, None)
+
+
+def _flagged(msg: dict) -> dict:
+    return {**msg, COMPACTION_BOUNDARY_KEY: True}
+
+
+def _history_with_boundary_at(index: int) -> list[dict]:
+    msgs = [_system_msg()]
+    for i in range(5):
+        msgs.append(_user_msg(f"q{i}"))
+        msgs.append(_assistant_msg(f"a{i}"))
+    msgs.append(_user_msg("current"))
+    msgs[index] = _flagged(msgs[index])
+    return msgs
+
+
+async def test_compaction_boundary_takes_the_oldest_rolling_slot():
+    """The summary's cut sits behind the rolling window; it gets msg[-2]'s slot."""
+    opt = CacheOptimizer()
+    msgs = _history_with_boundary_at(4)
+    out_m, out_t, _ = await opt.before_llm_call(msgs, [_tool()], ANTHROPIC_MODEL)
+    # tools(1) + system(1) + boundary(1) + msg[-1](1) = 4
+    assert _count_breakpoints(out_m, out_t) == 4
+    assert _content_blocks_with_cache(out_m[4]) == 1
+    assert _content_blocks_with_cache(out_m[-1]) == 1
+    assert _content_blocks_with_cache(out_m[-2]) == 0
+
+
+async def test_compaction_boundary_without_tools_keeps_two_rolling_marks():
+    opt = CacheOptimizer()
+    msgs = _history_with_boundary_at(4)
+    out_m, out_t, _ = await opt.before_llm_call(msgs, None, ANTHROPIC_MODEL)
+    # system(1) + boundary(1) + msg[-2](1) + msg[-1](1) = 4
+    assert _count_breakpoints(out_m, out_t) == 4
+    assert [i for i, m in enumerate(out_m) if _content_blocks_with_cache(m)] == [0, 4, 10, 11]
+
+
+async def test_compaction_boundary_inside_the_rolling_window_costs_no_slot():
+    opt = CacheOptimizer()
+    msgs = _history_with_boundary_at(10)
+    out_m, out_t, _ = await opt.before_llm_call(msgs, [_tool()], ANTHROPIC_MODEL)
+    assert [i for i, m in enumerate(out_m) if _content_blocks_with_cache(m)] == [0, 10, 11]
+    assert _count_breakpoints(out_m, out_t) == 4
+
+
+async def test_compaction_boundary_never_displaces_the_newest_rolling_mark():
+    """With one slot left after tools and system, the next call's read wins."""
+    opt = CacheOptimizer(max_breakpoints=3)
+    msgs = _history_with_boundary_at(4)
+    out_m, out_t, _ = await opt.before_llm_call(msgs, [_tool()], ANTHROPIC_MODEL)
+    assert [i for i, m in enumerate(out_m) if _content_blocks_with_cache(m)] == [0, 11]
+    assert _count_breakpoints(out_m, out_t) == 3
+
+
+async def test_compaction_boundary_walks_back_to_a_message_that_can_hold_a_mark():
+    """A tool-only assistant turn has no block for the field; the mark goes before it."""
+    opt = CacheOptimizer()
+    msgs = [
+        _system_msg(),
+        _user_msg("q0"),
+        _flagged({"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]}),
+        {"role": "tool", "tool_call_id": "c1", "content": "result"},
+        _assistant_msg("a0"),
+        _user_msg("q1"),
+        _assistant_msg("a1"),
+        _user_msg("current"),
+    ]
+    out_m, out_t, _ = await opt.before_llm_call(msgs, [_tool()], ANTHROPIC_MODEL)
+    assert _content_blocks_with_cache(out_m[1]) == 1
+    assert out_m[2]["content"] == ""
+    assert _count_breakpoints(out_m, out_t) == 4
 
 
 def test_cache_control_follows_the_wire_format_not_the_model_catalogue():

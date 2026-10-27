@@ -9,7 +9,7 @@ the same question six ways and each looked reasonable alone.
 Tools never got the equivalent. Three rules decide whether a tool is offered to
 the model, one per family, each a different shape:
 
-    web_search   a resolved key, asked of the built tool
+    web_search   a resolved key or a vendor needing none, asked of the built tool
     web_fetch    nothing -- always registered, a key only improves extraction
     media x3     an api_key *or* a model, either one counting as configured
 
@@ -82,6 +82,12 @@ class Capability:
     #: Stated before the deployer switches it on rather than after: these cost
     #: money per call, and one cannot run at all without prepaid credit.
     cost_note: str = ""
+    #: :attr:`cost_note` for a section on a named provider, which bills it
+    #: instead of OpenRouter; empty where the note holds either way.
+    named_provider_cost_note: str = ""
+    #: The credential's path where it is not the section's own: a section on a
+    #: named provider runs on that provider's key (see :func:`resolve`).
+    key_field: str = ""
 
     @property
     def key_path(self) -> str:
@@ -91,6 +97,8 @@ class Capability:
         model field: naming a model path as where a key came from sends the
         deployer to edit a line that holds no credential.
         """
+        if self.key_field:
+            return self.key_field
         return f"tools.media.{self.media_attr}.apiKey" if self.media_attr else self.config_path
 
 
@@ -132,6 +140,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         media_attr="video",
         env_var="OPENROUTER_API_KEY",
         cost_note="Billed per call; needs prepaid OpenRouter credit to run at all.",
+        named_provider_cost_note="Billed per call.",
     ),
     Capability(
         tool="web_search",
@@ -178,6 +187,19 @@ def resolve(cap: Capability, config: "Config") -> Capability:
 
         spec = FETCH_PROVIDERS[config.tools.web.fetch.provider]
         return replace(cap, config_path=spec.config_path, env_var=spec.env_var, obtain_from=spec.signup)
+    if cap.media_attr:
+        from raven.config.schema import media_provider
+
+        runs_on = media_provider(getattr(config.tools.media, cap.media_attr))
+        if runs_on and runs_on != "openrouter":
+            # That provider's key is the only one the section takes, and the
+            # provider bills it: OpenRouter's variable and credit do not reach it.
+            return replace(
+                cap,
+                key_field=f"providers.{runs_on}.apiKey",
+                env_var="",
+                cost_note=cap.named_provider_cost_note or cap.cost_note,
+            )
     return cap
 
 
@@ -270,9 +292,12 @@ def has_credential(cap: Capability, config: "Config") -> bool:
     every call then fails on a missing key. A report that collapses the two
     ticks a capability that cannot run, which is the one thing it must not do.
 
-    The same answer twice for the other families -- web_search is configured by
-    a resolved key and nothing else, and web_fetch needs none -- so this only
-    ever diverges where the rule itself does.
+    They come apart for web_search too, with the opposite outcome: a vendor
+    that needs no key (Keenable) is configured without one and every call runs.
+    :func:`runs_keyless` names that state, so a report neither claims a key
+    nor warns about a missing one. web_fetch needs none, and image_search is
+    configured by a resolved key and nothing else, so for those this is the
+    same answer twice.
     """
     if cap.need is Need.NOTHING:
         return True
@@ -280,7 +305,29 @@ def has_credential(cap: Capability, config: "Config") -> bool:
         from raven.agent.tools.media_gen import _OpenRouterMediaTool
 
         return _OpenRouterMediaTool.has_key(_resolved_media(cap, config))
+    from raven.agent.tools.web import WebSearchTool
+
+    if cap.tool == WebSearchTool.name:
+        provider = config.tools.web.search.provider
+        return WebSearchTool.has_key(config.tools.web.vendor_key(provider), provider)
     return is_configured(cap, config)
+
+
+def runs_keyless(cap: Capability, config: "Config") -> bool:
+    """Whether this capability is configured with no key because its vendor needs none.
+
+    The state :func:`has_credential` cannot tell apart from the media family's
+    on its own: configured, no key resolves, and yet every call runs, because
+    the selected web_search vendor answers unauthenticated at a lower rate
+    limit. A report that warned "calls will fail" here would send the deployer
+    to fix what works.
+
+    False wherever a key resolves, and for web_fetch, which needs nothing and
+    is never asked for a credential.
+    """
+    if cap.need is Need.NOTHING or cap.media_attr:
+        return False
+    return is_configured(cap, config) and not has_credential(cap, config)
 
 
 def configured_from(cap: Capability, config: "Config") -> str:
@@ -292,10 +339,11 @@ def configured_from(cap: Capability, config: "Config") -> str:
     have" and "needs a key" are different instructions, and a row that cannot
     tell them apart sends someone to create an account they already have.
 
-    Empty when the capability is unconfigured, when it needs nothing, and --
-    for the media family only -- when it is registered with no credential at
-    all: a section naming just a model is offered to the model and fails on
-    every call, so there is no source to name.
+    Empty when the capability is unconfigured, when it needs nothing, and when
+    it is registered with no credential at all: a media section naming just a
+    model is offered to the model and fails on every call, and web_search on a
+    vendor that needs no key runs without one (:func:`runs_keyless`), so in
+    neither case is there a source to name.
 
     Names a source; it does not rule on whether one exists. Callers wanting that
     answer ask :func:`has_credential`, which asks the tools -- inferring it from
@@ -377,4 +425,5 @@ __all__ = [
     "configured_from",
     "has_credential",
     "is_configured",
+    "runs_keyless",
 ]

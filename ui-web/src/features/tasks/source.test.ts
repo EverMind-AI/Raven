@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 import { setCurrent } from '../../lib/session'
+import { demoFixtures } from '../../rpc/fixtures'
 import { FixtureTransport } from '../../rpc/fixtureTransport'
 import { setGateway } from '../../rpc/gateway'
+import { countsOf } from './live'
 import { fromDagNode, fromSpawnContext, stepsOf, tasksSource } from './source'
 
 import type { DagNodeDetail, SubagentContextResult, TranscriptMessage } from '../../rpc/generated'
@@ -137,7 +139,7 @@ describe('fromSpawnContext', () => {
 describe('stop', () => {
   const row = (over: Partial<TaskRow> & Pick<TaskRow, 'id' | 'kind' | 'status'>): TaskRow => ({
     task_summary: null, started_at: null, ended_at: null, agent: null, handle: null,
-    counts: { total: 1, pending: 0, running: 1, completed: 0, failed: 0, skipped: 0, cancelled: 0, interrupted: 0, exception: 0 },
+    counts: { total: 1, pending: 0, running: 1, completed: 0, failed: 0, skipped: 0, cancelled: 0, interrupted: 0, exception: 0, not_executed: 0 },
     nodes: [],
     ...over,
   })
@@ -168,5 +170,26 @@ describe('stop', () => {
     expect(calls).toEqual([
       ['subagent.cancel_instance', { session_key: 's1', agent: 'raven', handle: '' }],
     ])
+  })
+})
+
+/* The rows the web UI shows offline are the ones it would get from a gateway, so the counts on them
+   have to be what the tasks tab itself would count off their nodes -- not what a switch in the library
+   happens to remember to tally. */
+describe('the offline library', () => {
+  const sessions = ['a', 'b', 'c', 'd', 'f', 'g', 'h']
+  const answer = async (key: string): Promise<TaskRow[]> =>
+    (await new FixtureTransport(demoFixtures).call('tasks.list', { session_key: key })).tasks
+
+  it('counts every row it answers the way the tasks tab counts its nodes', async () => {
+    const rows = (await Promise.all(sessions.map(answer))).flat()
+    expect(rows.length).toBeGreaterThan(8)
+    for (const row of rows) expect(row.counts, row.id).toEqual(countsOf(row.nodes))
+  })
+
+  it('holds a graph that branched, so that the count of what it left out is read', async () => {
+    const [row] = await answer('f')
+    expect(row?.status).toBe('completed')
+    expect(row?.counts).toMatchObject({ total: 6, completed: 3, not_executed: 3 })
   })
 })

@@ -23,7 +23,7 @@ architecture doing the job the fork used to:
 * the home is answered by the path paper (``raven.home``), never re-derived;
 * identity is a workspace asset -- raven reads
   ``agent_memory/profile/soul.md``, so ``soul.md`` beside this file is
-  copied there on first launch -- not a config override;
+  rendered there on every launch -- not a config override;
 * modes are overlays: ``modes/*.json`` diffs become ``acp.modes`` entries a
   client's picker shows, applied per session over the baseline flow config
   instead of being compiled into the loop the way the fork did.
@@ -42,7 +42,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import get_args
+from typing import Callable, get_args
 
 from raven.config import product_render as render
 from raven.config.schema import WEB_VENDOR_ENV_VARS, WebFetchProvider, WebSearchProvider
@@ -215,11 +215,14 @@ def require_search(config: dict) -> None:
     Search is what this agent is for; withheld, the tool is absent and a run
     answers from the model's own memory -- which reads as an ordinary run, in
     the one failure mode nobody inspects. The bare env var counts because the
-    tool resolves its key at call time from the config value or that var.
+    tool resolves its key at call time from the config value or that var, and
+    a vendor that searches without a key (Keenable) needs neither.
     """
+    from raven.agent.tools.web import SEARCH_PROVIDERS
+
     vendor, _ = selected_vendors(config)
     env_var = WEB_VENDOR_ENV_VARS.get(vendor, SEARCH_ENV_VAR)
-    if vendor_key(config, vendor) or os.environ.get(env_var):
+    if not SEARCH_PROVIDERS[vendor].needs_key or vendor_key(config, vendor) or os.environ.get(env_var):
         return
     raise SystemExit(
         f"error: search has no key for {vendor}; put RESEARCH_{env_var} in "
@@ -227,19 +230,33 @@ def require_search(config: dict) -> None:
     )
 
 
+def write_generated(target: Path, text: Callable[[], str]) -> None:
+    """Regenerate one product-owned workspace file, or refuse to launch.
+
+    A raven older than ``write_generated`` -- a home tree copied out by a newer
+    wheel serves an older checkout too -- seeds the file once instead, and says
+    that it will not be refreshed.
+    """
+    generate = getattr(render, "write_generated", None)
+    if generate is None:
+        render.seed_once(target, text)
+        log(f"[run] {target.name}: this raven predates regenerated prompts; seeded once, never refreshed")
+        return
+    try:
+        generate(target, text(), owner=PRODUCT, notify=lambda message: log(f"[run] {message}"))
+    except (OSError, UnicodeDecodeError) as exc:
+        raise SystemExit(f"error: cannot regenerate {target}: {exc}") from exc
+
+
 def seed_identity(workspace: Path, flow_slice: dict) -> None:
-    """Seed the product identity into the workspace raven reads it from.
+    """Write the product identity into the workspace raven reads it from.
 
     Rendered, not copied: the flow inserts its measured guidance into the
     identity text the way the vendored twin did at prompt-build time, so the
-    workspace copy is the model-visible text. Once (``seed_once``'s
-    contract): the workspace copy is the live one afterwards, and a product
-    update must not silently overwrite what an operator tuned in place.
+    workspace copy is the model-visible text. Regenerated on every launch
+    (``write_generated``): an operator's own lines go in ``soul.local.md``.
     """
-    render.seed_once(
-        workspace / "agent_memory" / "profile" / "soul.md",
-        lambda: rendered_identity(flow_slice),
-    )
+    write_generated(workspace / "agent_memory" / "profile" / "soul.md", lambda: rendered_identity(flow_slice))
 
 
 def _flow_prompts(flow_slice: dict):
@@ -290,16 +307,14 @@ def rendered_identity(flow_slice: dict) -> str:
 
 
 def seed_contract(workspace: Path, flow_slice: dict) -> None:
-    """Write the contract beside the identity, once, as ``agent.md``.
+    """Write the contract beside the identity as ``agent.md``.
 
     Bootstrap renders both files in order: the identity from ``soul.md``, the
     contract from ``agent.md`` -- the two halves of the segment the fork built
-    in code. Same once-only rule as the identity.
+    in code. Regenerated like the identity, so the contract the model reads
+    is the one this release's gates enforce.
     """
-    render.seed_once(
-        workspace / "agent_memory" / "profile" / "agent.md",
-        lambda: _flow_prompts(flow_slice)[1],
-    )
+    write_generated(workspace / "agent_memory" / "profile" / "agent.md", lambda: _flow_prompts(flow_slice)[1])
 
 
 def iteration_cap(base_flow: dict, base_cap, overlay: dict):

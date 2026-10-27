@@ -520,6 +520,18 @@ def _no_leaked_skill_watchers() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _forget_learned_reply_headroom() -> Iterator[None]:
+    """The reply headroom a refusal teaches is process state, keyed by model id:
+    a test whose provider refuses one prompt would otherwise move the trigger
+    of every later test on the same stub model."""
+    from raven.context_engine import headroom
+
+    headroom.reset()
+    yield
+    headroom.reset()
+
+
+@pytest.fixture(autouse=True)
 def no_discovered_products(monkeypatch):
     """Pin agent-table discovery off, so the suite sees the same table everywhere.
 
@@ -857,6 +869,23 @@ def _no_codex_version_network(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_mirror_fallback(monkeypatch):
+    """Keep the mirror fallback, and the probes it makes, off the network.
+
+    Every launch of a uvx or npx agent or MCP server, every bridge build, and
+    the upgrade helper's uv first ask whether the default registry answers, so an
+    un-mocked test would reach registry.npmjs.org or pypi.org and wait on
+    whatever the runner's network does. Opted out by env for the whole suite,
+    which is the launch each test was written against; tests that exercise a
+    fallback clear the variable.
+    """
+    from raven.utils import mirrors
+
+    monkeypatch.setenv(mirrors.OPT_OUT_ENV, "1")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_provider_probe(monkeypatch):
     """Keep the credential probe's socket off the network, and only the socket.
 
@@ -1159,6 +1188,21 @@ def with_channel_fields(view, **overrides):
     return DispensedSlice(section, cargo)
 
 
+@pytest.fixture
+def supported_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """This computer offers a machine the password login, whatever host the test runs on.
+
+    For a test of the password flow rather than of the host. A machine
+    registered with a password is reached through OpenSSH's askpass hook
+    (``raven.ops.transport.ssh_env``), and a Windows host refuses the whole
+    mode -- the registration itself is refused there, so a test of the flow
+    would be asserting the host instead. The pin is on ``sys.platform``, which
+    the modules read as they are asked; none of them reads it by value at
+    import time.
+    """
+    monkeypatch.setattr(sys, "platform", "linux")
+
+
 @pytest.fixture(autouse=True)
 def _one_memory_plugin_in_discovery(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the second memory plugin out of entry-point discovery by default.
@@ -1198,28 +1242,51 @@ def _this_process_goes_on() -> Iterator[None]:
     the leak check of ``tests/test_subagent_acp_remote.py`` fails for the
     rest of the worker's life (``tests/test_rpc_bootstrap.py`` runs that
     shutdown).
+
+    The dispatches such a shutdown marked as left go too: the mark waits for
+    the manager to read it (``raven.acp_client.remote_runs.was_left``), a test
+    that drives a backend alone never does, and a later test of the same
+    dispatch id would read the earlier test's run as left.
     """
     yield
+    remote_runs = sys.modules.get("raven.acp_client.remote_runs")
+    if remote_runs is not None:
+        remote_runs._LEFT.clear()
     remote = sys.modules.get("raven.acp_client.remote")
     if remote is not None:
         remote.staying()
 
 
 @pytest.fixture
-def unix_socket_host(monkeypatch: pytest.MonkeyPatch) -> None:
-    """This computer has the unix sockets MCP lending rides on, whatever host the test runs on.
+def no_real_ssh_g(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail a test that runs the computer's own ``ssh -G``.
 
-    For a test of the lending logic rather than of the host. On a host without
-    them (a Windows host) every acp row is withheld MCP
-    (``raven.agent.subagent.backends.session_mcp_delivered``), and a test that
-    expects delivery would be asserting the host instead. Pinned at its source
-    and in every raven module that imported it by name, so a module imported
-    after this reads the pin too.
+    It reads the ssh config of whoever runs the suite -- found through the
+    passwd entry, which the suite's ``HOME`` does not move -- and a ``Match
+    exec`` there runs. A stand-in under the test's own directory, or an ``-F``
+    naming the test's config, is what a test resolves with; with no ssh on
+    PATH at all nothing runs, and the lookup's own error stands. Used by the
+    modules whose code asks ``ssh -G`` (``transport.resolve_with_ssh``).
+
+    It judges the command line ``Popen`` is finally handed, the one that
+    execs: a test may swap ``Popen`` for a wrapper that starts its own
+    stand-in in place of ``ssh``, and what that wrapper passes on is what
+    runs. A subclass, so ``isinstance`` and ``Popen[bytes]`` keep working.
     """
-    from raven.mcp import bridge
+    import subprocess
 
-    original = bridge.unix_sockets_available
-    monkeypatch.setattr(bridge, "unix_sockets_available", lambda: True)
-    for name, module in list(sys.modules.items()):
-        if name.startswith("raven.") and getattr(module, "unix_sockets_available", None) is original:
-            monkeypatch.setattr(module, "unix_sockets_available", lambda: True)
+    class Popen(subprocess.Popen):
+        def __init__(self, argv, *args, **kwargs):
+            if (
+                isinstance(argv, (list, tuple))
+                and argv
+                and Path(str(argv[0])).stem.lower() == "ssh"
+                and "-G" in argv
+                and "-F" not in argv
+            ):
+                found = shutil.which(str(argv[0]), path=(kwargs.get("env") or os.environ).get("PATH"))
+                if found is not None and not Path(found).resolve().is_relative_to(tmp_path.resolve()):
+                    raise AssertionError(f"the real ssh -G ran against the owner's own config: {found}")
+            super().__init__(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", Popen)

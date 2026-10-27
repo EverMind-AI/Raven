@@ -7,9 +7,9 @@ reached over ACP or by shelling out, so a viewer or an audit does not need to
 know which lane produced it.
 
 The span is opened inside the backend, not by the caller. ``trace`` nests on a
-contextvar, so it lands under ``subagent.run`` for a ``spawn`` and under
-``tool.call`` for a DAG node without either dispatch path being changed -- and a
-DAG node has no span of its own at all, so this is the only observability it has.
+contextvar, so it lands under the ``subagent.run`` of whatever ran the backend --
+a ``spawn``'s run, or one attempt of a DAG node -- without either dispatch path
+being changed.
 
 The full transcript is an artifact, never an attribute. It is the audit record:
 unbounded, and deliberately not subject to ``max_output_chars``, which exists to

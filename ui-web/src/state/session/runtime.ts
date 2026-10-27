@@ -20,7 +20,7 @@ import { claimDraft as claimComposerDraft } from '../../features/composer/mount'
 import { drawMeter, goPaint as goState, queuePush, queueShift, turn } from '../../features/composer/mount'
 import { reduce } from '../../features/composer/turn'
 import { claimDraft as claimDeskDraft } from '../../features/desk/store'
-import { chipModel, loadProviders, rememberUsed, stagedTier } from '../../features/model/source'
+import { adoptSelection, chipModel, loadProviders, rememberUsed, stagedTier } from '../../features/model/source'
 import { rowPreview, touchSession } from '../../features/rail/source'
 import { draw as sessionDraw } from '../../features/rail/store'
 import { plainTitle } from '../../features/rail/title'
@@ -80,6 +80,35 @@ export class SessionRuntime {
   sawEpisode = false
   startedAt = 0
   answerAt = 0
+
+  /* The running turn's id when the runtime opened it (a delegated result
+     re-entering), from its `turn.started`; null for a turn a send opened. The
+     stop button names it, because no handle was bound for such a turn and
+     `turn.cancel` reaches it only by id -- and only while it is the one
+     running, so a stop that arrives late cannot land on the next turn. */
+  openedTurn: string | null = null
+
+  /* The id of the turn running in this conversation, from the frame that
+     opened it: `message.start` for a turn a send opened, `turn.started` for
+     one the runtime opened. It is what tells one frame apart from another --
+     a refusal that holds the lane busy has to know which turn's late
+     completion to drop, and only the page knows which turn the reader
+     pressed stop on. */
+  turnId: string | null = null
+
+  /* A refusal is holding the lane: the server said the lane still has a turn
+     to run whose first frame has not arrived, so the queue waits and no stop
+     is offered until a frame names it -- the turn's own opening frame, or the
+     frame that ends a turn which sent none. */
+  holding = false
+
+  /* The turn such a refusal is holding the lane for: the turn the reader
+     stopped. Its own late frames are dropped rather than folded -- the stop
+     already folded it, and a fold releases the queue into the turn that is
+     starting. Its end arrives as a completion, or as the notice a cancel
+     from another client sends in its place. Null when the page never saw that
+     turn's opening frame, and then no frame can be told from the next turn's. */
+  heldTurn: string | null = null
 
   /* Only read while off screen, same as `phase`. */
   queue: string[] = []
@@ -152,6 +181,10 @@ export const state = (): SessionRuntime => viewRuntime()
 export function reset(rt: SessionRuntime = viewRuntime()): void {
   transcript.stopStream()
   rt.st = null; rt.steps = []; rt.say = ''; rt.open.clear(); rt.sawEpisode = false
+  rt.openedTurn = null
+  rt.turnId = null
+  rt.holding = false
+  rt.heldTurn = null
   rt.startedAt = Date.now()
   rt.answerAt = 0
 }
@@ -376,17 +409,54 @@ function runsOn(sessionId: string | null | undefined): Recent | null {
 
 /* The stop button: cancel the turn the reader started. */
 export function stop(): void {
-  /* A runtime turn (a delegated result re-entering) is NOT cancellable:
-   turn.cancel resolves only handles turn.send registered, and the stop
-   button claiming the UI here would reset the stage while the delegated
-   deltas are still streaming into it. The reader's stop does nothing until
-   the turn is one they can stop. */
+  /* The machine's guard, not a statement about the turn: a send-bound turn and
+     a runtime-opened one (a delegated result re-entering) can both be stopped,
+     so what stops a second press here is the cancelling phase the first press
+     moved the machine into. The runtime-opened one is named by its id: the
+     server cancels it only while it is still the turn running, and goes past a
+     message the reader slipped into it -- that message runs next as a turn of
+     its own, as it does when a sent turn is stopped. */
   if (!turn.cancellable()) return
   const owner = sessionCurrent()
+  const opened = viewRuntime().openedTurn
+  /* The turn this stop is about: the one running here. Its id came from the
+     frame that opened it -- `message.start` for a turn a send opened,
+     `turn.started` for one the runtime opened -- and that is the id the
+     cancel names when it names one. It is read HERE, before the fold at the
+     press clears the runtime, because a refusal has to drop that turn's late
+     completion. */
+  const stopped = viewRuntime().turnId
   turn.dispatch({ type: 'cancel' })
-  gateway().call('turn.cancel', { session_key: owner as string })
-    .then(() => {
-      get(owner)?.dispatch({ type: 'idle' })
+  gateway().call('turn.cancel', { session_key: owner as string, ...(opened ? { turn_id: opened } : {}) })
+    .then((r) => {
+      const rt = get(owner)
+      /* Refused: the turn it named had already ended. A turn that opened since
+         took the phase off `cancelling` with its first frame -- `openedTurn`
+         cannot say so, the fold at the press cleared it and a turn a send
+         opened never sets it -- and that turn is the one running now: going
+         idle would take its stop button and release the queue into it. */
+      if (r.cancelled === false && rt && (isActiveRuntime(rt) ? turn.phase() : rt.phase.phase) !== 'cancelling') return
+      /* Refused, and the lane still has a turn to run whose first frame is not
+         here yet: the reply does not wait out the server's coalescing window,
+         and that frame does. Going idle would release the queue under that
+         turn, so the conversation stays busy, with no stop to offer until the
+         frame arrives and says which turn it is.
+
+         The hold remembers the turn that was stopped: the server read the
+         cancel after that turn had already ended, so its completion is still
+         on the way -- and behind this reply, because the reply is written
+         while the frames wait out the subscription's window. Folding it would
+         release the queue into the turn that is starting. */
+      if (r.cancelled === false && r.busy === true) {
+        if (rt) {
+          rt.heldTurn = stopped
+          rt.holding = true
+          rt.dispatch({ type: 'stream', cancellable: false })
+        }
+        if (sessionCurrent() === owner) { drawMeter(); goState() }
+        return
+      }
+      rt?.dispatch({ type: 'idle' })
       if (sessionCurrent() === owner) { drawMeter(); goState(); sessionDraw(); drain() }
     }, () => {
       get(owner)?.dispatch({ type: 'idle' })
@@ -510,6 +580,7 @@ export async function promote(preview?: string, atPointer?: (id: string) => void
      model, tier and permission mode, the lane it drew into -- belongs to the
      session that was just minted. */
   mint(draftRt, s.id)
+  adoptSelection(s.id, gen)
   /* The pointer has moved, and a caller with something to file under the new
      conversation files it HERE rather than after the round trips below: the
      send records the turn's owner at exactly this point, and a reader switching

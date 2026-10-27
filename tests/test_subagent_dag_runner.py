@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import itertools
 import json
 import os
 import posixpath
@@ -11,7 +12,7 @@ import re
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, NamedTuple
 
 import pytest
 
@@ -20,9 +21,10 @@ from raven.agent.subagent import instances as instances_mod
 from raven.agent.subagent.backends import format_agent_listing, third_party_agent_meta
 from raven.agent.subagent.backends.base import clamp_output
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
-from raven.agent.subagent.dag_graph import DagNodeSpec, parse_dag_spec
-from raven.agent.subagent.dag_runner import DagRunResult, run_dag
-from raven.agent.subagent.dag_store import RUNNING, UNRECORDED, DagRunStore, read_session_nodes
+from raven.agent.subagent.dag_graph import DagNodeSpec, guards_of, may_not_execute, parse_dag_spec
+from raven.agent.subagent.dag_render import MAYBE_MISSING_HEADING, MISSING_OUTPUT_TEXT
+from raven.agent.subagent.dag_runner import BranchState, DagRunResult, _mark_stopped, run_dag, settle_branches
+from raven.agent.subagent.dag_store import RUNNING, UNRECORDED, DagRunStore, read_registry, read_session_nodes
 from raven.agent.subagent.dag_tool import _NODE_SCHEMA, GUIDE_SKILL_ID, SubAgentDagTool
 from raven.agent.subagent.mcp_grant import McpGrant, MissingServer
 from raven.agent.subagent.prompt_backend import LocalFileBackend
@@ -30,6 +32,7 @@ from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.config.schema import ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 from raven.contracts.memory import Memory
 from raven.contracts.tool import ToolResult
+from raven.tracing import trace
 
 #: How long a drain waits for a cancelled background run to finish. Generous
 #: against the work (a node's subprocess teardown is milliseconds) and short
@@ -2052,7 +2055,7 @@ class TestSubagentRoster:
     def test_the_tags_are_explained_once_in_the_field_that_they_gate(self, tmp_path: Path) -> None:
         """Tags the model cannot interpret are just noise, and the pre-check would
         then reject graphs over a rule it was never told. The field descriptions
-        are that explanation -- they ride in the same payload as the roster (both
+        are that explanation -- they ride wherever the node schema does (both
         `to_schema()` and a tool_search hit carry description + parameters), so a
         second copy in the tool description is prose the model pays for twice."""
         tool = SubAgentDagTool(
@@ -2120,6 +2123,39 @@ class TestSubagentRoster:
         desc = SubAgentDagTool(workspace=tmp_path, agents=[]).description
         assert "(none configured)" not in desc
         assert GENERIC_AGENT in desc
+
+
+class TestTheRosterIsSpawnsToSayWhenSpawnIsListed:
+    """``spawn`` closes the tool array and ends with the roster, so this tool
+    points there instead of rendering a second copy. Told whether ``spawn`` is on
+    offer by the loop; a host that wires no answer gets the roster here, the
+    contract every other caller of this tool already relies on."""
+
+    _AGENTS = [ThirdPartyCliSubagentConfig(name="Coder", description="Codes things.", command="cat")]
+
+    def test_it_points_at_spawn_when_spawn_is_listed(self, tmp_path: Path) -> None:
+        desc = SubAgentDagTool(workspace=tmp_path, agents=self._AGENTS, spawn_offered=lambda: True).description
+
+        assert "Coder [" not in desc
+        assert desc.endswith(
+            "Available sub-agents for the `subagent` field: the roster at the end of the `spawn` tool's description."
+        )
+
+    def test_it_renders_the_roster_when_spawn_is_not(self, tmp_path: Path) -> None:
+        tool = SubAgentDagTool(workspace=tmp_path, agents=self._AGENTS, spawn_offered=lambda: False)
+
+        assert tool.description.endswith(tool.registry.roster_text() + ".")
+
+    def test_a_turns_worker_labels_are_listed_here_whatever_spawn_says(self, tmp_path: Path) -> None:
+        """Labels are not on spawn's roster, so there is nothing there to point at."""
+        from raven.agent.subagent.delegate import DelegateTable, Worker, delegate_scope
+
+        tool = SubAgentDagTool(workspace=tmp_path, agents=self._AGENTS, spawn_offered=lambda: True)
+        with delegate_scope(DelegateTable(workers={"drafter": Worker("drafter", "Coder", "writes the draft")})):
+            desc = tool.description
+
+        assert "- drafter: writes the draft [runs on Coder]" in desc
+        assert "`spawn` tool's description" not in desc
 
 
 class TestSubagentEnum:
@@ -2905,6 +2941,99 @@ async def _run(spec_nodes: list[dict], backend, root: str, history: str = "/hist
         history_root=history,
         subagents_root=history,
     )
+
+
+# A workdir reference that lands in the node root only reaches the node-root rule where it
+# passes confinement first.
+_POSIX_REFERENCE_PATHS = pytest.mark.skipif(
+    os.name == "nt",
+    reason=(
+        "check_confined resolves a workdir reference with POSIX path rules, so on Windows it refuses "
+        "every such reference as outside the roots before the node-root rule is reached"
+    ),
+)
+
+
+@_POSIX_REFERENCE_PATHS
+async def test_an_absolute_path_to_a_node_that_may_not_execute_is_refused_before_anything_runs() -> None:
+    """Refused at submission, as its `@nodes/` spelling is. Accepted, the reader would run once
+    the branch was left out and fail on the missing file, under an error naming the file
+    rather than the branch."""
+    backend = _InMemBackend()
+    decide = {"routes": {"a": "the first holds", "b": "the second holds"}}
+    with pytest.raises(DagValidationError, match="of node 'g', which may not execute"):
+        await _run(
+            [
+                {"id": "r", "subagent": "x", "node_summary": "decide", "prompt_template": "decide", **decide},
+                {
+                    "id": "g",
+                    "subagent": "x",
+                    "node_summary": "branch",
+                    "prompt_template": "work",
+                    "depends_on": ["r"],
+                    "when": "r.a",
+                },
+                {
+                    "id": "reader",
+                    "subagent": "x",
+                    "node_summary": "read the branch's file",
+                    "prompt_template": "{{ ref:/hist/nodes/g.out.md }}",
+                    "depends_on": ["r", "g"],
+                    "when": "r.done",
+                },
+            ],
+            backend,
+            "/hist/mas_dag",
+        )
+    assert [path for path in backend.files if path.endswith(".prompt.md")] == []
+
+
+@_POSIX_REFERENCE_PATHS
+async def test_the_tool_refuses_an_absolute_path_to_a_node_that_may_not_execute(tmp_path: Path) -> None:
+    """Refused by the tool's own check, so even a background run -- the default -- is
+    refused as the call's answer; past it, the run would start and the refusal from
+    `run_dag`'s second check would reach nobody until the run reported.
+
+    The history root is a reference root only once the conversation has a session
+    directory, which is the state a real conversation is in when it submits a graph.
+    """
+    (tmp_path / "sessions").mkdir()
+    tool = _foreground_tool(tmp_path, [])
+    history = tool._history_root()
+    assert history is not None
+
+    out = await tool.execute(
+        task_summary="handle the issue",
+        nodes=[
+            {
+                "id": "r",
+                "subagent": "echo",
+                "node_summary": "decide",
+                "prompt_template": "decide",
+                "routes": {"a": "the first holds", "b": "the second holds"},
+            },
+            {
+                "id": "g",
+                "subagent": "echo",
+                "node_summary": "branch",
+                "prompt_template": "work",
+                "depends_on": ["r"],
+                "when": "r.a",
+            },
+            {
+                "id": "reader",
+                "subagent": "echo",
+                "node_summary": "read the branch's file",
+                "prompt_template": "{{ ref:" + f"{history}/nodes/g.out.md" + " }}",
+                "depends_on": ["r", "g"],
+                "when": "r.done",
+            },
+        ],
+    )
+
+    text = out if isinstance(out, str) else out.model_text
+    assert text.startswith("Error: invalid DAG"), text
+    assert "of node 'g', which may not execute" in text
 
 
 async def test_a_bare_node_id_reaches_an_earlier_run_with_no_depends_on() -> None:
@@ -5677,6 +5806,83 @@ async def test_a_node_judged_not_accomplished_suspends_and_reports(tmp_path):
     assert "missing_credential" in reports[0][1]
 
 
+async def test_a_node_report_carries_what_the_node_itself_returned(tmp_path):
+    """The report is the runner's brief to the main agent; the output is the node's own words.
+
+    A reader shown only the brief sees the call it is told to make and the schema of
+    that call -- none of which the node said. So the attempt's output travels beside
+    the report, not inside it: the model's text stays the brief.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    seen: list[dict] = []
+
+    async def _announce(run_id, node_id, report, origin, **kwargs):
+        seen.append({"node": node_id, "report": report, **kwargs})
+        desk.resolve(node_id, "abandon", None)
+
+    async def _judge(**_):
+        return Verdict(accomplished=False, category="missing_credential", what_is_missing="a token")
+
+    await _run_two_node_dag(
+        tmp_path,
+        desk=desk,
+        judge_node=_judge,
+        announce_exception=_announce,
+        exec_backend=_FakeExec(reply="I could not push: the fork is read-only"),
+    )
+
+    assert seen[0]["output"] == "I could not push: the fork is read-only"
+    assert "the fork is read-only" not in seen[0]["report"], "the model's text is unchanged"
+
+
+async def test_a_crashed_node_report_carries_its_error_as_what_came_back(tmp_path):
+    """No output exists for a node that raised; its error is its whole account."""
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    seen: list[dict] = []
+
+    async def _announce(run_id, node_id, report, origin, **kwargs):
+        seen.append(kwargs)
+        desk.resolve(node_id, "abandon", None)
+
+    async def _judge(**_):
+        return Verdict(accomplished=False, what_is_missing="it crashed")
+
+    await _run_two_node_dag(
+        tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce, exec_backend=_FakeExec({"a"})
+    )
+
+    assert seen[0]["output"] == "boom a"
+
+
+async def test_a_continued_nodes_second_report_carries_the_second_attempts_output(tmp_path):
+    """A continued node writes its live output file again, so only the attempt's own
+    text says what that attempt returned -- the second report must not repeat the first."""
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    outputs: list[str] = []
+
+    async def _announce(run_id, node_id, report, origin, **kwargs):
+        outputs.append(kwargs["output"])
+        desk.resolve(node_id, "continue" if len(outputs) == 1 else "abandon", "use the staging token")
+
+    async def _judge(*, node, **_):
+        return Verdict(accomplished=False, what_is_missing="a token") if node.id == "a" else Verdict(accomplished=True)
+
+    await _run_two_node_dag(tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce)
+
+    assert len(outputs) == 2
+    assert "use the staging token" not in outputs[0]
+    assert "use the staging token" in outputs[1]
+
+
 async def test_a_judge_that_knows_what_to_say_retries_the_node_itself(tmp_path):
     """No desk, no announcer, nobody reachable -- and the node still runs again.
 
@@ -6469,8 +6675,8 @@ async def test_a_bad_verdict_records_the_reason_as_the_nodes_error(tmp_path):
 async def test_a_continued_instance_node_is_sent_only_the_follow_up_and_keeps_its_task_pinned(tmp_path):
     """A stateful node's continuation is the bare follow-up on the wire, but
 
-    the task the judge (and dag_status/read_node) sees for it never moves off
-    attempt 1's original render.
+    the prompt dag_status/read_node show for it never moves off attempt 1's
+    original render. The follow-up is recorded beside it, for the judge.
     """
     from raven.agent.subagent.dag_adjudication import AdjudicationDesk
     from raven.agent.subagent.dag_verdict import Verdict
@@ -6512,6 +6718,204 @@ async def test_a_continued_instance_node_is_sent_only_the_follow_up_and_keeps_it
     attempt_2 = await store.read_text(store.attempt_prompt_path("a", 2))
     assert attempt_1 == task_prompt
     assert attempt_2 == "use the staging token"
+    assert json.loads(await store.read_text(store.follow_ups_path("a"))) == ["use the staging token"]
+
+
+async def test_each_attempt_finds_every_follow_up_sent_before_it_when_dispatched_and_when_judged(tmp_path):
+    """The judge reads a node's follow-ups off the run's store, and a stateless
+
+    retry is built from the same record, so each follow-up must be on disk by
+    the time the attempt it started is dispatched -- not merely by the time it
+    is judged -- as the bare message rather than the prompt a stateless node is
+    sent, and none may replace an earlier one: a change of plan in the first is
+    still the task when the second only adds a detail.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    messages = iter(["open a replacement PR instead", "name PR 918 in its description"])
+    told = []
+    at_dispatch = []
+    observer = DagRunStore(
+        backend=LocalFileBackend(),
+        root=str(tmp_path / "runs"),
+        run_id="observer",
+        nodes_root=str(tmp_path / "nodes"),
+        registry_root=str(tmp_path),
+    )
+
+    class _Observing(_FakeExec):
+        async def run(self, task, *, task_id, **kwargs):
+            if task_id == "a":
+                at_dispatch.append(await observer.read_follow_ups("a"))
+            return await super().run(task, task_id=task_id, **kwargs)
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        desk.resolve(node_id, "continue", next(messages))
+
+    async def _judge(*, node, store, **_):
+        if node.id != "a":
+            return Verdict(accomplished=True)
+        path = store.follow_ups_path("a")
+        told.append(json.loads(await store.read_text(path)) if os.path.exists(path) else None)
+        return Verdict(accomplished=len(told) > 2)
+
+    result = await _run_two_node_dag(
+        tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce, exec_backend=_Observing()
+    )
+
+    assert result.summary["completed"] == 2
+    assert at_dispatch == [
+        [],
+        ["open a replacement PR instead"],
+        ["open a replacement PR instead", "name PR 918 in its description"],
+    ]
+    assert told == [
+        None,
+        ["open a replacement PR instead"],
+        ["open a replacement PR instead", "name PR 918 in its description"],
+    ]
+
+
+async def test_a_stateless_node_continued_twice_is_sent_every_follow_up_its_judge_reads(tmp_path):
+    """A stateless node keeps no conversation, and its previous answer need not repeat what it
+
+    was told: its retry prompt restates every follow-up so far, the same list its judge reads,
+    or the third attempt works to a task the judge no longer holds it to.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+    first, second = "open a replacement PR instead", "name PR 918 in its description"
+    messages = iter([first, second])
+    judged = []
+
+    class _Model:
+        async def chat_with_retry(self, **kwargs):
+            user = kwargs["messages"][-1]["content"]
+            if "do a" in user:
+                judged.append(user)
+            done = "do a" not in user or len(judged) > 2
+            report = (
+                {"outcome": "accomplished"}
+                if done
+                else {"outcome": "not_accomplished", "category": "other", "what_is_missing": "the deliverable"}
+            )
+            return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=json.dumps(report))])
+
+    model = _Model()
+    desk = AdjudicationDesk()
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        desk.resolve(node_id, "continue", next(messages))
+
+    tool = SubAgentDagTool(workspace=tmp_path, provider_for=lambda: model)
+    fake = _FakeExec(reply="The attempt ended without a deliverable.")
+    result = await _run_two_node_dag(
+        tmp_path, desk=desk, judge_node=tool._judge_node(), announce_exception=_announce, exec_backend=fake
+    )
+
+    assert result.summary["completed"] == 2
+    third = [call["prompt"] for call in fake.calls if call["task_id"] == "a"][2]
+    for sent in (third, judged[2]):
+        assert sent.count(first) == sent.count(second) == 1
+        assert sent.index(first) < sent.index(second)
+
+
+@pytest.mark.parametrize(
+    ("follow_ups", "earlier"),
+    [
+        (["now y"], ""),
+        (
+            ["one", "two"],
+            "Earlier follow-ups, oldest first; where a later one disagrees, the later one stands:\none\n\n",
+        ),
+    ],
+    ids=["one follow-up", "two follow-ups"],
+)
+def test_a_stateless_retry_lists_earlier_follow_ups_only_when_there_are_some(follow_ups, earlier):
+    """One follow-up keeps the shape a stateless retry always had; earlier ones go ahead of the latest."""
+    from raven.agent.subagent.dag_runner import _stateless_retry_prompt
+
+    assert _stateless_retry_prompt("do a", "it said x", follow_ups) == (
+        f"do a\n\nYour previous attempt returned:\nit said x\n\n{earlier}Now: {follow_ups[-1]}"
+    )
+
+
+async def test_a_reused_node_id_starts_with_none_of_an_earlier_nodes_follow_ups(tmp_path):
+    """Ids are unique per conversation only while the registry that claims them survives;
+
+    once it is lost, a new node can take an old id with that node's follow-ups still on disk.
+    The new node's first judge must not read them, and its own follow-ups start a fresh record.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    stale = tmp_path / "nodes" / "a.follow_ups.json"
+    stale.parent.mkdir(parents=True)
+    stale.write_text(json.dumps(["the earlier node's follow-up"]), encoding="utf-8")
+    desk = AdjudicationDesk()
+    told = []
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        desk.resolve(node_id, "continue", "open a replacement PR instead")
+
+    async def _judge(*, node, store, **_):
+        if node.id != "a":
+            return Verdict(accomplished=True)
+        told.append(await store.read_follow_ups("a"))
+        return Verdict(accomplished=len(told) > 1)
+
+    result = await _run_two_node_dag(tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce)
+
+    assert result.summary["completed"] == 2
+    assert told == [[], ["open a replacement PR instead"]]
+
+
+async def test_a_continued_node_is_judged_against_the_follow_up_that_changed_its_task(tmp_path):
+    """Through the production judge, with a model that holds node `a` to its first
+
+    prompt until a request tells it the task changed. The continue message has to
+    reach the verdict of the attempt it started; held back, that attempt and every
+    later one fail for doing what it asked, and the node runs out of continuations.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+    calls = []
+
+    class _Model:
+        async def chat_with_retry(self, **kwargs):
+            calls.append(kwargs)
+            user = kwargs["messages"][-1]["content"]
+            held = "do a" in user and "open a replacement PR instead" not in user
+            report = (
+                {"outcome": "not_accomplished", "category": "missing_credential", "what_is_missing": "push access"}
+                if held
+                else {"outcome": "accomplished"}
+            )
+            return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=json.dumps(report))])
+
+    model = _Model()
+    desk = AdjudicationDesk()
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        desk.resolve(node_id, "continue", "open a replacement PR instead")
+
+    tool = SubAgentDagTool(workspace=tmp_path, provider_for=lambda: model)
+    # A fixed answer, not the echo: a stateless node's retry prompt carries the
+    # follow-up, and an answer quoting it would tell the model on its own.
+    result = await _run_two_node_dag(
+        tmp_path,
+        desk=desk,
+        judge_node=tool._judge_node(),
+        announce_exception=_announce,
+        exec_backend=_FakeExec(reply="opened PR 1022"),
+    )
+
+    assert result.summary["completed"] == 2
+    tries = [call["messages"] for call in calls if "do a" in call["messages"][-1]["content"]]
+    assert len(tries) == 2
+    assert "the later one stands" in tries[1][0]["content"]
 
 
 async def test_a_continued_stateless_node_sends_task_plus_previous_output_plus_message(tmp_path):
@@ -7738,7 +8142,7 @@ async def test_the_announcer_is_told_whether_a_decision_is_pending(tmp_path, kwa
 
     seen: list[bool] = []
 
-    async def _announce(run_id, node_id, report, origin, *, awaiting_decision):
+    async def _announce(run_id, node_id, report, origin, *, awaiting_decision, output=None):
         seen.append(awaiting_decision)
 
     async def _judge(**_kw):
@@ -7779,17 +8183,26 @@ async def test_the_no_route_failure_keeps_the_judge_s_reason(tmp_path) -> None:
 
 
 def _foreground_tool(tmp_path: Path, verdicts: list[Any], **kwargs: Any) -> SubAgentDagTool:
-    """A graph tool over the real ``cat`` sub-agent, judged by a scripted verdict list.
+    """A graph tool over a Python echo process, judged by a scripted verdict list.
 
     Each judge call pops the next verdict; once the list is spent every node is
-    accomplished. ``cat`` echoes the prompt, so a node finishes in milliseconds
+    accomplished. The process echoes the prompt, so a node finishes quickly
     and the test spends its time on the handoff, which is what is under test.
     """
+    import sys
+
     from raven.agent.subagent.dag_verdict import Verdict
+    from raven.utils.commands import command_quote
+
+    echo = tmp_path / "echo agent.py"
+    echo.write_text(
+        '"""Echo the foreground test prompt."""\nimport sys\nsys.stdout.write(sys.stdin.read())\n', encoding="utf-8"
+    )
+    command = f"{command_quote(sys.executable)} {command_quote(str(echo))}"
 
     tool = SubAgentDagTool(
         workspace=tmp_path,
-        agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
+        agents=[ThirdPartyCliSubagentConfig(name="echo", command=command)],
         **kwargs,
     )
     tool.set_context("web", "default", "web:fg")
@@ -8024,6 +8437,68 @@ async def test_release_re_sends_the_unanswered_report_and_clocks_the_run(tmp_pat
         )
 
 
+async def test_a_re_sent_report_still_carries_what_the_node_returned(tmp_path: Path, monkeypatch) -> None:
+    """The outbox holds a report across the turn; the node's output is held with it.
+
+    Re-sent without it, a released foreground run's row would fold open onto the
+    brief again -- the same report, read the wrong way only because it waited.
+    """
+    from raven.config.raven import SubagentDagConfig
+
+    spawn = asyncio.create_subprocess_exec
+
+    async def without_cat(*args, **kwargs):
+        if Path(args[0]).name == "cat":
+            raise FileNotFoundError("cat is not installed")
+        return await spawn(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", without_cat)
+    re_sent: list[dict] = []
+
+    async def _announce_exception(run_id: str, node_id: str, report: str, origin: dict, **kwargs: Any) -> None:
+        re_sent.append(kwargs)
+
+    async def _announce(run_id: str, summary: str, origin: dict) -> None:
+        return None
+
+    async with draining_dag_runs():
+        tool = _foreground_tool(
+            tmp_path,
+            [_falls_short("token a")],
+            announce=_announce,
+            announce_exception=_announce_exception,
+            verdict_config=SubagentDagConfig(adjudication_timeout_seconds=0.3),
+        )
+        await tool.execute(task_summary="fg", nodes=_SOLO, background=False)
+        (run_id,) = list(tool._runs)
+        run_task = tool._runs[run_id]
+
+        await tool.release_turn("web:fg", flush=True)
+
+        assert re_sent and "do a" in re_sent[0]["output"], "the process echoes the prompt, so that is what came back"
+        await asyncio.wait_for(run_task, timeout=5)
+
+
+async def test_a_stint_driver_passes_a_notification_on_with_its_output(tmp_path: Path) -> None:
+    """The driver takes over only the decision; what it hands on is handed on whole."""
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+    passed: list[dict] = []
+
+    async def _host(run_id: str, node_id: str, report: str, origin: dict, **kwargs: Any) -> None:
+        passed.append(kwargs)
+
+    async def _adjudicate(node_id: str, report: str) -> tuple[str, str]:
+        raise AssertionError("a notification is not the driver's to decide")
+
+    tool = _foreground_tool(tmp_path, [])
+    announce = tool._answered_by(AdjudicationDesk(), _adjudicate, _host)
+
+    await announce("r", "a", "report", {}, awaiting_decision=False, output="what a said")
+
+    assert passed == [{"awaiting_decision": False, "informational": False, "output": "what a said"}]
+
+
 async def test_release_re_sends_a_report_the_turn_took_but_never_answered(tmp_path: Path) -> None:
     """A take is not an answer.
 
@@ -8146,6 +8621,7 @@ async def test_a_released_run_announces_a_terminal_report_as_a_notification(tmp_
         *,
         awaiting_decision: bool = True,
         informational: bool = False,
+        output: str | None = None,
     ) -> None:
         seen.append((node_id, awaiting_decision))
 
@@ -8483,7 +8959,7 @@ async def _run_replanned_dag(
     async def _judge(*, node, store, output, error, crashed, **_):
         return Verdict(accomplished=node.id != "a", what_is_missing="the wrong tool was used")
 
-    async def _announce(run_id, node_id, text, origin, *, awaiting_decision):
+    async def _announce(run_id, node_id, text, origin, *, awaiting_decision, output=None):
         if slow:
             await started.wait()
         if crash:
@@ -8605,6 +9081,200 @@ async def test_a_replan_does_not_overwrite_a_pre_existing_failure_or_its_cascade
     assert not files_by_node["blocked"]["error"], "a cascaded skip has no reason of its own to overwrite"
     assert files_by_node["a"]["status"] == "failed"
     assert result.replanned_into == "run-new"
+
+
+async def test_a_node_skipped_on_the_replan_pass_is_announced_on_that_pass(tmp_path) -> None:
+    """The replan exit's publish covers the cascade's own skips too.
+
+    The cascade marks `b` skipped off `a`'s failed verdict on the same pass
+    that discovers the replan the judge resolved for another ticket, and the
+    loop breaks at the replan before its sweep runs -- without this, `b` gets
+    no live frame and its registry row lands only when the run finalizes."""
+    from raven.agent.subagent.dag_adjudication import REPLAN, AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    frames: list[tuple[str, str]] = []
+
+    async def _capture(name: str, value: dict) -> None:
+        if name == "dag_node_updated":
+            frames.append((value["node"], value["status"]))
+
+    class _Backend:
+        async def run(self, prompt: str, **_kw: Any) -> str:
+            return "did it"
+
+    async def _judge(*, node, store, output, error, crashed, **_):
+        # A replan for a ticket of its own, resolved while `a`'s verdict is
+        # being decided, so the flag is discovered one pass after `a` has
+        # failed and the cascade has already skipped `b`.
+        desk.open("elsewhere")
+        desk.resolve("elsewhere", REPLAN, "the plan was wrong", plan=_replan_plan())
+        return Verdict(accomplished=node.id != "a", what_is_missing="nothing usable")
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "replan me",
+            "nodes": [
+                {"id": "a", "subagent": "x", "node_summary": "first", "prompt_template": "do a"},
+                {
+                    "id": "b",
+                    "subagent": "x",
+                    "node_summary": "downstream",
+                    "prompt_template": "do b",
+                    "depends_on": ["a"],
+                },
+            ],
+        }
+    )
+    result = await run_dag(
+        spec,
+        resolve=lambda node: _Backend(),
+        backend=LocalFileBackend(),
+        workdir=str(tmp_path),
+        run_root=str(tmp_path / "runs"),
+        nodes_root=str(tmp_path / "nodes"),
+        history_root=str(tmp_path),
+        desk=desk,
+        judge_node=_judge,
+        origin=_TEST_ORIGIN,
+        adjudication_timeout_s=5,
+        progress_publisher=_capture,
+    )
+
+    statuses = {entry["node"]: entry["status"] for entry in result.files}
+    assert statuses == {"a": "failed", "b": "skipped"}
+    assert ("b", "skipped") in frames, "the cascade's skip is announced on the pass that decides it"
+
+
+async def test_a_node_cancelled_on_the_replan_pass_is_announced_on_that_pass(tmp_path) -> None:
+    """The `cancelled` arm of the same publish: a stop and a replan landing on
+    one pass must not leave the stop's nodes unannounced either."""
+    from raven.agent.subagent.dag_adjudication import REPLAN, AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    cancel = asyncio.Event()
+    started = asyncio.Event()
+    frames: list[tuple[str, str]] = []
+
+    async def _capture(name: str, value: dict) -> None:
+        if name == "dag_node_updated":
+            frames.append((value["node"], value["status"]))
+
+    class _Backend:
+        async def run(self, prompt: str, **_kw: Any) -> str:
+            if "slowpoke" in prompt:
+                started.set()
+                await asyncio.sleep(30)
+            return "did it"
+
+    async def _judge(*, node, store, output, error, crashed, **_):
+        # Wait until the in-flight node is real, then land a stop and a replan
+        # on the same pass the runner will discover them.
+        await started.wait()
+        desk.open("elsewhere")
+        desk.resolve("elsewhere", REPLAN, "the plan was wrong", plan=_replan_plan())
+        cancel.set()
+        return Verdict(accomplished=node.id != "a", what_is_missing="nothing usable")
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "replan me",
+            "nodes": [
+                {"id": "a", "subagent": "x", "node_summary": "first", "prompt_template": "do a"},
+                {"id": "slowpoke", "subagent": "x", "node_summary": "slow", "prompt_template": "do slowpoke"},
+            ],
+        }
+    )
+    result = await run_dag(
+        spec,
+        resolve=lambda node: _Backend(),
+        backend=LocalFileBackend(),
+        workdir=str(tmp_path),
+        run_root=str(tmp_path / "runs"),
+        nodes_root=str(tmp_path / "nodes"),
+        history_root=str(tmp_path),
+        desk=desk,
+        judge_node=_judge,
+        origin=_TEST_ORIGIN,
+        adjudication_timeout_s=5,
+        cancel=cancel,
+        progress_publisher=_capture,
+    )
+
+    statuses = {entry["node"]: entry["status"] for entry in result.files}
+    assert statuses == {"a": "failed", "slowpoke": "cancelled"}
+    assert ("slowpoke", "cancelled") in frames, "the stop's cancel is announced on the pass that decides it"
+
+
+async def test_a_node_cancelled_mid_retry_keeps_a_duration_of_its_own(tmp_path, monkeypatch) -> None:
+    """The replan-time publish and the loop's own sweep are one definition.
+
+    A node that ended an attempt, was adjudicated into a retry, and is then
+    stopped on the pass that meets a replan carries an earlier attempt's end
+    in its history. Publishing it with `setdefault` keeps that stamp and
+    writes a duration that runs backwards into the manifest, while the sweep
+    always re-stamps: one node history must not depend on whether a replan
+    landed on the same pass. The clock is a strict counter so every stamp is
+    orderable, not a race with the millisecond resolution of the real one.
+    """
+    from raven.agent.subagent import dag_runner
+    from raven.agent.subagent.dag_adjudication import CONTINUE, REPLAN, AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    ticks = itertools.count(1000, 10)
+    monkeypatch.setattr(dag_runner, "_now_ms", lambda: next(ticks))
+
+    desk = AdjudicationDesk()
+    cancel = asyncio.Event()
+    first_landed = asyncio.Event()
+
+    class _Backend:
+        async def run(self, prompt: str, **_kw: Any) -> str:
+            if not first_landed.is_set():
+                first_landed.set()
+                return "attempt one lands"
+            # The retry is in flight: land a replan and a stop on the one pass
+            # that will discover both.
+            desk.open("elsewhere")
+            desk.resolve("elsewhere", REPLAN, "the plan was wrong", plan=_replan_plan())
+            cancel.set()
+            await asyncio.sleep(30)
+
+    async def _announce_exception(run_id, node_id, report, origin, **_):
+        desk.resolve(node_id, CONTINUE, "try it again")
+
+    async def _judge(*, node, store, output, error, crashed, **_):
+        return Verdict(accomplished=False, what_is_missing="a token")
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "replan me",
+            "nodes": [{"id": "n0", "subagent": "x", "node_summary": "one", "prompt_template": "do it"}],
+        }
+    )
+    result = await run_dag(
+        spec,
+        resolve=lambda node: _Backend(),
+        backend=LocalFileBackend(),
+        workdir=str(tmp_path),
+        run_root=str(tmp_path / "runs"),
+        nodes_root=str(tmp_path / "nodes"),
+        history_root=str(tmp_path),
+        desk=desk,
+        judge_node=_judge,
+        origin=_TEST_ORIGIN,
+        adjudication_timeout_s=5,
+        cancel=cancel,
+        announce_exception=_announce_exception,
+    )
+
+    rows = {entry["node"]: entry for entry in result.files}
+    assert rows["n0"]["status"] == "cancelled", rows
+    started, ended = rows["n0"]["started_at"], rows["n0"]["ended_at"]
+    assert started is not None and ended is not None
+    assert started <= ended, f"a cancelled retry must not end before it starts: {started} > {ended}"
 
 
 async def test_a_run_that_was_not_replanned_reports_no_successor(tmp_path) -> None:
@@ -8782,7 +9452,14 @@ async def test_a_silent_node_is_announced_once_per_stretch() -> None:
     announced: list[tuple[str, str]] = []
 
     async def announce(
-        run_id: str, node_id: str, report: str, origin: dict, *, awaiting_decision: bool, informational: bool = False
+        run_id: str,
+        node_id: str,
+        report: str,
+        origin: dict,
+        *,
+        awaiting_decision: bool,
+        informational: bool = False,
+        output: str | None = None,
     ) -> None:
         assert awaiting_decision is False, "a stall is information, not a suspension"
         announced.append((node_id, report))
@@ -8826,7 +9503,14 @@ async def test_a_moving_node_is_never_announced() -> None:
     announced: list[str] = []
 
     async def announce(
-        run_id: str, node_id: str, report: str, origin: dict, *, awaiting_decision: bool, informational: bool = False
+        run_id: str,
+        node_id: str,
+        report: str,
+        origin: dict,
+        *,
+        awaiting_decision: bool,
+        informational: bool = False,
+        output: str | None = None,
     ) -> None:
         announced.append(node_id)
 
@@ -8874,6 +9558,7 @@ async def test_the_stall_notice_reaches_a_production_shaped_announcer() -> None:
             *,
             awaiting_decision: bool,
             informational: bool = False,
+            output: str | None = None,
         ) -> None:
             heard.append((node_id, awaiting_decision, informational))
 
@@ -8943,7 +9628,14 @@ async def test_a_streaming_acp_node_is_never_announced_as_stalled() -> None:
     announced: list[str] = []
 
     async def announce(
-        run_id: str, node_id: str, report: str, origin: dict, *, awaiting_decision: bool, informational: bool = False
+        run_id: str,
+        node_id: str,
+        report: str,
+        origin: dict,
+        *,
+        awaiting_decision: bool,
+        informational: bool = False,
+        output: str | None = None,
     ) -> None:
         announced.append(node_id)
 
@@ -9128,3 +9820,2644 @@ async def test_a_finished_nodes_account_is_set_aside_until_the_manifest_is_writt
 
     assert exec_.seen_settled == [{"tokens_in": 5, "tokens_out": 1}], "b saw a's account while the run was going"
     assert activity.settled(node_live_key(result.run_id, "a")) is None, "and the manifest took it over"
+
+
+# --- branches: the runner settles every pending node -------------------------
+
+from raven.agent.subagent.dag_verdict import RouteUndeterminedError, Verdict
+
+#: Keys a branch adds to an event or a record. A node that is neither a decision
+#: nor guarded, nor left unexecuted, carries none of them.
+_BRANCH_KEYS = {"routes", "select", "when", "selected_routes", "route_evidence", "reason"}
+
+
+def _branching_spec() -> Any:
+    """Triage decides between two branches, and a summary merges them.
+
+    The routes are declared out of alphabetical order, so declaration order can be
+    told from a sort. The summary reads no output: rendering a missing one is the
+    renderer's concern, not the scheduler's.
+    """
+    return parse_dag_spec(
+        {
+            "task_summary": "route by what the triage says",
+            "nodes": [
+                {
+                    "id": "triage",
+                    "subagent": "x",
+                    "node_summary": "classify",
+                    "prompt_template": "classify",
+                    "routes": {"docs": "a documentation gap", "bug": "a code defect"},
+                },
+                {
+                    "id": "fix",
+                    "subagent": "x",
+                    "node_summary": "fix the code",
+                    "prompt_template": "fix",
+                    "depends_on": ["triage"],
+                    "when": "triage.bug",
+                },
+                {
+                    "id": "write",
+                    "subagent": "x",
+                    "node_summary": "write the docs",
+                    "prompt_template": "write",
+                    "depends_on": ["triage"],
+                    "when": "triage.docs",
+                },
+                {
+                    "id": "summary",
+                    "subagent": "x",
+                    "node_summary": "sum up",
+                    "prompt_template": "sum up",
+                    "depends_on": ["fix", "write"],
+                },
+            ],
+        }
+    )
+
+
+def _routing_judge(route: str):
+    """A judge that succeeds and selects one route for a decision node."""
+
+    async def _judge(*, node, store, output, error, crashed, output_limited=False):
+        if node.routes:
+            return Verdict(accomplished=True, routes=(route,), route_evidence="because")
+        return Verdict(accomplished=True)
+
+    return _judge
+
+
+def _picking_judge(picks: dict[str, tuple[str, ...]]):
+    """A judge that succeeds everywhere and selects, per decision node, what ``picks`` names."""
+
+    async def _judge(*, node, store, output, error, crashed, output_limited=False):
+        return Verdict(accomplished=True, routes=picks[node.id] if node.routes else None)
+
+    return _judge
+
+
+def _bnode(node_id: str, **over: Any) -> dict:
+    """A node on agent ``x`` whose summary and prompt are its id; keywords add fields."""
+    return {"id": node_id, "subagent": "x", "node_summary": node_id, "prompt_template": node_id, **over}
+
+
+def _bgraph(*nodes: dict) -> Any:
+    return parse_dag_spec({"task_summary": "g", "nodes": list(nodes)})
+
+
+async def _settle_run(
+    spec: Any, judge_node: Any, exec_backend: _FakeExec | None = None, **kwargs: Any
+) -> tuple[DagRunResult, _InMemBackend]:
+    """Run ``spec`` on one fake agent ``x`` over an in-memory store; return the result and the store."""
+    store = _InMemBackend()
+    result = await run_dag(
+        spec,
+        resolve=_by_name({"x": exec_backend if exec_backend is not None else _FakeExec()}),
+        backend=store,
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+        judge_node=judge_node,
+        **kwargs,
+    )
+    return result, store
+
+
+def _manifest_of(result: DagRunResult, store: _InMemBackend) -> dict:
+    return json.loads(store.files[posixpath.join(result.dir, "manifest.json")])
+
+
+async def test_the_unchosen_branch_is_not_executed_and_the_merge_runs_once() -> None:
+    backend = _FakeExec()
+    started: list[str] = []
+
+    async def _on_start(node_id: str) -> None:
+        started.append(node_id)
+
+    result = await run_dag(
+        _branching_spec(),
+        resolve=_by_name({"x": backend}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+        judge_node=_routing_judge("docs"),
+        on_node_start=_on_start,
+    )
+    assert [c["task_id"] for c in backend.calls] == ["triage", "write", "summary"]
+    assert result.summary["completed"] == 3
+    assert result.summary["not_executed"] == 1
+    assert [t["node"] for t in result.terminal_outputs] == ["summary"]
+    assert "fix" not in started, "an unselected branch never takes a slot in the concurrency gate"
+
+
+def _merging_spec() -> Any:
+    """`_branching_spec()` with a summary that inlines both branches, each under its own title."""
+    return _bgraph(
+        _bnode("triage", routes={"docs": "a documentation gap", "bug": "a code defect"}),
+        _bnode("fix", depends_on=["triage"], when="triage.bug"),
+        _bnode("write", depends_on=["triage"], when="triage.docs"),
+        _bnode(
+            "summary",
+            depends_on=["fix", "write"],
+            prompt_template="## Fix\n{{ fix.output }}\n\n## Docs\n{{ write.output }}",
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("route", "ran", "ran_title", "missed", "missed_title"),
+    [("docs", "write", "Docs", "fix", "Fix"), ("bug", "fix", "Fix", "write", "Docs")],
+)
+async def test_the_merge_prompt_reads_the_unchosen_branch_as_the_fixed_sentence(
+    route: str, ran: str, ran_title: str, missed: str, missed_title: str
+) -> None:
+    agent = _FakeExec()
+
+    result, store = await _settle_run(_merging_spec(), _routing_judge(route), agent)
+
+    assert (result.summary["completed"], result.summary["not_executed"]) == (3, 1)
+    prompt = next(call["prompt"] for call in agent.calls if call["task_id"] == "summary")
+    assert prompt.count(MAYBE_MISSING_HEADING) == 1
+    body, _, note = prompt.partition(MAYBE_MISSING_HEADING)
+    assert body.count(MISSING_OUTPUT_TEXT) == 1
+    assert f"## {missed_title}\n{MISSING_OUTPUT_TEXT}" in body
+    assert f"## {ran_title}\n[BEGIN UNTRUSTED subagent" in body and f"OUT[{ran}]:{ran}" in body
+    assert "selects them: fix, write." in note and MISSING_OUTPUT_TEXT in note
+    assert f"{ran}.memory.json" in note
+    assert f"{missed}.memory.json" not in prompt, "a node that was not executed has no memory record to point at"
+    stored = store.files["/hist/nodes/summary.prompt.md"].decode()
+    assert MISSING_OUTPUT_TEXT in stored and MAYBE_MISSING_HEADING in stored, "the judge reads what the node was told"
+
+
+async def test_a_failed_dependency_outranks_a_true_guard() -> None:
+    spec = parse_dag_spec(
+        {
+            "task_summary": "g",
+            "nodes": [
+                {"id": "a", "subagent": "x", "node_summary": "a", "prompt_template": "a"},
+                {
+                    "id": "r",
+                    "subagent": "x",
+                    "node_summary": "r",
+                    "prompt_template": "r",
+                    "routes": {"go": "go", "stop": "stop"},
+                },
+                {
+                    "id": "b",
+                    "subagent": "x",
+                    "node_summary": "b",
+                    "prompt_template": "b",
+                    "depends_on": ["a", "r"],
+                    "when": "r.go",
+                },
+            ],
+        }
+    )
+    result = await run_dag(
+        spec,
+        resolve=_by_name({"x": _FakeExec(fail_ids={"a"})}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+        judge_node=_routing_judge("go"),
+    )
+    assert result.summary["skipped"] == 1
+    assert result.summary.get("not_executed", 0) == 0
+
+
+async def test_a_router_whose_judge_cannot_settle_a_route_fails_and_skips_its_branch() -> None:
+    async def _judge(*, node, store, output, error, crashed, output_limited=False):
+        if node.routes:
+            raise RouteUndeterminedError("the judge call failed: provider down")
+        return Verdict(accomplished=True)
+
+    result = await run_dag(
+        _branching_spec(),
+        resolve=_by_name({"x": _FakeExec()}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+        judge_node=_judge,
+    )
+    assert result.summary["failed"] == 1
+    assert result.summary["skipped"] == 3
+    assert result.files[0]["error"] == "The route could not be determined: the judge call failed: provider down"
+
+
+async def test_a_route_that_cannot_be_determined_is_neither_reported_nor_adjudicated() -> None:
+    """No route means no branch and nothing to default to; a desk and an announcer change nothing."""
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+    reports: list[str] = []
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        reports.append(node_id)
+
+    async def _judge(*, node, store, output, error, crashed, output_limited=False):
+        if node.routes:
+            raise RouteUndeterminedError("the judge call timed out after 180s")
+        return Verdict(accomplished=True)
+
+    result, _ = await _settle_run(
+        _branching_spec(),
+        _judge,
+        desk=AdjudicationDesk(),
+        announce_exception=_announce,
+        origin=_TEST_ORIGIN,
+        adjudication_timeout_s=1,
+    )
+    triage = result.files[0]
+    assert triage["status"] == "failed"
+    assert triage["output_file"] is None, "a failed decision node's output is nobody's input"
+    assert reports == []
+
+
+async def test_a_router_judged_accomplished_without_a_route_fails() -> None:
+    async def _judge(*, node, store, output, error, crashed, output_limited=False):
+        return Verdict(accomplished=True)
+
+    result, _ = await _settle_run(_branching_spec(), _judge)
+    triage = result.files[0]
+    assert triage["status"] == "failed"
+    assert triage["error"] == (
+        "The route could not be determined: the judge reported the task accomplished without selecting a route"
+    )
+    assert triage["output_file"] is None
+    assert result.summary["skipped"] == 3
+
+
+@pytest.mark.parametrize("judged", ["accomplished", "route undetermined", "raises", "miswired", "no judge"])
+async def test_a_crashed_router_keeps_its_own_failure(judged: str) -> None:
+    """No route is read from a node that did not finish: whatever its judge does, its crash is why it failed."""
+
+    async def _judge(*, node, store, output, error, crashed, output_limited=False):
+        if node.routes and judged == "route undetermined":
+            raise RouteUndeterminedError("no provider is bound to judge this node")
+        if node.routes and judged == "raises":
+            raise RuntimeError("the judge hook broke")
+        if node.routes and judged == "miswired":
+            raise TypeError("the hook was wired to the wrong call")
+        # What the tool's judge answers a crashed decision node when no provider is bound.
+        return Verdict(accomplished=True)
+
+    judge = None if judged == "no judge" else _judge
+    result, _ = await _settle_run(_branching_spec(), judge, _FakeExec(fail_ids={"triage"}))
+    triage = result.files[0]
+    assert triage["status"] == "failed"
+    assert triage["error"] == "boom triage"
+    assert result.summary["skipped"] == 3
+
+
+async def test_a_router_whose_judge_raises_fails_while_an_ordinary_node_still_fails_open() -> None:
+    """The fail-open is an ordinary node's: a decision node has no route to default to."""
+    from loguru import logger
+
+    spec = _bgraph(
+        _bnode("router", routes={"a": "a", "b": "b"}),
+        _bnode("branch", depends_on=["router"], when="router.a"),
+        _bnode("plain"),
+    )
+    message = "the judge hook broke: " + "x" * 400
+
+    async def _judge(*, node, store, output, error, crashed, output_limited=False):
+        raise RuntimeError(message)
+
+    lines: list[str] = []
+    sink_id = logger.add(lambda m: lines.append(str(m)), level="WARNING")
+    try:
+        result, _ = await _settle_run(spec, _judge)
+    finally:
+        logger.remove(sink_id)
+
+    files = {f["node"]: f for f in result.files}
+    cut = f"RuntimeError: {message}"[:197] + "..."
+    assert files["router"]["status"] == "failed"
+    assert files["router"]["error"] == f"The route could not be determined: the judge call raised: {cut}"
+    assert files["router"]["output_file"] is None
+    assert files["branch"]["status"] == "skipped"
+    assert (files["plain"]["status"], files["plain"]["error"]) == ("completed", None)
+    fail_open = [line.splitlines()[0] for line in lines if "judging it accomplished" in line.splitlines()[0]]
+    assert len(fail_open) == 1 and "DAG node plain " in fail_open[0], "only the ordinary node fails open"
+
+
+async def test_a_judge_that_cannot_be_called_fails_a_router_for_want_of_a_route() -> None:
+    """A miswired hook: the router's route is undetermined; an ordinary node beside it was never judged."""
+    spec = _bgraph(
+        _bnode("router", routes={"a": "a", "b": "b"}),
+        _bnode("branch", depends_on=["router"], when="router.a"),
+        _bnode("plain"),
+    )
+
+    async def _judge(*, node, store, output, error, crashed, output_limited=False):
+        raise TypeError("the hook was wired to the wrong call")
+
+    result, _ = await _settle_run(spec, _judge)
+    files = {f["node"]: f for f in result.files}
+    assert files["router"]["status"] == "failed"
+    assert files["router"]["error"] == (
+        "The route could not be determined: the DAG judge could not be called: the hook was wired to the wrong call"
+    )
+    assert files["router"]["output_file"] is None
+    assert files["branch"]["status"] == "skipped"
+    assert files["plain"]["status"] == "failed"
+    assert files["plain"]["error"] == (
+        "the DAG judge could not be called, so this node was never judged: the hook was wired to the wrong call"
+    )
+    assert files["plain"]["output_file"] is None
+
+
+async def test_a_router_on_a_run_with_no_judge_fails_before_its_finish_event() -> None:
+    events: list[tuple[str, dict]] = []
+
+    async def pub(name, value):
+        events.append((name, value))
+
+    result, _ = await _settle_run(_branching_spec(), None, progress_publisher=pub)
+    assert result.summary == {"total": 4, "completed": 0, "failed": 1, "skipped": 3, "cancelled": 0}
+    triage = result.files[0]
+    assert triage["error"] == "The route could not be determined: this run has no judge to select a route"
+    assert triage["output_file"] is None
+    finish = [v for n, v in events if n == "dag_node_updated" and v["node"] == "triage" and v.get("ended_at")]
+    assert [v["status"] for v in finish] == ["failed"]
+
+
+async def test_a_many_router_that_selects_nothing_makes_its_branches_false_not_unknown() -> None:
+    """An empty selection is a decision: `r.a` is false, so `not r.b` holds."""
+    spec = _bgraph(
+        _bnode("r", routes={"a": "the first holds", "b": "the second holds"}, select="many"),
+        _bnode("ga", depends_on=["r"], when="r.a"),
+        _bnode("gb", depends_on=["r"], when="not r.b"),
+    )
+    events: list[tuple[str, dict]] = []
+
+    async def pub(name, value):
+        events.append((name, value))
+
+    result, store = await _settle_run(spec, _picking_judge({"r": ()}), progress_publisher=pub)
+    files = {f["node"]: f for f in result.files}
+    assert files["r"]["status"] == "completed"
+    assert (files["ga"]["status"], files["ga"]["reason"]) == ("not_executed", "when_false")
+    assert files["gb"]["status"] == "completed"
+    finish = [v for n, v in events if n == "dag_node_updated" and v["node"] == "r" and v.get("ended_at")]
+    assert finish[-1]["selected_routes"] == []
+    assert "route_evidence" not in finish[-1]
+    assert files["r"]["selected_routes"] == []
+    assert _manifest_of(result, store)["r"]["selected_routes"] == []
+
+
+def test_a_stop_leaves_a_not_executed_node_alone() -> None:
+    status = {"a": "not_executed", "b": "running", "c": "pending", "d": "exception"}
+    _mark_stopped(status)
+    assert status == {"a": "not_executed", "b": "cancelled", "c": "skipped", "d": "cancelled"}
+
+
+async def test_a_replan_leaves_a_not_executed_node_alone() -> None:
+    from raven.agent.subagent.dag_runner import _apply_replan
+
+    status = {"a": "not_executed", "b": "running", "c": "pending", "d": "exception"}
+    errors: dict[str, str] = {}
+    await _apply_replan(
+        SimpleNamespace(run_id="next", reason="the plan changed"),
+        status=status,
+        errors=errors,
+        published_terminal=set(),
+        node_started_at={},
+        node_ended_at={},
+        by_id={nid: SimpleNamespace(subagent="x") for nid in status},
+        session_key=None,
+        run_id="r1",
+        progress_publisher=None,
+    )
+    assert status == {"a": "not_executed", "b": "cancelled", "c": "skipped", "d": "failed"}
+    assert "a" not in errors
+
+
+async def test_the_events_carry_the_routes_the_selection_and_the_reason() -> None:
+    events: list[tuple[str, dict]] = []
+
+    async def pub(name, value):
+        events.append((name, value))
+
+    await run_dag(
+        _branching_spec(),
+        resolve=_by_name({"x": _FakeExec()}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+        judge_node=_routing_judge("docs"),
+        progress_publisher=pub,
+    )
+    started = {node["id"]: node for node in next(v for n, v in events if n == "dag_run_started")["nodes"]}
+    triage = started["triage"]
+    assert triage["routes"] == ["docs", "bug"], "the route names, in the order they were declared"
+    assert triage["select"] == "one"
+    assert "when" not in triage
+    assert started["fix"]["when"] == "triage.bug"
+    assert not {"routes", "select"} & set(started["fix"])
+    assert not _BRANCH_KEYS & set(started["summary"]), "a plain node's entry carries no branch key"
+
+    router_finish = [v for n, v in events if n == "dag_node_updated" and v["node"] == "triage" and v.get("ended_at")]
+    assert router_finish[0]["selected_routes"] == ["docs"]
+    assert router_finish[0]["route_evidence"] == "because"
+
+    fix_frames = [v for n, v in events if n == "dag_node_updated" and v["node"] == "fix"]
+    assert [v["status"] for v in fix_frames] == ["not_executed"], "never dispatched, so never running"
+    assert fix_frames[-1]["reason"] == "when_false"
+    order = [(v["node"], v["status"]) for n, v in events if n == "dag_node_updated"]
+    assert order.index(("fix", "not_executed")) < order.index(("write", "running")), "announced in the pass deciding it"
+
+    summary_finish = [v for n, v in events if n == "dag_node_updated" and v["node"] == "summary" and v.get("ended_at")]
+    assert not _BRANCH_KEYS & set(summary_finish[-1])
+
+
+async def test_the_run_record_carries_each_reason_and_the_selection() -> None:
+    result, store = await _settle_run(_branching_spec(), _routing_judge("docs"))
+    files = {f["node"]: f for f in result.files}
+    for record in (files, _manifest_of(result, store)):
+        assert record["triage"]["selected_routes"] == ["docs"]
+        assert record["triage"]["route_evidence"] == "because"
+        assert "reason" not in record["triage"]
+        assert record["fix"]["status"] == "not_executed"
+        assert record["fix"]["reason"] == "when_false"
+        assert not {"selected_routes", "route_evidence"} & set(record["fix"])
+        assert not _BRANCH_KEYS & set(record["summary"])
+
+
+#: Every key a `dag-node` registry row carries when no branch put anything on it.
+_ROW_KEYS = {"kind", "sessionKey", "agent", "handle", "runId", "nodeId", "status", "createdAtMs", "updatedAtMs"}
+
+
+async def test_the_registry_rows_carry_each_reason_and_the_selection_before_the_run_finalizes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A client that reloads mid-run rebuilds the graph from the rows, the manifest not
+    being written yet: the row of a node a branch left out says why, a decision
+    node's says what it selected, and the finalize pass does not erase either."""
+    reg = instances_mod.InstanceRegistry(path=tmp_path / "inst.json")
+    monkeypatch.setattr(instances_mod, "_registry", reg)
+    mid_run: dict[str, dict] = {}
+
+    async def _on_start(node_id: str) -> None:
+        if node_id == "summary":
+            mid_run.update({row["nodeId"]: dict(row) for row in reg.list_instances("web:s1")})
+
+    await _settle_run(_branching_spec(), _routing_judge("docs"), on_node_start=_on_start, session_key="web:s1")
+    final = {row["nodeId"]: row for row in reg.list_instances("web:s1")}
+
+    for rows in (mid_run, final):
+        assert (rows["triage"]["selectedRoutes"], rows["triage"]["routeEvidence"]) == (["docs"], "because")
+        assert "reason" not in rows["triage"]
+        assert (rows["fix"]["status"], rows["fix"]["reason"]) == ("not_executed", "when_false")
+        assert not {"selectedRoutes", "routeEvidence"} & set(rows["fix"])
+        assert set(rows["write"]) == _ROW_KEYS
+    assert set(final["summary"]) == _ROW_KEYS
+
+
+async def test_a_registry_row_keeps_an_empty_selection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    reg = instances_mod.InstanceRegistry(path=tmp_path / "inst.json")
+    monkeypatch.setattr(instances_mod, "_registry", reg)
+    spec = _bgraph(
+        _bnode("r", routes={"a": "the first holds", "b": "the second holds"}, select="many"),
+        _bnode("ga", depends_on=["r"], when="r.a"),
+    )
+
+    await _settle_run(spec, _picking_judge({"r": ()}), session_key="web:s1")
+
+    rows = {row["nodeId"]: row for row in reg.list_instances("web:s1")}
+    assert rows["r"]["selectedRoutes"] == [], "a decision that chose nothing has still decided"
+    assert "routeEvidence" not in rows["r"]
+    assert rows["ga"]["reason"] == "when_false"
+
+
+def test_a_dead_subtree_settles_in_the_same_pass_as_its_root() -> None:
+    """`inside` never becomes ready and never waits a round: it is marked with `g`.
+
+    Deepest first, so one sweep in dict order would reach `inside` before `g` is decided.
+    """
+    spec = parse_dag_spec(
+        {
+            "task_summary": "g",
+            "nodes": [
+                {
+                    "id": "r",
+                    "subagent": "x",
+                    "node_summary": "r",
+                    "prompt_template": "r",
+                    "routes": {"a": "a", "b": "b"},
+                },
+                {
+                    "id": "g",
+                    "subagent": "x",
+                    "node_summary": "g",
+                    "prompt_template": "g",
+                    "depends_on": ["r"],
+                    "when": "r.a",
+                },
+                {
+                    "id": "inside",
+                    "subagent": "x",
+                    "node_summary": "inside",
+                    "prompt_template": "inside",
+                    "depends_on": ["g"],
+                },
+            ],
+        }
+    )
+    status = {"inside": "pending", "g": "pending", "r": "completed"}
+    branch = BranchState(
+        guards=guards_of(spec.nodes),
+        skippable=may_not_execute(spec.nodes, {n.id: n for n in spec.nodes}),
+        chosen={"r": ("b",)},
+    )
+    deps = {"inside": ["g"], "g": ["r"], "r": []}
+    settle_branches(deps, status, branch, set())
+    assert status == {"r": "completed", "g": "not_executed", "inside": "not_executed"}
+    assert branch.reasons == {"g": "when_false", "inside": "upstream_not_executed"}
+
+
+@pytest.mark.parametrize("blocked", ["failed", "skipped", "cancelled"])
+def test_settling_leaves_a_node_behind_a_failed_skipped_or_cancelled_dependency_alone(blocked: str) -> None:
+    """Rule 1 is the cascade's: whatever the guard says, this pass does not decide such a node."""
+    spec = _bgraph(
+        _bnode("a"),
+        _bnode("r", routes={"go": "go", "stop": "stop"}),
+        _bnode("b", depends_on=["a", "r"], when="r.go"),
+    )
+    status = {"a": blocked, "r": "completed", "b": "pending"}
+    branch = BranchState(guards=guards_of(spec.nodes), skippable=frozenset({"b"}), chosen={"r": ("stop",)})
+    settle_branches({"a": [], "r": [], "b": ["a", "r"]}, status, branch, set())
+    assert status["b"] == "pending"
+    assert branch.reasons == {}
+
+
+def test_settling_waits_for_a_decision_whose_verdict_has_not_landed() -> None:
+    spec = _bgraph(_bnode("r", routes={"a": "a", "b": "b"}), _bnode("g", depends_on=["r"], when="r.a"))
+    deps = {"r": [], "g": ["r"]}
+    status = {"r": "completed", "g": "pending"}
+    branch = BranchState(guards=guards_of(spec.nodes), skippable=frozenset({"g"}))
+    settle_branches(deps, status, branch, {"r"})
+    assert status["g"] == "pending", "`r` reads completed before its judge has ruled"
+    branch.chosen["r"] = ("b",)
+    settle_branches(deps, status, branch, set())
+    assert (status["g"], branch.reasons["g"]) == ("not_executed", "when_false")
+
+
+def test_a_decision_with_no_route_on_record_reads_as_unknown() -> None:
+    """A decision node that completed and left no selection decided nothing a guard may read."""
+    spec = _bgraph(_bnode("r", routes={"a": "a", "b": "b"}), _bnode("g", depends_on=["r"], when="not r.a"))
+    status = {"r": "completed", "g": "pending"}
+    branch = BranchState(guards=guards_of(spec.nodes), skippable=frozenset({"g"}))
+    settle_branches({"r": [], "g": ["r"]}, status, branch, set())
+    assert (status["g"], branch.reasons["g"]) == ("not_executed", "when_unknown")
+
+
+async def test_done_cannot_revive_a_node_whose_every_input_was_not_executed() -> None:
+    """Rule 2 runs before the guard: `r2.done` holds, but there is nothing left to act on."""
+    spec = _bgraph(
+        _bnode("r1", routes={"a": "a", "b": "b"}),
+        _bnode("r2", routes={"x": "x", "y": "y"}, depends_on=["r1"], when="r1.a"),
+        _bnode("notify", depends_on=["r2"], when="r2.done"),
+    )
+    exec_ = _FakeExec()
+    result, _ = await _settle_run(spec, _routing_judge("b"), exec_)
+    files = {f["node"]: f for f in result.files}
+    assert files["r2"]["reason"] == "when_false"
+    assert (files["notify"]["status"], files["notify"]["reason"]) == ("not_executed", "upstream_not_executed")
+    assert [c["task_id"] for c in exec_.calls] == ["r1"]
+
+
+async def test_done_of_a_decision_that_was_not_executed_holds() -> None:
+    """`r2.done` is true whatever became of `r2`; `plain` completed, so rule 2 does not decide `report`."""
+    spec = _bgraph(
+        _bnode("r1", routes={"a": "a", "b": "b"}),
+        _bnode("r2", routes={"x": "x", "y": "y"}, depends_on=["r1"], when="r1.a"),
+        _bnode("plain"),
+        _bnode("report", depends_on=["r2", "plain"], when="r2.done"),
+    )
+    exec_ = _FakeExec()
+    result, _ = await _settle_run(spec, _routing_judge("b"), exec_)
+    files = {f["node"]: f for f in result.files}
+    assert (files["r2"]["status"], files["r2"]["reason"]) == ("not_executed", "when_false")
+    assert files["report"]["status"] == "completed"
+    assert sorted(c["task_id"] for c in exec_.calls) == ["plain", "r1", "report"]
+
+
+async def test_a_branch_declared_deepest_first_is_settled_whole() -> None:
+    """One sweep in declaration order would decide only `g`, and leave `d2` and `d3` to run."""
+    spec = _bgraph(
+        _bnode("d3", depends_on=["d2"]),
+        _bnode("d2", depends_on=["d1"]),
+        _bnode("d1", depends_on=["g"]),
+        _bnode("g", depends_on=["r"], when="r.a"),
+        _bnode("r", routes={"a": "a", "b": "b"}),
+    )
+    events: list[tuple[str, dict]] = []
+
+    async def pub(name, value):
+        events.append((name, value))
+
+    exec_ = _FakeExec()
+    result, _ = await _settle_run(spec, _routing_judge("b"), exec_, progress_publisher=pub)
+    assert [c["task_id"] for c in exec_.calls] == ["r"]
+    files = {f["node"]: f for f in result.files}
+    assert {nid: (files[nid]["status"], files[nid]["reason"]) for nid in ("g", "d1", "d2", "d3")} == {
+        "g": ("not_executed", "when_false"),
+        "d1": ("not_executed", "upstream_not_executed"),
+        "d2": ("not_executed", "upstream_not_executed"),
+        "d3": ("not_executed", "upstream_not_executed"),
+    }
+    announced = [v["node"] for n, v in events if n == "dag_node_updated" and v["status"] == "not_executed"]
+    assert sorted(announced) == ["d1", "d2", "d3", "g"], "decided as the run ends, and announced all the same"
+    assert all(files[nid]["started_at"] is not None for nid in announced)
+
+
+async def test_an_unknown_guard_and_a_false_one_are_recorded_apart() -> None:
+    """A decision nobody made is unknown, and `unknown and true` does not run the node."""
+    spec = _bgraph(
+        _bnode("triage", routes={"bug": "a defect", "question": "a usage question"}),
+        _bnode("risk", routes={"high": "a risky change", "low": "a safe change"}),
+        _bnode("security", routes={"vuln": "a vulnerability", "clean": "none"}, depends_on=["risk"], when="risk.high"),
+        _bnode("patch", depends_on=["security", "triage"], when="security.vuln and triage.bug"),
+        _bnode("reply", depends_on=["triage", "patch"], when="triage.done"),
+    )
+    exec_ = _FakeExec()
+    judge = _picking_judge({"triage": ("bug",), "risk": ("low",), "security": ("vuln",)})
+    result, _ = await _settle_run(spec, judge, exec_)
+    files = {f["node"]: f for f in result.files}
+    assert (files["security"]["status"], files["security"]["reason"]) == ("not_executed", "when_false")
+    assert (files["patch"]["status"], files["patch"]["reason"]) == ("not_executed", "when_unknown")
+    assert files["reply"]["status"] == "completed", "one input not executed is not every input"
+    assert sorted(c["task_id"] for c in exec_.calls) == ["reply", "risk", "triage"]
+
+
+async def test_no_guard_is_read_before_its_decision_nodes_verdict_lands() -> None:
+    """The scheduler makes a whole pass while the router's verdict is still out, and `g` waits it out."""
+    spec = _bgraph(
+        _bnode("r", routes={"a": "a", "b": "b"}),
+        _bnode("side"),
+        _bnode("side2", depends_on=["side"]),
+        _bnode("g", depends_on=["r"], when="r.a"),
+    )
+    side2_running = asyncio.Event()
+
+    async def pub(name, value):
+        if name == "dag_node_updated" and value["node"] == "side2" and value["status"] == "running":
+            side2_running.set()
+
+    async def _judge(*, node, store, output, error, crashed, output_limited=False):
+        if node.routes:
+            # Dispatching side2 takes a pass of the scheduler, guards included.
+            await asyncio.wait_for(side2_running.wait(), 5)
+            return Verdict(accomplished=True, routes=("a",))
+        return Verdict(accomplished=True)
+
+    exec_ = _FakeExec()
+    result, _ = await _settle_run(spec, _judge, exec_, progress_publisher=pub)
+    assert {f["node"]: f["status"] for f in result.files}["g"] == "completed"
+    assert [c["task_id"] for c in exec_.calls].count("g") == 1
+
+
+async def test_a_verdict_that_lands_while_the_sweep_publishes_is_read_before_dispatch() -> None:
+    """The publication sweep awaits; a carried router can land its verdict meanwhile.
+
+    Its dependent's guard has to be read before the ready set is, or the dependent
+    is dispatched on its dependencies alone, down a branch nobody selected.
+    """
+    spec = _bgraph(
+        _bnode("x"),
+        _bnode("y", depends_on=["x"]),
+        _bnode("r", routes={"a": "a", "b": "b"}),
+        _bnode("g", depends_on=["r"], when="r.a"),
+    )
+    release = asyncio.Event()
+    landed = asyncio.Event()
+
+    async def pub(name, value):
+        if name != "dag_node_updated":
+            return
+        if value["node"] == "r" and value.get("ended_at"):
+            landed.set()
+        if value["node"] == "y" and value["status"] == "skipped":
+            release.set()
+            await asyncio.wait_for(landed.wait(), 5)
+
+    async def _judge(*, node, store, output, error, crashed, output_limited=False):
+        if node.routes:
+            await asyncio.wait_for(release.wait(), 5)
+            return Verdict(accomplished=True, routes=("b",))
+        return Verdict(accomplished=True)
+
+    exec_ = _FakeExec(fail_ids={"x"})
+    result, _ = await _settle_run(spec, _judge, exec_, progress_publisher=pub)
+    assert "g" not in {c["task_id"] for c in exec_.calls}
+    g = {f["node"]: f for f in result.files}["g"]
+    assert (g["status"], g["reason"]) == ("not_executed", "when_false")
+
+
+async def test_a_node_the_second_settle_pass_decides_is_announced_before_the_pass_dispatches() -> None:
+    """The second settle pass runs after the sweep's await, and a verdict can land there.
+
+    `g` is decided by that pass, and `h` becomes dispatchable in the same one. `g`'s
+    frame has to be published by the pass that decided it -- before the dispatch it
+    shares the pass with -- rather than left for a later sweep, which is a pass `g`
+    may never get.
+    """
+    spec = _bgraph(
+        _bnode("x"),
+        _bnode("y", depends_on=["x"]),
+        _bnode("a"),
+        _bnode("h", depends_on=["a"]),
+        _bnode("r", routes={"a": "a", "b": "b"}),
+        _bnode("g", depends_on=["r"], when="r.a"),
+    )
+    release = asyncio.Event()
+    landed = asyncio.Event()
+    events: list[tuple[str, dict]] = []
+
+    async def pub(name, value):
+        events.append((name, value))
+        if name != "dag_node_updated":
+            return
+        if value["node"] == "y" and value["status"] == "skipped":
+            release.set()
+            await asyncio.wait_for(landed.wait(), 5)
+
+    async def _judge(*, node, store, output, error, crashed, output_limited=False):
+        if node.routes:
+            await asyncio.wait_for(release.wait(), 5)
+            landed.set()
+            return Verdict(accomplished=True, routes=("b",))
+        if node.id == "a":
+            await asyncio.wait_for(release.wait(), 5)
+        return Verdict(accomplished=True)
+
+    exec_ = _FakeExec(fail_ids={"x"})
+    result, _ = await _settle_run(spec, _judge, exec_, progress_publisher=pub)
+
+    g = {f["node"]: f for f in result.files}["g"]
+    assert (g["status"], g["reason"]) == ("not_executed", "when_false")
+    order = [(v["node"], v["status"]) for n, v in events if n == "dag_node_updated"]
+    assert order.index(("g", "not_executed")) < order.index(("h", "running")), (
+        "the pass that decided g announces it before dispatching what it made ready"
+    )
+
+
+async def test_a_verdict_that_lands_while_the_second_pass_publishes_is_settled_before_dispatch() -> None:
+    """The second pass's own publish awaits, and a decision can land inside it.
+
+    `g`'s frame is published by the second pass, and `r2`'s verdict lands while it is.
+    The pass has to settle again before it computes the ready set, or `g2` -- whose
+    guard that verdict made false -- is dispatched down a route nobody selected.
+    """
+    spec = _bgraph(
+        _bnode("x"),
+        _bnode("y", depends_on=["x"]),
+        _bnode("r", routes={"a": "a", "b": "b"}),
+        _bnode("g", depends_on=["r"], when="r.a"),
+        _bnode("r2", routes={"a": "a", "b": "b"}),
+        _bnode("g2", depends_on=["r2"], when="r2.a"),
+    )
+    release_r = asyncio.Event()
+    release_r2 = asyncio.Event()
+    landed_r = asyncio.Event()
+    landed_r2 = asyncio.Event()
+
+    async def pub(name, value):
+        if name != "dag_node_updated":
+            return
+        if value["node"] == "y" and value["status"] == "skipped":
+            release_r.set()
+            await asyncio.wait_for(landed_r.wait(), 5)
+        if value["node"] == "g" and value["status"] == "not_executed":
+            release_r2.set()
+            await asyncio.wait_for(landed_r2.wait(), 5)
+
+    async def _judge(*, node, store, output, error, crashed, output_limited=False):
+        if node.id == "r":
+            await asyncio.wait_for(release_r.wait(), 5)
+            landed_r.set()
+            return Verdict(accomplished=True, routes=("b",))
+        if node.id == "r2":
+            await asyncio.wait_for(release_r2.wait(), 5)
+            landed_r2.set()
+            return Verdict(accomplished=True, routes=("b",))
+        return Verdict(accomplished=True)
+
+    exec_ = _FakeExec(fail_ids={"x"})
+    result, _ = await _settle_run(spec, _judge, exec_, progress_publisher=pub)
+
+    assert "g2" not in [c["task_id"] for c in exec_.calls], "a node whose guard is false is never dispatched"
+    g2 = {f["node"]: f for f in result.files}["g2"]
+    assert (g2["status"], g2["reason"]) == ("not_executed", "when_false")
+
+
+async def test_a_node_the_second_settle_pass_decides_is_announced_once_when_a_replan_ends_the_run() -> None:
+    """`g` is decided after the sweep, and a replan then ends the run before any later sweep:
+    its one frame comes from the pass that decided it."""
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk, ReplanPlan
+
+    spec = _bgraph(
+        _bnode("x"),
+        _bnode("y", depends_on=["x"]),
+        _bnode("r", routes={"a": "a", "b": "b"}),
+        _bnode("g", depends_on=["r"], when="r.a"),
+    )
+    desk = AdjudicationDesk()
+    plan = ReplanPlan(
+        run_id="next",
+        from_node="elsewhere",
+        reason="the plan changed",
+        nodes=(),
+        backends={},
+        auto_instances=frozenset(),
+        notices=(),
+    )
+    release = asyncio.Event()
+    landed = asyncio.Event()
+    events: list[tuple[str, dict]] = []
+
+    async def pub(name, value):
+        events.append((name, value))
+        if name != "dag_node_updated":
+            return
+        if value["node"] == "r" and value.get("ended_at"):
+            landed.set()
+        if value["node"] == "y" and value["status"] == "skipped":
+            release.set()
+            await asyncio.wait_for(landed.wait(), 5)
+            desk.open("elsewhere")
+            desk.resolve("elsewhere", "replan", "the plan changed", plan=plan)
+
+    async def _judge(*, node, store, output, error, crashed, output_limited=False):
+        if node.routes:
+            await asyncio.wait_for(release.wait(), 5)
+            return Verdict(accomplished=True, routes=("b",))
+        return Verdict(accomplished=True)
+
+    result, _ = await _settle_run(spec, _judge, _FakeExec(fail_ids={"x"}), desk=desk, progress_publisher=pub)
+    assert result.replanned_into == "next"
+    g = {f["node"]: f for f in result.files}["g"]
+    assert (g["status"], g["reason"]) == ("not_executed", "when_false")
+    assert g["started_at"] is not None and g["ended_at"] is not None
+    g_frames = [v for n, v in events if n == "dag_node_updated" and v["node"] == "g"]
+    assert [(v["status"], v["reason"]) for v in g_frames] == [("not_executed", "when_false")]
+
+
+async def test_a_suspended_router_holds_its_branches_until_a_continue_judges_it_again() -> None:
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+    desk = AdjudicationDesk()
+    spec = _bgraph(
+        _bnode("r", routes={"a": "a", "b": "b"}),
+        _bnode("ga", depends_on=["r"], when="r.a"),
+        _bnode("gb", depends_on=["r"], when="r.b"),
+    )
+    verdicts = iter(
+        [
+            Verdict(accomplished=False, what_is_missing="no conclusion", routes=("a",)),
+            Verdict(accomplished=True, routes=("b",)),
+        ]
+    )
+
+    async def _judge(*, node, store, output, error, crashed, output_limited=False):
+        return next(verdicts) if node.routes else Verdict(accomplished=True)
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        desk.resolve(node_id, "continue", "say which it is")
+
+    events: list[tuple[str, dict]] = []
+
+    async def pub(name, value):
+        events.append((name, value))
+
+    exec_ = _FakeExec()
+    result, _ = await _settle_run(
+        spec,
+        _judge,
+        exec_,
+        desk=desk,
+        announce_exception=_announce,
+        origin=_TEST_ORIGIN,
+        progress_publisher=pub,
+    )
+    assert [c["task_id"] for c in exec_.calls] == ["r", "r", "gb"]
+    files = {f["node"]: f for f in result.files}
+    assert files["r"]["selected_routes"] == ["b"], "the second attempt's judgement, not the first's"
+    assert (files["ga"]["status"], files["ga"]["reason"]) == ("not_executed", "when_false")
+    landed = [
+        (v["node"], v["status"])
+        for n, v in events
+        if n == "dag_node_updated" and (v.get("ended_at") or v["status"] == "not_executed")
+    ]
+    assert landed.index(("r", "exception")) < landed.index(("r", "completed")) < landed.index(("ga", "not_executed"))
+    suspended = next(v for n, v in events if n == "dag_node_updated" and v["status"] == "exception")
+    assert "selected_routes" not in suspended, "a node that did not accomplish its task has no route"
+
+
+async def test_a_stop_while_a_routers_judge_is_out_skips_its_branch() -> None:
+    """The stop is why `g` never ran; a decision nobody made would misname it."""
+    spec = _bgraph(_bnode("r", routes={"a": "a", "b": "b"}), _bnode("g", depends_on=["r"], when="r.a"))
+    cancel = asyncio.Event()
+
+    async def _judge(*, node, store, output, error, crashed, output_limited=False):
+        if node.routes:
+            cancel.set()
+            await asyncio.Event().wait()
+        return Verdict(accomplished=True)
+
+    result, _ = await _settle_run(spec, _judge, cancel=cancel)
+    assert {f["node"]: f["status"] for f in result.files}["g"] == "skipped"
+    assert "not_executed" not in result.summary
+
+
+async def test_a_replan_while_a_routers_judge_is_out_skips_its_branch() -> None:
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk, ReplanPlan
+
+    spec = _bgraph(_bnode("r", routes={"a": "a", "b": "b"}), _bnode("g", depends_on=["r"], when="r.a"))
+    desk = AdjudicationDesk()
+    plan = ReplanPlan(
+        run_id="next",
+        from_node="elsewhere",
+        reason="the plan changed",
+        nodes=(),
+        backends={},
+        auto_instances=frozenset(),
+        notices=(),
+    )
+
+    async def _judge(*, node, store, output, error, crashed, output_limited=False):
+        if node.routes:
+            desk.open("elsewhere")
+            desk.resolve("elsewhere", "replan", "the plan changed", plan=plan)
+            await asyncio.Event().wait()
+        return Verdict(accomplished=True)
+
+    result, _ = await _settle_run(spec, _judge, desk=desk)
+    g = {f["node"]: f for f in result.files}["g"]
+    assert g["status"] == "skipped"
+    assert g["error"] == "Superseded by replan into run next: the plan changed"
+    assert result.replanned_into == "next"
+
+
+async def test_a_replan_exit_announces_the_cascade_skips_of_a_graph_without_branches() -> None:
+    """The replan exit publishes this pass's cascade skips too.
+
+    `b` is skipped by the cascade on the pass that meets the replan, and that pass
+    ends before its sweep: without the exit publishing it, a graph without routes
+    or guards got no event for it, and its row landed only when the run finalized.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk, ReplanPlan
+
+    spec = _bgraph(_bnode("a"), _bnode("b", depends_on=["a"]))
+    desk = AdjudicationDesk()
+    plan = ReplanPlan(
+        run_id="next",
+        from_node="elsewhere",
+        reason="the plan changed",
+        nodes=(),
+        backends={},
+        auto_instances=frozenset(),
+        notices=(),
+    )
+
+    async def _judge(*, node, store, output, error, crashed, output_limited=False):
+        desk.open("elsewhere")
+        desk.resolve("elsewhere", "replan", "the plan changed", plan=plan)
+        return Verdict(accomplished=False, what_is_missing="nothing usable")
+
+    events: list[tuple[str, dict]] = []
+
+    async def pub(name, value):
+        events.append((name, value))
+
+    result, _ = await _settle_run(spec, _judge, desk=desk, progress_publisher=pub)
+    assert result.replanned_into == "next"
+    assert {f["node"]: f["status"] for f in result.files} == {"a": "failed", "b": "skipped"}
+    assert [(v["node"], v["status"]) for n, v in events if n == "dag_node_updated"] == [
+        ("a", "running"),
+        ("a", "failed"),
+        ("b", "skipped"),
+    ]
+
+
+async def test_a_stateful_branch_entry_that_does_not_run_does_not_break_its_instance_order() -> None:
+    """A guarded node sharing an `instance` with its neighbours: nodes sharing one handle
+    run sequentially (id order), and a node that was not executed must simply not be in
+    that order -- the instance's other nodes still run."""
+    spec = parse_dag_spec(
+        {
+            "task_summary": "g",
+            "nodes": [
+                {
+                    "id": "r",
+                    "subagent": "x",
+                    "node_summary": "r",
+                    "prompt_template": "r",
+                    "routes": {"a": "a", "b": "b"},
+                },
+                {
+                    "id": "one",
+                    "subagent": "x",
+                    "node_summary": "one",
+                    "prompt_template": "one",
+                    "instance": "shared",
+                },
+                {
+                    "id": "two",
+                    "subagent": "x",
+                    "node_summary": "two",
+                    "prompt_template": "two",
+                    "instance": "shared",
+                    "depends_on": ["r"],
+                    "when": "r.a",
+                },
+                {
+                    "id": "three",
+                    "subagent": "x",
+                    "node_summary": "three",
+                    "prompt_template": "three",
+                    "instance": "shared",
+                    "depends_on": ["two"],
+                },
+            ],
+        }
+    )
+    backend = _FakeExec()
+    result = await run_dag(
+        spec,
+        resolve=_by_name({"x": backend}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+        judge_node=_routing_judge("b"),
+    )
+    assert [c["task_id"] for c in backend.calls if c["task_id"] == "one"] == ["one"]
+    assert [c["task_id"] for c in backend.calls if c["task_id"] == "two"] == []
+    assert result.summary["not_executed"] == 2
+    assert {n["instance"] for n in backend.calls if n["instance"]} == {"shared"}
+
+
+async def test_the_summary_omits_not_executed_at_zero() -> None:
+    spec = parse_dag_spec(
+        {"task_summary": "g", "nodes": [{"id": "a", "subagent": "x", "node_summary": "a", "prompt_template": "a"}]}
+    )
+    result = await run_dag(
+        spec,
+        resolve=_by_name({"x": _FakeExec()}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+    )
+    assert result.summary == {"total": 1, "completed": 1, "failed": 0, "skipped": 0, "cancelled": 0}
+
+
+async def test_a_graph_without_branches_carries_only_the_base_keys() -> None:
+    """No routes and no when: every payload and record carries its base keys and none of a branch's."""
+    spec = _bgraph(_bnode("a"), _bnode("b", depends_on=["a"]), _bnode("c"), _bnode("d", depends_on=["c"]))
+    events: list[tuple[str, dict]] = []
+
+    async def pub(name, value):
+        events.append((name, value))
+
+    async def _judge(**_):
+        return Verdict(accomplished=True)
+
+    result, store = await _settle_run(spec, _judge, _FakeExec(fail_ids={"c"}), progress_publisher=pub)
+    assert result.summary == {"total": 4, "completed": 2, "failed": 1, "skipped": 1, "cancelled": 0}
+    started = next(v for n, v in events if n == "dag_run_started")
+    assert {frozenset(node) for node in started["nodes"]} == {
+        frozenset({"id", "subagent", "node_summary", "depends_on", "instance"})
+    }
+    assert {frozenset(v) for n, v in events if n == "dag_node_updated"} == {
+        frozenset({"run_id", "node", "status", "started_at"}),
+        frozenset({"run_id", "node", "status", "started_at", "ended_at"}),
+        frozenset({"run_id", "node", "status"}),
+    }
+    record = {"subagent", "depends_on", "instance", "instance_auto", "status", "started_at", "ended_at"}
+    record |= {"prompt_file", "output_file", "error"}
+    assert {frozenset(entry) for entry in _manifest_of(result, store).values()} == {frozenset(record)}
+    assert {frozenset(entry) for entry in result.files} == {frozenset(record | {"node"})}
+
+
+async def test_a_graph_without_branches_writes_registry_rows_with_only_the_base_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No routes and no when: no registry write passes a keyword, and every row
+    carries the base keys and nothing else."""
+    reg = instances_mod.InstanceRegistry(path=tmp_path / "inst.json")
+    keywords: list[dict] = []
+    original_upsert = reg.upsert_dag_node
+
+    async def recording_upsert(*args: Any, **kwargs: Any) -> None:
+        keywords.append(kwargs)
+        await original_upsert(*args, **kwargs)
+
+    monkeypatch.setattr(reg, "upsert_dag_node", recording_upsert)
+    monkeypatch.setattr(instances_mod, "_registry", reg)
+    spec = _bgraph(_bnode("a"), _bnode("b", depends_on=["a"]), _bnode("c"), _bnode("d", depends_on=["c"]))
+
+    async def _judge(**_):
+        return Verdict(accomplished=True)
+
+    result, _ = await _settle_run(spec, _judge, _FakeExec(fail_ids={"c"}), session_key="web:s1")
+
+    assert result.summary == {"total": 4, "completed": 2, "failed": 1, "skipped": 1, "cancelled": 0}
+    assert keywords and all(kw == {} for kw in keywords)
+    assert {frozenset(row) for row in reg.list_instances("web:s1")} == {frozenset(_ROW_KEYS)}
+
+
+# --- branches: terminal outputs, clean runs and the result text --------------
+
+
+async def test_a_completed_node_none_of_whose_dependents_ran_is_a_terminal_output() -> None:
+    """A `select: many` router that selected nothing leaves its dependents unexecuted;
+    the router's own output is then the last word on that path."""
+    spec = _bgraph(
+        _bnode("r", routes={"a": "a", "b": "b"}, select="many"),
+        _bnode("g", depends_on=["r"], when="r.a"),
+    )
+
+    result, _ = await _settle_run(spec, _picking_judge({"r": ()}))
+
+    assert result.summary["not_executed"] == 1
+    assert result.terminal_outputs == [{"node": "r", "text": "OUT[r]:r"}]
+
+
+async def test_a_dependent_that_ran_and_failed_or_was_skipped_keeps_its_upstream_out() -> None:
+    """Only a dependent that was not executed lets its upstream speak last."""
+    spec = _bgraph(
+        _bnode("r", routes={"a": "a", "b": "b"}, select="many"),
+        _bnode("bad", depends_on=["r"], when="r.a"),
+        _bnode("miss", depends_on=["r"], when="r.b"),
+        _bnode("ok"),
+        _bnode("after", depends_on=["ok", "bad"]),
+        _bnode("solo"),
+    )
+
+    result, _ = await _settle_run(spec, _picking_judge({"r": ("a",)}), _FakeExec(fail_ids={"bad"}))
+
+    assert {f["node"]: f["status"] for f in result.files} == {
+        "r": "completed",
+        "bad": "failed",
+        "miss": "not_executed",
+        "ok": "completed",
+        "after": "skipped",
+        "solo": "completed",
+    }
+    assert [t["node"] for t in result.terminal_outputs] == ["solo"], (
+        "`r` has a dependent that ran and failed, `ok` one that was skipped: neither is the last word"
+    )
+
+
+def test_the_tally_line_names_the_new_count_only_when_there_is_one() -> None:
+    from raven.agent.subagent.dag_store import format_tally
+
+    assert format_tally({"total": 2, "completed": 2, "failed": 0, "skipped": 0, "cancelled": 0}) == (
+        "2 completed, 0 failed, 0 cancelled, 0 skipped (of 2)"
+    )
+    assert (
+        format_tally({"total": 2, "completed": 1, "failed": 0, "skipped": 0, "cancelled": 0, "not_executed": 1})
+        == "1 completed, 0 failed, 0 cancelled, 0 skipped, 1 not executed (of 2)"
+    )
+
+
+def _final_of(summary: dict, *, stopped: bool = False) -> Any:
+    from raven.agent.subagent.dag_adjudication import Final
+
+    return Final(DagRunResult(run_id="r1", dir="/d", summary=summary), stopped=stopped)
+
+
+def test_a_run_whose_only_oddity_is_an_unselected_branch_is_still_clean() -> None:
+    from raven.agent.subagent.dag_tool import _successful_final
+
+    plain = {"total": 2, "completed": 2, "failed": 0, "skipped": 0, "cancelled": 0}
+    branched = {**plain, "completed": 1, "not_executed": 1}
+
+    assert _successful_final(_final_of(plain)) is True
+    assert _successful_final(_final_of(branched)) is True
+    assert _successful_final(_final_of(branched, stopped=True)) is False
+    assert _successful_final(_final_of({})) is False
+    assert _successful_final(_final_of({**branched, "total": 3})) is False, "one node is counted nowhere"
+
+
+@pytest.mark.parametrize("oddity", ["failed", "skipped", "cancelled"])
+def test_an_unselected_branch_does_not_excuse_anything_else_that_went_wrong(oddity: str) -> None:
+    from raven.agent.subagent.dag_tool import _successful_final
+
+    summary = {"total": 3, "completed": 1, "failed": 0, "skipped": 0, "cancelled": 0, "not_executed": 1, oddity: 1}
+
+    assert _successful_final(_final_of(summary)) is False
+
+
+async def test_a_run_that_took_one_branch_is_a_clean_final() -> None:
+    """The recorded-as-a-playbook gate reads the tally the runner really produced."""
+    from raven.agent.subagent.dag_adjudication import Final
+    from raven.agent.subagent.dag_tool import _successful_final
+
+    result, _ = await _settle_run(_branching_spec(), _routing_judge("docs"))
+
+    assert result.summary["not_executed"] == 1
+    assert _successful_final(Final(result, stopped=False)) is True
+
+
+def test_the_transcript_label_of_a_graph_without_branches_is_unchanged() -> None:
+    files = [{"node": n, "status": s} for n, s in [("a", "completed"), ("b", "failed"), ("c", "failed")]]
+    mixed = {"total": 5, "completed": 1, "failed": 2, "skipped": 1, "cancelled": 1}
+    clean = {"total": 2, "completed": 2, "failed": 0, "skipped": 0, "cancelled": 0}
+
+    assert SubAgentDagTool._result_label(DagRunResult(run_id="r1", dir="/d", files=files, summary=mixed)) == (
+        "DAG r1: 1/5 completed, 2 failed (b, c), 1 cancelled, 1 skipped -- outputs in /d"
+    )
+    assert SubAgentDagTool._result_label(DagRunResult(run_id="r2", dir="/d", summary=clean)) == (
+        "DAG r2: 2/2 completed -- outputs in /d"
+    )
+
+
+def test_the_transcript_label_counts_a_not_executed_node_after_the_skipped_ones() -> None:
+    both = {"total": 5, "completed": 2, "failed": 0, "skipped": 1, "cancelled": 0, "not_executed": 2}
+    alone = {"total": 3, "completed": 2, "failed": 0, "skipped": 0, "cancelled": 0, "not_executed": 1}
+
+    assert SubAgentDagTool._result_label(DagRunResult(run_id="r1", dir="/d", summary=both)) == (
+        "DAG r1: 2/5 completed, 1 skipped, 2 not executed -- outputs in /d"
+    )
+    assert SubAgentDagTool._result_label(DagRunResult(run_id="r2", dir="/d", summary=alone)) == (
+        "DAG r2: 2/3 completed, 1 not executed -- outputs in /d"
+    )
+
+
+def _facts_of(text: str) -> tuple[str, Path, Path]:
+    """The run id, the run dir and the flat nodes dir a finish text names."""
+    match = re.match(r"DAG run (\S+) finished", text)
+    assert match, f"not a finish text: {text[:200]!r}"
+    run_dir = Path(text.split("Run dir: ")[1].splitlines()[0])
+    return match.group(1), run_dir, run_dir.parent.parent / "nodes"
+
+
+async def test_the_finish_text_of_a_graph_without_branches_is_unchanged(tmp_path: Path) -> None:
+    async with draining_dag_runs():
+        out = await _foreground_tool(tmp_path, []).execute(task_summary="fg", nodes=_PAIR, background=False)
+
+    run_id, run_dir, nodes = _facts_of(out.model_text)
+    assert out.model_text == "\n".join(
+        [
+            f"DAG run {run_id} finished: 2 completed, 0 failed, 0 cancelled, 0 skipped (of 2).",
+            f"Run dir: {run_dir}",
+            "",
+            "Node output files:",
+            f"- a [completed]: {nodes / 'a.out.md'}",
+            f"- b [completed]: {nodes / 'b.out.md'}",
+            "",
+            "Terminal outputs:",
+            "### a",
+            "do a",
+            "### b",
+            "do b",
+        ]
+    )
+    assert out.display_text == f"DAG {run_id}: 2/2 completed -- outputs in {run_dir}"
+
+
+async def test_the_finish_text_counts_and_explains_the_branches_that_were_not_taken(tmp_path: Path) -> None:
+    graph = [
+        _bnode(
+            "triage",
+            subagent="echo",
+            select="many",
+            routes={"docs": "a documentation gap", "bug": "a code defect", "perf": "a slowdown"},
+        ),
+        _bnode("fix", subagent="echo", depends_on=["triage"], when="triage.bug"),
+        _bnode("write", subagent="echo", depends_on=["triage"], when="triage.docs"),
+        _bnode("tune", subagent="echo", depends_on=["triage"], when="triage.perf"),
+    ]
+    picked = Verdict(accomplished=True, routes=("docs", "perf"), route_evidence="THE-JUDGES-QUOTE")
+    async with draining_dag_runs():
+        out = await _foreground_tool(tmp_path, [picked]).execute(task_summary="fg", nodes=graph, background=False)
+
+    run_id, run_dir, nodes = _facts_of(out.model_text)
+    head, _, terminal = out.model_text.partition("\n\nTerminal outputs:\n")
+    assert head == "\n".join(
+        [
+            f"DAG run {run_id} finished: 3 completed, 0 failed, 0 cancelled, 0 skipped, 1 not executed (of 4).",
+            f"Run dir: {run_dir}",
+            "",
+            "Node output files:",
+            f"- triage [completed]: {nodes / 'triage.out.md'}",
+            "    selected_routes: docs, perf",
+            "- fix [not_executed]: (no output file)",
+            "    reason: when_false",
+            f"- write [completed]: {nodes / 'write.out.md'}",
+            f"- tune [completed]: {nodes / 'tune.out.md'}",
+        ]
+    )
+    assert re.findall(r"^### (\S+)$", terminal, re.MULTILINE) == ["write", "tune"]
+    assert out.display_text == f"DAG {run_id}: 3/4 completed, 1 not executed -- outputs in {run_dir}"
+    assert "THE-JUDGES-QUOTE" not in out.model_text + out.display_text, (
+        "the judge's quote of a sub-agent's output must not reach the main agent's text"
+    )
+
+
+async def test_the_finish_text_says_when_a_decision_selected_nothing(tmp_path: Path) -> None:
+    graph = [
+        _bnode("r", subagent="echo", routes={"a": "the first holds", "b": "the second holds"}, select="many"),
+        _bnode("g", subagent="echo", depends_on=["r"], when="r.a"),
+    ]
+    async with draining_dag_runs():
+        out = await _foreground_tool(tmp_path, [Verdict(accomplished=True, routes=())]).execute(
+            task_summary="fg", nodes=graph, background=False
+        )
+
+    run_id, run_dir, nodes = _facts_of(out.model_text)
+    assert out.model_text == "\n".join(
+        [
+            f"DAG run {run_id} finished: 1 completed, 0 failed, 0 cancelled, 0 skipped, 1 not executed (of 2).",
+            f"Run dir: {run_dir}",
+            "",
+            "Node output files:",
+            f"- r [completed]: {nodes / 'r.out.md'}",
+            "    selected_routes: (none)",
+            "- g [not_executed]: (no output file)",
+            "    reason: when_false",
+            "",
+            "Terminal outputs:",
+            "### r",
+            "r",
+        ]
+    )
+    assert out.display_text == f"DAG {run_id}: 1/2 completed, 1 not executed -- outputs in {run_dir}"
+
+
+# --- branches: end to end ---------------------------------------------------
+
+
+class _AnsweringExec(_FakeExec):
+    """A fake agent that answers each node with the text scripted for it."""
+
+    def __init__(self, answers: dict[str, str]) -> None:
+        super().__init__()
+        self.answers = answers
+
+    async def run(self, task: str, *, task_id: str, **kwargs: Any) -> str:
+        await super().run(task, task_id=task_id, **kwargs)
+        return self.answers.get(task_id, f"answer of {task_id}")
+
+
+class _CountingGate(asyncio.Semaphore):
+    """A concurrency gate that counts the slots taken through it."""
+
+    def __init__(self, value: int) -> None:
+        super().__init__(value)
+        self.taken = 0
+
+    async def acquire(self) -> bool:
+        await super().acquire()
+        self.taken += 1
+        return True
+
+
+def _scripted_judge(picks: dict[str, tuple[tuple[str, ...], str]], told: dict[str, str] | None = None):
+    """A judge that selects, for each decision node, the routes and the quote scripted for it.
+
+    ``told`` collects the prompt each judged node is handed, read from the store the way the
+    production judge reads it.
+    """
+
+    async def _judge(*, node, store, output, error, crashed, output_limited=False):
+        if told is not None:
+            told[node.id] = await store.read_text(store.prompt_path(node.id))
+        if not node.routes:
+            return Verdict(accomplished=True)
+        routes, quote = picks[node.id]
+        return Verdict(accomplished=True, routes=routes, route_evidence=quote)
+
+    return _judge
+
+
+def _prompt_of(store: _InMemBackend, node_id: str) -> str:
+    return store.files[f"/hist/nodes/{node_id}.prompt.md"].decode()
+
+
+def _files_of(store: _InMemBackend, node_id: str) -> list[str]:
+    """Every file the store holds for one node's artifacts."""
+    return sorted(path for path in store.files if path.startswith(f"/hist/nodes/{node_id}."))
+
+
+def _frames_of(events: list[tuple[str, dict]], node_id: str) -> list[dict]:
+    return [value for name, value in events if name == "dag_node_updated" and value["node"] == node_id]
+
+
+def _block(prompt: str, title: str) -> str:
+    """What a rendered prompt holds under its ``## <title>`` heading, up to the next heading."""
+    heading = f"## {title}\n"
+    start = prompt.index(heading) + len(heading)
+    end = prompt.find("\n\n## ", start)
+    return (prompt[start:] if end == -1 else prompt[start:end]).strip()
+
+
+def _fences(block: str, text: str) -> bool:
+    """Whether ``block`` is ``text`` inside one untrusted-data fence and nothing else."""
+    fence = rf"\[BEGIN UNTRUSTED subagent #(\w+)[^\n]*\]\n{re.escape(text)}\n\[END UNTRUSTED subagent #\1\]"
+    return re.fullmatch(fence, block) is not None
+
+
+def _manifest_nodes(store: _InMemBackend, result: DagRunResult) -> dict[str, dict]:
+    return json.loads(store.files[posixpath.join(result.dir, "manifest.json")])
+
+
+_TRIAGE_ANSWERS = {
+    "bug": "Conclusion: a defect. The parser drops the last record of a file with no trailing newline.",
+    "feature": "Conclusion: a feature request. The reporter asks for a --dry-run flag the tool does not have.",
+    "question": "Conclusion: a usage question. The request timeout is set with --timeout and is documented.",
+}
+_TRIAGE_QUOTES = {
+    "bug": "drops the last record",
+    "feature": "asks for a --dry-run flag",
+    "question": "is set with --timeout",
+}
+_RISK_ANSWERS = {
+    "high": "Conclusion: high risk. The change would touch the billing export.",
+    "low": "Conclusion: low risk. The change stays inside the CSV reader.",
+}
+_RISK_QUOTES = {"high": "would touch the billing export", "low": "stays inside the CSV reader"}
+
+
+def _triage_nodes(agent: str = "x") -> list[dict]:
+    """The issue-triage graph of the DAG skill's worked example: two decisions, two branches off one of them,
+    and two nodes that read them.
+
+    ``deep_review`` waits for both decisions and both branches, and only its own guard keeps it off
+    a path that took neither branch. ``reply`` merges whatever ran, on every path.
+    """
+
+    def node(node_id: str, **over: Any) -> dict:
+        return _bnode(node_id, subagent=agent, **over)
+
+    return [
+        node(
+            "triage",
+            prompt_template="Conclude whether issue 123 is a defect, a feature request or a usage question.",
+            routes={
+                "bug": "the issue is caused by a defect in the code",
+                "feature": "the issue asks for new behaviour",
+                "question": "anything else: a usage question, or an issue that is neither a defect nor a request",
+            },
+        ),
+        node(
+            "risk",
+            prompt_template="Conclude whether a change for issue 123 would touch billing.",
+            routes={"high": "a change would touch billing", "low": "a change would not touch billing"},
+        ),
+        node(
+            "fix",
+            depends_on=["triage"],
+            when="triage.bug",
+            prompt_template="Fix the defect.\n\n## Triage\n{{ triage.output }}",
+        ),
+        node(
+            "design",
+            depends_on=["triage"],
+            when="triage.feature",
+            prompt_template="Write the design.\n\n## Triage\n{{ triage.output }}",
+        ),
+        node(
+            "deep_review",
+            depends_on=["triage", "risk", "fix", "design"],
+            when="(triage.bug or triage.feature) and risk.high",
+            prompt_template=(
+                "Review the change.\n\n## Risk assessment\n{{ risk.output }}\n\n"
+                "## Bug fix result\n{{ fix.output }}\n\n## Design proposal\n{{ design.output }}"
+            ),
+        ),
+        node(
+            "reply",
+            depends_on=["triage", "fix", "design"],
+            when="triage.done",
+            prompt_template=(
+                "Draft the reply.\n\n## Triage\n{{ triage.output }}\n\n"
+                "## Bug fix result\n{{ fix.output }}\n\n## Design proposal\n{{ design.output }}"
+            ),
+        ),
+    ]
+
+
+def _triage_answers(triage: str, risk: str) -> dict[str, str]:
+    return {
+        "triage": _TRIAGE_ANSWERS[triage],
+        "risk": _RISK_ANSWERS[risk],
+        "fix": "Fixed: the parser keeps the final record.",
+        "design": "Designed: a --dry-run flag that prints what it would do and exits.",
+        "deep_review": "Reviewed: the billing export is unaffected.",
+        "reply": "Drafted: thanks for the report.",
+    }
+
+
+_TRIAGE_IDS = ["triage", "risk", "fix", "design", "deep_review", "reply"]
+
+#: Which nodes the two selections leave out of the triage graph, and why.
+_TRIAGE_CASES = [
+    pytest.param(
+        "question",
+        "high",
+        {"fix": "when_false", "design": "when_false", "deep_review": "when_false"},
+        id="question-high",
+    ),
+    pytest.param("bug", "high", {"design": "when_false"}, id="bug-high"),
+    pytest.param("feature", "low", {"fix": "when_false", "deep_review": "when_false"}, id="feature-low"),
+]
+
+
+class _TriageRun(NamedTuple):
+    result: DagRunResult
+    store: _InMemBackend
+    agent: _AnsweringExec
+    gate: _CountingGate
+    told: dict[str, str]
+    events: list[tuple[str, dict]]
+    answers: dict[str, str]
+
+
+async def _run_triage(triage: str, risk: str) -> _TriageRun:
+    """Run the triage graph with the two decisions selecting ``triage`` and ``risk``."""
+    answers = _triage_answers(triage, risk)
+    agent = _AnsweringExec(answers)
+    gate = _CountingGate(5)
+    told: dict[str, str] = {}
+    events: list[tuple[str, dict]] = []
+
+    async def pub(name, value):
+        events.append((name, value))
+
+    judge = _scripted_judge(
+        {"triage": ((triage,), _TRIAGE_QUOTES[triage]), "risk": ((risk,), _RISK_QUOTES[risk])}, told
+    )
+    result, store = await _settle_run(_bgraph(*_triage_nodes()), judge, agent, semaphore=gate, progress_publisher=pub)
+    return _TriageRun(result, store, agent, gate, told, events, answers)
+
+
+def _split_note(prompt: str) -> tuple[str, str]:
+    """A prompt's text above the note on inputs that may be missing, and the note with what follows it.
+
+    The sentence for a missing input is looked for above the note, because the note quotes it too:
+    found anywhere in the prompt, it would pass with no input substituted at all.
+    """
+    assert prompt.count(MAYBE_MISSING_HEADING) == 1, "a node that reads a step which may not run carries the note"
+    body, _, note = prompt.partition(MAYBE_MISSING_HEADING)
+    return body, note
+
+
+@pytest.mark.parametrize(("triage", "risk", "left_out"), _TRIAGE_CASES)
+async def test_branch_e2e_a_triage_dispatches_one_branch_and_records_what_it_left_out(
+    triage: str, risk: str, left_out: dict[str, str]
+) -> None:
+    run = await _run_triage(triage, risk)
+
+    ran = [node_id for node_id in _TRIAGE_IDS if node_id not in left_out]
+    assert sorted(call["task_id"] for call in run.agent.calls) == sorted(ran)
+    assert run.gate.taken == len(ran), "a node that was not executed never takes a concurrency slot"
+
+    manifest = _manifest_nodes(run.store, run.result)
+    assert {node_id: m["status"] for node_id, m in manifest.items()} == {
+        node_id: "not_executed" if node_id in left_out else "completed" for node_id in _TRIAGE_IDS
+    }
+    assert {node_id: m["reason"] for node_id, m in manifest.items() if "reason" in m} == left_out
+    assert {node_id: m["selected_routes"] for node_id, m in manifest.items() if "selected_routes" in m} == {
+        "triage": [triage],
+        "risk": [risk],
+    }
+    quote = manifest["triage"]["route_evidence"]
+    assert quote == _TRIAGE_QUOTES[triage]
+    assert quote in run.store.files["/hist/nodes/triage.out.md"].decode(), "the quote is the node's own words"
+    for node_id in left_out:
+        assert (manifest[node_id]["prompt_file"], manifest[node_id]["output_file"]) == (None, None)
+        assert _files_of(run.store, node_id) == [], "a node that was not executed leaves no file behind"
+
+    left = len(left_out)
+    assert run.result.summary == {
+        "total": 6,
+        "completed": 6 - left,
+        "failed": 0,
+        "skipped": 0,
+        "cancelled": 0,
+        "not_executed": left,
+    }
+    recorded = await read_session_nodes(run.store, "/hist")
+    assert recorded.state == {
+        node_id: "not_executed" if node_id in left_out else "completed" for node_id in _TRIAGE_IDS
+    }
+    assert {node_id for node_id, has in recorded.has_output.items() if has} == set(ran)
+    assert (await read_registry(run.store, "/hist"))["runs"][-1]["summary"] == f"{6 - left}/6 completed"
+
+
+@pytest.mark.parametrize(("triage", "risk", "left_out"), _TRIAGE_CASES)
+async def test_branch_e2e_a_triage_merge_reads_what_was_not_executed_as_the_fixed_sentence(
+    triage: str, risk: str, left_out: dict[str, str]
+) -> None:
+    run = await _run_triage(triage, risk)
+
+    dispatched = {call["task_id"]: call["prompt"] for call in run.agent.calls}
+    for node_id in dispatched:
+        # The judge reads the stored prompt, so it has to be the one the node was handed.
+        assert _prompt_of(run.store, node_id) == dispatched[node_id] == run.told[node_id]
+    for node_id in ("fix", "design"):
+        if node_id not in left_out:
+            assert _fences(_block(_prompt_of(run.store, node_id), "Triage"), run.answers["triage"])
+
+    reads = {
+        "deep_review": {"Risk assessment": "risk", "Bug fix result": "fix", "Design proposal": "design"},
+        "reply": {"Triage": "triage", "Bug fix result": "fix", "Design proposal": "design"},
+    }
+    for merge, sources in reads.items():
+        if merge in left_out:
+            continue
+        body, note = _split_note(_prompt_of(run.store, merge))
+        for title, source in sources.items():
+            if source in left_out:
+                assert _block(body, title) == MISSING_OUTPUT_TEXT
+            else:
+                assert _fences(_block(body, title), run.answers[source])
+        assert body.count(MISSING_OUTPUT_TEXT) == sum(source in left_out for source in sources.values())
+        assert note.count(MISSING_OUTPUT_TEXT) == 1
+        assert "selects them: fix, design." in note
+        assert not any(f"{node_id}.memory.json" in note for node_id in left_out), "no record to point at"
+
+
+@pytest.mark.parametrize(("triage", "risk", "left_out"), _TRIAGE_CASES)
+async def test_branch_e2e_a_triage_announces_each_node_once_and_carries_the_selection(
+    triage: str, risk: str, left_out: dict[str, str]
+) -> None:
+    run = await _run_triage(triage, risk)
+    events = run.events
+
+    started = {node["id"]: node for node in next(v for n, v in events if n == "dag_run_started")["nodes"]}
+    assert {node_id for node_id, node in started.items() if "routes" in node} == {"triage", "risk"}
+    assert started["triage"]["routes"] == ["bug", "feature", "question"]
+    assert started["triage"]["select"] == "one"
+    assert {node_id for node_id, node in started.items() if "when" in node} == {"fix", "design", "deep_review", "reply"}
+    assert started["deep_review"]["when"] == "(triage.bug or triage.feature) and risk.high"
+
+    for node_id in _TRIAGE_IDS:
+        frames = _frames_of(events, node_id)
+        if node_id in left_out:
+            assert [(f["status"], f["reason"]) for f in frames] == [("not_executed", left_out[node_id])]
+        else:
+            assert [f["status"] for f in frames] == ["running", "completed"], "each node that ran, ran once"
+    assert _frames_of(events, "triage")[-1]["selected_routes"] == [triage]
+    assert _frames_of(events, "triage")[-1]["route_evidence"] == _TRIAGE_QUOTES[triage]
+    assert _frames_of(events, "risk")[-1]["selected_routes"] == [risk]
+
+    order = [(value["node"], value["status"]) for name, value in events if name == "dag_node_updated"]
+    for merge, sources in (("deep_review", ("risk", "fix", "design")), ("reply", ("triage", "fix", "design"))):
+        if merge in left_out:
+            continue
+        for source in sources:
+            settled = (source, "not_executed" if source in left_out else "completed")
+            assert order.index(settled) < order.index((merge, "running")), f"{merge} waits for {source} to settle"
+
+
+def _nested_nodes() -> list[dict]:
+    """A decision inside a branch: ``security`` runs only on a high risk, and what reads it is guarded by it."""
+    return [
+        _bnode(
+            "triage",
+            prompt_template="Is issue 123 a defect or a usage question?",
+            routes={"bug": "a defect in the code", "question": "anything else"},
+        ),
+        _bnode(
+            "risk",
+            prompt_template="Would a change for issue 123 touch billing?",
+            routes={"high": "a change would touch billing", "low": "a change would not touch billing"},
+        ),
+        _bnode(
+            "security",
+            depends_on=["risk"],
+            when="risk.high",
+            prompt_template="Audit the change.\n\n## Risk assessment\n{{ risk.output }}",
+            routes={"vuln": "the change opens a vulnerability", "clean": "the change opens none"},
+        ),
+        _bnode(
+            "patch",
+            depends_on=["security", "triage"],
+            when="security.vuln and triage.bug",
+            prompt_template="Patch it.\n\n## Audit\n{{ security.output }}\n\n## Triage\n{{ triage.output }}",
+        ),
+        _bnode(
+            "notify",
+            depends_on=["security"],
+            when="security.done",
+            prompt_template="Tell the security team.\n\n## Audit\n{{ security.output }}",
+        ),
+        _bnode(
+            "report",
+            depends_on=["triage", "patch"],
+            when="triage.done",
+            prompt_template="Write the report.\n\n## Triage\n{{ triage.output }}\n\n## Patch\n{{ patch.output }}",
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("picks", "left_out"),
+    [
+        pytest.param(
+            {"triage": "bug", "risk": "low"},
+            {"security": "when_false", "patch": "when_unknown", "notify": "upstream_not_executed"},
+            id="a-decision-that-never-ran-is-unknown",
+        ),
+        pytest.param(
+            {"triage": "question", "risk": "low"},
+            {"security": "when_false", "patch": "when_false", "notify": "upstream_not_executed"},
+            id="unknown-and-false-is-false",
+        ),
+        pytest.param({"triage": "bug", "risk": "high", "security": "vuln"}, {}, id="every-guard-holds"),
+    ],
+)
+async def test_branch_e2e_a_decision_that_never_ran_leaves_the_guards_that_read_it_unknown_not_false(
+    picks: dict[str, str], left_out: dict[str, str]
+) -> None:
+    ids = [node["id"] for node in _nested_nodes()]
+    ran = [node_id for node_id in ids if node_id not in left_out]
+    agent = _AnsweringExec({"triage": "Conclusion: it is a defect.", "patch": "Patched: the audit finding is closed."})
+    events: list[tuple[str, dict]] = []
+
+    async def pub(name, value):
+        events.append((name, value))
+
+    judge = _scripted_judge({node_id: ((route,), f"quote of {node_id}") for node_id, route in picks.items()})
+    result, store = await _settle_run(_bgraph(*_nested_nodes()), judge, agent, progress_publisher=pub)
+
+    assert sorted(call["task_id"] for call in agent.calls) == sorted(ran)
+    manifest = _manifest_nodes(store, result)
+    assert {node_id: m["status"] for node_id, m in manifest.items()} == {
+        node_id: "not_executed" if node_id in left_out else "completed" for node_id in ids
+    }
+    assert {node_id: m["reason"] for node_id, m in manifest.items() if "reason" in m} == left_out
+    assert {node_id: m["selected_routes"] for node_id, m in manifest.items() if "selected_routes" in m} == {
+        node_id: [route] for node_id, route in picks.items()
+    }
+    for node_id in left_out:
+        assert _files_of(store, node_id) == [], "a node that was not executed leaves no file behind"
+        assert [(f["status"], f["reason"]) for f in _frames_of(events, node_id)] == [
+            ("not_executed", left_out[node_id])
+        ]
+    assert {node_id: _frames_of(events, node_id)[-1]["status"] for node_id in ran} == dict.fromkeys(ran, "completed")
+    expected_summary = {"total": 6, "completed": 6 - len(left_out), "failed": 0, "skipped": 0, "cancelled": 0}
+    assert result.summary == {**expected_summary, **({"not_executed": len(left_out)} if left_out else {})}
+
+    # `report` runs on every path and reads the patch that may not exist, above the note.
+    body, note = _split_note(_prompt_of(store, "report"))
+    assert "selects them: patch." in note
+    if "patch" in left_out:
+        assert _block(body, "Patch") == MISSING_OUTPUT_TEXT
+        assert body.count(MISSING_OUTPUT_TEXT) == 1
+    else:
+        assert _fences(_block(body, "Patch"), "Patched: the audit finding is closed.")
+        assert MISSING_OUTPUT_TEXT not in body, "the note is there all the same, and nothing is missing"
+    assert note.count(MISSING_OUTPUT_TEXT) == 1
+
+
+@pytest.mark.parametrize(
+    ("inner", "route", "status", "reason"),
+    [
+        pytest.param(
+            {"depends_on": ["fix"]},
+            "question",
+            "not_executed",
+            "upstream_not_executed",
+            id="every-input-lies-inside-the-branch",
+        ),
+        pytest.param(
+            {"depends_on": ["fix", "prep"]}, "question", "completed", None, id="an-input-outside-and-no-guard"
+        ),
+        pytest.param(
+            {"depends_on": ["fix", "triage"], "when": "triage.done"},
+            "question",
+            "completed",
+            None,
+            id="done-holds-whichever-route-is-selected",
+        ),
+        pytest.param(
+            {"depends_on": ["fix", "triage"], "when": "triage.bug"},
+            "question",
+            "not_executed",
+            "when_false",
+            id="the-route-keeps-it-off-the-other-path",
+        ),
+        pytest.param(
+            {"depends_on": ["fix", "triage"], "when": "triage.bug"},
+            "bug",
+            "completed",
+            None,
+            id="the-same-guard-on-the-selected-path",
+        ),
+    ],
+)
+async def test_branch_e2e_a_node_inside_a_branch_needs_a_guard_once_something_outside_it_feeds_the_node(
+    inner: dict, route: str, status: str, reason: str | None
+) -> None:
+    graph = _bgraph(
+        _bnode("triage", routes={"bug": "a defect in the code", "question": "anything else"}),
+        _bnode("prep"),
+        _bnode("fix", depends_on=["triage"], when="triage.bug"),
+        _bnode("inner", prompt_template="## Fix\n{{ fix.output }}", **inner),
+    )
+    agent = _AnsweringExec({"fix": "Fixed: the parser keeps the final record."})
+
+    result, store = await _settle_run(graph, _scripted_judge({"triage": ((route,), "quote")}), agent)
+
+    manifest = _manifest_nodes(store, result)
+    assert (manifest["inner"]["status"], manifest["inner"].get("reason")) == (status, reason)
+    assert (manifest["fix"]["status"], manifest["fix"].get("reason")) == (
+        ("completed", None) if route == "bug" else ("not_executed", "when_false")
+    )
+    dispatched = {call["task_id"] for call in agent.calls}
+    assert dispatched == {"prep", "triage"} | ({"fix"} if route == "bug" else set()) | (
+        {"inner"} if status == "completed" else set()
+    )
+    if status == "not_executed":
+        assert _files_of(store, "inner") == []
+        return
+    # It ran: on the path that took the branch it read the real result, and on the other it read the sentence.
+    body, note = _split_note(_prompt_of(store, "inner"))
+    assert "selects them: fix." in note
+    if route == "bug":
+        assert _fences(_block(body, "Fix"), "Fixed: the parser keeps the final record.")
+    else:
+        assert _block(body, "Fix") == MISSING_OUTPUT_TEXT
+
+
+async def test_branch_e2e_one_tool_call_classifies_runs_one_branch_and_merges(tmp_path: Path) -> None:
+    async with draining_dag_runs():
+        tool = _foreground_tool(tmp_path, [])
+        tool._judge_node = lambda: _picking_judge({"triage": ("bug",), "risk": ("low",)})  # type: ignore[method-assign]
+
+        out = await tool.execute(task_summary="triage issue 123", nodes=_triage_nodes("echo"), background=False)
+
+    run_id, run_dir, nodes = _facts_of(out.model_text)
+    head, _, terminal = out.model_text.partition("\n\nTerminal outputs:\n")
+    assert head == "\n".join(
+        [
+            f"DAG run {run_id} finished: 4 completed, 0 failed, 0 cancelled, 0 skipped, 2 not executed (of 6).",
+            f"Run dir: {run_dir}",
+            "",
+            "Node output files:",
+            f"- triage [completed]: {nodes / 'triage.out.md'}",
+            "    selected_routes: bug",
+            f"- risk [completed]: {nodes / 'risk.out.md'}",
+            "    selected_routes: low",
+            f"- fix [completed]: {nodes / 'fix.out.md'}",
+            "- design [not_executed]: (no output file)",
+            "    reason: when_false",
+            "- deep_review [not_executed]: (no output file)",
+            "    reason: when_false",
+            f"- reply [completed]: {nodes / 'reply.out.md'}",
+        ]
+    )
+    assert re.findall(r"^### (\S+)$", terminal, re.MULTILINE) == ["risk", "reply"], (
+        "`risk` has one dependent and it was not executed, so its output is the last word on its path"
+    )
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert {node_id: (m["status"], m.get("reason")) for node_id, m in manifest.items()} == {
+        "triage": ("completed", None),
+        "risk": ("completed", None),
+        "fix": ("completed", None),
+        "design": ("not_executed", "when_false"),
+        "deep_review": ("not_executed", "when_false"),
+        "reply": ("completed", None),
+    }
+    assert (manifest["triage"]["selected_routes"], manifest["risk"]["selected_routes"]) == (["bug"], ["low"])
+    assert {"fix.prompt.md", "reply.prompt.md", "risk.prompt.md", "triage.prompt.md"} <= {
+        path.name for path in nodes.glob("*.prompt.md")
+    }
+    assert not [path.name for path in nodes.iterdir() if path.name.split(".")[0] in {"design", "deep_review"}], (
+        "a node that was not executed left no file at all, not even a prompt"
+    )
+    triage_said = (nodes / "triage.out.md").read_text(encoding="utf-8")
+    assert triage_said.strip(), "the echo agent returned the prompt it was given"
+    fix_prompt = (nodes / "fix.prompt.md").read_text(encoding="utf-8")
+    assert _fences(_block(fix_prompt, "Triage"), triage_said)
+    body, note = _split_note((nodes / "reply.prompt.md").read_text(encoding="utf-8"))
+    assert "selects them: fix, design." in note
+    assert _block(body, "Design proposal") == MISSING_OUTPUT_TEXT
+    assert body.count(MISSING_OUTPUT_TEXT) == 1
+    assert note.count(MISSING_OUTPUT_TEXT) == 1
+
+
+# --- a run's reports name the span that dispatched its graph -------------------
+
+
+_ADDRESS = {"channel": "web", "chat_id": "default", "session_key": "web:sess1"}
+
+
+def _traced(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from raven.tracing import spans as _spans
+
+    monkeypatch.setenv("RAVEN_TRACING", "1")
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path / "traces"))
+    _spans._store = None
+
+
+def _echo_tool(tmp_path: Path, announce: Any) -> SubAgentDagTool:
+    tool = SubAgentDagTool(
+        workspace=tmp_path,
+        agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
+        announce=announce,
+    )
+    tool.set_context("web", "default", "web:sess1")
+    return tool
+
+
+async def test_a_backgrounded_graph_s_result_links_to_the_span_that_dispatched_it(tmp_path, monkeypatch) -> None:
+    _traced(monkeypatch, tmp_path)
+    announces = _Announces()
+    async with draining_dag_runs():
+        tool = _echo_tool(tmp_path, announces)
+        with trace.span("tool.call") as dispatch:
+            await tool.execute(task_summary="one node", nodes=_SOLO)
+        ((_run_id, _summary, origin),) = await announces.wait()
+
+    assert trace.dispatch_link_of(origin) == (dispatch.trace_id, dispatch.span_id)
+
+
+async def test_a_graph_dispatched_outside_any_span_reports_with_no_link(tmp_path, monkeypatch) -> None:
+    from raven.agent.subagent.manager import SubagentManager
+
+    _traced(monkeypatch, tmp_path)
+    announces = _Announces()
+    async with draining_dag_runs():
+        tool = _echo_tool(tmp_path, announces)
+        await tool.execute(task_summary="one node", nodes=_SOLO)
+        ((run_id, summary, origin),) = await announces.wait()
+
+    assert origin == _ADDRESS, "no dispatching span, so no link keys on the origin"
+    manager = SubagentManager(provider=SimpleNamespace(get_default_model=lambda: "stub"), workspace=tmp_path)
+    submitted: list[Any] = []
+    manager.set_submit(submitted.append)
+    with trace.span("unrelated.op"):
+        await manager.announce_dag_result(run_id, summary, origin)
+    assert submitted[0].dispatch_link is None, "the span the report is sent from is not where the graph came from"
+
+
+async def test_a_released_foreground_graph_links_each_report_to_its_attempt_and_its_result_to_the_dispatch(
+    tmp_path, monkeypatch
+) -> None:
+    """Released at its turn's end, after every span involved has closed: a node's report
+    still names the attempt that sent it, and the graph's result the span that dispatched it."""
+    from raven.config.raven import SubagentDagConfig
+
+    _traced(monkeypatch, tmp_path)
+    reports: list[tuple[str, dict]] = []
+    finals: list[dict] = []
+
+    async def _announce_exception(run_id: str, node_id: str, report: str, origin: dict, **_kwargs: Any) -> None:
+        reports.append((node_id, origin))
+
+    async def _announce(run_id: str, summary: str, origin: dict) -> None:
+        finals.append(origin)
+
+    async with draining_dag_runs():
+        tool = _foreground_tool(
+            tmp_path,
+            [_falls_short("token a"), _falls_short("token b")],
+            announce=_announce,
+            announce_exception=_announce_exception,
+            verdict_config=SubagentDagConfig(adjudication_timeout_seconds=0.1),
+        )
+        with trace.span("tool.call") as dispatch:
+            await tool.execute(task_summary="fg", nodes=_PAIR, background=False)
+        (run_id,) = list(tool._runs)
+        run_task = tool._runs[run_id]
+        await _both_suspended(tool, run_id)
+
+        assert trace.dispatch_link() is None
+        await tool.release_turn("web:fg", flush=True)
+        await asyncio.wait_for(run_task, timeout=5)
+
+    spans = _recorded(tmp_path / "traces")
+    assert {node_id for node_id, _origin in reports} == {"a", "b"} and finals
+    for node_id, origin in reports:
+        (suspended,) = [a for a in _attempts(spans, node_id) if a["attributes"]["subagent.outcome"] == "exception"]
+        assert trace.dispatch_link_of(origin) == (suspended["traceId"], suspended["spanId"])
+        assert suspended["parentSpanId"] == dispatch.span_id
+    expected = (dispatch.trace_id, dispatch.span_id)
+    assert [trace.dispatch_link_of(origin) for origin in finals] == [expected] * len(finals)
+
+
+async def test_a_stint_s_progress_line_links_to_the_span_it_is_said_from(tmp_path, monkeypatch) -> None:
+    _traced(monkeypatch, tmp_path)
+    announces = _Announces()
+    tool = _echo_tool(tmp_path, announces)
+    address = dict(_ADDRESS)
+
+    with trace.span("stint.round") as here:
+        await tool.say("r1", "round 1 finished", address)
+    await tool.say("r2", "round 2 finished", address)
+    with trace.span("stint.round"):
+        await tool.say("r3", "round 3 finished", {**address, **trace.dispatch_attrs(("trace-o", "span-o"))})
+
+    links = [trace.dispatch_link_of(origin) for _run, _text, origin in announces.calls]
+    assert links == [(here.trace_id, here.span_id), None, ("trace-o", "span-o")]
+    assert address == _ADDRESS, "the stint's own address is not written into"
+
+
+# --- each attempt of a node is its own subagent.run span ---------------------
+
+
+def _recorded(directory: Path) -> list[dict[str, Any]]:
+    log = directory / "logs" / "audit-spans.log"
+    if not log.exists():
+        return []
+    return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _attempt_records(spans: list[dict[str, Any]], node_id: str) -> list[dict[str, Any]]:
+    return [s for s in spans if s["name"] == "subagent.run" and s["attributes"].get("subagent.node_id") == node_id]
+
+
+def _attempts(spans: list[dict[str, Any]], node_id: str) -> list[dict[str, Any]]:
+    """Each attempt's last record, by attempt number."""
+    last = {record["spanId"]: record for record in _attempt_records(spans, node_id)}
+    return sorted(last.values(), key=lambda record: record["attributes"]["subagent.attempt"])
+
+
+def _steps_of(spans: list[dict[str, Any]], node_id: str) -> list[dict[str, Any]]:
+    return [s for s in spans if s["attributes"].get("test.task_id") == node_id]
+
+
+def _nd(node_id: str, **extra: Any) -> dict[str, Any]:
+    return {
+        "id": node_id,
+        "subagent": "x",
+        "node_summary": f"step {node_id}",
+        "prompt_template": f"do {node_id}",
+        **extra,
+    }
+
+
+class _StepsExec:
+    """A backend whose run takes one model call and one tool call, each tagged with its task id.
+
+    A node named in ``gate`` stops between the two until ``release`` is set; one
+    named in ``fail`` raises the given exception once both have been taken.
+    """
+
+    def __init__(self, *, gate: set[str] = frozenset(), fail: dict[str, BaseException] | None = None) -> None:
+        self.gate = gate
+        self.fail = fail or {}
+        self.entered: dict[str, asyncio.Event] = {}
+        self.release = asyncio.Event()
+
+    def entered_event(self, node_id: str) -> asyncio.Event:
+        return self.entered.setdefault(node_id, asyncio.Event())
+
+    async def run(self, task: str, *, task_id: str, **_: Any) -> str:
+        with trace.span("llm.call", {"llm.provider": "stub", "llm.model": "m", "test.task_id": task_id}):
+            pass
+        self.entered_event(task_id).set()
+        if task_id in self.gate:
+            await self.release.wait()
+        with trace.span("tool.call", {"tool.name": "read_file", "test.task_id": task_id}):
+            pass
+        if task_id in self.fail:
+            raise self.fail[task_id]
+        return f"done {task_id}"
+
+
+async def _run_traced(root: Path, nodes: list[dict[str, Any]], exec_: Any, **kwargs: Any) -> DagRunResult:
+    return await run_dag(
+        parse_dag_spec({"task_summary": "a traced graph", "nodes": nodes}),
+        resolve=lambda node: exec_,
+        backend=LocalFileBackend(),
+        workdir=str(root),
+        run_root=str(root / "runs"),
+        nodes_root=str(root / "nodes"),
+        history_root=str(root),
+        session_key="web:sess1",
+        **kwargs,
+    )
+
+
+def _project_spans(directory: Path) -> list[Any]:
+    from raven.trajectory.entries import project_entries
+
+    return list(project_entries(_recorded(directory), state=directory).entries)
+
+
+async def test_parallel_nodes_each_record_their_own_span_with_their_own_steps_under_it(tmp_path, monkeypatch) -> None:
+    _traced(monkeypatch, tmp_path)
+    exec_ = _StepsExec(gate={"a", "b"})
+    with trace.span("tool.call", {"tool.name": "run_subagent_dag"}) as dispatch:
+        run = asyncio.create_task(_run_traced(tmp_path, [_nd("a"), _nd("b")], exec_))
+    # Both are past their model call before either is let go: the two attempts overlap.
+    await asyncio.wait_for(asyncio.gather(exec_.entered_event("a").wait(), exec_.entered_event("b").wait()), 5)
+    exec_.release.set()
+    result = await asyncio.wait_for(run, 10)
+
+    spans = _recorded(tmp_path / "traces")
+    for nid in ("a", "b"):
+        (final,) = _attempts(spans, nid)
+        attrs = final["attributes"]
+        assert {key: attrs.get(key) for key in _DAG_SPAN_KEYS} == {
+            "subagent.dispatch": "dag",
+            "subagent.dag_run_id": result.run_id,
+            "subagent.node_id": nid,
+            "subagent.attempt": 1,
+            "subagent.task_id": nid,
+            "subagent.agent": "x",
+            "subagent.handle": nid,
+            "subagent.label": f"step {nid}",
+            "subagent.task": f"do {nid}",
+            "subagent.origin_session": "web:sess1",
+            "subagent.in_progress": False,
+            "subagent.outcome": "completed",
+        }
+        assert "subagent.instance" not in attrs
+        assert final["status"]["code"] == "OK"
+        assert final["parentSpanId"] == dispatch.span_id
+        records = _attempt_records(spans, nid)
+        assert len(records) == 2, "a checkpoint when the attempt opens, the final record when it closes"
+        assert records[0]["attributes"]["subagent.in_progress"] is True
+        assert "subagent.outcome" not in records[0]["attributes"]
+        steps = _steps_of(spans, nid)
+        assert sorted(step["name"] for step in steps) == ["llm.call", "tool.call"]
+        assert {step["parentSpanId"] for step in steps} == {final["spanId"]}
+
+
+_DAG_SPAN_KEYS = (
+    "subagent.dispatch",
+    "subagent.dag_run_id",
+    "subagent.node_id",
+    "subagent.attempt",
+    "subagent.task_id",
+    "subagent.agent",
+    "subagent.handle",
+    "subagent.label",
+    "subagent.task",
+    "subagent.origin_session",
+    "subagent.in_progress",
+    "subagent.outcome",
+)
+
+
+async def test_the_nodes_of_one_instance_record_one_span_each_in_turn(tmp_path, monkeypatch) -> None:
+    from datetime import datetime
+
+    _traced(monkeypatch, tmp_path)
+    await _run_traced(tmp_path, [_nd("a", instance="w"), _nd("b", instance="w")], _StepsExec())
+
+    spans = _recorded(tmp_path / "traces")
+    (first,) = _attempts(spans, "a")
+    (second,) = _attempts(spans, "b")
+    for final in (first, second):
+        assert final["attributes"]["subagent.instance"] == "w"
+        assert final["attributes"]["subagent.handle"] == "w"
+    assert datetime.fromisoformat(first["endTime"]) <= datetime.fromisoformat(second["startTime"])
+
+
+@pytest.mark.parametrize(
+    ("missing", "reason"),
+    [
+        ("a token", "a token"),
+        (None, "The node did not accomplish its task."),
+        ("", "The node did not accomplish its task."),
+    ],
+)
+async def test_an_attempt_sent_its_judge_s_follow_up_is_an_error_and_the_retry_its_own_span(
+    tmp_path, monkeypatch, missing, reason
+) -> None:
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    _traced(monkeypatch, tmp_path)
+    judged: list[dict] = []
+
+    async def _judge(**kwargs: Any) -> Verdict:
+        judged.append(kwargs)
+        if len(judged) == 1:
+            return Verdict(accomplished=False, follow_up="try again", what_is_missing=missing)
+        return Verdict(accomplished=True)
+
+    result = await _run_traced(tmp_path, [_nd("a")], _StepsExec(), judge_node=_judge)
+
+    assert result.summary["completed"] == 1
+    spans = _recorded(tmp_path / "traces")
+    first, second = _attempts(spans, "a")
+    assert first["spanId"] != second["spanId"]
+    assert [first["attributes"]["subagent.attempt"], second["attributes"]["subagent.attempt"]] == [1, 2]
+    assert first["attributes"]["subagent.outcome"] == "continued"
+    assert first["status"] == {"code": "ERROR", "message": reason}
+    assert second["attributes"]["subagent.outcome"] == "completed"
+    assert second["status"]["code"] == "OK"
+    entries = [e for e in _project_spans(tmp_path / "traces") if e.span_id == first["spanId"]]
+    assert entries and {e.operation_status for e in entries} == {"error"}
+
+
+async def test_a_node_continued_by_the_main_agent_records_each_attempt(tmp_path, monkeypatch) -> None:
+    from raven.agent.subagent.dag_adjudication import CONTINUE, AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    _traced(monkeypatch, tmp_path)
+    desk = AdjudicationDesk()
+    judged: list[dict] = []
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        desk.resolve(node_id, CONTINUE, "use the staging token")
+
+    async def _judge(**kwargs: Any) -> Verdict:
+        judged.append(kwargs)
+        return Verdict(accomplished=len(judged) > 1, category="missing_credential", what_is_missing="a token")
+
+    result = await _run_traced(
+        tmp_path,
+        [_nd("a")],
+        _StepsExec(),
+        desk=desk,
+        judge_node=_judge,
+        announce_exception=_announce,
+        origin=_TEST_ORIGIN,
+        adjudication_timeout_s=5,
+    )
+
+    assert result.summary["completed"] == 1
+    first, second = _attempts(_recorded(tmp_path / "traces"), "a")
+    assert first["spanId"] != second["spanId"]
+    assert [first["attributes"]["subagent.attempt"], second["attributes"]["subagent.attempt"]] == [1, 2]
+    assert first["attributes"]["subagent.outcome"] == "exception"
+    assert first["status"] == {"code": "ERROR", "message": "a token"}
+    assert second["attributes"]["subagent.outcome"] == "completed"
+    assert second["status"]["code"] == "OK"
+
+
+@pytest.mark.parametrize("error", [RuntimeError("boom a"), RuntimeError()])
+async def test_a_failed_attempt_is_an_error_with_a_reason(tmp_path, monkeypatch, error) -> None:
+    _traced(monkeypatch, tmp_path)
+
+    result = await _run_traced(tmp_path, [_nd("a")], _StepsExec(fail={"a": error}))
+
+    (final,) = _attempts(_recorded(tmp_path / "traces"), "a")
+    assert final["attributes"]["subagent.outcome"] == "failed"
+    assert final["status"]["code"] == "ERROR"
+    assert final["status"]["message"], "a failed attempt always says why"
+    if str(error):
+        assert str(error) in final["status"]["message"]
+    recorded = {f["node"]: f for f in result.files}["a"]["error"] or ""
+    assert recorded == str(error), "the run's own record keeps what the node raised"
+
+
+async def test_an_exception_report_is_sent_from_inside_the_attempt_it_is_about(tmp_path, monkeypatch) -> None:
+    from raven.agent.subagent.dag_adjudication import ABANDON, AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    _traced(monkeypatch, tmp_path)
+    desk = AdjudicationDesk()
+    sent_from: list[tuple[str, str] | None] = []
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        sent_from.append(trace.dispatch_link())
+        desk.resolve(node_id, ABANDON, None)
+
+    async def _judge(**_: Any) -> Verdict:
+        return Verdict(accomplished=False, category="missing_credential", what_is_missing="a token")
+
+    await _run_traced(
+        tmp_path,
+        [_nd("a")],
+        _StepsExec(),
+        desk=desk,
+        judge_node=_judge,
+        announce_exception=_announce,
+        origin=_TEST_ORIGIN,
+        adjudication_timeout_s=5,
+    )
+
+    (final,) = _attempts(_recorded(tmp_path / "traces"), "a")
+    assert sent_from == [(final["traceId"], final["spanId"])]
+    assert final["attributes"]["subagent.outcome"] == "exception"
+    assert final["status"] == {"code": "ERROR", "message": "a token"}
+
+
+async def test_the_judge_s_model_call_nests_under_the_attempt_it_judges(tmp_path, monkeypatch) -> None:
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    _traced(monkeypatch, tmp_path)
+
+    async def _judge(*, node, **_: Any) -> Verdict:
+        with trace.span("llm.call", {"llm.purpose": "dag_verdict", "test.task_id": f"judge:{node.id}"}):
+            pass
+        return Verdict(accomplished=True)
+
+    with trace.span("tool.call", {"tool.name": "run_subagent_dag"}):
+        await _run_traced(tmp_path, [_nd("a")], _StepsExec(), judge_node=_judge)
+
+    spans = _recorded(tmp_path / "traces")
+    (final,) = _attempts(spans, "a")
+    (judge_call,) = _steps_of(spans, "judge:a")
+    assert judge_call["parentSpanId"] == final["spanId"]
+
+
+@pytest.mark.parametrize("stop", ["cancel_event", "cancel_task"])
+async def test_a_stopped_attempt_is_recorded_cancelled_not_completed(tmp_path, monkeypatch, stop) -> None:
+    _traced(monkeypatch, tmp_path)
+    exec_ = _StepsExec(gate={"a"})
+    cancel = asyncio.Event()
+    run = asyncio.create_task(_run_traced(tmp_path, [_nd("a")], exec_, cancel=cancel))
+    await asyncio.wait_for(exec_.entered_event("a").wait(), 5)
+
+    if stop == "cancel_event":
+        cancel.set()
+        await asyncio.wait_for(run, 10)
+    else:
+        run.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(run, 10)
+
+    (final,) = _attempts(_recorded(tmp_path / "traces"), "a")
+    assert final["attributes"]["subagent.in_progress"] is False
+    assert final["attributes"]["subagent.outcome"] == "cancelled"
+    assert final["status"]["code"] == "OK"
+
+
+async def test_a_node_whose_branch_is_not_selected_records_no_span(tmp_path, monkeypatch) -> None:
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    _traced(monkeypatch, tmp_path)
+
+    async def _judge(*, node, **_: Any) -> Verdict:
+        return Verdict(accomplished=True, routes=("go",) if node.routes else None)
+
+    routes = {"go": "the work can go ahead", "stop": "the work has to stop"}
+    await _run_traced(
+        tmp_path,
+        [_nd("r", routes=routes), _nd("g", depends_on=["r"], when="r.stop")],
+        _StepsExec(),
+        judge_node=_judge,
+    )
+
+    spans = _recorded(tmp_path / "traces")
+    assert len(_attempts(spans, "r")) == 1
+    assert _attempt_records(spans, "g") == []
+
+
+async def test_a_node_skipped_behind_a_failed_dependency_records_no_span(tmp_path, monkeypatch) -> None:
+    _traced(monkeypatch, tmp_path)
+
+    await _run_traced(tmp_path, [_nd("a"), _nd("b", depends_on=["a"])], _StepsExec(fail={"a": RuntimeError("boom a")}))
+
+    spans = _recorded(tmp_path / "traces")
+    assert len(_attempts(spans, "a")) == 1
+    assert _attempt_records(spans, "b") == []
+
+
+async def test_a_node_still_queued_when_the_run_stops_records_no_span(tmp_path, monkeypatch) -> None:
+    _traced(monkeypatch, tmp_path)
+    exec_ = _StepsExec(gate={"a", "b"})
+    cancel = asyncio.Event()
+    run = asyncio.create_task(
+        _run_traced(tmp_path, [_nd("a"), _nd("b")], exec_, cancel=cancel, semaphore=asyncio.Semaphore(1))
+    )
+    entered = [asyncio.ensure_future(exec_.entered_event(nid).wait()) for nid in ("a", "b")]
+    await asyncio.wait_for(asyncio.wait(entered, return_when=asyncio.FIRST_COMPLETED), 5)
+    for waiter in entered:
+        waiter.cancel()
+    cancel.set()
+    await asyncio.wait_for(run, 10)
+
+    spans = _recorded(tmp_path / "traces")
+    started = [nid for nid in ("a", "b") if _attempt_records(spans, nid)]
+    assert len(started) == 1, f"one node held the only slot and the other never ran: {started}"
+
+
+async def test_an_external_agent_s_span_nests_under_the_attempt_that_ran_it(tmp_path, monkeypatch) -> None:
+    from raven.agent.subagent.backends.observability import external_agent_span
+
+    _traced(monkeypatch, tmp_path)
+
+    class _ExternalExec:
+        async def run(self, task: str, *, task_id: str, **_: Any) -> str:
+            with external_agent_span(agent="echo", transport="cli", task_id=task_id, instance=task_id):
+                pass
+            return "done"
+
+    await _run_traced(tmp_path, [_nd("a")], _ExternalExec())
+
+    spans = _recorded(tmp_path / "traces")
+    (final,) = _attempts(spans, "a")
+    (external,) = [s for s in spans if s["name"] == "subagent.external"]
+    assert external["parentSpanId"] == final["spanId"]
+    assert external["attributes"]["subagent.external.task_id"] == final["attributes"]["subagent.task_id"]
+
+
+async def test_a_graph_runs_the_same_with_tracing_off(tmp_path, monkeypatch) -> None:
+    from raven.tracing import config as tracing_config
+    from raven.tracing import spans as _spans
+
+    nodes = [_nd("a"), _nd("b"), _nd("c")]
+
+    async def _run_with(tracing: str) -> tuple[DagRunResult, Path]:
+        directory = tmp_path / f"traces-{tracing}"
+        monkeypatch.setenv("RAVEN_TRACING", tracing)
+        monkeypatch.setenv("RAVEN_TRACING_DIR", str(directory))
+        _spans._store = None
+        assert tracing_config.enabled() is (tracing == "1")
+        result = await _run_traced(tmp_path / f"run-{tracing}", nodes, _StepsExec(fail={"c": RuntimeError("boom c")}))
+        _spans._store = None
+        return result, directory
+
+    traced, on_dir = await _run_with("1")
+    untraced, off_dir = await _run_with("0")
+
+    assert _attempts(_recorded(on_dir), "a"), "the traced run does record its attempts"
+    assert _recorded(off_dir) == []
+    assert untraced.summary == traced.summary
+
+    def _outcomes(result: DagRunResult) -> dict[str, tuple[Any, Any]]:
+        return {f["node"]: (f["status"], f["error"]) for f in result.files}
+
+    assert _outcomes(untraced) == _outcomes(traced)
+
+
+async def test_a_running_attempt_projects_running_with_its_steps_in_the_dispatching_turn(tmp_path, monkeypatch) -> None:
+    _traced(monkeypatch, tmp_path)
+    exec_ = _StepsExec(gate={"a"})
+    with trace.span("session.turn", root=True, session_key="web:sess1"):
+        with trace.span("tool.call", {"tool.name": "run_subagent_dag"}):
+            run = asyncio.create_task(_run_traced(tmp_path, [_nd("a")], exec_))
+    await asyncio.wait_for(exec_.entered_event("a").wait(), 5)
+
+    entries = _project_spans(tmp_path / "traces")
+    (running,) = [e for e in entries if e.span_name == "subagent.run"]
+    assert running.operation_status == "running"
+    assert running.status_evidence == ("subagent_in_progress",)
+    assert running.duration_ms is None
+    steps = [e for e in entries if e.span_name == "llm.call"]
+    assert steps and all(e.turn_number == 1 and "turn_unknown" not in e.integrity for e in steps)
+
+    exec_.release.set()
+    await asyncio.wait_for(run, 10)
+    (finished,) = [e for e in _project_spans(tmp_path / "traces") if e.span_name == "subagent.run"]
+    assert finished.operation_status == "ok"
+    assert isinstance(finished.duration_ms, int)
+
+
+# --- a report an attempt sends links its turn to that attempt ----------------
+
+
+async def _suspend_and_abandon(tmp_path: Path, announce: Any, origin: dict) -> DagRunResult:
+    """One node judged short and suspended; ``announce`` hears the report and the node is abandoned."""
+    from raven.agent.subagent.dag_adjudication import ABANDON, AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+
+    async def _announce(run_id, node_id, report, origin, **kwargs):
+        await announce(run_id, node_id, report, origin, **kwargs)
+        desk.resolve(node_id, ABANDON, None)
+
+    async def _judge(**_: Any) -> Verdict:
+        return Verdict(accomplished=False, category="missing_credential", what_is_missing="a token")
+
+    return await _run_traced(
+        tmp_path,
+        [_nd("a")],
+        _StepsExec(),
+        desk=desk,
+        judge_node=_judge,
+        announce_exception=_announce,
+        origin=origin,
+        adjudication_timeout_s=5,
+    )
+
+
+async def test_an_exception_report_links_its_turn_to_the_attempt_that_sent_it(tmp_path, monkeypatch) -> None:
+    _traced(monkeypatch, tmp_path)
+    heard: list[dict] = []
+    origin = {**_ADDRESS, **trace.dispatch_attrs(("trace-d", "span-d"))}
+    before = dict(origin)
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        heard.append(origin)
+
+    await _suspend_and_abandon(tmp_path, _announce, origin)
+
+    (attempt,) = _attempts(_recorded(tmp_path / "traces"), "a")
+    assert [trace.dispatch_link_of(o) for o in heard] == [(attempt["traceId"], attempt["spanId"])]
+    assert origin == before, "the run's own origin keeps the graph's link for its result"
+
+
+async def test_a_stall_notice_links_its_turn_to_the_attempt_that_stalled(tmp_path, monkeypatch) -> None:
+    from raven.agent.subagent import dag_runner as runner_mod
+
+    _traced(monkeypatch, tmp_path)
+    monkeypatch.setattr(runner_mod, "STALL_NOTICE_S", 0.05)
+    exec_ = _StepsExec(gate={"a"})
+    notices: list[dict] = []
+
+    async def _announce(run_id, node_id, report, origin, *, awaiting_decision, informational=False, output=None):
+        if informational:
+            notices.append(origin)
+            exec_.release.set()
+
+    with trace.span("tool.call", {"tool.name": "run_subagent_dag"}) as dispatch:
+        origin = {**_ADDRESS, **trace.dispatch_attrs(trace.dispatch_link())}
+        await asyncio.wait_for(
+            _run_traced(tmp_path, [_nd("a")], exec_, announce_exception=_announce, origin=origin), 10
+        )
+
+    (attempt,) = _attempts(_recorded(tmp_path / "traces"), "a")
+    assert attempt["parentSpanId"] == dispatch.span_id
+    assert notices, "the gated node went quiet past the notice threshold"
+    assert {trace.dispatch_link_of(o) for o in notices} == {(attempt["traceId"], attempt["spanId"])}
+
+
+async def test_with_tracing_off_a_report_carries_the_origin_it_was_given(tmp_path, monkeypatch) -> None:
+    from raven.tracing import config as tracing_config
+
+    monkeypatch.setenv("RAVEN_TRACING", "0")
+    assert tracing_config.enabled() is False
+    heard: list[dict] = []
+    origin = {**_ADDRESS, **trace.dispatch_attrs(("trace-d", "span-d"))}
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        heard.append(origin)
+
+    await _suspend_and_abandon(tmp_path, _announce, origin)
+
+    assert heard == [origin]
+
+
+async def test_the_turn_an_exception_report_starts_links_to_the_attempt(tmp_path, monkeypatch) -> None:
+    from raven.agent.subagent.manager import SubagentManager
+
+    _traced(monkeypatch, tmp_path)
+    manager = SubagentManager(provider=SimpleNamespace(get_default_model=lambda: "stub"), workspace=tmp_path)
+    submitted: list[Any] = []
+    manager.set_submit(submitted.append)
+
+    with trace.span("tool.call", {"tool.name": "run_subagent_dag"}) as dispatch:
+        origin = {**_ADDRESS, **trace.dispatch_attrs(trace.dispatch_link())}
+        await _suspend_and_abandon(tmp_path, manager.announce_dag_exception, origin)
+
+    (attempt,) = _attempts(_recorded(tmp_path / "traces"), "a")
+    assert attempt["parentSpanId"] == dispatch.span_id
+    assert [request.dispatch_link for request in submitted] == [(attempt["traceId"], attempt["spanId"])]
+
+
+async def test_a_node_report_from_a_graph_dispatched_outside_any_span_carries_no_link(tmp_path, monkeypatch) -> None:
+    """A stint round resumed outside any turn, say. Its attempt roots a trace no turn
+    dispatched, so a report linked there would be reachable from no main-line turn;
+    with no link the report's turn is a main-line turn of its own."""
+    from raven.agent.subagent.manager import SubagentManager
+
+    _traced(monkeypatch, tmp_path)
+    manager = SubagentManager(provider=SimpleNamespace(get_default_model=lambda: "stub"), workspace=tmp_path)
+    submitted: list[Any] = []
+    manager.set_submit(submitted.append)
+
+    await _suspend_and_abandon(tmp_path, manager.announce_dag_exception, dict(_ADDRESS))
+
+    (attempt,) = _attempts(_recorded(tmp_path / "traces"), "a")
+    assert attempt["parentSpanId"] is None, "the attempt is still recorded, as the root of its own trace"
+    assert [request.dispatch_link for request in submitted] == [None]
+
+
+# --- every route into the runner nests its attempts under its caller ---------
+
+
+async def test_a_backgrounded_graph_s_attempts_nest_under_the_call_that_dispatched_it(tmp_path, monkeypatch) -> None:
+    _traced(monkeypatch, tmp_path)
+    announces = _Announces()
+    async with draining_dag_runs():
+        tool = _echo_tool(tmp_path, announces)
+        with trace.span("tool.call", {"tool.name": "run_subagent_dag"}) as dispatch:
+            await tool.execute(task_summary="two nodes", nodes=_PAIR)
+        await announces.wait()
+
+    spans = _recorded(tmp_path / "traces")
+    for nid in ("a", "b"):
+        (attempt,) = _attempts(spans, nid)
+        assert attempt["parentSpanId"] == dispatch.span_id
+        assert attempt["attributes"]["subagent.outcome"] == "completed"
+
+
+async def test_a_foreground_graph_s_attempts_nest_under_the_call_that_dispatched_it(tmp_path, monkeypatch) -> None:
+    _traced(monkeypatch, tmp_path)
+    async with draining_dag_runs():
+        tool = _foreground_tool(tmp_path, [])
+        with trace.span("tool.call", {"tool.name": "run_subagent_dag"}) as dispatch:
+            await tool.execute(task_summary="fg", nodes=_PAIR, background=False)
+
+    spans = _recorded(tmp_path / "traces")
+    for nid in ("a", "b"):
+        (attempt,) = _attempts(spans, nid)
+        assert attempt["parentSpanId"] == dispatch.span_id

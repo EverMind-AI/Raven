@@ -104,6 +104,11 @@ DEFAULT_ALLOW_TOOLS: frozenset[str] = frozenset(
         # the call and tells the model it needs approval, so the attached
         # bases are never searched at all.
         "knowledge_search",
+        # Reads back only this conversation's own filed log, which the model
+        # already saw in full before the history strategy pruned it; asking for
+        # each read-back would leave a turn with nobody to ask unable to read
+        # what the default strategy cut.
+        "context_retrieve",
         "deliver_files",
         "message",
         "ask_user",

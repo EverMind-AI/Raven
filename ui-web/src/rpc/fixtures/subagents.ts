@@ -10,6 +10,8 @@
  * page chose.
  */
 
+import { RpcError } from '../transport'
+
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
 import type { ResultOf } from '../generated'
 import type { PushMethod } from '../notifications'
@@ -97,6 +99,15 @@ const ROSTER: Row[] = [
     description: 'MiroMind deep-research (OpenAI-compatible HTTP).' },
 ]
 
+/* The presets a machine's node can start, as `subagents.presets` lists them. */
+const PRESETS: Array<{ preset: string; name: string; kind: 'acp' | 'cli'; description: string }> = [
+  { preset: 'claude_code', name: 'Claude Code', kind: 'acp', description: 'An agentic coding tool that reads your codebase, edits files, runs commands, and integrates with your development tools.' },
+  { preset: 'codex', name: 'Codex', kind: 'acp', description: 'A coding agent from OpenAI that runs locally on your computer.' },
+  { preset: 'opencode', name: 'OpenCode', kind: 'acp', description: 'An open-source coding agent for the terminal.' },
+  { preset: 'hermes', name: 'Hermes Agent', kind: 'acp', description: 'A self-improving agent with a persistent memory.' },
+  { preset: 'openclaw', name: 'OpenClaw', kind: 'acp', description: 'An open-source agent for your own computer.' },
+]
+
 export interface SubagentsFixture {
   fixtures: Fixtures
 }
@@ -111,7 +122,44 @@ export function createSubagents(env: FixtureEnv): SubagentsFixture {
   return {
     fixtures: {
       'subagents.list': () => ({ rows: rows.map((r) => ({ ...r })) }),
+      /* What the machine sheet's connect form chooses from: the presets a
+         machine's node can start, whether or not a row here holds them, with
+         where each already runs read off the roster. */
+      'subagents.presets': () => ({
+        presets: PRESETS.map((p) => ({
+          ...p,
+          connected_here: rows.some((r) => r.preset === p.preset && r.configured && !r.machine),
+          on_machines: rows.filter((r) => r.preset === p.preset && r.configured && !!r.machine && r.enabled).map((r) => String(r.machine)),
+          off_on_machines: rows
+            .filter((r) => r.preset === p.preset && r.configured && !!r.machine && !r.enabled)
+            .map((r) => ({ machine: String(r.machine), name: r.name })),
+        })),
+      }),
       'subagents.add': (p) => {
+        if (p.machine) {
+          /* An add on a machine makes a second row of the preset, under
+             <preset>@<machine> unless the caller named it, drawn from the
+             preset's own row when the roster has one, so the offline page
+             shows the card it would. One preset once per machine, as the
+             server holds it: a second one there under the default name is
+             refused, naming the entry the machine has. */
+          const name = p.name || `${p.preset}@${p.machine}`
+          const there = rows.find((r) => r.preset === p.preset && r.configured && r.machine === p.machine)
+          if (there && !p.name) {
+            throw new RpcError(-32011, 'config_validation_error', {
+              detail: `preset '${p.preset}' is already on machine '${p.machine}' as '${there.name}' (connected); use that entry, or give this one a name of its own`,
+            })
+          }
+          const base = rows.find((r) => r.preset === p.preset) || find(p.preset || '')
+          if (base) {
+            rows.push({
+              ...base, name, machine: p.machine, configured: true, enabled: true,
+              group: 'installed', probe_status: 'ready', probe_detail: `runs on machine ${p.machine}; it ran and replied`,
+              last_test_ok: true, last_test_at_ms: env.now(), model_choices: [...(base.model_choices || [])],
+            })
+          }
+          return { added: true, name }
+        }
         const row = find(p.name || p.preset || '')
         if (row) {
           row.configured = true

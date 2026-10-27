@@ -20,6 +20,8 @@ import pytest
 from raven.acp_client import remote
 from raven.acp_client.remote import Machine, RemoteMachineError
 
+pytestmark = pytest.mark.usefixtures("no_real_ssh_g")
+
 HOST = "203.0.113.7"
 PORT = 58717
 KEY = "/keys/id_raven_test"
@@ -563,3 +565,238 @@ def test_the_files_note_names_what_came_with_the_task_by_address_and_nothing_els
     assert note.endswith("- /Users/me/sales.csv\n- /tmp/a b.png")
     assert "machine 'Lab box' (box)" in note
     assert remote.files_note([], target) == "" and remote.files_note([SimpleNamespace(path=None)], target) == ""
+
+
+# ---- a machine registered with a password: the link, the push and the tunnel ask askpass ----
+
+PASSWORD_ROW = {k: v for k, v in ROW.items() if k != "key"} | {"auth": "password"}
+
+
+def _pw() -> Machine:
+    return Machine(id="box", display_name="Lab box", _row=dict(PASSWORD_ROW))
+
+
+def _resolving_ssh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An ssh first on PATH that answers ``-G`` with the row's address, as a machine with no config would."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / "ssh").write_text(f'#!/bin/sh\n[ "$1" = -G ] && echo "hostname {HOST}"\nexit 0\n', encoding="utf-8")
+    (bin_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+
+def test_the_ssh_command_for_a_password_machine_offers_no_key_and_the_link_gets_the_askpass_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, supported_host
+):
+    from raven.ops.connection_add import store_password
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    store_password("box", "hunter2")
+    _resolving_ssh(tmp_path, monkeypatch)
+
+    argv = remote.ssh_command(_pw(), "node --stdio", ssh_log=tmp_path / "box.log")
+
+    assert "-i" not in argv and "BatchMode=yes" not in argv and KEY not in argv
+    assert "PubkeyAuthentication=no" in argv and "-T" in argv and "-E" in argv
+    env = remote.ssh_environment(_pw())
+    assert env["SSH_ASKPASS_REQUIRE"] == "force" and "hunter2" not in "".join(env.values())
+    assert remote.ssh_environment(_box()) == {}
+
+
+def test_a_password_machine_with_no_password_kept_here_is_refused_by_name_not_as_a_network_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, supported_host
+):
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+
+    with pytest.raises(RemoteMachineError, match=r"machine 'Lab box' \(box\): no password is kept here"):
+        remote.ssh_command(_pw(), "node", ssh_log=tmp_path / "l")
+    with pytest.raises(RemoteMachineError, match="no password is kept here"):
+        remote.ssh_environment(_pw())
+
+
+def test_push_hands_ssh_the_askpass_environment_for_a_password_machine_and_nothing_for_a_key_machine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, supported_host
+):
+    from raven.ops.connection_add import store_password
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    store_password("box", "hunter2")
+    seen: list[tuple[list[str], dict | None, bool]] = []
+
+    def run(argv, **kwargs):
+        if "-G" in argv:
+            # How ssh resolves the host for the helper's prompt: a config dump, not a connection.
+            return subprocess.CompletedProcess(argv, 0, "hostname 203.0.113.7\n", "")
+        seen.append((argv, kwargs.get("env"), kwargs.get("start_new_session", False)))
+        return subprocess.CompletedProcess(argv, 0, b"ok", b"")
+
+    monkeypatch.setattr(remote.subprocess, "run", run)
+
+    assert remote.push(_pw(), "cat > /dev/null", b"data") == (0, "ok")
+    assert remote.push(_box(), "cat > /dev/null", b"data") == (0, "ok")
+
+    (argv_pw, env_pw, session_pw), (argv_key, env_key, session_key) = seen
+    assert env_pw["SSH_ASKPASS_REQUIRE"] == "force" and "-i" not in argv_pw
+    assert env_key is None and "-i" in argv_key
+    assert session_pw is True and session_key is False
+    for option in ("ProxyJump=none", "ProxyCommand=none"):
+        assert option in argv_pw, option
+
+
+async def test_the_tunnel_hands_ssh_the_askpass_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, supported_host
+):
+    from raven.ops.connection_add import store_password
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    monkeypatch.setattr("raven.config.paths.get_logs_dir", lambda: tmp_path / "logs")
+    store_password("box", "hunter2")
+    _resolving_ssh(tmp_path, monkeypatch)
+    spawned: list[dict] = []
+
+    class _Proc:
+        returncode = None
+
+        async def wait(self):
+            self.returncode = 0
+            return 0
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+    async def spawn(*argv, **kwargs):
+        spawned.append(
+            {"argv": list(argv), "env": kwargs.get("env"), "session": kwargs.get("start_new_session", False)}
+        )
+        return _Proc()
+
+    async def up(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(remote.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(remote, "_tunnel_up", up)
+
+    async with remote.tunnel(_pw(), "http://127.0.0.1:8000/v1", ssh_log=tmp_path / "tunnel.log") as forwarded:
+        assert forwarded.url.startswith("http://127.0.0.1:")
+
+    (one,) = spawned
+    assert one["env"]["SSH_ASKPASS_REQUIRE"] == "force" and "-i" not in one["argv"] and "-L" in one["argv"]
+    assert one["session"] is True, "no controlling terminal for the tunnel's ssh either"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in ssh is a POSIX script")
+async def test_the_tunnel_asks_ssh_whose_prompt_to_answer_off_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, supported_host
+):
+    """The askpass environment runs ``ssh -G`` to learn which host ssh's prompt will name. On the loop, a
+    resolution waiting on DNS or a slow ``Match exec`` would hold every other turn the loop serves."""
+    import asyncio
+
+    from raven.ops.connection_add import store_password
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    monkeypatch.setattr("raven.config.paths.get_logs_dir", lambda: tmp_path / "logs")
+    store_password("box", "hunter2")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "ssh").write_text(f'#!/bin/sh\nsleep 1\necho "hostname {HOST}"\n', encoding="utf-8")
+    (bin_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+    class _Proc:
+        returncode = None
+
+        async def wait(self):
+            self.returncode = 0
+            return 0
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+    async def spawn(*argv, **kwargs):
+        return _Proc()
+
+    async def up(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(remote.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(remote, "_tunnel_up", up)
+    ticks = 0
+
+    async def tick():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.05)
+            ticks += 1
+
+    ticker = asyncio.create_task(tick())
+    try:
+        async with remote.tunnel(_pw(), "http://127.0.0.1:8000/v1", ssh_log=tmp_path / "tunnel.log"):
+            pass
+    finally:
+        ticker.cancel()
+
+    assert ticks >= 5, f"the loop ran {ticks} ticks of 50 ms while ssh -G took a second"
+
+
+def test_a_prompt_the_kept_password_does_not_answer_is_not_blamed_on_the_password():
+    """The helper gave ssh nothing, so the refusal that follows says nothing about the password; telling the
+    owner to check it sent them after a fault it did not have (reviewed 2026-10-20)."""
+    from raven.ops.transport import ASKPASS_REFUSED
+
+    refused = f"{ASKPASS_REFUSED}\nalice@203.0.113.7: Permission denied (keyboard-interactive)."
+
+    said = remote.explain(_pw(), remote.SSH_FAILED_RC, refused)
+
+    assert said is not None and "check the password" not in said and "was not sent" in said
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the askpass helper and the stand-in ssh are POSIX scripts")
+def test_a_host_ssh_could_not_resolve_is_named_when_the_helper_then_gives_the_prompt_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, supported_host
+):
+    """With ``ssh -G`` failing the helper waits for the row's own spelling; when the machine's prompt names the
+    host ssh did resolve, the helper declines. Saying the machine asked another question, and to use a key,
+    sent the owner the wrong way: the failed resolution is what is named."""
+    from raven.ops import transport
+    from raven.ops.connection_add import store_password
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "ssh").write_text("#!/bin/sh\necho 'ssh: Could not resolve hostname' >&2; exit 255\n")
+    (bin_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    store_password("box", "hunter2")
+    env = transport.ssh_env({**PASSWORD_ROW, "host": "ownerbox"})
+    helper = subprocess.run(
+        [env["SSH_ASKPASS"], "worker@192.0.2.8's password: "],
+        capture_output=True,
+        text=True,
+        env={**os.environ, **env},
+        timeout=30,
+    )
+    assert (helper.returncode, helper.stdout) == (1, "")
+
+    said = remote.explain(_pw(), remote.SSH_FAILED_RC, helper.stderr + "worker@192.0.2.8: Permission denied.\n")
+
+    assert said is not None and "check the password" not in said and "a key" not in said
+    assert "could not say which host" in said and "exited 255" in said
+
+
+def test_a_refused_login_names_the_password_for_a_password_machine_and_the_key_for_a_key_machine():
+    out = "worker@203.0.113.7: Permission denied (publickey,password)."
+
+    assert remote.explain(_box(), remote.SSH_FAILED_RC, out) == (
+        "machine 'Lab box' (box) refused the login; check the key it is registered with"
+    )
+    assert remote.explain(_pw(), remote.SSH_FAILED_RC, out) == (
+        "machine 'Lab box' (box) refused the login; check the password kept for it, and that the machine accepts "
+        "password logins"
+    )

@@ -22,6 +22,7 @@ from typing import Any
 
 from loguru import logger
 
+from raven.config.agent_names import canonical_agent_name
 from raven.utils.atomic_io import atomic_replace, write_transaction
 from raven.utils.paths import mint_slug
 
@@ -114,11 +115,18 @@ class InstanceRegistry:
         for rec in (raw.get("instances") if isinstance(raw, dict) else None) or []:
             if not isinstance(rec, dict):
                 continue
+            if isinstance(rec.get("agent"), str):
+                # A row written under a former name of a built-in row is keyed, and
+                # listed, under the current one: a resume asks with that name.
+                rec["agent"] = canonical_agent_name(rec["agent"])
             key = (rec.get("sessionKey"), rec.get("agent"), rec.get("handle"))
             if not all(isinstance(part, str) and part for part in key):
                 continue
             if "kind" not in rec:
                 rec["kind"] = "cli"
+            held = records.get(key)
+            if held is not None and (held.get("updatedAtMs") or 0) > (rec.get("updatedAtMs") or 0):
+                continue
             records[key] = rec  # type: ignore[index]
         self._records = records
         # Stamped from the stat taken BEFORE the read: a writer that lands
@@ -130,7 +138,14 @@ class InstanceRegistry:
     def _flush(self) -> None:
         assert self._records is not None  # noqa: S101
         data = {"version": 1, "instances": list(self._records.values())}
-        atomic_replace(self._path, json.dumps(data, indent=2, ensure_ascii=False))
+        try:
+            atomic_replace(self._path, json.dumps(data, indent=2, ensure_ascii=False))
+        except (TypeError, ValueError):
+            # A value the file cannot hold, such as text UTF-8 cannot encode. Each write
+            # flushes the whole cache, so a row left in it would fail every later write in
+            # the process, whichever session made it; the next read reloads the file instead.
+            self._records = None
+            raise
         # Our own write is not a reason to re-read on the next call.
         self._stamp = self._file_stamp()
 
@@ -143,7 +158,7 @@ class InstanceRegistry:
         Defaults to ``cli`` so every existing caller keeps its behaviour.
         """
         async with self._lock:
-            rec = self._load().get((session_key, agent, handle))
+            rec = self._load().get((session_key, canonical_agent_name(agent), handle))
         if not rec or rec.get("kind") != kind:
             return None
         return rec.get("agentId")
@@ -151,7 +166,7 @@ class InstanceRegistry:
     async def commit(self, session_key: str, agent: str, handle: str, agent_id: str, *, kind: str = "cli") -> None:
         async with self._lock:
             with write_transaction(self._path):
-                self._bind(self._load(), (session_key, agent, handle), agent_id, kind)
+                self._bind(self._load(), (session_key, canonical_agent_name(agent), handle), agent_id, kind)
 
     async def bind_if_absent(
         self, session_key: str, agent: str, handle: str, agent_id: str, *, kind: str = "cli"
@@ -176,7 +191,7 @@ class InstanceRegistry:
         async with self._lock:
             with write_transaction(self._path):
                 records = self._load()
-                key = (session_key, agent, handle)
+                key = (session_key, canonical_agent_name(agent), handle)
                 rec = records.get(key)
                 if rec and rec.get("kind") == kind and rec.get("agentId") and rec["agentId"] != agent_id:
                     return str(rec["agentId"])
@@ -220,6 +235,7 @@ class InstanceRegistry:
         when not given, so a status write after a successful create does not
         erase the session id ``commit`` already stored for that handle.
         """
+        agent = canonical_agent_name(agent)
         async with self._lock:
             with write_transaction(self._path):
                 records = self._load()
@@ -249,12 +265,32 @@ class InstanceRegistry:
                         e,
                     )
 
-    async def upsert_dag_node(self, session_key: str, run_id: str, node_id: str, agent: str, status: str) -> None:
-        """Record or update one DAG node's status.
+    async def upsert_dag_node(
+        self,
+        session_key: str,
+        run_id: str,
+        node_id: str,
+        agent: str,
+        status: str,
+        *,
+        reason: str | None = None,
+        selected_routes: list[str] | None = None,
+        route_evidence: str | None = None,
+    ) -> None:
+        """Record or update one DAG node's status, and what a branch decided about it.
 
         The handle is namespaced by run id so a node can never collide with a
         user-chosen CLI instance handle.
+
+        ``reason``, ``selected_routes`` and ``route_evidence`` are written as
+        ``reason``, ``selectedRoutes`` and ``routeEvidence``, each only when given;
+        an empty selection is given, since a decision that chose nothing has still
+        decided. Until the run's manifest is written they are the only durable
+        record of a branch's outcome. The record is rebuilt on every write, so the
+        row always says what the latest write said: a write without them leaves
+        none behind.
         """
+        agent = canonical_agent_name(agent)
         handle = f"{run_id}/{node_id}"
         async with self._lock:
             with write_transaction(self._path):
@@ -270,6 +306,9 @@ class InstanceRegistry:
                     "runId": run_id,
                     "nodeId": node_id,
                     "status": status,
+                    **({"reason": reason} if reason is not None else {}),
+                    **({"selectedRoutes": list(selected_routes)} if selected_routes is not None else {}),
+                    **({"routeEvidence": route_evidence} if route_evidence is not None else {}),
                     "createdAtMs": existing.get("createdAtMs", now),
                     "updatedAtMs": now,
                 }
@@ -298,6 +337,7 @@ class InstanceRegistry:
         still the node's, and a reader that saw only the ``dag-node`` row would
         report the graph twice.
         """
+        agent = canonical_agent_name(agent)
         async with self._lock:
             with write_transaction(self._path):
                 records = self._load()
@@ -342,7 +382,7 @@ class InstanceRegistry:
         async with self._lock:
             with write_transaction(self._path):
                 records = self._load()
-                key = (session_key, agent, handle)
+                key = (session_key, canonical_agent_name(agent), handle)
                 rec = records.get(key)
                 if rec is None or rec.get("agentId") is None:
                     return False
@@ -361,7 +401,7 @@ class InstanceRegistry:
         async with self._lock:
             with write_transaction(self._path):
                 records = self._load()
-                key = (session_key, agent, handle)
+                key = (session_key, canonical_agent_name(agent), handle)
                 if key not in records:
                     return False
                 del records[key]
@@ -440,8 +480,10 @@ def reconcile_instance_rows(
             # without this branch such a row read "running" forever.
             session_key = row.get("sessionKey", "")
             if session_key not in live_by_session:
-                live_by_session[session_key] = live_handles(session_key)
-            if (row.get("agent"), row.get("handle")) not in live_by_session[session_key]:
+                live_by_session[session_key] = {
+                    (canonical_agent_name(agent), handle) for agent, handle in live_handles(session_key)
+                }
+            if (canonical_agent_name(row.get("agent", "")), row.get("handle")) not in live_by_session[session_key]:
                 out.append({**row, "status": "interrupted"})
                 continue
         out.append(row)
@@ -495,7 +537,7 @@ async def hold_handle(session_key: str, agent: str, handle: str) -> AsyncIterato
     is what the lock protects. Non-reentrant, that pair is a deadlock with no
     error and no timeout: the turn's record simply stays ``running`` forever.
     """
-    key = (session_key, agent, handle)
+    key = (session_key, canonical_agent_name(agent), handle)
     current = asyncio.current_task()
 
     if current is not None and _handle_owners.get(key) is current:

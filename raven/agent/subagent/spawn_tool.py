@@ -115,27 +115,17 @@ class SpawnTool(Tool):
             "The subagent will complete the task and report back when done. "
             "Multiple spawns run concurrently."
         )
+        labels, _ = self._workers()
+        if labels:
+            base += (
+                " Pick a worker label from the `subagent` parameter enum for this turn; "
+                "its worker brief says which work it handles. `run_subagent_dag` nodes use "
+                "the same worker labels."
+            )
         agents = self._agents()
         if agents:
             from raven.agent.subagent.backends import format_agent_listing
 
-            listing = format_agent_listing(agents)
-            base += (
-                " Pick the agent for the job with `subagent` -- there is no default, so choose "
-                f"deliberately from: {listing}."
-            )
-            # Sits with the roster rather than after the DAG pointer below: it is a
-            # rule about which name to pass here, so a model that has stopped
-            # reading by the time it reaches the DAG advice has still read it.
-            # Withheld when the table holds nothing but the generic row, which
-            # would make it name a specialist the model cannot pick.
-            if any(a.name != GENERIC_AGENT for a in agents):
-                base += (
-                    " Prefer delegation over doing it yourself: when a single specialist on this "
-                    "roster covers the whole task, spawn that one instead of carrying the work out "
-                    f"with your own tools. `{GENERIC_AGENT}` is not a specialist -- it carries no "
-                    "capability bias, so reach for it only when no specialist covers the work."
-                )
             # The one moment a wrong choice is visible: the model is reading this
             # tool while the work is really a graph.
             base += (
@@ -152,6 +142,31 @@ class SpawnTool(Tool):
                 "sits `<node_id>.memory.json` -- what the sub-agent concluded for itself, rather "
                 "than the answer it gave you -- written after the call, so absence is normal."
             )
+            # Right before the roster: it is a rule about which name to pass, so it
+            # sits with the list it picks from. It used to come ahead of the DAG
+            # pointer, so that a model which stops reading early still met it; with
+            # the roster closing the description, a model that stops before the rule
+            # has no name to pass either. Withheld when the table holds nothing but
+            # the generic row, which would make it name a specialist the model
+            # cannot pick, or when a worker table supplies this turn's choices.
+            if not labels and any(a.name != GENERIC_AGENT for a in agents):
+                base += (
+                    " Prefer delegation over doing it yourself: when a single specialist on the "
+                    "roster below covers the whole task, spawn that one instead of carrying the work "
+                    f"out with your own tools. `{GENERIC_AGENT}` is not a specialist -- it carries no "
+                    "capability bias, so reach for it only when no specialist covers the work."
+                )
+            # Last, and the array's only copy: the loop lists this tool after every
+            # other one, and run_subagent_dag, listed just before it, points here
+            # rather than rendering the roster a second time.
+            base += (
+                " The roster describes the underlying agents' capabilities; "
+                "pass a worker label from the parameter enum for this turn. Underlying agent roster: "
+                if labels
+                else " Pick the agent for the job with `subagent` -- there is no default, so choose "
+                "deliberately from the roster, which `run_subagent_dag` nodes pick from as well: "
+            )
+            base += f"{format_agent_listing(agents)}."
         return base
 
     @property
@@ -231,6 +246,11 @@ class SpawnTool(Tool):
                 "description": "Which agent runs this task. Required: pick one from the list.",
             }
         stateful_names = sorted(a.name for a in agents if a.stateful)
+        instance_targets = (
+            "Accepted only when the selected worker's underlying agent is tagged [stateful] in the roster"
+            if labels
+            else f"Accepted for `subagent` in {stateful_names}"
+        )
         props["instance"] = {
             "type": "string",
             "description": (
@@ -238,7 +258,7 @@ class SpawnTool(Tool):
                 "conversation with a resumable sub-agent. Reuse the same handle to "
                 "continue that session. Omit it and one is assigned automatically and "
                 "reported when the call finishes, so any run can be continued later. "
-                f"Accepted for `subagent` in {stateful_names} -- against any other one a handle "
+                f"{instance_targets} -- against any other one a handle "
                 "continues nothing and the call is rejected."
             ),
         }

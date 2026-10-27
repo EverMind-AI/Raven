@@ -41,6 +41,7 @@ from uuid import uuid4
 from loguru import logger
 
 from raven.agent.tools import snapshot as workdir_snapshot
+from raven.config.agent_names import canonical_agent_name
 
 # Names a provider might report token counts under. OpenAI-shaped
 # (``prompt_tokens``) is what raven's own providers normalise to; the camelCase
@@ -318,6 +319,9 @@ def watching_instance(activity: RunActivity, instance: tuple[str, str, str] | No
     so a lane that opened its block before taking the instance's lock can
     register here once it holds it, and no lane can unseat the one answering.
     """
+    if instance is not None:
+        session_key, agent, handle = instance
+        instance = (session_key, canonical_agent_name(agent), handle)
     owned = False
     if instance and _live_instances.get(instance) is None:
         _live_instances[instance] = activity
@@ -352,7 +356,7 @@ def live(key: str) -> RunActivity | None:
 
 def live_instance(session_key: str, agent: str, handle: str) -> RunActivity | None:
     """The activity of the turn this instance is answering, if it is answering one."""
-    return _live_instances.get((session_key, agent, handle))
+    return _live_instances.get((session_key, canonical_agent_name(agent), handle))
 
 
 def current() -> RunActivity | None:

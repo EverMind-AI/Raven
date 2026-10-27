@@ -178,12 +178,16 @@ async def test_a_stopped_receiver_gives_a_retryable_failure_and_a_retry_delivers
     inbox = tmp_path / "inbox"
     args = ["receiver", "--save-dir", str(inbox), "--port"]
     proc, port = await _start_receiver(_raven(*args, "0"), env)
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", f"http://127.0.0.1:{port}")
+    dispatcher = _dispatcher()
     try:
+        probe = await _call(dispatcher, "bugreport.probe", {})
+        assert probe == {"reachable": True, "target": f"http://127.0.0.1:{port}", "reason": ""}
         await _stop(proc)
     finally:
         await _reap(proc)
-    monkeypatch.setenv("RAVEN_BUGREPORT_URL", f"http://127.0.0.1:{port}")
-    dispatcher = _dispatcher()
+    probe = await _call(dispatcher, "bugreport.probe", {})
+    assert probe["reachable"] is False and "could not reach" in probe["reason"], probe
     report = await _start(dispatcher)
     await _decide_all(dispatcher, report, await _until(dispatcher, report, "deciding"))
     await _until(dispatcher, report, "ready")
@@ -195,6 +199,7 @@ async def test_a_stopped_receiver_gives_a_retryable_failure_and_a_retry_delivers
     proc, again = await _start_receiver(_raven(*args, str(port)), env)
     try:
         assert again == port
+        assert (await _call(dispatcher, "bugreport.probe", {}))["reachable"] is True
         await _call(dispatcher, "bugreport.retry_upload", {"report_id": report})
         delivered = await _until(dispatcher, report, "uploaded")
         assert delivered["receipt"]["receipt_id"]

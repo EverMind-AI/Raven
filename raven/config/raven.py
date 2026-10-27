@@ -57,6 +57,361 @@ class _Base(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class ContextCacheConfig(_Base):
+    """Where the query-conditioned segments sit, which decides how much of each
+    request a provider's prefix cache can match. Shared by every history
+    strategy: it governs the system and user slots, not the history slot --
+    save ``compaction_breakpoint``, which only the compacting strategy reads."""
+
+    turn_scratch: bool = True
+    """Keep query-conditioned segments out of the system prompt.
+
+    ``# Memory`` and ``# Skills`` are recomputed from the current message every
+    turn. Rendered into the system prompt they sit ahead of the conversation in
+    every provider's cache prefix, so each turn re-bills the whole history
+    behind them; rendered at the end of the turn's user message they leave the
+    system prompt byte-identical, so the tools and system marks are read back on
+    the next turn. The history itself reads back only through a provider's
+    look-back over earlier breakpoints: the turn's message is filed without the
+    scratch, so its stored form was never sent.
+
+    ``False`` puts them back in the system prompt. Note that the segment order
+    is normalised either way -- ``# Active Skills`` now precedes ``# Memory``,
+    since it is the one of the two that does not move with the query.
+    """
+
+    compaction_breakpoint: bool = False
+    """Also mark where the next summarising request is expected to end.
+
+    The compacting strategy writes a summary by replaying an earlier request as
+    a prefix, cut where the removed span ends. That cut sits behind every
+    rolling breakpoint, so without one of its own the summary reads back only
+    the system head. Once the prompt is past the compaction target, each turn
+    flags where its summary would end if the log compacted now -- the next
+    real cut lands at or past it -- and the cache optimizer spends its oldest
+    rolling mark there. Only breakpoint-style caches (Anthropic) read it; an
+    automatic prefix cache hits either way. Takes effect only while ``tokenWise.cacheOptimization`` places
+    the marks.
+
+    Off by default. The flag takes the rolling window's oldest slot, and on a
+    turn's first request that slot holds the last history message -- the only
+    mark the next turn can read its history back through, since the turn's own
+    message is filed in a different form from the one sent. On Anthropic every
+    turn past the target then writes its history to cache again; a review
+    measured 1.07x to 2.0x the cost across window sizes, with or without a
+    summary ever firing. Turn it on once the mark has a slot of its own.
+    """
+
+
+class ContextHeadroomConfig(_Base):
+    """How much of the window every turn holds back for the reply.
+
+    Not a history strategy's tuning: the number bounds every prompt this
+    process builds, whichever strategy filled the history slot, so it sits
+    beside ``cache`` rather than inside one strategy's block.
+    """
+
+    min_tokens: int = 4_096
+    """Floor, applied before anything has been learned.
+
+    Flat on purpose. The alternative -- reserving the model's whole output
+    ceiling -- costs a share of the window that grows as the window shrinks
+    (half of 32768 against a 16384 ceiling, an eighth of 128000), so the
+    deployments with the least room to spare paid the most for a reply that
+    almost never arrives.
+    """
+
+    overflow_backoff_tokens: int = 8_192
+    """Extra room added per refusal the model's own ceiling did not explain.
+
+    A provider that validates ``prompt + ceiling <= window`` is answered in
+    one refusal by the ceiling itself; this is what the stricter ones back off
+    by, each time, until they stop refusing.
+    """
+
+
+PRUNE_LINE_MAX_CHARS = 160
+"""Upper bound on what the pruner leaves behind for one tool result.
+
+The replacement is a call record and a ref -- no head or tail of the original
+-- so its length is bounded by construction rather than configured, and the
+pruner clips its own line to this. Being a constant is what makes pruning
+idempotent: it is below any legal ``minChars``, so a second pass cannot select
+a line the first pass wrote.
+"""
+
+
+class ContextPruneConfig(_Base):
+    """When the pruner replaces a tool result with a record of the call.
+
+    Read only under the compacting strategy, and only while it is compacting: a
+    turn under the trigger keeps every result whole.
+    """
+
+    enabled: bool = True
+    """The rollback lever. ``False`` puts the strategy back to reclaiming space
+    only by removing whole messages."""
+
+    min_chars: int = Field(default=2_048, gt=PRUNE_LINE_MAX_CHARS)
+    """Smallest tool result worth replacing.
+
+    Bounded below by the length of the replacement itself: a threshold under
+    that would let the pruner rewrite what it had already written, and the
+    second pass would not be a no-op.
+    """
+
+    keep_recent_pairs: int = Field(default=3, ge=0)
+    """Most recent tool exchanges left whole, whatever their size.
+
+    Three matches Anthropic's ``clear_tool_uses_20250919`` default -- a number
+    already exercised by real traffic -- and covers the case the ref does not:
+    the model is usually still working from the last few results, and making it
+    fetch one back costs a round trip.
+    """
+
+    dedup: bool = True
+    """Replace an older tool result that repeats a later one byte for byte,
+    whatever its size. Reading the same file twice is the common case, and the
+    older copy is the one no longer being worked from."""
+
+    prune_call_args: bool = True
+    """Also shorten oversized arguments on the call that produced a result.
+
+    A ``write_file`` carrying 50KB of content leaves that content in the
+    assistant message even after its result is gone, so the turn pays for it
+    every round from then on.
+    """
+
+    call_args_max_chars: int = Field(default=1_024, ge=64)
+    """Longest argument value kept whole when ``pruneCallArgs`` is on."""
+
+
+class ContextSummaryConfig(_Base):
+    """What stands in for the messages compaction removes.
+
+    Read only under the compacting strategy, and only on a turn that could not
+    get back under the trigger by shortening tool results alone.
+    """
+
+    mode: Literal["off", "lazy", "eager"] = "lazy"
+    """How far up the ladder a compaction may go.
+
+    ``off`` stops at the deterministic fold -- no model is ever called to
+    compact, which is the setting for a cost-sensitive or strictly reproducible
+    deployment, and the rollback lever if a summary ever loses something it
+    should not have. ``lazy`` folds when the removal was small enough to be
+    worth a pointer and summarises otherwise. ``eager`` summarises every time.
+    """
+
+    model: str = ""
+    """Which model writes the summary. Empty means the turn's own model.
+
+    Empty by default because a summarising request is built as a verbatim
+    prefix of the conversation, which is what makes it eligible for a provider's
+    prefix cache; naming a second model moves the request to a wire that has
+    never seen those tokens, so the two are mutually exclusive. Whether the
+    cache is worth more than a cheaper per-token rate depends on a read actually
+    happening, which the checkpoint records as ``cache_status`` rather than
+    assuming. Setting this logs that prefix reuse is off and pins
+    ``byte_prefix_reused`` to false.
+    """
+
+    fold: bool = True
+    """Leave a fold marker where removed messages were.
+
+    The marker is a count, a token estimate, and a ref -- no prose and no
+    model, so it cannot be wrong about what it stands for. ``False`` removes
+    messages with nothing at all in their place, which is what the engine did
+    before summaries existed.
+    """
+
+    fold_max_messages: int = Field(default=20, ge=0)
+    """Largest removal ``lazy`` will answer with a fold instead of a summary.
+
+    Above it the model would have to reach for the fold's ref repeatedly to
+    make progress, and paying for one summary is cheaper than paying for the
+    retrievals it replaces.
+    """
+
+    refs_inline: bool = True
+    """Render each summary line's refs beside it in the window.
+
+    ``False`` saves the tokens and keeps the refs in the stored checkpoint, at
+    the cost of the line being unverifiable by the turn that reads it.
+    """
+
+    max_tokens: int = Field(default=4_096, ge=256)
+    """Output ceiling for the summarising call. Eight sections of engineering
+    prose, not a document."""
+
+    timeout_seconds: float = Field(default=120.0, gt=0.0)
+    """Wall time one summarising call may take before the turn falls back to a
+    fold. Generous because the request is large by construction."""
+
+    max_input_tokens: int = Field(default=0, ge=0)
+    """Largest summarising request to send, in estimated prompt tokens.
+
+    ``0`` sends the whole covered span, which is what prefix reuse needs and
+    what a model that can answer at that size should get. A positive value
+    drops the oldest replayed messages until the request fits, which trades
+    that reuse away -- set it when the deployment's summarising model is known
+    to answer badly above some size, rather than as a general precaution.
+
+    The measure is ``estimate_message_tokens``, the same estimator the ledger
+    prices with. It reads high against a provider's own count, so the cap binds
+    a little earlier than its number suggests.
+    """
+
+    retry_on_empty: bool = True
+    """Retry once, over a shorter span, when the reply is unusable for a reason
+    a shorter request could fix.
+
+    The reasons are a refusal, a timeout, and a reply that carried none of the
+    eight sections or filled none of them -- the shape a model produces when
+    the request is past what it can hold together. An output-ceiling cut is not
+    one of them: less input does not buy more output. The retry only goes out
+    when the request actually got shorter, so it is never the same call twice,
+    and it drops the prefix it reuses, which is why it is a fallback rather
+    than the first thing tried. ``False`` folds on the first failure.
+    """
+
+
+class ContextCompactionConfig(_Base):
+    """Tuning for the compacting history strategy, read only when it is the selected one.
+
+    Every ratio here is a share of the **raw** context window. Nothing is
+    deducted from that base first: the reply headroom is applied as a cap on
+    the result (see :mod:`raven.context_engine.headroom`), because deducting it
+    from the base as well would charge the same tokens twice and make the
+    effective trigger fall as the window shrinks.
+    """
+
+    trigger_ratio_max: float = Field(default=0.90, gt=0.0, le=1.0)
+    """Trigger share at or below the reference window.
+
+    The 10% left above it is not reply space -- that is the headroom cap's job
+    -- it is room for the turn that noticed the pressure to finish assembling
+    and go out, and for the summarising call that assembly may have to make.
+    """
+
+    trigger_ratio_min: float = Field(default=0.80, gt=0.0, le=1.0)
+    """Floor the adaptive ratio decays toward on very large windows."""
+
+    trigger_ref_window: int = Field(default=128_000, gt=0)
+    """Window at which the ratio equals ``triggerRatioMax``; smaller windows
+    all sit at the max, since the ratio only decays upward from here."""
+
+    trigger_slope: float = Field(default=0.03, ge=0.0)
+    """Points of trigger ratio given up per doubling of the window.
+
+    Log-scaled rather than linear because the incompressible part of a prompt
+    is roughly constant, so its share of the window is a reciprocal curve and
+    this is its complement over the range that matters.
+    """
+
+    retain_ratio: float = Field(default=0.40, gt=0.0, lt=1.0)
+    """Share of the window a compaction aims to come back down to. Lower means
+    fewer compactions, each discarding more."""
+
+    min_reclaim_tokens: int = Field(default=16_384, ge=0)
+    """Least a compaction may reclaim to be worth running.
+
+    Anti-thrash: below this the turn pays a cache invalidation, and later a
+    summarising call, to buy back a handful of turns. When the target is not
+    already this far below the trigger, the target is lowered until it is.
+    """
+
+    head_keep_messages: int = Field(default=2, ge=0)
+    """Opening messages held out of compaction -- the first question and the
+    first answer, which is what the rest of the session is about."""
+
+    head_keep_decays: bool = True
+    """Stop protecting the head after the first compaction.
+
+    Those turns are represented by what compaction produced by then, and a head
+    protected forever both grows without bound and keeps the oldest messages
+    alive past every other retention rule.
+    """
+
+    tail_keep_messages: int = Field(default=8, ge=0)
+    """Recent messages never compacted, as a count."""
+
+    tail_keep_ratio: float = Field(default=0.25, ge=0.0, lt=1.0)
+    """Recent messages never compacted, as a share of the window.
+
+    Held together with the count as a union, not an alternative: each is a
+    floor, one semantic and one budgetary, and taking the larger of the two
+    satisfies both. A count alone leaves nothing behind when recent messages
+    are huge; a share alone can leave half a message when they are huger.
+    """
+
+    boundary: Literal["tool_pair", "turn"] = "tool_pair"
+    """Where a cut may fall. ``tool_pair`` requires only that no tool call is
+    left without its result; ``turn`` additionally snaps to a user message,
+    which is coarser and never splits one exchange of work."""
+
+    honor_pinned: bool = True
+    """Hold ``context.pinnedSkillIds`` bodies out of the compacted range.
+
+    They sit in the middle of a session by nature, which is exactly where
+    compaction operates, so without this the one category of content that is
+    silently wrong when missing is the one most likely to go.
+    """
+
+    prune: ContextPruneConfig = Field(default_factory=ContextPruneConfig)
+    """Deterministic tool-result pruning -- the rung of the ladder below
+    dropping messages, and the one that often makes dropping unnecessary."""
+
+    summary: ContextSummaryConfig = Field(default_factory=ContextSummaryConfig)
+    """What replaces the messages removal takes out -- the rung above pruning,
+    and the only one that calls a model."""
+
+    @model_validator(mode="after")
+    def _check_ratios(self) -> "ContextCompactionConfig":
+        """Relations between the ratios, checked at load rather than at the
+        first turn that trips over them.
+
+        Not checked here: whether the static reply-headroom floor leaves room
+        for ``triggerRatioMax`` to bind at all. It does not on any window at or
+        below 40960 with the defaults (a 32768 window has 3277 tokens of slack
+        above 0.90, less than the 4096 floor), so the ratio is simply inert
+        there and the floor governs. That is a property of the window, not a
+        misconfiguration, and raising on it would refuse to start on exactly
+        the deployments that need the policy most.
+        """
+        if self.trigger_ratio_min > self.trigger_ratio_max:
+            raise ValueError("context.history.compacting.triggerRatioMin must not exceed triggerRatioMax")
+        if self.retain_ratio >= self.trigger_ratio_min:
+            raise ValueError(
+                "context.history.compacting.retainRatio must be below triggerRatioMin; "
+                "a compaction that targets the trigger line has nothing to reclaim"
+            )
+        if self.tail_keep_ratio >= self.retain_ratio:
+            raise ValueError(
+                "context.history.compacting.tailKeepRatio must be below retainRatio; "
+                "a tail larger than the target can never be compacted into it"
+            )
+        return self
+
+
+class ContextHistoryConfig(_Base):
+    """Which strategy fills the history slot, and its tuning."""
+
+    strategy: str = "compacting"
+    """Which builder fills the history slot.
+
+    ``compacting``, the default, hands the conversation over verbatim
+    until the window nears its trigger, then prunes large tool results to a
+    one-line record and a ref, folds what it drops, and past that writes an
+    eight-section checkpoint. ``curator`` is the earlier strategy, tuned by the
+    flat ``context.*`` Curator keys and kept so a deployment can go back to it.
+    Anything else is refused at startup, naming the two.
+    """
+
+    compacting: ContextCompactionConfig = Field(default_factory=ContextCompactionConfig)
+    """The compacting strategy's own settings; ignored under ``curator``."""
+
+
 class ContextConfig(_Base):
     """Context engine tuning: which host segments render, and the Curator knobs."""
 
@@ -129,6 +484,39 @@ class ContextConfig(_Base):
 
     archive_dir: str = "memory/.curator/archive"
     """Relative path under workspace for lossless message archives."""
+
+    history: ContextHistoryConfig = Field(default_factory=ContextHistoryConfig)
+    """Which strategy fills the history slot, and its own settings."""
+
+    cache: ContextCacheConfig = Field(default_factory=ContextCacheConfig)
+    """Segment placement for the prompt cache; shared by every strategy."""
+
+    headroom: ContextHeadroomConfig = Field(default_factory=ContextHeadroomConfig)
+    """The window share held back for the reply; shared by every strategy."""
+
+    tool_result_max_chars: int = Field(default=1_000_000, ge=0)
+    """Longest ``role="tool"`` text the loop's ``_save_turn`` writes to the
+    session log; ``0`` removes the cap entirely.
+
+    Here rather than beside the other persistence settings because of what it
+    is for. A ref promises the verbatim original is one retrieval away, and the
+    log is where that original lives -- so a cap that cuts the write makes the
+    promise unkeepable for anything above it. It was 16000 and hard-coded,
+    which meant no large tool result had ever been stored whole.
+
+    A million characters is roughly 250K tokens, larger than any window we
+    target, so it never cuts an output that could have been read in context. It
+    stays non-zero as a runaway guard: one ``cat`` of a binary would otherwise
+    be written to the JSONL in full and re-read on every session load. Inline
+    images are handled separately, before this.
+
+    Raising it does not grow the prompt -- what enters the window is decided by
+    the history strategy -- but it does grow the file: a session of thirty
+    large tool results goes from roughly 480KB to 1.8MB.
+
+    History written under the old cap cannot be recovered; retrieval reports
+    those spans as truncated rather than passing off a prefix as the whole.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -1539,18 +1927,15 @@ class SubagentDagConfig(_Base):
     and a graph that can now pause waiting for the main agent to decide.
     """
 
-    verdict_enabled: bool = True
-    """On by default. Off restores the previous behaviour exactly: a node that
-    returns is completed, whatever it returned."""
-
     verdict_model: str | None = None
     """Model for the judge call. None inherits the agent's own. Set a cheaper tier
     here: the task is one enum plus a sentence, not the reasoning the conversation
     needs."""
 
     verdict_timeout_seconds: float = 180.0
-    """Wall clock for one judge call. Past this the node is treated as having
-    accomplished its task, which is what the previous behaviour was.
+    """Wall clock for one judge call. Past this an ordinary node is treated as having
+    accomplished its task, which is what the previous behaviour was. A decision node,
+    one that declares routes, fails instead: there is no route to default to.
 
     It has to leave room for the retry ladder it contains: `chat_with_retry` makes
     four attempts with roughly 7s of jittered backoff between them, so a ceiling

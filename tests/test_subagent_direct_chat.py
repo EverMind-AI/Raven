@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import os
+from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
@@ -12,6 +14,7 @@ import pytest
 from raven.agent.loop.bundles import SubagentWiring
 from raven.agent.subagent.direct_chat import DirectChatError, direct_root
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
+from raven.config.agent_names import GENERIC_AGENT
 from raven.contracts.llm_provider import LLMResponse
 
 
@@ -87,6 +90,149 @@ class _RecordingProvider:
 def test_state_path_is_scoped_by_agent_and_handle(tmp_path):
     p = instance_state_path(tmp_path, "Raven-Code", "refactor-auth")
     assert p == tmp_path / "subagents" / "direct" / "Raven-Code" / "refactor-auth" / "messages.json"
+
+
+def test_a_direct_chat_under_a_former_name_keeps_its_directory(tmp_path):
+    """The generic agent was renamed without moving what its direct chats wrote, so
+    continuing one under the new name has to land in the directory its history is in."""
+    legacy = tmp_path / "subagents" / "direct" / "Raven" / "h1"
+    legacy.mkdir(parents=True)
+
+    assert direct_root(tmp_path, GENERIC_AGENT, "h1") == legacy
+    assert instance_state_path(tmp_path, GENERIC_AGENT, "h1").parent == legacy
+    assert direct_root(tmp_path, GENERIC_AGENT, "fresh") == tmp_path / "subagents" / "direct" / GENERIC_AGENT / "fresh"
+
+
+@pytest.mark.parametrize("latest", ["raven", "Raven"])
+def test_two_legacy_directories_resume_the_latest_state_for_every_alias(tmp_path, latest):
+    older = tmp_path / "subagents" / "direct" / "raven" / "h1"
+    newer = tmp_path / "subagents" / "direct" / "Raven" / "h1"
+    older.mkdir(parents=True)
+    newer.mkdir(parents=True, exist_ok=True)
+    if older.samefile(newer):
+        pytest.skip("Two casing generations require a case-sensitive filesystem")
+    InstanceState(older / "messages.json").save([{"role": "user", "content": "older"}])
+    InstanceState(newer / "messages.json").save([{"role": "user", "content": "newer"}])
+    chosen = older if latest == "raven" else newer
+    for path in (older, newer):
+        stamp = 2_000_000_000 if path == chosen else 1_000_000_000
+        os.utime(path / "messages.json", ns=(stamp, stamp))
+
+    for name in (GENERIC_AGENT, "Raven", "raven"):
+        state = InstanceState(instance_state_path(tmp_path, name, "h1"))
+        assert state.load() == InstanceState(chosen / "messages.json").load()
+        assert direct_root(tmp_path, name, "h1") == chosen
+
+
+@pytest.mark.parametrize("state_is_directory", [False, True])
+def test_an_empty_current_directory_does_not_hide_legacy_messages(tmp_path, state_is_directory):
+    legacy = tmp_path / "subagents" / "direct" / "Raven" / "h1"
+    current = tmp_path / "subagents" / "direct" / GENERIC_AGENT / "h1"
+    InstanceState(legacy / "messages.json").save([{"role": "user", "content": "kept"}])
+    current.mkdir(parents=True)
+    if state_is_directory:
+        (current / "messages.json").mkdir()
+
+    assert InstanceState(instance_state_path(tmp_path, GENERIC_AGENT, "h1")).load() == [
+        {"role": "user", "content": "kept"}
+    ]
+
+
+def test_equally_dated_messages_prefer_the_current_agent_name(tmp_path):
+    for agent in ("Raven", GENERIC_AGENT):
+        path = tmp_path / "subagents" / "direct" / agent / "h1" / "messages.json"
+        InstanceState(path).save([{"role": "user", "content": agent}])
+        os.utime(path, ns=(1_000_000_000, 1_000_000_000))
+
+    for name in ("Raven", "raven", GENERIC_AGENT):
+        assert InstanceState(instance_state_path(tmp_path, name, "h1")).load() == [
+            {"role": "user", "content": GENERIC_AGENT}
+        ]
+
+
+def test_instance_preferences_follow_the_agent_alias(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    monkeypatch.setattr(manager, "agent_modes", lambda agent: (SimpleNamespace(id="plan"),))
+    manager.set_instance_mode("s1", "Raven", "h1", "plan")
+    manager.set_instance_model("s1", "raven", "h1", "model-a", offered=["model-a"])
+
+    for name in (GENERIC_AGENT, "Raven", "raven"):
+        assert manager.resolve_mode("s1", name, "h1") == "plan"
+        assert manager.session_model_for("s1", name, "h1") == "model-a"
+    manager.set_instance_mode("s1", GENERIC_AGENT, "h1", None)
+    manager.set_instance_model("s1", "Raven", "h1", None)
+    assert manager.instance_mode("s1", "raven", "h1") is None
+    assert manager.instance_model("s1", GENERIC_AGENT, "h1") is None
+
+
+@pytest.mark.parametrize("former", ["Raven", "raven"])
+async def test_alias_chat_turns_share_the_lock_and_preserve_both_turns(tmp_path, monkeypatch, former):
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    backend = manager.registry.backend(GENERIC_AGENT)
+    run = backend.run
+    slot = manager._hold_instance_slot
+    first_started = asyncio.Event()
+    second_attempted = asyncio.Event()
+    second_started = asyncio.Event()
+    release = asyncio.Event()
+    slots = 0
+
+    @asynccontextmanager
+    async def observed_slot(*args):
+        nonlocal slots
+        slots += 1
+        if slots == 2:
+            second_attempted.set()
+        async with slot(*args):
+            yield
+
+    async def delayed_run(task, **kwargs):
+        (first_started if task == "first" else second_started).set()
+        await release.wait()
+        return await run(task, **kwargs)
+
+    monkeypatch.setattr(manager, "_hold_instance_slot", observed_slot)
+    monkeypatch.setattr(backend, "run", delayed_run)
+    first = asyncio.create_task(manager.chat(session_key="s1", agent=former, handle="h1", text="first"))
+    second = None
+    try:
+        await asyncio.wait_for(first_started.wait(), timeout=2)
+        second = asyncio.create_task(manager.chat(session_key="s1", agent=GENERIC_AGENT, handle="h1", text="second"))
+        await asyncio.wait_for(second_attempted.wait(), timeout=2)
+        overlapped = second_started.is_set()
+    finally:
+        release.set()
+        await asyncio.gather(first, *([second] if second is not None else []))
+
+    assert not overlapped
+    history = manager.instance_state("s1", GENERIC_AGENT, "h1").load()
+    assert [m["content"] for m in history if m["role"] == "user"] == ["first", "second"]
+
+
+@pytest.mark.parametrize("former", ["Raven", "raven"])
+async def test_a_legacy_dag_handle_lock_blocks_a_current_name_chat(tmp_path, monkeypatch, former):
+    from raven.agent.subagent.instances import hold_handle
+
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    slot = manager._hold_instance_slot
+    attempted = asyncio.Event()
+
+    @asynccontextmanager
+    async def observed_slot(*args):
+        attempted.set()
+        async with slot(*args):
+            yield
+
+    monkeypatch.setattr(manager, "_hold_instance_slot", observed_slot)
+    async with hold_handle("s1", former, "h1"):
+        turn = asyncio.create_task(manager.chat(session_key="s1", agent=GENERIC_AGENT, handle="h1", text="later"))
+        await asyncio.wait_for(attempted.wait(), timeout=2)
+        finished_while_held = turn.done()
+    await asyncio.wait_for(turn, timeout=2)
+
+    assert not finished_while_held
 
 
 def test_load_of_a_missing_file_is_empty(tmp_path):
@@ -188,9 +334,50 @@ async def test_a_streamed_reply_cut_in_transport_is_asked_again_without_the_stre
 
     assert answer == "done"
     assert provider.streams == 1 and len(provider.seen) == 1, "one stream, then one waited-for call"
-    assert "cut off" not in answer and rendered == [], "the diagnostic never reached the reply"
+    assert "cut off" not in answer and rendered == ["done"], "the diagnostic never streamed; the answer did"
     assert billed[0] == {"prompt_tokens": 4000, "completion_tokens": 12000}, "the cut call is billed first"
     assert len(billed) == 2, "and the waited-for call after it"
+
+
+async def test_the_answer_asked_for_again_after_a_cut_stream_reaches_the_watcher(tmp_path):
+    """What streams has to end with the reply the record stores. A round that
+    narrated before its tool call has streamed, so the turn sends no closing
+    text; when the next round's stream is cut and the waited-for call answers,
+    that answer has to stream too, or it is recorded and never shown."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.contracts.llm_provider import ChatDelta
+
+    class _NarratesThenIsCut(_RecordingProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.streams = 0
+
+        async def chat_stream(self, *, messages, tools=None, model=None, **_):
+            self.streams += 1
+            if self.streams == 1:
+                call = {
+                    "index": 0,
+                    "id": "c1",
+                    "function": {"name": "list_dir", "arguments": json.dumps({"path": "."})},
+                }
+                yield ChatDelta(content="looking ", tool_call_delta={"tool_calls": [call]}, finish_reason="tool_calls")
+                return
+            yield ChatDelta(content=None, reasoning_content="thinking about it")
+            yield ChatDelta(content=None, finish_reason="stop", finish_synthesized=True)
+
+    provider = _NarratesThenIsCut()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+    rendered: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        rendered.append(text)
+
+    answer = await backend.run("hi", task_id="t1", workspace=tmp_path, executor=None, history=[], on_delta=on_delta)
+
+    assert answer == "done"
+    assert provider.streams == 2 and len(provider.seen) == 1, "the second stream is cut, then one waited-for call"
+    streamed = "".join(rendered)
+    assert streamed.endswith(answer) and streamed.count(answer) == 1, rendered
 
 
 async def test_a_streamed_refusal_the_repo_does_not_retry_fails_the_run_without_a_second_ask(tmp_path, monkeypatch):
@@ -557,8 +744,8 @@ async def test_create_instance_writes_one_idle_registry_row(tmp_path, monkeypatc
     created = await manager.create_instance(session_key="s1", agent="raven")
 
     rows = registry.list_instances("s1")
-    assert [(r["agent"], r["handle"], r["status"]) for r in rows] == [("raven", created.handle, "idle")]
-    assert created.agent == "raven"
+    assert [(r["agent"], r["handle"], r["status"]) for r in rows] == [(GENERIC_AGENT, created.handle, "idle")]
+    assert created.agent == GENERIC_AGENT
     assert created.created_at_ms > 0
 
 
@@ -1168,7 +1355,7 @@ async def test_a_running_direct_chat_is_reported_live(tmp_path, monkeypatch):
     release.set()
     await asyncio.wait_for(turn, timeout=2)
 
-    assert seen[0] == {("raven", "notes")}
+    assert seen[0] == {(GENERIC_AGENT, "notes")}
     # And released when it lands, or the row would read live forever.
     assert manager.live_handles("s1") == set()
 
@@ -1755,7 +1942,7 @@ async def test_a_spawn_queued_behind_a_direct_chat_stays_pending_and_leaves_the_
             break
         await asyncio.sleep(0.01)
     live = manager.live_direct_turns("s1")
-    assert [(a, h) for a, h, _ in live] == [("raven", "notes")]
+    assert [(a, h) for a, h, _ in live] == [(GENERIC_AGENT, "notes")]
     answering = activity.live_instance("s1", "raven", "notes")
     assert answering is not None
 
@@ -1795,7 +1982,7 @@ async def test_a_direct_chat_queued_behind_the_handle_is_not_reported_as_answeri
     async with hold_handle("s1", "raven", "notes"):
         direct = asyncio.create_task(manager.chat(session_key="s1", agent="raven", handle="notes", text="hi"))
         await asyncio.sleep(0.1)
-        assert manager._instance_tasks.get(("s1", "raven", "notes")), "the slot is taken while it waits"
+        assert manager._instance_tasks.get(("s1", GENERIC_AGENT, "notes")), "the slot is taken while it waits"
         assert manager.live_direct_turns("s1") == [], "but it is not answering yet"
         before = int(time.time() * 1000)
     for _ in range(200):
@@ -1803,7 +1990,7 @@ async def test_a_direct_chat_queued_behind_the_handle_is_not_reported_as_answeri
             break
         await asyncio.sleep(0.01)
     live = manager.live_direct_turns("s1")
-    assert [(a, h) for a, h, _ in live] == [("raven", "notes")] and live[0][2] >= before
+    assert [(a, h) for a, h, _ in live] == [(GENERIC_AGENT, "notes")] and live[0][2] >= before
     release.set()
     await direct
     assert manager.live_direct_turns("s1") == []

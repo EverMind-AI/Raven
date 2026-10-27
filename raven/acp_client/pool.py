@@ -29,7 +29,7 @@ from typing import Any
 
 from loguru import logger
 
-from raven.acp_client import protocol
+from raven.acp_client import npx_fetch, protocol
 from raven.acp_client.ask_user import notification_dispatcher
 from raven.acp_client.capabilities import handshake_of
 from raven.acp_client.client import AcpClient, end_drain
@@ -39,8 +39,10 @@ from raven.acp_client.protocol import AcpError
 
 # Budget for the one `initialize` a new connection owes, when the caller does
 # not say. Generous because an adapter fetched by `npx` may be downloading
-# itself on the first connect -- but an entry's own `readyTimeoutMs` is
-# documented as exactly this budget, so a caller that has one passes it.
+# itself on the first connect -- on a registered machine, whose Raven node starts
+# it, or under a command the fetch ahead of a launch here leaves alone
+# (`npx_fetch`) -- but an entry's own `readyTimeoutMs` is documented as exactly
+# this budget, so a caller that has one passes it.
 _HANDSHAKE_TIMEOUT_S = 120.0
 
 # How long a best-effort `session/delete` may take before its caller moves on.
@@ -48,10 +50,11 @@ _HANDSHAKE_TIMEOUT_S = 120.0
 # agent-side cleanup must not hold it up past a moment.
 _DELETE_TIMEOUT_S = 10.0
 
-# Backstop only: `AcpClient.close` bounds its own two waits, so reaching this is
-# pathology rather than a slow child. Cancelling a close from out here is what
-# leaves its subprocess transport unreleased, so the budget stays well clear of
-# the internal one instead of racing it.
+# Backstop only: `AcpClient.close` bounds its own waits -- the agent's grace (five
+# seconds at most), the drain and the reap -- so reaching this is pathology rather
+# than a slow child. The budget stays well clear of the internal one instead of
+# racing it: a close cancelled from out here ends the tree and lets go of its
+# transport, but no longer reaps the child.
 _CLOSE_TIMEOUT_S = 10.0
 
 # How long a connection may sit silent before a reuse pays for a probe. Under
@@ -432,6 +435,10 @@ class AcpConnectionPool:
         key = launch_key(command=command, cwd=cwd, env=env, binding=binding, machine=machine)
         bkey = _binding_key(binding)
         launch_env = {**(env or {}), **binding} if binding else env
+        if launcher is None:
+            # Ahead of the lock, which `drop` waits on too: a first fetch can run for
+            # minutes. Launches that overlap still share the one fetch (`npx_fetch`).
+            await npx_fetch.ensure_fetched(name, command, env=launch_env, cwd=cwd)
         async with self._lock_for(name):
             held = self._connections.setdefault(name, {})
             existing = held.get(bkey)

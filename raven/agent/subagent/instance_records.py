@@ -29,6 +29,7 @@ from typing import Any
 
 from raven.agent.subagent.dag_store import REGISTRY_FILENAME
 from raven.agent.subagent.history import node_file_in
+from raven.config.agent_names import canonical_agent_name
 
 __all__ = [
     "dag_exchanges",
@@ -36,6 +37,10 @@ __all__ = [
     "spawn_exchanges",
     "stitched_turns",
 ]
+
+
+def _same_agent(stored: Any, requested: str) -> bool:
+    return isinstance(stored, str) and canonical_agent_name(stored) == canonical_agent_name(requested)
 
 
 def stitched_turns(direct: Path, dag: Path, nodes: Path, agent: str, handle: str) -> list[dict[str, Any]]:
@@ -126,7 +131,7 @@ def spawn_exchanges(nodes: Path, agent: str, handle: str) -> list[tuple[int, lis
         if not isinstance(node_id, str) or not isinstance(entry, dict) or entry.get("kind") != "spawn":
             continue
         meta = _read_json(node_file_in(nodes, node_id, "meta.json"))
-        if meta.get("agent") != agent or meta.get("handle") != handle:
+        if not _same_agent(meta.get("agent"), agent) or meta.get("handle") != handle:
             continue
         started = int(meta.get("started_at_ms") or entry.get("started_at_ms") or 0)
         ended = int(meta.get("ended_at_ms") or entry.get("ended_at_ms") or started)
@@ -207,7 +212,7 @@ def dag_exchanges(root: Path, nodes_root: Path, agent: str, handle: str) -> list
     for run in runs:
         manifest = _read_json(run / "manifest.json") or _graph_nodes(run, nodes_root)
         for node_id, node in manifest.items():
-            if not isinstance(node, dict) or node.get("subagent") != agent:
+            if not isinstance(node, dict) or not _same_agent(node.get("subagent"), agent):
                 continue
             if (node.get("instance") or node_id) != handle:
                 continue

@@ -17,6 +17,7 @@ import contextlib
 import contextvars
 import logging
 import time
+from collections.abc import Mapping
 from typing import Any, Iterator
 
 from . import config
@@ -99,6 +100,10 @@ class Span:
         self._status_code = "OK"
         self._status_message = ""
 
+    def get(self, key: str, default: Any = None) -> Any:
+        """The attribute ``key`` as merged so far, or ``default``."""
+        return self._attrs.get(key, default)
+
     def set(self, attributes: dict[str, Any] | None = None, **kw) -> "Span":
         """Merge attributes onto the span.
 
@@ -111,6 +116,19 @@ class Span:
             self._attrs.update(attributes)
         if kw:
             self._attrs.update(kw)
+        return self
+
+    def set_dispatch_link(self, link: tuple[str, str] | None) -> "Span":
+        """Make the span's dispatch pair exactly ``link``: written when given, removed when None.
+
+        A root span opened inside an active span links back to it on its own
+        (see :func:`span`). A span whose origin is stated elsewhere -- a turn
+        names its dispatcher on its request -- has to drop that automatic pair
+        when the statement is "none", which merging attributes cannot do.
+        """
+        self._attrs.pop(DISPATCHED_BY, None)
+        self._attrs.pop(DISPATCHED_IN, None)
+        self._attrs.update(dispatch_attrs(link))
         return self
 
     def artifact(self, key: str, payload: Any, *, kind: str = "json") -> "Span":
@@ -200,7 +218,13 @@ class _NoopSpan:
     name = ""
     invocation_source = None
 
+    def get(self, _key, default=None):
+        return default
+
     def set(self, *_a, **_k):
+        return self
+
+    def set_dispatch_link(self, *_a):
         return self
 
     def artifact(self, *_a, **_k):
@@ -223,6 +247,11 @@ class _NoopSpan:
 
     def cancel(self, *_a, **_k):
         return self
+
+
+# The pair a root span carries when another span dispatched it.
+DISPATCHED_BY = "trace.dispatched_by_span_id"
+DISPATCHED_IN = "trace.dispatched_in_trace_id"
 
 
 @contextlib.contextmanager
@@ -283,7 +312,7 @@ def span(
         )
         handle.set(attributes, **kw)
         if dispatched_by:
-            handle.set({"trace.dispatched_by_span_id": dispatched_by, "trace.dispatched_in_trace_id": dispatched_in})
+            handle.set({DISPATCHED_BY: dispatched_by, DISPATCHED_IN: dispatched_in})
         # A detached span is a leaf marker: it does NOT become the active parent,
         # so work done inside it attaches to ITS parent, not to it. Required for
         # cancellable spans (e.g. skill.inject) — otherwise a child that opened
@@ -481,6 +510,38 @@ def use_context(ctx: Any | None) -> Any:
     re-enter it here around the span.
     """
     return _ctx.use(ctx)
+
+
+def dispatch_link() -> tuple[str, str] | None:
+    """``(trace_id, span_id)`` of the active span, for a later turn that reports on work it dispatched.
+
+    A turn run by the scheduler does not inherit its submitter's context, so
+    whoever submits a report reads the link here, in the frame of the unit that
+    did the dispatching, and puts it on the request. None with tracing off or
+    outside any span.
+    """
+    if not config.enabled():
+        return None
+    cur = _ctx.current()
+    if cur is None or not cur.parent_span_id:
+        return None
+    return (cur.trace_id, cur.parent_span_id)
+
+
+def dispatch_attrs(link: tuple[str, str] | None) -> dict[str, str]:
+    """A dispatch link as the two root-span attributes; empty for None."""
+    if link is None:
+        return {}
+    trace_id, span_id = link
+    return {DISPATCHED_BY: span_id, DISPATCHED_IN: trace_id}
+
+
+def dispatch_link_of(attrs: Mapping[str, Any]) -> tuple[str, str] | None:
+    """The dispatch link :func:`dispatch_attrs` wrote into ``attrs``, or None unless both halves are there."""
+    trace_id, span_id = attrs.get(DISPATCHED_IN), attrs.get(DISPATCHED_BY)
+    if isinstance(trace_id, str) and trace_id and isinstance(span_id, str) and span_id:
+        return (trace_id, span_id)
+    return None
 
 
 def enabled() -> bool:

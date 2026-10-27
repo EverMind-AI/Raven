@@ -128,6 +128,17 @@ export function stageOf(row: ExtAgentRow): Stage {
    whose engine wheel is not installed -- is connected from here, and is one
    section. */
 export type Section = 'on' | 'avail' | 'missing'
+
+/* Whether this row has an entry of its own to write to. A preset that is not
+   on the roster has none: the server answers an update for a name it does not
+   hold with "no configured sub-agent named ...", so a model picked on one waits
+   for the add that writes it. A folder found on disk and Raven's own loop both
+   have somewhere to land -- the server writes the first from its manifest and
+   the second from the seed -- so only a preset waits. */
+export function hasEntry(row: ExtAgentRow): boolean {
+  return row.configured || !!row.builtin || !!row.vendored
+}
+
 export function sectionOf(row: ExtAgentRow): Section {
   const stage = stageOf(row)
   if (stage === 'live' || stage === 'builtin') return 'on'
@@ -384,6 +395,48 @@ export const extAgentsSource: ExtAgentsSource = {
     }
     return extAgentsFetch(remeasures(op, row, a))
   },
+  presets: async () => {
+    const got = await gateway().call('subagents.presets', {})
+    return got.presets.map((p) => ({
+      preset: p.preset,
+      name: p.name,
+      kind: p.kind === 'cli' ? 'cli' : 'acp',
+      description: p.description || '',
+      connected_here: !!p.connected_here,
+      on_machines: Array.isArray(p.on_machines) ? p.on_machines.map(String) : [],
+      off_on_machines: Array.isArray(p.off_on_machines)
+        ? p.off_on_machines.map((e) => ({ machine: String(e.machine), name: String(e.name) }))
+        : [],
+    }))
+  },
+  /* The same add a preset's sheet makes, from the machine's side, under the
+     server's own default name (`<preset>@<machine>`): one preset once per
+     machine is the server's rule, kept whichever way the add arrives -- a
+     preset the machine already has is refused, naming the entry it has -- and
+     a preset this computer also runs lands as a second row of its own name.
+     The server starts it on the machine once first, and a refusal is its own
+     sentence -- the agent's words when it did not answer. */
+  connectOnMachine: async (choice, machine, remoteCwd) => {
+    try {
+      const got = await gateway().call('subagents.add', {
+        preset: choice.preset,
+        machine,
+        remote_cwd: remoteCwd || undefined,
+      })
+      return { name: got.name || `${choice.preset}@${machine}` }
+    } catch (e) {
+      const err = e as { message?: string; data?: { detail?: string; cancelled?: boolean } } | null
+      const refused = (err && ((err.data && err.data.detail) || err.message)) || String(e)
+      return err?.data?.cancelled ? { refused, cancelled: true } : { refused }
+    }
+  },
+  /* The run server-side is the agent's one real prompt, held under the name
+     the way a test's is; stopping it ends the agent's process there and the
+     connect's own call answers with the refusal that says so. */
+  cancelRun: async (name) => {
+    const got = await gateway().call('subagents.test_cancel', { name })
+    return !!got.cancelled
+  },
 }
 
 /* Test seam only: the rows carried across a refetch are the module's. */
@@ -446,9 +499,12 @@ export function machineRowOf(r: MachineRowWire): MachineRow {
     agents: r.agents || 0,
     node_version: r.node_version || '',
     node_current: !!r.node_current,
+    auth: r.auth === 'password' ? 'password' : r.auth === 'key' ? 'key' : '',
     install: { running: !!r.install?.running, ok: r.install?.ok ?? null, detail: r.install?.detail || '' },
     paths: Array.isArray(r.paths) ? r.paths.map(String) : [],
     problems: Array.isArray(r.problems) ? r.problems.map(String) : [],
+    agents_here: Array.isArray(r.agents_here) ? r.agents_here.map(String) : [],
+    agents_off_here: Array.isArray(r.agents_off_here) ? r.agents_off_here.map(String) : [],
   }
 }
 
@@ -464,7 +520,8 @@ export const machinesSource: MachinesSource = {
       host: form.host,
       port: form.port || undefined,
       user: form.user,
-      key: form.key,
+      auth: form.auth,
+      ...(form.auth === 'password' ? { password: form.password } : { key: form.key }),
       paths: form.paths.length ? form.paths : undefined,
     })
     return { ok: !!got.ok, detail: got.detail || '', reason: got.reason }
@@ -480,5 +537,9 @@ export const machinesSource: MachinesSource = {
   remove: async (id) => {
     const got = await gateway().call('machines.remove', { id })
     return { removed: !!got.removed, detail: got.detail || '', agents: Array.isArray(got.agents) ? got.agents.map(String) : [] }
+  },
+  localKeys: async () => {
+    const got = await gateway().call('machines.local_keys', {})
+    return Array.isArray(got.keys) ? got.keys.map(String) : []
   },
 }

@@ -370,6 +370,130 @@ def test_subagent_children_nest(trace_dir):
     assert inner_parent == sa_id  # inner llm.call nests under the subagent node
 
 
+def test_span_get_reads_back_merged_attributes(trace_dir):
+    with trace.span("tool.call", {"tool.name": "exec"}) as s:
+        s.set({"tool.call_id": "c1"})
+        assert s.get("tool.name") == "exec"
+        assert s.get("tool.call_id") == "c1"
+        assert s.get("tool.error") is None
+        assert s.get("tool.error", "none") == "none"
+    assert trace._NoopSpan().get("tool.name", 3) == 3
+
+
+_SUBAGENT_RUN_KEYS = {
+    "subagent.task_id",
+    "subagent.task",
+    "subagent.label",
+    "subagent.origin_session",
+    "subagent.agent",
+    "subagent.instance",
+    "subagent.handle",
+    "subagent.dispatch",
+    "subagent.in_progress",
+}
+
+
+async def _record_subagent_run(trace_dir, origin, body=None):
+    """Run a function instrumented the way ``SubagentManager._run_subagent`` is; its ``subagent.run`` records."""
+    from raven.observability import semconv
+
+    @trace.instrument("subagent.run", on_open=semconv.subagent_open, extract=semconv.subagent)
+    async def run(task_id, task, task_summary, origin, provider, model, mcp_grant=None):
+        if body is not None:
+            await body()
+
+    await run("t1", "inspect the repo", "inspect", origin, None, "m")
+    return [sp for sp in _spans_written(trace_dir) if sp["name"] == "subagent.run"]
+
+
+async def test_a_subagent_run_is_checkpointed_with_its_attributes_when_it_opens(trace_dir):
+    origin = {"session_key": "cli:p", "agent": "researcher", "instance": "scout", "handle": "scout"}
+    opened, closed = await _record_subagent_run(trace_dir, origin)
+
+    assert opened["spanId"] == closed["spanId"]
+    attrs = opened["attributes"]
+    assert {key for key in attrs if key.startswith("subagent.")} == _SUBAGENT_RUN_KEYS
+    assert attrs["subagent.task_id"] == "t1"
+    assert attrs["subagent.task"] == "inspect the repo"
+    assert attrs["subagent.label"] == "inspect"
+    assert attrs["subagent.origin_session"] == "cli:p"
+    assert attrs["subagent.agent"] == "researcher"
+    assert attrs["subagent.instance"] == "scout"
+    assert attrs["subagent.handle"] == "scout"
+    assert attrs["subagent.dispatch"] == "spawn"
+    assert attrs["subagent.in_progress"] is True
+    final = closed["attributes"]
+    assert {key for key in final if key.startswith("subagent.")} == _SUBAGENT_RUN_KEYS
+    assert final["subagent.in_progress"] is False
+    assert "subagent.outcome" not in final
+
+
+@pytest.mark.parametrize("instance", [None, ""])
+async def test_a_subagent_run_without_an_instance_writes_none_and_is_handled_by_task_id(trace_dir, instance):
+    records = await _record_subagent_run(trace_dir, {"session_key": "cli:p", "agent": "a", "instance": instance})
+    for record in records:
+        assert "subagent.instance" not in record["attributes"]
+        assert record["attributes"]["subagent.handle"] == "t1"
+
+
+async def _cancel():
+    raise asyncio.CancelledError
+
+
+async def _fail():
+    raise RuntimeError("boom")
+
+
+async def _hand_off_then_cancel():
+    from raven.observability import semconv
+
+    semconv.subagent_outcome(trace.current_span(), "handed_off")
+    raise asyncio.CancelledError
+
+
+async def _complete_then_fail():
+    from raven.observability import semconv
+
+    semconv.subagent_outcome(trace.current_span(), "completed")
+    semconv.subagent_outcome(trace.current_span(), "failed")
+
+
+@pytest.mark.parametrize(
+    ("body", "raised", "outcome"),
+    [
+        (_cancel, asyncio.CancelledError, "cancelled"),
+        (_fail, RuntimeError, "failed"),
+        (_hand_off_then_cancel, asyncio.CancelledError, "handed_off"),
+        (_complete_then_fail, None, "completed"),
+    ],
+    ids=["cancelled", "failed", "marked_before_cancel", "first_mark_stands"],
+)
+async def test_a_subagent_run_s_first_outcome_stands_and_an_unmarked_end_is_filled_in(trace_dir, body, raised, outcome):
+    origin = {"session_key": "cli:p", "agent": "a"}
+    if raised is None:
+        records = await _record_subagent_run(trace_dir, origin, body)
+    else:
+        with pytest.raises(raised):
+            await _record_subagent_run(trace_dir, origin, body)
+        records = [sp for sp in _spans_written(trace_dir) if sp["name"] == "subagent.run"]
+    assert records[-1]["attributes"]["subagent.outcome"] == outcome
+    assert "subagent.outcome" not in records[0]["attributes"]
+
+
+def test_subagent_attrs_name_a_graph_node_dispatch_and_leave_out_what_is_unknown():
+    from raven.observability import semconv
+
+    attrs = semconv.subagent_attrs(task_id="n1", task="t", label="node", origin={}, dispatch="dag", in_progress=True)
+    assert attrs == {
+        "subagent.task_id": "n1",
+        "subagent.task": "t",
+        "subagent.label": "node",
+        "subagent.handle": "n1",
+        "subagent.dispatch": "dag",
+        "subagent.in_progress": True,
+    }
+
+
 def test_a_mutated_artifact_does_not_corrupt_the_next_record(trace_dir):
     """An edit through one hard link must not follow the payload forward.
 
@@ -1218,3 +1342,104 @@ def test_llm_purpose_is_recorded_from_the_enclosing_caller(trace_dir):
     labelled, unlabelled = (x for x in _spans_written(trace_dir) if x["name"] == "llm.call")
     assert labelled["attributes"]["llm.purpose"] == "title"
     assert "llm.purpose" not in unlabelled["attributes"]
+
+
+# --- dispatch links: read where the work is dispatched, written on the turn ---
+
+
+def test_dispatch_link_is_the_active_span_and_none_outside_one(trace_dir):
+    assert trace.dispatch_link() is None
+    with trace.span("tool.call") as s:
+        assert trace.dispatch_link() == (s.trace_id, s.span_id)
+        with trace.suppress():
+            assert trace.dispatch_link() is None, "a suppressed tree claims no link"
+    assert trace.dispatch_link() is None
+
+
+def test_dispatch_link_is_none_with_tracing_off(monkeypatch):
+    monkeypatch.setenv("RAVEN_TRACING", "0")
+    with trace.span("tool.call") as s:
+        assert trace.dispatch_link() is None
+        assert s.set_dispatch_link(("trace-x", "span-x")) is s, "the no-op span takes a link like any other call"
+
+
+def test_dispatch_attrs_and_dispatch_link_of_round_trip():
+    attrs = trace.dispatch_attrs(("trace-a", "span-b"))
+
+    assert attrs == {"trace.dispatched_by_span_id": "span-b", "trace.dispatched_in_trace_id": "trace-a"}
+    assert trace.dispatch_link_of(attrs) == ("trace-a", "span-b")
+    assert trace.dispatch_attrs(None) == {}
+    assert trace.dispatch_link_of({}) is None
+    assert trace.dispatch_link_of({"trace.dispatched_by_span_id": "span-b"}) is None, "half a link is no link"
+    assert trace.dispatch_link_of({**attrs, "trace.dispatched_in_trace_id": ""}) is None
+
+
+def _turn_with(dispatch_link):
+    """A ``session.turn`` opened the way ``AgentLoop._process_message`` opens it."""
+    from raven.observability import semconv
+    from raven.spine import ChatType, Origin, Source, TurnRequest
+
+    @trace.instrument(
+        "session.turn", root=True, seed=semconv.turn_seed, on_open=semconv.turn_open, extract=semconv.turn
+    )
+    async def _process_message(req, session_key=None):
+        return None
+
+    src = Source(channel="web", chat_id="s1", sender_id="subagent", chat_type=ChatType.DM)
+    req = TurnRequest(origin=Origin.SUBAGENT, source=src, text="report", dispatch_link=dispatch_link)
+    return _process_message(req, session_key="web:s1")
+
+
+def test_a_turn_writes_its_requests_dispatch_link_on_both_records(trace_dir):
+    """The in-progress record carries the link too: a viewer reading a turn still
+    running must already know it is a dispatched one."""
+    asyncio.run(_turn_with(("trace-d", "span-d")))
+
+    records = [sp for sp in _spans_written(trace_dir) if sp["name"] == "session.turn"]
+    assert {sp["attributes"]["turn.in_progress"] for sp in records} == {True, False}
+    for sp in records:
+        assert sp["attributes"]["trace.dispatched_by_span_id"] == "span-d"
+        assert sp["attributes"]["trace.dispatched_in_trace_id"] == "trace-d"
+
+
+def test_a_turn_without_a_dispatch_link_carries_none(trace_dir):
+    asyncio.run(_turn_with(None))
+
+    records = [sp for sp in _spans_written(trace_dir) if sp["name"] == "session.turn"]
+    assert len(records) == 2
+    for sp in records:
+        assert "trace.dispatched_by_span_id" not in sp["attributes"]
+        assert "trace.dispatched_in_trace_id" not in sp["attributes"]
+
+
+def test_set_dispatch_link_replaces_or_removes_the_automatic_pair(trace_dir):
+    with trace.span("startup.build") as ambient:
+        with trace.span("session.turn", root=True) as turn:
+            turn.set_dispatch_link(("trace-r", "span-r"))
+        with trace.span("session.turn", root=True) as cleared:
+            cleared.set_dispatch_link(None)
+        with trace.span("session.turn", root=True) as kept:
+            pass
+
+    written = {sp["spanId"]: sp["attributes"] for sp in _spans_written(trace_dir)}
+    assert trace.dispatch_link_of(written[turn.span_id]) == ("trace-r", "span-r")
+    assert trace.dispatch_link_of(written[cleared.span_id]) is None
+    assert "trace.dispatched_by_span_id" not in written[cleared.span_id]
+    assert trace.dispatch_link_of(written[kept.span_id]) == (ambient.trace_id, ambient.span_id), (
+        "the root span's own rule is unchanged"
+    )
+
+
+@pytest.mark.parametrize("stated", [None, ("trace-d", "span-d")], ids=["no-link", "linked"])
+def test_a_turn_opened_inside_a_span_carries_only_the_link_its_request_states(trace_dir, stated):
+    """The span a turn happens to be opened under is not where it came from."""
+
+    async def _opened_under_a_span():
+        with trace.span("startup.build"):
+            await _turn_with(stated)
+
+    asyncio.run(_opened_under_a_span())
+
+    records = [sp for sp in _spans_written(trace_dir) if sp["name"] == "session.turn"]
+    assert {sp["attributes"]["turn.in_progress"] for sp in records} == {True, False}
+    assert [trace.dispatch_link_of(sp["attributes"]) for sp in records] == [stated, stated]

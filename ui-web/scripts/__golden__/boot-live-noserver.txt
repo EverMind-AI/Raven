@@ -104,6 +104,7 @@ div.app[data-rail=on]
         button#backpill.backpill
           svg
             path
+        div#turnNav
         div#wsGrip.grip
         div#brand
           span.mk
@@ -220,6 +221,7 @@ section#connectionsPage.page[data-open=false]
   div.work
     div#connectionsBody.wrap
       div.hub-head
+        button.hub-head-tab
         button.hub-head-tab
         button.hub-head-tab
       p.hub-head-sub

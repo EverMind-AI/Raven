@@ -29,9 +29,9 @@ leave the process should not be put on the wire in the first place.
 
 from __future__ import annotations
 
-import json
 import os
 import re
+from pathlib import PurePath, PurePosixPath, PureWindowsPath
 from typing import Any
 
 REPLACEMENT = "[redacted]"
@@ -193,23 +193,240 @@ def redact(text: str, *, truncated: bool = False) -> str:
     return text
 
 
-def _home_config() -> re.Pattern[str]:
-    """A path into a dot-directory of the home, Raven's own home excepted.
+_POSIX, _WINDOWS = "posix", "windows"
 
-    Raven's home holds the default workspace and the channels' scratch
-    directories, where a coding turn reads its own source; rewriting that
-    source's ``token = ...`` lines breaks every edit built from them. Raven's
-    own keys are taken out by the exact-match pass in ``held_secrets`` instead.
+
+def _path_style() -> str:
+    """The path spelling this host compares by. A seam, so a test can drive the
+    other host's branch: a Linux run cannot read a Windows path."""
+    return _WINDOWS if os.name == "nt" else _POSIX
+
+
+def _host_paths(style: str) -> tuple[type[PurePath], str, int]:
+    """The path flavour, the separator pattern and the regex flags ``style`` compares by.
+
+    Windows takes either slash, repeated -- a path quoted inside a script
+    argument arrives with ``json.dumps``' doubled backslashes -- and ignores
+    case, because its filesystem does. POSIX keeps ``/`` and its case.
+    """
+    if style == _WINDOWS:
+        return PureWindowsPath, r"[/\\]+", re.IGNORECASE
+    return PurePosixPath, "/", 0
+
+
+def _spelled(path: PurePath, sep: str) -> str:
+    """``path`` as a pattern, segment by segment, joined by ``sep``.
+
+    Escaping ``str(path)`` whole would freeze the separators inside the path
+    to the one the host prints; matching by segment lets every separator in
+    it take the host's alternatives.
+    """
+    parts = [re.escape(part) for part in path.parts[1:]] if path.anchor else [re.escape(p) for p in path.parts]
+    if not path.anchor:
+        return sep.join(parts)
+    head = re.escape(path.anchor.rstrip("/\\"))
+    if path.anchor.endswith(("/", "\\")):
+        head += sep
+    return head + sep.join(parts)
+
+
+def _argument_strings(arguments: Any, *, depth: int = 0) -> list[str]:
+    """Every string in a call's arguments, decoded, as the caller wrote it.
+
+    Matched one by one rather than as ``json.dumps`` output, which escapes
+    every backslash and so hides a Windows path from a pattern built from the
+    path itself. Keys are included: a tool may take paths as mapping keys.
+    """
+    if depth > 12:
+        return []
+    if isinstance(arguments, str):
+        return [arguments]
+    if isinstance(arguments, dict):
+        found: list[str] = []
+        for key, value in arguments.items():
+            found += _argument_strings(key, depth=depth + 1) + _argument_strings(value, depth=depth + 1)
+        return found
+    if isinstance(arguments, (list, tuple)):
+        return [text for item in arguments for text in _argument_strings(item, depth=depth + 1)]
+    return [] if arguments is None else [str(arguments)]
+
+
+#: The subdirectories of Raven's home a coding turn reads its own source from.
+#: Exempt from the home-config pass. Not a claim that the rest of the home holds
+#: no source-shaped text: it is the set known to hold source a turn edits, and a
+#: new directory of that kind has to be added here when one appears. The
+#: neighbours that are left out are each left out on purpose, with the reason in
+#: :func:`_home_config`: ``bridge`` (a compiled install of the shipped bridge, not
+#: the user's tree), ``traces`` and ``telemetry`` (written by the tracing and usage
+#: code), ``subagent_sessions`` (per-product runtime state), ``playbooks`` (which
+#: resolves under ``workspace`` by default and so is covered by the first entry).
+_OWN_SOURCE_DIRS = ("workspace", "tmp", "plugins", "agents")
+
+# Raven's own token files name their credentials with words that mean nothing on
+# their own: ``save_token`` writes ``asdict(MiniMaxOAuthToken)``, whose fields are
+# ``access`` and ``refresh``. Adding those two names to ``_PATTERNS`` would be the
+# cheap fix and the wrong one -- it rewrites "refresh the page" and "access the
+# network" in every tool result, a coding turn's included. So this pair is fenced
+# twice over: the call must have reached Raven's OAuth directory (below), and the
+# value must look like a token rather than a word -- sixteen characters or more,
+# no whitespace, no quote. Both conditions together are what the label patterns
+# cannot express for a name this ordinary.
+_OAUTH_TOKEN_FIELD = re.compile(r'("(?:access|refresh)"\s*:\s*")([^\s"\\]{16,})')
+
+
+def _own_oauth_store() -> re.Pattern[str]:
+    """A path into Raven's OAuth token directory, in the spellings calls have used.
+
+    The directory is asked of ``raven/home.py``, which owns where the store
+    sits under the home, rather than assembled here from ``raven_home()``: a
+    store that moves has to move this pattern with it, or the pass keeps
+    pointing at a directory no writer uses and every test built the same way
+    stays green. The config shelf's own name for that path is
+    ``config.paths.oauth_dir``, which answers with the same function, so the
+    writers and this pattern cannot drift apart. ``oauth_home()`` and not
+    ``get_oauth_dir()`` for the same reason that helper's docstring gives: the
+    latter creates and chmods the directory, and a redaction pass must not have
+    side effects on the filesystem it is reading about.
+
+    One root covers every provider: the writers all derive from ``get_oauth_dir()``
+    (``minimax_oauth.token_path``, ``chatgpt_token.token_dir``,
+    ``litellm_setup._point_oauth_tokens_at_raven`` for Copilot), and each of those
+    overrides its own directory by environment variable when the driver owns it,
+    which is a read outside the home and was never this pass's to redact.
+
+    The spellings are enumerated rather than claimed: the store's own path, and
+    ``~`` / ``$HOME`` / ``${HOME}`` with the store's path relative to the home,
+    each followed by ``/``, ``\\``, the end of the string or a quote -- never by
+    more of a name, so ``oauth-other`` is not the store. Each root is built
+    segment by segment in the host's terms (:func:`_host_paths`): on Windows
+    every separator inside it is either slash, one or more, and the pattern
+    ignores case, as the filesystem does; on POSIX a separator is one or more
+    ``/`` and case counts. Between two segments a separator may repeat and a
+    ``.`` segment may sit between them, as ``.raven\\.\\oauth`` is the same
+    directory as ``.raven\\oauth``; the arguments are matched as the call wrote
+    them, and no caller normalizes a path first. A store not under the home
+    (``RAVEN_HOME`` elsewhere) has no abbreviation to add and is matched by its
+    absolute path alone, which is the only spelling a call can use for it.
+
+    This is a second resolver beside :func:`_home_config`, not the same one: that
+    one answers "is this any program's dot-directory of the home", this one "is
+    this Raven's token store". They share ``raven_home()`` through
+    ``home.oauth_home`` -- the one definition the config shelf's ``oauth_dir``
+    also answers with -- and are asserted together wherever a change could make
+    one wider than the other.
+    """
+    from raven.home import oauth_home
+
+    style = _path_style()
+    flavour, sep, flags = _host_paths(style)
+    store = flavour(str(oauth_home()))
+    home_dir = flavour(os.path.expanduser("~"))
+    gap = sep if style == _WINDOWS else "/+"
+    gap += r"(?:\." + gap + r")*"
+    roots = [_spelled(store, gap)]
+    # The shell spellings, derived from the store's own path rather than spelled
+    # here. The old condition compared the store's *parent* with the home, which
+    # held while the root was ``~/.raven`` and stopped holding the moment the
+    # root became ``~/.raven/oauth`` -- the three abbreviations silently dropped
+    # out of the pattern. Relative to the home is what the question was the
+    # whole time.
+    try:
+        rel = store.relative_to(home_dir)
+    except ValueError:
+        rel = None
+    if rel is not None and rel.parts:
+        roots += [re.escape(prefix) + gap + _spelled(rel, gap) for prefix in ("~", "$HOME", "${HOME}")]
+    return re.compile(r"(?:" + "|".join(dict.fromkeys(roots)) + r")(?:[/\\]|$|[\"'\s])", flags)
+
+
+def _redact_oauth_store(text: str) -> str:
+    """Redact the credential fields of Raven's own token store file.
+
+    Only the value is replaced, so the file's shape still says what was read --
+    the same trade the pattern table makes for another program's settings.
+    """
+    return _OAUTH_TOKEN_FIELD.sub(lambda m: m.group(1) + REPLACEMENT, text)
+
+
+def _home_config() -> re.Pattern[str]:
+    """A path into a dot-directory of the home, Raven's own source directories excepted.
+
+    Raven's home holds four directories a coding turn reads its own source from:
+    the default workspace and the channels' scratch directories, the user plugin
+    directory (``plugins``, ``raven/core/plugin_stack.py``) and the installed
+    vendored agents (``agents``,
+    ``raven/agent/subagent/vendored_agents.py``). Rewriting ``token = ...`` lines
+    in that source breaks every edit built from them, so those four stay exempt.
+    They are the set known to hold source a turn edits, not a survey of the home:
+    a directory that starts holding such source has to join ``_OWN_SOURCE_DIRS``,
+    which is why that list is not called exhaustive. The neighbours measured when
+    this list was narrowed are outside it on purpose:
+
+    * ``bridge`` -- the WhatsApp bridge as installed under the home
+      (``raven/config/paths.py``:``get_bridge_install_dir``), a copy of the
+      shipped ``bridge/`` built by ``_build_bridge`` (``shutil.copytree`` then
+      ``npm install`` and ``tsc``). It does hold source-shaped text, and the
+      ``private token: string`` annotation in its ``src/server.ts`` is rewritten
+      to ``private token: [redacted]`` by this pass -- a known cost, taken
+      because it is a build the next ``ensure_bridge_dir`` replaces, not a tree a
+      turn's edit belongs in. Its credentials are not in there: the bridge token
+      and the Baileys auth state are siblings, under ``whatsapp-auth``.
+    * ``traces`` (``raven/tracing/config.py``) and ``telemetry``
+      (``raven/token_wise/usage_tracker.py``) -- written by the tracing and usage
+      code, never read back as source.
+    * ``subagent_sessions`` (``raven/config/product_render.py``) -- per-product
+      runtime state: rendered config, ``TOOLS.md``, ``agent_memory``, caches.
+    * ``cache`` (``raven/sandbox/compat_bin.py``, ``raven/providers/codex_client_version.py``)
+      and ``runtime`` (``raven/cli/tui_commands.py``, a node install) -- build and
+      download caches, regenerated rather than edited.
+    * ``playbooks`` -- the user layer resolves to ``<workspace>/playbooks``
+      (``raven/rpc/methods/playbooks.py``) unless ``playbooks.dir`` overrides it,
+      so the default is already inside the first entry; an override elsewhere in
+      the home was never covered by this pass and is not a directory name this
+      list can exempt without also exempting ``bridge``-style build output.
+
+    The home and the four names are compared in the host's terms
+    (:func:`_host_paths`): on Windows either slash separates and case is
+    ignored, so ``C:\\Users\\a\\.raven\\Workspace`` is the ``workspace`` directory; on POSIX
+    ``/`` separates and ``Workspace`` is not ``workspace``. Either way a name
+    ends at a separator, a quote or the end, so ``pluginsfoo`` is not exempt.
+    Before the name, separators may repeat and ``.`` segments may sit between
+    them: the arguments are matched as the call wrote them, no caller
+    normalizes them first, and ``.raven//workspace`` is the same directory.
+
+    The OAuth token store (``oauth/<provider>/...``) is deliberately not among
+    them: it holds no source to edit, and a read of it is a credential file like
+    another program's settings, so it loses its tokens to this pass —
+    :func:`redact_home_config_read` additionally applies
+    :data:`_OAUTH_TOKEN_FIELD` there, for the token fields whose names are
+    ordinary words.
+
+    Why the store is not left to the pass that already existed: from #833 until
+    this change the whole of Raven's home was exempt here, on the argument that
+    Raven's own keys are taken out by the exact-match pass over ``config.json``
+    (``raven/config/held_secrets.py``). That pass reads ``config.json`` only, and
+    it finds a credential by the name on it -- ``api_key``, ``token``, ``secret``.
+    ``access`` and ``refresh``, which is what ``save_token`` writes, are ordinary
+    English words and name nothing, so nothing caught the token files at all. The
+    argument held for the keys it was about and never held for the store, which is
+    why the exemption is now this list instead of the whole home.
     """
     from raven.home import raven_home
 
-    home_dir = os.path.expanduser("~").rstrip("/")
-    home = re.escape(home_dir)
-    own = raven_home()
+    style = _path_style()
+    flavour, sep, flags = _host_paths(style)
+    home_dir = flavour(os.path.expanduser("~"))
+    home = _spelled(home_dir, sep) if len(home_dir.parts) > 1 else re.escape(home_dir.anchor.rstrip("/\\"))
+    own = flavour(str(raven_home()))
     skip = ""
-    if str(own.parent) == home_dir and own.name.startswith("."):
-        skip = r"(?!" + re.escape(own.name[1:]) + r"(?:/|\\|$|[\"'\s]))"
-    return re.compile(r"(?:~|\$HOME|\$\{HOME\}|" + home + r")/\." + skip + r"[A-Za-z0-9_-]")
+    if own.parent == home_dir and own.name.startswith("."):
+        name = re.escape(own.name[1:])
+        boundary = r"(?:/|\\|$|[\"'\s])"
+        lead = sep if style == _WINDOWS else "/+"
+        lead += r"(?:\." + lead + r")*"
+        source = r"(?:" + lead + r"(?:" + "|".join(_OWN_SOURCE_DIRS) + r"))" + boundary
+        skip = r"(?!" + name + r"(?:" + source + r"|(?:$|[\"'\s])))"
+    return re.compile(r"(?:~|\$HOME|\$\{HOME\}|" + home + r")" + sep + r"\." + skip + r"[A-Za-z0-9_-]", flags)
 
 
 def redact_home_config_read(arguments: Any, text: str) -> str:
@@ -221,14 +438,26 @@ def redact_home_config_read(arguments: Any, text: str) -> str:
     connect an agent ran ``read_file`` on its settings and read its key back.
     Only those calls: the patterns here would also rewrite placeholders in a
     project's source and tests, which a coding turn then fails to edit.
+
+    Raven's own OAuth store is the one place a second pass runs, for the token
+    fields whose names (``access``, ``refresh``) are ordinary words -- see
+    :data:`_OAUTH_TOKEN_FIELD`. It is gated on the read reaching that directory,
+    so it costs nothing anywhere else. Prose is safe for a reason narrower than
+    that: the field shape is required (a quoted ``access`` or ``refresh``, a colon,
+    then sixteen characters with no space or quote), so a sentence saying "refresh
+    the page" is untouched, while a passage that quotes a token sample -- a note
+    explaining the file format, with ``"refresh": "<40 hex>"`` in it -- is rewritten
+    with the rest of the passage intact. The gate is on the path, not on whether
+    the text is prose.
     """
     if not text:
         return text
-    try:
-        blob = arguments if isinstance(arguments, str) else json.dumps(arguments, ensure_ascii=False)
-    except (TypeError, ValueError):
-        blob = str(arguments)
-    return redact(text) if _home_config().search(blob) else text
+    strings = _argument_strings(arguments)
+    store = _own_oauth_store()
+    if any(store.search(value) for value in strings):
+        text = _redact_oauth_store(text)
+    config = _home_config()
+    return redact(text) if any(config.search(value) for value in strings) else text
 
 
 # A mapping key that names its value a secret. The structure carries the label

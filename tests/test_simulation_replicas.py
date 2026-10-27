@@ -17,6 +17,7 @@ from experimental.simulation.agency import NAME as REVIEW
 from experimental.simulation.agency import Agency
 from experimental.simulation.employee import HOME, WORKDIR, Together, hire, replicate
 from experimental.simulation.scenario import BUNDLED, Scenario
+from raven.config.agent_names import GENERIC_AGENT
 from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
 
 TRAVEL = BUNDLED / "travel_agency"
@@ -40,8 +41,8 @@ def test_a_replica_copies_the_employee_as_it_stands_with_its_installed_revision(
     scenario, config = Scenario.load(TRAVEL), config_file(tmp_path)
     (tmp_path / "work").mkdir()
     employee = hire(scenario, config, workdir=tmp_path / "work", root=tmp_path / "run")
-    employee.children = prepare_children(employee.baseline, employee.root, ["Raven"])
-    employee.children["Raven"].artifact = Artifact(values={"memory.prompt": {"TOOLS.md": "Search first."}})
+    employee.children = prepare_children(employee.baseline, employee.root, [GENERIC_AGENT])
+    employee.children[GENERIC_AGENT].artifact = Artifact(values={"memory.prompt": {"TOOLS.md": "Search first."}})
     employee.artifact = AUTHORED
     home = employee.baseline.config.workspace_path
     (home / "skills" / "service-sop").mkdir(parents=True)
@@ -52,7 +53,7 @@ def test_a_replica_copies_the_employee_as_it_stands_with_its_installed_revision(
     (tmp_path / "work" / "handover" / "ticket.md").write_text("earlier ticket")
     saved = {"task_id": employee.baseline.task.id, "data": {}, "sessions": {"c1": {"stage": "S2"}}}
     (employee.root / "planning.json").write_text(json.dumps(saved))
-    child_state = child_directory(employee.root, "Raven")
+    child_state = child_directory(employee.root, GENERIC_AGENT)
     child_state.mkdir(parents=True, exist_ok=True)
     (child_state / "action.json").write_text('{"held": 1}')
 
@@ -63,14 +64,17 @@ def test_a_replica_copies_the_employee_as_it_stands_with_its_installed_revision(
     assert not (root / HOME / "sessions").exists()
     assert (root / WORKDIR / "handover" / "ticket.md").read_text() == "earlier ticket"
     assert replica.baseline.workdir == root / WORKDIR
-    assert replica.artifact == AUTHORED and replica.children["Raven"].artifact == employee.children["Raven"].artifact
-    assert replica.children["Raven"].baseline.config.workspace_path == root / HOME / "subagents" / "Raven"
+    assert (
+        replica.artifact == AUTHORED
+        and replica.children[GENERIC_AGENT].artifact == employee.children[GENERIC_AGENT].artifact
+    )
+    assert replica.children[GENERIC_AGENT].baseline.config.workspace_path == root / HOME / "subagents" / GENERIC_AGENT
     # A replica under a new task id would refuse the employee's saved plan before any drill started.
     assert replica.baseline.task == employee.baseline.task
     assert Scopes("planning", replica.baseline.task, root / "planning.json", dict, per_session=True).saved["c1"] == {
         "stage": "S2"
     }
-    assert (child_directory(root, "Raven") / "action.json").read_text() == '{"held": 1}'
+    assert (child_directory(root, GENERIC_AGENT) / "action.json").read_text() == '{"held": 1}'
     assert employee.artifact == AUTHORED and (tmp_path / "work" / "handover" / "ticket.md").is_file()
     assert replica.revision_id == employee.revision_id
 
