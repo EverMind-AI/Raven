@@ -2580,7 +2580,8 @@ class AcpAgentBackend:
         option = self._effort_option.get(session_id) or str(getattr(self._snapshot, "effort_option", "") or "")
         if not option:
             snapshot = self._snapshot
-            if snapshot is None or not snapshot.mode_efforts():
+            mode_efforts = getattr(snapshot, "mode_efforts", None)
+            if not callable(mode_efforts) or not mode_efforts():
                 return
             await self._set_mode_effort(client, session_id, effort, fallback_mode=fallback_mode, budget=budget)
             return
