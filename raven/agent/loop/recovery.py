@@ -64,7 +64,7 @@ import random
 import re
 from collections import Counter
 from collections.abc import Callable, Collection, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum, auto
 
 from raven.agent.context.silence import SILENT_MARKER, is_silence
@@ -674,6 +674,57 @@ class ContinuationGate:
             await self._deliver(text)
 
 
+@dataclass(eq=False)
+class _Reading:
+    """How far one reading of a reply has got toward the taught marker.
+
+    ``body`` is the text read so far with its whitespace and think blocks off, a prefix of the
+    marker while the reading lives; ``block`` names the think block the text is inside, and ``tag``
+    is a tag still being read.
+    """
+
+    body: str = ""
+    block: str | None = None
+    tag: str = ""
+
+    def read(self, char: str) -> str | bool | None:
+        """Read one more character: None once the text can no longer be the marker, ``"closed"`` when it
+        closes a think block, True otherwise."""
+        if self.block is not None:
+            if self.tag or char == "<":
+                self.tag += char
+                tag = _read_think_tag(self.tag, self.block)
+                if tag is None:
+                    self.tag = "<" if char == "<" else ""
+                elif tag is not True:
+                    self.block, self.tag = None, ""
+                    return "closed"
+            return True
+        if self.tag or char == "<":
+            self.tag += char
+            tag = _read_think_tag(self.tag, None)
+            if tag is None:
+                return None
+            if tag is not True:
+                self.block, self.tag = tag, ""
+            return True
+        if char.isspace():
+            # Whitespace may only stand before the marker or after the whole of it.
+            return True if not self.body or self.body == SILENT_MARKER else None
+        self.body += char
+        return True if SILENT_MARKER.startswith(self.body) else None
+
+
+@dataclass
+class _Carried:
+    """What a gate held when its call was cut, and how far it had read, for the call that continues it."""
+
+    text: str
+    reading: _Reading | None
+    # Set once any gate built from this has shown the text, so a later one does not show it again.
+    shown: bool = False
+
+
 class SilenceGate:
     """Holds the start of a reply back while it could still turn out to be a silence marker.
 
@@ -693,21 +744,30 @@ class SilenceGate:
 
     The loop decides once it has read the reply: ``discard`` for a marker, which goes to no one,
     ``release`` for anything else, and for a reply that ends in tool calls, whose words are not a
-    reply a marker could be.
+    reply a marker could be. A call cut mid-answer is not read on its fragment: the loop asks the
+    model to go on, and :meth:`carry` keeps what is held for the gate of the call that continues it
+    (:meth:`handed_over`). That gate reads the continuation two ways at once, on from where the cut
+    one stopped and on its own, because the loop drops a continuation that is a marker by itself;
+    it holds while either reading could still be the marker. :meth:`keep_carried` is the end for
+    such a continuation: what was carried is shown, and the rest is dropped.
     """
 
-    def __init__(self, deliver, *, hold_all: bool) -> None:
+    def __init__(self, deliver, *, hold_all: bool, carried: _Carried | None = None) -> None:
         self._deliver = deliver
         self._hold_all = hold_all
-        self._held: list[str] = []
         self._open = False
         self._dropped = False
-        # The text read so far with its whitespace and think blocks off: a prefix of the marker while
-        # the gate holds.
-        self._body = ""
-        # The name of the think block the text is inside, and a tag still being read.
-        self._block: str | None = None
-        self._tag = ""
+        # What this gate started from, carried from a cut call, and what it hands on if cut itself.
+        self._carried = carried
+        self._handover: _Carried | None = None
+        self._held: list[str] = [carried.text] if carried is not None and carried.text else []
+        # The reading of the whole reply so far, and, on a gate that continues a cut call, the reading
+        # of this call's text on its own. None once it can no longer be the marker.
+        self._whole: _Reading | None = _Reading()
+        self._readings = [self._whole]
+        if carried is not None:
+            self._whole = replace(carried.reading) if carried.reading is not None else None
+            self._readings = [_Reading()] if self._whole is None else [self._whole, _Reading()]
 
     async def __call__(self, delta: str) -> None:
         if self._dropped:
@@ -720,52 +780,37 @@ class SilenceGate:
             return
         start = 0
         for index, char in enumerate(delta):
-            step = self._read(char)
-            if step is None:
+            steps = [(reading, reading.read(char)) for reading in self._readings]
+            self._readings = [reading for reading, step in steps if step is not None]
+            if not any(reading is self._whole for reading in self._readings):
+                self._whole = None
+            if not self._readings:
                 self._held.append(delta[start:])
                 await self.release()
                 return
-            if step == "closed" and not self._body:
+            if self._nothing_of_a_marker_held() and any(step == "closed" for _reading, step in steps):
                 self._held.append(delta[start : index + 1])
                 await self._show_held()
                 start = index + 1
         self._held.append(delta[start:])
-        if self._block is not None and not self._body:
+        if self._nothing_of_a_marker_held() and any(reading.block is not None for reading in self._readings):
             await self._show_held()
 
-    def _read(self, char: str) -> str | bool | None:
-        """Read one more character: None once the text can no longer be the marker, ``"closed"`` when it
-        closes a think block, True otherwise."""
-        if self._block is not None:
-            if self._tag or char == "<":
-                self._tag += char
-                tag = _read_think_tag(self._tag, self._block)
-                if tag is None:
-                    self._tag = "<" if char == "<" else ""
-                elif tag is not True:
-                    self._block, self._tag = None, ""
-                    return "closed"
-            return True
-        if self._tag or char == "<":
-            self._tag += char
-            tag = _read_think_tag(self._tag, None)
-            if tag is None:
-                return None
-            if tag is not True:
-                self._block, self._tag = tag, ""
-            return True
-        if char.isspace():
-            # Whitespace may only stand before the marker or after the whole of it.
-            return True if not self._body or self._body == SILENT_MARKER else None
-        self._body += char
-        return True if SILENT_MARKER.startswith(self._body) else None
+    def _nothing_of_a_marker_held(self) -> bool:
+        """No reading has read any of the marker: what is held is whitespace and think blocks."""
+        return not any(reading.body for reading in self._readings)
 
     async def _show_held(self) -> None:
         """Deliver what is held without opening the gate: a think block before any of the reply."""
         text = "".join(self._held)
         self._held = []
         if text:
+            self._mark_carried_shown()
             await self._deliver(text)
+
+    def _mark_carried_shown(self) -> None:
+        if self._carried is not None:
+            self._carried.shown = True
 
     async def release(self) -> None:
         """Deliver what is held, then let the rest through untouched."""
@@ -775,9 +820,39 @@ class SilenceGate:
         text = "".join(self._held)
         self._held = []
         if text:
+            self._mark_carried_shown()
             await self._deliver(text)
 
     def discard(self) -> None:
         """Drop what is held and everything after it: the reply was a marker, and a marker is shown to no one."""
         self._held = []
         self._dropped = True
+
+    def carry(self) -> None:
+        """Keep what is held for the call that continues this cut one; nothing of it is shown yet."""
+        if self._open or self._dropped:
+            self._handover = None
+            return
+        reading = None if self._hold_all or self._whole is None else replace(self._whole)
+        self._handover = _Carried("".join(self._held), reading)
+
+    def handed_over(self) -> "SilenceGate":
+        """A gate for the call that continues the cut one, starting from what :meth:`carry` kept.
+
+        A gate that had already let the reply through hands on nothing: the reader has what streamed,
+        and the continuation is held only while it could be a marker on its own. So does one whose
+        carried text another gate built from it has shown.
+        """
+        carried = self._handover
+        if carried is None or carried.shown:
+            return SilenceGate(self._deliver, hold_all=self._hold_all)
+        return SilenceGate(self._deliver, hold_all=self._hold_all, carried=carried)
+
+    async def keep_carried(self) -> None:
+        """Show what was carried from the cut call and drop the rest: a continuation that adds nothing."""
+        held = not (self._open or self._dropped)
+        text = self._carried.text if held and self._carried is not None and not self._carried.shown else ""
+        self.discard()
+        if text:
+            self._mark_carried_shown()
+            await self._deliver(text)

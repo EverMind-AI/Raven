@@ -834,7 +834,8 @@ nothing is delivered for it: `_process_message` returns no reply, so a channel s
 a surface that streams is shown none of the marker -- the `SilenceGate` holds the start of a reply
 while it could still become `[SILENT]` (a reply that opens with anything but whitespace or the
 bracket goes out at once), reads past an inline think block the way the loop does (the block streams
-as it arrives, and what follows it is held), and drops what it held when the loop reads the reply as
+as it arrives, and what follows it is held), keeps holding across a stream cut while the reply could
+still be the marker, and drops what it held when the loop reads the reply as
 a marker (a turn from a proactive origin, whose marker may close a report, holds the
 whole call instead). An exhausted turn's wrap-up is gated and read the same way. The marker row
 stays in the history holding the model's whole reply -- the marker, or, from a proactive origin,
@@ -885,10 +886,14 @@ than taken for silence, and a stream that had already received a refusal finish 
 refusal is handled as one rather than continued. The model is asked to go on, and the parts are
 joined, up to `MAX_CONTINUATIONS` times,
 after which the partial is delivered with `PARTIAL_STREAM_NOTE` as an `interrupted` turn. A
-continuation that comes back empty leaves what streamed as the answer; one that comes back as an
+continuation that comes back empty leaves what streamed as the answer, and so does one that is a
+marker on its own; one that comes back as an
 error, a stream cut off before any new text included, ends the turn at once on the partial with
 the note, as `interrupted`, with no wait and no fallback model -- and so does a turn that runs out
-of iterations or time while a continuation is still owed, with no wrap-up. A stream that merely
+of iterations or time while a continuation is still owed, with no wrap-up. On each of those exits
+the reply the turn ends on, the joined parts, is read for a Silence Marker by the turn's rule, and
+one that is a marker ends the turn as a **Silent Turn**: nothing of it shown, its row filed
+`silent: true`, no note, and the turn `interrupted` only when its budget stopped it. A stream that merely
 closed without a terminal chunk -- all a backend that never sends one leaves -- and a body that
 names no finish read `unknown` and are delivered as they stand. The continuation streams into the
 step the cut answer opened, and one that calls a tool files the joined words on that call's row. A

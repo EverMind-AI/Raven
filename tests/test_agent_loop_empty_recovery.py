@@ -2211,9 +2211,10 @@ class _ContinuationErrors(LLMProvider):
     """Streams its words and dies; the continuation it is then asked for fails outright, with the
     kind of error a wait or another model could mend."""
 
-    def __init__(self) -> None:
+    def __init__(self, first: str = "The answer is 42.") -> None:
         super().__init__(api_key="test")
         self.models: list[str | None] = []
+        self.first = first
 
     async def chat(self, *args, **kwargs):  # pragma: no cover - the streaming path is under test
         raise AssertionError("the streaming path is the one under test")
@@ -2221,7 +2222,7 @@ class _ContinuationErrors(LLMProvider):
     async def chat_stream(self, messages, tools=None, model=None, **_kw):
         self.models.append(model)
         if len(self.models) == 1:
-            yield ChatDelta(content="The answer is 42.")
+            yield ChatDelta(content=self.first)
             raise ConnectionError("connection reset by peer")
         yield ChatDelta(
             content="Error calling LLM (network@stub): connection reset",
@@ -2343,6 +2344,141 @@ async def test_a_spent_wall_clock_ends_a_cut_answer_on_what_streamed_with_the_no
     assert outcome.status == "interrupted" and outcome.error is None
     assert "".join(sink.text) == final
     assert (messages[-1]["role"], messages[-1]["content"]) == ("assistant", final)
+
+
+def _empty_finish() -> _Stream:
+    return _Stream([_chunk(finish_reason="stop")], "stop")
+
+
+# --------------------------------------------------------------------------- #
+# a cut is continued, and the reply the turn ends on is what is read for silence #
+# --------------------------------------------------------------------------- #
+
+
+async def _ends_on(agent: AgentLoop, origin: Origin, **kwargs):
+    """Run the loop on a streamed turn and return what it ended on, what was filed and what streamed."""
+    sink = _Sink()
+    final, _used, messages, outcome = await agent._run_agent_loop(
+        _seed(), on_token_delta=sink.delta, origin=origin, **kwargs
+    )
+    return final, outcome, messages[-1], sink.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "origin,cuts,continuation",
+    [
+        pytest.param(Origin.USER, ["[SILENT]"], _empty_finish, id="person_marker_then_empty"),
+        pytest.param(Origin.USER, ["[SILENT]"], lambda: _finished_stream("[SILENT]"), id="person_marker_then_marker"),
+        pytest.param(Origin.USER, ["[SIL"], lambda: _finished_stream("ENT]"), id="person_marker_cut_in_two"),
+        pytest.param(Origin.CRON, ["No reply"], _empty_finish, id="proactive_no_reply_then_empty"),
+        pytest.param(Origin.CRON, ["[SILENT]"], _empty_finish, id="proactive_marker_then_empty"),
+        pytest.param(
+            Origin.CRON, ["[SILENT]"], lambda: _finished_stream("[SILENT]"), id="proactive_marker_then_marker"
+        ),
+    ],
+)
+async def test_a_marker_a_cut_stream_carried_ends_the_turn_silent(workspace, monkeypatch, origin, cuts, continuation):
+    """The cut is continued and never judged on its fragment; the reply the turn ends on is, and when that
+    is the model's marker the turn ends as any marker does: nothing shown, the row filed silent, no note."""
+    calls = _served(monkeypatch, [*(_DyingStream(cut) for cut in cuts), continuation()])
+
+    final, outcome, last, streamed = await _ends_on(_litellm_agent(workspace), origin)
+
+    assert len(calls) == len(cuts) + 1, "the cut was continued"
+    assert outcome.silent is True and outcome.status == "completed"
+    assert last.get("_silent") is True and PARTIAL_STREAM_NOTE not in final
+    assert streamed == [], "none of the marker reached the reader"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin,first", [(Origin.USER, "[SILENT]"), (Origin.CRON, "No reply")])
+async def test_a_marker_a_failed_continuation_leaves_ends_the_turn_silent(workspace, monkeypatch, origin, first):
+    provider = _ContinuationErrors(first=first)
+    _recorded_sleeps(monkeypatch)
+
+    final, outcome, last, streamed = await _ends_on(_make_agent(workspace, provider), origin)
+
+    assert provider.models == ["stub", "stub"]
+    assert final == first and outcome.silent is True and outcome.status == "completed"
+    assert last.get("_silent") is True
+    assert streamed == []
+
+
+@pytest.mark.asyncio
+async def test_a_marker_the_spent_continuations_leave_ends_the_turn_silent(workspace, monkeypatch):
+    calls = _served(monkeypatch, [_DyingStream(text) for text in ("[S", "IL", "EN", "T]")])
+
+    final, outcome, last, streamed = await _ends_on(_litellm_agent(workspace), Origin.USER)
+
+    assert len(calls) == 1 + MAX_CONTINUATIONS
+    assert final == "[SILENT]" and outcome.silent is True and outcome.status == "completed"
+    assert last.get("_silent") is True
+    assert streamed == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin,cut", [(Origin.USER, "[SILENT]"), (Origin.CRON, "No reply")])
+async def test_a_marker_cut_on_the_last_iteration_ends_the_turn_silent(workspace, monkeypatch, origin, cut):
+    """The budget stopped the turn, so it is ``interrupted`` as a silent wrap-up is; its reply is the marker."""
+    calls = _served(monkeypatch, [_DyingStream(cut)])
+
+    final, outcome, last, streamed = await _ends_on(_litellm_agent(workspace, max_iterations=1), origin)
+
+    assert len(calls) == 1
+    assert final == cut and outcome.silent is True and outcome.status == "interrupted"
+    assert last.get("_silent") is True
+    assert streamed == []
+
+
+@pytest.mark.asyncio
+async def test_a_no_reply_cut_that_goes_on_to_a_summary_is_delivered_whole(workspace, monkeypatch):
+    """The control: the words after the cut make the reply a summary, and a proactive turn delivers it whole."""
+    _served(monkeypatch, [_DyingStream("No reply"), _finished_stream(" was needed; here is the summary")])
+
+    final, outcome, last, streamed = await _ends_on(_litellm_agent(workspace), Origin.CRON)
+
+    assert final == "No reply was needed; here is the summary" and outcome.silent is False
+    assert "_silent" not in last
+    assert "".join(streamed) == final
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", [Origin.USER, Origin.CRON])
+async def test_a_marker_after_a_held_cut_shows_what_streamed_and_drops_the_marker(workspace, monkeypatch, origin):
+    """A continuation that is a marker adds nothing, so what streamed is the answer: a start that was held
+    across the cut goes out, and the marker after it does not."""
+    _served(monkeypatch, [_DyingStream("[SIL"), _finished_stream("[SILENT]")])
+
+    final, outcome, last, streamed = await _ends_on(_litellm_agent(workspace), origin)
+
+    assert final == "[SIL" and outcome.silent is False
+    assert "_silent" not in last
+    assert "".join(streamed) == "[SIL"
+
+
+@pytest.mark.asyncio
+async def test_a_held_cut_a_refused_continuation_let_out_is_not_shown_twice(workspace, monkeypatch):
+    """The refusal's words showed what was held across the cut; the fallback's continuation starts on
+    from it, and does not show it again."""
+    refusal = _Stream([_chunk("I can't."), _chunk(finish_reason="content_filter")], "content_filter")
+    _served(monkeypatch, [_DyingStream("[SIL"), refusal, _finished_stream("VER] tier is on.")])
+
+    final, outcome, _last, streamed = await _ends_on(_litellm_agent(workspace), Origin.USER, fallback_models=["fb"])
+
+    assert final == "[SILVER] tier is on." and outcome.silent is False
+    assert "".join(streamed).count("[SIL") == 1
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_cut_answer_streams_as_it_did(workspace, monkeypatch):
+    """The control: a person's answer is out from its first letter, and its continuation follows as it comes."""
+    _served(monkeypatch, [_DyingStream("The answer is "), _finished_stream("42", ".")])
+
+    final, outcome, _last, streamed = await _ends_on(_litellm_agent(workspace), Origin.USER)
+
+    assert final == "The answer is 42." and outcome.silent is False
+    assert streamed == ["The answer is ", "42", "."]
 
 
 class _DiesAfterItsUsage(LLMProvider):
@@ -4041,10 +4177,6 @@ async def test_a_stream_cut_right_after_a_marker_is_continued_not_ended_silent(w
     assert calls[1]["messages"][-1]["content"] == NETWORK_CUT_CONTINUATION
     assert final == f"{cut} yet from the vendor." and outcome.silent is False
     assert "_silent" not in messages[-1]
-
-
-def _empty_finish() -> _Stream:
-    return _Stream([_chunk(finish_reason="stop")], "stop")
 
 
 @pytest.mark.asyncio

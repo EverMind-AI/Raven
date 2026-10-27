@@ -381,12 +381,18 @@ _ASKS_AGAIN = frozenset(
 )
 
 
-async def _settle_silence(gate: SilenceGate | None, *, silent: bool) -> None:
-    """End the hold on a kept reply's start: dropped when the reply was a marker, shown otherwise."""
+async def _settle_silence(gate: SilenceGate | None, *, silent: bool, dropped_marker: bool = False) -> None:
+    """End the hold on a kept reply's start: dropped when the reply was a marker, shown otherwise.
+
+    ``dropped_marker`` is a continuation that was a marker the reply leaves out: only what the cut
+    call before it carried is shown.
+    """
     if gate is None:
         return
     if silent:
         gate.discard()
+    elif dropped_marker:
+        await gate.keep_carried()
     else:
         await gate.release()
 
@@ -1058,6 +1064,9 @@ class TurnPathMixin:
         # Set when a stream cut mid-answer is about to be continued: the next call
         # carries on the step the cut one opened rather than starting another.
         merge_episode = False
+        # The silence gate of the call a cut answer is being continued from: what it held is not
+        # shown at the cut, because the reply the turn ends on may still be a marker.
+        carried_gate: SilenceGate | None = None
         # Sticky across a turn's step-downs: once the descent reaches a rung, the
         # next one must not read the turn's own effort again and hand back the
         # value that already came up thinking and nothing else.
@@ -1231,19 +1240,31 @@ class TurnPathMixin:
         async def _end_on_the_partial(last: LLMResponse) -> str:
             """End the turn on a cut answer no continuation will finish, and return what it ends on.
 
-            The continuation failed, or the turn has no iteration or time left to ask for it. The
-            reader already holds what streamed, so that is the answer, the note says it is not the
-            whole of it, and the turn is ``interrupted``. Nothing more is asked for: a wrap-up would
-            stream onto the partial and be all the record kept. The reply carries the window ``last``,
-            the turn's newest call, measured, as every reply does.
+            The continuation failed, or the turn has no iteration or time left to ask for it. What
+            streamed is the answer, the note says it is not the whole of it, and the turn is
+            ``interrupted``. Nothing more is asked for: a wrap-up would stream onto the partial and be
+            all the record kept. When what streamed is the model's marker, the turn ends silent as any
+            marker does: nothing shown, no note. The reply carries the window ``last``, the turn's
+            newest call, measured, as every reply does.
             """
-            nonlocal messages, status
-            note = "\n\n" + PARTIAL_STREAM_NOTE
-            final = "".join(recovery.parts).strip() + note
-            status = "interrupted"
-            if on_token_delta is not None:
-                await on_token_delta(note)
+            nonlocal messages, status, silent
+            final = "".join(recovery.parts).strip()
+            held = carried_gate.handed_over() if carried_gate is not None else None
+            silent = not reply_awaited and is_silence(final, origin)
+            if silent:
+                if held is not None:
+                    held.discard()
+            else:
+                note = "\n\n" + PARTIAL_STREAM_NOTE
+                final += note
+                status = "interrupted"
+                if held is not None:
+                    await held.release()
+                if on_token_delta is not None:
+                    await on_token_delta(note)
             messages = self.context.add_assistant_message(messages, final)
+            if silent:
+                messages[-1][_SILENT_KEY] = True
             _stamp_context_used(messages, last)
             return final
 
@@ -1443,11 +1464,12 @@ class TurnPathMixin:
             # held until the loop has read the reply. A turn from a proactive origin holds the
             # whole call, because its marker may close a report and only the end of the call
             # shows that. The gates below deliver into this one.
-            silence_gate = (
-                SilenceGate(on_token_delta, hold_all=origin in PROACTIVE_ORIGINS)
-                if on_token_delta is not None and not reply_awaited
-                else None
-            )
+            if on_token_delta is None or reply_awaited:
+                silence_gate = None
+            elif carried_gate is not None:
+                silence_gate = carried_gate.handed_over()
+            else:
+                silence_gate = SilenceGate(on_token_delta, hold_all=origin in PROACTIVE_ORIGINS)
             downstream = silence_gate or on_token_delta
             # A hook can send this whole response back, and a rollback pops the
             # history the stream has already left -- so where hooks are installed
@@ -1638,6 +1660,7 @@ class TurnPathMixin:
                 )
                 recovery.empty_streak.clear()
                 recovery.parts.clear()
+                carried_gate = None
                 recovery.step_asks.clear()
                 if hook_ctx is not None:
                     hook_ctx.messages = messages
@@ -2324,11 +2347,15 @@ class TurnPathMixin:
                         MAX_CONTINUATIONS,
                     )
                     # What streamed is the answer so far, and a reader whose deltas
-                    # were held back for a hook is shown it before the rest follows.
+                    # were held back for a hook is shown it before the rest follows --
+                    # unless it may still be a marker: the silence gate keeps holding it,
+                    # and the continuation's deltas join it there, until the reply the
+                    # turn ends on is read.
                     if draft is not None:
                         await draft.release()
                     if silence_gate is not None:
-                        await silence_gate.release()
+                        silence_gate.carry()
+                        carried_gate = silence_gate
                     messages = self.context.add_assistant_message(messages, clean)
                     messages[-1]["_recovery_synthetic"] = True
                     messages.append({"role": "user", "content": NETWORK_CUT_CONTINUATION, "_recovery_synthetic": True})
@@ -2402,6 +2429,14 @@ class TurnPathMixin:
                         else ""
                     )
                     clean = ("".join(recovery.parts) + tail).strip()
+                # The reply the turn ends on is read for silence once it is whole: a cut is
+                # continued rather than judged on its fragment, so after one -- or when one can
+                # no longer be continued -- the joined text is what may be the marker.
+                if recovery.parts or kind is ReplyKind.NETWORK_CUT:
+                    ends_silent = not reply_awaited and is_silence(clean, origin)
+                else:
+                    ends_silent = action is RecoveryAction.SILENT
+                dropped_marker = action is RecoveryAction.SILENT and not ends_silent
 
                 # Before the text is persisted, so a short-circuit replaces it
                 # without leaving the replaced draft in history and a rollback
@@ -2420,7 +2455,7 @@ class TurnPathMixin:
                         continue
                     if draft is not None:
                         await draft.release()
-                    await _settle_silence(silence_gate, silent=action is RecoveryAction.SILENT)
+                    await _settle_silence(silence_gate, silent=ends_silent, dropped_marker=dropped_marker)
                     _land_hook_note(decision)
                     if decision.short_circuit_result is not None:
                         final_content = str(decision.short_circuit_result)
@@ -2428,9 +2463,9 @@ class TurnPathMixin:
                         _stamp_context_used(messages, response)
                         break
                 else:
-                    await _settle_silence(silence_gate, silent=action is RecoveryAction.SILENT)
+                    await _settle_silence(silence_gate, silent=ends_silent, dropped_marker=dropped_marker)
 
-                if kind is ReplyKind.NETWORK_CUT and action is RecoveryAction.COMPLETE:
+                if kind is ReplyKind.NETWORK_CUT and action is RecoveryAction.COMPLETE and not ends_silent:
                     # Cut, and nothing will ask the model to go on: the continuations are
                     # spent, or recovery is switched off, which is the same with none made.
                     # The reader gets what there is, and the note says it is not the whole
@@ -2451,9 +2486,8 @@ class TurnPathMixin:
                 _stamp_reasoning_ms(messages, response)
                 _stamp_context_used(messages, response)
                 # Kept in the history, as the row it is, and filed as a marker so a
-                # reload does not read it as an answer. After a cut answer the reader
-                # already has, a marker is not the whole reply, and the row is not one.
-                silent = action is RecoveryAction.SILENT and not recovery.parts
+                # reload does not read it as an answer.
+                silent = ends_silent
                 if silent:
                     messages[-1][_SILENT_KEY] = True
                 final_content = clean
@@ -2489,6 +2523,9 @@ class TurnPathMixin:
                 "Turn stopped ({}) with a cut answer awaiting its continuation; ending on what streamed", stopped_by
             )
             final_content = await _end_on_the_partial(response)
+            # The budget stopped it, so it is interrupted even when its reply is the marker,
+            # as a wrap-up that is one is.
+            status = "interrupted"
         elif exhausted:
             if stalled_tool is not None:
                 stopped_by = "stalled_tool"
