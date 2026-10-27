@@ -3731,6 +3731,26 @@ async def test_a_proactive_turn_still_reads_a_loosely_spelled_marker_as_silence(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("origin,silent", [(Origin.USER, False), (Origin.CRON, True)])
+async def test_a_wrap_up_that_closes_a_note_with_the_marker_is_read_by_its_turns_rule(
+    workspace, monkeypatch, origin, silent
+):
+    """The loose rule takes a marker on the last line of a note as silence, and only a proactive turn
+    reads it: on a person's turn the wrap-up is their answer, note and marker together."""
+    wrap_up = "Checked the inbox twice; nothing changed.\n\n[SILENT]"
+    _served(monkeypatch, [_tool_stream(), _finished_stream(*_chunked(wrap_up))])
+    sink = _Sink()
+
+    final, _used, messages, outcome = await _litellm_agent(workspace, max_iterations=1)._run_agent_loop(
+        _seed(), on_token_delta=sink.delta, origin=origin
+    )
+
+    assert final == wrap_up and outcome.silent is silent
+    assert bool(messages[-1].get("_silent")) is silent
+    assert "".join(sink.text) == ("" if silent else wrap_up)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin,silent", [(Origin.USER, False), (Origin.CRON, True)])
 async def test_a_wrap_up_that_spells_a_marker_loosely_is_read_by_its_turns_rule(workspace, monkeypatch, origin, silent):
     _served(monkeypatch, [_tool_stream(), _finished_stream("No reply.")])
     sink = _Sink()
