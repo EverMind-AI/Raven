@@ -44,6 +44,7 @@ from raven.acp.replay import replay
 from raven.acp.updates import AcpSession, TurnAlreadyRunningError, UpdateTranslator
 from raven.config import load_config
 from raven.security import redact
+from raven.session.manager import BUDGET_STOP_TURN_AT, OUTPUT_LIMIT_TURN_AT
 
 # Methods in the stable manifest that raven does not serve yet. Answered with
 # method-not-found, which is the same answer an unknown name gets -- the
@@ -967,7 +968,7 @@ class AcpMethods:
         if stop != "end_turn" or sessions is None:
             return stop
         metadata = getattr(sessions.get_or_create(session_key), "metadata", {})
-        for key, refined in (("budget_stop_turn_at", "max_turn_requests"), ("output_limit_turn_at", "max_tokens")):
+        for key, refined in ((BUDGET_STOP_TURN_AT, "max_turn_requests"), (OUTPUT_LIMIT_TURN_AT, "max_tokens")):
             at = metadata.get(key)
             if isinstance(at, int) and at >= filed_before:
                 return refined

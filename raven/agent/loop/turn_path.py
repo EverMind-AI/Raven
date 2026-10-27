@@ -139,6 +139,7 @@ from raven.providers import usage_record
 from raven.providers.base import bound_llm_detail, canonical_llm_error, llm_error_summary, parse_llm_error
 from raven.providers.first_byte import first_byte_budget
 from raven.providers.tool_calls import openai_tool_call
+from raven.session.manager import BUDGET_STOP_TURN_AT, OUTPUT_LIMIT_TURN_AT
 from raven.session.refs import TOOL_RESULT_TRUNCATION_MARKER, tool_result_view
 from raven.spine.events import bound_failure_text
 from raven.spine.turn import PROACTIVE_ORIGINS, AnswerlessTurnError
@@ -3301,13 +3302,13 @@ class TurnPathMixin:
                 # standing -- which is exactly the reading ACP's ``max_tokens``
                 # refinement makes.
                 if turn_hook_meta.get("output_limited"):
-                    session.metadata["output_limit_turn_at"] = _turn_start()
+                    session.metadata[OUTPUT_LIMIT_TURN_AT] = _turn_start()
                 else:
                     # None rather than dropping the key: a save merges its
                     # metadata over the record on disk, so a key left unsaid is
                     # kept rather than cleared (SessionManager._metadata_to_write).
                     # The reader asks whether this is an int, which None is not.
-                    session.metadata["output_limit_turn_at"] = None
+                    session.metadata[OUTPUT_LIMIT_TURN_AT] = None
                 # The same slot for a turn its own budget ended -- the tool cap, the
                 # wall clock or a stalled tool. Its wrap-up reads as an ordinary
                 # answer, so a surface that reports the turn (ACP's stop reason) has
@@ -3316,7 +3317,7 @@ class TurnPathMixin:
                 # interrupted too, and no budget of its was spent. Written or
                 # cleared on the same terms as above.
                 budget_stopped = outcome.status == "interrupted" and bool(turn_hook_meta.get("budget_stopped"))
-                session.metadata["budget_stop_turn_at"] = _turn_start() if budget_stopped else None
+                session.metadata[BUDGET_STOP_TURN_AT] = _turn_start() if budget_stopped else None
                 # The loop gave up on the model. Its ladder, its rerun and its
                 # salvage have all had their say, so what is left is a turn with
                 # no answer: the failure the handler below files and the lane
