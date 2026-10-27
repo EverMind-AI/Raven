@@ -49,6 +49,7 @@ from raven.agent.loop._shared import (
     _appended_by_hook,
     _display_label,
     _file_change_payload,
+    _file_composed_reply,
     _file_removed_payload,
     _file_written_payload,
     _first_line,
@@ -3336,6 +3337,12 @@ class TurnPathMixin:
         # body or a dropped stretch of the turn is the window's business, and
         # filing it would replay it to every later turn as what happened.
         turn_msgs = live["log"].messages(_TURN_TRANSIENT_KEYS)
+        message_tool = self.tools.get("message")
+        sent_by_tool = isinstance(message_tool, MessageTool) and message_tool.sent_in_turn
+        if outcome.silent and not silent and not sent_by_tool:
+            # A hook composed the reply the reader is sent in place of the marker. A turn the
+            # message tool answered sends no reply of its own, so its marker row stays.
+            _file_composed_reply(turn_msgs, final_content)
         if len(self.hooks) > 0:
             _stamp_turn_observers(turn_msgs, turn_hook_meta, turn_start_idx)
 
@@ -3381,7 +3388,7 @@ class TurnPathMixin:
         if origin is Origin.USER:
             self._maybe_annotate_tail(session, _turn_start())
 
-        if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt.sent_in_turn:
+        if sent_by_tool:
             # Defensive fingerprint. A silent return None would leave no
             # trace when the agent replied via the message tool, making
             # stochastic dud-turn bugs invisible to grep. Log

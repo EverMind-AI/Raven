@@ -394,6 +394,22 @@ def _appended_by_hook(before: str | None, after: str) -> str:
     return after[len(head) :]
 
 
+def _file_composed_reply(messages: list[dict[str, Any]], reply: str) -> None:
+    """Put the reply an ``after_send`` hook composed on a silent turn in place of the marker row.
+
+    The hook's text is what the reader was sent, so it is what the turn files: a reload, a replay and
+    a cron run's preview read the marker row as no reply. Replaced with a copy, so a list that shares
+    the row is left as it was.
+    """
+    for index in range(len(messages) - 1, -1, -1):
+        row = messages[index]
+        if row.get("role") == "assistant" and row.get(_SILENT_KEY):
+            filed = {key: value for key, value in row.items() if key != _SILENT_KEY}
+            filed["content"] = reply
+            messages[index] = filed
+            return
+
+
 #: A message a hook injected on rollback: the harness re-prompting itself (a
 #: reviewer rejection, a commit nudge). It persists into history because the
 #: model was shown it, but no real user said it; the underscore key is dropped

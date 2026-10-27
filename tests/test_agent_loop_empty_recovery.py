@@ -4029,7 +4029,45 @@ async def test_text_a_hook_composes_on_a_silent_turn_is_delivered(workspace, mon
     assert out == ("Deck: /out/deck.pptx", []), "the separator the hook put in front separates nothing"
     assert silence == {}, "a turn that replied was not silent"
     assert sink == {"appended": "\n\nDeck: /out/deck.pptx"}, "the tail a streaming reader is sent keeps it"
-    assert agent.sessions.get_or_create("s1").messages[-1]["content"] == "[SILENT]", "history keeps the model's own row"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", [Origin.USER, Origin.CRON])
+async def test_the_reply_a_hook_composes_on_a_silent_turn_is_filed_as_the_reply(workspace, monkeypatch, origin):
+    """What was delivered is what is filed: the hook's text, as a reply and not a marker, so a reload,
+    an ACP replay, the session list and a cron run's preview all read the reply the reader got."""
+    from raven.acp.replay import replay
+    from raven.rpc.methods.session import _map_to_wire
+
+    _served(monkeypatch, [_reply("[SILENT]")])
+    agent = _litellm_agent(workspace, hooks=[_Sees(reply="\n\nDeck: /out/deck.pptx")])
+
+    out = await agent._process_message(_turn(origin=origin), session_key="s1", origin=origin)
+
+    assert out == ("Deck: /out/deck.pptx", [])
+    rows = agent.sessions.get_or_create("s1").messages
+    assert (rows[-1]["role"], rows[-1]["content"]) == ("assistant", "Deck: /out/deck.pptx")
+    assert "silent" not in rows[-1]
+    wire = _map_to_wire(rows, "s1")
+    said = [u["content"]["text"] for u in replay(wire, session_id="s1") if u["sessionUpdate"] == "agent_message_chunk"]
+    assert said == ["Deck: /out/deck.pptx"]
+    listed = next(s for s in agent.sessions.list_sessions() if s["key"] == "s1")
+    assert listed["last_message_preview"] == "Deck: /out/deck.pptx"
+
+
+@pytest.mark.asyncio
+async def test_a_hook_reply_on_a_turn_the_message_tool_answered_leaves_the_marker_row(workspace, monkeypatch):
+    """The message tool's text is the turn's answer and nothing else is delivered, so the marker the
+    model closed it on stays the row it is."""
+    _served(monkeypatch, [_tool_reply("message", _SEND), _reply("[SILENT]")])
+    agent = _litellm_agent(workspace, hooks=[_Sees(reply="\n\nDeck: /out/deck.pptx")])
+    sent = _wire_message_tool(agent)
+
+    out = await agent._process_message(_turn(), session_key="s1")
+
+    assert sent == ["here is your answer"] and out is None
+    last = agent.sessions.get_or_create("s1").messages[-1]
+    assert (last["content"], last.get("silent")) == ("[SILENT]", True)
 
 
 @pytest.mark.asyncio
