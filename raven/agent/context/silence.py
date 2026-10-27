@@ -8,17 +8,15 @@ Silence is something the model chooses, by answering with a marker. It is not:
   completed, and a marker never hides a failure;
 * a marker inside a report -- prose that merely mentions one is delivered like any other prose.
 
-One marker set is read by two rules, so the lanes cannot drift apart. The strict rule
-(``is_exact_silence``) serves a turn a person started: the reply must be exactly a marker, so
-anything the model meant to say reaches the person waiting on it. A turn from a proactive origin
-(cron, sub-agent, sentinel, heartbeat) reads the loose rule (``is_loose_silence``) as well as the
-strict one: nobody is waiting, the model is told to answer ``[SILENT]`` when nothing is new, and
-models reliably wrap it in a short note on why they stayed quiet, so the bracketed ``[SILENT]``
-opening the reply, or any marker alone on its first or last line, counts too.
-
-``may_become_silence`` is the strict rule's counterpart for streaming: it says whether the text so
-far could still turn out to be a marker, so a surface holds it back instead of showing a marker
-and retracting it.
+The rule depends on who the turn is for, and ``is_silence`` is the one place that picks it, so the
+lanes cannot drift apart. A turn a person started is never taught a marker, so it honours only the
+bracketed ``[SILENT]`` the runtime teaches, as the whole reply: a one-word answer such as ``Silent.``
+or ``No reply.`` is the person's answer. A turn from a proactive origin (cron, sub-agent, sentinel,
+heartbeat) is told to answer ``[SILENT]`` when nothing is new, and models reliably vary the spelling
+and wrap it in a short note on why they stayed quiet, so it reads the whole marker set by two rules:
+the strict one (``is_exact_silence``), a reply that is exactly a marker, and the loose one
+(``is_loose_silence``), where the bracketed ``[SILENT]`` opening the reply, or any marker alone on
+its first or last line, counts too.
 """
 
 import unicodedata
@@ -110,30 +108,9 @@ def is_silence(text: object, origin: Origin | None) -> bool:
 
     A turn from a proactive origin reads the loose rule and the strict one: the loose matcher takes a
     whole-reply marker as written, so ``NO_REPLY.`` needs the strict rule's forgiveness of edge
-    punctuation, and whatever stays quiet on a person's turn stays quiet here too. Every other
-    origin, and none, reads the strict rule alone, so an origin this table does not know delivers a
-    marker rather than swallowing a reply.
+    punctuation. Every other origin, and none, honours only ``[SILENT]`` with whitespace around it,
+    so an origin this table does not know delivers a reply rather than swallowing it.
     """
     if origin in PROACTIVE_ORIGINS:
         return is_loose_silence(text) or is_exact_silence(text)
-    return is_exact_silence(text)
-
-
-def may_become_silence(text: object) -> bool:
-    """True while ``text`` could still resolve to a marker under the strict rule.
-
-    A streaming surface decides, before the whole reply is known, whether to show what it has. A
-    buffer whose canonical form is a non-empty prefix of a marker (``NO`` on the way to
-    ``NO_REPLY``, or a whole marker the stream has not yet ended) is held back, so a raw marker is
-    never shown and then retracted. Text that has diverged from every marker, or outgrown the cap,
-    returns False and streaming resumes at once.
-    """
-    if not isinstance(text, str):
-        return False
-    stripped = text.strip()
-    if not stripped or len(stripped) > SILENCE_MAX_CHARS:
-        return False
-    for candidate in _canonical_silence_candidates(stripped):
-        if candidate and any(marker.startswith(candidate) for marker in SILENCE_MARKERS):
-            return True
-    return False
+    return isinstance(text, str) and text.strip() == SILENT_MARKER

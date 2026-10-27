@@ -8,6 +8,7 @@ import contextlib
 import functools
 from typing import TYPE_CHECKING
 
+from raven.agent.context.silence import is_silence
 from raven.agent.loop._shared import (
     _ABORTED_ACTION_REPLY,
     _CONTEXT_USED_KEY,
@@ -112,7 +113,6 @@ from raven.agent.loop.recovery import (
     decide,
     empty_retry_delay,
     has_thinking_to_refeed,
-    is_silent_reply,
     next_step_down,
     reasoning_excerpt,
     reply_kind,
@@ -2530,7 +2530,7 @@ class TurnPathMixin:
                 ),
                 synthesis_policy=turn_synthesis(turn_meta),
             )
-            silent = not reply_awaited and is_silent_reply(final_content, origin)
+            silent = not reply_awaited and is_silence(final_content, origin)
             await _settle_silence(wrap_up_gate, silent=silent)
             # Persist the wrap-up into history like any normal final reply.
             # Persistence downstream reads only the returned ``messages`` list,

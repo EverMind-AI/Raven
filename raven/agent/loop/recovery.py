@@ -72,7 +72,7 @@ from raven.config import schema as config_schema
 from raven.contracts.llm_provider import REASONING_EFFORT_LADDER, LLMResponse
 from raven.providers.streaming import DECLINED_FINISH_REASONS, STREAM_CUT
 from raven.providers.usage import reported_cost, token_count
-from raven.spine.turn import PROACTIVE_ORIGINS, Origin
+from raven.spine.turn import Origin
 
 # In-content thinking markers. Some models (Ollama, certain Qwen gateways) put
 # the reasoning in ``content`` as <think>…</think> rather than in the structured
@@ -357,24 +357,6 @@ def _read_think_tag(tag: str, closing: str | None) -> str | bool | None:
     return True if not name or _TAG_NAMESPACE_RE.fullmatch(name) else None
 
 
-def _is_taught_marker(text: object) -> bool:
-    """Whether ``text`` is the bracketed marker the runtime teaches, and nothing else but whitespace."""
-    return isinstance(text, str) and text.strip() == SILENT_MARKER
-
-
-def is_silent_reply(text: object, origin: Origin | None) -> bool:
-    """Whether a reply is the model choosing to say nothing, under the rule the turn's ``origin`` picks.
-
-    A proactive origin reads the marker rules ``is_silence`` holds for it. A person's turn (``USER``,
-    or no origin) is never taught a marker, so it honours only ``[SILENT]``, the spelling the runtime
-    teaches, as the whole reply: a one-word answer such as ``Silent.`` or ``No reply.`` is the
-    person's answer.
-    """
-    if origin in PROACTIVE_ORIGINS:
-        return is_silence(text, origin)
-    return _is_taught_marker(text)
-
-
 def reply_kind(
     response: LLMResponse,
     visible: str | None,
@@ -398,7 +380,7 @@ def reply_kind(
     # that names no finish, read ``unknown`` and are whole answers.
     if has_text and streamed and response.finish_reason == STREAM_CUT:
         return ReplyKind.NETWORK_CUT
-    if has_text and not reply_awaited and is_silent_reply(visible, origin):
+    if has_text and not reply_awaited and is_silence(visible, origin):
         return ReplyKind.SILENT
     if response.finish_reason in DECLINED_FINISH_REASONS:
         return ReplyKind.REFUSAL
@@ -697,7 +679,7 @@ class SilenceGate:
 
     A marker is the model saying nothing, so a surface that streams must never show it and then
     take it back. On a person's turn, which honours only ``[SILENT]`` with whitespace around it
-    (:func:`is_silent_reply`), deltas are held while the text so far could still become that, and go
+    (:func:`is_silence`), deltas are held while the text so far could still become that, and go
     out together with everything after them the moment it cannot -- which a reply that begins with
     anything but whitespace or the marker's bracket does at its first delta, so an ordinary answer
     waits for nothing. The loop reads a reply with its inline think blocks taken out

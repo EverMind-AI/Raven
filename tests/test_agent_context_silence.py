@@ -10,7 +10,6 @@ from raven.agent.context.silence import (
     is_exact_silence,
     is_loose_silence,
     is_silence,
-    may_become_silence,
 )
 from raven.spine import PROACTIVE_ORIGINS, Origin
 
@@ -52,7 +51,19 @@ def test_a_marker_mid_sentence_is_a_report(text):
 def test_the_origin_picks_the_rule():
     assert is_silence("[SILENT] No changes", Origin.CRON) and is_silence("[SILENT] No changes", Origin.SUBAGENT)
     assert not is_silence("[SILENT] No changes", Origin.USER) and not is_silence("[SILENT] No changes", None)
-    assert is_silence("NO_REPLY", Origin.USER)
+    assert is_silence("NO_REPLY", Origin.CRON)
+
+
+@pytest.mark.parametrize("origin", [Origin.USER, None])
+@pytest.mark.parametrize("text", ["[SILENT]", "  [SILENT]\n"])
+def test_a_persons_turn_honours_the_taught_marker(text, origin):
+    assert is_silence(text, origin)
+
+
+@pytest.mark.parametrize("origin", [Origin.USER, None])
+@pytest.mark.parametrize("text", ["Silent.", "silent", "No reply.", "NO_REPLY", "*NO_REPLY*", "[silent]", "[SILENT]."])
+def test_a_persons_one_word_answer_is_not_silence(text, origin):
+    assert not is_silence(text, origin)
 
 
 @pytest.mark.parametrize("origin", sorted(PROACTIVE_ORIGINS))
@@ -66,29 +77,11 @@ def test_a_proactive_turn_forgives_edge_punctuation_around_a_bare_marker(text, o
     assert is_silence(text, origin)
 
 
-@pytest.mark.parametrize(
-    "text,held",
-    [
-        ("N", True),
-        ("NO", True),
-        ("NO_", True),
-        ("[SIL", True),
-        ("NO_REPLY", True),
-        ("Hello", False),
-        ("NOT", False),
-        ("", False),
-        ("N" * 65, False),
-    ],
-)
-def test_a_prefix_is_held_only_while_it_can_still_be_a_marker(text, held):
-    assert may_become_silence(text) is held
-
-
 def test_the_length_cap_ignores_edge_whitespace_but_not_edge_punctuation():
     at_cap = "." * 28 + "NO_REPLY" + "." * 28
     assert len(at_cap) == SILENCE_MAX_CHARS
-    assert is_exact_silence(at_cap) and may_become_silence(at_cap)
-    assert not is_exact_silence("." + at_cap) and not may_become_silence("." + at_cap)
+    assert is_exact_silence(at_cap)
+    assert not is_exact_silence("." + at_cap)
     assert is_exact_silence("\n" * 70 + at_cap + " " * 70)
 
 
