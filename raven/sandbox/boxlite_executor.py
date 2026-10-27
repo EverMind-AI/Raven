@@ -522,9 +522,15 @@ class BoxliteExecutor(SandboxExecutor):
             return text
         for host_root, guest_root in self._mount_roots():
             host = str(host_root)
+            windows = "\\" in host
+            # The suffix stops at the next occurrence of this root, so re.sub
+            # resumes there and translates it too; it must not swallow one.
+            suffix = r"(?:[\\/](?:(?!" + re.escape(host) + r")[^:;])*)?"
             text = re.sub(
-                re.escape(host) + r"(?=$|[\\/])(?P<suffix>(?:[\\/][^:;]*)?)",
-                lambda match, guest=guest_root: guest + match.group("suffix").replace("\\", "/"),
+                re.escape(host) + r"(?=$|[\\/])(?P<suffix>" + suffix + r")",
+                lambda match, guest=guest_root, windows=windows: (
+                    guest + (match.group("suffix").replace("\\", "/") if windows else match.group("suffix"))
+                ),
                 text,
             )
         return text

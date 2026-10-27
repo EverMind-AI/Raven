@@ -1111,6 +1111,23 @@ class TestBoxliteTranslateProcessPath:
 
         assert translated == r"/workspace/packages/demo/bin;C:\outside\bin"
 
+    def test_every_occurrence_of_one_root_is_translated(self, tmp_path):
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=_TEST_SANDBOX_HOME)
+        root = str(tmp_path.resolve())
+
+        translated = executor._translate_process_path(f"cd {root}/pkgs/p && node {root}/pkgs/p/server.js")
+
+        assert translated == "cd /workspace/pkgs/p && node /workspace/pkgs/p/server.js"
+
+    def test_a_posix_tail_keeps_its_backslashes(self, tmp_path):
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=_TEST_SANDBOX_HOME)
+        root = str(tmp_path.resolve())
+        backslash = "\\"
+
+        translated = executor._translate_process_path(f"--data={root}/d --sep={backslash}t")
+
+        assert translated == f"--data=/workspace/d --sep={backslash}t"
+
 
 # ---------------------------------------------------------------------------
 # BoxliteExecutor._collect
