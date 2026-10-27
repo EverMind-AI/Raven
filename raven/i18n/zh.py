@@ -300,7 +300,7 @@ MESSAGES: dict[str, str] = {
     "  [green]✓ Keys written to config and mirrored to {path} (owner-only).[/green]": "  [green]✓ key 已写入配置,并镜像到 {path}(仅本人可读)。[/green]",
     "  [dim]A running gateway / TUI picks these up on its next restart.[/dim]": "  [dim]正在运行的 gateway / TUI 需重启后生效。[/dim]",
     "Web access": "联网能力",
-    "  [dim]web_search[/dim]  Search the web — needs the chosen vendor's key, except Keenable;\n              without one the tool is not offered to the model at all.\n  [dim]web_fetch [/dim]  Read a page — Jina and Keenable work with no key at a lower\n              rate limit; every other reader needs its key.": "  [dim]web_search[/dim]  搜索网页 — 需要所选供应商的 key(Keenable 除外);没有 key 时这个工具\n              根本不会提供给模型。\n  [dim]web_fetch [/dim]  读取网页 — Jina 和 Keenable 没有 key 也能用,只是限流更低;\n              其他读页供应商都需要 key。",
+    "  [dim]web_search[/dim]  Search the web — needs the chosen vendor's key, except Keenable;\n              DeepSeek borrows the model-provider key. Without either, the tool is not offered.\n  [dim]web_fetch [/dim]  Read a page — Jina and Keenable work with no key at a lower\n              rate limit; other readers need a key or a borrowed model-provider key.": "  [dim]web_search[/dim]  搜索网页 — 需要所选供应商的 key(Keenable 除外);\n              DeepSeek 会借用 model provider 的 key。两者都没有时,这个工具不会提供给模型。\n  [dim]web_fetch [/dim]  读取网页 — Jina 和 Keenable 没有 key 也能用,只是限流更低;\n              其他读页供应商需要自己的 key 或借用的 model-provider key。",
     "Search provider (web_search)": "搜索供应商(web_search)",
     "Page reader (web_fetch)": "读页供应商(web_fetch)",
     "{label} API key": "{label} API key",

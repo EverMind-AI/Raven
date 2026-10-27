@@ -62,6 +62,15 @@ SOURCE_LINE = f'[ -f "$HOME/.raven/env" ] && . "$HOME/.raven/env"  {RC_MARKER}'
 #: none exist, ``~/.profile`` is the one a login shell reads by convention.
 _BASH_LOGIN_CANDIDATES = (".bash_profile", ".bash_login", ".profile")
 
+#: The explanation above the web step. Its exact text is the gettext key, so the
+#: zh catalogue maps this constant rather than a second copy that silently drifts.
+WEB_STEPS_INTRO = (
+    "  [dim]web_search[/dim]  Search the web — needs the chosen vendor's key, except Keenable;\n"
+    "              DeepSeek borrows the model-provider key. Without either, the tool is not offered.\n"
+    "  [dim]web_fetch [/dim]  Read a page — Jina and Keenable work with no key at a lower\n"
+    "              rate limit; other readers need a key or a borrowed model-provider key."
+)
+
 
 def _stored_provider(kind: str) -> str:
     """The vendor config currently selects for ``search`` or ``fetch``."""
@@ -306,15 +315,7 @@ def _step5_web(
         oc.console.print(t("  [dim]Skipping the web tool keys (set them up later: raven onboard).[/dim]"))
         return None
 
-    oc.console.print(
-        t(
-            "  [dim]web_search[/dim]  Search the web — needs the chosen vendor's key, except Keenable;\n"
-            "              DeepSeek borrows the model-provider key. Without either, the tool is not offered.\n"
-            "  [dim]web_fetch [/dim]  Read a page — Jina and Keenable work with no key at a lower\n"
-            "              rate limit; other readers need a key or a borrowed model-provider key."
-        ),
-        highlight=False,
-    )
+    oc.console.print(t(WEB_STEPS_INTRO), highlight=False)
     oc.console.print()
 
     search = _pick_provider("search", _stored_provider("search"))

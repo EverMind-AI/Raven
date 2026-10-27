@@ -8674,3 +8674,9 @@ def test_the_wizard_reads_a_borrowed_web_key(tmp_path: Path) -> None:
         assert onboard_web._stored_key("tavily") == ""
     finally:
         set_config_path(None)
+
+
+def test_the_onboarding_web_explanation_reaches_the_zh_catalog() -> None:
+    """The step-5 text is its own gettext key; a rewrite that leaves the zh entry
+    behind silently falls the whole screen back to English."""
+    assert onboard_web.WEB_STEPS_INTRO in zh_catalog.MESSAGES
