@@ -200,9 +200,10 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
         # with no such option may still advertise effort as its modes -- Pi,
         # Grok, Kimi, DSH -- and `mode_efforts` takes those only when every
         # mode id is a level name, never a permission or editor mode.
-        effort_choices = tuple(getattr(snapshot, "effort_choices", ()) or ()) or (
-            snapshot.mode_efforts() if snapshot is not None else ()
-        )
+        effort_choices = tuple(getattr(snapshot, "effort_choices", ()) or ())
+        if not effort_choices:
+            mode_efforts = getattr(snapshot, "mode_efforts", None)
+            effort_choices = mode_efforts() if callable(mode_efforts) else ()
     elif kind == "openai":
         stateful = bool(getattr(cfg, "stateful", True))
     else:
