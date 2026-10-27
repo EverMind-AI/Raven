@@ -2723,6 +2723,81 @@ async def test_an_automatic_read_reuses_a_menu_read_moments_ago(
     assert first["models"] == again["models"] == forced["models"]
 
 
+async def test_a_menu_read_that_never_answers_reports_the_timeout(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    monkeypatch.setattr(menu_reads, "_MENU_REFRESH_TIMEOUT_S", 0.01)
+
+    async def hang(cfg):
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", hang)
+    out = await subagents_refresh_models({"name": "OpenCode", "source": "preset"})
+    assert out["ok"] is False
+    assert "did not report its menu" in out["detail"]
+
+
+async def test_a_menu_read_that_raises_returns_the_reason(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    async def boom(cfg):
+        raise RuntimeError("host down")
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", boom)
+    out = await subagents_refresh_models({"name": "OpenCode", "source": "preset"})
+    assert out["ok"] is False
+    assert out["detail"] == "host down"
+
+
+async def test_a_failed_hot_apply_still_answers_the_measured_menu(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {"name": "Helped", "kind": "acp", "command": "helper --acp", "enabled": True},
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+
+    async def fake_record(cfg):
+        return _menu_snapshot()
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+
+    class _Loop:
+        def apply_agents(self, configs: list) -> None:
+            raise RuntimeError("no table")
+
+    out = await subagents_refresh_models({"name": "Helped", "source": "config"}, agent_loop_factory=lambda: _Loop())
+    assert out["ok"] is True
+    assert out["models"][0]["value"] == "m1"
+
+
+async def test_a_mode_derived_effort_menu_travels_with_the_refreshed_models(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    from types import SimpleNamespace
+
+    snapshot = _menu_snapshot(effort_choices=())
+    snapshot.mode_efforts = lambda: (SimpleNamespace(value="high", name="High"),)
+
+    async def fake_record(cfg):
+        return snapshot
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    out = await subagents_refresh_models({"name": "OpenCode", "source": "preset"})
+    assert out["effort_choices"] == [{"value": "high", "name": "High"}]
+
+
 async def test_refreshing_a_configured_agents_menu_recomposes_the_agent_table(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
 ) -> None:
