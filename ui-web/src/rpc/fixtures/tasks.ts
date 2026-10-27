@@ -22,7 +22,7 @@ const SEC = 1000
 function node(over: Partial<TaskNode> & Pick<TaskNode, 'node_id' | 'agent' | 'status'>): TaskNode {
   return {
     node_summary: null, instance: null, depends_on: [], started_at: null, ended_at: null, error: null,
-    tokens_in: null, tokens_out: null, tool_call_count: null, tool_failure_count: null, has_output: null,
+    tokens_in: null, tokens_out: null, tool_call_count: null, has_output: null,
     prompt_template: null, files: [],
     ...over,
   }
@@ -67,7 +67,7 @@ function scenarioForkJoin(env: FixtureEnv): TaskRow[] {
       node_id: 'survey', agent: 'Raven-Research', status: 'completed',
       node_summary: 'Survey what changed since the last release',
       started_at: started, ended_at: started + 40 * SEC, tokens_in: 1200, tokens_out: 340,
-      tool_call_count: 3, tool_failure_count: 0, has_output: true,
+      tool_call_count: 3, has_output: true,
       prompt_template: 'Survey the changelog and open PRs since {{ inputs.since }}.',
       inputs: { since: 'v0.4.0' },
       files: [{ path: '/work/notes/survey.md', op: 'write', add: 28, del: 0, size: 1180 }],
@@ -76,13 +76,13 @@ function scenarioForkJoin(env: FixtureEnv): TaskRow[] {
       node_id: 'draft_notes', agent: 'Raven', status: 'completed', depends_on: ['survey'],
       node_summary: 'Draft the release notes from the survey',
       started_at: started + 41 * SEC, ended_at: started + 95 * SEC, tokens_in: 900, tokens_out: 520,
-      tool_call_count: 1, tool_failure_count: 0, has_output: true,
+      tool_call_count: 1, has_output: true,
       prompt_template: 'Draft release notes from {{ survey.output }}.',
     }),
     node({
       node_id: 'render_deck', agent: 'Raven-Code', status: 'running', depends_on: ['survey'], instance: 'w1',
       node_summary: 'Render a one-slide summary deck',
-      started_at: started + 41 * SEC, tool_call_count: 2, tool_failure_count: 0,
+      started_at: started + 41 * SEC, tool_call_count: 2,
       prompt_template: 'Render one slide summarising {{ survey.output }}.',
       skills: ['deck-render'], mcps: [],
     }),
@@ -104,7 +104,7 @@ function scenarioForkJoin(env: FixtureEnv): TaskRow[] {
     node({
       node_id: 'render_deck_v1', agent: 'Raven-Code', status: 'exception',
       node_summary: 'Render a one-slide summary deck',
-      started_at: started - 90 * SEC, tool_call_count: 1, tool_failure_count: 0,
+      started_at: started - 90 * SEC, tool_call_count: 1,
     }),
   ]
   const superseded = row({
@@ -140,7 +140,7 @@ function scenarioPlaybookFailed(env: FixtureEnv): TaskRow[] {
       node_id: 'nightly-checks-a1b2c3-setup', agent: 'Raven', status: 'completed',
       node_summary: 'Prepare the test environment',
       started_at: started, ended_at: started + 30 * SEC, tokens_in: 300, tokens_out: 90,
-      tool_call_count: 2, tool_failure_count: 0, has_output: true,
+      tool_call_count: 2, has_output: true,
     }),
     node({
       node_id: 'nightly-checks-a1b2c3-run_tests', agent: 'Raven-Code', status: 'failed',
@@ -148,7 +148,7 @@ function scenarioPlaybookFailed(env: FixtureEnv): TaskRow[] {
       node_summary: 'Run the regression suite',
       started_at: started + 31 * SEC, ended_at: started + 210 * SEC,
       error: 'pytest: 3 assertions failed in test_login.py (test_expired_token, test_locked_account, test_mfa_retry)',
-      tokens_in: 4100, tokens_out: 260, tool_call_count: 5, tool_failure_count: 2, has_output: true,
+      tokens_in: 4100, tokens_out: 260, tool_call_count: 5, has_output: true,
       skills: ['pytest-runner'],
     }),
     node({
@@ -178,13 +178,13 @@ function scenarioCompletedWithFiles(env: FixtureEnv): TaskRow[] {
       node_id: 'inspect', agent: 'Raven-Code', status: 'completed',
       node_summary: 'Read the current payment callback module',
       started_at: started, ended_at: started + 22 * SEC, tokens_in: 800, tokens_out: 140,
-      tool_call_count: 2, tool_failure_count: 0, has_output: true,
+      tool_call_count: 2, has_output: true,
     }),
     node({
       node_id: 'patch', agent: 'Raven-Code', status: 'completed', depends_on: ['inspect'],
       node_summary: 'Fix the missing null check on the webhook signature',
       started_at: started + 23 * SEC, ended_at: started + 96 * SEC, tokens_in: 1500, tokens_out: 610,
-      tool_call_count: 3, tool_failure_count: 0, has_output: true,
+      tool_call_count: 3, has_output: true,
       /* The four verdicts a folded touch can carry, one node apart: an edit in
          place, a file the node removed (no size -- there is nothing left to
          measure), and below, a file it created against one it rewrote. */
@@ -197,7 +197,7 @@ function scenarioCompletedWithFiles(env: FixtureEnv): TaskRow[] {
       node_id: 'verify', agent: 'Raven-Code', status: 'completed', depends_on: ['patch'],
       node_summary: 'Run the payments test suite',
       started_at: started + 97 * SEC, ended_at: started + 150 * SEC, tokens_in: 700, tokens_out: 90,
-      tool_call_count: 1, tool_failure_count: 0, has_output: true,
+      tool_call_count: 1, has_output: true,
       files: [
         { path: '/work/reports/payments-verify.md', op: 'add', add: 18, del: 0, size: 640 },
         { path: '/work/reports/index.md', op: 'write', add: 6, del: 2, size: 210 },
@@ -228,7 +228,7 @@ function scenarioManyFiles(env: FixtureEnv): TaskRow {
     node({
       node_id: 'ai-hotspot-deck', agent: 'Raven-Design', status: 'running', instance: 'ai_hotspot_deck',
       node_summary: 'Turn the AI news survey into a deck',
-      started_at: started, tokens_in: 4200, tokens_out: 900, tool_call_count: 41, tool_failure_count: 0,
+      started_at: started, tokens_in: 4200, tokens_out: 900, tool_call_count: 41,
       files: DECK_ASSETS.map((name, i) => ({
         path: `/work/deck/assets/${name}`, op: 'add' as const, add: 0, del: 0, size: 2300 + ((i * 7919) % 900) * 1024,
       })),
@@ -251,7 +251,7 @@ function scenarioTwoSpawns(env: FixtureEnv): TaskRow[] {
       node_id: 'write-install-section', agent: 'Raven', status: 'completed',
       node_summary: 'Write the installer README section',
       started_at: okStart, ended_at: okStart + 54 * SEC, tokens_in: 640, tokens_out: 410,
-      tool_call_count: 1, tool_failure_count: 0, has_output: true,
+      tool_call_count: 1, has_output: true,
       files: [{ path: '/work/README.md', op: 'write', add: 40, del: 0, size: 1536 }],
     }),
   ]
@@ -267,7 +267,7 @@ function scenarioTwoSpawns(env: FixtureEnv): TaskRow[] {
       node_summary: 'Scan dependencies for known CVEs',
       started_at: failStart, ended_at: failStart + 38 * SEC,
       error: 'The vendor advisory feed answered 503 three times in a row; nothing was substituted for it.',
-      tokens_in: 500, tokens_out: 70, tool_call_count: 4, tool_failure_count: 3, has_output: false,
+      tokens_in: 500, tokens_out: 70, tool_call_count: 4, has_output: false,
     }),
   ]
   const failed = row({
@@ -289,7 +289,7 @@ function scenarioInterrupted(env: FixtureEnv): TaskRow[] {
       node_id: 'fetch', agent: 'Raven-Research', status: 'completed',
       node_summary: 'Fetch the source documents to index',
       started_at: started, ended_at: started + 60 * SEC, tokens_in: 900, tokens_out: 120,
-      tool_call_count: 4, tool_failure_count: 0, has_output: true,
+      tool_call_count: 4, has_output: true,
     }),
     node({
       node_id: 'transform', agent: 'Raven-Code', status: 'interrupted', depends_on: ['fetch'],
@@ -318,7 +318,7 @@ function scenarioSkippedLayer(env: FixtureEnv): TaskRow[] {
   const research = (id: string, summary: string, took: number): TaskNode => node({
     node_id: id, agent: 'Raven-Research', status: 'completed', instance: id.replace('research_', 'research-'),
     node_summary: summary, started_at: started, ended_at: started + took, tokens_in: 5200, tokens_out: 2100,
-    tool_call_count: 14, tool_failure_count: 0, has_output: true,
+    tool_call_count: 14, has_output: true,
   })
   const nodes = [
     research('research_rl_llm', 'Survey recent progress in RL for LLMs', 15 * MIN + 9 * SEC),
@@ -357,7 +357,7 @@ function scenarioBranched(env: FixtureEnv): TaskRow[] {
       node_id: 'triage', agent: 'Raven', status: 'completed',
       node_summary: 'Decide whether the report is a question or a bug',
       started_at: started, ended_at: started + 20 * SEC, tokens_in: 420, tokens_out: 60,
-      tool_call_count: 1, tool_failure_count: 0, has_output: true,
+      tool_call_count: 1, has_output: true,
       routes: ['question', 'bug'], select: 'one', selected_routes: ['question'],
       route_evidence: 'The user asks how to reset a password; nothing in the message describes a failure.',
     }),
@@ -365,7 +365,7 @@ function scenarioBranched(env: FixtureEnv): TaskRow[] {
       node_id: 'answer', agent: 'Raven', status: 'completed', depends_on: ['triage'], when: 'triage.question',
       node_summary: 'Answer the question from the docs',
       started_at: started + 21 * SEC, ended_at: started + 66 * SEC, tokens_in: 900, tokens_out: 310,
-      tool_call_count: 3, tool_failure_count: 0, has_output: true,
+      tool_call_count: 3, has_output: true,
     }),
     node({
       node_id: 'reproduce', agent: 'Raven-Code', status: 'not_executed', depends_on: ['triage'], when: 'triage.bug',
@@ -379,7 +379,7 @@ function scenarioBranched(env: FixtureEnv): TaskRow[] {
       node_id: 'label', agent: 'Raven', status: 'completed', depends_on: ['answer'],
       node_summary: 'Add any labels that apply',
       started_at: started + 67 * SEC, ended_at: started + 80 * SEC, tokens_in: 300, tokens_out: 40,
-      tool_call_count: 1, tool_failure_count: 0, has_output: true,
+      tool_call_count: 1, has_output: true,
       routes: ['docs', 'billing'], select: 'many', selected_routes: [],
     }),
     node({

@@ -91,18 +91,16 @@ def _int_or_none(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
-def _tool_counts(source: dict[str, Any]) -> tuple[int | None, int | None]:
-    """``(tool_call_count, tool_failure_count)``, null where the lane never said.
+def _tool_call_count(source: dict[str, Any]) -> int | None:
+    """How many tools the run called, or null where its lane never listed them.
 
-    ``as_meta`` writes ``tool_failures`` only when there were some, so a lane
-    that listed its calls and named no failure had zero, not an unknown number.
+    A lane that wrote ``tool_calls`` named every call it made, so the length is
+    the count rather than an estimate; one that never wrote it leaves the field
+    null. Failures are the sub-agent's to report, so no failure tally is derived
+    here.
     """
     calls = source.get("tool_calls")
-    failures = source.get("tool_failures")
-    call_count = len(calls) if isinstance(calls, list) else None
-    if isinstance(failures, list):
-        return call_count, len(failures)
-    return call_count, (0 if call_count is not None else None)
+    return len(calls) if isinstance(calls, list) else None
 
 
 def _files_of(source: dict[str, Any]) -> list[dict[str, Any]]:
@@ -124,7 +122,7 @@ def _files_of(source: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _overlay_live(node: dict[str, Any], live: Any) -> None:
-    """Fill a running node's usage, tool counts and files from the activity
+    """Fill a running node's usage, tool-call count and files from the activity
     being collected for it in this process.
 
     The record on disk carries those only once the run finishes (``as_meta``
@@ -142,7 +140,6 @@ def _overlay_live(node: dict[str, Any], live: Any) -> None:
     calls = getattr(live, "tool_calls", None)
     if node["tool_call_count"] is None and calls:
         node["tool_call_count"] = len(calls)
-        node["tool_failure_count"] = len(getattr(live, "tool_failures", None) or [])
     if not node["files"]:
         node["files"] = _files_of({"files": list(getattr(live, "files", None) or [])})
 
@@ -242,7 +239,7 @@ def _spawn_row(files: "_NodeFiles", agent_loop_factory: "AgentLoopFactory | None
 
     started_at = _int_or_none(meta.get("started_at_ms"))
     ended_at = _int_or_none(meta.get("ended_at_ms"))
-    call_count, failure_count = _tool_counts(meta)
+    call_count = _tool_call_count(meta)
 
     node: dict[str, Any] = {
         "node_id": files.node_id,
@@ -257,7 +254,6 @@ def _spawn_row(files: "_NodeFiles", agent_loop_factory: "AgentLoopFactory | None
         "tokens_in": _int_or_none(meta.get("tokens_in")),
         "tokens_out": _int_or_none(meta.get("tokens_out")),
         "tool_call_count": call_count,
-        "tool_failure_count": failure_count,
         "has_output": has_output,
         "prompt_template": None,
         "files": _files_of(meta),
@@ -401,7 +397,7 @@ def _dag_row(
             # finalized, and the runner with the moment the branch was decided,
             # neither of which is a clock this node ever had.
             started = ended = None
-        call_count, failure_count = _tool_counts(account)
+        call_count = _tool_call_count(account)
         agent = (entry or {}).get("subagent") or gnode.get("subagent") or ""
         node: dict[str, Any] = {
             "node_id": nid,
@@ -416,7 +412,6 @@ def _dag_row(
             "tokens_in": _int_or_none(account.get("tokens_in")),
             "tokens_out": _int_or_none(account.get("tokens_out")),
             "tool_call_count": call_count,
-            "tool_failure_count": failure_count,
             "has_output": _dag_has_output(nid, entry, registry_nodes.get(nid), nodes_dir),
             "prompt_template": gnode.get("prompt_template") or None,
             "files": _files_of(account),

@@ -77,7 +77,7 @@ field), `status` (`running` | `completed` | `failed` | `interrupted` | `cancelle
 is the session's), `started_at` / `ended_at`, `error` (capped at 500 chars -- the manifest
 stores it uncapped; a spawn's is the head of `.error.md`, or of `.out.md` when `aborted`),
 `tokens_in` / `tokens_out` (null = the lane cannot report; never zero), `tool_call_count`
-(null = zero or unreported, an acknowledged ambiguity of `as_meta`), `tool_failure_count`,
+(null = zero or unreported, an acknowledged ambiguity of `as_meta`),
 `has_output`, `prompt_template`, `inputs`, `skills`, `mcps`, `files[]`
 (`{path, op: write|edit, add, del, size}`). A dag node of a branching graph also carries the
 six optional branch fields, each present on a node that has one: `reason` (`when_false` |
@@ -86,7 +86,7 @@ six optional branch fields, each present on a node that has one: `reason` (`when
 choice, not an absent one), `route_evidence` (the judge's quote for it), and the request it
 was written with -- `routes`, `select`, `when` -- of which `select` is the effective value
 and `routes` the declared names alone. The three outcomes are the manifest's, and until it is
-written the node's `dag-node` row supplies them. While a node runs, the usage, the tool counts and
+written the node's `dag-node` row supplies them. While a node runs, the usage, the tool-call count and
 the files are read off the activity being collected for it in this process (the same
 in-memory account `subagent.context` and `dag.node` serve a transcript from), since the record
 on disk carries them only once the run finishes; what the lane has not reported yet stays null,

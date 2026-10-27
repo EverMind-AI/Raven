@@ -1915,7 +1915,6 @@ async def test_a_running_acp_node_shows_its_files_through_the_live_account(tmp_p
             "tokens_in": None,
             "tokens_out": None,
             "tool_call_count": None,
-            "tool_failure_count": None,
         }
         _overlay_live(node, activity.live("acp-live"))
 

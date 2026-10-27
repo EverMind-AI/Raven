@@ -9,7 +9,7 @@ import type { TaskNode, TaskRow } from './types'
 
 const node = (over: Partial<TaskNode> & Pick<TaskNode, 'node_id' | 'status'>): TaskNode => ({
   agent: 'raven', instance: null, depends_on: [], started_at: null, ended_at: null, error: null,
-  tokens_in: null, tokens_out: null, tool_call_count: null, tool_failure_count: null, has_output: null,
+  tokens_in: null, tokens_out: null, tool_call_count: null, has_output: null,
   prompt_template: null, node_summary: null, files: [],
   ...over,
 })
@@ -145,7 +145,7 @@ describe('applyRunStarted', () => {
     const [row] = applyRunStarted([], payload)
     expect(Object.keys(row!.nodes[0]!).sort()).toEqual([
       'agent', 'depends_on', 'ended_at', 'error', 'files', 'has_output', 'instance', 'node_id', 'node_summary',
-      'prompt_template', 'started_at', 'status', 'tokens_in', 'tokens_out', 'tool_call_count', 'tool_failure_count',
+      'prompt_template', 'started_at', 'status', 'tokens_in', 'tokens_out', 'tool_call_count',
     ])
   })
 })

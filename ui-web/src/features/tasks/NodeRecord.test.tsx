@@ -19,7 +19,7 @@ const taskRow = (over: Partial<TaskRow> & Pick<TaskRow, 'id' | 'kind' | 'status'
 
 const taskNode = (over: Partial<TaskNode> & Pick<TaskNode, 'node_id' | 'agent' | 'status'>): TaskNode => ({
   node_summary: null, instance: null, depends_on: [], started_at: null, ended_at: null, error: null,
-  tokens_in: null, tokens_out: null, tool_call_count: null, tool_failure_count: null, has_output: null,
+  tokens_in: null, tokens_out: null, tool_call_count: null, has_output: null,
   prompt_template: null, files: [],
   ...over,
 })

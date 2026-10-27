@@ -2408,10 +2408,6 @@ export interface TaskNode {
    */
   tool_call_count?: number | null;
   /**
-   * How many of those calls reported failure. A completed node with all its calls failed is not a clean run.
-   */
-  tool_failure_count?: number | null;
-  /**
    * Whether the node wrote an output at all. A completed node without one is why a downstream reference of it fails.
    */
   has_output?: boolean | null;

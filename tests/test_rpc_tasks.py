@@ -574,11 +574,12 @@ async def test_a_finalized_two_node_run_is_one_completed_task(workspace: Path) -
     assert n1["node_id"] == "n1"
     assert n1["has_output"] is True
     assert n1["tool_call_count"] == 1
-    assert n1["tool_failure_count"] == 0
+    assert "tool_failure_count" not in n1
     assert n1["tokens_in"] == 10 and n1["tokens_out"] == 5
     n2 = row["nodes"][1]
     assert n2["depends_on"] == ["n1"]
-    assert n2["tool_call_count"] is None and n2["tool_failure_count"] is None
+    assert n2["tool_call_count"] is None
+    assert "tool_failure_count" not in n2
 
 
 async def test_a_hard_stop_reads_cancelled_from_the_node_registry_not_all(workspace: Path) -> None:
@@ -790,7 +791,6 @@ async def test_a_run_that_never_branched_has_exactly_the_node_keys_it_always_had
         "tokens_in",
         "tokens_out",
         "tool_call_count",
-        "tool_failure_count",
         "has_output",
         "prompt_template",
         "inputs",
@@ -1353,10 +1353,15 @@ def test_head_is_none_for_a_missing_file_and_for_one_that_cannot_be_opened(
     assert tasks_mod._head(present, 10) is None
 
 
-def test_tool_counts_three_ways() -> None:
-    assert tasks_mod._tool_counts({}) == (None, None)
-    assert tasks_mod._tool_counts({"tool_calls": ["a", "b"]}) == (2, 0)
-    assert tasks_mod._tool_counts({"tool_calls": ["a", "b"], "tool_failures": ["b"]}) == (2, 1)
+def test_tool_call_count_reads_only_the_listed_calls() -> None:
+    """Deliberate flip: this used to pin ``_tool_counts`` and its failure
+    tally. Failures are the sub-agent's to report now, so the helper derives
+    the call count alone -- a record that still carries ``tool_failures`` is
+    evidence the field is ignored, not a second number to publish."""
+    assert tasks_mod._tool_call_count({}) is None
+    assert tasks_mod._tool_call_count({"tool_calls": "not a list"}) is None
+    assert tasks_mod._tool_call_count({"tool_calls": ["a", "b"]}) == 2
+    assert tasks_mod._tool_call_count({"tool_calls": ["a", "b"], "tool_failures": ["b"]}) == 2
 
 
 def test_clip_only_clips_strings() -> None:
@@ -1491,7 +1496,8 @@ async def test_a_running_spawn_reads_usage_and_counts_off_the_live_activity(work
 
     assert node["status"] == "running"
     assert node["tokens_in"] == 50 and node["tokens_out"] == 5
-    assert node["tool_call_count"] == 2 and node["tool_failure_count"] == 1
+    assert node["tool_call_count"] == 2
+    assert "tool_failure_count" not in node
     assert node["files"] == [{"path": "notes/a.md", "op": "write", "add": 3, "del": 0, "size": 12}]
 
     after = (await tasks_list({"session_key": SESSION}, agent_loop_factory=_factory(loop)))["tasks"][0]["nodes"][0]
@@ -1547,7 +1553,8 @@ async def test_a_lane_that_has_not_spoken_keeps_its_nulls_while_live(workspace: 
         node = (await tasks_list({"session_key": SESSION}, agent_loop_factory=_factory(loop)))["tasks"][0]["nodes"][0]
 
     assert node["tokens_in"] is None and node["tokens_out"] is None
-    assert node["tool_call_count"] is None and node["tool_failure_count"] is None
+    assert node["tool_call_count"] is None
+    assert "tool_failure_count" not in node
     assert node["files"] == []
 
 
@@ -1571,7 +1578,8 @@ async def test_a_running_dag_node_reads_usage_off_the_live_activity(workspace: P
 
     n1, n2 = row["nodes"]
     assert n1["status"] == "running" and n1["tokens_in"] == 7 and n1["tokens_out"] == 1
-    assert n1["tool_call_count"] == 1 and n1["tool_failure_count"] == 0
+    assert n1["tool_call_count"] == 1
+    assert "tool_failure_count" not in n1
     assert n2["tokens_in"] is None and n2["tool_call_count"] is None
 
 
@@ -1607,7 +1615,8 @@ async def test_a_dag_node_that_finished_mid_run_reads_the_account_the_runner_set
     n1, n2 = row["nodes"]
     assert n1["status"] == "completed"
     assert n1["tokens_in"] == 7 and n1["tokens_out"] == 1
-    assert n1["tool_call_count"] == 1 and n1["tool_failure_count"] == 1
+    assert n1["tool_call_count"] == 1
+    assert "tool_failure_count" not in n1
     assert n1["files"] == [{"path": "a.md", "op": "write", "add": 1, "del": 0, "size": 5}]
     assert n2["tokens_in"] is None and n2["tool_call_count"] is None
 

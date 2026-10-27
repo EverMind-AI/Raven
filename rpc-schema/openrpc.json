@@ -17432,13 +17432,6 @@
             ],
             "description": "Null means zero calls or an unreporting lane; the record cannot tell the two apart."
           },
-          "tool_failure_count": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "description": "How many of those calls reported failure. A completed node with all its calls failed is not a clean run."
-          },
           "has_output": {
             "type": [
               "boolean",

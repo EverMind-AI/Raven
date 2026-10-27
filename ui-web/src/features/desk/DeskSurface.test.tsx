@@ -816,7 +816,7 @@ describe("a task pane's header icon", () => {
 describe('a pane named once, in its header', () => {
   const node = (over: Partial<TaskNode> & Pick<TaskNode, 'node_id' | 'status'>): TaskNode => ({
     agent: 'raven', node_summary: null, instance: null, depends_on: [], started_at: null, ended_at: null,
-    error: null, tokens_in: null, tokens_out: null, tool_call_count: null, tool_failure_count: null,
+    error: null, tokens_in: null, tokens_out: null, tool_call_count: null,
     has_output: null, prompt_template: null, files: [],
     ...over,
   })

@@ -1374,7 +1374,6 @@ class TaskNode(_Strict):
     )
     tokens_out: int | None = None
     tool_call_count: int | None = None
-    tool_failure_count: int | None = None
     has_output: bool | None = None
     prompt_template: str | None = None
     inputs: dict[str, Any] | None = None

@@ -31,7 +31,7 @@ const counts = (over: Partial<TaskRow['counts']> = {}) => (
 
 const node = (over: Partial<TaskNode> & Pick<TaskNode, 'node_id' | 'status'>): TaskNode => ({
   agent: 'raven', node_summary: null, instance: null, depends_on: [], started_at: null, ended_at: null,
-  error: null, tokens_in: null, tokens_out: null, tool_call_count: null, tool_failure_count: null,
+  error: null, tokens_in: null, tokens_out: null, tool_call_count: null,
   has_output: null, prompt_template: null, files: [],
   ...over,
 })
@@ -892,7 +892,7 @@ describe('the node panel', () => {
       id: 'a', kind: 'dag', status: 'completed',
       nodes: [node({
         node_id: 'n1', status: 'completed', started_at: 1000, ended_at: 2000,
-        tokens_in: null, tokens_out: null, tool_call_count: 14, tool_failure_count: 1,
+        tokens_in: null, tokens_out: null, tool_call_count: 14,
       })],
     })
     pick(done)

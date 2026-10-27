@@ -90,7 +90,7 @@ export function deriveStatus(nodes: readonly TaskNode[]): TaskStatus {
 const blankNode = (id: string): TaskNode => ({
   node_id: id, node_summary: null, agent: '', instance: null, status: 'pending', depends_on: [],
   started_at: null, ended_at: null, error: null, tokens_in: null, tokens_out: null,
-  tool_call_count: null, tool_failure_count: null, has_output: null, prompt_template: null, files: [],
+  tool_call_count: null, has_output: null, prompt_template: null, files: [],
 })
 
 /* How a branch came out, as a frame or a row says it: `reason` for a node a
