@@ -1134,6 +1134,12 @@ export function newStep(lane: Lane): StepHandle {
     bump(lane, seg)
   }
 
+  /* Where the prose of the step's latest model call starts. A call's narration
+     comes before the tools it calls, so prose after the step's last tool call
+     is a later call's: an exhausted turn's wrap-up opens no episode and streams
+     into the step the last call left open. */
+  let replyAt = 0
+
   const h: StepHandle = {
     seg,
     get hasThink() { return seg.hasThink },
@@ -1170,9 +1176,9 @@ export function newStep(lane: Lane): StepHandle {
       seg.sayCaret = true
       scheduleFlush(lane, seg)
     },
-    dropSay() {
-      seg.say = ''
-      seg.hasSay = false
+    dropReply() {
+      seg.say = seg.say.slice(0, replyAt)
+      seg.hasSay = !!seg.say
       seg.sayCaret = false
       if (!seg.hasThink && !seg.calls.length && !seg.hasQA && replaceStep(lane, seg, null)) bumpList(lane)
       else bump(lane, seg)
@@ -1198,6 +1204,7 @@ export function newStep(lane: Lane): StepHandle {
       poke(lane)
       paintWork(lane, seg, grew)
       bumpList(lane)
+      replyAt = seg.say.length
       return {
         done: (ok, res, ms, diff, truncated) => callDone(lane, seg, c, ok, res, ms, diff, truncated),
         spawnTask: (taskId) => { c.spawnTaskId = String(taskId || '') },

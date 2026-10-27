@@ -2836,7 +2836,7 @@ describe('transcript island, a turn the model chose not to answer', () => {
      finishTurn is handed none -- only the list of steps the turn ran. */
   const hush = (open: ReturnType<typeof mount.step> | null): void => {
     act(() => {
-      if (open) { open.seal(); open.dropSay() }
+      if (open) { open.seal(); open.dropReply() }
       mount.note(LABEL, '', { quiet: true })
     })
   }

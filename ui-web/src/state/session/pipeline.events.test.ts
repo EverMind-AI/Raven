@@ -7,10 +7,12 @@
  * ordering included -- and it is the baseline the rewrite was measured against.
  */
 
-import { describe, expect, it } from 'vitest'
+import { act } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
 
+import type { HistoryMessage } from '../../features/transcript/types'
 import type { Sources } from '../sources'
 
 type Pipeline = typeof import('./pipeline')
@@ -18,7 +20,7 @@ type Pipeline = typeof import('./pipeline')
 interface Row { id: string; title?: string; status?: string | null; last?: string; naming?: boolean }
 interface Step {
   seal(): void
-  dropSay(): void
+  dropReply(): void
   thinkAppend(text: string): void
   sayDelta(text: string): void
   tool(name: string, args: unknown, display: unknown, callId: string): { done(...a: unknown[]): void }
@@ -38,7 +40,7 @@ async function harness({
   const step = (): Step => {
     const st: Step = {
       seal: () => log.push(['seal']),
-      dropSay: () => log.push(['dropSay']),
+      dropReply: () => log.push(['dropReply']),
       thinkAppend: (text: string) => log.push(['thinkAppend', text]),
       sayDelta: (text: string) => log.push(['sayDelta', text]),
       tool: (name: string, args: unknown, display: unknown, callId: string) => {
@@ -436,7 +438,7 @@ describe('notice', () => {
       /* Sealed, then taken back, then the row: the reply was never the turn's
          answer, and nothing about the notice differs from any other closing
          one in how its row is drawn. */
-      expect(h.order().slice(-4)).toEqual(['killStatus', 'seal', 'dropSay', 'noteRow'])
+      expect(h.order().slice(-4)).toEqual(['killStatus', 'seal', 'dropReply', 'noteRow'])
       expect(h.did('noteRow')).toEqual([['noteRow', 'gui.notice.silent_turn', '', ['quiet']]])
       expect(h.live.st).toBeNull()
       expect(h.live.say).toBe('')
@@ -448,7 +450,7 @@ describe('notice', () => {
 
       h.dispatch(silent)
 
-      expect(h.did('dropSay')).toEqual([])
+      expect(h.did('dropReply')).toEqual([])
       expect(h.did('noteRow')).toHaveLength(1)
       expect(h.live.silent).toBe(true)
     })
@@ -496,7 +498,7 @@ describe('notice', () => {
 
       h.dispatch({ type: 'notice', payload: { kind: 'action_blocked', detail: 'needs approval' } })
 
-      expect(h.did('dropSay')).toEqual([])
+      expect(h.did('dropReply')).toEqual([])
       expect(h.live.silent).toBe(false)
     })
 
@@ -567,6 +569,179 @@ describe('notice', () => {
       expect(h.live.silent).toBe(false)
       expect(h.did('finishTurn')).toEqual([])
     })
+  })
+})
+
+/* The same frames through the real transcript island, read off what it draws:
+   the stand-in step above can say a take-back ran, not what it took back. */
+async function islandHarness() {
+  ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+  const frames: FrameRequestCallback[] = []
+  vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frames.push(cb); return frames.length })
+  vi.stubGlobal('cancelAnimationFrame', () => {})
+  const page = (): void => { document.body.innerHTML = '<div id="scroll"><div class="col" id="stage"></div></div>' }
+  page()
+  await loadPart(async () => { await import('./runtime'); await import('./stages'); return import('./pipeline') }, {
+    fakes: {
+      'src/state/ws': { setOpen: () => {} },
+      'src/features/rail/store': {
+        draw: () => {},
+        reconcileRows: (_cur: Row[], next: Row[]) => ({ rows: next, currentMissing: false }),
+      },
+      'src/state/session/rows': { sess: () => undefined, replace: () => {}, rows: () => [] },
+      'src/features/composer/mount': {
+        drawMeter: () => {},
+        goPaint: () => {},
+        queueShift: () => undefined,
+        turn: { busy: () => false, phase: () => 'streaming', dispatch: () => {} },
+      },
+      'src/lib/duration': { formatDuration: (ms: number) => `${ms}ms` },
+      'src/lib/session': { current: () => 's1' },
+      'src/state/toast': { show: () => {} },
+      'src/state/ctxChip': { set: () => {} },
+      'src/lib/notifications': { show: () => {} },
+      'src/features/rail/source': { touchSession: () => {} },
+      'src/features/workspace/record': { wsOnTool: () => {}, wsOnToolDone: () => {} },
+      'src/features/transcript/tail': { down: () => {} },
+    },
+  })
+  const pipeline = (await import('./pipeline')) as Pipeline
+  const mount = await import('../../features/transcript/mount')
+  const { setTranslator } = await import('../../i18n/t')
+  const { installWsPane } = await import('../../test/wsPaneHarness')
+  const { setSources } = await import('../sources')
+  setTranslator((key) => key)
+  installWsPane()
+  setSources({
+    composer: {},
+    rail: {},
+    transcript: {
+      clean: (t: unknown) => String(t == null ? '' : t).trim(),
+      okOf: () => true,
+    },
+    workspace: { shortPath: (p: string) => p, openPath: () => {} },
+    prose: { pathOf: () => null, linkTargetOf: () => null },
+  } as unknown as Partial<Sources>)
+  await fakeGateway(() => Promise.resolve({ sessions: [] }))
+  const flush = (): void => { while (frames.length) frames.shift()!(0) }
+  const $$ = (sel: string): Element[] => [...document.querySelectorAll(sel)]
+  return {
+    dispatch: (ev: unknown) => act(() => { pipeline.dispatch(ev); flush() }),
+    /* What a reload of the stored rows draws, on a page of its own. */
+    reload: (rows: HistoryMessage[]) => { page(); act(() => { mount.history(rows); flush() }) },
+    /* What the reader can reach: every fold and work list opened through its
+       own control, then the prose of each step, the answers and the quiet
+       rows, in the order they stand. */
+    seen: () => {
+      act(() => { $$('.tfold:not(.open) .tfh').forEach((b) => (b as HTMLElement).click()) })
+      act(() => { $$('.wrow.sum:not(.open)').forEach((b) => (b as HTMLElement).click()) })
+      return {
+        said: $$('.step .say').map((n) => n.textContent?.trim()).filter(Boolean),
+        answers: $$('.answer').length,
+        quiet: $$('.tnote:not(.bad) .tx').map((n) => n.textContent),
+        text: document.getElementById('stage')!.textContent || '',
+      }
+    },
+  }
+}
+
+describe('a turn that ends silent, drawn by the real transcript island', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  const SILENT = { type: 'notice', payload: { kind: 'silent_turn', detail: '', transient: false } }
+
+  it('keeps the narration of the step an exhausted turn\'s wrap-up streamed into, as a reload does', async () => {
+    /* The wire of a person's turn that ran out of iterations: one episode per
+       model call, then the wrap-up, which opens none and so lands in the step
+       the last call left open. Its marker was held back by the server and
+       never streamed. */
+    const h = await islandHarness()
+    h.dispatch({ type: 'message.start', payload: { turn_id: 't1', content: 'tidy the logs' } })
+    h.dispatch({ type: 'episode.start', payload: { index: 0 } })
+    h.dispatch({ type: 'token.delta', payload: { text: 'Checking the first log.' } })
+    h.dispatch({ type: 'tool.start', payload: { tool_call_id: 'c1', name: 'read_file', arguments: { path: '/tmp/a.log' } } })
+    h.dispatch({ type: 'tool.complete', payload: { tool_call_id: 'c1', result_preview: 'quiet', ok: true } })
+    /* A call with no narration is a quiet step, which merges with a quiet
+       neighbour when the turn lands: the step after it keeps its prose only
+       while it still counts as having said something. */
+    h.dispatch({ type: 'episode.start', payload: { index: 1 } })
+    h.dispatch({ type: 'tool.start', payload: { tool_call_id: 'c2', name: 'read_file', arguments: { path: '/tmp/b.log' } } })
+    h.dispatch({ type: 'tool.complete', payload: { tool_call_id: 'c2', result_preview: 'quiet', ok: true } })
+    h.dispatch({ type: 'episode.start', payload: { index: 2 } })
+    h.dispatch({ type: 'token.delta', payload: { text: 'Now the last one.' } })
+    h.dispatch({ type: 'tool.start', payload: { tool_call_id: 'c3', name: 'read_file', arguments: { path: '/tmp/c.log' } } })
+    h.dispatch({ type: 'tool.complete', payload: { tool_call_id: 'c3', result_preview: 'quiet', ok: true } })
+    h.dispatch(SILENT)
+    h.dispatch({ type: 'message.complete', payload: { turn_id: 't1', usage: {}, duration_ms: 4000 } })
+    const live = h.seen()
+
+    h.reload([
+      { role: 'user', text: 'tidy the logs', timestamp: new Date(Date.now() - 9000).toISOString() },
+      {
+        role: 'assistant', text: 'Checking the first log.', timestamp: new Date(Date.now() - 8000).toISOString(),
+        tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{"path":"/tmp/a.log"}' }],
+      },
+      { role: 'tool', tool_call_id: 'c1', name: 'read_file', text: 'quiet' },
+      {
+        role: 'assistant', text: '', timestamp: new Date(Date.now() - 7000).toISOString(),
+        tool_calls: [{ id: 'c2', name: 'read_file', arguments: '{"path":"/tmp/b.log"}' }],
+      },
+      { role: 'tool', tool_call_id: 'c2', name: 'read_file', text: 'quiet' },
+      {
+        role: 'assistant', text: 'Now the last one.', timestamp: new Date(Date.now() - 6000).toISOString(),
+        tool_calls: [{ id: 'c3', name: 'read_file', arguments: '{"path":"/tmp/c.log"}' }],
+      },
+      { role: 'tool', tool_call_id: 'c3', name: 'read_file', text: 'quiet' },
+      { role: 'assistant', text: '[SILENT]', silent: true, timestamp: new Date(Date.now() - 4000).toISOString() },
+    ])
+    const reloaded = h.seen()
+
+    expect(reloaded.said).toEqual(['Checking the first log.', 'Now the last one.'])
+    expect(live.said).toEqual(reloaded.said)
+    expect(live.answers).toBe(0)
+    expect(live.quiet).toEqual(['gui.notice.silent_turn'])
+    expect(live.quiet).toEqual(reloaded.quiet)
+  })
+
+  it('takes back only what the wrap-up streamed when it did stream its marker', async () => {
+    /* A model that inlines its thinking in the reply: the server's hold lets
+       the reply through at its first character, and only once the call ended
+       and the thinking was stripped does the loop read a marker. That stream is
+       the one the notice takes back, and the narration before it stays. */
+    const h = await islandHarness()
+    h.dispatch({ type: 'message.start', payload: { turn_id: 't1', content: 'tidy the logs' } })
+    h.dispatch({ type: 'episode.start', payload: { index: 0 } })
+    h.dispatch({ type: 'token.delta', payload: { text: 'Checking the log.' } })
+    h.dispatch({ type: 'tool.start', payload: { tool_call_id: 'c1', name: 'read_file', arguments: { path: '/tmp/a.log' } } })
+    h.dispatch({ type: 'tool.complete', payload: { tool_call_id: 'c1', result_preview: 'quiet', ok: true } })
+    h.dispatch({ type: 'token.delta', payload: { text: '<think>nothing new</think>' } })
+    h.dispatch({ type: 'token.delta', payload: { text: '[SILENT]' } })
+    h.dispatch(SILENT)
+    h.dispatch({ type: 'message.complete', payload: { turn_id: 't1', usage: {}, duration_ms: 4000 } })
+
+    const live = h.seen()
+
+    expect(live.said).toEqual(['Checking the log.'])
+    expect(live.text).not.toContain('SILENT')
+    expect(live.text).not.toContain('nothing new')
+    expect(live.answers).toBe(0)
+    expect(live.quiet).toEqual(['gui.notice.silent_turn'])
+  })
+
+  it('still takes back a whole reply that streamed in a step of its own', async () => {
+    const h = await islandHarness()
+    h.dispatch({ type: 'message.start', payload: { turn_id: 't1', content: 'anything new?' } })
+    h.dispatch({ type: 'episode.start', payload: { index: 0 } })
+    h.dispatch({ type: 'token.delta', payload: { text: '<think>nothing new</think>[SILENT]' } })
+    h.dispatch(SILENT)
+    h.dispatch({ type: 'message.complete', payload: { turn_id: 't1', usage: {}, duration_ms: 2000 } })
+
+    const live = h.seen()
+
+    expect(live.said).toEqual([])
+    expect(live.text).not.toContain('SILENT')
+    expect(live.answers).toBe(0)
+    expect(live.quiet).toEqual(['gui.notice.silent_turn'])
   })
 })
 

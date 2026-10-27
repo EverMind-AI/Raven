@@ -348,10 +348,12 @@ export interface StepHandle {
   setThinkOpen(open: boolean): void
   setSay(text: string): void
   sayDelta(text: string): void
-  /* Take back what the step has said: the model ended the turn on its silence
-     marker, so a reply that began streaming before that was known is not an
-     answer. A step left with nothing else on it is removed. */
-  dropSay(): void
+  /* Take back the reply the step's latest model call streamed -- the prose
+     after the step's last tool call, or all of it in a step that made none:
+     the model ended the turn on its silence marker, so that reply is not an
+     answer. Narration an earlier call said before its tools stays, as a reload
+     draws it. A step left with nothing else on it is removed. */
+  dropReply(): void
   tool(name: string, args: unknown, display?: string | null, callId?: string | null): CallHandle
   seal(): void
 }
