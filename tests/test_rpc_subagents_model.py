@@ -200,6 +200,24 @@ async def test_update_rejects_an_effort_the_acp_row_does_not_advertise(
     assert "effort" not in entry or entry["effort"] is None
 
 
+async def test_update_refuses_effort_for_a_non_acp_row(config_path: Path) -> None:
+    with pytest.raises(ConfigFieldReadonlyError, match="only an acp agent"):
+        await subagents_update({"name": GENERIC_AGENT, "effort": "high"})
+
+
+async def test_update_refuses_effort_when_the_menu_cannot_be_read(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("raven.rpc.methods.subagents.acp_snapshot_for", lambda cfg: None)
+
+    async def fail(cfg):
+        raise RuntimeError("no handshake")
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fail)
+    with pytest.raises(ConfigValidationError, match="offers none"):
+        await subagents_update({"name": "Hermes Agent", "effort": "high"})
+
+
 async def test_update_clears_an_effort_without_needing_a_menu(
     config_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
