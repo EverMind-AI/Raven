@@ -26,6 +26,8 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from raven.providers.relay import relayed
+
 if TYPE_CHECKING:
     from raven.providers.registry import ProviderSpec
 
@@ -105,23 +107,32 @@ def supports_image_tool_result(provider: Any, model: str, spec: "ProviderSpec | 
         # admits ResponseInputImageContentParam.
         return True
 
-    from raven.providers.litellm_provider import LiteLLMProvider
+    from raven.providers.relay_provider import is_litellm_transport
 
-    if not isinstance(provider, LiteLLMProvider):
+    if not is_litellm_transport(provider):
         # Azure direct and any other bespoke transport speak Chat Completions.
         return False
 
+    target = _litellm_target(model)
+    if target is None:
+        return False
+
+    if target in GATEWAY_TARGETS:
+        return _gateway_route(model).startswith(GATEWAY_IMAGE_TOOL_RESULT_PREFIXES)
+    return target in IMAGE_TOOL_RESULT_TARGETS
+
+
+@relayed()
+def _litellm_target(model: str) -> str | None:
+    """The upstream LiteLLM routes ``model`` to, or None when it cannot say."""
     try:
         import litellm
 
         _, target, _, _ = litellm.get_llm_provider(model=model)
     except Exception as e:
         logger.debug("supports_image_tool_result: cannot resolve target for {}: {}", model, e)
-        return False
-
-    if target in GATEWAY_TARGETS:
-        return _gateway_route(model).startswith(GATEWAY_IMAGE_TOOL_RESULT_PREFIXES)
-    return target in IMAGE_TOOL_RESULT_TARGETS
+        return None
+    return target
 
 
 def _model_id_is_caller_chosen(model: str, provider: Any, spec: "ProviderSpec | None") -> bool:
