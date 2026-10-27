@@ -16,9 +16,10 @@ import sys
 def run() -> None:
     """Console-script entry point.
 
-    The supervisor `raven web` leaves running is the one launch taken without the
-    command table: it only restarts the gateway, and whatever it imports stays
-    resident for as long as the page is up.
+    Two launches are taken without the command table. The supervisor `raven web`
+    leaves running only restarts the gateway, and whatever it imports stays
+    resident for as long as the page is up. The fork template loads what Raven
+    agents load and forks them, so what it imports is exactly what it chooses.
     """
     from raven.security.tls import use_system_ca
 
@@ -30,6 +31,11 @@ def run() -> None:
 
         if supervise_from_argv(sys.argv[1:]):
             return
+
+    if sys.argv[1:2] == ["--fork-template"]:
+        from raven.cli._fork_template import main as serve_forks
+
+        raise SystemExit(serve_forks(sys.argv[2:]))
 
     from raven.cli.commands import run as run_commands
 
