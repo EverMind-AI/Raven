@@ -71,7 +71,7 @@ export function KeyRow({ label, keyName, legacy, url, raw }: {
   return (
     <Row stack label={<>{label}<KeyLink url={url} /></>}>
       <span className="settings-taglist">
-        <KeyInput className="settings-tbox keyrow-tbox" value={value} aria-label={label}
+        <KeyInput className="settings-tbox settings-tbox-wide" value={value} aria-label={label}
           placeholder={isSet ? t('gui.settings.key_set_ph') : t('gui.settings.key_ph')}
           onChange={(e) => setValue(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
         <button type="button" className="mini" onClick={save}>{isSet ? t('gui.settings.update') : t('gui.save')}</button>
