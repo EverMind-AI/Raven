@@ -442,8 +442,12 @@ async def test_a_forked_agent_trusts_the_store_a_launched_one_would(tmp_path: Pa
     assert out == b"True\n"
 
 
-def test_a_new_event_loop_gets_a_new_template_and_the_old_one_ends(tmp_path: Path) -> None:
-    """A CLI turn is one asyncio.run; a template opened under the last one cannot serve the next."""
+# The pipes and the child watcher belong to the loop: a template still held when
+# that loop closes leaves an unreaped child on a pidfd host and a transport whose
+# finalizer fails on the closed loop, which pytest reports as unraisable.
+@pytest.mark.filterwarnings("error::pytest.PytestUnraisableExceptionWarning")
+def test_a_template_ends_with_the_event_loop_that_started_it(tmp_path: Path) -> None:
+    """A CLI turn is one asyncio.run: the template it opened is gone, reaped, when that run returns."""
     script = _product(tmp_path, "print('ran', flush=True)\n")
 
     async def once() -> tuple[int, bytes]:
@@ -454,21 +458,52 @@ def test_a_new_event_loop_gets_a_new_template_and_the_old_one_ends(tmp_path: Pat
         assert template is not None and template._proc is not None
         return template._proc.pid, out
 
-    first_pid, first_out = asyncio.run(once())
-    second_pid, second_out = asyncio.run(once())
     try:
+        first_pid, first_out = asyncio.run(once())
+        assert not Path(f"/proc/{first_pid}").exists(), "the template outlived its loop, or was left unreaped"
+        second_pid, second_out = asyncio.run(once())
         assert first_out == second_out == b"ran\n"
         assert second_pid != first_pid
-        for _ in range(100):
-            try:
-                os.kill(first_pid, 0)
-            except ProcessLookupError:
-                break
-            time.sleep(0.05)
-        else:
-            pytest.fail("the template opened under the ended loop is still running")
+        assert not Path(f"/proc/{second_pid}").exists()
     finally:
         asyncio.run(fork_template.close_template())
+
+
+async def _deaf_template(tmp_path: Path, monkeypatch) -> fork_template.ForkTemplate:
+    """A template that reports ready and never reads its stdin, so letting go of it does not stop it."""
+    (tmp_path / "deaf_template.py").write_text(
+        "import json, time\nprint(json.dumps({'ready': True}), flush=True)\ntime.sleep(600)\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(fork_template, "_TEMPLATE_PROGRAM", ("-m", "deaf_template"))
+    template = fork_template.ForkTemplate()
+    await template._start({**os.environ, "PYTHONPATH": str(tmp_path)})
+    assert template.running
+    return template
+
+
+async def test_a_template_that_ignores_its_lifeline_is_killed_and_reaped(tmp_path: Path, monkeypatch) -> None:
+    template = await _deaf_template(tmp_path, monkeypatch)
+    proc = template._proc
+    assert proc is not None
+
+    await template.close()
+    assert proc.returncode is not None
+
+
+async def test_a_close_cut_short_still_ends_the_template_and_closes_its_pipes(tmp_path: Path, monkeypatch) -> None:
+    """The loop ending cancels a close still waiting out the grace: an idle close, or the hold task's own."""
+    template = await _deaf_template(tmp_path, monkeypatch)
+    proc = template._proc
+    assert proc is not None
+
+    closing = asyncio.get_running_loop().create_task(template.close())
+    await asyncio.sleep(0.2)
+    assert not closing.done()
+    closing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+    assert proc._transport.is_closing()
+    await asyncio.wait_for(proc.wait(), timeout=10)
 
 
 def test_the_client_shelf_loads_no_module_by_name() -> None:
