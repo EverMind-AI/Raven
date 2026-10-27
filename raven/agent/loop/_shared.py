@@ -180,8 +180,9 @@ def _window_reading(usage: dict[str, Any] | None) -> int:
     Not what the prompt was billed as. A provider that reports cache reads apart
     from ``prompt_tokens`` (``prompt_tokens_include_cache`` false, the Anthropic
     Messages shape) bills a fraction of a warm prompt while all of it still
-    occupies the window, so the cached counts are added back. Same add-back, for
-    the same reason, as ``transport_failure.never_processed``.
+    occupies the window, so the cached counts are added back -- and only then:
+    where ``prompt_tokens`` already holds them, adding them again would count the
+    warm prompt twice.
     """
     if not usage:
         return 0
