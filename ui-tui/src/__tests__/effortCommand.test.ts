@@ -8,6 +8,8 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { enterDirect, resetDirectChat } from '../app/directChatStore.js'
+import { RESET_WORDS } from '../app/slash/commands/core.js'
 import { sessionCommands } from '../app/slash/commands/session.js'
 import { getUiState, patchUiState, resetUiState } from '../app/uiStore.js'
 import { rpcErrorMessage } from '../lib/rpc.js'
@@ -50,6 +52,7 @@ const flush = () => new Promise(resolve => setTimeout(resolve, 0))
 
 beforeEach(() => {
   resetUiState()
+  resetDirectChat()
   patchUiState({ info: { model: 'vendor/model', skills: {}, tools: {}, reasoning_effort: 'low' } })
 })
 
@@ -93,7 +96,8 @@ describe('/effort', () => {
     expect(getUiState().info?.reasoning_effort).toBe('high')
   })
 
-  it.each(['default', 'reset', 'clear'])('clears the pick on `%s` and shows the default again', async word => {
+  // The words are `/mode`'s: one set, so the two commands cannot drift apart.
+  it.each([...RESET_WORDS])('clears the pick on `%s` and shows the default again', async word => {
     const rpc = vi.fn(() => Promise.resolve({ session_key: 's1', effort: null, default: 'medium', options: WORDS }))
     patchUiState(state => ({ ...state, info: { ...state.info!, reasoning_effort: 'high' } }))
     const { lines } = run(word, rpc)
@@ -103,6 +107,22 @@ describe('/effort', () => {
     expect(lines).toEqual(['reasoning effort: default (medium)'])
     expect(getUiState().info?.reasoning_effort).toBe('medium')
   })
+
+  it.each(['', 'high', 'default'])(
+    'refuses `/effort %s` inside a direct chat, naming the instance, and asks the gateway nothing',
+    arg => {
+      // The pick is the main conversation's; sent from an instance's pane it
+      // moved the main record while the reply there said "this conversation".
+      enterDirect('Raven-Code', 'refactor-auth')
+      const { lines, rpc } = run(arg)
+
+      expect(lines).toEqual([
+        "/effort is the main conversation's and does not reach Raven-Code/refactor-auth -- Esc returns to Raven"
+      ])
+      expect(rpc).not.toHaveBeenCalled()
+      expect(getUiState().info?.reasoning_effort).toBe('low')
+    }
+  )
 
   it('lands the gateway refusal on the transcript and leaves the status bar alone', async () => {
     const rpc = vi.fn(() => Promise.reject(new Error("no reasoning effort 'turbo'; the words are minimal, low, medium, high")))

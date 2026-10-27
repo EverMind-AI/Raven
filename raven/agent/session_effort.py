@@ -121,7 +121,9 @@ def write(sessions: Any, session_key: str, effort: str | None) -> bool:
 
     A session that has no record yet -- a draft the first message has not
     filed -- holds it on its in-memory copy, which the first turn's save then
-    writes; the caller reports that as pending, the way ``session.pin`` does.
+    writes. The answer tells the two apart for a caller that cares;
+    ``session.set_effort`` does not pass it on, since the next turn runs at
+    the pick either way and the control is drawn from the reply's ``effort``.
     """
     persisted = False
     try:

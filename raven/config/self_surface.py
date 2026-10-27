@@ -45,6 +45,7 @@ from pydantic.alias_generators import to_camel, to_snake
 from raven.config.agent_names import GENERIC_AGENT
 from raven.config.keys import key_as_written as _spelled
 from raven.config.loader import EXTENSION_KEYS, get_config_path, read_raw_or_raise
+from raven.config.schema import REASONING_EFFORTS
 from raven.providers.registry import PROVIDERS
 from raven.utils.atomic_io import atomic_update
 
@@ -148,7 +149,6 @@ class Section:
     settings: tuple[Setting, ...] = field(default_factory=tuple)
 
 
-_REASONING = ("minimal", "low", "medium", "high")
 _WEB_SEARCH = ("serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl", "serply", "keenable")
 _WEB_FETCH = ("jina", "anysearch", "tavily", "exa", "firecrawl", "keenable")
 _WEB_VENDORS = ("serper", "anysearch", "serpapi", "jina", "tavily", "exa", "brave", "firecrawl", "serply", "keenable")
@@ -178,13 +178,19 @@ SECTIONS: tuple[Section, ...] = (
                 note='value is {"provider": "<provider>", "model": "<model id>"}; takes over from this '
                 "conversation's next turn",
             ),
+            # The words are ``REASONING_EFFORTS``, the list the console's checker
+            # reads too: the four every provider takes, since this key reaches
+            # every model call (a session's own pick has its model's provider's
+            # words, ``LLMProvider.reasoning_efforts``). Null hands the choice back
+            # to the provider's own default, as the settings page offers.
             Setting(
                 "agents.defaults.reasoningEffort",
-                "Reasoning effort sent with each model call",
+                "Reasoning effort sent with each model call; null is the provider's own default",
                 "enum",
                 _E.NEXT_TURN,
                 writer="settings",
-                choices=_REASONING,
+                choices=REASONING_EFFORTS,
+                nullable=True,
             ),
             Setting(
                 "agents.defaults.maxToolIterations",

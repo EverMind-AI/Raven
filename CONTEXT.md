@@ -277,7 +277,8 @@ the TUI, the effort row of the WebUI's model picker):
 The reasoning effort one session picked for its own model calls, kept on the session's
 metadata beside `model` (`reasoning_effort`; null once cleared, since a metadata patch sets
 keys and never removes one) rather than on the loop's in-memory policy, so it outlives the
-gateway and a resumed conversation runs at what it was left at. `_run_agent_loop` is handed
+gateway and a resumed conversation runs at what it was left at, and a fork carries it with
+the model (`FORK_CARRIES` in `session/manager.py`). `_run_agent_loop` is handed
 it by the turn entrance that holds the record, the way the model is, and ranks it: the
 configured `agents.defaults.reasoningEffort` underneath, a Session Mode's own
 `reasoningEffort` over that, this pick over both, a hook's rollback override on top. The
@@ -291,19 +292,21 @@ forwarded by the wrappers the way `reasoning_wire_keys` is): the four every wire
 (`REASONING_EFFORTS`, `config/schema.py`), and `xhigh` and `max` over them on the Anthropic
 Messages wire (`_ADAPTIVE_EFFORTS` is the table). `session.set_effort` answers `options`
 from that and refuses a word the provider does not take, naming the ones it does. The
-console's checker for `agents.defaults.reasoningEffort` stays at the four on purpose: that
-key reaches every model call on every vendor and every sub-agent, so a rung one wire takes
-is a session's own pick, never the install's default. The key is clearable (null is the
-provider's own default) and the settings page draws it, when unset, as a rung of its own
-rather than as `low`. The record may carry any rung this raven knows
-(`REASONING_EFFORT_RUNGS`, the retry descent's ladder read upward), because the model can
-move after the pick: the turn asks its own provider again (`session_effort.fit`, before
-`in_force` ranks the pick) and runs a pick the new wire does not take at the highest rung it
-does take, logged, rather than at a request it would refuse -- the pick only; a mode's
-`reasoningEffort` is the catalogue's word and goes out as named. The page re-reads the row on
-a model switch and draws such a pick beside the words it can move to. Lands on the next
-turn, like a tier; reaches no sub-agent, unlike one -- a sub-agent is still told the
-configured default (`RAVEN_PARENT_REASONING_EFFORT`).
+console's checker for `agents.defaults.reasoningEffort`, and the agent's own `raven_config`
+door, stay at the four on purpose: that key reaches every model call on every vendor and
+every sub-agent, so a rung one wire takes is a session's own pick, never the install's
+default. The key is clearable on both (null is the provider's own default) and the settings
+page draws it, when unset, as a rung of its own rather than as `low`. The record may carry
+any rung this raven knows (`REASONING_EFFORT_RUNGS`, the retry descent's ladder read
+upward), because the model can move after the pick: the turn asks its own provider again
+(`session_effort.fit`, before `in_force` ranks the pick) and runs a pick the new wire does
+not take at the highest rung it does take, logged, rather than at a request it would refuse
+-- the pick only; a mode's `reasoningEffort` is the catalogue's word and goes out as named.
+The page re-reads the row on a model switch and draws such a pick beside the words it can
+move to. Lands on the next turn, like a tier; reaches no sub-agent, unlike one -- a
+sub-agent is still told the configured default (`RAVEN_PARENT_REASONING_EFFORT`), and the
+TUI's `/effort` is refused inside a direct chat with an instance, since the pick is the main
+conversation's and an instance has none.
 _Avoid_: reading the pick off `SessionPolicy`. A mode switch replaces the whole policy and a
 restart empties it; the record is the pick's one home, and the policy carries only the
 mode's own effort.

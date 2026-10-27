@@ -27,9 +27,11 @@ import {
 } from '../../../domain/messages.js'
 import { formatVoiceRecordKey, parseVoiceRecordKey } from '../../../lib/platform.js'
 import { fmtK } from '../../../lib/text.js'
+import { getDirectChat } from '../../directChatStore.js'
 import { DEFAULT_INDICATOR_STYLE, INDICATOR_STYLES, type IndicatorStyle } from '../../interfaces.js'
 import { patchOverlayState } from '../../overlayStore.js'
 import { patchUiState } from '../../uiStore.js'
+import { RESET_WORDS } from './core.js'
 
 // A model switch is per conversation; `--default` also changes what new ones start on. The picker passes `<model> --provider
 // <slug>`; a bare `/model <name>` carries no provider. Parse both into the
@@ -61,9 +63,6 @@ const parseModelArg = (arg: string): { provider?: string; value: string } => {
 // The wire contract is the full `<channel>:<chat_id>` key; users naturally
 // type the bare chat_id they see in filenames, so default those to tui:.
 const normalizeSessionId = (id: string) => (id.includes(':') ? id : `tui:${id}`)
-
-// `/effort default` and its two synonyms, the words `/mode` reserves too.
-const EFFORT_RESET_WORDS = new Set(['default', 'reset', 'clear'])
 
 export const sessionCommands: SlashCommand[] = [
   {
@@ -644,17 +643,30 @@ export const sessionCommands: SlashCommand[] = [
         return ctx.transcript.sys('no active session')
       }
 
+      // Refused inside a direct chat rather than redirected: the pick is the
+      // main conversation's, and the instance on screen has no reasoning
+      // effort of its own to set from here (`/mode` has one per instance;
+      // this does not). Sent anyway, it moved the main conversation's record
+      // while the reply, in the instance's pane, said "this conversation".
+      const { active } = getDirectChat()
+
+      if (active) {
+        return ctx.transcript.sys(
+          `/effort is the main conversation's and does not reach ${active.agent}/${active.handle} -- Esc returns to Raven`
+        )
+      }
+
       // The session's own reasoning effort, kept on its record by the server:
       // a bare `/effort` reports, a word sets it from the next turn on, and
-      // the reset words drop it so the conversation follows the global
-      // setting (or its mode's) again. The words are the model's provider's
-      // (six on the Anthropic Messages wire, four elsewhere) and the server's
-      // to refuse -- its refusal names the ones it takes -- so none are
-      // checked here; the usage line lists them all for the reader.
+      // the reset words (`/mode`'s) drop it so the conversation follows the
+      // global setting (or its mode's) again. The words are the model's
+      // provider's (six on the Anthropic Messages wire, four elsewhere) and
+      // the server's to refuse -- its refusal names the ones it takes -- so
+      // none are checked here; the usage line lists them all for the reader.
       const want = arg.trim().toLowerCase()
       const params: Record<string, unknown> = { session_key: ctx.sid }
 
-      if (EFFORT_RESET_WORDS.has(want)) {
+      if (RESET_WORDS.has(want)) {
         params.clear = true
       } else if (want) {
         params.effort = want

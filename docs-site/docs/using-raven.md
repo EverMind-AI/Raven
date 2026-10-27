@@ -80,7 +80,9 @@ Two places set it:
   <word>` in the TUI. `/effort` alone reports the effort in force, and
   `/effort default` returns the conversation to the global setting. The row
   offers the words the conversation's model takes, and `/effort` refuses a
-  word the model's provider does not take, naming the ones it does.
+  word the model's provider does not take, naming the ones it does. Inside a
+  direct chat with a sub-agent instance the command is refused: the pick is
+  the main conversation's, and an instance has none of its own.
 
 A pick made for one conversation outranks the global setting and the
 conversation's mode. It is kept on the conversation's own record, so it survives

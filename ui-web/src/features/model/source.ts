@@ -20,6 +20,7 @@ import { beginLoad, current, currentProvider, failLoad, loadStatus, loadToken, o
 
 import type { ParamsOf, ResultOf } from '../../rpc/generated'
 import type { EffortSource } from '../../state/effort'
+import type { Staging } from '../../state/session/staging'
 import type { TierReply, TierSource } from '../../state/tier'
 import type { Recent } from './recent'
 import type { ApiProtocol, Kind, ModelSource, Offer, Provider } from './types'
@@ -404,16 +405,35 @@ export const effortSource: EffortSource = {
     if (!sid) {
       /* Staged, and echoed back as though written: there is no server state
          to contradict it yet. Clearing a staged pick is just dropping it --
-         a draft follows the default anyway. */
-      staging().effort = effort
-      const was = await gateway().call('session.set_effort', { session_key: '' })
-      return { ...was, effort }
+         a draft follows the default anyway. Staged BEFORE the read, so a send
+         during the round trip carries it; and put back when the read fails,
+         because the caller then says the pick was not made and repaints the
+         old rung, and a value left staged would run the first turn at a pick
+         the reader was told did not take. The draft's own object, held across
+         the await: a reader who moved to another draft meanwhile has another
+         one, which this must not touch. */
+      const held = staging()
+      held.effort = effort
+      try {
+        const was = await gateway().call('session.set_effort', { session_key: '' })
+        stood.set(held, effort)
+        return { ...was, effort }
+      } catch (e) {
+        if (held.effort === effort) held.effort = stood.get(held) ?? null
+        throw e
+      }
     }
     return gateway().call('session.set_effort', effort
       ? { session_key: sid, effort }
       : { session_key: sid, clear: true })
   },
 }
+
+/* The last pick of each draft whose read landed, which is what a failed read
+   puts back: the value staged before the failing call is not it when a second
+   pick went out while the first was in flight and failed too. Keyed by the
+   draft's staging object, so a draft that was left takes its entry with it. */
+const stood = new WeakMap<Staging, string | null>()
 
 /* Read by the send path next to the staged tier. */
 export function stagedEffort(): string | null {
