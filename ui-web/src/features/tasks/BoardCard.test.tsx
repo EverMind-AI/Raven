@@ -169,11 +169,56 @@ describe('the board card', () => {
 
     it('lists a many-selection in the order it was given, and titles the chip with all of it', () => {
       render(<BoardCard node={node({ status: 'completed', selected_routes: ['bug', 'docs', 'question'] })} now={1000} />)
-      expect(document.querySelector('.tkrunsel')?.textContent).toBe('\u2192 bug, docs, question')
-      expect(document.querySelector('.tkrunsel')?.getAttribute('title')).toBe('\u2192 bug, docs, question')
+      expect(document.querySelector('.tkrunl2')?.textContent).toContain('\u2192 bug, docs, question')
+      for (const part of document.querySelectorAll('.tkrunsel, .tkrunselrest')) {
+        expect(part.getAttribute('title')).toBe('\u2192 bug, docs, question')
+      }
     })
 
-    it('shows an empty selection as none: it chose nothing, which is a decision and not a blank', () => {
+    /* The card is narrow, and the line it shares with the agent's name, handle and tool count was
+       cut from the end: the selection went first, down to its arrow. Its first route is held apart
+       from the rest so the stylesheet can cut it last (scripts/gates/task-card-selection-css.test.mjs,
+       tests/test_web_task_card_route_real_browser.py). */
+    it('holds its first route apart from the routes after it, which are cut first', () => {
+      render(<BoardCard node={node({ status: 'completed', selected_routes: ['bug', 'docs', 'question'] })} now={1000} />)
+      const line = document.querySelector('.tkrunl2')
+      expect(line?.querySelector('.tkrunsel')?.textContent).toBe('\u2192 bug, ')
+      expect(line?.querySelector('.tkrunselrest')?.textContent).toBe('docs, question')
+      expect(line?.lastElementChild?.className).toBe('tkrunselrest')
+
+      cleanup()
+      render(<BoardCard node={node({ status: 'completed', selected_routes: ['question'] })} now={1000} />)
+      expect(document.querySelector('.tkrunselrest')).toBeNull()
+    })
+
+    it('separates the fields but gives the selected routes only their text space', () => {
+      const sheet = document.createElement('style')
+      sheet.textContent = readFileSync('src/features/tasks/styles.css', 'utf8') as string
+      document.head.append(sheet)
+      try {
+        render(<BoardCard node={node({
+          status: 'completed', instance: 'triage', tool_call_count: 2, selected_routes: ['bug', 'docs'],
+        })} now={1000} />)
+        const line = document.querySelector('.tkrunl2') as HTMLElement
+        const first = line.querySelector('.tkrunsel') as HTMLElement
+        const rest = line.querySelector('.tkrunselrest') as HTMLElement
+        const spacing = getComputedStyle(first).marginLeft
+        expect(parseFloat(spacing)).toBeGreaterThan(0)
+        expect(parseFloat(getComputedStyle(line).gap)).toBe(0)
+        expect(parseFloat(getComputedStyle(line.firstElementChild as Element).marginLeft) || 0).toBe(0)
+        for (const field of line.querySelectorAll('.tkrunhandle, .tkrunchip')) {
+          expect(getComputedStyle(field).marginLeft).toBe(spacing)
+        }
+        expect(rest.previousElementSibling).toBe(first)
+        expect(parseFloat(getComputedStyle(rest).marginLeft) || 0).toBe(0)
+        expect(getComputedStyle(first).whiteSpace).toBe('pre')
+        expect(first.textContent + rest.textContent).toBe('\u2192 bug, docs')
+      } finally {
+        sheet.remove()
+      }
+    })
+
+    it('shows an empty selection as none: it chose nothing, which is an answer and not a blank', () => {
       render(<BoardCard node={node({ status: 'completed', selected_routes: [] })} now={1000} />)
       expect(document.querySelector('.tkrunsel')?.textContent).toBe('\u2192 gui.tasks.node_sel_none')
     })

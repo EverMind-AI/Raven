@@ -14,6 +14,7 @@ import { show as toast } from '../../state/toast'
 import { note as transcriptNote } from '../transcript/mount'
 import * as tail from '../transcript/tail'
 import * as turn from './turn'
+import { previousUserTop } from './userjump'
 
 import type { Attachment, ComposerSource, SlashCmd, TemplateRow } from './types'
 
@@ -126,6 +127,9 @@ export function parkDraft(): void {
 
 export function loadDraft(id: string | null): void {
   draftOwner = id || 'new'
+  /* A switch starts a new transcript: the direction the last scroll took says
+     nothing about where this one opens. */
+  jumpReset()
   /* Above the guard: the tray is swapped even on the paths that run before the
      field is mounted, or the files of the conversation left behind stay on
      screen and ride the next message out. */
@@ -287,24 +291,59 @@ export function dockLift(): void {
   if (chat.style.getPropertyValue('--lift') !== v) chat.style.setProperty('--lift', v)
 }
 
-/* ── the back-to-bottom pill ──────────────────────────────────────────── */
+/* ── the quick-jump pills ─────────────────────────────────────────────── */
 
 const scroller = (): HTMLElement | null => el('scroll')
 
-/* The pill only appears when the reader has left the tail. */
+/* Where the last scroll went, and the position it started from. Null until the
+   reader moves the transcript, so a conversation restored into the middle opens
+   with both pills away. */
+type Jump = 'down' | 'up'
+let jumpDir: Jump | null = null
+let jumpTop = 0
+
+function jumpReset(): void {
+  jumpDir = null
+  jumpTop = 0
+}
+
+/* The down pill takes the reader to the newest message; the up pill to the
+   question above the content at the top edge. At the two ends the only way left
+   is back, so the edge wins over the direction -- scrolling up to the top must
+   not leave the up pill pointing nowhere. The up pill is not offered when no
+   question sits above that edge: there is nowhere for it to go. */
 export function pillPaint(): void {
   const sc = scroller()
-  const pill = el('backpill')
-  if (!sc || !pill) return
-  const away = sc.scrollHeight - sc.scrollTop - sc.clientHeight > 120
-  const stuck = tail.isStuck()
-  pill.hidden = stuck || !away
-  if (pill.hidden) return
-  /* The offset must be current the moment it appears, not from whenever the
-     dock last changed shape. */
-  dockLift()
-  pill.dataset.tip = t('gui.pill.bottom')
-  pill.setAttribute('aria-label', t('gui.pill.bottom'))
+  const down = el('backpill')
+  const up = el('toppill')
+  if (!sc || (!down && !up)) return
+  const room = sc.scrollHeight - sc.clientHeight
+  const scrollable = room > 4
+  const atTop = sc.scrollTop <= 2
+  const atEnd = room - sc.scrollTop < 4
+  /* The first paint is the baseline the first scroll is measured from. */
+  if (jumpDir === null) jumpTop = sc.scrollTop
+  const upWanted = !!up && scrollable && (atEnd || (jumpDir === 'up' && !atTop))
+  const target = upWanted ? previousUserTop(sc) : null
+  const showDown = !!(down && scrollable && (atTop || (jumpDir === 'down' && !atEnd)))
+  const showUp = upWanted && target !== null
+  if (down) {
+    down.hidden = !showDown
+    if (showDown) {
+      /* The offset must be current the moment it appears, not from whenever the
+         last dock change left it. */
+      dockLift()
+      down.dataset.tip = t('gui.pill.bottom')
+      down.setAttribute('aria-label', t('gui.pill.bottom'))
+    }
+  }
+  if (up) {
+    up.hidden = !showUp
+    if (showUp) {
+      up.dataset.tip = t('gui.pill.prev')
+      up.setAttribute('aria-label', t('gui.pill.prev'))
+    }
+  }
 }
 
 export function pillClick(): void {
@@ -313,15 +352,43 @@ export function pillClick(): void {
   pillPaint()
 }
 
+export function topClick(): void {
+  const sc = scroller()
+  if (!sc) return
+  const top = previousUserTop(sc)
+  if (top === null) return
+  /* Before the scroll: a token landing mid-animation must not haul the reader
+     back to the tail. */
+  tail.setStuck(false)
+  jumpDir = 'up'
+  jumpTop = sc.scrollTop
+  sc.scrollTo({ top, behavior: 'smooth' })
+  pillPaint()
+}
+
 export function scrolled(): void {
   const sc = scroller()
-  if (sc && sc.scrollHeight - sc.scrollTop - sc.clientHeight < 4) tail.setStuck(true)
+  if (!sc) return
+  const atEnd = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 4
+  if (atEnd) tail.setStuck(true)
+  const delta = sc.scrollTop - jumpTop
+  if (Math.abs(delta) >= 1) {
+    jumpDir = delta > 0 ? 'down' : 'up'
+    jumpTop = sc.scrollTop
+    /* A reader dragging the scrollbar or pressing Page Up is leaving the tail as
+       surely as one turning the wheel, and the next token must not haul them
+       back. Off the tail only: content shrinking can clamp scrollTop down while
+       the reader is still at the end, which is not them going anywhere. */
+    if (delta < 0 && !atEnd) tail.setStuck(false)
+  }
   pillPaint()
 }
 
 export function wheeled(up: boolean): void {
-  if (!up) return
-  tail.setStuck(false)
+  const sc = scroller()
+  jumpDir = up ? 'up' : 'down'
+  if (sc) jumpTop = sc.scrollTop
+  if (up) tail.setStuck(false)
   pillPaint()
 }
 
@@ -821,6 +888,7 @@ export function _resetForTests(): void {
   liveT0 = 0
   draftOwner = null
   draftTick = null
+  jumpReset()
   trays.clear()
   store.set({ ...initial })
 }

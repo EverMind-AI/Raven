@@ -3,10 +3,12 @@
 import asyncio
 import json
 import re
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+import raven.security.trust as trust
 from raven.agent.subagent.dag_verdict import (
     _DESCRIBE_INSTRUCTION,
     _JUDGE_INSTRUCTION,
@@ -269,6 +271,7 @@ _MANY_CORRECTION = (
     "that hold, or [] when none does."
 )
 _PLAIN_PROPERTIES = ["outcome", "category", "what_is_missing", "evidence"]
+_PLAIN_REQUEST = Path(__file__).parent / "data" / "dag_verdict_plain_request.json"
 
 
 class _Script(_Provider):
@@ -473,16 +476,16 @@ async def test_a_router_cut_off_at_the_output_limit_is_told_both_things():
     assert user.rindex("[END UNTRUSTED") < user.index("Routes this step decides between")
 
 
-async def test_judge_without_routes_sends_the_old_request_verbatim():
+async def test_judge_without_routes_sends_the_old_request_verbatim(monkeypatch):
+    """The whole request -- messages, tools, model, tool choice -- against a literal golden
+    taken from before a node could be a decision node, with the fence nonce fixed. Compared with
+    this module's own constants instead, a change to the instruction, to a tool schema's
+    description or to a message label passed, since the expected value changed with it."""
+    monkeypatch.setattr(trust, "secrets", SimpleNamespace(token_hex=lambda nbytes: "0d15ea5e"))
     provider = _Provider(_accomplished())
     await _judged(provider)
     (call,) = provider.calls
-    system, user = (message["content"] for message in call["messages"])
-    assert system == _JUDGE_INSTRUCTION
-    assert re.search(r"\[END UNTRUSTED subagent #[0-9a-f]{8}\]\Z", user)
-    assert "Routes this step decides between" not in user
-    assert list(call["tools"][0]["function"]["parameters"]["properties"]) == _PLAIN_PROPERTIES
-    assert "route" not in json.dumps(call["tools"])
+    assert call == json.loads(_PLAIN_REQUEST.read_text(encoding="utf-8"))
 
 
 async def test_judge_without_routes_adds_nothing_to_the_other_clauses():

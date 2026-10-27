@@ -116,6 +116,11 @@ EXTENSION_KEYS = (
     # Session housekeeping the settings page controls (raven.rpc.methods.session).
     # Same consequence as sessionTitle above if omitted.
     "sessions",
+    # Portable Agent Plugins 1.0 packages (raven.agent_plugins). Same
+    # consequence as sessionTitle above if omitted: a config carrying the
+    # block would fail base Config validation instead of being read.
+    "agentPlugins",
+    "agent_plugins",
 )
 
 # Paths already warned about as malformed in this process; repeated

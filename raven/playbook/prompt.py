@@ -216,8 +216,21 @@ otherwise set it to false. Never put `confirm` on an individual node.
   refused. Every declared input must be referenced in `promptTemplate` as
   {{ inputs.<key> }} or {{ inputs.<key>.path }}. Never duplicate a playbook
   param in `inputs`; use ${params.<key>} directly in the template instead.
-- `dependsOn` is the whole graph language: empty = a start node; several =
-  a join; nodes with no dependency between them run in parallel.
+- `dependsOn` draws the graph: empty = a start node; several = a join;
+  nodes with no dependency between them run in parallel.
+- A step whose answer decides what runs next is a decision node: `routes`
+  maps each route name (letters, digits, - and _) to the condition, in plain
+  words, under which the answer takes that route. A judge picks the route;
+  the step's own text picks nothing; a condition may use ${params.<key>}.
+  `select` is "one" (the default: exactly one route, so declare at least
+  two) or "many" (any number, none included).
+- A node that depends on a decision node must name it in its `when`:
+  <id>.<route> for the route(s) it runs on, or <id>.done to run whichever is
+  taken, combined with not / and / or and parentheses; `when` may name only
+  decision nodes in the node's own `dependsOn`. A node whose `when` does not
+  hold is not executed. Read a node that may not run through
+  {{ <id>.output }}, which then reads as a fixed "not executed" sentence,
+  never through a file reference to its output.
 - Consecutive steps by one agent that must keep memory (revising a draft
   has to remember the draft) -> the same `instance`, with a dependency
   between the nodes; a fresh perspective (review, critique) -> no shared

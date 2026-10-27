@@ -28,7 +28,6 @@ is an internal data layer.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import shutil
@@ -39,6 +38,12 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 from raven.memory_engine.skill_local.types import SkillMeta
+from raven.utils.skill_meta import (
+    nested_metadata as _parse_nested_metadata,
+)
+from raven.utils.skill_meta import (
+    resolve_always as _resolve_always,
+)
 from raven.utils.text import parse_frontmatter
 
 # Default builtin skills directory.
@@ -502,63 +507,9 @@ def _strip_frontmatter(content: str) -> str:
     return parse_frontmatter(content, line_fallback=True, preserve_body_whitespace=True)[1]
 
 
-def _parse_nested_metadata(raw: object) -> dict:
-    """Extract Raven-namespaced metadata from ``metadata``: a JSON string, or
-    the mapping YAML reads the same one-line JSON as.
-
-    Lookup order (first match wins): ``raven`` > ``nanobot`` > ``openclaw``.
-    Returns ``{}`` on any failure.
-    """
-    if isinstance(raw, dict):
-        data = raw
-    elif not isinstance(raw, str) or not raw:
-        return {}
-    else:
-        try:
-            data = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            return {}
-    if not isinstance(data, dict):
-        return {}
-    for key in ("raven", "nanobot", "openclaw"):
-        if key in data and isinstance(data[key], dict):
-            return data[key]
-    return {}
-
-
-_ALWAYS_TRUTHY = {"true", "1", "yes"}
-_ALWAYS_KNOWN = _ALWAYS_TRUTHY | {"false", "0", "no", ""}
-
-
-def _parse_always_value(raw: object) -> bool:
-    """Strict always parser (R3). Only explicit truthy values count."""
-    if raw is None:
-        return False
-    if isinstance(raw, bool):
-        return raw
-    if isinstance(raw, (int, float)):
-        return bool(raw)
-    if isinstance(raw, str):
-        lower = raw.strip().lower()
-        if lower not in _ALWAYS_KNOWN:
-            log.warning(
-                "Unrecognized 'always' value '%s' — treated as false. Expected true/false/yes/no/1/0.",
-                raw,
-            )
-        return lower in _ALWAYS_TRUTHY
-    return False
-
-
-def _resolve_always(frontmatter: dict, nested: dict) -> bool:
-    """Resolve always flag from nested metadata (priority) or frontmatter.
-
-    R3 fix: ``"false"`` is now correctly treated as ``False`` instead of
-    the old behavior where ``bool("false") == True``.
-    """
-    nested_val = nested.get("always")
-    if nested_val is not None:
-        return _parse_always_value(nested_val)
-    return _parse_always_value(frontmatter.get("always"))
+# ``_parse_nested_metadata`` and ``_resolve_always`` are imported above from
+# ``raven.utils.skill_meta``: the importer asks the same parser, so the two
+# cannot drift into different answers about the same file.
 
 
 _INJECT_MODES = {"full", "description"}

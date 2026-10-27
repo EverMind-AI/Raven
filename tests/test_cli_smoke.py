@@ -180,6 +180,9 @@ REGISTERED_COMMAND_NAMES = {
     # not a command -- raven spawns those agents itself.
     "acp",
     "agent",
+    # Portable Agent Plugins 1.0 packages (data-only), distinct from the
+    # kernel plugins below: `agent-plugins` reads a package directory.
+    "agent-plugins",
     # Plural beside the singular: `agents` manages the roster of agent
     # products (`agents new` scaffolds one), while `agent` talks to the
     # host's own agent.

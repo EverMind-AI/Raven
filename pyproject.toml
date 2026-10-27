@@ -705,6 +705,10 @@ source_modules = [
     # The Raven node: this Raven's own file tools run on a registered machine;
     # consumed by the CLI, it imports no surface itself.
     "raven.node",
+    # Portable Agent Plugins 1.0 packages: the data-only loader the assembly
+    # root and the CLI consume; it imports config, security, skill_hub and
+    # utils, and no surface.
+    "raven.agent_plugins",
 ]
 forbidden_modules = ["raven.cli", "raven.rpc", "raven.acp", "raven.a2a"]
 # Debt allowlist: none. The last allowlisted edge (market reaching the skill
@@ -736,7 +740,7 @@ type = "forbidden"
 # this is the one edge to resolve.
 source_modules = ["raven.contracts", "raven.home", "raven.spine", "raven.tracing"]
 forbidden_modules = [
-    "raven.acp", "raven.acp_client", "raven.agent", "raven.auth", "raven.browser",
+    "raven.acp", "raven.acp_client", "raven.agent", "raven.agent_plugins", "raven.auth", "raven.browser",
     "raven.channels", "raven.cli", "raven.config", "raven.context_engine",
     "raven.core", "raven.eval_engine", "raven.gateway",
     "raven.i18n", "raven.importer", "raven.knowledge", "raven.market", "raven.mcp",

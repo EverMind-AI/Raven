@@ -93,7 +93,7 @@ function Cluster({ node, now }: { node: DagNode; now: number }): JSX.Element {
   return <span className="tkrunrt">{key ? t(key) : node.status}</span>
 }
 
-/* What a decision selected, as it reads after its status: an arrow and the route names, or the word
+/* What a decision node selected, as it reads after its status: an arrow and the route names, or the word
    for none when the selection is empty. Absent means it has not decided, which is not the same as
    deciding on nothing -- hence `undefined` and not length. */
 export function selectionText(selected: readonly string[] | undefined): string {
@@ -101,8 +101,16 @@ export function selectionText(selected: readonly string[] | undefined): string {
   return '\u2192 ' + (selected.length ? selected.join(', ') : t('gui.tasks.node_sel_none'))
 }
 
+/* The same text cut where the card may cut it: the arrow and the first route, which the agent line
+   cuts last, and the routes after it, which take only the room the line has left. */
+function selectionParts(selected: readonly string[] | undefined): [string, string] {
+  if (selected === undefined || selected.length < 2) return [selectionText(selected), '']
+  return ['\u2192 ' + selected[0] + ', ', selected.slice(1).join(', ')]
+}
+
 export function BoardCard({ node, now }: { node: DagNode; now: number }): JSX.Element {
   const chosen = selectionText(node.selected_routes)
+  const [first, rest] = selectionParts(node.selected_routes)
   const title = node.node_summary || node.id
   const cluster = <Cluster node={node} now={now} />
   /* The word of a node a branch left out is the longest of any status, wider than the room both lines
@@ -119,7 +127,8 @@ export function BoardCard({ node, now }: { node: DagNode; now: number }): JSX.El
         <span className="tkrunag">{node.subagent}</span>
         {node.instance ? <span className="tkrunhandle">{'@' + node.instance}</span> : null}
         {node.tool_call_count ? <span className="tkrunchip">{t('gui.tasks.tools_n', { n: node.tool_call_count })}</span> : null}
-        {chosen ? <span className="tkrunsel" title={chosen}>{chosen}</span> : null}
+        {chosen ? <span className="tkrunsel" title={chosen}>{first}</span> : null}
+        {rest ? <span className="tkrunselrest" title={chosen}>{rest}</span> : null}
       </span>
       {cluster}
     </div>

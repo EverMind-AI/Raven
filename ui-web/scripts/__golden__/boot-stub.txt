@@ -101,6 +101,9 @@ div.app[data-rail=on]
           div#flash.flash
           div#stage.col
         div#trajHost
+        button#toppill.backpill.tipdn.chrome-toppill
+          svg
+            path
         button#backpill.backpill
           svg
             path

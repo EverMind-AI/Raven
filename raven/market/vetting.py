@@ -279,6 +279,10 @@ def validate_mcp_connection(cfg: dict) -> dict:
 
     kind = str(cfg.get("type") or "stdio")
     if kind == "stdio":
+        if cfg.get("cwd"):
+            raise HubTrustError(
+                "a catalog entry must not choose a working directory; add the server to your own configuration instead"
+            )
         command = str(cfg.get("command") or "")
         if command not in ALLOWED_COMMANDS:
             raise HubTrustError(
