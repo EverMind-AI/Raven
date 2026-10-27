@@ -123,6 +123,8 @@ async def pick_up(run: RemoteRun, backend: AcpAgentBackend, *, pool: Any = None)
                 f"its frames are on machine {target.label}, task {run.task}",
                 stop_reason,
             )
+        if (refused := backend._provider_refusal(collector.text)) is not None:
+            return PickedUp("error", refused, stop_reason)
         reply = await backend._finished(collector.reply, stop_reason=stop_reason, span=_Span(), sink=None)
         reply += (
             f"\n\n[raven] Ran on machine {target.label}, in {remote.shown(target, run.session_cwd)}, "

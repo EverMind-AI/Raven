@@ -2883,6 +2883,12 @@ class TurnPathMixin:
                     # kept rather than cleared (SessionManager._metadata_to_write).
                     # The reader asks whether this is an int, which None is not.
                     session.metadata["output_limit_turn_at"] = None
+                # The same slot for a turn its own budget ended -- the tool cap, the
+                # wall clock or a stalled tool, which is all ``interrupted`` means.
+                # Its wrap-up reads as an ordinary answer, so a surface that reports
+                # the turn (ACP's stop reason) has only this to tell it from one
+                # that finished. Written or cleared on the same terms as above.
+                session.metadata["budget_stop_turn_at"] = _turn_start() if outcome.status == "interrupted" else None
                 # The loop gave up on the model. Its ladder, its rerun and its
                 # salvage have all had their say, so what is left is a turn with
                 # no answer: the failure the handler below files and the lane

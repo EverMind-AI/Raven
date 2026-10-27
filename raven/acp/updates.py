@@ -197,7 +197,7 @@ def _meta_for(payload: dict[str, Any]) -> dict[str, Any] | None:
     return {"raven.target": target}
 
 
-def translate(event: Any, *, cwd: str | None = None) -> Translated:
+def translate(event: Any, *, cwd: str | None = None, session_cost: float | None = None) -> Translated:
     """Read one wire event. Pure: no state, no I/O, no event loop.
 
     Kept pure so the frames it produces can be validated against the official
@@ -207,6 +207,9 @@ def translate(event: Any, *, cwd: str | None = None) -> Translated:
     An event this has no branch for yields an empty result rather than raising.
     A translator that crashed on an unrecognised event would take the whole
     connection down over a wire event somebody added for the web client.
+
+    ``session_cost`` is the session's cumulative cost, which the caller keeps:
+    it is what ACP's ``usage_update.cost`` reports, and no one event carries it.
     """
     if not isinstance(event, dict):
         return Translated()
@@ -242,7 +245,7 @@ def translate(event: Any, *, cwd: str | None = None) -> Translated:
         # latched one earlier; ``end_turn`` here is the default that a plain
         # completion means. The usage rides out first, so the client has the
         # turn's cost before the turn is over rather than after.
-        usage = _usage_update(payload.get("usage"))
+        usage = _usage_update(payload.get("usage"), session_cost)
         return Translated(updates=() if usage is None else (usage,), stop="end_turn")
 
     if kind == "media":
@@ -361,8 +364,8 @@ def _file_uri(path: str) -> str:
         return "file://" + quote(path, safe="/")
 
 
-def _usage_update(usage: Any) -> dict[str, Any] | None:
-    """How full the context window is, and what the turn cost.
+def _usage_update(usage: Any, session_cost: float | None = None) -> dict[str, Any] | None:
+    """How full the context window is, and what the session has cost so far.
 
     The one place the rich accounting already on the internal wire maps cleanly
     onto ACP: ``used`` and ``size`` are the context numbers, and ``Cost`` wants
@@ -373,8 +376,11 @@ def _usage_update(usage: Any) -> dict[str, Any] | None:
     no usage at all (a cached reply, a hook short-circuit) has nothing to say
     here -- an update of zeroes is not the same statement as no update.
 
-    The currency is USD because cost_usd carries only verified dollar amounts
-    reported by the provider, never a locally estimated price.
+    ``cost`` is ``session_cost``, not the turn's ``cost_usd``: ACP defines it as
+    the session's cumulative cost, and the turn's alone made a client show the
+    last turn's spend as the whole session's. The currency is USD because the
+    total sums only dollar amounts providers reported, never a locally estimated
+    price.
     """
     if not isinstance(usage, dict):
         return None
@@ -383,10 +389,25 @@ def _usage_update(usage: Any) -> dict[str, Any] | None:
     if not isinstance(used, int) or not isinstance(size, int) or size <= 0 or used < 0:
         return None
     update: dict[str, Any] = {"sessionUpdate": "usage_update", "used": used, "size": size}
-    cost = usage.get("cost_usd")
-    if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0:
-        update["cost"] = {"amount": float(cost), "currency": "USD"}
+    if _usd(session_cost) is not None:
+        update["cost"] = {"amount": float(session_cost), "currency": "USD"}
     return update
+
+
+def _usd(value: Any) -> float | None:
+    """``value`` as a reported dollar amount, or None when it is not one."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+        return float(value)
+    return None
+
+
+def _turn_spend(event: Any) -> float | None:
+    """What the turn a ``message.complete`` ends reported spending, or None for any other event."""
+    if not isinstance(event, dict) or event.get("type") != "message.complete":
+        return None
+    payload = event.get("payload")
+    usage = payload.get("usage") if isinstance(payload, dict) else None
+    return _usd(usage.get("cost_usd")) if isinstance(usage, dict) else None
 
 
 def _clip_deep(value: Any, depth: int = 0) -> Any:
@@ -698,6 +719,13 @@ class AcpSession:
     cwd: str
     subscription_id: str | None = None
     turn: _Turn | None = None
+    cost_usd: float | None = None
+    """What the session has cost so far, in provider-reported USD: what it had
+    spent when it was opened here, then each turn's spend added as it ends. None
+    until some call reports a price."""
+    cost_known: bool = True
+    """False when what the session had spent before it was opened here could not
+    be read: a total counted from zero would understate it, so none is sent."""
 
 
 class UpdateTranslator:
@@ -919,7 +947,9 @@ class UpdateTranslator:
         await self._deliver(session, params.get("event"))
 
     async def _deliver(self, session: AcpSession, event: Any) -> None:
-        result = translate(event, cwd=session.cwd)
+        if (spent := _turn_spend(event)) is not None:
+            session.cost_usd = (session.cost_usd or 0.0) + spent
+        result = translate(event, cwd=session.cwd, session_cost=session.cost_usd if session.cost_known else None)
         # Held thoughts go out before anything that has to follow them: a
         # chunk of the answer, a tool call, an ending. An event that carries
         # none of those (a thought, or nothing at all) leaves them held, which
