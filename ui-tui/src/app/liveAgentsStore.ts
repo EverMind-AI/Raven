@@ -249,6 +249,21 @@ const DAG_TO_LIVE: Record<string, LiveAgentStatus> = {
   skipped: 'skipped'
 }
 
+/**
+ * Who runs a node now, as a frame or a list row reports it.
+ *
+ * `subagent` speaks only when it names one; `instance` speaks whenever its key
+ * is present -- a present null is a clear, because that attempt keeps no
+ * session, while an absent key is a source that does not speak for it.
+ */
+const identityOf = (
+  subagent: string | null | undefined,
+  wire: { instance?: string | null }
+): Pick<LiveAgentRow, 'agent' | 'instance'> => ({
+  ...(subagent ? { agent: subagent } : {}),
+  ...(Object.hasOwn(wire, 'instance') ? { instance: wire.instance ?? undefined } : {})
+})
+
 /** Node statuses folded onto a run: what its line counts. */
 export interface DagRunCounts {
   done: number
@@ -394,13 +409,11 @@ export const applyDagEvent = (event: DagEvent): void => {
       })
     }
   } else if (event.type === 'dag.node_updated') {
-    const { ended_at, instance, node, run_id, status, subagent } = event.payload
+    const { ended_at, node, run_id, status, subagent } = event.payload
     rows = upsert(rows, {
       // Once the node has been reassigned, the frame names the agent and handle
-      // running it now. A present null handle is a clear -- the new attempt is
-      // stateless -- while an absent key means this frame does not speak for it.
-      ...(subagent ? { agent: subagent } : {}),
-      ...(Object.hasOwn(event.payload, 'instance') ? { instance: instance ?? undefined } : {}),
+      // running it now.
+      ...identityOf(subagent, event.payload),
       endedAtMs: ended_at ?? undefined,
       id: `${run_id}/${node}`,
       kind: 'dag-node',
@@ -422,6 +435,10 @@ export const applyDagEvent = (event: DagEvent): void => {
       rows = upsert(
         rows,
         {
+          // A moved node's manifest entry names the attempt that ran it last;
+          // for every other node these keys are absent and the row keeps what
+          // its own frames said.
+          ...identityOf(file.subagent, file),
           endedAtMs: known ?? now,
           id: `${event.payload.run_id}/${file.node}`,
           kind: 'dag-node',
@@ -586,11 +603,15 @@ export const reconcileFromList = (items: SubagentCall[]): void => {
       // same node is the lossy wire folding failed/interrupted/exception
       // together, not a fresher answer. Let a real resolution arrive the way
       // it always does, as a dag event; don't let this poll manufacture one.
-      if (isTerminal(status) && !isTerminal(existing.status) && existing.status !== 'exception') {
-        rows = rows.map(r =>
-          r.id === existing.id ? { ...r, endedAtMs: isoToMs(item.ended_at) ?? now, settledAtMs: now, status } : r
-        )
-      }
+      const resolved =
+        isTerminal(status) && !isTerminal(existing.status) && existing.status !== 'exception'
+          ? { endedAtMs: isoToMs(item.ended_at) ?? now, settledAtMs: now, status }
+          : {}
+
+      // Who runs the row is the disk's to say too, not only whether it ended:
+      // a client that missed the reassignment repaints the agent and handle of
+      // the attempt the snapshot says ran last.
+      rows = rows.map(r => (r.id === existing.id ? { ...r, ...identityOf(item.agent, item), ...resolved } : r))
 
       continue
     }

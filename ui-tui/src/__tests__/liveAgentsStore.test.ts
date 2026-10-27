@@ -6,7 +6,12 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import type { DagNodeUpdatedEvent, DagRunStartedEvent, SubagentCall } from '../rpc/index.js'
+import type {
+  DagNodeUpdatedEvent,
+  DagRunCompletedEvent,
+  DagRunStartedEvent,
+  SubagentCall
+} from '../rpc/index.js'
 
 import {
   $dagRuns,
@@ -631,5 +636,71 @@ describe('a dag row whose node was reassigned', () => {
       status: 'completed'
     })
     expect(rowFor('run-1/write')?.instance).toBeUndefined()
+  })
+
+  const completed = (files: DagRunCompletedEvent['payload']['files']): DagRunCompletedEvent => ({
+    payload: { dir: '/tmp/run-1', files, run_id: 'run-1', summary: {} },
+    type: 'dag.run_completed'
+  })
+
+  // The manifest is the only reassignment account a client that missed the moved
+  // attempt's update ever sees, so it has to carry the identity the same way.
+  it('moves the agent and clears the handle from the run manifest', () => {
+    applyDagEvent(update({ instance: 'old', subagent: 'alpha' }))
+    applyDagEvent(
+      completed([
+        { attempt_agents: ['alpha', 'beta'], instance: null, node: 'write', status: 'completed', subagent: 'beta' }
+      ])
+    )
+
+    expect(rowFor('run-1/write')).toMatchObject({ agent: 'beta', status: 'completed' })
+    expect(rowFor('run-1/write')?.instance).toBeUndefined()
+  })
+
+  it('keeps the identity a manifest entry does not speak for', () => {
+    applyDagEvent(update({ instance: 'write-minted', subagent: 'claude' }))
+    applyDagEvent(completed([{ node: 'write', status: 'completed' }]))
+
+    expect(rowFor('run-1/write')).toMatchObject({ agent: 'claude', instance: 'write-minted' })
+  })
+
+  // The snapshot is the repair path for a client that missed the reassignment
+  // entirely; a row already on the strip must not keep its superseded identity.
+  it('repairs an existing row from the list snapshot', () => {
+    applyDagEvent(update({ instance: 'old', subagent: 'alpha' }))
+    reconcileFromList([
+      {
+        agent: 'beta',
+        id: 'run-1/write',
+        instance: null,
+        kind: 'dag',
+        label: 'write',
+        message_count: 1,
+        node: 'write',
+        run_id: 'run-1',
+        status: 'run'
+      }
+    ])
+
+    expect(rowFor('run-1/write')).toMatchObject({ agent: 'beta', status: 'running' })
+    expect(rowFor('run-1/write')?.instance).toBeUndefined()
+  })
+
+  it('keeps a handle the list snapshot does not carry', () => {
+    applyDagEvent(update({ instance: 'write-minted', subagent: 'claude' }))
+    reconcileFromList([
+      {
+        agent: 'claude',
+        id: 'run-1/write',
+        kind: 'dag',
+        label: 'write',
+        message_count: 1,
+        node: 'write',
+        run_id: 'run-1',
+        status: 'run'
+      }
+    ])
+
+    expect(rowFor('run-1/write')).toMatchObject({ agent: 'claude', instance: 'write-minted' })
   })
 })
