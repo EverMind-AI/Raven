@@ -580,6 +580,31 @@ def test_editable_checkout_refuses_a_url_that_is_not_a_local_directory(
 
 
 @pytest.mark.parametrize(
+    ("windows", "script"),
+    [(True, ".\\install.ps1"), (False, "./install.sh")],
+    ids=["windows", "posix"],
+)
+def test_install_script_names_the_platform_s_install_script(windows: bool, script: str) -> None:
+    """install.sh stops on Windows with "on Windows use install.ps1", so the CLI
+    and the page's editable refusal must both name the script by platform --
+    read from this one definition so the two spellings cannot drift apart."""
+    assert upgrade_commands.install_script(windows=windows) == script
+
+
+@pytest.mark.parametrize(
+    ("os_name", "script"),
+    [("nt", ".\\install.ps1"), ("posix", "./install.sh")],
+    ids=["windows", "posix"],
+)
+def test_install_script_defaults_to_the_running_platform(
+    monkeypatch: pytest.MonkeyPatch, os_name: str, script: str
+) -> None:
+    monkeypatch.setattr(upgrade_commands.os, "name", os_name)
+
+    assert upgrade_commands.install_script() == script
+
+
+@pytest.mark.parametrize(
     "raw",
     [
         None,
