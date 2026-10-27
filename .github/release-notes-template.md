@@ -29,9 +29,11 @@ irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.
 The installer puts uv, Node.js 22, Raven and its plugins in place, downloads the
 browser runtime and the word dictionary and PDF models the knowledge reader uses
 (about 110 MB), installs or offers LibreOffice, and then finishes by opening
-Raven in your browser. First-run setup happens on that page. The installer holds
-the terminal while the page is up; press Ctrl-C to stop it, then start Raven
-again with:
+Raven in your browser. First-run setup happens on that page. When a download
+host cannot be reached, the installer falls back to a mirror and says so;
+`RAVEN_NO_MIRROR=1` keeps every download on its default host. The installer
+holds the terminal while the page is up; press Ctrl-C to stop it, then start
+Raven again with:
 
 ```bash
 raven web
@@ -52,8 +54,8 @@ Already running Raven? Upgrade in place -- configuration, sessions, and memory
 are preserved. On a `raven web` install whose page is served by 0.2.3 or later,
 the update row at the bottom of the sidebar does this for you, and the page
 reloads itself, still signed in, once the new version is up. A page served by
-0.2.2 or earlier refuses it; from the command line, stop the page first, then
-upgrade:
+0.2.2 or earlier, or by a source checkout, refuses it; from the command line,
+stop the page first, then upgrade:
 
 ```bash
 raven web --stop
@@ -67,6 +69,14 @@ start Raven again:
 
 ```bash
 raven web
+```
+
+Neither `raven upgrade` nor the update row downloads the knowledge reader's
+word dictionary and PDF models (about 110 MB). An install that has never
+fetched them runs this once:
+
+```bash
+raven resources
 ```
 
 `raven upgrade` installs the latest stable release together with the plugin
