@@ -3707,6 +3707,10 @@
       "en": "Back to bottom",
       "zh": "回到底部"
     },
+    "gui.pill.prev": {
+      "en": "Previous user message",
+      "zh": "上一条用户消息"
+    },
     "gui.pinned_ok": {
       "en": "Pinned",
       "zh": "已固定"

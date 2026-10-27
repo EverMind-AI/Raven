@@ -549,6 +549,22 @@ def test_run_judges_on_the_users_own_subagent_dag_settings(library, monkeypatch)
     assert "The route could not be determined: the judge call timed out after 0.05s" in r.stdout
 
 
+def test_validate_answers_a_yaml_syntax_error_as_a_finding(library, monkeypatch):
+    """A hand-edited file with a YAML syntax error in its spec block is the
+    case the RPC validator catches yaml.YAMLError for; the CLI must answer it
+    as a finding too, not crash with a traceback."""
+    _write_dag_md(library["user"], "broken")
+    block = library["user"] / "broken" / "playbook.md"
+    text = block.read_text(encoding="utf-8")
+    broken = text.replace("```yaml playbook-spec\n", "```yaml playbook-spec\n  nodes: [unclosed\n", 1)
+    block.write_text(broken, encoding="utf-8")
+
+    r = runner.invoke(app, ["playbook", "validate", "broken"])
+
+    assert r.exit_code == 1, r.stdout
+    assert "while parsing a flow sequence" in r.stdout, r.stdout
+
+
 def test_run_wires_subagent_manager_sandbox_and_workspace_restriction(library, monkeypatch):
     """SubagentManager in playbook run receives tools.sandbox and tools.restrict_to_workspace (#798)."""
     _write_dag_md(library["user"], "audit")

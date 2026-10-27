@@ -89,11 +89,22 @@ class SandboxExecutor(ABC):
         command: str,
         args: list[str],
         env: dict[str, str] | None = None,
+        cwd: str | None = None,
     ) -> tuple[Any, Any]:
         """Start a long-running child process; return (read_stream, write_stream).
 
         Streams are anyio MemoryObjectReceiveStream / MemoryObjectSendStream,
         compatible with the MCP SDK's ClientSession.
+
+        ``command``, ``args``, ``env`` values and ``cwd`` are host paths. The
+        executor owns their mapping to wherever the process actually runs,
+        because only it knows which host directories it mounted; a caller
+        hands them over exactly as the server's configuration spells them.
+        ``cwd`` is where the process runs. An MCP server contributed by an
+        Agent Plugin package always names one -- the package root when the
+        package's ``mcp.json`` omits it -- so an executor that cannot honour
+        it must refuse rather than run the server somewhere else.
+
         Only implemented by executors that override supports_process_spawning to True.
         """
         raise NotImplementedError(

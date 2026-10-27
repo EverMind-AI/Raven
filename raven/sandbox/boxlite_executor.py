@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -379,6 +380,7 @@ class BoxliteExecutor(SandboxExecutor):
         command: str,
         args: list[str],
         env: dict[str, str] | None = None,
+        cwd: str | None = None,
     ) -> tuple[Any, Any]:
         """Start a long-running process inside the VM and return MCP-compatible streams.
 
@@ -388,18 +390,30 @@ class BoxliteExecutor(SandboxExecutor):
 
         Both streams are compatible with the MCP SDK's ClientSession constructor.
         The caller owns write_send.aclose() — typically handled by MCP ClientSession.__aexit__.
+
+        ``command``, ``args``, ``env`` values and ``cwd`` are host paths,
+        translated to their guest mounts before they reach the VM. Only this
+        executor knows the mount table, so callers hand over the paths exactly
+        as a host MCP server's configuration spells them. A working directory
+        outside every mounted volume is refused rather than silently replaced
+        by the default: a server told to run in its package root must not end
+        up in /workspace.
         """
         import anyio
         from mcp.shared.message import SessionMessage
         from mcp.types import JSONRPCMessage
 
         box = await self._ensure_box()
+        vm_cwd = self._translate_process_cwd(cwd)
+        vm_command = self._translate_process_path(command)
+        vm_args = [self._translate_process_path(arg) for arg in args]
+        vm_env = {key: self._translate_process_path(value) for key, value in env.items()} if env else None
 
-        env_tuples = list(env.items()) if env else None
+        env_tuples = list(vm_env.items()) if vm_env else None
         if env_tuples:
-            execution = await box.exec(command, list(args), env_tuples)
+            execution = await box.exec(vm_command, vm_args, env_tuples, cwd=vm_cwd)
         else:
-            execution = await box.exec(command, list(args))
+            execution = await box.exec(vm_command, vm_args, cwd=vm_cwd)
         self._process_executions.append(execution)
 
         read_send, read_recv = anyio.create_memory_object_stream(max_buffer_size=16)
@@ -484,6 +498,64 @@ class BoxliteExecutor(SandboxExecutor):
 
         return read_recv, write_send
 
+    def _mount_roots(self) -> list[tuple[Path, str]]:
+        """Every volume's host root and guest mount, longest host root first.
+
+        A nested mount has to win over its parent: a directory mounted on its
+        own must not be translated through the wider root that happens to
+        contain it.
+        """
+        roots = [(Path(self._workspace).resolve(), self.WORKSPACE_MOUNT)]
+        roots.extend((Path(host).resolve(), guest) for host, guest, _mode in self._extra_volumes)
+        roots.sort(key=lambda item: len(str(item[0])), reverse=True)
+        return roots
+
+    def _translate_process_path(self, text: str) -> str:
+        """Rewrite every mounted host root inside *text* to its guest path.
+
+        A package server's command, its placeholder-expanded arguments and
+        its PLUGIN_ROOT/PLUGIN_DATA variables all carry host paths. The VM can
+        only see the guest paths, so handing the host spelling to ``box.exec``
+        launches something that does not exist inside the sandbox.
+        """
+        if not text:
+            return text
+        for host_root, guest_root in self._mount_roots():
+            host = str(host_root)
+            windows = "\\" in host
+            # The suffix stops at the next occurrence of this root, so re.sub
+            # resumes there and translates it too; it must not swallow one.
+            suffix = r"(?:[\\/](?:(?!" + re.escape(host) + r")[^:;])*)?"
+            text = re.sub(
+                re.escape(host) + r"(?=$|[\\/])(?P<suffix>" + suffix + r")",
+                lambda match, guest=guest_root, windows=windows: (
+                    guest + (match.group("suffix").replace("\\", "/") if windows else match.group("suffix"))
+                ),
+                text,
+            )
+        return text
+
+    def _translate_process_cwd(self, cwd: str | None) -> str:
+        """``_translate_cwd`` for a long-running server, which must be exact.
+
+        ``exec`` may fall back to the workspace mount because a one-shot
+        command still runs; a server launched in the wrong directory answers
+        with the wrong files for as long as it lives, so this refuses.
+        """
+        if cwd is None:
+            return self.WORKSPACE_MOUNT
+        host_path = Path(cwd).resolve()
+        for host_root, guest_root in self._mount_roots():
+            try:
+                rel = host_path.relative_to(host_root)
+            except ValueError:
+                continue
+            return self._guest_mount_path(guest_root, rel)
+        raise ValueError(
+            f"the working directory {cwd!r} is not inside any volume mounted into the "
+            "sandbox; mount its parent directory or run this server without the sandbox"
+        )
+
     def _translate_cwd(self, cwd: str | None) -> str:
         """Map a host path to its VM mount path.
 
@@ -495,14 +567,16 @@ class BoxliteExecutor(SandboxExecutor):
         if cwd is None:
             return self.WORKSPACE_MOUNT
         host_path = Path(cwd).resolve()
-        roots = [(self._workspace, self.WORKSPACE_MOUNT)]
-        roots.extend((Path(host), guest) for host, guest, _mode in self._extra_volumes)
-        for host_root, guest_root in roots:
+        for host_root, guest_root in self._mount_roots():
             try:
-                rel = host_path.relative_to(host_root.resolve())
+                rel = host_path.relative_to(host_root)
             except ValueError:
                 continue
-            rel_str = str(rel)
-            return guest_root if rel_str == "." else f"{guest_root}/{rel_str}"
+            return self._guest_mount_path(guest_root, rel)
         logger.warning("cwd '%s' is outside every mounted volume; falling back to /workspace", cwd)
         return self.WORKSPACE_MOUNT
+
+    @staticmethod
+    def _guest_mount_path(guest_root: str, relative: Path) -> str:
+        suffix = "/".join(relative.parts)
+        return guest_root if not suffix else f"{guest_root}/{suffix}"

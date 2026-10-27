@@ -129,7 +129,7 @@ the DAG scheduler itself does not create worktrees or lock files. See
 | `skills` | Omitted: the agent's menu; `[]`: no skills; list: narrowed menu where supported |
 | `mcps` | Omitted: the row's defaults; `[]`: no attached MCPs; list: replace the selection |
 | `instance` | Reuse a sub-agent session, not a node output address |
-| `routes` | Route name to condition. Makes this node a decision: the verdict call picks the route from its answer |
+| `routes` | Route name to condition. Makes this node a decision node: the verdict call picks the route from its answer |
 | `select` | `"one"` (default) or `"many"`: how many routes one answer may select |
 | `when` | Guard. The node runs only if the condition holds once its dependencies settle |
 
@@ -171,7 +171,7 @@ to the node's prompt, and the node's own text never selects a route.
 | Field | Meaning |
 | --- | --- |
 | `routes` | Route name to condition. At least two routes for `select: "one"`, at least one for `"many"`; names use the node-id charset (letters, digits, `_`, `-`), no two may differ only in case, and `done` is reserved in any letter case |
-| `select` | `"one"`: exactly one route, so give the decision a catch-all route for everything else. `"many"`: any number, none included. Only on a node with `routes` |
+| `select` | `"one"`: exactly one route, so give the decision node a catch-all route for everything else. `"many"`: any number, none included. Only on a node with `routes` |
 | `when` | Guard, read once every dependency has settled |
 
 A guard's atoms are `<node>.<route>`, true when that decision node selected that
@@ -188,7 +188,7 @@ needs the branch's route in its own `when`, as `<node>.<route>` rather than
 run on every route keeps `<node>.done`.
 
 A node ends `not_executed` when its guard is false (`when_false`), when the guard
-is unknown because a decision it names was never made (`when_unknown`), or when
+is unknown because a decision node it names never chose (`when_unknown`), or when
 every dependency it has in the graph was itself not executed
 (`upstream_not_executed`). It is never dispatched and writes no output, and unlike
 a skipped node it does not skip its dependents. A node of the same graph that
@@ -282,7 +282,7 @@ the next attempt is judged against the prompt as that message changed it, so a
 deliverable the user swaps after an attempt falls short is the one judged.
 Replanning finalizes the old run and starts a new one; reuse completed outputs by
 reference and assign fresh ids to replacement nodes. Failed prerequisites
-eventually skip their dependents; independent branches need not be discarded.
+eventually skip their dependents; nodes that do not depend on them need not be discarded.
 
 The `subagentDag` settings default to a 180-second judge timeout, a 600-second
 background adjudication window, and two continuations per node. These bound

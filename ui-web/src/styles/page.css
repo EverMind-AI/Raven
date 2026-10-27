@@ -1911,7 +1911,8 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
   transform: translate(4px, 4px);
 }
 
-/* back-to-bottom pill, shown only while the reader is scrolled up */
+/* quick-jump pills: back to the tail above the composer, and back to the last
+   question under the header. Which one is up is the composer store's. */
 /* --lift is the measured height of everything docked at the bottom (composer,
    queued rows, a clarify sheet). A constant here would be wrong the moment the
    composer grows a line, which is exactly when the pill matters. */
@@ -1935,6 +1936,11 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
   stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
 }
 .backpill[hidden] { display: none; }
+/* The up pill mirrors the other end: same circle, hung under the header instead
+   of above the composer. 52px is .top's height, the number .scroll[data-parked]
+   already insets by; a shell measures its title bar into --tl-row. */
+.chrome-toppill { top: calc(52px + 12px); bottom: auto; }
+:root[data-shell="1"] .chrome-toppill { top: calc(var(--tl-row, 38px) + 12px); }
 
 /* mid-turn narration: what the agent said on the way, set between the process
    lines and the answer. It used to sit a step under the reply and a step over
