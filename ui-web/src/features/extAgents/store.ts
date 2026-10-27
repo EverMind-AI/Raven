@@ -533,7 +533,11 @@ export async function refreshMenus(row: ExtAgentRow, opts: { force?: boolean } =
   set({ menusBusy: [...get().menusBusy, name], menusFailed: without(get().menusFailed, name) })
   try {
     const got = await source().refreshMenus(row, !!opts.force)
-    set({ rows: get().rows.map((r) => (r.name === name ? { ...r, model_choices: got.models } : r)) })
+    set({
+      rows: get().rows.map((r) =>
+        r.name === name ? { ...r, model_choices: got.models, effort_choices: got.effortChoices } : r,
+      ),
+    })
     if (!got.ok) set({ menusFailed: { ...get().menusFailed, [name]: got.detail } })
   } catch (e) {
     set({ menusFailed: { ...get().menusFailed, [name]: failure(e) } })

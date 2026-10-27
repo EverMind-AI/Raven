@@ -16,7 +16,12 @@ const offMachine = {
   presets: async () => [],
   connectOnMachine: async () => ({ refused: 'no machine form in this test' }),
   cancelRun: async () => false,
-  refreshMenus: async (r: ExtAgentRow) => ({ ok: true, detail: '', models: r.model_choices || [] }),
+  refreshMenus: async (r: ExtAgentRow) => ({
+    ok: true,
+    detail: '',
+    models: r.model_choices || [],
+    effortChoices: r.effort_choices || [],
+  }),
 }
 
 const toastWriter = vi.hoisted(() => ({ items: [] as string[] }))
@@ -398,19 +403,24 @@ describe('the model menu re-read', () => {
 
   it('patches the one row in place, and does not remount the sheet waiting on it', async () => {
     const fresh = { value: 'profile:x', name: 'own key', group: 'Own key' }
+    const freshEffort = { value: 'high', name: 'High' }
     let release: () => void = () => {}
     const gate = new Promise<void>((resolve) => { release = resolve })
     const { calls, rows } = readeable(async () => {
       await gate
-      return { ok: true, detail: '', models: [fresh] }
+      return { ok: true, detail: '', models: [fresh], effortChoices: [freshEffort] }
     })
-    const target = row({ model_choices: [{ value: 'old', name: 'old', group: 'Mirasim' }] })
+    const target = row({
+      model_choices: [{ value: 'old', name: 'old', group: 'Mirasim' }],
+      effort_choices: [{ value: 'low', name: 'Low' }],
+    })
     rows[0] = target
     store.set({ rows, epoch: 7 })
 
     const running = store.refreshMenus(target)
     expect(store.get().menusBusy).toEqual(['claude_code'])
     expect(store.get().rows[0]!.model_choices).toEqual([{ value: 'old', name: 'old', group: 'Mirasim' }])
+    expect(store.get().rows[0]!.effort_choices).toEqual([{ value: 'low', name: 'Low' }])
     expect(store.get().epoch).toBe(7)
 
     release()
@@ -418,6 +428,7 @@ describe('the model menu re-read', () => {
 
     expect(calls).toEqual([['claude_code', false]])
     expect(store.get().rows[0]!.model_choices).toEqual([fresh])
+    expect(store.get().rows[0]!.effort_choices).toEqual([freshEffort])
     expect(store.get().rows[1]).toBe(rows[1])
     expect(store.get().epoch).toBe(7)
     expect(store.get().menusBusy).toEqual([])
@@ -426,7 +437,12 @@ describe('the model menu re-read', () => {
 
   it('keeps the menu a failed read kept, and why', async () => {
     const old = [{ value: 'old', name: 'old', group: 'Mirasim' }]
-    const { rows } = readeable(async () => ({ ok: false, detail: 'the host is down', models: old }))
+    const { rows } = readeable(async () => ({
+      ok: false,
+      detail: 'the host is down',
+      models: old,
+      effortChoices: [{ value: 'low', name: 'Low' }],
+    }))
     const target = row({ model_choices: old })
     rows[0] = target
     store.set({ rows })
@@ -459,7 +475,7 @@ describe('the model menu re-read', () => {
     const gate = new Promise<void>((resolve) => { release = resolve })
     const { calls, rows } = readeable(async () => {
       await gate
-      return { ok: true, detail: '', models: [] }
+      return { ok: true, detail: '', models: [], effortChoices: [] }
     })
     const target = row()
     rows[0] = target

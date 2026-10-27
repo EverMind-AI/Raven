@@ -2526,6 +2526,10 @@ def _menu_snapshot(**over):
             SimpleNamespace(value="m1", name="One", group="Group"),
             SimpleNamespace(value="m2", name="Two", group="Group"),
         ),
+        "effort_choices": (
+            SimpleNamespace(value="low", name="Low"),
+            SimpleNamespace(value="high", name="High"),
+        ),
     }
     values.update(over)
     return SimpleNamespace(**values)
@@ -2552,6 +2556,10 @@ async def test_refresh_models_reads_the_handshake_and_returns_that_menu(
         "models": [
             {"value": "m1", "name": "One", "group": "Group"},
             {"value": "m2", "name": "Two", "group": "Group"},
+        ],
+        "effort_choices": [
+            {"value": "low", "name": "Low"},
+            {"value": "high", "name": "High"},
         ],
     }
 

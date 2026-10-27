@@ -2787,6 +2787,27 @@
                   }
                 }
               }
+            },
+            "effort_choices": {
+              "type": "array",
+              "description": "The effort menu recorded by the same read, in subagents.list's shape.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "value"
+                ],
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "description": "The value the agent takes back, e.g. low, high or max."
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "What the agent asked to be shown, usually the same word."
+                  }
+                }
+              }
             }
           }
         }

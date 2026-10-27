@@ -3138,6 +3138,14 @@ class SubagentsRefreshModelsResult(_Strict):
             "choice is the agent's own id, name and group, exactly as ``subagents.list`` sends them."
         ),
     )
+    effort_choices: list["SubagentEffortChoice"] = Field(
+        default_factory=list,
+        description=(
+            "The effort menu recorded by the same read, in ``subagents.list``'s shape. A model-specific "
+            "menu (OpenCode 1.19.4) moves with the model, so it is sent beside the models rather than left "
+            "for a later listing."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

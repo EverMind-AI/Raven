@@ -34,6 +34,7 @@ export interface ExtAgentMenuRefresh {
   ok: boolean
   detail: string
   models: ExtAgentModelChoice[]
+  effortChoices: ExtAgentEffortChoice[]
 }
 
 /* What `subagents.update` accepts for `model` on a row, by kind -- not
