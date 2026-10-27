@@ -274,10 +274,11 @@ All notable changes to Raven are documented here.
 ### Changed
 
 - Empty and abnormal model replies are handled the way Hermes Agent handles
-  them. A reply that is only a silence marker (`[SILENT]`, `SILENT`,
-  `NO_REPLY` or `NO REPLY`; a scheduled run, a sub-agent's report or a
-  Sentinel notice may wrap it in a note) ends the turn with nothing sent (an
-  A2A peer, which waits on the text, still gets the reply as written), and
+  them. A reply that is only the silence marker `[SILENT]` ends the turn with
+  nothing sent; a scheduled run, a sub-agent's report or a Sentinel notice
+  may also spell it `SILENT`, `NO_REPLY` or `NO REPLY` and wrap it in a note,
+  but a reply to a person that is only "No reply." reaches them as written.
+  An A2A peer, which waits on the text, still gets the reply as written, and
   the TUI and web UI draw one muted line, "Raven chose not to reply."; every
   cron reminder teaches the marker, and a silent run counts as a success. An
   empty reply is recovered by its kind: a plain one is resent unchanged up to
@@ -285,11 +286,13 @@ All notable changes to Raven are documented here.
   `agents.defaults.emptyRetryCostThresholdUsd`, default 0.25 USD); one that
   only thought is asked again and then at a lower reasoning effort; one cut
   at the output limit is continued with more room; a refusal is never resent
-  but goes to a fallback model or fails with the model's explanation; and a
-  turn left with nothing fails in words that name what happened. A streamed
-  answer whose connection dies is continued where it stopped, then delivered
-  marked as partial if it stays cut. A compaction summary asks for reasoning
-  effort `low` instead of `minimal`, which Codex refuses.
+  but goes to a fallback model or fails with the model's explanation (except
+  one an OpenAI-compatible model streams, which litellm drops before Raven
+  sees it, so it is read as an empty reply); and a turn left with nothing
+  fails in words that name what happened. A streamed answer whose connection
+  dies is continued where it stopped, then delivered marked as partial if it
+  stays cut. A compaction summary asks for reasoning effort `low` instead of
+  `minimal`, which Codex refuses.
 
 - A complete install now carries the `everos-cloud-memory` plugin, so the
   hosted EverOS is a memory backend a user can pick rather than a wheel

@@ -808,49 +808,53 @@ judged without a tree, so a file the checkpoint would not store has no diff and 
 it goes out `withheld`, which nothing else may fill in.
 _Avoid_: "shadow git" as the term — Checkpoint is the per-turn snapshot it produces.
 
-**Silence Marker** (`spine/silence.py`):
+**Silence Marker** (`agent/context/silence.py`):
 What a model answers with to say a turn has nothing to report: `[SILENT]`, `SILENT`, `NO_REPLY`
 or `NO REPLY` (`SILENCE_MARKERS`); `SILENCE_INSTRUCTION` is the two sentences that teach the
-bracketed form. Two rules read the set, and the turn's `Origin` decides which of them apply
-(`is_silence`). A `USER` turn takes the strict rule (`is_exact_silence`) alone: the whole reply
-must be a marker, with case, edge whitespace and stray edge punctuation forgiven up to
-`SILENCE_MAX_CHARS`, so prose that merely mentions a marker is delivered. A turn from a
-proactive origin -- `SENTINEL`, `CRON`, `HEARTBEAT` or `SUBAGENT` -- takes the loose rule
-(`is_loose_silence`) on top of the strict one: nobody is waiting on it and models wrap the marker
+bracketed form. The turn's `Origin` picks the rule, in one place (`is_silence`). A `USER` turn, or
+one with no origin, is never taught a marker, so it honours only `[SILENT]` itself with nothing but
+whitespace around it: a one-word answer such as `Silent.` or `No reply.` is the person's answer, and
+is delivered. A turn from a proactive origin -- `SENTINEL`, `CRON`, `HEARTBEAT` or `SUBAGENT` --
+reads the whole set by two rules: the strict one (`is_exact_silence`), a reply that is exactly a
+marker, with case, edge whitespace and stray edge punctuation forgiven up to `SILENCE_MAX_CHARS`;
+and the loose one (`is_loose_silence`): nobody is waiting on such a turn and models wrap the marker
 in a note on why they stayed quiet, so a marker alone on the first or last line, or a bracketed
-`[SILENT]` opening the reply, is silence too, whatever the length. A turn whose caller waits on
-its text (`reply_awaited`: an A2A one-shot turn, which runs as `HEARTBEAT`) takes
-neither rule, and its reply comes back as written, a marker included. `may_become_silence`
-is the strict rule's streaming counterpart: it says whether the text so far could still turn
-into a marker, so a surface holds it back instead of showing it and retracting it.
+`[SILENT]` opening the reply, is silence too, whatever the length. A turn whose caller waits on its
+text (`reply_awaited`: an A2A one-shot turn, which runs as `HEARTBEAT`) takes no rule, and its reply
+comes back as written, a marker included.
 Only a turn that did not fail can be silent -- one that ran out of budget is, when its wrap-up is
 a marker: a failed turn is a failure whatever its last text said, and a reply with no text at all
 is not silence but an empty response, which **Empty-Response Recovery** handles.
 _Avoid_: "empty reply" for silence — an empty reply is a failure; a Silence Marker is what the
 model chose to write.
 
-**Silent Turn** (`agent/loop/turn_path.py`, `agent/loop/recovery.py`, `spine/events.py`):
+**Silent Turn** (`agent/loop/turn_path.py`, `agent/loop/recovery.py`, `spine/runner.py`):
 A turn whose last reply is a Silence Marker the model chose to write. It ends as a success and
 nothing is delivered for it: `_process_message` returns no reply, so a channel sends nothing, and
 a surface that streams is shown none of the marker -- the `SilenceGate` holds the start of a reply
-while it could still be one (before the first letter or digit, only whitespace and the edge
-punctuation a marker may carry; anything else goes out at once), and drops it when the loop reads
-the reply as a marker (a turn from a proactive origin, whose marker may close a report, holds the
+while it could still become `[SILENT]` (a reply that opens with anything but whitespace or the
+bracket goes out at once), reads past an inline think block the way the loop does (the block streams
+as it arrives, and what follows it is held), and drops what it held when the loop reads the reply as
+a marker (a turn from a proactive origin, whose marker may close a report, holds the
 whole call instead). An exhausted turn's wrap-up is gated and read the same way. The marker row
 stays in the history holding the model's whole reply -- the marker, or, from a proactive origin,
 the note around it -- filed with `silent: true` so a reload does not read it as an answer, and it
 carries the turn's Response Meta. The turn reports itself as
-`TurnOutcome.silent` (copied onto `TurnEnded.silent`) and, for a surface drawing it live, as a
-closing `NoticeKind.SILENT_TURN` notice. The `after_send` hook chain still runs, with
+`TurnOutcome.silent` and, for a surface drawing it live, as a closing `NoticeKind.SILENT_TURN`
+notice; the spine's `TurnEnded` carries no flag of its own, so the kernel knows nothing of markers.
+The `after_send` hook chain still runs, with
 `outbound_content` None: a response modifier is left unasked, so a nudge it would pop stays
 queued for the next reply, and the personalizer learns nothing; text a hook composes there is
-delivered as the reply, and the turn is then not silent. A turn the message tool has already
-answered is not a Silent Turn whatever it ends on -- its answer reached the reader, so no
+delivered as the reply, the closing row is filed as that text rather than the marker, and the turn
+is then not silent. A turn the message tool has already answered (`MessageTool.sent_in_turn`: a send
+to the turn's own chat that went out) is not a Silent Turn whatever it ends on -- its answer reached
+the reader, so no
 `SILENT_TURN` notice goes out; a marker it ends on is still filed `silent: true`, so a reload
-draws the muted line after the delivered reply where the live view drew none. The rule is read
-from one place (`session/turn_shape.py`), so the two surfaces that read a stored turn -- the ACP
-replay, which draws it, and the session list, which orders sessions by it -- agree about which
-turn answered.
+draws the muted line after the delivered reply where the live view drew none. The turn's closing row
+carries that live verdict as `replied_via_tool`, and the two surfaces that read a stored turn -- the
+ACP replay, which draws it, and the session list, which orders sessions by it -- read the flag from
+one place (`session/turn_shape.py`) rather than guess it from the calls they can see, where a send
+that failed or went to another chat would look like an answer.
 Distinct from a `no_output` failure. A Silent Turn is the model saying nothing on purpose, so it
 succeeds; `no_output` is what a turn is failed with when its last reply was empty -- no text, no
 tool call, no reasoning -- once every retry was spent, or, with recovery switched off, when its
@@ -866,13 +870,20 @@ reply cut at the output ceiling with nothing in it, nothing right after tools, o
 and `decide` names the move from that kind and what the turn has already spent
 (`RecoveryState`), under `RecoveryLimits`. Text completes; a Silence Marker ends the turn as a
 **Silent Turn**; a refusal (a `refusal` or `content_filter` finish) outranks the text that came
-with it, which is the model's explanation, and is never resent: one switch to a fallback model,
-then the turn fails. A stream that died after the reader had seen its text -- an error, a stall
+with it, which is the model's explanation, and is never resent: one switch to a fallback model, then
+the turn fails; the fallback's answer opens a step of its own, and the refused words, shown live,
+are not stored. A refusal is read off the finish or the OpenAI-shaped `refusal` field, which litellm
+moves into `provider_specific_fields`; litellm's stream wrapper drops a chunk that carries only a
+refusal, so a refusal an OpenAI-compatible model streams never reaches Raven and reads as an empty
+reply. A stream that died after the reader had seen its text -- an error, a stall
 or a terminal error delta -- is CONTINUEd: `stream_llm_call` hands the words back as a reply
 finished `stream_cut` (`hand_back_partial`, which only the loop's answering call passes: a
 sub-agent's dropped stream still fails its run, and an exhausted turn's wrap-up still falls back
 to its static line) instead of failing, unless `llm_retry_after_output` asks for the whole call
-again. The model is asked to go on, and the parts are joined, up to `MAX_CONTINUATIONS` times,
+again. A cut is read before any marker, so a fragment that happens to spell one is continued rather
+than taken for silence, and a stream that had already received a refusal finish keeps it, so the
+refusal is handled as one rather than continued. The model is asked to go on, and the parts are
+joined, up to `MAX_CONTINUATIONS` times,
 after which the partial is delivered with `PARTIAL_STREAM_NOTE` as an `interrupted` turn. A
 continuation that comes back empty leaves what streamed as the answer; one that comes back as an
 error, a stream cut off before any new text included, ends the turn at once on the partial with
@@ -880,15 +891,18 @@ the note, as `interrupted`, with no wait and no fallback model -- and so does a 
 of iterations or time while a continuation is still owed, with no wrap-up. A stream that merely
 closed without a terminal chunk -- all a backend that never sends one leaves -- and a body that
 names no finish read `unknown` and are delivered as they stand. The continuation streams into the
-step the cut answer opened. A reply with only thinking is PREFILLed twice when there is thinking
+step the cut answer opened, and one that calls a tool files the joined words on that call's row. A
+reply with only thinking is PREFILLed twice when there is thinking
 to re-feed (`has_thinking_to_refeed`: reasoning text that is not blank, or thinking blocks; one
 known only by its reasoning-token count, an empty think block or blank reasoning goes straight
 on), then STEP_DOWNed: asked again at whichever of `high` and `low` lie below the turn's effort
 (an unstated effort is above both), once each a turn and never at `minimal` (Codex refuses it),
 the rungs skipped that the wire cannot tell apart (`LLMProvider.reasoning_wire_keys`). A reply
 cut at the ceiling with nothing in it is CONTINUEd
-with `OUTPUT_LIMIT_CONTINUATION` and a doubling `max_tokens` (clamped by `send_max_tokens`, and
-near the window held to the room its prompt leaves), the effort untouched, then fails. Nothing right after tools is NUDGEd once, then treated as nothing.
+with `OUTPUT_LIMIT_CONTINUATION` and a doubling `max_tokens` (held by the loop to the model's own
+ceiling, through `send_max_tokens` pinned for the model it goes to, whatever the provider clamps,
+and near the window to the room its prompt leaves), the effort untouched, then fails. Nothing right
+after tools is NUDGEd once, then treated as nothing.
 An empty reply is RETRYed: the same request resent unchanged, up to `empty_content_max_retries`
 times, after a jittered backoff -- cut short by two zero-output replies of one model and finish
 (`deterministic_empty`), or by a reply whose reported cost reaches
