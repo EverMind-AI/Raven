@@ -684,7 +684,7 @@ async def session_resume(
 def _fill_resumed_context(usage: dict[str, Any], session: Any) -> None:
     """How full the context window is, into a caller's usage mapping.
 
-    Read off the newest stored reply that carries the window its call measured
+    Read off the newest stored row that carries the window a call measured
     (``context_used``): that is the number the meter showed when the turn ended.
     The stored log cannot stand in for it. The context engine compacts on its
     own and leaves the log whole, so ``last_consolidated`` never moves and the
@@ -730,7 +730,7 @@ def _fill_resumed_context(usage: dict[str, Any], session: Any) -> None:
 
 
 def _last_window_reading(messages: list[Any]) -> int:
-    """The window the newest reading-carrying reply measured, or 0 for none."""
+    """The window the newest reading-carrying row records, or 0 for none."""
     for message in reversed(messages):
         used = message.get("context_used") if isinstance(message, dict) else None
         if isinstance(used, int) and not isinstance(used, bool) and used > 0:

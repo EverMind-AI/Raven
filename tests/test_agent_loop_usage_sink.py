@@ -24,6 +24,7 @@ from raven.agent.harness.action import DefaultAction
 from raven.agent.hook import AgentHook, HookDecision
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, HostWiring, ToolWiring, TurnPolicy
+from raven.agent.loop.recovery import RecoveryLimits
 from raven.config.loader import load_config
 from raven.config.raven import ContextConfig
 from raven.contracts.llm_provider import ToolCallRequest
@@ -935,5 +936,61 @@ async def test_a_reply_a_hook_put_in_place_of_the_calls_keeps_that_calls_reading
 
     assert put_in_place in [r.get("content") for r in _stored_replies(workspace, "tui:c1")], "the hook's text was filed"
     assert sink["context_used"] == 8000
+    assert (usage["context_used"], usage["context_percent"]) == (sink["context_used"], sink["context_percent"])
+    assert usage["context_estimated"] is False
+
+
+_ANSWERS_THROUGH_THE_MESSAGE_TOOL = LLMResponse(
+    content="",
+    tool_calls=[ToolCallRequest(id="c1", name="message", arguments={"content": "here it is"})],
+    usage=_measured(6000, 200),
+)
+
+
+def _says_nothing(usage: dict) -> LLMResponse:
+    return LLMResponse(content="", finish_reason="stop", usage=usage)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("limits", "empty_replies", "live"),
+    [
+        (
+            RecoveryLimits(llm_error_retry_delays=()),
+            [_says_nothing(_measured(7000, 0)), _says_nothing(_measured(7400, 0))],
+            7400,
+        ),
+        (RecoveryLimits(enabled=False), [_says_nothing(_measured(7000, 0))], 7000),
+        (RecoveryLimits(llm_error_retry_delays=()), [_says_nothing(_measured(7000, 0)), _says_nothing({})], 7000),
+    ],
+    ids=["recovery_spent", "recovery_off", "last_empty_reply_unreported"],
+)
+async def test_a_turn_that_ends_on_an_empty_reply_keeps_that_calls_reading(
+    workspace, monkeypatch, limits, empty_replies, live
+):
+    """The model answered through the message tool and then said nothing more,
+    so the turn completes on a call whose reply is not filed. The live meter
+    showed the last window reported, which ends at the newest row the turn
+    kept, so a resume must show it too: recovery's scaffolding is dropped, and
+    a call that reported nothing leaves the reading before it standing."""
+    agent = AgentLoop(
+        provider=ScriptedProvider("stub", [_ANSWERS_THROUGH_THE_MESSAGE_TOOL, *empty_replies]),
+        workspace=workspace,
+        model="stub",
+        engine=EngineWiring(context_window_tokens=40000, context_config=ContextConfig(drop_segments=["curator"])),
+        policy=TurnPolicy(max_iterations=6, empty_recovery=limits),
+        tools=ToolWiring(restrict_to_workspace=True),
+    )
+
+    async def _delivered(_content: str, _media: list[str]) -> None:
+        return None
+
+    agent.tools.get("message").set_send_callback(_delivered)
+    sink: dict = {}
+    await _turn(agent, sink, session_key="tui:c1")
+
+    usage = await _resumed_usage(workspace, monkeypatch, "tui:c1")
+
+    assert sink["context_used"] == live
     assert (usage["context_used"], usage["context_percent"]) == (sink["context_used"], sink["context_percent"])
     assert usage["context_estimated"] is False

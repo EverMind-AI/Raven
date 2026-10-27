@@ -358,6 +358,24 @@ _SAID_LOG_MAX_CHARS = 2000
 _TURN_TRANSIENT_KEYS = ("_recovery_synthetic", ATTACHED_IMAGE_KEY)
 
 
+def _stamp_context_used_on_kept(messages: list[dict[str, Any]], response: Any) -> None:
+    """Put the reading of a call whose reply is not filed on the newest row that is.
+
+    An empty reply never becomes a row of its own in the session: recovery
+    stands scaffolding in for it, the loop gives up on it, or it is filed empty
+    and dropped on save. The live gauge still showed that call's window, and
+    the window it measured ends at the newest row the turn keeps, so the
+    reading goes there.
+    """
+    used = _window_reading(getattr(response, "usage", None))
+    if used <= 0:
+        return
+    for message in reversed(messages):
+        if not any(message.get(key) for key in _TURN_TRANSIENT_KEYS):
+            message[_CONTEXT_USED_KEY] = used
+            return
+
+
 # How a turn reports the model saying nothing with no recovery behind it. The
 # texts recovery fails a turn with say what it tried; nothing was tried here,
 # and this says why.
@@ -2207,6 +2225,9 @@ class TurnPathMixin:
                         clean = None
                         recovery.parts.clear()
                         carried_gate = None
+
+                if not (clean or "").strip():
+                    _stamp_context_used_on_kept(messages, response)
 
                 # Empty-response recovery. A reply with no tool call is read for
                 # what it is (``reply_kind``) and ``decide`` names the move; an

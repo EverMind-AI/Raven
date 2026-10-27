@@ -164,7 +164,9 @@ def _stamp_reasoning_ms(messages: list[dict[str, Any]], response: Any) -> None:
 
 
 # How full a model call left the window, on the assistant entry that stands for
-# it: the reply it produced, or the text a hook put in that reply's place.
+# it: the reply it produced, or the text a hook put in that reply's place. A
+# reply that is not filed leaves it on the newest row the turn keeps instead
+# (``turn_path._stamp_context_used_on_kept``).
 # Same underscore-then-rename convention as the spans above; ``_save_turn``
 # writes it as ``context_used``. A resume has no other way to know what the
 # model was sent: the context engine compacts on its own and leaves the stored
