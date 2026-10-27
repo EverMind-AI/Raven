@@ -902,7 +902,9 @@ of iterations or time while a continuation is still owed, with no wrap-up. On ea
 the reply the turn ends on is the joined parts with their think blocks taken out of the whole -- a
 cut can split one -- read for a Silence Marker by the turn's rule as a reply with no cut is, and
 one that is a marker ends the turn as a **Silent Turn**: nothing of it shown, its row filed
-`silent: true`, no note, and the turn `interrupted` only when its budget stopped it. A stream that
+`silent: true`, no note, and the turn `interrupted` only when its budget stopped it. A cut answer
+that, joined to what continued it, is nothing but a thought is the reply an uncut stream would have
+given, and is read as that one: the thinking-only moves below, then the failure. A stream that
 merely closed without a terminal chunk -- all a backend that never sends one leaves -- and a body
 that
 names no finish read `unknown` and are delivered as they stand. The continuation streams into the

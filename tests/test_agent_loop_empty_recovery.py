@@ -2568,15 +2568,77 @@ async def test_every_exit_on_a_cut_thought_reads_the_reply_with_the_thought_out(
     assert "<think>" not in out
 
 
+_A_THOUGHT_UNCUT = [lambda: _finished_stream("<think>abc", "def</think>")]
+_A_THOUGHT_CUT = [lambda: _DyingStream("<think>abc"), lambda: _finished_stream("def</think>")]
+# The continuation only closes the thought: on its own, the debris of one.
+_A_THOUGHT_CUT_AT_ITS_CLOSE = [lambda: _DyingStream("<think>abc"), lambda: _finished_stream("</think>")]
+_THOUGHTS = pytest.mark.parametrize(
+    "thought", [_A_THOUGHT_UNCUT, _A_THOUGHT_CUT, _A_THOUGHT_CUT_AT_ITS_CLOSE], ids=["uncut", "cut", "cut_at_its_close"]
+)
+
+
 @pytest.mark.asyncio
-async def test_a_cut_thought_closed_with_nothing_after_it_delivers_no_reasoning(workspace, monkeypatch):
-    """The continuation only closes the thought, so the joined reply has no answer in it. The reasoning is
-    not one: the turn ends with nothing to deliver rather than with the thought as its text."""
-    _served(monkeypatch, [_DyingStream("<think>abc"), _finished_stream("</think>")])
+@_THOUGHTS
+async def test_a_reply_that_is_only_a_thought_is_prefilled_whether_or_not_a_cut_split_it(
+    workspace, monkeypatch, thought
+):
+    """Joined, the cut reply is the uncut one: a thought and no answer. It takes the thinking-only path
+    -- the thought re-fed so the model goes on into the answer -- and not the end of the turn."""
+    calls = _served(monkeypatch, [*(make() for make in thought), _finished_stream("Four.")])
 
-    out, outcome, _last, _streamed = await _ends_on(_litellm_agent(workspace), Origin.USER)
+    final, _used, _messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=_Sink().delta
+    )
 
-    assert out == "" and outcome.no_output is True and outcome.silent is False
+    assert final == "Four." and outcome.status == "completed" and outcome.no_output is False
+    prefill = calls[-1]["messages"][-1]
+    assert prefill["role"] == "assistant" and prefill["content"].startswith("<think>abc")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "script",
+    [
+        pytest.param(lambda: [_finished_stream("<think>a", "b</think>", "[SILENT]")], id="uncut"),
+        pytest.param(
+            lambda: [_DyingStream("<think>a"), _DyingStream("b</think>"), _finished_stream("[SILENT]")], id="cut"
+        ),
+    ],
+)
+async def test_a_marker_after_a_thought_the_cuts_closed_is_the_reply(workspace, monkeypatch, script):
+    """With nothing but a thought before it, the marker that continues it is the whole reply, not a
+    continuation that adds nothing: the turn ends silent as the uncut reply does."""
+    _served(monkeypatch, script())
+
+    final, outcome, last, streamed = await _ends_on(_litellm_agent(workspace), Origin.USER)
+
+    assert final == "[SILENT]" and outcome.silent is True
+    assert last.get("_silent") is True
+    assert "[SIL" not in "".join(streamed)
+
+
+@pytest.mark.asyncio
+@_THOUGHTS
+async def test_a_reply_that_stays_only_a_thought_fails_whether_or_not_a_cut_split_it(workspace, monkeypatch, thought):
+    """Every move spent on a thought with no answer fails the turn the same way, cut or not: never a
+    success with no text."""
+    calls = _served(
+        monkeypatch, [*(make() for make in thought), *(_finished_stream("<think>more</think>") for _ in range(4))]
+    )
+    _recorded_sleeps(monkeypatch)
+    agent = _litellm_agent(workspace)
+
+    with pytest.raises(AnswerlessTurnError) as failed:
+        await agent._process_message(_turn(), session_key="s1", on_token_delta=_Sink().delta)
+
+    assert str(failed.value).startswith(THINKING_ONLY_FAILURE)
+    moves = calls[len(thought) :]
+    assert [(c["messages"][-1]["role"], c.get("reasoning_effort")) for c in moves] == [
+        ("assistant", None),
+        ("assistant", None),
+        ("user", "high"),
+        ("user", "low"),
+    ]
 
 
 @pytest.mark.asyncio

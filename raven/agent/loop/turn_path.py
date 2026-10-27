@@ -2179,6 +2179,19 @@ class TurnPathMixin:
                     error_full = response_failure_text(clean, response.call_record)
                     break
 
+                if recovery.parts:
+                    # A cut answer that, joined to what continued it, says nothing but a thought is
+                    # the reply an uncut stream would have given: it is read as that one -- the
+                    # thinking-only moves, then the failure -- rather than as an answer with no text.
+                    so_far = "".join(recovery.parts)
+                    joins = leaves_think_block_open(so_far) or clean
+                    whole = (so_far + (response.content or "")) if joins else so_far
+                    if not self._strip_think(whole):
+                        response = replace(response, content=whole)
+                        clean = None
+                        recovery.parts.clear()
+                        carried_gate = None
+
                 # Empty-response recovery. A reply with no tool call is read for
                 # what it is (``reply_kind``) and ``decide`` names the move; an
                 # empty assistant turn would otherwise end here as a turn with no
