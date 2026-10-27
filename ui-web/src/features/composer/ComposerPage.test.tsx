@@ -47,7 +47,7 @@ const WORDS: Record<string, Record<string, string>> = {
   zh: {
     'gui.send': '发送', 'gui.stop': '停止', 'gui.q.edit': '编辑', 'gui.q.remove': '删掉',
     'gui.att.uploading': '上传中', 'gui.att.remove': '移除 {name}', 'gui.att.fail': '{name} 上传失败',
-    'gui.live.busy': '进行中 {t}', 'gui.pill.bottom': '回到底部',
+    'gui.live.busy': '进行中 {t}', 'gui.pill.bottom': '回到底部', 'gui.pill.prev': '上一条用户消息',
     'gui.att.note': '我给你的文件：', 'gui.att.pending': '还有文件在上传',
     'gui.att.pending_body': '{n} 个文件还没传完，传完再发。',
   },
@@ -55,6 +55,7 @@ const WORDS: Record<string, Record<string, string>> = {
     'gui.send': 'Send', 'gui.stop': 'Stop', 'gui.q.edit': 'Edit', 'gui.q.remove': 'Remove',
     'gui.att.uploading': 'uploading', 'gui.att.remove': 'remove {name}', 'gui.att.fail': '{name} failed',
     'gui.live.busy': 'running {t}', 'gui.pill.bottom': 'back to the bottom',
+    'gui.pill.prev': 'previous user message',
     'gui.att.note': 'Files for you:', 'gui.att.pending': 'a file is still uploading',
     'gui.att.pending_body': '{n} still going; send once they land.',
   },
@@ -67,6 +68,7 @@ const word = (key: string): string => (WORDS[lang] as Record<string, string>)[ke
 const DOCK = `
   <div class="chat">
     <div class="scroll" id="scroll"><div class="col" id="stage"></div></div>
+    <button class="backpill chrome-toppill" id="toppill" hidden></button>
     <button class="backpill" id="backpill" hidden></button>
     <div class="dock">
       <div class="sheets" id="sheetRack"></div>
@@ -717,22 +719,157 @@ describe('the live turn row', () => {
     expect((document.querySelector('.turnlive .lb') as HTMLElement).textContent).toBe('1m01s')
   })
 
-  it('paints the meter from the source and shows the pill only away from the tail', () => {
+  it('paints the meter from the source', () => {
     wire({ meter: () => '3 calls' })
     mountLive()
-    tail.setStuck(false)
-    const sc = document.getElementById('scroll')!
-    Object.defineProperty(sc, 'scrollHeight', { value: 900, configurable: true })
-    Object.defineProperty(sc, 'clientHeight', { value: 300, configurable: true })
-    sc.scrollTop = 0
     act(() => { store.drawMeter() })
     expect(document.getElementById('meter')!.textContent).toBe('3 calls')
-    const pill = document.getElementById('backpill') as HTMLElement
-    expect(pill.hidden).toBe(false)
-    expect(pill.dataset.tip).toBe('回到底部')
-    tail.setStuck(true)
-    act(() => { store.drawMeter() })
-    expect(pill.hidden).toBe(true)
+  })
+})
+
+/* The two round pills: where they sit is the stylesheet's, and what this file
+   owns is which one is up. The rule follows the reader's direction, except at
+   the ends, where the only way left is back. */
+describe('the quick-jump pills', () => {
+  const rect = (top: number): DOMRect => ({
+    top, bottom: top, left: 0, right: 0, width: 0, height: 0, x: 0, y: top,
+  } as DOMRect)
+
+  const sized = (scrollTop: number, scrollHeight = 900, clientHeight = 300): HTMLElement => {
+    const sc = document.getElementById('scroll') as HTMLElement
+    Object.defineProperty(sc, 'scrollHeight', { value: scrollHeight, configurable: true })
+    Object.defineProperty(sc, 'clientHeight', { value: clientHeight, configurable: true })
+    sc.getBoundingClientRect = () => rect(0)
+    sc.scrollTop = scrollTop
+    return sc
+  }
+
+  const question = (top: number): HTMLElement => {
+    const el = document.createElement('div')
+    el.className = 'turn me'
+    el.getBoundingClientRect = () => rect(top)
+    ;(document.getElementById('stage') as HTMLElement).appendChild(el)
+    return el
+  }
+
+  const pills = (): { down: HTMLElement; up: HTMLElement } => ({
+    down: document.getElementById('backpill') as HTMLElement,
+    up: document.getElementById('toppill') as HTMLElement,
+  })
+
+  it('offers the way to the tail at the very top, before any scroll', () => {
+    wire()
+    sized(0)
+    store.pillPaint()
+    const { down, up } = pills()
+    expect(down.hidden).toBe(false)
+    expect(down.dataset.tip).toBe('回到底部')
+    expect(up.hidden).toBe(true)
+  })
+
+  it('offers the way back to the question at the very bottom', () => {
+    wire()
+    sized(600)
+    question(-200)
+    store.pillPaint()
+    const { down, up } = pills()
+    expect(down.hidden).toBe(true)
+    expect(up.hidden).toBe(false)
+    expect(up.dataset.tip).toBe('上一条用户消息')
+    expect(up.getAttribute('aria-label')).toBe('上一条用户消息')
+  })
+
+  it('keeps the last direction after the wheel stops', () => {
+    wire()
+    const sc = sized(200)
+    question(-100)
+    store.pillPaint()
+    expect(pills().down.hidden).toBe(true)
+    expect(pills().up.hidden).toBe(true)
+    sc.scrollTop = 300
+    store.scrolled()
+    expect(pills().down.hidden).toBe(false)
+    expect(pills().up.hidden).toBe(true)
+    sc.scrollTop = 250
+    store.scrolled()
+    expect(pills().down.hidden).toBe(true)
+    expect(pills().up.hidden).toBe(false)
+  })
+
+  it('forgets the direction when another conversation opens', () => {
+    wire()
+    const sc = sized(200)
+    question(-100)
+    store.pillPaint()
+    sc.scrollTop = 300
+    store.scrolled()
+    expect(pills().down.hidden).toBe(false)
+    store.loadDraft('b')
+    sc.scrollTop = 250
+    store.pillPaint()
+    expect(pills().down.hidden).toBe(true)
+    expect(pills().up.hidden).toBe(true)
+  })
+
+  it('lets the top edge win over a scroll that pointed up', () => {
+    wire()
+    const sc = sized(600)
+    store.pillPaint()
+    sc.scrollTop = 500
+    store.scrolled()
+    sc.scrollTop = 0
+    store.scrolled()
+    expect(pills().down.hidden).toBe(false)
+    expect(pills().up.hidden).toBe(true)
+  })
+
+  it('lets the bottom edge win over a scroll that pointed down', () => {
+    wire()
+    const sc = sized(200)
+    question(-200)
+    store.pillPaint()
+    sc.scrollTop = 300
+    store.scrolled()
+    sc.scrollTop = 600
+    store.scrolled()
+    expect(pills().down.hidden).toBe(true)
+    expect(pills().up.hidden).toBe(false)
+  })
+
+  it('keeps both away when the conversation does not scroll', () => {
+    wire()
+    sized(0, 300, 300)
+    store.pillPaint()
+    expect(pills().down.hidden).toBe(true)
+    expect(pills().up.hidden).toBe(true)
+  })
+
+  it('keeps the up pill away when no question sits above the viewport', () => {
+    wire()
+    sized(600)
+    question(0)
+    store.pillPaint()
+    expect(pills().up.hidden).toBe(true)
+  })
+
+  it('sends the reader up smoothly to that question and lets go of the tail', () => {
+    wire()
+    const sc = sized(600)
+    question(-200)
+    const scrollTo = vi.fn()
+    sc.scrollTo = scrollTo
+    store.topClick()
+    expect(scrollTo).toHaveBeenCalledWith({ top: 400, behavior: 'smooth' })
+    expect(tail.isStuck()).toBe(false)
+  })
+
+  it('does nothing when there is no question above', () => {
+    wire()
+    const sc = sized(600)
+    const scrollTo = vi.fn()
+    sc.scrollTo = scrollTo
+    store.topClick()
+    expect(scrollTo).not.toHaveBeenCalled()
   })
 })
 

@@ -282,10 +282,22 @@ export function install(): void {
 
   const pill = document.getElementById('backpill')
   if (pill) pill.onclick = () => store.pillClick()
+  const prev = document.getElementById('toppill')
+  if (prev) prev.onclick = () => store.topClick()
   const sc = document.getElementById('scroll')
   if (sc) {
     sc.addEventListener('wheel', (e) => store.wheeled((e as WheelEvent).deltaY < 0), { passive: true })
     sc.addEventListener('scroll', () => store.scrolled())
+  }
+  /* Which pill is up is geometry, so both sizes matter: the scrollport's (a
+     resized window) and the transcript's (a conversation arriving after the
+     open, before any scroll). Without this a page opened at the top offered no
+     way down until the reader touched the wheel. */
+  if (sc && typeof ResizeObserver === 'function') {
+    const jump = new ResizeObserver(() => store.pillPaint())
+    jump.observe(sc)
+    const stage = document.getElementById('stage')
+    if (stage) jump.observe(stage)
   }
 
   const dock = document.querySelector('.dock')
