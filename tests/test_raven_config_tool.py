@@ -1130,6 +1130,56 @@ async def test_an_agent_that_does_not_answer_its_test_is_reported_with_what_to_d
     )
 
 
+def test_the_next_step_for_an_opencode_row_runs_the_model_its_row_names() -> None:
+    """``DIAGNOSE_HINTS`` is a template, and raven_config read it as a finished command.
+
+    The settings page expands the table through ``diagnose_hint_for``; this
+    reader took the raw string, so an OpenCode row that ended its turn empty
+    was told to run ``opencode run{model} hi`` -- no command at all.
+    """
+    from raven.agent.tools.raven_config import _what_it_needs
+
+    pinned = _what_it_needs(
+        "opencode",
+        {"model": "opencode/big-pickle"},
+        remedy=None,
+        detail="acp agent 'OpenCode' ended its turn with no content",
+        model="add again",
+    )
+    joined = "\n".join(pinned)
+    assert "{" not in joined
+    assert "opencode run --model opencode/big-pickle hi" in joined
+
+    plain = "\n".join(
+        _what_it_needs("opencode", {}, remedy=None, detail="ended its turn with no content", model="add again")
+    )
+    assert "opencode run hi" in plain
+
+
+@pytest.mark.asyncio
+async def test_adding_an_opencode_row_with_a_model_names_that_model_in_the_next_step(config_file):
+    """The row is not in the roster yet, so the model exists only in add's params.
+
+    Dropping it told the model to run the agent's default turn -- a different
+    question from the one the failed add asked, and one whose answer can hide
+    the cause.
+    """
+    refusal = RuntimeError(
+        "sub-agent 'OpenCode' did not answer a test message, so it was not added: acp agent 'OpenCode' ended "
+        "its turn with no content; stderr tail: <empty>"
+    )
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"subagents.add": refusal, "subagents.list": _roster()}))
+    reply = await _run(
+        tool,
+        action="add",
+        path="subagents",
+        value='{"preset": "opencode", "model": "opencode/big-pickle"}',
+    )
+    assert "opencode run{model} hi" not in reply
+    assert "opencode run --model opencode/big-pickle hi" in reply
+
+
 class _Refused(RuntimeError):
     def __init__(self, text: str, remedy: dict[str, Any]) -> None:
         super().__init__(text)
