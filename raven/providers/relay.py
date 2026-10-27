@@ -34,7 +34,7 @@ import socket
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from loguru import logger
 
@@ -255,7 +255,7 @@ def relayed(
                         answers.popitem(last=False)
             return value
 
-        return call  # type: ignore[return-value]
+        return cast(F, call)
 
     return wrap
 
