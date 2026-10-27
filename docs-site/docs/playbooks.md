@@ -138,8 +138,10 @@ prompts: |
 In a conversation, `load_playbook` returns this filled guidance; the caller
 composes and submits `run_subagent_dag`. The CLI instead uses its configured
 model to compose the graph, with a limited repair attempt. Both paths use the
-ordinary DAG contract. Prompt mode is assembly guidance, not a runtime
-branching language; inspect the submitted graph's options, including approval.
+ordinary DAG contract. Prompt mode is assembly guidance, read once to compose
+the graph: it decides nothing while the graph runs, and a branch is chosen by a
+decision node in the graph it composed. Inspect the submitted graph's options,
+including approval.
 
 ## Parameters and blank fields
 

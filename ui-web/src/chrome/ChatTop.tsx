@@ -26,7 +26,7 @@
  *     keyed value below is written on a language pick -- so a pick puts the
  *     word for "expand" back on an open pane's toggle, exactly as the document
  *     pass did.
- *   - #backpill's hidden, tooltip and label, and its click
+ *   - #backpill's and #toppill's hidden, tooltip and label, and their clicks
  *     (features/composer/store.ts's pillPaint, features/composer/mount.tsx).
  *   - #flash and #stage's children. #stage is shared ground: the transcript
  *     island appends a lane host into it and the composer appends the live
@@ -210,6 +210,12 @@ export function ChatTop(): JSX.Element {
       <div className="scroll" id="scroll" data-parked={parked ? '' : undefined}><Scroll /></div>
       {/* The trajectory island's box, handed over empty (features/trajectory/manifest.ts). */}
       <div id="trajHost" hidden={!parked} />
+      {/* The other end of the quick-jump pair: the last question above what the
+          top edge is showing. .tipdn, because its hover pill belongs below the
+          control rather than over the header it sits under. */}
+      <button className="backpill tipdn chrome-toppill" id="toppill" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 18.5v-13M6.5 11.5l5.5-5.5 5.5 5.5" /></svg>
+      </button>
       <button className="backpill" id="backpill" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5v13M6.5 12.5l5.5 5.5 5.5-5.5" /></svg>
       </button>

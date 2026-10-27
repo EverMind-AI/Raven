@@ -91,6 +91,7 @@ describe('the chat column chrome', () => {
       'stage',
     ])
     expect(Array.from(el('backpill').children).map((child) => child.tagName.toLowerCase())).toEqual(['svg'])
+    expect(Array.from(el('toppill').children).map((child) => child.tagName.toLowerCase())).toEqual(['svg'])
     expect(Array.from(el('brand').children).map((child) => child.className)).toEqual(['mk', 'wl'])
     /* Nothing portals into the seam: it has no interior, which is why it is
        the one region of the five this step leaves entirely to page.html. */
@@ -101,7 +102,9 @@ describe('the chat column chrome', () => {
 
   it('renders every id the chrome, the islands and the writers reach for, once each', () => {
     render()
-    for (const id of ['title', 'wdTag', 'wsBtn', 'wsBdg', 'bannerHost', 'flash', 'stage', 'trajHost', 'turnNav']) {
+    for (const id of [
+      'title', 'wdTag', 'wsBtn', 'wsBdg', 'bannerHost', 'flash', 'stage', 'trajHost', 'turnNav', 'toppill',
+    ]) {
       expect(document.querySelectorAll(`#${id}`), id).toHaveLength(1)
     }
   })
@@ -123,7 +126,11 @@ describe('the chat column chrome', () => {
        than fetched -- so it is one element, and it is hidden from the reader
        along with the lockup around it. */
     expect(document.querySelector('#brand .mk > svg')).toBeTruthy()
-    for (const svg of [...top().querySelectorAll('svg'), ...el('backpill').querySelectorAll('svg')]) {
+    for (const svg of [
+      ...top().querySelectorAll('svg'),
+      ...el('backpill').querySelectorAll('svg'),
+      ...el('toppill').querySelectorAll('svg'),
+    ]) {
       expect(svg.getAttribute('aria-hidden')).toBe('true')
     }
   })

@@ -91,6 +91,7 @@ plugins:
             DAG Orchestration: DAG 编排
             Permissions and Security: 权限与安全
             Skills, Memory and Extensions: 技能、记忆与扩展
+            Agent Plugin Packages: Agent 插件包
             Command Reference: 命令参考
             Repo Layout: 仓库布局
             Developers: 开发者
@@ -129,6 +130,7 @@ nav:
       - Channels and Messaging: channels.md
       - Agent Integrations: agent-integrations.md
       - Skills, Memory and Extensions: skills-and-extensions.md
+      - Agent Plugin Packages: agent-plugin-packages.md
       - Self-Hosting:
           - Overview: self-hosting.md
           - Docker Deployment: docker.md

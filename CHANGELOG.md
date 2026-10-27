@@ -228,6 +228,48 @@ All notable changes to Raven are documented here.
   `PPT_IMAGE_PROVIDER` puts a deck's pictures on a provider of its own. See
   `docs/minimax-media.md`.
 
+- Raven reads the **portable Agent Plugins 1.0** package format: a directory
+  whose root holds a `plugin.json` that validates against the official
+  manifest schema, with optional `skills/` and `mcp.json`. It is not the
+  Raven plugin (`raven-plugin.toml`, Python factories running inside the
+  host) -- a package is data only. `raven agent-plugins list | inspect |
+  import | remove | check` reads them; an import copies the package's skills
+  into the workspace skill tree under `<workspace>/skills/<package name>/`,
+  one directory per package, so the pool mints one source label per package
+  and two packages may ship the same skill name without either shadowing
+  the other. The copy is recorded in a ledger (`<home>/agent-plugins.json`),
+  so `remove` only ever deletes directories the ledger claims and `check`
+  reports a package that changed since the import. A package cannot put text
+  into every turn: the `always` flag is dropped from the imported copy. A
+  skill on `skillForge.blocklist`, or one whose body points at another
+  product's home directory, is refused, and a target directory the ledger
+  does not claim is never written into. See
+  `docs/specs/2026-10-25-agent-plugins-loader-design.md`.
+
+- A portable Agent Plugin package can now ship **MCP servers** in its
+  `mcp.json`, and Raven reads and runs them. Every entry is validated
+  against the format's closed variants (stdio, Streamable HTTP, legacy
+  HTTP+SSE) and one bad entry never takes the others down: it is skipped
+  and reported. The servers are named `<package>__<server>` so they cannot
+  collide with the host's own `tools.mcpServers`, they run with the
+  package root as their working directory, and they get `PLUGIN_ROOT` and
+  `PLUGIN_DATA` in their environment, with the format's two placeholders
+  expanded in their arguments, environment and working directory. A
+  package's server is a process on the operator's machine, so it starts
+  only when the package is named in `agentPlugins.mcpPackages`; by default
+  the configuration is parsed, validated and reported only.
+  `MCPServerConfig` gained `cwd`, which the stdio transport passes to the
+  MCP SDK, and `SandboxExecutor.start_process` gained an optional `cwd` so
+  a sandboxed server runs in the directory it names instead of being
+  refused; the boxlite executor translates the command, arguments and
+  environment to their guest mounts too, and a package's data root is
+  mounted at `/plugin-data` so `PLUGIN_DATA` is reachable inside the VM. A
+  package server never replaces an operator-configured one: a name
+  collision is reported and the host's entry wins. Re-importing a package
+  also removes the skills it no longer ships, keeping the ledger's claim on
+  a copy whose deletion failed, so the workspace converges on the package. `raven agent-plugins list` and `inspect` show
+  a package's servers and their problems without starting anything.
+
 ### Changed
 
 - A complete install now carries the `everos-cloud-memory` plugin, so the
@@ -455,6 +497,17 @@ All notable changes to Raven are documented here.
   state is now its own rung, *Provider default*, which also clears the key
   (`agents.defaults.reasoningEffort` accepts null) rather than leaving a word
   the install never chose.
+- On native Windows a DAG node can read files by reference: `{{ ref:... }}`,
+  `{{ ref_path:... }}` and a `{"file": ...}` input naming a file in the
+  session's working directory or its sub-agent history. They were resolved by
+  POSIX path rules, so every one was refused as outside those directories, a
+  relative `notes.md` included; they now resolve by the host's rules. An
+  `@nodes/` reference that leaves this session's node artifacts by Windows
+  rules -- through `..\` or a drive -- is refused on every host: on Windows it
+  was accepted, and the read returned the file it named. On Python 3.12 a path
+  rooted without a drive (`\notes.md`) is read on the drive it was checked
+  against, not on the process's current one.
+
 - A sub-agent of the in-process or OpenAI-API kind whose model ends its turn
   with nothing visible -- the one-space
   reply OpenRouter hands back for an empty turn, or the empty reply of a
@@ -514,6 +567,27 @@ All notable changes to Raven are documented here.
   own. A report turn no longer acts in the finished sub-agent's browser tab
   either. Turns recorded before this keep the attribution they were recorded
   with.
+
+- A playbook's route conditions are filled the way its prompts are. A
+  `${params.<key>}` in a decision node's condition reached the judge as
+  written, and one naming no declared param passed validation; now it reaches
+  the judge as its value, a secret param in one is withheld as it is from a
+  prompt, and a reference to no declared param is refused when the playbook is
+  saved or loaded.
+
+- A hand-written playbook whose decision node names a route `yes`, `no`, `on`,
+  `off`, `true`, `false` or a bare number loads. YAML 1.1 read such a key as a
+  boolean or a number, the playbook failed to load, and the runtime dropped it
+  from the library; every key in the spec block is now read as the text it is
+  written as. Values keep their YAML types. A spec block that is not a mapping
+  is a finding, and `raven playbook validate` answers a YAML syntax error as one
+  instead of a traceback.
+
+- Generating a dag playbook can produce a branch. The generator's instructions
+  for dag mode called `dependsOn` the whole graph language and never named
+  `routes`, `select` or `when`, though the schema it fills offers them; they
+  now describe a decision node and the rule that a node depending on one names
+  it in its `when`.
 
 - In the web UI, the **What came back** fold of a DAG node that stopped on
   a decision no longer opens onto the brief written for the model -- the
@@ -600,6 +674,13 @@ All notable changes to Raven are documented here.
   its own selection, place, zoom and details pane, a link in the details moves
   to the tab its entry is in, and another conversation starts on the main
   session's tab alone.
+
+- A decision node's card on the tasks board cuts its first selected route
+  last. The agent line gave the selection all of its overflow, so a long agent
+  name and a tool count cut it down to its arrow; now the instance handle and
+  any further routes give way first, then the agent's name down to its first
+  few letters, and only then the route, which ends in an ellipsis inside the
+  card.
 
 - An empty reply from a model behind OpenRouter (`content: " "`,
   `finish_reason: stop`) is no longer reported as an upstream transport

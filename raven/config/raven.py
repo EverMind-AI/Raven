@@ -1543,6 +1543,33 @@ class PluginsConfig(_Base):
     factory receives ``ctx.config = plugins.config.get(<id>, {})``."""
 
 
+class AgentPluginsConfig(_Base):
+    """Agent Plugin packages -- the portable Agent Plugins 1.0 format.
+
+    A package is a directory whose root holds a ``plugin.json`` that
+    validates against the Agent Plugins manifest schema, with optional
+    ``skills/`` and ``mcp.json`` components. It contributes skills and MCP
+    servers; its ``mcp.json`` server is a separate process, and it is not a
+    kernel plugin: those ship Python factories in ``raven-plugin.toml``.
+
+    ``packages`` names where the packages live. An entry is either a
+    package root (a directory holding ``plugin.json``) or a directory
+    whose immediate children are package roots.
+    """
+
+    packages: list[str] = Field(default_factory=list)
+    """Package roots, or directories of package roots. Relative paths
+    resolve against the working directory."""
+
+    disabled: list[str] = Field(default_factory=list)
+    """Package names the operator opted out of (e.g.
+    ``["agentic-bundle-essentials"]``)."""
+
+    mcp_packages: list[str] = Field(default_factory=list)
+    """Package names whose ``mcp.json`` servers may start. Empty by
+    default: a package's MCP server is a process the operator opted into."""
+
+
 class MemoryConfig(_Base):
     """Which memory backend is active + per-track identity wiring.
 
@@ -2050,6 +2077,8 @@ class RavenConfig(_Base):
 
     # Plugin system + memory backend.
     plugins: PluginsConfig = Field(default_factory=PluginsConfig)
+    # Portable Agent Plugins 1.0 packages (skills and MCP servers; no host-process code).
+    agent_plugins: AgentPluginsConfig = Field(default_factory=AgentPluginsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
 

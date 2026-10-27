@@ -7,7 +7,6 @@ render/store are exercised over a tiny in-memory duck-typed backend.
 from __future__ import annotations
 
 import json
-import os
 import pathlib
 import posixpath
 import re
@@ -1051,17 +1050,6 @@ async def test_read_node_returns_its_own_transcript() -> None:
 
 # A real, well-formed run id: _check_run_id runs the moment prepare_replan
 # reads the old graph, well before anything this suite is actually about.
-# A workdir reference that lands in the node root only reaches the node-root rule where it
-# passes confinement first.
-_POSIX_REFERENCE_PATHS = pytest.mark.skipif(
-    os.name == "nt",
-    reason=(
-        "check_confined resolves a workdir reference with POSIX path rules, so on Windows it refuses "
-        "every such reference as outside the roots before the node-root rule is reached"
-    ),
-)
-
-
 _OLD_RUN_ID = "20260904T000000Z-00000001"
 
 
@@ -1256,7 +1244,6 @@ async def test_replanning_refuses_a_reference_to_a_live_completed_node_that_wrot
     assert "b" in out
 
 
-@_POSIX_REFERENCE_PATHS
 async def test_replanning_refuses_an_absolute_path_to_a_node_that_may_not_execute(tmp_path) -> None:
     """A replacement graph is held to the rules a submitted one is, the node root by any
     spelling included: refused here, it never becomes a run that fails on a missing file."""
@@ -1580,7 +1567,9 @@ def test_a_reference_landing_outside_every_root_is_rejected(path: str) -> None:
         check_confined(path, what="ref", roots=_ROOTS)
 
 
-@pytest.mark.parametrize("path", ["/work/notes.md", "../elsewhere/notes.md"])
+@pytest.mark.parametrize(
+    "path", ["/work/notes.md", "../elsewhere/notes.md", r"..\elsewhere\notes.md", r"C:\work\notes.md", "C:notes.md"]
+)
 def test_without_roots_a_reference_must_stay_relative(path: str) -> None:
     with pytest.raises(DagValidationError, match="must be relative"):
         check_confined(path, what="ref")
@@ -1608,6 +1597,27 @@ def test_a_nodes_prefixed_reference_cannot_escape_the_node_root(path: str) -> No
     """
     with pytest.raises(DagValidationError):
         check_confined(path, what="ref", roots=None)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        r"@nodes/..\..\secret.md",
+        r"@nodes/sub\..\..\secret.md",
+        r"@nodes/C:\Users\agent\secret.md",
+        "@nodes/C:secret.md",
+        r"@nodes/\\server\share\secret.md",
+    ],
+    ids=["backslash-parent", "backslash-through-a-child", "drive-absolute", "drive-relative", "unc"],
+)
+def test_a_nodes_prefixed_reference_cannot_escape_by_windows_path_rules(path: str) -> None:
+    """A Windows read takes a backslash as a separator and a drive as an anchor -- a
+    drive-relative path lands in that drive's current directory -- so each of these leaves
+    the node root there. Refused on every host: no artifact name holds either, and a graph
+    is then valid or not wherever it is checked."""
+    for roots in (_ROOTS, None):
+        with pytest.raises(DagValidationError, match="node artifacts"):
+            check_confined(path, what="ref", roots=roots)
 
 
 # --- render across runs --------------------------------------------------
@@ -1970,7 +1980,7 @@ def test_the_guide_gives_the_operator_precedence_the_schema_leaves_to_it() -> No
 def test_the_guide_says_a_false_or_unknown_guard_leaves_the_node_not_executed() -> None:
     """`not_executed` covers both a guard that came out false and one that came out
     unknown, and the two reasons are distinguishable in the manifest. Unknown is not
-    false -- an atom naming a route of a decision that never ran is unknown, not
+    false -- an atom naming a route of a decision node that never ran is unknown, not
     false -- so a guard `not risk.high` does not run the node when risk was never
     judged, and the reason says which happened."""
     guide = _guide_text()
@@ -3158,7 +3168,7 @@ def test_a_decision_node_in_depends_on_must_appear_in_when() -> None:
 
 
 def test_a_decision_node_that_depends_on_another_decision_must_name_it_in_when() -> None:
-    """A nested decision is bound like any other node: it says which route of its parent it wants."""
+    """A nested decision node is bound like any other node: it says which route of its parent it wants."""
     errors = _branch_graph([_decision(), _decision("r2", depends_on=["r"])])
     assert errors == [
         "node 'r2' depends on decision node 'r', which must appear in when -- "
@@ -3213,8 +3223,8 @@ def test_a_decision_depending_on_a_plain_node_must_still_be_named() -> None:
 
 
 def test_a_node_that_declines_the_route_and_names_the_decision_is_allowed() -> None:
-    """Naming the decision is the whole obligation: `.done` is a node that runs on
-    every route, and it is accepted however the decision itself is guarded."""
+    """Naming the decision node is the whole obligation: `.done` is a node that runs on
+    every route, and it is accepted however the decision node itself is guarded."""
     assert (
         _branch_graph(
             [
@@ -3545,6 +3555,7 @@ def test_at_nodes_case_aliases_use_the_reserved_node_identity(kind: str, spellin
 async def test_at_nodes_aliases_respect_the_filesystem_and_reserved_ids(
     tmp_path: Path, kind: str, relative: str
 ) -> None:
+    anchored = "{drive}" in relative
     relative = relative.format(drive=tmp_path.drive or "C:")
     artifacts = tmp_path / "nodes"
     artifacts.mkdir()
@@ -3565,7 +3576,14 @@ async def test_at_nodes_aliases_respect_the_filesystem_and_reserved_ids(
             _branch_node(id="reader", depends_on=["r", "Gate"], when="r.done", prompt_template=template, inputs=inputs),
         ]
     )
-    if aliases_output or relative in ("GATE.out.md", "gate.out.md"):
+    if anchored:
+        # Naming another drive, the same spelling lands outside the node root, so confinement
+        # refuses a drive on every host; where it does reach the artifact, the alias rule
+        # still names the node.
+        assert "must be relative to and within this session's node artifacts" in errors[0]
+        assert len(errors) == (2 if aliases_output else 1)
+        assert all("of node 'Gate', which may not execute" in error for error in errors[1:])
+    elif aliases_output or relative in ("GATE.out.md", "gate.out.md"):
         assert len(errors) == 1
         assert "of node 'Gate', which may not execute" in errors[0]
         assert "use {{ Gate.output }} instead" in errors[0]
@@ -3573,7 +3591,6 @@ async def test_at_nodes_aliases_respect_the_filesystem_and_reserved_ids(
         assert errors == []
 
 
-@_POSIX_REFERENCE_PATHS
 @pytest.mark.parametrize("kind", ["ref", "ref_path", "input"])
 @pytest.mark.parametrize(
     "spelling",
@@ -3614,7 +3631,6 @@ def test_a_path_into_the_node_root_without_at_nodes_is_refused_too(tmp_path: Pat
     assert errors([_branch_node(id="Gate"), _branch_node(**reader, depends_on=["Gate"])]) == []
 
 
-@_POSIX_REFERENCE_PATHS
 @pytest.mark.parametrize(("link", "refused"), [(True, True), (False, False)], ids=["through-a-link", "same-name"])
 def test_a_workdir_reference_is_judged_by_the_file_its_read_would_open(
     tmp_path: Path, link: bool, refused: bool
@@ -4287,7 +4303,7 @@ _BRANCH_RUN_ID = "20261015T120000Z-0badc0de"
 
 
 def _branching_nodes() -> list[dict]:
-    """Two decisions (one `select: one`, one `select: many`), a guarded node, and a node inside its branch."""
+    """Two decision nodes (one `select: one`, one `select: many`), a guarded node, and a node inside its branch."""
     return [
         _branch_node(id="notes"),
         _branch_node(
@@ -4389,7 +4405,7 @@ async def test_read_run_reads_the_outcome_off_the_manifest_and_the_request_off_t
 
 
 async def test_read_run_keeps_an_empty_selection_as_an_empty_list() -> None:
-    """A `select: many` decision that chose nothing is still a decision: a falsy value is not an absent one."""
+    """A `select: many` decision node that chose nothing still made a selection: a falsy value is not an absent one."""
     run = await _read_branching_run()
 
     scan = next(entry for entry in run["files"] if entry["node"] == "scan")
@@ -4432,7 +4448,7 @@ async def _read_one_node(node: dict) -> dict:
 async def test_read_run_shows_routes_and_the_effective_select_only_on_a_node_that_branches(
     node: dict, shown: dict
 ) -> None:
-    """The run-started event says `select: one` for a decision that left it unset; the snapshot says the same.
+    """The run-started event says `select: one` for a decision node that left it unset; the snapshot says the same.
 
     A node branches when it has a route in `routes`, as the runner reads it, so an empty `routes` reads as none
     and a stray `select` on a node with no routes is not shown.
@@ -4444,7 +4460,7 @@ async def test_read_run_shows_routes_and_the_effective_select_only_on_a_node_tha
 
 @pytest.mark.parametrize("routes", [5, ["a"], "ab", True], ids=["number", "list", "string", "bool"])
 async def test_read_run_does_not_trip_over_routes_that_are_not_a_mapping(routes: object) -> None:
-    """A hand-edited graph.json must not raise out of `dag.get` -- `list(5)` does -- nor be read as a decision:
+    """A hand-edited graph.json must not raise out of `dag.get` -- `list(5)` does -- nor be read as a decision node:
     `list("ab")` would have made two routes of one string."""
     entry = await _read_one_node({"routes": routes, "select": "many"})
 
@@ -4649,7 +4665,7 @@ async def test_read_run_returns_the_outcomes_the_runner_wrote_under_the_names_it
 
 
 async def test_read_run_describes_each_node_the_way_the_run_started_event_did() -> None:
-    """Both say `select: one` for a decision that left it unset, and neither says anything of a node that does
+    """Both say `select: one` for a decision node that left it unset, and neither says anything of a node that does
     not branch: a client that read the event and one that read the snapshot must not disagree about a node."""
     result, be, events = await _run_a_branching_graph()
     started = next(value for name, value in events if name == "dag_run_started")["nodes"]
@@ -4733,15 +4749,15 @@ def test_the_skill_documents_conditional_branches() -> None:
     # Spaces separate tokens; inside an atom (`r . a`) the guard does not parse.
     assert "Spacing between tokens is free; an atom is one token, written without spaces." in section
     # A decision node's prompt asks for a conclusion; conditions are decidable and
-    # a single-select decision has a route for everything else.
+    # a single-select decision node has a route for everything else.
     assert "asks for the conclusion" in section
     assert "mutually exclusive and decidable" in section
     assert "catch-all" in section
     # Every decision node a node depends on is named in its `when`: the general rule,
-    # and the same rule for one decision depending on another.
+    # and the same rule for one decision node depending on another.
     assert (
         "**Every decision node in `depends_on` must appear in the node's `when`.** A node cannot depend on a "
-        "decision and stay silent about it"
+        "decision node and stay silent about it"
     ) in section
     assert "decision node that depends on another decision node" in section
     # One titled block per input that may be missing, and no `@nodes/` path to a
@@ -4761,8 +4777,8 @@ def test_the_skill_documents_conditional_branches() -> None:
     # Unknown is a value of its own, and the upstream check runs before the guard.
     assert "Unknown is not false: a route of a decision node that was never executed is *unknown*" in section
     assert (
-        "that check comes first, so `<node>.done`, true whatever the decision did, cannot revive a node with "
-        "no input left on that path"
+        "that check comes first, so `<node>.done`, true whatever the decision node chose, cannot revive a node "
+        "with no input left on that path"
     ) in section
 
 
@@ -4835,13 +4851,13 @@ def test_the_skills_resident_description_names_the_branch_in_one_graph() -> None
         "A step whose result decides what runs next is a decision node: give it routes, and guard what follows "
         "with when, all in one graph."
     ) in description
-    # Loops are still graphs in series: a branch is a decision inside one graph, not a cycle.
+    # Loops are still graphs in series: a branch is chosen inside one graph, not a cycle.
     assert "Iteration is graphs in series, one graph per round, driven by you." in description
 
 
 def test_the_skills_worked_example_is_a_graph_the_runtime_accepts() -> None:
     """The example is copied, so it has to be a valid submission as written -- and
-    the one submission that exercises the whole feature: two decisions, a guarded
+    the one submission that exercises the whole feature: two decision nodes, a guarded
     branch off each, a merge behind both, and a merge that reads a branch it did not
     take."""
     section = _heading_span(_repo_text(_SKILL), "## Conditional branches")
@@ -4857,7 +4873,7 @@ def test_the_skills_worked_example_is_a_graph_the_runtime_accepts() -> None:
     # The prose around the example counts what it shows, and calls a guarded node a
     # node that carries a guard rather than a guard.
     prose = _flat(section)
-    assert "One graph, two decisions, four guarded steps:" in prose
+    assert "One graph, two decision nodes, four guarded steps:" in prose
     assert sum(1 for node in spec.nodes if node.routes) == 2
     assert sum(1 for node in spec.nodes if node.when) == 4
     assert "`fix`, `design` and `deep_review` each open a branch, and each carries that branch's guard." in prose

@@ -6896,7 +6896,7 @@ export interface SessionUsageResult {
    */
   context_max: number;
   /**
-   * Estimated tokens the next call would send.
+   * Tokens the session's last model call filled the window with; a tiktoken estimate when no call recorded one.
    */
   context_used: number;
   /**

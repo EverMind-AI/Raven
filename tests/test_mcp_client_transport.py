@@ -78,10 +78,10 @@ class _SpawningExecutor:
     supports_process_spawning = True
 
     def __init__(self) -> None:
-        self.started: list[tuple[str, list[str], dict | None]] = []
+        self.started: list[tuple[str, list[str], dict | None, str | None]] = []
 
-    async def start_process(self, command, args, env=None):
-        self.started.append((command, list(args), env))
+    async def start_process(self, command, args, env=None, cwd=None):
+        self.started.append((command, list(args), env, cwd))
         return object(), object()
 
 
@@ -108,8 +108,38 @@ async def test_a_sandboxed_stdio_server_starts_the_same_way(monkeypatch):
     ):
         pass
 
-    assert executor.started == [("uvx", ["--default-index", mirrors.PYPI_INDEX, "mcp-server-fetch"], None)]
+    assert executor.started == [("uvx", ["--default-index", mirrors.PYPI_INDEX, "mcp-server-fetch"], None, None)]
     assert asked == [False]
+
+
+@pytest.mark.asyncio
+async def test_a_packages_working_directory_does_not_choose_the_registry(monkeypatch):
+    """The server starts in its cwd, but the mirror decision runs without it.
+
+    A package root is third-party content: a ``.npmrc`` there would otherwise
+    pick the registry and the payload the launch fetches.
+    """
+    from raven.utils import mirrors
+
+    asked: list[str | None] = []
+
+    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None):
+        asked.append(cwd)
+        return list(argv)
+
+    monkeypatch.setattr(mirrors, "package_launch", package_launch)
+    executor = _SpawningExecutor()
+    package_root = "/srv/packages/demo"
+
+    async with open_mcp_transport(
+        MCPServerConfig(command="uvx", args=["mcp-server-fetch"], cwd=package_root),
+        "stdio",
+        executor=executor,
+    ):
+        pass
+
+    assert asked == [None]
+    assert executor.started == [("uvx", ["mcp-server-fetch"], None, package_root)]
 
 
 @pytest.mark.asyncio

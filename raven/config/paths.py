@@ -45,6 +45,39 @@ def get_cache_dir() -> Path:
     return get_runtime_subdir("cache")
 
 
+def get_agent_plugins_ledger_path() -> Path:
+    """Return the Agent Plugin package ledger path.
+
+    The ledger records which portable Agent Plugins packages were imported
+    into the workspace, so that only those directories are ever removed.
+    """
+    return get_data_dir() / "agent-plugins.json"
+
+
+PACKAGE_DATA_MOUNT = "/plugin-data"
+"""Guest path the package data root is mounted at inside a sandboxed VM."""
+
+
+def package_data_root_path() -> Path:
+    """The per-package data root, named without creating anything.
+
+    A read-only surface -- ``raven agent-plugins inspect`` -- has to be able
+    to say where a package's data would live without leaving a directory
+    behind for a package nothing will run.
+    """
+    return get_data_dir() / "plugin-data"
+
+
+def get_package_data_root() -> Path:
+    """Return the root of the per-package persistent data directories.
+
+    Each portable Agent Plugin package gets one directory under it, kept
+    across package updates: it is where a package's server keeps whatever
+    it generates.
+    """
+    return ensure_dir(package_data_root_path())
+
+
 def get_sandbox_dir(backend: str) -> Path:
     """Return the sandbox runtime home directory for the given backend.
 
