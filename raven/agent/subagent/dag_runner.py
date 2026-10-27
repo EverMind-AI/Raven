@@ -347,6 +347,7 @@ async def run_dag(
     memory_for: "Callable[[str], MemoryScope | None] | None" = None,
     mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
     model_for: "Callable[[str | None, str | None, str | None], str | None] | None" = None,
+    effort_for: "Callable[[str | None, str | None, str | None], str | None] | None" = None,
     capabilities: dict[str, AgentCapabilities] | None = None,
     desk: AdjudicationDesk | None = None,
     adjudication_timeout_s: float = 600.0,
@@ -739,6 +740,7 @@ async def run_dag(
                         memory_for=memory_for,
                         mode_for=mode_for,
                         model_for=model_for,
+                        effort_for=effort_for,
                         capabilities=capabilities,
                         session_key=session_key,
                         subagents_root=subagents_root,
@@ -1671,6 +1673,7 @@ async def _run_group(
     memory_for: "Callable[[str], MemoryScope | None] | None" = None,
     mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
     model_for: "Callable[[str | None, str | None, str | None], str | None] | None" = None,
+    effort_for: "Callable[[str | None, str | None, str | None], str | None] | None" = None,
     capabilities: dict[str, AgentCapabilities] | None = None,
     progress_publisher: ProgressPublisher | None = None,
     session_key: str | None = None,
@@ -1725,6 +1728,7 @@ async def _run_group(
                 memory_for=memory_for,
                 mode_for=mode_for,
                 model_for=model_for,
+                effort_for=effort_for,
                 capabilities=capabilities,
                 progress_publisher=progress_publisher,
                 session_key=session_key,
@@ -1900,6 +1904,7 @@ async def _run_node(
     memory_for: "Callable[[str], MemoryScope | None] | None" = None,
     mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
     model_for: "Callable[[str | None, str | None, str | None], str | None] | None" = None,
+    effort_for: "Callable[[str | None, str | None, str | None], str | None] | None" = None,
     capabilities: dict[str, AgentCapabilities] | None = None,
     progress_publisher: ProgressPublisher | None = None,
     session_key: str | None = None,
@@ -1948,6 +1953,7 @@ async def _run_node(
             state_for=state_for,
             mode_for=mode_for,
             model_for=model_for,
+            effort_for=effort_for,
             capabilities=capabilities,
             progress_publisher=progress_publisher,
             session_key=session_key,
@@ -2056,6 +2062,7 @@ async def _attempt_node(
     state_for: "Callable[[str, str | None, str], Any] | None" = None,
     mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
     model_for: "Callable[[str | None, str | None, str | None], str | None] | None" = None,
+    effort_for: "Callable[[str | None, str | None, str | None], str | None] | None" = None,
     capabilities: dict[str, AgentCapabilities] | None = None,
     progress_publisher: ProgressPublisher | None = None,
     session_key: str | None = None,
@@ -2168,6 +2175,12 @@ async def _attempt_node(
         node_session_model = (
             model_for(session_key or "", node.subagent, node.instance) if model_for is not None else None
         )
+        # The row's reasoning effort, on the same terms and through its own
+        # resolver: a node reaching an acp row must run on the effort a spawn
+        # to that row would, or the two lanes answer with different settings.
+        node_session_effort = (
+            effort_for(session_key or "", node.subagent, node.instance) if effort_for is not None else None
+        )
         # Collected around the dispatch, exactly as a spawn does it: the
         # backend publishes into whatever is open, so a node gets the same
         # account of its tool calls and token cost that a spawned call gets,
@@ -2249,6 +2262,7 @@ async def _attempt_node(
                             # answers with, pushed over `session/set_config_option`
                             # the same way a spawn's does (`manager.row_default_model`).
                             **optional_keyword(agent_backend, "session_model", node_session_model),
+                            **optional_keyword(agent_backend, "session_effort", node_session_effort),
                             **state_kwargs,
                         )
                         if (failure := llm_error_reply(result)) is not None:

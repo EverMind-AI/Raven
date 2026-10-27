@@ -283,6 +283,7 @@ class _FakeExec:
         mode: str | None = None,
         authored_task: str | None = None,
         session_model: str | None = None,
+        session_effort: str | None = None,
     ) -> str:
         self.calls.append(
             {
@@ -292,6 +293,7 @@ class _FakeExec:
                 "prompt": task,
                 "mode": mode,
                 "session_model": session_model,
+                "session_effort": session_effort,
             }
         )
         if task_id in self.fail_ids:
@@ -7760,6 +7762,64 @@ async def test_a_runner_with_no_model_source_dispatches_without_one() -> None:
     )
 
     assert execu.calls[0]["session_model"] is None
+
+
+async def test_a_node_on_an_acp_backend_receives_the_row_s_effort() -> None:
+    """A node dispatched to an acp row carries that row's reasoning effort, on
+    the same terms a spawn to it would (``SubagentManager.session_effort_for``).
+    A graph reaching the agent through its own lane must not run on a different
+    effort than a spawn to the same row."""
+    execu = _FakeExec()
+    spec = parse_dag_spec(
+        {
+            "task_summary": "run the graph under test",
+            "nodes": [
+                {"id": "a", "subagent": "x", "node_summary": "an acp node", "prompt_template": "hello"},
+                {"id": "b", "subagent": "y", "node_summary": "a row with no effort set", "prompt_template": "hello"},
+            ],
+        }
+    )
+
+    await run_dag(
+        spec,
+        resolve=_by_name({"x": execu, "y": execu}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+        session_key="cli:direct",
+        effort_for=lambda skey, agent, instance: {"x": "high"}.get(agent),
+    )
+
+    by_id = {call["task_id"]: call for call in execu.calls}
+    assert by_id["a"]["session_effort"] == "high"
+    assert by_id["b"]["session_effort"] is None
+
+
+async def test_a_runner_with_no_effort_source_dispatches_without_one() -> None:
+    """The unwired host (tests, an offline entry point, a bare `SubAgentDagTool`
+    built with no `effort_for`) must not crash and must not guess."""
+    execu = _FakeExec()
+    spec = parse_dag_spec(
+        {
+            "task_summary": "run the graph under test",
+            "nodes": [{"id": "a", "subagent": "x", "node_summary": "plain node", "prompt_template": "hello"}],
+        }
+    )
+
+    await run_dag(
+        spec,
+        resolve=_by_name({"x": execu}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+        session_key="cli:direct",
+    )
+
+    assert execu.calls[0]["session_effort"] is None
 
 
 async def test_an_unstarted_background_run_retires_every_per_run_entry(tmp_path: Path) -> None:
