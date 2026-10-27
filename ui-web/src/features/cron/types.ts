@@ -41,7 +41,7 @@ export interface CronSource {
   rows(): Promise<CronJob[]>
   toggle(j: CronJob): Promise<unknown>
   remove(j: CronJob): Promise<unknown>
-  save(draft: CronDraft): Promise<CronJob>
+  save(draft: CronDraft): Promise<{ row: CronJob; outcome: 'created' | 'updated' | 'skipped' }>
   runs(j: CronJob): Promise<CronRun[]>
   runNow(j: CronJob): Promise<unknown>
   openRun(j: CronJob, run?: CronRun): Promise<unknown>

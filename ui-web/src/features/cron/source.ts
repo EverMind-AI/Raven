@@ -152,7 +152,7 @@ export const cronSource: CronSource = {
      the existing catch already handles. */
   save: async (draft) => {
     const payload = jobToSave(draft)
-    return gateway().call('cron.save', payload).then((r) => cronToRow(r.job)).catch((e) => {
+    return gateway().call('cron.save', payload).then((r) => ({ row: cronToRow(r.job), outcome: r.outcome })).catch((e) => {
       toast(t('gui.op.save_failed', { detail: (e.data && e.data.detail) || e.message || e }))
       throw { handled: true }
     })

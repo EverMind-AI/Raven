@@ -4153,6 +4153,13 @@ class CronSaveParams(_Strict):
 
 class CronSaveResult(_Strict):
     job: CronJobInfo
+    outcome: Literal["created", "updated", "skipped"] = Field(
+        description=(
+            "How the request landed: 'created' stored a new job, 'updated' edited the returned "
+            "existing job in place, 'skipped' wrote nothing and returned the matching existing "
+            "job (identical message, fire still ahead) without applying the requested schedule."
+        ),
+    )
 
 
 class CronDeleteParams(_Strict):

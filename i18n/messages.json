@@ -1867,6 +1867,10 @@
       "en": "Saved",
       "zh": "已保存"
     },
+    "gui.cron.existing_kept": {
+      "en": "No new job created - an existing one already carries this message; its schedule was kept",
+      "zh": "未新建任务——已有相同内容的任务，保留了原定时间"
+    },
     "gui.cron.triggered_x": {
       "en": "\"{name}\" triggered - you will be told when it finishes",
       "zh": "已触发「{name}」，跑完会通知你"

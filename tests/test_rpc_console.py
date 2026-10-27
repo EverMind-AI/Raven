@@ -3263,3 +3263,37 @@ def test_viewer_root_follows_a_linked_agent_home(tmp_path: Path) -> None:
 
     assert viewer_root(session, Path("uploads/shot.png"), linked) == linked
     assert viewer_root(session, real / "uploads" / "shot.png", linked) == linked
+
+
+@pytest.mark.asyncio
+async def test_cron_save_reports_what_happened(tmp_path: Path) -> None:
+    """The response carries the outcome beside the job (issue #1060): a save
+    that landed on an existing job, or stored nothing, does not read as a
+    creation."""
+    loop = _cron_loop(tmp_path)
+    created = await console_module.cron_save(
+        {"kind": "every", "every_seconds": 3600, "name": "hourly", "message": "ping"},
+        agent_loop_factory=lambda: loop,
+    )
+    assert created["outcome"] == "created"
+
+    edited = await console_module.cron_save(
+        {
+            "id": created["job"]["id"],
+            "kind": "every",
+            "every_seconds": 7200,
+            "name": "hourly",
+            "message": "ping louder",
+        },
+        agent_loop_factory=lambda: loop,
+    )
+    assert edited["outcome"] == "updated"
+    assert edited["job"]["id"] == created["job"]["id"]
+
+    again = await console_module.cron_save(
+        {"kind": "every", "every_seconds": 7200, "name": "hourly again", "message": "ping louder"},
+        agent_loop_factory=lambda: loop,
+    )
+    assert again["outcome"] == "skipped"
+    assert again["job"]["id"] == created["job"]["id"], "the matching existing job is returned"
+    assert [j.name for j in loop.cron_service.list_jobs()] == ["hourly"], "nothing new was stored"

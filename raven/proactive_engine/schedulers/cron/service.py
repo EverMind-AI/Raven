@@ -13,6 +13,7 @@ from typing import Any, Callable, Coroutine
 from loguru import logger
 
 from raven.proactive_engine.schedulers.cron.types import (
+    AddJobOutcome,
     CronJob,
     CronJobState,
     CronPayload,
@@ -742,6 +743,41 @@ class CronService:
         direct_handle: str | None = None,
         fire_missed: bool = False,
     ) -> CronJob:
+        """Add a job and return just the stored job.
+
+        Same dedup semantics as :meth:`add_job_with_outcome`; that variant
+        also reports whether the request created, updated, or skipped, which
+        a caller needs to word a reply that does not claim a creation when
+        nothing was created.
+        """
+        return self.add_job_with_outcome(
+            name=name,
+            schedule=schedule,
+            message=message,
+            channel=channel,
+            to=to,
+            delete_after_run=delete_after_run,
+            topic_tag=topic_tag,
+            job_id=job_id,
+            direct_agent=direct_agent,
+            direct_handle=direct_handle,
+            fire_missed=fire_missed,
+        ).job
+
+    def add_job_with_outcome(
+        self,
+        name: str,
+        schedule: CronSchedule,
+        message: str,
+        channel: str | None = None,
+        to: str | None = None,
+        delete_after_run: bool = False,
+        topic_tag: str | None = None,
+        job_id: str | None = None,
+        direct_agent: str | None = None,
+        direct_handle: str | None = None,
+        fire_missed: bool = False,
+    ) -> AddJobOutcome:
         """Add a new job, or update an existing job that is the *same
         reminder* — agents often re-register the same reminder across
         conversations; without dedup the user gets N near-identical fires
@@ -787,6 +823,13 @@ class CronService:
         minted a fresh id would orphan it. It also skips every dedup layer
         below, which answer "is this the same reminder as some other job" -- a
         question an edit has already answered by naming the job it edits.
+
+        The return also says how the request landed: ``created`` stored a new
+        job, ``updated`` edited an existing one in place (``schedule_replaced``
+        says whether the stored schedule is now the requested one), and
+        ``skipped`` wrote nothing and returned the matching existing job --
+        byte-identical message, fire still ahead -- whose requested schedule
+        was not applied.
         """
         # One ``now`` snapshot for both validation and storage: the validate
         # predicate and the stored next_run must agree on "now", or a boundary
@@ -838,7 +881,7 @@ class CronService:
                     self._save_store()
                     self._signal_wake()
                     logger.info("Cron: updated job '{}' ({})", name, j.id)
-                    return j
+                    return AddJobOutcome(j, "updated", schedule_replaced=True)
 
             # L7: topic_tag dedup — strictest, runs first. If the new
             # request carries a topic_tag, any existing enabled job for the
@@ -877,7 +920,7 @@ class CronService:
                     j.updated_at_ms = now
                     self._save_store()
                     self._signal_wake()
-                    return j
+                    return AddJobOutcome(j, "updated", schedule_replaced=True)
 
             # Message-equal dedup (covers same-intent reminders the LLM
             # re-asks for across days, possibly with different schedule
@@ -902,7 +945,7 @@ class CronService:
                     schedule.kind,
                 )
                 self._signal_wake()
-                return j
+                return AddJobOutcome(j, "skipped")
 
             # Dedup: same schedule slot + same channel + recipient + the
             # same message → reuse that job rather than create a duplicate.
@@ -926,7 +969,7 @@ class CronService:
                     existing.id,
                 )
                 self._signal_wake()
-                return existing
+                return AddJobOutcome(existing, "updated")
 
             job = CronJob(
                 id=job_id or str(uuid.uuid4())[:8],
@@ -951,7 +994,7 @@ class CronService:
             self._save_store()
         self._signal_wake()
         logger.info("Cron: added job '{}' ({})", name, job.id)
-        return job
+        return AddJobOutcome(job, "created", schedule_replaced=True)
 
     @staticmethod
     def _find_duplicate_schedule(

@@ -259,7 +259,7 @@ class CronTool(Tool):
         # Store request-time channel/chat_id verbatim — this binding IS the
         # delivery target; the runner owning that channel fires it directly.
         try:
-            job = self._cron.add_job(
+            res = self._cron.add_job_with_outcome(
                 name=message[:30],
                 schedule=schedule,
                 message=message,
@@ -273,7 +273,17 @@ class CronTool(Tool):
             # invalid cron expr) is rejected by the service rather than stored as
             # a job that silently never fires — surface it so the agent retries.
             return f"Error: {exc}"
-        return f"Created job '{job.name}' (id: {job.id}){self._zone_note(job.schedule)}"
+        job = res.job
+        if res.outcome == "created":
+            return f"Created job '{job.name}' (id: {job.id}){self._zone_note(job.schedule)}"
+        if res.outcome == "updated":
+            if res.schedule_replaced:
+                return f"Updated job '{job.name}' (id: {job.id}) with the new schedule{self._zone_note(job.schedule)}"
+            return f"Updated job '{job.name}' (id: {job.id}); kept its schedule"
+        return (
+            f"No new job created: '{job.name}' (id: {job.id}) already carries this message; "
+            "the requested schedule was not applied"
+        )
 
     @staticmethod
     def _zone_note(schedule: CronSchedule) -> str:

@@ -5429,6 +5429,10 @@ export interface CronSaveParams {
  */
 export interface CronSaveResult {
   job: CronJobInfo;
+  /**
+   * How the request landed: 'created' stored a new job, 'updated' edited the returned existing job in place, 'skipped' wrote nothing and returned the matching existing job (identical message, fire still ahead) without applying the requested schedule.
+   */
+  outcome: 'created' | 'updated' | 'skipped';
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

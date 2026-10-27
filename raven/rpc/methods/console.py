@@ -485,7 +485,7 @@ async def cron_save(params: dict, *, agent_loop_factory=None) -> dict:
     old_id = str(params.get("id") or "")
     previous = next((j for j in svc.list_jobs(include_disabled=True) if j.id == old_id), None) if old_id else None
     try:
-        job = svc.add_job(
+        res = svc.add_job_with_outcome(
             name=name,
             schedule=schedule,
             message=message,
@@ -500,7 +500,7 @@ async def cron_save(params: dict, *, agent_loop_factory=None) -> dict:
         )
     except ValueError as e:
         raise ConfigValidationError(str(e)) from None
-    return {"job": _job_info(job)}
+    return {"job": _job_info(res.job), "outcome": res.outcome}
 
 
 async def cron_delete(params: dict, *, agent_loop_factory=None) -> dict:

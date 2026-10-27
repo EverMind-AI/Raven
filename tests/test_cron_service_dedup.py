@@ -388,3 +388,88 @@ def test_same_kind_distinct_messages_minutes_apart_are_kept(svc, gap_minutes):
         "prepare the daily brief",
         "review the presentation",
     }
+
+
+# ── add_job_with_outcome: what each layer reports ────────────────────────
+
+
+def test_outcome_created_for_a_fresh_add(svc):
+    res = svc.add_job_with_outcome(
+        name="fresh", schedule=CronSchedule(kind="cron", expr="0 9 * * *"), message="fresh", channel="tui", to="direct"
+    )
+    assert res.outcome == "created"
+    assert res.schedule_replaced is True
+    assert res.job.id
+
+
+def test_outcome_skipped_when_an_identical_message_is_still_ahead(svc):
+    """The message-equal layer writes nothing: the returned job is the one that
+    matched, and the requested schedule was not applied."""
+    first = _add(svc, "take the pill", CronSchedule(kind="cron", expr="0 8 * * *"))
+    res = svc.add_job_with_outcome(
+        name="take the pill",
+        schedule=CronSchedule(kind="cron", expr="0 15 * * *"),
+        message="take the pill",
+        channel="tui",
+        to="direct",
+    )
+    assert res.outcome == "skipped"
+    assert res.schedule_replaced is False
+    assert res.job.id == first.id
+    assert res.job.schedule.expr == "0 8 * * *", "the requested schedule was not applied"
+    assert [j.schedule.expr for j in svc.list_jobs()] == ["0 8 * * *"], "nothing was written"
+
+
+def test_outcome_updated_with_schedule_replaced_for_topic_tag(svc):
+    first = _add(svc, "old", CronSchedule(kind="cron", expr="0 11 * * *"), topic_tag="meds")
+    res = svc.add_job_with_outcome(
+        name="new",
+        schedule=CronSchedule(kind="cron", expr="30 13 * * *"),
+        message="new",
+        channel="tui",
+        to="direct",
+        topic_tag="meds",
+    )
+    assert res.outcome == "updated"
+    assert res.schedule_replaced is True
+    assert res.job.id == first.id
+    assert res.job.schedule.expr == "30 13 * * *"
+
+
+def test_outcome_updated_keeping_schedule_for_a_same_slot_reuse(svc):
+    """A byte-identical message on an identical schedule reuses the job once
+    its fire has passed; the schedule is kept, not replaced."""
+    sched = CronSchedule(kind="every", every_ms=60_000)
+    first = _add(svc, "water", sched)
+    first.state.next_run_at_ms = None
+    svc._save_store()
+    res = svc.add_job_with_outcome(name="water again", schedule=sched, message="water", channel="tui", to="direct")
+    assert res.outcome == "updated"
+    assert res.schedule_replaced is False
+    assert res.job.id == first.id
+    assert res.job.name == "water again", "the name follows the request"
+    assert res.job.schedule.every_ms == 60_000
+
+
+def test_outcome_updated_with_schedule_replaced_for_a_job_id_edit(svc):
+    first = _add(svc, "before", CronSchedule(kind="cron", expr="0 9 * * *"))
+    res = svc.add_job_with_outcome(
+        name="after",
+        schedule=CronSchedule(kind="cron", expr="30 10 * * *"),
+        message="after",
+        channel="tui",
+        to="direct",
+        job_id=first.id,
+    )
+    assert res.outcome == "updated"
+    assert res.schedule_replaced is True
+    assert res.job.id == first.id
+
+
+def test_add_job_still_returns_just_the_job():
+    """The plain entry keeps its signature: every existing caller reads a
+    CronJob off it."""
+    svc = CronService(Path(__import__("tempfile").mkdtemp()) / "jobs.json")
+    job = svc.add_job(name="daily", schedule=CronSchedule(kind="cron", expr="0 9 * * *"), message="daily")
+    assert job.name == "daily"
+    assert not hasattr(job, "outcome")

@@ -781,7 +781,7 @@ def cron_add(
 
     service = _open_service()
     try:
-        job = service.add_job(
+        res = service.add_job_with_outcome(
             name=name[:30],
             schedule=schedule,
             message=message,
@@ -795,7 +795,16 @@ def cron_add(
         # silently never fires.
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=2)
-    console.print(f"[green]✓[/green] Created job '{job.name}' (id: {job.id})")
+    job = res.job
+    if res.outcome == "created":
+        console.print(f"[green]✓[/green] Created job '{job.name}' (id: {job.id})")
+    elif res.outcome == "updated":
+        console.print(f"[green]✓[/green] Updated job '{job.name}' (id: {job.id}); kept its schedule")
+    else:
+        console.print(
+            f"[yellow]![/yellow] No new job created: '{job.name}' (id: {job.id}) already carries this message; "
+            "the requested schedule was not applied"
+        )
     if channel in _INTERACTIVE_CHANNELS:
         console.print(f"[dim]  fires in the {channel} session (only while one is open)[/dim]")
     else:

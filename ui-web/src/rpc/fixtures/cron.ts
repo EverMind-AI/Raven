@@ -105,7 +105,7 @@ export function createCron(env: FixtureEnv): CronFixture {
           existing.message = p.message || existing.message
           existing.kind = p.kind || existing.kind
           existing.expr = p.expr || existing.expr
-          return { job: wire(existing) }
+          return { job: wire(existing), outcome: 'updated' }
         }
         minted += 1
         const fresh: Fixture = {
@@ -114,7 +114,7 @@ export function createCron(env: FixtureEnv): CronFixture {
           next: 12 * HOUR, runs: [],
         }
         jobs.push(fresh)
-        return { job: wire(fresh) }
+        return { job: wire(fresh), outcome: 'created' }
       },
       'cron.run_now': () => ({ ok: true }),
     },

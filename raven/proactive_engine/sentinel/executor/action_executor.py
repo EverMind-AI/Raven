@@ -212,14 +212,19 @@ class ActionExecutor:
             cron_msg = payload.get("cron_message") or option.title
             if cron_expr:
                 try:
-                    job = self.cron_service.add_job(
+                    res = self.cron_service.add_job_with_outcome(
                         name=option.title[:30] or routine_id,
                         schedule=_build_cron_schedule(cron_expr, payload.get("tz")),
                         message=cron_msg,
                         channel=decision.channel,
                         to=decision.to,
                     )
-                    side_effects.append(f"created cron job {job.id} ({cron_expr})")
+                    if res.outcome == "created":
+                        side_effects.append(f"created cron job {res.job.id} ({cron_expr})")
+                    elif res.outcome == "updated":
+                        side_effects.append(f"updated cron job {res.job.id} ({cron_expr})")
+                    else:
+                        side_effects.append(f"kept cron job {res.job.id}; the requested schedule was not applied")
                 except Exception as exc:
                     side_effects.append(f"cron job creation failed: {type(exc).__name__}: {exc}")
             else:

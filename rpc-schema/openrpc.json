@@ -5115,10 +5115,20 @@
           "properties": {
             "job": {
               "$ref": "#/components/schemas/CronJobInfo"
+            },
+            "outcome": {
+              "description": "How the request landed: 'created' stored a new job, 'updated' edited the returned existing job in place, 'skipped' wrote nothing and returned the matching existing job (identical message, fire still ahead) without applying the requested schedule.",
+              "enum": [
+                "created",
+                "updated",
+                "skipped"
+              ],
+              "type": "string"
             }
           },
           "required": [
-            "job"
+            "job",
+            "outcome"
           ],
           "type": "object"
         }

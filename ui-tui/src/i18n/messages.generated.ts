@@ -653,6 +653,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.cron.running_x': 'running "{name}" now',
     'gui.cron.save': 'Save changes',
     'gui.cron.saved': 'Saved',
+    'gui.cron.existing_kept':
+      'No new job created - an existing one already carries this message; its schedule was kept',
     'gui.cron.triggered_x': '"{name}" triggered - you will be told when it finishes',
     'gui.cron_new': 'New schedule',
     'gui.ctx.label': 'context {pct}%',
@@ -4086,6 +4088,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.cron.running_x': '正在补跑「{name}」',
     'gui.cron.save': '保存修改',
     'gui.cron.saved': '已保存',
+    'gui.cron.existing_kept': '未新建任务——已有相同内容的任务，保留了原定时间',
     'gui.cron.triggered_x': '已触发「{name}」，跑完会通知你',
     'gui.cron_new': '新建任务',
     'gui.ctx.label': '上下文 {pct}%',

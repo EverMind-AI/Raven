@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from raven.proactive_engine.schedulers.cron.service import CronService
+from raven.proactive_engine.schedulers.cron.types import CronSchedule
 from raven.proactive_engine.sentinel.executor.action_executor import ActionExecutor
 from raven.proactive_engine.sentinel.predictor.routine_store import RoutineStore
 from raven.proactive_engine.sentinel.types import (
@@ -300,3 +301,49 @@ async def test_elapsed_ms_is_recorded():
     result = await executor.execute(option, decision=_decision())
     assert isinstance(result.elapsed_ms, int)
     assert result.elapsed_ms >= 0
+
+
+@pytest.mark.asyncio
+async def test_routine_confirm_make_cron_reusing_a_job_says_so(tmp_path: Path):
+    """A confirm whose cron message matches an enabled job with a fire ahead
+    stores nothing (the service's message-equal dedup), and the side effect
+    says the existing job was kept instead of claiming a creation (#1060)."""
+    routine_store = RoutineStore(tmp_path / "routines.json")
+    routine_store.merge(
+        [
+            Routine(id="dow1-h09-meeting", pattern="x", occurrence_count=4),
+        ],
+        now_ms=_NOW_MS - 1000,
+    )
+    cron_service = CronService(tmp_path / "jobs.json")
+    cron_service.add_job(
+        name="meeting",
+        schedule=CronSchedule(kind="cron", expr="0 9 * * 1"),
+        message="standup review",
+        channel="feishu",
+        to="ou_xxx",
+    )
+
+    executor = ActionExecutor(
+        routine_store=routine_store,
+        cron_service=cron_service,
+        now_fn=lambda: _NOW,
+    )
+    option = _option(
+        type="routine_confirm",
+        exec_kind="routine_confirm",
+        exec_payload={
+            "routine_id": "dow1-h09-meeting",
+            "make_cron": True,
+            "cron_expr": "0 9 * * 1",
+            "cron_message": "standup review",
+        },
+        title="meeting",
+    )
+
+    result = await executor.execute(option, decision=_decision())
+    assert result.status == "ok"
+    side = "\n".join(result.side_effects)
+    assert "kept cron job" in side
+    assert "created cron job" not in side
+    assert len(cron_service.list_jobs()) == 1

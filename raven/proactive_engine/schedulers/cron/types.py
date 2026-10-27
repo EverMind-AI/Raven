@@ -107,3 +107,24 @@ class CronStore:
 
     version: int = 1
     jobs: list[CronJob] = field(default_factory=list)
+
+
+@dataclass
+class AddJobOutcome:
+    """The stored job plus how an add request landed on it.
+
+    ``CronService.add_job_with_outcome`` returns this so callers can word a
+    reply that does not claim a creation when nothing was created:
+
+    - ``created`` -- a new job was stored; the stored schedule is the
+      requested one;
+    - ``updated`` -- an existing job was edited in place (a ``job_id`` edit,
+      a ``topic_tag`` match, or a same-schedule reuse). ``schedule_replaced``
+      says whether the stored schedule is now the requested one;
+    - ``skipped`` -- nothing was written; the returned job is the existing one
+      that matched, and the requested schedule was not applied.
+    """
+
+    job: CronJob
+    outcome: Literal["created", "updated", "skipped"]
+    schedule_replaced: bool = False

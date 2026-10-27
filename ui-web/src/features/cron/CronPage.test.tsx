@@ -47,7 +47,7 @@ function install(rows: CronJob[], over: Partial<CronSource> = {}) {
     rows: async () => rows,
     toggle: async () => calls.push('toggle'),
     remove: async () => calls.push('remove'),
-    save: async (d) => ({ ...job(), ...d }),
+    save: async (d) => ({ row: { ...job(), ...d }, outcome: 'created' }),
     runs: async () => [],
     runNow: async () => calls.push('runNow'),
     openRun: async () => calls.push('openRun'),
@@ -306,7 +306,7 @@ describe('cron island', () => {
     install([job()], {
       save: async (d) => {
         saved.push(d.name)
-        return { ...job(), ...d, name: d.name || 'morning digest' }
+        return { row: { ...job(), ...d, name: d.name || 'morning digest' }, outcome: 'created' }
       },
     })
     await mount()
@@ -334,8 +334,8 @@ describe('cron island', () => {
           /* Snapshotted at the call, the way a server answers the request it
              was given rather than the reader's later keystrokes. */
           const answer = { ...job(), ...d }
-          return new Promise<CronJob>((res) => {
-            box.land = () => res(answer)
+          return new Promise<{ row: CronJob; outcome: 'created' | 'updated' | 'skipped' }>((res) => {
+            box.land = () => res({ row: answer, outcome: 'created' })
           })
         },
       },
@@ -390,7 +390,7 @@ describe('cron island', () => {
     install([job({ freq: 'hour', every_ms: 3600000 })], {
       save: async (d) => {
         saved.push({ freq: d.freq, ...(d.every_ms ? { every_ms: d.every_ms } : {}) })
-        return { ...job(), ...d }
+        return { row: { ...job(), ...d }, outcome: 'created' }
       },
     })
     await mount()
