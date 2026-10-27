@@ -2174,6 +2174,39 @@ async def test_a_spent_wall_clock_ends_a_cut_answer_on_what_streamed_with_the_no
     assert (messages[-1]["role"], messages[-1]["content"]) == ("assistant", final)
 
 
+class _DiesAfterItsUsage(LLMProvider):
+    """Streams an answer with the usage a provider can report before the end, then the connection drops."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+
+    async def chat(self, *args, **kwargs):  # pragma: no cover - the streaming path is under test
+        raise AssertionError("the streaming path is the one under test")
+
+    async def chat_stream(self, messages, tools=None, model=None, **_kw):
+        yield ChatDelta(content="The answer is 4", usage={"prompt_tokens": 6000, "completion_tokens": 7})
+        raise ConnectionError("connection reset by peer")
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_ends_on_a_cut_answer_keeps_the_window_its_call_measured(workspace):
+    """A resume reads the window from the newest reply that carries a reading, so the reply a cut
+    answer ends on carries the reading its call reported, as every other reply does."""
+    from raven.agent.loop._shared import _CONTEXT_USED_KEY
+
+    sink = _Sink()
+    final, _used, messages, outcome = await _make_agent(
+        workspace, _DiesAfterItsUsage(), max_iterations=1
+    )._run_agent_loop(_seed(), on_token_delta=sink.delta)
+
+    assert outcome.status == "interrupted"
+    assert (messages[-1]["role"], messages[-1]["content"]) == ("assistant", final)
+    assert messages[-1].get(_CONTEXT_USED_KEY) == 6007
+
+
 class _ReadsTheReply(AgentHook):
     """An ``after_iteration`` hook that writes down the reply it is handed, as one that checks it does."""
 

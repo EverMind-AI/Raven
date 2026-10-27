@@ -1225,13 +1225,14 @@ class TurnPathMixin:
             _drop_trailing_prefills(messages)
             return previous
 
-        async def _end_on_the_partial() -> str:
+        async def _end_on_the_partial(last: LLMResponse) -> str:
             """End the turn on a cut answer no continuation will finish, and return what it ends on.
 
             The continuation failed, or the turn has no iteration or time left to ask for it. The
             reader already holds what streamed, so that is the answer, the note says it is not the
             whole of it, and the turn is ``interrupted``. Nothing more is asked for: a wrap-up would
-            stream onto the partial and be all the record kept.
+            stream onto the partial and be all the record kept. The reply carries the window ``last``,
+            the turn's newest call, measured, as every reply does.
             """
             nonlocal messages, status
             note = "\n\n" + PARTIAL_STREAM_NOTE
@@ -1240,6 +1241,7 @@ class TurnPathMixin:
             if on_token_delta is not None:
                 await on_token_delta(note)
             messages = self.context.add_assistant_message(messages, final)
+            _stamp_context_used(messages, last)
             return final
 
         while iteration < iteration_cap:
@@ -2085,7 +2087,7 @@ class TurnPathMixin:
                             sum(len(part) for part in recovery.parts),
                             (clean or "")[:160],
                         )
-                        final_content = await _end_on_the_partial()
+                        final_content = await _end_on_the_partial(response)
                         break
                     # The provider's ladder is seconds long and has already run. A
                     # gateway serving error pages for a few minutes outlasts it, and
@@ -2473,7 +2475,7 @@ class TurnPathMixin:
             logger.warning(
                 "Turn stopped ({}) with a cut answer awaiting its continuation; ending on what streamed", stopped_by
             )
-            final_content = await _end_on_the_partial()
+            final_content = await _end_on_the_partial(response)
         elif exhausted:
             if stalled_tool is not None:
                 stopped_by = "stalled_tool"
