@@ -394,6 +394,27 @@ async def test_a_silent_row_reaches_the_wire(workspace: Path) -> None:
     assert "silent" not in spoken, "an ordinary reply carries no flag"
 
 
+async def test_the_message_tools_verdict_reaches_the_wire(workspace: Path) -> None:
+    """A reload is told which turn the message tool answered, as the live turn judged it."""
+    from raven.rpc.methods import session as session_mod
+    from raven.rpc.models import TranscriptMessage
+    from raven.session.manager import SessionManager
+
+    mgr = SessionManager(workspace)
+    stored = mgr.get_or_create("tui:answered")
+    stored.add_message("user", "[Scheduled Task] check the build", origin="cron")
+    stored.add_message("assistant", "[SILENT]", silent=True, replied_via_tool=True)
+    mgr.save(stored)
+
+    payload = await session_mod.session_resume({"session_id": "tui:answered"})
+    _check("session.resume", payload)
+
+    closing = payload["messages"][1]
+    assert closing["replied_via_tool"] is True
+    assert TranscriptMessage.model_validate(closing).replied_via_tool is True
+    assert "replied_via_tool" not in payload["messages"][0]
+
+
 async def test_session_close(workspace: Path) -> None:
     from raven.rpc.methods import session as session_mod
 

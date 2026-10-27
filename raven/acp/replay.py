@@ -39,7 +39,7 @@ from typing import Any
 from raven.acp.tool_kinds import locations, title_for, tool_kind
 from raven.acp.updates import notice_text, turn_failure_text
 from raven.security import redact
-from raven.session.turn_shape import turn_called_message_tool
+from raven.session.turn_shape import replied_via_message_tool
 
 # A replayed transcript is bounded by what a client can draw, not by what is
 # stored: a session with two thousand messages would otherwise emit two thousand
@@ -96,11 +96,10 @@ def _without_silent_runtime_turns(entries: list[dict[str, Any]]) -> list[dict[st
     session list reads a transcript with (``SessionManager._scan_file``): only a
     user row carrying ``origin`` opens a turn that can be taken back, so a
     person's own message stays when the model answers it with silence. A turn
-    that called the message tool stays too: the message tool answered it, so it
-    is not a Silent Turn whatever it ends on, and its reply reached the reader.
-    That rule is read from one place (``raven/session/turn_shape.py``), so the
-    session list and this replay cannot come to disagree about which turn
-    answered.
+    the message tool answered stays too: it is not a Silent Turn whatever it ends
+    on, and its reply reached the reader. Its closing row carries the live turn's
+    verdict, read from one place (``raven/session/turn_shape.py``), so the session
+    list and this replay cannot come to disagree about which turn answered.
     """
     kept: list[dict[str, Any]] = []
     opened_at: int | None = None
@@ -110,7 +109,7 @@ def _without_silent_runtime_turns(entries: list[dict[str, Any]]) -> list[dict[st
             opened_at = len(kept) if entry.get("origin") else None
         elif role == "assistant" and entry.get("silent") is True and opened_at is not None:
             start, opened_at = opened_at, None
-            if not turn_called_message_tool(kept[start:]):
+            if not replied_via_message_tool(entry):
                 del kept[start:]
                 continue
         kept.append(entry)

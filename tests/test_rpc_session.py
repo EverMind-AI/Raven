@@ -2989,8 +2989,9 @@ async def test_session_list_keeps_a_runtime_turn_the_message_tool_answered(
 ) -> None:
     """A turn the message tool answered is not a Silent Turn whatever it ends on: the
     reply reached the reader, so the turn stays the activity the session is ordered by
-    -- the rule the ACP replay reads the same turn with. The second session is the
-    same fixture without the message call, so only that call differs."""
+    -- the rule the ACP replay reads the same turn with. The live turn files that
+    verdict on the row that closes it. The second session is the same fixture without
+    the message call, so only that call and its verdict differ."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
     monkeypatch.setattr(session_module, "load_config", lambda: cfg)
@@ -3010,7 +3011,8 @@ async def test_session_list_keeps_a_runtime_turn_the_message_tool_answered(
             session.add_message(
                 "tool", "Message sent", timestamp="2026-06-10T09:00:03", tool_call_id="m1", name="message"
             )
-        session.add_message("assistant", "[SILENT]", timestamp="2026-06-10T09:00:05", silent=True)
+        verdict = {"replied_via_tool": True} if delivered else {}
+        session.add_message("assistant", "[SILENT]", timestamp="2026-06-10T09:00:05", silent=True, **verdict)
         mgr.save(session)
     monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 

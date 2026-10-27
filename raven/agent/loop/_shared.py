@@ -110,6 +110,12 @@ _NOTICE_KEY = "_notice"
 # ``_notice``: ``_save_turn`` writes it as ``silent``.
 _SILENT_KEY = "_silent"
 
+# Marks the stored row that closes a turn whose reply went out through the message
+# tool, read off ``MessageTool.sent_in_turn``: the live verdict, so a stored reader
+# need not guess it from the calls it can see. ``_save_turn`` writes it as
+# ``replied_via_tool``.
+_REPLIED_VIA_TOOL_KEY = "_replied_via_tool"
+
 # Marks the user entry of a turn the runtime opened on the agent's behalf, with
 # the origin that opened it. Same underscore-then-rename convention as
 # ``_notice``: ``_save_turn`` writes it as ``origin``, and the underscore keeps
@@ -407,6 +413,18 @@ def _file_composed_reply(messages: list[dict[str, Any]], reply: str) -> None:
             filed = {key: value for key, value in row.items() if key != _SILENT_KEY}
             filed["content"] = reply
             messages[index] = filed
+            return
+
+
+def _stamp_replied_via_tool(messages: list[dict[str, Any]], turn_base: int) -> None:
+    """Mark the turn's closing assistant row: the message tool sent this turn's reply to its own chat.
+
+    Replaced with a copy, so a list that shares the row is left as it was.
+    """
+    for index in range(len(messages) - 1, turn_base - 1, -1):
+        row = messages[index]
+        if row.get("role") == "assistant":
+            messages[index] = {**row, _REPLIED_VIA_TOOL_KEY: True}
             return
 
 

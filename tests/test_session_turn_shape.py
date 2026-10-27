@@ -1,54 +1,46 @@
 """What a stored transcript says about the turn it holds: did the message tool answer it?"""
 
-from raven.session.turn_shape import calls_message_tool, turn_called_message_tool
+from raven.rpc.methods.session import _map_to_wire
+from raven.session.turn_shape import replied_via_message_tool
 
 
-def _stored_call(name: str) -> dict:
-    """A call as a stored row keeps it: the provider's own shape."""
-    return {"id": "c1", "type": "function", "function": {"name": name, "arguments": "{}"}}
+def _message_call(chat_id: str | None = None) -> dict:
+    arguments = '{"content": "3 tests failed"' + (f', "chat_id": "{chat_id}"' if chat_id else "") + "}"
+    return {"id": "m1", "type": "function", "function": {"name": "message", "arguments": arguments}}
 
 
-def _wire_call(name: str) -> dict:
-    """A call as the wire carries it: flattened."""
-    return {"id": "c1", "name": name, "arguments": "{}"}
-
-
-def test_a_stored_row_that_called_the_message_tool_says_so():
-    assert calls_message_tool({"role": "assistant", "tool_calls": [_stored_call("message")]})
-
-
-def test_a_wire_row_that_called_the_message_tool_says_so():
-    assert calls_message_tool({"role": "assistant", "tool_calls": [_wire_call("message")]})
-
-
-def test_a_row_that_called_another_tool_did_not_answer():
-    assert not calls_message_tool({"role": "assistant", "tool_calls": [_stored_call("exec")]})
-
-
-def test_a_row_that_called_nothing_did_not_answer():
-    assert not calls_message_tool({"role": "assistant", "tool_calls": []})
-    assert not calls_message_tool({"role": "assistant", "content": "[SILENT]"})
-
-
-def test_only_an_assistant_row_calls_tools():
-    assert not calls_message_tool({"role": "user", "tool_calls": [_stored_call("message")]})
-
-
-def test_a_turn_is_answered_when_any_of_its_rows_called_the_message_tool():
-    rows = [
-        {"role": "user", "content": "[Unprompted report from 'ci']\n\n3 tests failed", "origin": "subagent"},
-        {"role": "assistant", "content": "", "tool_calls": [_stored_call("message")]},
-        {"role": "tool", "content": "Message sent", "tool_call_id": "c1", "name": "message"},
-        {"role": "assistant", "content": "[SILENT]", "silent": True},
+def _turn(*, answered: bool, chat_id: str | None = None, sent: str = "Message sent to cron:job") -> list[dict]:
+    closing = {"role": "assistant", "content": "[SILENT]", "silent": True}
+    if answered:
+        closing["replied_via_tool"] = True
+    return [
+        {"role": "user", "content": "[Scheduled Task] check the build", "origin": "cron"},
+        {"role": "assistant", "content": "", "tool_calls": [_message_call(chat_id)]},
+        {"role": "tool", "content": sent, "tool_call_id": "m1", "name": "message"},
+        closing,
     ]
-    assert turn_called_message_tool(rows)
 
 
-def test_a_turn_that_called_another_tool_only_is_not_answered():
-    rows = [
-        {"role": "user", "content": "[Unprompted report from 'ci']\n\n3 tests failed", "origin": "subagent"},
-        {"role": "assistant", "content": "", "tool_calls": [_stored_call("list_dir")]},
-        {"role": "tool", "content": "inbox", "tool_call_id": "c1", "name": "list_dir"},
-        {"role": "assistant", "content": "[SILENT]", "silent": True},
-    ]
-    assert not turn_called_message_tool(rows)
+def test_a_stored_turn_is_answered_by_its_closing_rows_verdict():
+    assert replied_via_message_tool(_turn(answered=True)[-1])
+
+
+def test_a_wire_turn_is_answered_by_the_same_verdict():
+    assert replied_via_message_tool(_map_to_wire(_turn(answered=True), "cron:job")[-1])
+
+
+def test_a_message_call_that_failed_did_not_answer_in_either_shape():
+    stored = _turn(answered=False, sent="Error sending message: the channel is down")
+    assert not any(replied_via_message_tool(row) for row in stored)
+    assert not any(replied_via_message_tool(row) for row in _map_to_wire(stored, "cron:job"))
+
+
+def test_a_message_call_to_another_chat_did_not_answer_in_either_shape():
+    stored = _turn(answered=False, chat_id="c2", sent="Message sent to cron:c2")
+    assert not any(replied_via_message_tool(row) for row in stored)
+    assert not any(replied_via_message_tool(row) for row in _map_to_wire(stored, "cron:job"))
+
+
+def test_only_an_assistant_row_carries_the_verdict():
+    assert not replied_via_message_tool({"role": "user", "content": "hi", "replied_via_tool": True})
+    assert not replied_via_message_tool({"role": "assistant", "content": "[SILENT]", "replied_via_tool": "yes"})

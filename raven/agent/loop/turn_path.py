@@ -19,6 +19,7 @@ from raven.agent.loop._shared import (
     _NOTICE_KEY,
     _ORIGIN_KEY,
     _REASONING_MS_KEY,
+    _REPLIED_VIA_TOOL_KEY,
     _SILENT_KEY,
     _SKIP_AFTER_SEND_ORIGINS,
     _SKIP_USER_INBOUND_ORIGINS,
@@ -56,6 +57,7 @@ from raven.agent.loop._shared import (
     _runtime_origin,
     _stamp_context_used,
     _stamp_reasoning_ms,
+    _stamp_replied_via_tool,
     _strip_inline_images,
     _window_reading,
     append_hook_note,
@@ -3343,6 +3345,8 @@ class TurnPathMixin:
             # A hook composed the reply the reader is sent in place of the marker. A turn the
             # message tool answered sends no reply of its own, so its marker row stays.
             _file_composed_reply(turn_msgs, final_content)
+        if sent_by_tool:
+            _stamp_replied_via_tool(turn_msgs, turn_start_idx)
         if len(self.hooks) > 0:
             _stamp_turn_observers(turn_msgs, turn_hook_meta, turn_start_idx)
 
@@ -3739,6 +3743,10 @@ class TurnPathMixin:
                 # Same rename as the notice above, for the same reason: without
                 # it a reload cannot tell a marker the model wrote from an answer.
                 entry["silent"] = True
+            if entry.pop(_REPLIED_VIA_TOOL_KEY, None):
+                # Same rename again: a stored reader asks whether the message tool
+                # answered the turn, and only the live turn could tell.
+                entry["replied_via_tool"] = True
             if tool_diff := entry.pop("_diff", None):
                 # Renamed for storage: the private spelling kept it out of the
                 # live provider payload, the plain one is what session.resume

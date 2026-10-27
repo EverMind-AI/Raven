@@ -4173,6 +4173,48 @@ async def test_a_proactive_turn_that_skips_after_send_stays_silent(workspace, mo
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments,fails,answered",
+    [
+        pytest.param(_SEND, False, True, id="sent_to_its_own_chat"),
+        pytest.param(_SEND, True, False, id="a_send_that_failed"),
+        pytest.param('{"content": "here is your answer", "chat_id": "c2"}', False, False, id="sent_to_another_chat"),
+    ],
+)
+async def test_a_stored_turn_reads_the_message_tools_live_verdict(workspace, monkeypatch, arguments, fails, answered):
+    """A turn the runtime opened calls the message tool and closes on the marker. The live turn counts it
+    answered only when the tool sent to the turn's own chat (``MessageTool.sent_in_turn``); the session
+    list and an ACP replay read the stored turn by that same verdict, so a send that failed or went to
+    another chat leaves a Silent Turn there too, and is taken back whole."""
+    from raven.acp.replay import replay
+    from raven.rpc.methods.session import _map_to_wire
+
+    _served(monkeypatch, [_tool_reply("message", arguments), _reply("[SILENT]")])
+    agent = _litellm_agent(workspace)
+    _wire_message_tool(agent)
+    if fails:
+
+        async def unreachable(content: str, media: list[str]) -> None:
+            raise ConnectionError("the channel is down")
+
+        agent.tools.get("message").set_send_callback(unreachable)
+    silence: dict[str, bool] = {}
+
+    out = await agent._process_message(
+        _turn("check the build", Origin.CRON), session_key="cron:job", origin=Origin.CRON, silence=silence
+    )
+
+    assert out is None
+    assert silence == ({} if answered else {"silent": True}), "the live verdict"
+    rows = agent.sessions.get_or_create("cron:job").messages
+    assert rows[-1]["silent"] is True
+    replayed = replay(_map_to_wire(rows, "cron:job"), session_id="cron:job")
+    assert bool(replayed) is answered, "a Silent Turn the runtime opened replays as nothing"
+    [listed] = agent.sessions.list_sessions()
+    assert bool(listed["last_message_at"]) is answered, "and does not move the session list"
+
+
+@pytest.mark.asyncio
 async def test_a_marker_after_the_message_tool_sent_is_not_a_silent_turn(workspace, monkeypatch):
     """The reader has the answer from the tool; the marker only says there is nothing more.
     A turn that answered is not a turn that said nothing, and a surface told otherwise would drop the answer."""

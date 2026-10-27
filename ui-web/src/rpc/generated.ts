@@ -254,6 +254,10 @@ export interface TranscriptMessage {
    * Set on an assistant entry whose text, the model's last word in its turn, is its silence marker (from a turn the runtime opened, possibly with a note around it), not an answer. A reader draws one muted line and never treats `text` as the answer. A turn the message tool had already answered can still carry it: that reply reached the reader, and a reload draws the muted line after it. Distinct from `notice`, which marks a row the runtime wrote; this row is the model's own.
    */
   silent?: boolean;
+  /**
+   * Set on the assistant entry that closes a turn whose reply the message tool sent to the turn's own chat: the live turn's verdict, so a send that failed or went to another chat does not set it. Such a turn answered whatever it ends on, `silent` included, and is not a Silent Turn.
+   */
+  replied_via_tool?: boolean;
 }
 export interface TranscriptToolCall {
   id: string;

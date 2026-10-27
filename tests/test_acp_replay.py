@@ -408,7 +408,7 @@ class TestRuntimeMarks:
             {"role": "user", "content": "[Unprompted report from 'ci']\n\n3 tests failed", "origin": "subagent"},
             {"role": "assistant", "content": "", "tool_calls": calls},
             {"role": "tool", "content": "Message sent to acp:s1", "tool_call_id": "m1", "name": "message"},
-            {"role": "assistant", "content": "[SILENT]", "silent": True},
+            {"role": "assistant", "content": "[SILENT]", "silent": True, "replied_via_tool": True},
         ]
 
         updates = _valid(replay(_map_to_wire(stored, "acp:s1"), session_id="acp:s1"))
@@ -417,6 +417,28 @@ class TestRuntimeMarks:
         assert updates[1]["toolCallId"] == updates[2]["toolCallId"] == "m1"
         assert updates[1]["_meta"] == {"raven.toolName": "message"}
         assert "[SILENT]" not in json.dumps(updates)
+
+    @pytest.mark.parametrize(
+        "arguments,result",
+        [
+            pytest.param({}, "Error sending message: the channel is down", id="a_send_that_failed"),
+            pytest.param({"chat_id": "c2"}, "Message sent to acp:c2", id="sent_to_another_chat"),
+        ],
+    )
+    def test_a_runtime_turn_whose_message_call_answered_nobody_replays_as_nothing(self, arguments, result):
+        """A message call is not an answer by being made: the live turn counted it only when it
+        sent to the turn's own chat, and filed that verdict on the row that closes the turn. A
+        turn that closes on the marker without it is a Silent Turn, taken out whole."""
+        said = json.dumps({"content": "The build finished with 3 failing tests.", **arguments})
+        calls = [{"id": "m1", "type": "function", "function": {"name": "message", "arguments": said}}]
+        stored = [
+            {"role": "user", "content": "[Unprompted report from 'ci']\n\n3 tests failed", "origin": "subagent"},
+            {"role": "assistant", "content": "", "tool_calls": calls},
+            {"role": "tool", "content": result, "tool_call_id": "m1", "name": "message"},
+            {"role": "assistant", "content": "[SILENT]", "silent": True},
+        ]
+
+        assert replay(_map_to_wire(stored, "acp:s1"), session_id="acp:s1") == []
 
     def test_a_person_answered_with_silence_still_replays_their_message(self):
         """Only a turn the runtime opened is left out: a person's own message is

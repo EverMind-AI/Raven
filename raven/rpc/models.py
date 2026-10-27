@@ -4006,6 +4006,15 @@ class TranscriptMessage(_Strict):
             "marks a row the runtime wrote; this row is the model's own."
         ),
     )
+    replied_via_tool: bool | None = Field(
+        default=None,
+        description=(
+            "Set on the assistant entry that closes a turn whose reply the message tool sent to the "
+            "turn's own chat: the live turn's verdict, so a send that failed or went to another chat "
+            "does not set it. Such a turn answered whatever it ends on, `silent` included, and is not "
+            "a Silent Turn."
+        ),
+    )
 
 
 class SessionCloseParams(_Strict):
