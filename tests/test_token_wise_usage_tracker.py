@@ -450,6 +450,24 @@ async def test_in_process_subagent_usage_is_written_as_delegated_usage(tmp_path:
     assert got.cost_usd == pytest.approx(0.2)
 
 
+async def test_a_delegated_call_without_counts_is_booked_with_its_cost_alone(tmp_path: Path):
+    """Its counts are stored as missing, not as the zeros ``normalize_usage``
+    fills in: a zero says the call read and wrote nothing."""
+    from datetime import datetime, timedelta, timezone
+
+    from raven.token_wise.usage_tracker import delegated_usage, record_delegated_usage
+
+    since = datetime.now(timezone.utc) - timedelta(seconds=1)
+    with usage_context.bind("cli:root", {"root_session_key": "cli:root", "telemetry_dir": str(tmp_path)}):
+        await record_delegated_usage({"cost_usd": 0.0125}, model="m", root="cli:root", task_id="t1", counts_known=False)
+
+    (row,) = [json.loads(line) for path in tmp_path.glob("usage-*.jsonl") for line in path.read_text().splitlines()]
+    assert (row["input_tokens"], row["output_tokens"], row["cost_usd"]) == (None, None, 0.0125)
+    got = delegated_usage("cli:root", since, telemetry_dir=tmp_path)
+    assert (got.calls, got.input_missing_calls, got.output_missing_calls) == (1, 1, 1)
+    assert got.cost_usd == pytest.approx(0.0125)
+
+
 def test_delegated_usage_keeps_to_its_window_and_to_reported_prices(tmp_path: Path):
     from datetime import datetime, timedelta, timezone
 

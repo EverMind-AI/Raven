@@ -2223,11 +2223,16 @@ class AcpAgentBackend:
         cost, spent = _turn_cost(collector.usage, before)
         if spent is not None and self.is_stateful:
             self._session_spend[session_id] = spent
-        if (usage := _ledger_counts(collector.turn_counts(answered))) is None:
+        counts = _ledger_counts(collector.turn_counts(answered))
+        if counts is None and cost is None:
             return
         model = self._model_pushed.get(session_id) or self._model_baseline.get(session_id) or ""
         await activity.note_ledger_usage(
-            {**usage, "cost_usd": cost}, model=model, session_key=session_key, task_id=task_id
+            {**(counts or {}), "cost_usd": cost},
+            model=model,
+            session_key=session_key,
+            task_id=task_id,
+            counts_known=counts is not None,
         )
 
     def _provider_refusal(self, reply: str) -> str | None:

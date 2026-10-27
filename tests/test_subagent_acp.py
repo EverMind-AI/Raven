@@ -2660,6 +2660,36 @@ async def test_a_third_party_agents_turn_is_booked_in_the_usage_ledger(tmp_path:
     assert got.cost_usd == pytest.approx(0.0125)
 
 
+@pytest.mark.parametrize(
+    "reported",
+    [
+        {},
+        {
+            "ACP_STUB_AGENT_NAME": "codex-acp",
+            "ACP_STUB_AGENT_VERSION": "2.1.1",
+            "ACP_STUB_PROMPT_USAGE": json.dumps(_TURN_COUNTS),
+        },
+    ],
+    ids=["no-counts", "last-call-counts"],
+)
+async def test_a_turn_whose_counts_are_unknown_still_books_its_cost(tmp_path: Path, reported: dict[str, str]) -> None:
+    """``usage_update`` carries the window and the cost and no counts, so a turn
+    can arrive with a cost and no counts that are the turn's. Its cost is booked
+    and its counts are left missing: not dropped with them, nor written as zeros."""
+    got = await _booked(tmp_path, ACP_STUB_COST_PER_PROMPT="0.0125", **reported)
+
+    assert got.calls == 1
+    assert got.cost_usd == pytest.approx(0.0125) and got.cost_missing_calls == 0
+    assert (got.input_missing_calls, got.output_missing_calls) == (1, 1)
+
+
+async def test_a_turn_with_neither_counts_nor_cost_books_nothing(tmp_path: Path) -> None:
+    """A row that knows nothing would still count as a call."""
+    got = await _booked(tmp_path)
+
+    assert got.calls == 0
+
+
 async def test_a_sessions_cumulative_cost_is_booked_once(tmp_path: Path) -> None:
     """``usage_update.cost`` is the session's cumulative cost, so each turn books
     what it added: two turns reporting 0.01 then 0.02 cost 0.02, not 0.03."""
