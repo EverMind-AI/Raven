@@ -88,7 +88,7 @@ from raven.agent.subagent.acp_registry_presets import (
 )
 from raven.agent.subagent.mirasim_presets import MIRASIM_PRESETS, MIRASIM_SHIM_PRESETS
 from raven.agent.subagent.vendored_agents import _resolved_python
-from raven.utils.commands import resolve_subagent_command
+from raven.utils.commands import command_quote, resolve_subagent_command
 
 # Command templates for the cli transport, kept as reference rather than as
 # presets. Nothing reads them: they exist because the cli backend still runs
@@ -760,7 +760,7 @@ def diagnose_hint_for(cfg: Any) -> str | None:
     if template is None:
         return None
     model = str(getattr(cfg, "model", "") or "").strip()
-    return template.replace("{model}", f" --model {model}" if model else "")
+    return template.replace("{model}", f" --model {command_quote(model)}" if model else "")
 
 
 def upgrade_hint_for(cfg: Any) -> str | None:
