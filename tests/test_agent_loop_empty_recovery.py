@@ -988,6 +988,37 @@ async def test_a_cut_reply_with_nothing_in_it_is_continued_with_more_room(worksp
 
 
 @pytest.mark.asyncio
+async def test_a_continuation_near_the_window_asks_no_more_room_than_the_prompt_leaves(workspace, monkeypatch):
+    """Near the window a call is sized to the room beside its prompt, and a provider that checks
+    ``prompt + max_tokens <= window`` refuses anything larger, so the doubled ceiling of a
+    continuation is held to that room as well."""
+    monkeypatch.setattr(rates, "resolve_max_output_tokens", lambda *_a, **_k: 32_768)
+    calls = _served(monkeypatch, [_reply("", finish="length")] * 4)
+    agent = _litellm_agent(workspace, max_tokens=4096)
+    agent._reply_room = lambda messages, tools, model: 3000
+
+    await _fail(agent)
+
+    assert len(calls) == 4, "the cut reply was continued"
+    assert [call["max_tokens"] for call in calls] == [3000] * 4
+
+
+@pytest.mark.asyncio
+async def test_a_continuation_keeps_doubling_until_the_room_beside_its_prompt_runs_out(workspace, monkeypatch):
+    """The room only ever lowers the doubled ceiling: while it is wider, the continuation asks
+    for the doubled value, not for the whole room."""
+    monkeypatch.setattr(rates, "resolve_max_output_tokens", lambda *_a, **_k: 32_768)
+    calls = _served(monkeypatch, [_reply("", finish="length")] * 4)
+    agent = _litellm_agent(workspace, max_tokens=4096)
+    rooms = iter([None, 20_000, 20_000, 20_000])
+    agent._reply_room = lambda messages, tools, model: next(rooms)
+
+    await _fail(agent)
+
+    assert [call["max_tokens"] for call in calls] == [4096, 8192, 16384, 20_000]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "cuts_before_the_tool,attempts",
     [

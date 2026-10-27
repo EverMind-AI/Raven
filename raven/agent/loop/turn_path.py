@@ -1133,6 +1133,9 @@ class TurnPathMixin:
         )
         iter_msg_base = 0
         pending_gen_overrides: dict[str, Any] | None = None
+        # The overrides an output-limit continuation set, compared by identity: an unchanged
+        # resend carries the same dict on, and a hook's rollback brings a dict of its own.
+        continuation_overrides: dict[str, Any] | None = None
 
         async def _announce_wait(detail: str) -> None:
             """Say the loop is waiting before it asks the model again, as the status line the next output replaces.
@@ -1421,11 +1424,13 @@ class TurnPathMixin:
             # history strategy's trigger holds back: near that line the model's
             # whole ceiling no longer fits, and a provider that checks
             # ``prompt + max_tokens <= window`` refuses the request outright. A
-            # hook's own ``max_tokens`` override stands.
-            if "max_tokens" not in gen_overrides and (
-                reply_room := self._reply_room(call_messages, call_tools, call_model)
+            # hook's own ``max_tokens`` override stands; the doubled ceiling of an
+            # output-limit continuation does not, since the same refusal awaits it.
+            if "max_tokens" not in gen_overrides or (
+                call_overrides is not None and call_overrides is continuation_overrides
             ):
-                gen_overrides["max_tokens"] = reply_room
+                if reply_room := self._reply_room(call_messages, call_tools, call_model):
+                    gen_overrides["max_tokens"] = min(gen_overrides.get("max_tokens", reply_room), reply_room)
             # A reply that is a silence marker is shown to no one, so the start of one is
             # held until the loop has read the reply. A turn from a proactive origin holds the
             # whole call, because its marker may close a report and only the end of the call
@@ -2323,12 +2328,14 @@ class TurnPathMixin:
                     # and given more room. Effort is left alone -- there was no
                     # reasoning to blame. The ceiling doubles per continuation from
                     # the one the first cut call carried; the provider clamps it
-                    # to what the model accepts (``send_max_tokens``).
+                    # to what the model accepts (``send_max_tokens``), and the call
+                    # to the room its prompt leaves in the window.
                     recovery.continuations += 1
                     if recovery.max_tokens_base is None:
                         recovery.max_tokens_base = response.max_tokens
                     if recovery.max_tokens_base:
                         pending_gen_overrides = {"max_tokens": recovery.max_tokens_base * 2**recovery.continuations}
+                        continuation_overrides = pending_gen_overrides
                     logger.warning(
                         "empty-recovery: reply cut at the output ceiling with nothing in it; continuation {}/{} (max_tokens {})",
                         recovery.continuations,
