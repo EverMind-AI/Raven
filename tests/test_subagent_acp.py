@@ -28,7 +28,7 @@ from unittest.mock import patch
 import pytest
 from loguru import logger
 
-from raven.acp_client.acp_agent import AcpAgentBackend, AcpEmptyTurnError
+from raven.acp_client.acp_agent import _SESSION_EFFORT, AcpAgentBackend, AcpEmptyTurnError
 from raven.acp_client.acp_dialects import ToolCall
 from raven.acp_client.capabilities import (
     AcpEffortChoice,
@@ -78,7 +78,11 @@ async def _no_pooled_connections():
     The pool is process state by design (two backends of one agent must share a
     connection), so without this a stub process would outlive its test and the
     next test would be handed a connection configured for a different mode.
+    The effort map is process state for the same reason -- a hot apply replaces
+    the backend while the session continues -- and stub sessions reuse ids like
+    ``s1``, so it is cleared with the pool.
     """
+    _SESSION_EFFORT.clear()
     yield
     await close_pool()
 
@@ -320,7 +324,7 @@ async def test_an_effort_on_a_mode_menu_is_sent_through_set_mode() -> None:
 
     backend = AcpAgentBackend(name="a", command="unused", snapshot=snapshot)
     client = _Client()
-    backend._mode_baseline["s1"] = "low"
+    backend._note_session_mode("s1", {"modes": {"currentModeId": "low"}})
 
     await backend._set_effort(client, "s1", "high", fallback_mode=None, budget=1)
     await backend._set_effort(client, "s1", None, fallback_mode=None, budget=1)
@@ -7625,6 +7629,45 @@ async def test_clearing_an_effort_puts_the_session_back_on_the_agents_own(tmp_pa
 
     connection = await get_pool().acquire(
         name="cleareffort", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    frames = [ln for ln in connection.client.stderr_tail(4000).splitlines() if "effort=" in ln]
+    assert any("effort=high" in ln for ln in frames), "the switch"
+    assert frames[-1].endswith("effort=default"), f"the restore, got {frames!r}"
+
+
+async def test_clearing_an_effort_survives_a_backend_replacement(tmp_path: Path) -> None:
+    """A config change hot-applies the table and replaces every backend instance.
+
+    The session outlives that replacement, so the baseline and the pushed value
+    have to live somewhere other than the instance: a fresh backend that only
+    trusts its own empty ``pushed`` never sends the session back, and a live
+    direct chat keeps the effort the row just cleared."""
+    cfg = stub_config("cleareffort2")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    snapshot = _snapshot("cleareffort2", cfg, can_resume=True, can_load=True)
+    key = {"workspace": tmp_path, "executor": None, "session_key": "s", "instance": "h1"}
+
+    first = AcpAgentBackend(
+        name="cleareffort2",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=snapshot,
+        registry=registry,
+    )
+    await first.run("ping", task_id="t1", session_effort="high", **key)
+
+    # The hot-applied replacement, sharing only the session registry.
+    second = AcpAgentBackend(
+        name="cleareffort2",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=snapshot,
+        registry=registry,
+    )
+    await second.run("ping", task_id="t2", **key)
+
+    connection = await get_pool().acquire(
+        name="cleareffort2", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
     )
     frames = [ln for ln in connection.client.stderr_tail(4000).splitlines() if "effort=" in ln]
     assert any("effort=high" in ln for ln in frames), "the switch"
