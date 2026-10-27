@@ -575,6 +575,13 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- The *Mode* row of the WebUI's model picker (the sub-agent tier) read the
+  conversation being left rather than the one being opened: a switch asked
+  before the page's current session had moved over, so opening B from A
+  painted A's rung on B, and picking that rung on B was taken as already in
+  force. The row now reads the opened conversation under its own switch, and
+  an answer overtaken by a later switch is dropped rather than painted, as the
+  *Reasoning effort* row and the permission chip already do.
 - A key the vendor refuses is no longer called connected. The settings page
   and the first-run wizard ask the vendor about a key before storing it
   (`model.check_key`): a key answered with 401, or named invalid, is refused

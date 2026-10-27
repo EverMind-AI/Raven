@@ -273,7 +273,7 @@ export function switchToDraft(): void {
   // conversation just left. A null session omits the field, which is the
   // default's own answer. The tier and the permission mode are the same.
   void loadProviders(null, gen)
-  void loadTier()
+  void loadTier(null, gen)
   void loadEffort(null, gen)
   void loadPermMode(null, gen)
   $('#title')!.textContent = t('gui.new_task')
@@ -309,8 +309,11 @@ export async function switchTo(s: SessRow, turnOver = false): Promise<void> {
      and the reconnect path reopens the SAME id. The loop holds session policies
      in memory (`_session_policies`, no persistence), so a gateway restart puts
      every session back on the catalogue default -- and the chip went on naming
-     the tier from before the gap. */
-  void loadTier()
+     the tier from before the gap. Keyed to s.id and the switch, as the effort
+     and the permission mode are: the current session is not switched over
+     until below, so a read of "the current one" here was a read of the
+     conversation being left, and its rung was painted on the one opened. */
+  void loadTier(s.id, gen)
   /* The effort is kept on the session's record, so a reopen reads what it
      was left at -- including after a gateway restart, unlike the tier. Keyed
      to s.id and the switch, as the permission mode is: the current session

@@ -63,9 +63,17 @@ export interface TierReply {
 
 /* The seam, published by the live layer over `session.set_mode` and by the demo
    shell over a fixture. Both calls take the same shape the wire does: no `mode`
-   reports, a `mode` switches. */
+   reports, a `mode` switches.
+
+   `read` names the conversation it is about and the switch it was started
+   under, the way `loadPermMode` and the effort's read do: a switch asks for
+   the conversation being OPENED before the page's current session moves over
+   to it, so a read that asked "whichever is current" asked about the one
+   being left -- and painted its rung on the new view, where a pick of that
+   very rung was then taken as already in force. The source answers null for a
+   read whose switch has been overtaken, and null paints nothing. */
 export interface TierSource {
-  read(): Promise<TierReply>
+  read(sid?: string | null, gen?: number): Promise<TierReply | null>
   set(mode: string): Promise<TierReply>
 }
 
@@ -306,12 +314,18 @@ function absorb(reply: TierReply | null | undefined): void {
    module's -- see the live source, which stages one the way it already stages a
    model picked before the session exists.
 
+   `sid` is the conversation the read is about -- the one being opened, which
+   is not yet the current one when a switch asks -- and `gen` the switch it
+   belongs to; a caller with neither is reading the view as it stands. A read
+   the source dropped (null) paints nothing and loses nothing: the chip goes on
+   showing the last answer about the view on screen, and no listener is told.
+
    A failure hides the chip rather than drawing a control whose state is unknown.
    There is nothing useful to show, and a chip that names a tier the next turn
    will not run at is worse than no chip. */
-export async function load(): Promise<void> {
+export async function load(sid?: string | null, gen?: number): Promise<void> {
   try {
-    absorb(await ds('tier').read())
+    absorb(await ds('tier').read(sid, gen))
   } catch {
     loaded = false
     draw()
