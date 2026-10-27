@@ -2685,6 +2685,29 @@ async def test_a_stray_closing_think_tag_after_a_cut_marker_shows_none_of_it(wor
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "script,final",
+    [
+        pytest.param(lambda: [_finished_stream("<think>abc")], "<think>abc", id="uncut"),
+        pytest.param(
+            lambda: [_DyingStream("<think>abc"), _unfinished_empty_stream()],
+            "<think>abc\n\n" + PARTIAL_STREAM_NOTE,
+            id="cut_then_a_failed_continuation",
+        ),
+    ],
+)
+async def test_a_thought_never_closed_is_read_as_text_cut_or_not(workspace, monkeypatch, script, final):
+    """Only a closed think block comes out of a reply; one never closed is its text, with no cut as after
+    one."""
+    _served(monkeypatch, script())
+    _recorded_sleeps(monkeypatch)
+
+    out, outcome, _last, _streamed = await _ends_on(_litellm_agent(workspace), Origin.USER)
+
+    assert out == final and outcome.silent is False
+
+
+@pytest.mark.asyncio
 async def test_an_ordinary_cut_answer_streams_as_it_did(workspace, monkeypatch):
     """The control: a person's answer is out from its first letter, and its continuation follows as it comes."""
     _served(monkeypatch, [_DyingStream("The answer is "), _finished_stream("42", ".")])

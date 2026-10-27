@@ -2439,7 +2439,8 @@ class TurnPathMixin:
                 own_marker = action is RecoveryAction.SILENT
                 if recovery.parts:
                     # The answer is what streamed across every call, joined, read as a reply with
-                    # no cut is: think blocks out of the whole, since a cut can split one. A
+                    # no cut is: closed think blocks out of the whole, since a cut can split one,
+                    # and one never closed left in as text. A
                     # continuation inside a block the cut left open is read only that way, as the
                     # rest of a thought and not a reply of its own. Otherwise one that came back
                     # empty, as think-tag debris or as a marker leaves the partial as it was.
