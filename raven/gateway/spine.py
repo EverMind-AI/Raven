@@ -100,7 +100,7 @@ class GatewayTurnRunner(AgentTurnRunner):
             taken = drain()
             people = [merged.source for merged in taken if merged.origin is Origin.USER]
             if people:
-                self._merged.setdefault(req.turn_id, []).extend(people)
+                self._merged.setdefault(req.turn_id or "", []).extend(people)
             return taken
 
         return noted
