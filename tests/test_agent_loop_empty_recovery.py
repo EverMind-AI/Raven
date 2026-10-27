@@ -227,6 +227,12 @@ def _kind(content, finish="stop", *, origin=Origin.USER, streamed=False, prev_ha
         ("", "content_filter", {}, Origin.USER, False, ReplyKind.REFUSAL),
         ("I can't", "refusal", {}, Origin.USER, False, ReplyKind.REFUSAL),
         ("partial", STREAM_CUT, {}, Origin.USER, True, ReplyKind.NETWORK_CUT),
+        # A cut stream's text is a fragment, never a whole reply, so it is not read as a marker: the
+        # model may have been going on past it.
+        ("[SILENT]", STREAM_CUT, {}, Origin.USER, True, ReplyKind.NETWORK_CUT),
+        ("No reply", STREAM_CUT, {}, Origin.CRON, True, ReplyKind.NETWORK_CUT),
+        ("nothing new\n\n[SILENT]", STREAM_CUT, {}, Origin.CRON, True, ReplyKind.NETWORK_CUT),
+        ("[SILENT]", STREAM_CUT, {}, Origin.USER, False, ReplyKind.SILENT),
         # Only a stream that died is cut: a clean close without a terminal chunk, and a whole body that
         # names no finish, both read ``unknown`` and are whole answers.
         ("partial", "unknown", {}, Origin.USER, True, ReplyKind.TEXT),
@@ -3840,6 +3846,64 @@ async def test_a_marker_after_a_cut_answer_leaves_what_streamed_as_the_answer(wo
     assert "".join(sink.text) == "Hello ", "the marker is held back and dropped all the same"
     assert (messages[-1]["role"], messages[-1]["content"]) == ("assistant", "Hello")
     assert "_silent" not in messages[-1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "origin,cut", [(Origin.CRON, "No reply"), (Origin.USER, "[SILENT]")], ids=["proactive", "a_persons"]
+)
+async def test_a_stream_cut_right_after_a_marker_is_continued_not_ended_silent(workspace, monkeypatch, origin, cut):
+    """What a cut stream sent is the start of a reply, not the whole of one, so it is continued like any
+    other cut answer; the model was going on past what looked like a marker."""
+    calls = _served(monkeypatch, [_DyingStream(cut), _finished_stream(" yet from the vendor.")])
+    sink = _Sink()
+
+    final, _used, messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=sink.delta, origin=origin
+    )
+
+    assert len(calls) == 2
+    assert calls[1]["messages"][-1]["content"] == NETWORK_CUT_CONTINUATION
+    assert final == f"{cut} yet from the vendor." and outcome.silent is False
+    assert "_silent" not in messages[-1]
+
+
+def _empty_finish() -> _Stream:
+    return _Stream([_chunk(finish_reason="stop")], "stop")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", [Origin.USER, Origin.CRON])
+@pytest.mark.parametrize(
+    "continuation",
+    [
+        pytest.param(lambda: _finished_stream("[SILENT]"), id="the_marker"),
+        pytest.param(lambda: _finished_stream("nothing new\n\n[SILENT]"), id="the_marker_with_a_note"),
+    ],
+)
+async def test_a_continuation_that_is_a_marker_ends_the_turn_as_an_empty_one_does(
+    workspace, monkeypatch, origin, continuation
+):
+    """After a cut answer the reader holds, a continuation that is a marker under the turn's rule has
+    nothing to add, as an empty one has not: what streamed is the answer, with the same row, status
+    and stream as the empty continuation leaves."""
+
+    async def run(second):
+        _served(monkeypatch, [_DyingStream("Hello "), second])
+        sink = _Sink()
+        final, _used, messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
+            _seed(), on_token_delta=sink.delta, origin=origin
+        )
+        return final, outcome.status, outcome.silent, messages[-1].get("content"), "_silent" in messages[-1], sink.text
+
+    marker = await run(continuation())
+    empty = await run(_empty_finish())
+
+    if origin is Origin.USER and "nothing new" in str(marker[0]):
+        # A person's turn honours only the bare marker, so the noted one is text it delivers.
+        assert marker[0] == "Hello nothing new\n\n[SILENT]"
+    else:
+        assert marker == empty == ("Hello", "completed", False, "Hello", False, ["Hello "])
 
 
 @pytest.mark.asyncio

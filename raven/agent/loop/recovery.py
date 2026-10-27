@@ -10,10 +10,10 @@ A model reply that carries no tool call is read as one :class:`ReplyKind`, and
 (:class:`RecoveryState`) to the next :class:`RecoveryAction`. The first row that
 matches wins:
 
-  text                 a reply to deliver                      COMPLETE
+  stream cut           text from a stream that died            CONTINUE, then COMPLETE with the partial
   silence marker       the model chose to say nothing          SILENT
   refusal              the upstream declined                   FALLBACK once, then FAIL
-  stream cut           text from a stream that died            CONTINUE, then COMPLETE with the partial
+  text                 a reply to deliver                      COMPLETE
   thinking only        reasoning and no answer                 PREFILL, STEP_DOWN, FALLBACK, FAIL
   cut, nothing in it   stopped at the ceiling, empty           CONTINUE with more room, then FAIL
   empty after a tool   nothing right after tool results        NUDGE once, then as an empty reply
@@ -386,20 +386,24 @@ def reply_kind(
 ) -> ReplyKind:
     """What a reply that carries no tool call is, by the first of these rules it meets.
 
-    ``visible`` is ``response.content`` once think blocks are out. A refusal is named before text
-    because the text is the model's explanation of it, and thinking before a cut because a reply that
-    thought and was cut is thinking-only: TRUNCATED is a cut with no reasoning behind it.
-    ``reply_awaited`` is a turn whose caller waits on its text, where a marker is text like any other.
+    ``visible`` is ``response.content`` once think blocks are out. A stream cut is named first: its
+    text is the start of a reply the model may have been going on past, never a whole one, so it is
+    not read as a marker. A refusal is named before text because the text is the model's explanation
+    of it, and thinking before a cut because a reply that thought and was cut is thinking-only:
+    TRUNCATED is a cut with no reasoning behind it. ``reply_awaited`` is a turn whose caller waits on
+    its text, where a marker is text like any other.
     """
     has_text = bool(visible and visible.strip())
+    # Only a stream that died carries ``STREAM_CUT``. A clean close without a terminal chunk, and a body
+    # that names no finish, read ``unknown`` and are whole answers.
+    if has_text and streamed and response.finish_reason == STREAM_CUT:
+        return ReplyKind.NETWORK_CUT
     if has_text and not reply_awaited and is_silent_reply(visible, origin):
         return ReplyKind.SILENT
     if response.finish_reason in DECLINED_FINISH_REASONS:
         return ReplyKind.REFUSAL
     if has_text:
-        # Only a stream that died carries ``STREAM_CUT``. A clean close without a terminal chunk, and a body
-        # that names no finish, read ``unknown`` and are whole answers.
-        return ReplyKind.NETWORK_CUT if streamed and response.finish_reason == STREAM_CUT else ReplyKind.TEXT
+        return ReplyKind.TEXT
     if has_thinking(response) or (token_count(_usage(response).get("reasoning_tokens")) or 0) > 0:
         return ReplyKind.THINKING_ONLY
     if response.truncated:
