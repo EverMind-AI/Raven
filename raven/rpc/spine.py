@@ -238,10 +238,18 @@ class RpcTurnRunner(AgentTurnRunner):
         # delivers a cron.delivered event to every session (the cron:<job_id>
         # conversation has no subscriber, so its hub deliverables no-op). Mirrors
         # the gateway's GatewayTurnRunner read-back path.
+        #
+        # Its usage is stashed as any turn's is. A wake runs on the session's own
+        # conversation, and its message.complete reports the lane's slot: left to
+        # the turn before (one that did not own the lane, so never cleared it),
+        # that turn's spend was reported again.
         if req.origin is Origin.CRON:
             text_sink: dict[str, str] = {}
+            cron_usage: dict[str, Any] = {}
             try:
-                outcome = await self._loop.run_turn(req, emit, drain, stream=False, text_sink=text_sink)
+                outcome = await self._loop.run_turn(
+                    req, emit, drain, stream=False, usage_sink=cron_usage, text_sink=text_sink
+                )
             finally:
                 # A turn that fails stores nothing and the submitter pops by
                 # conversation, so the previous run's text must not be left for
@@ -250,6 +258,7 @@ class RpcTurnRunner(AgentTurnRunner):
                     self._readback_texts.pop(req.conversation, None)
             if req.conversation is not None and (text := text_sink.get("text")) is not None:
                 self._readback_texts[req.conversation] = text
+            self._usages[cid] = dict(cron_usage)
             return outcome
         usage_sink: dict[str, Any] = {}
         outcome = await self._loop.run_turn(req, emit, drain, stream=True, usage_sink=usage_sink)
