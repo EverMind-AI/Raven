@@ -77,7 +77,7 @@ class RelayServer:
         self._providers: OrderedDict[str, LLMProvider] = OrderedDict()
         self._building: dict[str, asyncio.Future[LLMProvider]] = {}
         self.loop: asyncio.AbstractEventLoop | None = None
-        """The loop that answers this server's connections; a server is no use to another."""
+        """The loop that answers this server's connections, and the only one that may close it."""
 
     @property
     def serving(self) -> bool:
@@ -260,6 +260,12 @@ async def relay_env() -> dict[str, str]:
     global _SERVER, _STARTING
     loop = asyncio.get_running_loop()
     if _SERVER is not None and _SERVER.loop is not loop:
+        if _SERVER.loop is not None and _SERVER.loop.is_running():
+            # A loop in another thread serves it, and its socket answers an
+            # agent launched from this loop as well as its own.
+            if _SERVER.serving:
+                return _SERVER.env()
+            raise RuntimeError("the relay belongs to an event loop running in another thread")
         # Started under a loop that has ended (a CLI turn is one asyncio.run).
         _SERVER.abandon()
         _SERVER, _STARTING = None, None

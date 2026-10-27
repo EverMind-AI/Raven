@@ -469,6 +469,26 @@ def test_a_template_ends_with_the_event_loop_that_started_it(tmp_path: Path) -> 
         asyncio.run(fork_template.close_template())
 
 
+async def test_a_loop_in_another_thread_leaves_this_loops_agents_running(tmp_path: Path) -> None:
+    """The RPC server runs a CLI command's own asyncio.run on a worker thread, beside its own loop."""
+    script = _product(tmp_path, "import time\nprint('up', flush=True)\ntime.sleep(600)\n")
+    endpoint = await _launch(script)
+    try:
+        assert await asyncio.wait_for(endpoint.readline(), timeout=60) == b"up\n"
+        template = fork_template._TEMPLATE
+
+        async def launch_beside() -> object:
+            base = dict(os.environ)
+            return await fork_launch([sys.executable, str(script)], base, str(tmp_path), base_env=base)
+
+        assert await asyncio.to_thread(asyncio.run, launch_beside()) is None
+        assert fork_template._TEMPLATE is template and template is not None and template.running
+        os.kill(endpoint.pid, 0)
+        assert endpoint.returncode is None
+    finally:
+        endpoint.release()
+
+
 async def _deaf_template(tmp_path: Path, monkeypatch) -> fork_template.ForkTemplate:
     """A template that reports ready and never reads its stdin, so letting go of it does not stop it."""
     (tmp_path / "deaf_template.py").write_text(

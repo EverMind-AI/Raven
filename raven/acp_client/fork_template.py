@@ -19,7 +19,8 @@ point, as ``python -m raven --fork-template``, and never imports it.
 host holds: letting go of it asks the template to stop. It belongs to the event
 loop it was started on -- its pipes and the watcher that reaps it are that
 loop's -- so it is ended with that loop (``ForkTemplate._hold``), and a host on a
-later loop starts another.
+later loop starts another. A loop running beside it in another thread launches
+the ordinary way rather than end the agents that loop still has.
 
 **A fork.** The host hands over the agent's argv, environment and working
 directory, and the three pipe ends that become its stdin, stdout and stderr.
@@ -494,6 +495,11 @@ async def fork_launch(
         # caller hears why; a fork would only see the agent die.
         return None
     if _TEMPLATE is not None and _TEMPLATE.loop is not asyncio.get_running_loop():
+        if _TEMPLATE.loop.is_running():
+            # A loop in another thread (a CLI command the RPC server runs on a
+            # worker) still holds it, and its agents would die with it: this
+            # one launches the ordinary way.
+            return None
         # Started under a loop that has ended (a CLI turn is one asyncio.run).
         _TEMPLATE.abandon()
         _TEMPLATE = None
