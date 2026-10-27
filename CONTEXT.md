@@ -887,8 +887,8 @@ on), then STEP_DOWNed: asked again at whichever of `high` and `low` lie below th
 (an unstated effort is above both), once each a turn and never at `minimal` (Codex refuses it),
 the rungs skipped that the wire cannot tell apart (`LLMProvider.reasoning_wire_keys`). A reply
 cut at the ceiling with nothing in it is CONTINUEd
-with `OUTPUT_LIMIT_CONTINUATION` and a doubling `max_tokens` (clamped by `send_max_tokens`), the
-effort untouched, then fails. Nothing right after tools is NUDGEd once, then treated as nothing.
+with `OUTPUT_LIMIT_CONTINUATION` and a doubling `max_tokens` (clamped by `send_max_tokens`, and
+near the window held to the room its prompt leaves), the effort untouched, then fails. Nothing right after tools is NUDGEd once, then treated as nothing.
 An empty reply is RETRYed: the same request resent unchanged, up to `empty_content_max_retries`
 times, after a jittered backoff -- cut short by two zero-output replies of one model and finish
 (`deterministic_empty`), or by a reply whose reported cost reaches

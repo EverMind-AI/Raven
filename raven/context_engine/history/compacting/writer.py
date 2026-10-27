@@ -643,9 +643,9 @@ class CheckpointWriter:
         if getattr(response, "error_classification", None) is not None:
             # A transport that classified the call as an error and still handed
             # back whatever text arrived. ``finish_reason`` cannot be trusted to
-            # say so: the provider layer defaults an absent one to "stop", so a
-            # failed route that returned a fragment reads here exactly like a
-            # completed reply. Parsing the fragment is how a partial answer
+            # say so: a missing one reads "unknown" and an ordinary one "stop",
+            # and this call treats neither as a failure, so a failed route that
+            # returned a fragment reads here exactly like a completed reply. Parsing the fragment is how a partial answer
             # becomes a checkpoint that claims the span held only what the
             # fragment happened to mention.
             logger.warning(
