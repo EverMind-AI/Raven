@@ -2636,6 +2636,56 @@ async def test_concurrent_menu_reads_share_one_handshake(
     assert [o["models"] for o in out] == [out[0]["models"], out[0]["models"]]
 
 
+async def test_a_config_row_and_a_preset_sharing_a_name_read_separately(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """A name is not an identity across the two pools: the config row and the
+    preset it shadows have different launch commands, so sharing one in-flight
+    read would answer one of them with the other's menu."""
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {
+                            "name": "OpenCode",
+                            "preset": "opencode",
+                            "kind": "acp",
+                            "command": "configured --acp",
+                            "enabled": True,
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    commands: list[str] = []
+
+    async def fake_record(cfg):
+        commands.append(cfg.command)
+        started.set()
+        await release.wait()
+        return _menu_snapshot()
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    first = asyncio.ensure_future(subagents_refresh_models({"name": "OpenCode", "source": "config", "force": True}))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    second = asyncio.ensure_future(subagents_refresh_models({"name": "OpenCode", "source": "preset", "force": True}))
+    await asyncio.sleep(0)
+    release.set()
+
+    await asyncio.gather(first, second)
+    assert len(commands) == 2
+    assert commands[0] != commands[1]
+
+
 async def test_an_automatic_read_reuses_a_menu_read_moments_ago(
     config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
 ) -> None:
