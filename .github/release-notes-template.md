@@ -30,10 +30,11 @@ The installer puts uv, Node.js 22, Raven and its plugins in place, downloads the
 browser runtime and the word dictionary and PDF models the knowledge reader uses
 (about 110 MB), installs or offers LibreOffice, and then finishes by opening
 Raven in your browser. First-run setup happens on that page. When a download
-host cannot be reached, the installer falls back to a mirror and says so;
-`RAVEN_NO_MIRROR=1` keeps every download on its default host. The installer
-holds the terminal while the page is up; press Ctrl-C to stop it, then start
-Raven again with:
+host cannot be reached, the installer falls back to a mirror and says so, except
+for Raven's own release files, which come from GitHub Releases and have no
+mirror; `RAVEN_NO_MIRROR=1` keeps every download on its default host. The
+installer holds the terminal while the page is up; press Ctrl-C to stop it, then
+start Raven again with:
 
 ```bash
 raven web
@@ -54,8 +55,8 @@ Already running Raven? Upgrade in place -- configuration, sessions, and memory
 are preserved. On a `raven web` install whose page is served by 0.2.3 or later,
 the update row at the bottom of the sidebar does this for you, and the page
 reloads itself, still signed in, once the new version is up. A page served by
-0.2.2 or earlier, or by a source checkout, refuses it; from the command line,
-stop the page first, then upgrade:
+0.2.2 or earlier refuses it; from the command line, stop the page first, then
+upgrade:
 
 ```bash
 raven web --stop
@@ -83,10 +84,11 @@ raven resources
 wheels it ships. It never picks up a pre-release unless this install has joined
 the beta channel (a `~/.raven/beta.json` that only the beta installer writes).
 `raven upgrade --check` reports whether a newer release exists without
-installing it. Editable source checkouts are never overwritten: `raven upgrade`
-reports the checkout path and how far it is ahead of or behind `origin/main`,
-and the remedy is `git pull && ./install.sh` in the checkout. Rerunning the
-one-line installer also upgrades, and ends on the running page.
+installing it. Editable source checkouts are never overwritten, and a page
+served by one refuses the update row as well: `raven upgrade` reports the
+checkout path and how far it is ahead of or behind `origin/main`, and the remedy
+is `git pull && ./install.sh` in the checkout. Rerunning the one-line installer
+also upgrades, and ends on the running page.
 
 ## Release Status
 
