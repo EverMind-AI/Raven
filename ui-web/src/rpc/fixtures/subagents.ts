@@ -126,7 +126,12 @@ export function createSubagents(env: FixtureEnv): SubagentsFixture {
          agent behind it to ask again, so it answers the menu it holds. */
       'subagents.refresh_models': (p) => {
         const row = find(p.name)
-        return { ok: true, detail: '', models: [...(row?.model_choices || [])] }
+        return {
+          ok: true,
+          detail: '',
+          models: [...(row?.model_choices || [])],
+          effort_choices: [...(row?.effort_choices || [])],
+        }
       },
       /* What the machine sheet's connect form chooses from: the presets a
          machine's node can start, whether or not a row here holds them, with
