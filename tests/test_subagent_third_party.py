@@ -5601,6 +5601,48 @@ def test_the_empty_turn_names_the_credential_check_beside_the_command_that_print
     assert "shows whether it is signed in" in text
 
 
+def test_a_full_stderr_tail_does_not_cut_the_floor_note_and_the_command_out() -> None:
+    """The cap is the sentence's budget, and the sentence's tail is what a reader acts on.
+
+    A 1500-character stderr tail is the most an empty turn carries, and the
+    composed sentence ends past the cap: truncating the whole thing dropped the
+    floor note, the credential check and the run command together.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    empty = RuntimeError(
+        "acp agent 'OpenCode' ended its turn with no content (stopReason='end_turn'); stderr tail: "
+        + "stderr line\n" * 125
+    )
+    empty.agent_version = "1.14.31"
+    code = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp", command="opencode acp")
+    text, remedy = probe_mod._ping_refusal(code, empty)
+    assert len(text) <= 2000
+    assert text.endswith("which prints the provider's answer")
+    assert "opencode auth list" in text
+    assert "opencode upgrade" in text
+    assert remedy == Remedy("silent", "opencode run hi")
+
+
+def test_a_full_prompt_timeout_tail_keeps_the_command_that_prints_the_reason() -> None:
+    """A timeout the agent kept retrying through says nothing; the command beside it is the whole remedy."""
+    from types import SimpleNamespace
+
+    from raven.acp_client.protocol import AcpTimeoutError
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    timed_out = AcpTimeoutError("session/prompt timed out after 60s; " + "x" * 1900, method="session/prompt")
+    qwen = SimpleNamespace(name="Qwen Code", preset="qwen_code", kind="acp", command="qwen --acp")
+    text, remedy = probe_mod._ping_refusal(qwen, timed_out)
+    assert len(text) <= 2000
+    assert text.endswith("which prints the reason within a few minutes")
+    assert remedy == Remedy("silent", "qwen hi")
+
+
 async def test_a_test_whose_launch_quit_names_it_the_way_the_connect_does(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test fails on the handshake first, and that verdict named no fix for a launch that quit.
 

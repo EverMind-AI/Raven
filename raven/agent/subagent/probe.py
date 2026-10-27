@@ -458,12 +458,17 @@ _EMPTY_TURN = re.compile(r"ended its turn with no content")
 
 
 def _silent_detail(said: str, run: str) -> str:
-    """The sentence for an agent that outlasted the wait saying nothing -- and how to make it talk."""
-    return (
-        f"{said}: it kept working and said nothing, which is how it waits out a model provider that "
+    """The sentence for an agent that outlasted the wait saying nothing -- and how to make it talk.
+
+    The tail is composed first and ``said`` gets what is left of the cap, so the
+    command a reader has to run is never what the cap cuts off.
+    """
+    tail = (
+        ": it kept working and said nothing, which is how it waits out a model provider that "
         f"keeps refusing it (a spent quota, a rate limit, an unreachable host); run `{run}` in a terminal, "
-        f"which prints the reason within a few minutes"
-    )[:_DETAIL_CAP]
+        "which prints the reason within a few minutes"
+    )
+    return said[: max(_DETAIL_CAP - len(tail), 0)].rstrip() + tail
 
 
 def _floor_note(cfg: Any, version: str) -> str:
@@ -541,11 +546,12 @@ def _process_refusal(cfg: Any, shown: str, version: str = "") -> tuple[str, Reme
         # agent's own command settles.
         hint = sign_in_hint_for(cfg)
         checked = f"; `{hint.check}` shows whether it is signed in" if hint and hint.check else ""
-        return (
-            f"{shown}: it ended the turn without a reply, which is how it relays a model call its provider "
-            f"refused (a key, a model, a quota), and its stderr warnings are usually unrelated"
+        tail = (
+            ": it ended the turn without a reply, which is how it relays a model call its provider "
+            "refused (a key, a model, a quota), and its stderr warnings are usually unrelated"
             f"{_floor_note(cfg, version)}{checked}; run `{run}`, which prints the provider's answer"
-        )[:_DETAIL_CAP], Remedy("silent", run)
+        )
+        return (shown[: max(_DETAIL_CAP - len(tail), 0)].rstrip() + tail), Remedy("silent", run)
     if getattr(cfg, "preset", None) in {"grok", "github_copilot"} and "initialize timed out" in shown:
         return (f"its ACP server did not start; connect again. It said: {shown}")[:_DETAIL_CAP], None
     return None
