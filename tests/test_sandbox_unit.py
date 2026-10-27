@@ -12,7 +12,7 @@ import sys
 import tempfile
 import textwrap
 import time
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1119,12 +1119,18 @@ class TestBoxliteTranslateProcessPath:
 
         assert translated == "cd /workspace/pkgs/p && node /workspace/pkgs/p/server.js"
 
-    def test_a_posix_tail_keeps_its_backslashes(self, tmp_path):
+    def test_a_posix_tail_keeps_its_backslashes(self, tmp_path, monkeypatch):
         executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=_TEST_SANDBOX_HOME)
-        root = str(tmp_path.resolve())
+        # A POSIX-shaped root keeps the premise of this test true on every host;
+        # tmp_path on Windows would make the translator take the Windows branch.
+        monkeypatch.setattr(
+            executor,
+            "_mount_roots",
+            lambda: [(PurePosixPath("/srv/work"), "/workspace")],
+        )
         backslash = "\\"
 
-        translated = executor._translate_process_path(f"--data={root}/d --sep={backslash}t")
+        translated = executor._translate_process_path(f"--data=/srv/work/d --sep={backslash}t")
 
         assert translated == f"--data=/workspace/d --sep={backslash}t"
 
