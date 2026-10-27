@@ -845,3 +845,109 @@ def test_a_delta_without_a_refusal_is_unchanged() -> None:
 
     assert delta is not None
     assert (delta.content, delta.finish_reason) == ("token", None)
+
+
+# ---------- a refusal as litellm hands it over -------------------------------------
+
+_REFUSAL = "I can't help with that."
+
+
+def _refusing_openai_upstream(request: Any) -> Any:
+    """An OpenAI chat-completions endpoint that refuses, in the shape it answers each call with."""
+    import json
+
+    import httpx
+
+    body = json.loads(request.content)
+    if not body.get("stream"):
+        message = {"role": "assistant", "content": None, "refusal": _REFUSAL}
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-r",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4o",
+                "choices": [{"index": 0, "finish_reason": "stop", "logprobs": None, "message": message}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 6, "total_tokens": 11},
+            },
+        )
+    head = {"id": "chatcmpl-r", "object": "chat.completion.chunk", "created": 1, "model": "gpt-4o"}
+    deltas = [
+        ({"role": "assistant", "content": None, "refusal": ""}, None),
+        ({"refusal": "I can't "}, None),
+        ({"refusal": "help with that."}, None),
+        ({}, "stop"),
+    ]
+    events = [
+        "data: "
+        + json.dumps({**head, "choices": [{"index": 0, "delta": delta, "finish_reason": finish, "logprobs": None}]})
+        + "\n\n"
+        for delta, finish in deltas
+    ]
+    return httpx.Response(
+        200, content=("".join(events) + "data: [DONE]\n\n").encode(), headers={"content-type": "text/event-stream"}
+    )
+
+
+def _through_litellm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Send the provider's calls through litellm's own OpenAI route, onto the refusing upstream."""
+    import httpx
+    import litellm
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(
+        api_key="test-key",
+        base_url="http://upstream.invalid/v1",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(_refusing_openai_upstream)),
+    )
+
+    async def acompletion(**kwargs: Any) -> Any:
+        return await litellm.acompletion(**kwargs, client=client)
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", acompletion)
+
+
+@pytest.mark.asyncio
+async def test_an_openai_refusal_is_read_where_litellm_files_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Converting the upstream's body, litellm moves every field its ``Message`` does
+    not declare into ``provider_specific_fields``, so the refusal is not on
+    ``message.refusal`` by the time the provider reads the reply."""
+    _through_litellm(monkeypatch)
+
+    response = await _make_provider().chat(messages=[{"role": "user", "content": "hi"}])
+
+    assert (response.content, response.finish_reason) == (_REFUSAL, "refusal")
+
+
+def test_a_refusal_filed_with_a_chunks_provider_fields_is_read() -> None:
+    """A delta litellm builds keeps an undeclared field where it was given, so a
+    refusal filed with its provider fields reads like one on ``delta.refusal``."""
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    chunk = ModelResponseStream(choices=[StreamingChoices(delta=Delta(provider_specific_fields={"refusal": _REFUSAL}))])
+
+    delta = _make_provider()._normalize_stream_chunk(chunk)
+
+    assert delta is not None
+    assert (delta.content, delta.finish_reason) == (_REFUSAL, "refusal")
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_openai_refusal_never_reaches_the_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """litellm's stream wrapper drops a chunk whose only payload is a refusal: its
+    test for an empty chunk does not count the field. What reaches the provider is
+    the opening chunk, whose refusal is still empty, and a bare ``stop``, which reads
+    as an empty reply. Pinned so a litellm that starts passing the words on fails
+    here, and this becomes the test that they are read."""
+    from raven.providers.streaming import stream_llm_call
+
+    _through_litellm(monkeypatch)
+
+    deltas = [d async for d in _make_provider().chat_stream(messages=[{"role": "user", "content": "hi"}])]
+    response = await stream_llm_call(
+        _make_provider(), messages=[{"role": "user", "content": "hi"}], tools=None, model="openai/gpt-4o"
+    )
+
+    assert [(d.content, d.finish_reason) for d in deltas if d.content or d.finish_reason] == [(None, "stop")]
+    assert (response.content, response.finish_reason) == ("", "stop")

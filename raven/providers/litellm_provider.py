@@ -169,9 +169,14 @@ def _refusal_of(carrier: Any) -> str | None:
     """The refusal text a message or delta carries, when the upstream sent one.
 
     Read with ``getattr`` because the SDK's own types do not declare the field: it
-    is there only when the upstream's body had it.
+    is there only when the upstream's body had it. litellm, converting a reply's
+    body, moves every field its ``Message`` does not declare into
+    ``provider_specific_fields``, so an OpenAI-shaped refusal is read there too.
     """
     text = getattr(carrier, "refusal", None)
+    if not (isinstance(text, str) and text):
+        extra = getattr(carrier, "provider_specific_fields", None)
+        text = extra.get("refusal") if isinstance(extra, dict) else None
     return text if isinstance(text, str) and text else None
 
 
