@@ -1625,6 +1625,33 @@ async def test_a_refusal_switches_to_one_fallback_model(workspace, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_fallbacks_answer_after_a_streamed_refusal_opens_a_step_of_its_own(workspace, monkeypatch):
+    """The refusal has already streamed when the turn switches models. The fallback's answer is another
+    model's call, so it opens a step of its own rather than running on under the refusal."""
+    refusal = _Stream([_chunk("I can't help with that."), _chunk(finish_reason="content_filter")], "content_filter")
+    calls = _served(monkeypatch, [refusal, _finished_stream("Here it is.")])
+    timeline: list[tuple[str, object]] = []
+
+    async def delta(text: str) -> None:
+        timeline.append(("delta", text))
+
+    async def episode(index: int) -> None:
+        timeline.append(("step", None))
+
+    final, _used, _messages, _outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=delta, on_episode_start=episode, fallback_models=["fb"]
+    )
+
+    assert final == "Here it is." and _models(calls) == [_MODEL, "fb"]
+    assert timeline == [
+        ("step", None),
+        ("delta", "I can't help with that."),
+        ("step", None),
+        ("delta", "Here it is."),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_a_refusal_falls_back_only_once(workspace, monkeypatch):
     """The second refusal ends the turn with a model still unused: a refusal is the upstream's
     verdict on the request, and asking every model in turn is shopping for a yes."""
