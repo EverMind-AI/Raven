@@ -1651,6 +1651,41 @@ async def test_a_fallbacks_answer_after_a_streamed_refusal_opens_a_step_of_its_o
     ]
 
 
+class _DiesAfter(_Stream):
+    """A stream that sent ``chunks`` and then broke, as a dropped connection does: the wrapper raises."""
+
+    def __init__(self, *chunks, received_finish_reason=None) -> None:
+        super().__init__(chunks, received_finish_reason)
+
+    async def __anext__(self):
+        try:
+            return next(self._chunks)
+        except StopIteration:
+            raise ConnectionError("connection reset by peer") from None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish", ["content_filter", "refusal"])
+@pytest.mark.parametrize("fallbacks", [["fb"], []], ids=["a_fallback_left", "none_left"])
+async def test_a_stream_that_dies_after_its_refusal_is_read_as_the_refusal(workspace, monkeypatch, finish, fallbacks):
+    """The upstream's refusal had arrived when the connection dropped, so the words are the model's
+    explanation of a refusal, not the start of an answer to ask it to go on with: the refusal's one
+    switch to a fallback is taken, or the turn fails on it, and no continuation is asked for."""
+    refusal = _DiesAfter(_chunk("I can't help with that."), _chunk(finish_reason=finish), received_finish_reason=finish)
+    calls = _served(monkeypatch, [refusal, _finished_stream("fb's answer")])
+
+    final, _used, _messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=_Sink().delta, fallback_models=fallbacks
+    )
+
+    assert not any(m["content"] == NETWORK_CUT_CONTINUATION for call in calls for m in call["messages"])
+    if fallbacks:
+        assert _models(calls) == [_MODEL, "fb"] and final == "fb's answer"
+    else:
+        assert len(calls) == 1 and outcome.status == "error"
+        assert outcome.error.startswith(REFUSAL_FAILURE)
+
+
 @pytest.mark.asyncio
 async def test_a_refusal_falls_back_only_once(workspace, monkeypatch):
     """The second refusal ends the turn with a model still unused: a refusal is the upstream's

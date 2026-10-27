@@ -144,6 +144,7 @@ class _Produced:
     record: CallRecord | None
     reasoning_ms: int | None
     hand_back: bool
+    finish_reason: str | None = None
 
 
 async def _hand_back(produced: _Produced, cause: str) -> LLMResponse | None:
@@ -155,7 +156,9 @@ async def _hand_back(produced: _Produced, cause: str) -> LLMResponse | None:
     tool call still in the making stay the failure they were. The upstream sent no
     finish, and the reply says it was cut rather than ``unknown``: that is also what a
     stream that closed cleanly without a terminal chunk reads, and such a stream is a
-    whole answer.
+    whole answer. A refusal the upstream had already sent is its whole verdict, so the
+    reply keeps that finish instead: the words are its explanation, not an answer to go
+    on with.
 
     An opening still held back, because it could have been a sentinel, is shown
     first, exactly as the end of a stream shows one: the continuation that follows
@@ -179,7 +182,7 @@ async def _hand_back(produced: _Produced, cause: str) -> LLMResponse | None:
     )
     return LLMResponse(
         content=content,
-        finish_reason=STREAM_CUT,
+        finish_reason=_finish_after(produced.finish_reason, STREAM_CUT),
         usage=produced.usage or {},
         reasoning_content=reasoning_content,
         thinking_blocks=produced.thinking_blocks,
@@ -390,6 +393,7 @@ async def stream_llm_call(
             record,
             reasoning_ms,
             hand_back_partial,
+            upstream_finish_reason,
         )
 
     for attempt in range(max_reconnects + len(retry_delays) + 1):
