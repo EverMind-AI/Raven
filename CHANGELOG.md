@@ -581,7 +581,10 @@ All notable changes to Raven are documented here.
   painted A's rung on B, and picking that rung on B was taken as already in
   force. The row now reads the opened conversation under its own switch, and
   an answer overtaken by a later switch is dropped rather than painted, as the
-  *Reasoning effort* row and the permission chip already do.
+  *Reasoning effort* row and the permission chip already do. The re-read after
+  a draft's staged rung is written to the conversation its first message
+  minted runs under that promotion's switch as well, so leaving for another
+  conversation while the write is in flight no longer paints the rung there.
 - A key the vendor refuses is no longer called connected. The settings page
   and the first-run wizard ask the vendor about a key before storing it
   (`model.check_key`): a key answered with 401, or named invalid, is refused
