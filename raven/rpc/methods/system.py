@@ -265,14 +265,21 @@ def _checkout_recovery(checkout: str, windows: bool) -> str:
     POSIX replaces a running executable without complaint, and stopping the
     page there would only take it down before the install needs to.
     """
+    from raven.updates import upgrade as _upgrade
+
     if windows:
         # PowerShell, which `.\install.ps1` needs anyway: -LiteralPath keeps
         # `[` and `]` from reading as wildcards, and a doubled quote is the only
         # escape a single-quoted string has -- for each of the four curly single
         # quotes PowerShell also reads as one, not only for the ASCII quote.
         literal = re.sub("(['\u2018\u2019\u201a\u201b])", r"\1\1", checkout)
-        return "raven web --stop\nSet-Location -LiteralPath '" + literal + "'\ngit pull\n.\\install.ps1"
-    return f"cd {shlex.quote(checkout)}\ngit pull\n./install.sh"
+        return (
+            "raven web --stop\nSet-Location -LiteralPath '"
+            + literal
+            + "'\ngit pull\n"
+            + _upgrade.install_script(windows=True)
+        )
+    return f"cd {shlex.quote(checkout)}\ngit pull\n{_upgrade.install_script(windows=False)}"
 
 
 def _unsupervised_recovery(windows: bool) -> tuple[str, str]:
