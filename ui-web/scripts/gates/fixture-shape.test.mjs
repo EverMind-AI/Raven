@@ -270,6 +270,8 @@ const UNSENT = new Set([
   'turn.cancel.busy',
   // session.compress / session.create: 1 each -- only resuming an Imported Conversation sets read_only
   'session.compress.info.read_only', 'session.create.info.read_only',
+  // session.resume: 1 -- the page reads no message-tool verdict; the ACP replay and the session list do
+  'session.resume.messages[].replied_via_tool',
 ])
 
 describe('the offline fixture library', () => {
