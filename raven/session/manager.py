@@ -36,6 +36,16 @@ SUBAGENT_CHANNEL = "sub"
 IMPORTED_CHANNEL = "imported"
 
 
+#: The metadata a fork carries over from its parent: the model and provider it
+#: was switched onto, and the reasoning effort picked for it. The effort key is
+#: ``raven.agent.session_effort.METADATA_KEY``, spelt here rather than imported
+#: because the session layer does not import the agent's; a test holds the two
+#: spellings together. A value that is null -- a pick cleared, which a metadata
+#: patch leaves as null rather than removing -- is not carried: the fork follows
+#: the default, as its parent does.
+FORK_CARRIES: tuple[str, ...] = ("model", "provider", "reasoning_effort")
+
+
 def _refuse_imported(key: str) -> None:
     if key.partition(":")[0] == IMPORTED_CHANNEL:
         raise ValueError(f"{key!r} is an imported conversation; the session store does not keep it")
@@ -1262,10 +1272,11 @@ class SessionManager:
         # every inherited message to the annotator a second time.
         child.metadata["annotated_through"] = len(child.messages)
         # A fork continues its parent's conversation, so it continues on its
-        # parent's model. The caller re-points the live binding, but that lives
-        # in memory only -- without carrying the record too, the fork drops to
-        # the default the first time it is resumed in a new process.
-        for slot in ("model", "provider"):
+        # parent's model, and at the reasoning effort picked for it. The caller
+        # re-points the live binding, but that lives in memory only -- without
+        # carrying the record too, the fork drops to the default the first time
+        # it is resumed in a new process.
+        for slot in FORK_CARRIES:
             inherited = (source.metadata or {}).get(slot)
             if inherited:
                 child.metadata[slot] = inherited
