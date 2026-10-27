@@ -910,6 +910,7 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
                 "only an acp agent can be started with Raven's keys", data={"field": "lend_keys", "name": name}
             )
         target["lendKeys"] = _lend_keys(target.get("preset"), list(params["lend_keys"]))
+    measured_for_effort = False
     if params.get("clear_model") or params.get("model") is not None:
         cfg_for_meta = _as_configs([target])[0]
         snapshot = acp_snapshot_for(cfg_for_meta) if cfg_for_meta.kind == "acp" else None
@@ -920,6 +921,7 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
             # and the caller launched a whole run to make it record some.
             try:
                 snapshot = await record_capabilities(cfg_for_meta)
+                measured_for_effort = True
             except Exception as exc:  # noqa: BLE001 - judged on what is recorded, as before
                 logger.debug("subagents: {!r} menu not measured for a model pick: {}", name, exc)
         meta = agent_meta(cfg_for_meta, snapshot=snapshot)
@@ -982,10 +984,13 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
             )
         cfg_for_meta = _as_configs([target])[0]
         snapshot = acp_snapshot_for(cfg_for_meta)
-        if snapshot is None and params.get("effort") is not None:
+        model_moved = params.get("clear_model") or params.get("model") is not None
+        if (snapshot is None or (model_moved and not measured_for_effort)) and params.get("effort") is not None:
             # A menu never measured is not "offers none": the thought_level
             # option rides the same session response as the model menu, which
-            # the free handshake already takes.
+            # the free handshake already takes. A model moved in this same call
+            # is the other case: the stored snapshot describes the model the row
+            # had before it, and OpenCode's effort rungs are model-specific.
             try:
                 snapshot = await record_capabilities(cfg_for_meta)
             except Exception as exc:  # noqa: BLE001 - judged on what is recorded, as the model pick is
@@ -1629,11 +1634,15 @@ async def subagents_test_cancel(params: dict) -> dict:
     return {"cancelled": True}
 
 
-_MENU_TASKS: dict[str, asyncio.Task[Any]] = {}
-"""The menu reads in flight, by agent name, so concurrent asks share one handshake."""
+_MENU_TASKS: dict[tuple[str, str], asyncio.Task[Any]] = {}
+"""The menu reads in flight, by (source, agent name), so concurrent asks share one handshake.
 
-_MENU_READ_AT: dict[str, float] = {}
-"""``time.monotonic()`` when each agent's menu was last read successfully.
+The source is part of the key because a config row and a preset may share a
+name; one is not the other's stored menu, and a task started for one must not
+answer the other."""
+
+_MENU_READ_AT: dict[tuple[str, str], float] = {}
+"""``time.monotonic()`` when each (source, agent) menu was last read successfully.
 
 Only a successful read is recorded: a failed one leaves the next automatic ask
 free to retry, where a cooldown stamped on failure would keep answering the old
@@ -1705,14 +1714,15 @@ async def subagents_refresh_models(params: dict, *, agent_loop_factory: "AgentLo
             data={"field": "model", "name": name},
         )
 
-    task = _MENU_TASKS.get(name)
+    key = (source, name)
+    task = _MENU_TASKS.get(key)
     if task is None or task.done():
-        last = _MENU_READ_AT.get(name)
+        last = _MENU_READ_AT.get(key)
         if not force and last is not None and time.monotonic() - last < _MENU_REFRESH_COOLDOWN_S:
             return {"ok": True, "detail": "", **_recorded_menu(cfg)}
         task = asyncio.ensure_future(record_capabilities(cfg))
-        _MENU_TASKS[name] = task
-        task.add_done_callback(lambda done, agent=name: _forget_menu_task(agent, done))
+        _MENU_TASKS[key] = task
+        task.add_done_callback(lambda done, key=key: _forget_menu_task(key, done))
 
     try:
         snapshot = await asyncio.wait_for(task, timeout=_MENU_REFRESH_TIMEOUT_S)
@@ -1730,7 +1740,7 @@ async def subagents_refresh_models(params: dict, *, agent_loop_factory: "AgentLo
 
     measured = bool(getattr(snapshot, "usable", False) and getattr(snapshot, "model_menu_measured", False))
     if measured:
-        _MENU_READ_AT[name] = time.monotonic()
+        _MENU_READ_AT[key] = time.monotonic()
     if source != "preset":
         # The roster reads `stateful` and the menu from the table built the last
         # time `apply` ran, so a snapshot written now has to reach the table or
@@ -1745,10 +1755,10 @@ async def subagents_refresh_models(params: dict, *, agent_loop_factory: "AgentLo
     return {"ok": measured, "detail": getattr(snapshot, "detail", "") or "", "models": models}
 
 
-def _forget_menu_task(name: str, done: asyncio.Task[Any]) -> None:
+def _forget_menu_task(key: tuple[str, str], done: asyncio.Task[Any]) -> None:
     """Drop a finished read from the in-flight table, only while it is still this one."""
-    if _MENU_TASKS.get(name) is done:
-        _MENU_TASKS.pop(name, None)
+    if _MENU_TASKS.get(key) is done:
+        _MENU_TASKS.pop(key, None)
 
 
 async def subagents_presets(params: dict) -> dict:
