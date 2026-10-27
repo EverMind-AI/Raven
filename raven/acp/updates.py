@@ -36,6 +36,7 @@ from loguru import logger
 
 from raven.acp import protocol
 from raven.acp.tool_kinds import absolute_path, locations, title_for, tool_kind
+from raven.providers.usage import reported_cost
 from raven.security.redact import redact, redact_value
 
 # Every event type ``RpcOutlet``, the spine sink, the DAG bridge and the cron
@@ -389,16 +390,9 @@ def _usage_update(usage: Any, session_cost: float | None = None) -> dict[str, An
     if not isinstance(used, int) or not isinstance(size, int) or size <= 0 or used < 0:
         return None
     update: dict[str, Any] = {"sessionUpdate": "usage_update", "used": used, "size": size}
-    if _usd(session_cost) is not None:
-        update["cost"] = {"amount": float(session_cost), "currency": "USD"}
+    if (amount := reported_cost(session_cost)) is not None:
+        update["cost"] = {"amount": amount, "currency": "USD"}
     return update
-
-
-def _usd(value: Any) -> float | None:
-    """``value`` as a reported dollar amount, or None when it is not one."""
-    if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
-        return float(value)
-    return None
 
 
 def _turn_spend(event: Any) -> float | None:
@@ -407,7 +401,7 @@ def _turn_spend(event: Any) -> float | None:
         return None
     payload = event.get("payload")
     usage = payload.get("usage") if isinstance(payload, dict) else None
-    return _usd(usage.get("cost_usd")) if isinstance(usage, dict) else None
+    return reported_cost(usage.get("cost_usd")) if isinstance(usage, dict) else None
 
 
 def _clip_deep(value: Any, depth: int = 0) -> Any:
