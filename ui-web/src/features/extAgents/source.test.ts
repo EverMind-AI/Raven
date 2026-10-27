@@ -75,6 +75,25 @@ describe('one agent row', () => {
   /* The provider's refusals and the failures to answer are fixes too, and a
      step to type travels only beside the command that opens where to type it:
      alone it would tell the reader to type into nothing. */
+  it('carries the reasoning effort and the agent menu that offers it', () => {
+    const row = extAgentRowOf(
+      wire({
+        effort: 'high',
+        effort_choices: [
+          { value: 'low', name: 'Low' },
+          { value: 'high', name: 'High' },
+          { value: '', name: 'dropped' },
+        ],
+      }),
+    )
+    expect(row.effort).toBe('high')
+    expect(row.effort_choices).toEqual([
+      { value: 'low', name: 'Low' },
+      { value: 'high', name: 'High' },
+    ])
+    expect(extAgentRowOf(wire({})).effort_choices).toEqual([])
+  })
+
   it('reads the kinds past a credential, and keeps a step only beside its command', () => {
     const inAgent = extAgentRowOf(wire({ last_test_remedy: { kind: 'model', command: 'qwen', then: '/model' } }))
     expect(inAgent.last_test_remedy).toEqual({ kind: 'model', command: 'qwen', then: '/model' })
@@ -267,6 +286,18 @@ describe('the seven writes a card can make', () => {
     }])
   })
 
+  it('sets and clears the reasoning effort as its own update', async () => {
+    const { asked } = writes()
+
+    await extAgentsSource.act('effort', card(), { effort: 'high' })
+    await extAgentsSource.act('effort', card(), { clear_effort: true })
+
+    expect(asked.filter(([method]) => method === 'subagents.update')).toEqual([
+      ['subagents.update', { name: 'codex', effort: 'high' }],
+      ['subagents.update', { name: 'codex', clear_effort: true }],
+    ])
+  })
+
   it('toggles one switch for every kind of row', async () => {
     const { asked } = writes()
 
@@ -316,6 +347,56 @@ describe('the seven writes a card can make', () => {
     await extAgentsSource.act('build', card())
 
     expect(asked[0]).toEqual(['subagents.build', { name: 'codex' }])
+  })
+})
+
+/* The menu read is not a write: it answers the menu now in force, and the same
+   row rules decide which source a test would use. */
+describe('the model menu re-read', () => {
+  function menus(answer: Record<string, unknown>): Array<[string, Record<string, unknown>]> {
+    const asked: Array<[string, Record<string, unknown>]> = []
+    const transport = new FixtureTransport({})
+    transport.call = (async (method: string, params: Record<string, unknown>) => {
+      asked.push([method, params])
+      return answer
+    }) as typeof transport.call
+    setGateway(transport)
+    return asked
+  }
+
+  it('sends a configured row as config, with the force the caller gave', async () => {
+    const asked = menus({
+      ok: true,
+      detail: 'connected; models: 2',
+      models: [{ value: 'm1', name: 'One', group: 'Own key' }, { value: '', name: 'dropped' }],
+    })
+
+    const out = await extAgentsSource.refreshMenus(card({ configured: true }), true)
+
+    expect(asked).toEqual([
+      ['subagents.refresh_models', { name: 'codex', source: 'config', force: true }],
+    ])
+    expect(out).toEqual({
+      ok: true,
+      detail: 'connected; models: 2',
+      models: [{ value: 'm1', name: 'One', group: 'Own key' }],
+    })
+  })
+
+  it('sends a preset row as preset, and keeps a failed read drawable', async () => {
+    const asked = menus({ ok: false, detail: 'the host is down', models: [{ value: 'old' }] })
+
+    const out = await extAgentsSource.refreshMenus(card({ configured: false }))
+
+    expect(asked[0]).toEqual([
+      'subagents.refresh_models',
+      { name: 'codex', source: 'preset', force: false },
+    ])
+    expect(out).toEqual({
+      ok: false,
+      detail: 'the host is down',
+      models: [{ value: 'old', name: '', group: '' }],
+    })
   })
 })
 

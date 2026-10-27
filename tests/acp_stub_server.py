@@ -180,6 +180,9 @@ _SESSIONS = 0
 _SESSION_CWD = ""
 # What each session is currently answering with, so a resumed one can report it.
 _SESSION_MODELS: dict[str, str] = {}
+# The reasoning effort each session is on, for the same reason; the ACP option
+# that carries it has its own id (`effort`) and category (`thought_level`).
+_SESSION_EFFORTS: dict[str, str] = {}
 
 _SESSION_CAPS = {"fork": {}, "list": {}, "resume": {}}
 if MODE != "no_session_delete":
@@ -773,6 +776,44 @@ def handle_cancel(params) -> None:
         ok(held[0], {"stopReason": "cancelled"})
 
 
+def _set_config_option(request_id, params) -> None:
+    """One ``session/set_config_option`` frame: the model, or the reasoning effort.
+
+    Split out of ``main`` when the effort arm pushed its complexity past the
+    gate; the two options share the log-on-entry rule below, so they stay one
+    handler.
+    """
+    # Logged on entry, not on success: a test asserting that NO frame was sent
+    # has to see every frame, and a print behind the refusals below leaves an
+    # unrequested call looking identical to no call at all.
+    print(
+        f"stub: session/set_config_option {params.get('configId')}={params.get('value')}",
+        file=sys.stderr,
+        flush=True,
+    )
+    if MODE == "refuse_restore" and params.get("value") == "stub:model-a":
+        # Takes a switch and refuses the way back, which is the shape a host
+        # has to survive: it moved the session and cannot unmove it.
+        err(request_id, -32011, "will not switch back to 'stub:model-a'")
+    elif MODE == "no_models":
+        err(request_id, -32602, "unknown configuration option 'model'")
+    elif params.get("configId") == "effort":
+        if params.get("value") not in ("low", "high", "max", "default"):
+            err(request_id, -32011, f"will not switch to effort {params.get('value')!r}")
+        else:
+            _SESSION_EFFORTS[str(params.get("sessionId"))] = str(params.get("value"))
+            ok(request_id, {"configOptions": []})
+    elif params.get("configId") != "model":
+        err(request_id, -32602, f"unknown configuration option {params.get('configId')!r}")
+    elif params.get("value") not in ("stub:model-a", "stub:model-b"):
+        # The runtime's own refusal, with its own code: a value it will not
+        # write is not an internal error.
+        err(request_id, -32011, f"will not switch to {params.get('value')!r}")
+    else:
+        _SESSION_MODELS[str(params.get("sessionId"))] = str(params.get("value"))
+        ok(request_id, {"configOptions": []})
+
+
 def main() -> None:
     global _INITIALIZED
     if MODE == "abort":
@@ -933,33 +974,24 @@ def main() -> None:
                                     }
                                 ],
                             },
+                            {
+                                "id": "effort",
+                                "name": "Effort",
+                                "category": "thought_level",
+                                "type": "select",
+                                "currentValue": _SESSION_EFFORTS.get(f"stub-session-{_SESSIONS}", "default"),
+                                "options": [
+                                    {"value": "low", "name": "low"},
+                                    {"value": "high", "name": "high"},
+                                    {"value": "max", "name": "max"},
+                                    {"value": "default", "name": "default"},
+                                ],
+                            },
                         ],
                     },
                 )
         elif method == "session/set_config_option":
-            # Logged on entry, not on success: a test asserting that NO frame was
-            # sent has to see every frame, and a print behind the refusals below
-            # leaves an unrequested call looking identical to no call at all.
-            print(
-                f"stub: session/set_config_option {params.get('configId')}={params.get('value')}",
-                file=sys.stderr,
-                flush=True,
-            )
-            if MODE == "refuse_restore" and params.get("value") == "stub:model-a":
-                # Takes a switch and refuses the way back, which is the shape a
-                # host has to survive: it moved the session and cannot unmove it.
-                err(request_id, -32011, "will not switch back to 'stub:model-a'")
-            elif MODE == "no_models":
-                err(request_id, -32602, "unknown configuration option 'model'")
-            elif params.get("configId") != "model":
-                err(request_id, -32602, f"unknown configuration option {params.get('configId')!r}")
-            elif params.get("value") not in ("stub:model-a", "stub:model-b"):
-                # The runtime's own refusal, with its own code: a value it will
-                # not write is not an internal error.
-                err(request_id, -32011, f"will not switch to {params.get('value')!r}")
-            else:
-                _SESSION_MODELS[str(params.get("sessionId"))] = str(params.get("value"))
-                ok(request_id, {"configOptions": []})
+            _set_config_option(request_id, params)
         elif method == "session/set_mode":
             if MODE == "no_modes":
                 err(request_id, -32601, "session/set_mode is not implemented")
@@ -986,7 +1018,19 @@ def main() -> None:
                                 "type": "select",
                                 "currentValue": _SESSION_MODELS.get(sid, "stub:model-a"),
                                 "options": [],
-                            }
+                            },
+                            {
+                                "id": "effort",
+                                "category": "thought_level",
+                                "type": "select",
+                                "currentValue": _SESSION_EFFORTS.get(sid, "default"),
+                                "options": [
+                                    {"value": "low", "name": "low"},
+                                    {"value": "high", "name": "high"},
+                                    {"value": "max", "name": "max"},
+                                    {"value": "default", "name": "default"},
+                                ],
+                            },
                         ]
                     },
                 )

@@ -42,7 +42,9 @@ from raven.acp_client.acp_dialects import AcpDialect, ToolCall, agent_version, d
 from raven.acp_client.ask_user import AskUserResponder, clarify_responder
 from raven.acp_client.capabilities import (
     CapabilitySnapshot,
+    read_session_current_mode,
     read_session_current_model,
+    read_session_effort,
     relearn_session_menus,
     steer_offered,
 )
@@ -1035,10 +1037,23 @@ class AcpAgentBackend:
         # send that choice again -- and nothing else remembers what it was.
         self._model_baseline: dict[str, str] = {}
         self._model_pushed: dict[str, str] = {}
+        # The reasoning effort option has the same lifecycle as the model: the
+        # option's own id comes from the session response (``effort`` on
+        # OpenCode 1.19.4), the baseline is what the agent opened on, and the
+        # pushed value is what this host may need to undo.
+        self._effort_option: dict[str, str] = {}
+        self._effort_baseline: dict[str, str] = {}
+        self._effort_pushed: dict[str, str] = {}
+        # For an agent whose effort IS its mode menu (Pi, Grok, Kimi, DSH), the
+        # row's effort is sent through session/set_mode; the baseline is what the
+        # session opened on, and the push is what a cleared effort must undo.
+        self._mode_baseline: dict[str, str] = {}
+        self._mode_effort_pushed: dict[str, str] = {}
         # Values this agent has refused, so a refusal re-attempted on every
         # route into a session -- and on every fresh session a spawn opens --
         # is said once per value rather than once per turn.
         self._model_refused: set[str] = set()
+        self._effort_refused: set[str] = set()
         # An instance whose earlier session the agent could not resume, by
         # (session key, handle): the next reply on that handle has to say it
         # starts over. Held until a turn there answers, not only for the turn
@@ -1231,6 +1246,31 @@ class AcpAgentBackend:
         current = read_session_current_model(result)
         if current:
             self._model_baseline[session_id] = current
+
+    def _note_session_mode(self, session_id: str | None, result: Any) -> None:
+        """Remember the mode a session opened on, for a menu that is effort."""
+        if not session_id or session_id in self._mode_baseline:
+            return
+        current = read_session_current_mode(result)
+        if current:
+            self._mode_baseline[session_id] = current
+
+    def _note_session_effort(self, session_id: str | None, result: Any) -> None:
+        """Remember the effort option's id and what the session opened on.
+
+        Both are read from the session response, because the option's id is the
+        agent's to name (``effort`` on OpenCode 1.19.4) and a resumed response
+        may omit it. Recorded once per session for the reason
+        :meth:`_note_session_model` gives: a second reading would adopt a value
+        this host pushed as the baseline.
+        """
+        if not session_id:
+            return
+        option, current, _choices = read_session_effort(result)
+        if option and session_id not in self._effort_option:
+            self._effort_option[session_id] = option
+        if current and session_id not in self._effort_baseline:
+            self._effort_baseline[session_id] = current
 
     def _relearn_menus(self, result: Any) -> None:
         """Take the modes and models a session response advertises over the cached ones.
@@ -1574,6 +1614,8 @@ class AcpAgentBackend:
         # Not `model` above, which is the PARENT's and rides out as
         # RAVEN_PARENT_MODEL: this is what this agent should answer with.
         session_model: str | None = None,
+        # The row's reasoning effort, a value from its thought_level menu.
+        session_effort: str | None = None,
         authored_task: str | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         media: Sequence[Media] = (),
@@ -1693,6 +1735,7 @@ class AcpAgentBackend:
                     router=connection.router,
                     mode=mode,
                     session_model=session_model,
+                    session_effort=session_effort,
                 )
                 if journal is not None:
                     # Inside the marked range on purpose, so the per-call copy of the
@@ -2244,6 +2287,7 @@ class AcpAgentBackend:
         router: Any = None,
         mode: str | None = None,
         session_model: str | None = None,
+        session_effort: str | None = None,
     ) -> tuple[str, bool]:
         """The session to prompt, and whether it continues an earlier one."""
 
@@ -2306,8 +2350,11 @@ class AcpAgentBackend:
                     if loaded is not None:
                         self._relearn_menus(loaded)
                         self._note_session_model(known, loaded)
+                        self._note_session_effort(known, loaded)
+                        self._note_session_mode(known, loaded)
                     await self._set_mode(client, known, mode, budget=budget)
                     await self._set_model(client, known, session_model, budget=budget)
+                    await self._set_effort(client, known, session_effort, fallback_mode=mode, budget=budget)
                     return known, True
                 except AcpRemoteError as exc:
                     # The agent's own store may have pruned this id, and the
@@ -2335,8 +2382,11 @@ class AcpAgentBackend:
         if not isinstance(session_id, str) or not session_id:
             raise AcpEmptyTurnError(f"acp agent {self.name!r}: session/new returned no sessionId")
         self._note_session_model(session_id, result)
+        self._note_session_effort(session_id, result)
+        self._note_session_mode(session_id, result)
         await self._set_mode(client, session_id, mode, budget=budget)
         await self._set_model(client, session_id, session_model, budget=budget)
+        await self._set_effort(client, session_id, session_effort, fallback_mode=mode, budget=budget)
         if lost is not None:
             self._resume_lost[(skey, handle)] = (
                 f"Instance {handle!r} could not pick up its earlier conversation ({lost}), "
@@ -2397,7 +2447,7 @@ class AcpAgentBackend:
                 self._model_pushed.pop(session_id, None)
                 return
         try:
-            await client.request(
+            response = await client.request(
                 "session/set_config_option",
                 {"sessionId": session_id, "configId": "model", "value": target},
                 timeout=budget,
@@ -2433,6 +2483,156 @@ class AcpAgentBackend:
             self._model_pushed[session_id] = target
         else:
             self._model_pushed.pop(session_id, None)
+        # The response carries the config options the model now has. Its
+        # thought_level entry is what the effort push below needs, and it can
+        # differ from the one the session opened on: OpenCode 1.19.4 offers
+        # effort only for a model that reasons, and the session opens on the
+        # agent's own default. Best-effort, like every menu relearn.
+        self._relearn_menus(response)
+        self._note_session_effort(session_id, response)
+
+    async def _set_effort(
+        self,
+        client: Any,
+        session_id: str,
+        effort: str | None,
+        *,
+        fallback_mode: str | None = None,
+        budget: float,
+    ) -> None:
+        """Put this session on ``effort``, or back on its own when that is cleared.
+
+        Two channels, because agents advertise effort in two ways. A real
+        ``thought_level`` option (OpenCode 1.19.4) is set through
+        ``session/set_config_option`` with the agent's own option id. An agent
+        whose mode menu *is* its effort menu (Pi, Grok, Kimi, DSH) is set through
+        ``session/set_mode``; the row's effort then wins over the run-intensity
+        tier sent just before it, which is what a per-row setting means.
+
+        Cleared means sending the value the session opened on again -- the
+        config option has no unset, and the mode menu has no "agent default" --
+        unless a falling-back tier mode is already what the session was put on.
+        Never fatal, for the reason the model push gives.
+        """
+        option = self._effort_option.get(session_id) or str(getattr(self._snapshot, "effort_option", "") or "")
+        if not option:
+            snapshot = self._snapshot
+            if snapshot is None or not snapshot.mode_efforts():
+                return
+            await self._set_mode_effort(client, session_id, effort, fallback_mode=fallback_mode, budget=budget)
+            return
+        pushed = self._effort_pushed.get(session_id)
+        if effort:
+            target = effort
+        elif pushed is None:
+            return
+        else:
+            target = self._effort_baseline.get(session_id, "")
+            if not target:
+                logger.warning(
+                    "acp agent {!r}: session {} was put on effort {!r} and reported no earlier effort; "
+                    "cannot restore the agent's own",
+                    self.name,
+                    session_id,
+                    pushed,
+                )
+                self._effort_pushed.pop(session_id, None)
+                return
+        try:
+            await client.request(
+                "session/set_config_option",
+                {"sessionId": session_id, "configId": option, "value": target},
+                timeout=budget,
+            )
+        except AcpRemoteError as exc:
+            self._say_effort_refused(
+                target,
+                "acp agent {!r}: session {} would not take effort {!r} ({}); running on its default",
+                self.name,
+                session_id,
+                target,
+                exc.message,
+            )
+            return
+        except AcpError as exc:
+            self._say_effort_refused(
+                target,
+                "acp agent {!r}: could not set effort {!r} on session {} ({}); running on its default",
+                self.name,
+                session_id,
+                target,
+                exc,
+            )
+            return
+        self._effort_refused.discard(target)
+        if effort:
+            self._effort_pushed[session_id] = target
+        else:
+            self._effort_pushed.pop(session_id, None)
+
+    async def _set_mode_effort(
+        self,
+        client: Any,
+        session_id: str,
+        effort: str | None,
+        *,
+        fallback_mode: str | None,
+        budget: float,
+    ) -> None:
+        """The row's effort for an agent whose mode menu is its effort menu.
+
+        Sent after :meth:`_set_mode`, so a per-row effort wins over the session
+        tier; a clear restores the tier that was already sent, or the mode the
+        session opened on when there is no tier. Never fatal, like its siblings.
+        """
+        pushed = self._mode_effort_pushed.get(session_id)
+        if effort:
+            target = effort
+        elif pushed is None:
+            return
+        else:
+            target = fallback_mode or self._mode_baseline.get(session_id, "")
+            if not target:
+                logger.warning(
+                    "acp agent {!r}: session {} was put on effort mode {!r} and reported no earlier mode; "
+                    "cannot restore the agent's own",
+                    self.name,
+                    session_id,
+                    pushed,
+                )
+                self._mode_effort_pushed.pop(session_id, None)
+                return
+        try:
+            await client.request("session/set_mode", {"sessionId": session_id, "modeId": target}, timeout=budget)
+        except AcpRemoteError as exc:
+            self._say_effort_refused(
+                target,
+                "acp agent {!r}: session {} would not take effort mode {!r} ({}); running on its default",
+                self.name,
+                session_id,
+                target,
+                exc.message,
+            )
+            return
+        except AcpError as exc:
+            self._say_effort_refused(
+                target,
+                "acp agent {!r}: could not set effort mode {!r} on session {} ({}); running on its default",
+                self.name,
+                target,
+                session_id,
+                exc,
+            )
+            return
+        if effort:
+            self._mode_effort_pushed[session_id] = target
+        else:
+            self._mode_effort_pushed.pop(session_id, None)
+
+    def _say_effort_refused(self, value: str, message: str, *args: Any) -> None:
+        first = value not in self._effort_refused
+        self._effort_refused.add(value)
+        logger.log("WARNING" if first else "DEBUG", message, *args)
 
     def _say_model_refused(self, value: str, message: str, *args: Any) -> None:
         first = value not in self._model_refused

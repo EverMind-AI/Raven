@@ -1249,6 +1249,9 @@ class SubagentManager:
                             **optional_keyword(
                                 backend, "session_model", self.session_model_for(session_key, agent, handle)
                             ),
+                            **optional_keyword(
+                                backend, "session_effort", self.session_effort_for(session_key, agent, handle)
+                            ),
                             **optional_keyword(backend, "authored_task", text),
                             **kwargs,
                         )
@@ -1464,6 +1467,28 @@ class SubagentManager:
             if override:
                 return override
         return self.row_default_model(agent)
+
+    def row_default_effort(self, agent: str) -> str | None:
+        """The row's own reasoning effort, or ``None`` for the agent's default.
+
+        Unlike ``model`` there is no instance override yet: the effort is the
+        row's operator setting, through the agent's ``thought_level`` option,
+        and every lane resolves it here so a spawn, a direct chat and a DAG node
+        cannot disagree.
+        """
+        row = self.registry.get(agent or "")
+        if row is None or row.kind != "acp":
+            return None
+        return getattr(row.config, "effort", None)
+
+    def session_effort_for(self, session_key: str | None, agent: str | None, instance: str | None) -> str | None:
+        """The reasoning effort one acp dispatch runs on, or ``None`` for the agent's own.
+
+        The effort counterpart to :meth:`session_model_for`. ``session_key`` and
+        ``instance`` are accepted for that method's reason and for the day an
+        instance override exists; today the row's setting is the whole answer.
+        """
+        return self.row_default_effort(agent or "")
 
     def set_instance_model(
         self,
@@ -1877,6 +1902,11 @@ class SubagentManager:
                                 backend,
                                 "session_model",
                                 self.session_model_for(session_key, agent, origin.get("instance")),
+                            ),
+                            **optional_keyword(
+                                backend,
+                                "session_effort",
+                                self.session_effort_for(session_key, agent, origin.get("instance")),
                             ),
                             **optional_keyword(backend, "authored_task", origin.get("authored_task")),
                             **({"mcp_grant": mcp_grant} if mcp_grant is not None else {}),

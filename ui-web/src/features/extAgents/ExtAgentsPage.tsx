@@ -230,6 +230,17 @@ function asAsked(row: ExtAgentRow, s: ExtAgentsState): ExtAgentRow {
   return write.args.model ? { ...row, model: write.args.model } : row
 }
 
+/* The manual re-read beside the model pill: two arcs, the way a refresh reads
+   in a toolbar. Drawn here because it is this one control's glyph. */
+function RefreshGlyph(): JSX.Element {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M20 11a8 8 0 1 0-2.3 5.7" />
+      <path d="M20 4v7h-7" />
+    </svg>
+  )
+}
+
 /* The model a row answers with, and the picker that changes it. Unset reads by
    ownership: one of Raven's own follows the main Raven, a third party runs on
    its own default. A row with no menu wears the pill disabled: an openai or
@@ -243,9 +254,20 @@ function asAsked(row: ExtAgentRow, s: ExtAgentsState): ExtAgentRow {
    A row that is not on the roster has no entry to update -- the server answers
    such a name with "no configured sub-agent named ..." -- so its pick waits for
    the add that writes the row, the way the family drawer's pick waits. */
-function ModelPill({ row, busy, held }: { row: ExtAgentRow; busy: boolean; held?: string }): JSX.Element | null {
+function ModelPill({
+  row,
+  busy,
+  held,
+  s,
+}: {
+  row: ExtAgentRow
+  busy: boolean
+  held?: string
+  s: ExtAgentsState
+}): JSX.Element | null {
   const pill = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
+  const refreshFailed = s.menusFailed[row.name] || ''
   if (!row.model_source) return null
   const own = isOwnRow(row)
   const provs = pickerProvidersFor(row)
@@ -275,10 +297,17 @@ function ModelPill({ row, busy, held }: { row: ExtAgentRow; busy: boolean; held?
        before that landed asks once itself rather than offering nothing. */
     if (row.model_source === 'raven' && !hostProviders().length) await loadDefaultProviders()
     setOpen(true)
+    /* An acp agent's menu is measured when its handshake last ran, and its own
+       catalog can move without its launch config moving -- Mirasim adding the
+       reader's provider profiles is the one that was reported. Opening the menu
+       is the reader looking at it, so read it again; the cached list stays on
+       screen and fills in when the answer lands. */
+    if (row.model_source === 'agent') void store.refreshMenus(row)
   }
   return (
-    <div className="extAgents-fld">
-      <span className="extAgents-k">{t('gui.agent.model_label')}</span>
+    <>
+      <div className="extAgents-fld">
+        <span className="extAgents-k">{t('gui.agent.model_label')}</span>
       <span className={cls}>
         <button
           aria-expanded={open}
@@ -314,6 +343,7 @@ function ModelPill({ row, busy, held }: { row: ExtAgentRow; busy: boolean; held?
           </button>
         ) : null}
       </span>
+      {refreshFailed ? <div className="extAgents-mnote">{t('gui.agent.model_refresh_failed', { detail: refreshFailed })}</div> : null}
       {open ? (
         <ModelPicker
           anchor={pill.current}
@@ -332,8 +362,32 @@ function ModelPill({ row, busy, held }: { row: ExtAgentRow; busy: boolean; held?
           allowTyped={false}
           title={t('gui.agent.model_label')}
         />
+        ) : null}
+      </div>
+      {row.effort_choices?.length ? (
+        <label className="extAgents-fld">
+          <span className="extAgents-k">{t('gui.agent.effort_label')}</span>
+          <select
+            aria-label={t('gui.agent.effort_label')}
+            className="extAgents-in extAgents-effort"
+            disabled={busy}
+            onChange={(e) => {
+              const choice = e.currentTarget.value
+              if (choice) void store.setEffort(row, choice)
+              else void store.clearEffort(row)
+            }}
+            value={row.effort || ''}
+          >
+            <option value="">{t('gui.agent.effort_default')}</option>
+            {row.effort_choices.map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.name || c.value}
+              </option>
+            ))}
+          </select>
+        </label>
       ) : null}
-    </div>
+    </>
   )
 }
 
@@ -708,6 +762,24 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
           <h3>{row.name}</h3>
           <StatusLine row={row} s={lineState} shown={shownOf(row, lineState)} />
         </div>
+        {/* The card's own action, at the corner where a card keeps one: an acp
+            agent's menu can move while its row stays the same, and a reader who
+            came to this card to change the model should be able to read it
+            again without opening the picker first. Hidden for a missing agent
+            -- there is nothing to handshake -- and for every row whose model is
+            not the agent's own menu. */}
+        {row.model_source === 'agent' && shown !== 'missing' ? (
+          <button
+            aria-label={t('gui.agent.model_refresh')}
+            className="extAgents-mrf"
+            disabled={s.menusBusy.includes(row.name) || !!s.joining[row.name] || testing}
+            onClick={() => void store.refreshMenus(row, { force: true })}
+            title={t('gui.agent.model_refresh')}
+            type="button"
+          >
+            {s.menusBusy.includes(row.name) ? <Spin /> : <RefreshGlyph />}
+          </button>
+        ) : null}
       </div>
       <div className="extAgents-body">
         {shown === 'missing' ? (
@@ -732,7 +804,7 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
               row={row}
               saved={(!row.configured && !row.vendored && store.draftOf(row.name)) || row.description || ''}
             />
-            <ModelPill busy={shown === 'pending'} held={s.picked[row.name]} row={asAsked(row, s)} />
+            <ModelPill busy={shown === 'pending'} held={s.picked[row.name]} row={asAsked(row, s)} s={s} />
             {/* Only a preset not yet on the roster picks where it runs -- at
                 the add stage, or at the key stage an openai preset waits in
                 until its key is typed: the machine is written with the add,
@@ -792,6 +864,8 @@ function PickRow({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Eleme
      empty picker. */
   const menuless = !provs.length
   const busy = !!s.joining[row.name]
+  const refreshing = s.menusBusy.includes(row.name)
+  const refreshFailed = s.menusFailed[row.name] || ''
   const missing = sectionOf(row) === 'missing'
   /* The same verdict the card carries, and for the same reason: the handshake
      already refused this agent for want of a credential, and the fix -- signing
@@ -827,20 +901,40 @@ function PickRow({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Eleme
           </span>
         </div>
         {missing ? null : <div className="extAgents-pickpill">
-          <span className={cls}>
-            <button
-              aria-expanded={open}
-              aria-label={t('gui.agent.model_change')}
-              className="extAgents-pm"
-              disabled={menuless || busy}
-              onClick={() => setOpen(true)}
-              type="button"
-            >
-              <span className="extAgents-mid">
-                {shown ? shown.id : t(menuless ? 'gui.agent.model_managed' : 'gui.agent.model_own_default')}
-              </span>
-              {menuless ? null : <span className="extAgents-mch">{'⌄'}</span>}
-            </button>
+          <span className="extAgents-mrow">
+            <span className={cls}>
+              <button
+                aria-expanded={open}
+                aria-label={t('gui.agent.model_change')}
+                className="extAgents-pm"
+                disabled={menuless || busy}
+                onClick={() => {
+                  setOpen(true)
+                  /* The same read the sheet's pill makes: a preset's menu is a
+                     measurement too, and the reader opening it is the moment to
+                     take it again. */
+                  if (row.model_source === 'agent') void store.refreshMenus(row)
+                }}
+                type="button"
+              >
+                <span className="extAgents-mid">
+                  {shown ? shown.id : t(menuless ? 'gui.agent.model_managed' : 'gui.agent.model_own_default')}
+                </span>
+                {menuless ? null : <span className="extAgents-mch">{'⌄'}</span>}
+              </button>
+            </span>
+            {row.model_source === 'agent' ? (
+              <button
+                aria-label={t('gui.agent.model_refresh')}
+                className="extAgents-mrf"
+                disabled={refreshing || busy}
+                onClick={() => void store.refreshMenus(row, { force: true })}
+                title={refreshFailed || t('gui.agent.model_refresh')}
+                type="button"
+              >
+                {refreshing ? <Spin /> : <RefreshGlyph />}
+              </button>
+            ) : null}
           </span>
         </div>}
         <button

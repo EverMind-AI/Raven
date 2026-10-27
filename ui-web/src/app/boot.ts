@@ -15,7 +15,10 @@
 
 import { load as paneLoad } from '../chrome/behaviour/panes'
 import { goPaint } from '../features/composer/mount'
+import { warm as warmConnections } from '../features/connections/store'
 import { warm as warmCron } from '../features/cron/store'
+import * as machinesStore from '../features/extAgents/machines'
+import { warm as warmAgents } from '../features/extAgents/store'
 import { refresh as refreshImportSync } from '../features/importSync/store'
 import { loadExt } from '../features/installed/source'
 import { loadSelection, setupState } from '../features/model/source'
@@ -122,6 +125,15 @@ async function sequence(): Promise<void> {
       .catch(() => {})
     await loadSessions()
     releaseRail()
+    /* The connections hub's three modules, fetched while the reader is still on
+       the first screen: opening it later draws its cards at once and refreshes
+       behind them. The agents read carries no probe -- the page's own open is
+       what re-measures availability -- so this starts no agent process. None is
+       awaited: nothing on this screen reads any of it, and a failed warm is the
+       module's own read to report when the reader goes there. */
+    void warmConnections()
+    void warmAgents()
+    void machinesStore.load()
     /* Whether the trajectory view is on for this gateway; the poller keeps
        asking from here on (features/trajectory/poll.ts). */
     void refreshTrajectoryState()

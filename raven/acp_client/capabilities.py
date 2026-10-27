@@ -130,6 +130,40 @@ class AcpModelChoice:
     group: str = ""
 
 
+EFFORT_MODE_IDS = frozenset({"off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "default", "none"})
+"""Mode ids that name a reasoning effort, so a mode menu made only of them can be offered as effort."""
+
+
+def mode_effort_choices(modes: tuple["AcpMode", ...]) -> tuple["AcpEffortChoice", ...]:
+    """``modes`` as reasoning-effort choices, when every mode is an effort level.
+
+    ACP has no field saying whether an agent's ``modes`` are reasoning levels or
+    editor/permission modes; the names are the only signal. So this takes a menu
+    as effort only when *every* id is a level name: one ``acceptEdits`` or
+    ``plan`` makes it a mode menu, and offering a permission mode as a reasoning
+    level is worse than offering no effort menu at all.
+    """
+    ids = [mode.id for mode in modes]
+    if not ids or any(mode_id not in EFFORT_MODE_IDS for mode_id in ids):
+        return ()
+    return tuple(AcpEffortChoice(value=mode.id, name=mode.name or mode.id) for mode in modes if mode.id)
+
+
+@dataclass(frozen=True)
+class AcpEffortChoice:
+    """One reasoning effort an agent offers, from its ``thought_level`` config option.
+
+    ``value`` is what ``session/set_config_option`` takes back (``low``,
+    ``high``, ``max``, ``default`` on OpenCode 1.19.4); ``name`` is what the
+    agent asked to be shown, which is usually the same word. Carried whole for
+    the reason :class:`AcpModelChoice` is: a menu of bare ids is not what the
+    agent meant to put in front of a reader.
+    """
+
+    value: str
+    name: str = ""
+
+
 @dataclass(frozen=True)
 class CapabilitySnapshot:
     """One handshake's worth of measured facts about an acp agent."""
@@ -174,6 +208,18 @@ class CapabilitySnapshot:
 
     Measured rather than declared, for the reason ``available_modes`` gives:
     a row naming its own would drift the first time the agent's list changed."""
+    effort_choices: tuple[AcpEffortChoice, ...] = ()
+    """The reasoning efforts the agent's ``thought_level`` option offers.
+
+    A separate config option from ``model`` (``session/set_config_option`` with
+    the option's own id, ``effort`` on OpenCode 1.19.4), which is why the model
+    list no longer carries effort-suffixed ids there. Measured like the other
+    two menus, and empty for an agent that advertises none."""
+    effort_option: str = ""
+    """The config option id the effort values are set through (``effort``).
+
+    Empty with ``effort_choices``: an agent with no effort menu has no id to
+    send to, and the session's own response is what names it."""
     available_modes: tuple[AcpMode, ...] = ()
     """The profiles ``session/set_mode`` can switch a session between.
 
@@ -219,6 +265,17 @@ class CapabilitySnapshot:
     def usable(self) -> bool:
         return self.status == "ready" and not self.stale
 
+    def mode_efforts(self) -> tuple[AcpEffortChoice, ...]:
+        """This agent's mode menu read as reasoning effort, or ``()`` when it is not one.
+
+        A real ``thought_level`` option always wins; none is guessed for raven's
+        own agents, whose modes are run-intensity tiers rather than a model's
+        reasoning effort.
+        """
+        if self.effort_choices or self.agent_name == "raven":
+            return ()
+        return mode_effort_choices(self.available_modes)
+
     def to_wire(self) -> dict[str, Any]:
         """camelCase for the RPC layers, matching how ``ProbeResult`` does it."""
         return {
@@ -239,6 +296,8 @@ class CapabilitySnapshot:
             "promptModalities": list(self.prompt_modalities),
             "availableModels": list(self.available_models),
             "modelChoices": [{"value": c.value, "name": c.name, "group": c.group} for c in self.model_choices],
+            "effortChoices": [{"value": c.value, "name": c.name} for c in self.effort_choices],
+            "effortOption": self.effort_option,
             "availableModes": [
                 {"id": m.id, "name": m.name, "description": m.description} for m in self.available_modes
             ],
@@ -285,6 +344,16 @@ class CapabilitySnapshot:
                 if isinstance(c, dict) and isinstance(c.get("value"), str) and c["value"]
             )
 
+        def _efforts(key: str) -> tuple[AcpEffortChoice, ...]:
+            value = row.get(key)
+            if not isinstance(value, list):
+                return ()
+            return tuple(
+                AcpEffortChoice(value=c["value"], name=str(c.get("name") or ""))
+                for c in value
+                if isinstance(c, dict) and isinstance(c.get("value"), str) and c["value"]
+            )
+
         def _modes(key: str) -> tuple[AcpMode, ...]:
             value = row.get(key)
             if not isinstance(value, list):
@@ -314,6 +383,8 @@ class CapabilitySnapshot:
             prompt_modalities=_strs("promptModalities"),
             available_models=_strs("availableModels"),
             model_choices=_choices("modelChoices"),
+            effort_choices=_efforts("effortChoices"),
+            effort_option=str(row.get("effortOption") or ""),
             available_modes=_modes("availableModes"),
             auth_methods=_strs("authMethods"),
             needs_auth=bool(row.get("needsAuth")),
@@ -518,6 +589,8 @@ class _Handshake:
     auth_methods: tuple[str, ...] = ()
     available_models: tuple[str, ...] = ()
     model_choices: tuple["AcpModelChoice", ...] = ()
+    effort_choices: tuple["AcpEffortChoice", ...] = ()
+    effort_option: str = ""
     available_modes: tuple["AcpMode", ...] = ()
     menu_unread: bool = False
     """The agent answered ``session/new``, saying its menus are empty for want of a read."""
@@ -647,6 +720,58 @@ def _read_session_model_choices(result: Any) -> tuple[AcpModelChoice, ...]:
     return tuple(choices(entry.get("options"), ""))
 
 
+def read_session_effort(result: Any) -> tuple[str, str, tuple[AcpEffortChoice, ...]]:
+    """The session's reasoning-effort option: ``(option_id, current, choices)``.
+
+    The option is the ``configOptions`` entry whose ``category`` is
+    ``thought_level`` (OpenCode 1.19.4: id ``effort``, values ``low``, ``high``,
+    ``max``, ``default``). It is a **separate** option from ``model``, which is
+    why that agent's model list is the base models only: 1.14.31 packed the
+    effort into ``model`` ids (``.../low``), and 1.19.4 moved it here.
+
+    Empty everywhere when the agent advertises no such option, which is every
+    agent measured before 1.19.4 and every one that has no reasoning effort to
+    choose. ``current`` is the value this throwaway session opened on -- the
+    agent's own default -- and is not stored on the capability snapshot for the
+    reason :func:`read_session_current_model` gives; the session that opens for
+    a real turn keeps it beside its id so a cleared override can be sent back.
+    """
+    options = _dict(result).get("configOptions")
+    if not isinstance(options, list):
+        return "", "", ()
+    for entry in options:
+        if not isinstance(entry, dict) or entry.get("category") != "thought_level":
+            continue
+        found: list[AcpEffortChoice] = []
+
+        def walk(items: Any) -> None:
+            for item in items if isinstance(items, list) else ():
+                if not isinstance(item, dict):
+                    continue
+                nested = item.get("options")
+                if isinstance(nested, list):
+                    walk(nested)
+                    continue
+                value = item.get("value")
+                if isinstance(value, str) and value:
+                    found.append(AcpEffortChoice(value=value, name=str(item.get("name") or "")))
+
+        walk(entry.get("options"))
+        return str(entry.get("id") or ""), str(entry.get("currentValue") or ""), tuple(found)
+    return "", "", ()
+
+
+def read_session_current_mode(result: Any) -> str:
+    """The session mode a response opened on, or ``""`` when it named none.
+
+    Used only for a menu that is effort: clearing a row's effort sends this
+    back, because ``session/set_mode`` takes a value and has no unset.
+    """
+    modes = _dict(_dict(result).get("modes"))
+    value = modes.get("currentModeId")
+    return value if isinstance(value, str) else ""
+
+
 def read_session_current_model(result: Any) -> str:
     """The model a session response says that session is on right now.
 
@@ -727,11 +852,12 @@ def relearn_session_menus(
     (``_with_modes`` in the fork's ACP methods), the models at least on
     ``session/new`` -- so the response a dispatch already holds is newer
     evidence than the snapshot. Without this the cache only ever moves when
-    someone presses Test: ``snapshot_fingerprint`` covers how the agent is
-    LAUNCHED, and an agent that reworded its own modes or renamed its models
-    launches identically, so nothing marks the stored menus stale -- the
-    dispatching model goes on reading modes the agent no longer serves, and the
-    row's picker goes on offering model ids it no longer takes.
+    someone presses Test or asks for the menu again (``subagents.refresh_models``):
+    ``snapshot_fingerprint`` covers how the agent is LAUNCHED, and an agent that
+    reworded its own modes or renamed its models launches identically, so
+    nothing marks the stored menus stale -- the dispatching model goes on reading
+    modes the agent no longer serves, and the row's picker goes on offering model
+    ids it no longer takes.
 
     Read with the probe's own parsers, from the response this route was sending
     for anyway: nothing here opens a session or starts a process.
@@ -763,6 +889,12 @@ def relearn_session_menus(
     if choices and choices != snapshot.model_choices:
         changes["model_choices"] = choices
         changes["model_menu_measured"] = True
+    effort_option, _effort_now, efforts = read_session_effort(result)
+    if efforts and (efforts != snapshot.effort_choices or effort_option != snapshot.effort_option):
+        # The option id travels with the choices: it is what a later turn sends
+        # the value through, and an agent may rename it between versions.
+        changes["effort_choices"] = efforts
+        changes["effort_option"] = effort_option
     if not changes:
         return None
     revised = (store or SnapshotStore()).revise(snapshot, **changes)
@@ -1003,6 +1135,8 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
             prompt_modalities=hs.prompt_modalities,
             available_models=hs.available_models,
             model_choices=hs.model_choices,
+            effort_choices=hs.effort_choices,
+            effort_option=hs.effort_option,
             model_menu_measured=not hs.menu_unread,
             available_modes=hs.available_modes,
             auth_methods=hs.auth_methods,
@@ -1137,8 +1271,38 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
             suffix = f"; stderr: {tail}" if tail else ""
             return done("attention", f"connected, but session/new failed: {exc}{suffix}", handshake)
 
+        # The effort menu can be model-specific: OpenCode 1.19.4 advertises a
+        # thought_level option for a model that reasons, and a fresh session
+        # opens on the agent's own default. Put the row's model on the
+        # throwaway session first, so a row pinned to a reasoning model records
+        # the menu that model has; the set response is the one carrying it.
+        wanted_model = getattr(cfg, "model", None)
+        session_id = _dict(session).get("sessionId")
+        selected_effort: tuple[str, tuple[AcpEffortChoice, ...]] | None = None
+        if isinstance(wanted_model, str) and wanted_model and isinstance(session_id, str) and session_id:
+            try:
+                switched = await client.request(
+                    "session/set_config_option",
+                    {"sessionId": session_id, "configId": "model", "value": wanted_model},
+                    timeout=budget,
+                )
+            except AcpError as exc:
+                logger.debug(
+                    "acp verify for {!r}: setting {!r} for its effort menu failed: {}", name, wanted_model, exc
+                )
+            else:
+                if isinstance(switched, dict):
+                    option, _effort_now, efforts = read_session_effort(switched)
+                    if efforts:
+                        selected_effort = (option, efforts)
+
         handshake.available_models = _read_session_models(session)
         handshake.model_choices = _read_session_model_choices(session)
+        handshake.effort_option, _effort_now, handshake.effort_choices = read_session_effort(session)
+        if selected_effort is not None:
+            # The row's model, not the session's default, is what the effort
+            # menu belongs to -- the set response is authoritative for it.
+            handshake.effort_option, handshake.effort_choices = selected_effort
         handshake.menu_unread = _read_session_menu_unread(session)
         handshake.available_modes = _read_session_modes(session)
         caps = ", ".join(
@@ -1174,7 +1338,10 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
 
 
 __all__ = [
+    "AcpEffortChoice",
     "CapabilitySnapshot",
+    "EFFORT_MODE_IDS",
+    "mode_effort_choices",
     "SnapshotStatus",
     "SnapshotStore",
     "default_snapshot_path",
@@ -1183,6 +1350,8 @@ __all__ = [
     "npx_fetch_failure",
     "npx_fetch_lead",
     "npx_incomplete_lead",
+    "read_session_current_mode",
+    "read_session_effort",
     "relearn_session_menus",
     "snapshot_fingerprint",
     "steer_offered",
