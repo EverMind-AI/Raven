@@ -1896,7 +1896,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.pb.required': 'required',
     'gui.pb.no_default': '—',
     'gui.tier.title': 'Mode',
-    'gui.tier.scope': 'Reasoning depth, sub-agent mode and the rest follow this setting. This conversation only.',
+    'gui.tier.scope': 'The tier the sub-agents this conversation dispatches run at. This conversation only.',
     'gui.tier.failed': 'Could not switch to {name}',
     'gui.tier.mode': 'Mode',
     'gui.tier.mode_scope':
@@ -5323,7 +5323,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.pb.required': '必填',
     'gui.pb.no_default': '—',
     'gui.tier.title': '模式',
-    'gui.tier.scope': '模型思考深度、子智能体运行强度等都跟着这一档走。只作用于本会话。',
+    'gui.tier.scope': '派出的子智能体按这一档运行。只作用于本会话。',
     'gui.tier.failed': '切换到 {name} 没有成功',
     'gui.tier.mode': '模式',
     'gui.tier.mode_scope': '这是部署自带的模式，不是内置档位，因此不会下发给子智能体。',
