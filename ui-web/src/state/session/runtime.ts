@@ -675,7 +675,7 @@ export async function applyStagedEffort(_rt: SessionRuntime, sessionId: string):
   } catch (e) {
     toast(`${t('gui.effort.title')}: ${detailOf(e)}`)
   }
-  void loadEffort()
+  void loadEffort(sessionId)
 }
 
 /* The permission mode picked while this was still a draft, written now that

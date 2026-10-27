@@ -388,7 +388,17 @@ export const tierSource: TierSource = {
    send path to write once the first message has minted a session
    (state/session/runtime.ts, applyStagedEffort). */
 export const effortSource: EffortSource = {
-  read: async () => gateway().call('session.set_effort', { session_key: sessionCurrent() || '' }),
+  read: async (sid, gen) => {
+    /* The conversation named by the caller, else the one on screen: a switch
+       asks before the current session moves over, so "current" there is the
+       conversation being left (see EffortSource). The ticket is the same guard
+       `loadProviders` keeps -- an answer about a view the reader has already
+       left is dropped rather than painted. */
+    const target = sid !== undefined ? sid : sessionCurrent()
+    const ticket = gen !== undefined ? gen : generation()
+    const r = await gateway().call('session.set_effort', { session_key: target || '' })
+    return ticket === generation() ? r : null
+  },
   set: async (effort: string | null) => {
     const sid = sessionCurrent()
     if (!sid) {

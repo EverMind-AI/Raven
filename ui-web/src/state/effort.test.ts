@@ -20,12 +20,14 @@ vi.mock('./toast', () => ({
 const WORDS = ['minimal', 'low', 'medium', 'high']
 
 let asked: Array<string | null | undefined>
-let answer: (effort: string | null | undefined) => Promise<EffortReply>
+/* What each read was about: the conversation and the switch it named. */
+let reads: Array<[string | null | undefined, number | undefined]>
+let answer: (effort: string | null | undefined) => Promise<EffortReply | null>
 
 function source(): void {
   const src: EffortSource = {
-    read: () => { asked.push(undefined); return answer(undefined) },
-    set: (id) => { asked.push(id); return answer(id) },
+    read: (sid, gen) => { asked.push(undefined); reads.push([sid, gen]); return answer(undefined) },
+    set: (id) => { asked.push(id); return answer(id) as Promise<EffortReply> },
   }
   setSources({ effort: src })
 }
@@ -35,6 +37,7 @@ beforeEach(() => {
   effort._resetForTests()
   toastWriter.items = []
   asked = []
+  reads = []
   answer = async (id) => ({ session_key: 'cli:one', effort: id === undefined ? null : id, default: 'low', options: WORDS })
   source()
 })
@@ -70,6 +73,29 @@ describe('the reasoning effort', () => {
     await effort.load()
     /* No configured effort: the provider's own, which has no rung. */
     expect(effort.scopeNote()).toBe('gui.effort.scope gui.effort.now {"name":"gui.effort.provider"}')
+  })
+
+  it('reads the conversation it was given under the switch it was given, not the one on screen', async () => {
+    /* A switch asks for the conversation being opened before the page's
+       current session moves over to it: the source is told which, so it does
+       not ask about the one being left. */
+    await effort.load('cli:two', 7)
+    expect(reads).toEqual([['cli:two', 7]])
+    await effort.load(null, 8)
+    expect(reads).toEqual([['cli:two', 7], [null, 8]])
+    await effort.load()
+    expect(reads).toEqual([['cli:two', 7], [null, 8], [undefined, undefined]])
+  })
+
+  it('paints nothing from a read the source dropped, and keeps what it had', async () => {
+    await effort.load()
+    expect(ticked()).toEqual([''])
+    /* The source answers null for a read whose switch was overtaken (the live
+       one, features/model/source.ts): nothing to paint, nothing lost. */
+    answer = async () => null
+    await effort.load('cli:gone', 9)
+    expect(effort.offered()).toBe(true)
+    expect(ticked()).toEqual([''])
   })
 
   it('offers nothing when the read fails, which is what an older gateway answers', async () => {
