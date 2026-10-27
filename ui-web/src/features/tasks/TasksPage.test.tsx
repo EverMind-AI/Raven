@@ -907,7 +907,7 @@ describe('the node panel', () => {
       nodes: [node({ node_id: 'n1', status: 'completed', started_at: 1000, ended_at: 111_000, tokens_in: 4000, tokens_out: 910 })],
     })
     pick(done)
-    expect(document.querySelector('.pane-head-meta')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1m50s · gui.tasks.tokens_n {"n":"4,910"}')
+    expect(document.querySelector('.pane-head-meta')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1m 50s · gui.tasks.tokens_n {"n":"4,910"}')
   })
 
   it('subtitle counts usage a lane reported on one side only', () => {

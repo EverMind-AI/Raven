@@ -537,7 +537,7 @@ describe('the rows that lead to a Scope Tab', () => {
     await draw()
     expect(row('door').classList.contains('trajectory-row-door')).toBe(true)
     const cell = row('door').querySelector('.trajectory-scope-door') as HTMLElement
-    expect([...cell.children].map((c) => c.textContent)).toEqual(['gui.trajectory.status.ok', '1m05s', ''])
+    expect([...cell.children].map((c) => c.textContent)).toEqual(['gui.trajectory.status.ok', '1m 5s', ''])
     expect([...cell.children].map((c) => c.classList[0])).toEqual(['trajectory-scope-door-state', 'trajectory-scope-door-dur', 'trajectory-scope-opens'])
     /* The door's own columns: its kind column may give way to its tag, its preview keeps a floor, and the state takes the fifth. */
     const cols = list().style.getPropertyValue('--trajectory-cols-door')

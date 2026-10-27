@@ -777,7 +777,7 @@ describe('transcript island, history', () => {
     /* One minute of work under a header that said eleven, because the span was
        measured from the question ten minutes before the cron entry. */
     const folds = Array.from(document.querySelectorAll('.tfold'))
-    expect(folds.map((f) => f.querySelector('.tfh .tm')?.textContent)).toEqual(['1m00s'])
+    expect(folds.map((f) => f.querySelector('.tfh .tm')?.textContent)).toEqual(['1m 0s'])
   })
 
   it('gives a delegated turn its own fold instead of rewriting the last one', () => {
@@ -807,7 +807,7 @@ describe('transcript island, history', () => {
        rather than wearing the twenty seconds the delivered turn took. */
     openFolds()
     const folds = Array.from(document.querySelectorAll('.tfold'))
-    expect(folds.map((f) => f.querySelector('.tfh .tm')?.textContent)).toEqual(['5m00s', '20s'])
+    expect(folds.map((f) => f.querySelector('.tfh .tm')?.textContent)).toEqual(['5m 0s', '20s'])
     expect(folds.map((f) => f.querySelectorAll('.tfb .step').length)).toEqual([1, 1])
     expect((folds[0] as HTMLElement).querySelector('.think .lb')?.textContent).toBe('en:gui.think.label')
   })
@@ -4021,7 +4021,7 @@ describe('transcript island, delegated calls', () => {
     const shown = card.querySelector('.dgr')!.textContent as string
     expect(shown).toContain(store.durText(180_000))
     /* Not the near-zero call time, as a whole reading rather than a digit
-       that happens to occur inside the correct one ("3m00s" ends in the
+       that happens to occur inside the correct one ("3m 0s" ends in the
        same two characters `durText(5)` would print on its own). */
     expect(shown).not.toMatch(/(?<!\d)0s\b/)
   })

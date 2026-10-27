@@ -145,7 +145,7 @@ describe('the strip', () => {
       'gui.trajectory.scope.instance {"name":"coder-2"}',
       'gui.trajectory.scope.dispatched_in {"n":3}',
       'gui.trajectory.status.ok',
-      '1m05s',
+      '1m 5s',
     ])
     expect(tabs()[2]!.title).toBe('gui.trajectory.status.ok')
   })

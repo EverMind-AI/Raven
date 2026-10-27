@@ -184,7 +184,7 @@ describe('the renderers', () => {
     const keys = [...document.querySelectorAll('.trajectory-kv-k')].map((k) => k.textContent)
     /* A key with a catalogue label reads as the label; one without reads as itself. */
     expect(keys).toEqual(['gui.trajectory.timing.duration', 'timing_basis', 'tool.duration_ms'])
-    expect(document.body.textContent).toContain('65000 ms (1m05s)')
+    expect(document.body.textContent).toContain('65000 ms (1m 5s)')
     expect(document.body.textContent).toContain('gui.trajectory.basis.span_full')
     expect([...document.querySelectorAll('.trajectory-kv-src')].map((s) => s.textContent)).toEqual([
       'gui.trajectory.details.source_derived', 'gui.trajectory.details.source_derived', 'gui.trajectory.details.source_attribute',

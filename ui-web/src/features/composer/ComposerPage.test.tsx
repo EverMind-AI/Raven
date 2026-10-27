@@ -717,7 +717,7 @@ describe('the live turn row', () => {
     store.setLiveAnchor(0)
     store.setLiveAnchor(anchor - 61000)
     act(() => { store.drawTurnLive() })
-    expect((document.querySelector('.turnlive .lb') as HTMLElement).textContent).toBe('1m01s')
+    expect((document.querySelector('.turnlive .lb') as HTMLElement).textContent).toBe('1m 1s')
   })
 
   it('shows a word from the shared catalogue, kept out of the readable name', () => {
@@ -753,8 +753,8 @@ describe('the live turn row', () => {
     expect((document.querySelector('.turnlive .lb') as HTMLElement).textContent).toBe('0s')
     act(() => { vi.advanceTimersByTime(verbSpec.rotationMs) })
     expect((document.querySelector('.turnlive .cp-verb') as HTMLElement).textContent).toBe(verbSpec.verbs[1])
-    /* `formatDuration` rounds, so 2500ms reads as 3s. */
-    expect((document.querySelector('.turnlive .lb') as HTMLElement).textContent).toBe('3s')
+    /* `formatDuration` truncates, so 2500ms reads as 2s. */
+    expect((document.querySelector('.turnlive .lb') as HTMLElement).textContent).toBe('2s')
   })
 
   it('paints the meter from the source', () => {
