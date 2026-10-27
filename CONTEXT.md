@@ -856,8 +856,9 @@ the reader, so no
 `SILENT_TURN` notice goes out; a marker it ends on is still filed `silent: true`, so a reload
 draws the muted line after the delivered reply where the live view drew none. The last assistant row
 the turn stores -- the marker's row when it ends on one, else the row before an empty closing reply,
-which is not stored -- carries that live verdict as `replied_via_tool`, and the two surfaces that read a stored turn -- the
-ACP replay, which draws it, and the session list, which orders sessions by it -- read the flag from
+which is not stored -- carries that live verdict as `replied_via_tool`, and the two surfaces that
+read a stored turn -- the ACP replay, which draws it, and the session list, which orders sessions by
+it -- read the flag from
 one place (`session/turn_shape.py`) rather than guess it from the calls they can see, where a send
 that failed or went to another chat would look like an answer.
 Distinct from a `no_output` failure. A Silent Turn is the model saying nothing on purpose, so it
@@ -897,8 +898,9 @@ the note, as `interrupted`, with no wait and no fallback model -- and so does a 
 of iterations or time while a continuation is still owed, with no wrap-up. On each of those exits
 the reply the turn ends on, the joined parts, is read for a Silence Marker by the turn's rule, and
 one that is a marker ends the turn as a **Silent Turn**: nothing of it shown, its row filed
-`silent: true`, no note, and the turn `interrupted` only when its budget stopped it. A stream that merely
-closed without a terminal chunk -- all a backend that never sends one leaves -- and a body that
+`silent: true`, no note, and the turn `interrupted` only when its budget stopped it. A stream that
+merely closed without a terminal chunk -- all a backend that never sends one leaves -- and a body
+that
 names no finish read `unknown` and are delivered as they stand. The continuation streams into the
 step the cut answer opened, and one that calls a tool files the joined words on that call's row. A
 reply with only thinking is PREFILLed twice when there is thinking
