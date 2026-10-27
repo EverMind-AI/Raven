@@ -159,6 +159,27 @@ def test_a_web_vendor_borrows_the_key_of_the_llm_provider_it_shares_an_account_w
     assert config.effective_web_vendor_keys() == {"deepseek": "sk-web"}
 
 
+def test_the_borrow_follows_the_section_address_and_its_endpoints() -> None:
+    """The web endpoints are literals, so a key may only be lent by a section
+    that resolves to DeepSeek's own host: a gateway key would travel to a party
+    that never issued it. Endpoints are the section's own key/address groups,
+    so the endpoint's key wins over the flat one it replaces."""
+    gateway = Config.model_validate(
+        {"providers": {"deepseek": {"apiKey": "sk-gateway", "apiBase": "https://llm-gw.corp.example/v1"}}}
+    )
+    assert gateway.effective_web_vendor_key("deepseek") == ""
+
+    rotated = Config.model_validate(
+        {"providers": {"deepseek": {"apiKey": "sk-old", "endpoints": [{"label": "a", "apiKey": "sk-new"}]}}}
+    )
+    assert rotated.effective_web_vendor_key("deepseek") == "sk-new"
+
+    endpoint_only = Config.model_validate(
+        {"providers": {"deepseek": {"endpoints": [{"label": "a", "apiKey": "sk-only"}]}}}
+    )
+    assert endpoint_only.effective_web_vendor_key("deepseek") == "sk-only"
+
+
 def test_a_malformed_provider_section_yields_no_borrowed_key() -> None:
     """The borrow is a read of somebody else's section: a value the schema
     rejects, or a subtree that is not an object at all, answers no key rather
@@ -1155,3 +1176,22 @@ async def test_registry_image_search_preserves_the_single_query_fallback(monkeyp
     assert calls == want
     assert params == original
     assert ("Invalid parameters" in result) is (not want)
+
+
+def test_a_resolver_failure_lends_no_key_and_a_foreign_host_is_not_the_vendors(monkeypatch) -> None:
+    """The borrow is a read of somebody else's section: a resolver that cannot
+    read it lends nothing, and only DeepSeek's own parsed host qualifies (a
+    look-alike domain does not)."""
+    from raven.config import update_providers
+    from raven.config.schema import borrowed_web_key, is_web_vendor_address
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("resolver failed")
+
+    monkeypatch.setattr(update_providers, "provider_connection", boom)
+    assert borrowed_web_key("deepseek", {"deepseek": {"apiKey": "sk"}}) == ""
+
+    monkeypatch.undo()
+    assert is_web_vendor_address("deepseek", "http://[") is False
+    assert is_web_vendor_address("deepseek", "https://api.deepseek.com.evil.example") is False
+    assert is_web_vendor_address("serper", "https://api.deepseek.com") is False

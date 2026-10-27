@@ -1398,12 +1398,61 @@ class TestLiveVendorKeyFollowsTheCanonicalOrder:
         _write(path, {"tools": {"web": {}}})
         assert live_vendor_key(LiveConfig(path), "deepseek", boot="sk-boot") == "sk-boot", "no file entry keeps boot"
 
-    def test_a_malformed_provider_section_dispenses_no_live_answer(self, tmp_path: Path) -> None:
-        """A provider block the schema rejects is not a new answer: the boot value
-        keeps serving, the same rule every live reader here follows."""
-        from raven.config.schema import live_borrowed_web_key
+    def test_a_borrow_follows_the_section_address_and_its_endpoints_live(self, tmp_path: Path) -> None:
+        """The live answer obeys the same host rule as the boot one, and an
+        endpoint's key replaces the flat one it supersedes."""
+        from raven.config.live import live_vendor_key
 
-        assert live_borrowed_web_key("deepseek", {"deepseek": {"apiKey": {"nested": 1}}}) is None
+        path = tmp_path / "config.json"
+        _write(
+            path,
+            {"providers": {"deepseek": {"apiKey": "sk-gw", "apiBase": "https://llm-gw.corp.example/v1"}}},
+        )
+        assert live_vendor_key(LiveConfig(path), "deepseek", boot="sk-gw") == ""
+
+        _write(
+            path,
+            {"providers": {"deepseek": {"apiKey": "sk-old", "endpoints": [{"label": "a", "apiKey": "sk-new"}]}}},
+        )
+        assert live_vendor_key(LiveConfig(path), "deepseek", boot="") == "sk-new"
+
+    def test_a_rejected_provider_edit_keeps_the_last_live_borrowed_key(self, tmp_path: Path) -> None:
+        """A file being rewritten is briefly invalid; a rejected edit must keep
+        the last admitted borrowed key serving and not roll it back to boot,
+        while removing the provider section still hands the boot value back."""
+        from raven.config.live import live_vendor_key
+
+        path = tmp_path / "config.json"
+        _write(path, {"providers": {"deepseek": {"apiKey": "sk-1"}}})
+        live = LiveConfig(path)
+        assert live_vendor_key(live, "deepseek", boot="") == "sk-1"
+
+        _write(path, {"providers": {"deepseek": {"apiKey": {"nested": 1}}}})
+        assert live_vendor_key(live, "deepseek", boot="") == "sk-1", "a rejected edit keeps the last admitted key"
+
+        _write(path, {"providers": {"deepseek": {"apiKey": "sk-2"}}})
+        assert live_vendor_key(live, "deepseek", boot="") == "sk-2"
+
+        _write(path, {"tools": {"web": {}}})
+        assert live_vendor_key(live, "deepseek", boot="sk-boot") == "sk-boot", "an absent provider falls back to boot"
+
+    def test_an_empty_provider_key_without_a_web_slot_is_a_revocation(self, tmp_path: Path) -> None:
+        from raven.config.live import live_vendor_key
+
+        path = tmp_path / "config.json"
+        _write(path, {"providers": {"deepseek": {"apiKey": ""}}})
+        assert live_vendor_key(LiveConfig(path), "deepseek", boot="sk-boot") == ""
+
+    def test_a_malformed_provider_section_dispenses_no_live_answer(self, tmp_path: Path) -> None:
+        """A provider block the schema rejects is named but carries no answer;
+        the live reader admits it through its last-good memory. A provider the
+        file does not name at all is a different state -- the boot value keeps
+        serving."""
+        from raven.config.schema import live_borrowed_web_answer
+
+        assert live_borrowed_web_answer("deepseek", {"deepseek": {"apiKey": {"nested": 1}}}) == (True, None)
+        assert live_borrowed_web_answer("deepseek", {"openai": {"apiKey": "x"}}) == (False, None)
+        assert live_borrowed_web_answer("deepseek", ["not", "a", "dict"]) == (False, None)
 
     def test_a_leaf_the_schema_rejects_dispenses_no_new_answer(self, tmp_path: Path) -> None:
         from raven.config.live import web_jina_key

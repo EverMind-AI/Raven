@@ -368,14 +368,15 @@ def live_vendor_key(live: LiveConfig, vendor: str, *, boot: str | None) -> str:
     then the LLM provider key a borrowing vendor shares an account with, then
     ``boot``. A vendor the file names with an empty key is revoked, not
     missed -- except a borrowing vendor, whose own slot is optional and whose
-    source is the provider section. The boot value serves only when the file
-    says nothing about the vendor at all -- no slot of its own, no leaf, and no
-    provider section -- which is the lane a harness passes a key through with
-    no file behind it; a ``providers`` subtree that names other vendors says
-    nothing about this one. A tool that reads its key through this on every
-    call sees a key the user sets or rotates in the file without a restart --
-    which is what an error message telling them to set one has to be able to
-    promise.
+    source is the provider section; a rejected edit to that section keeps the
+    last admitted key, and a section resolving to another host lends nothing.
+    The boot value serves only when the file says nothing about the vendor at
+    all -- no slot of its own, no leaf, and no provider section -- which is the
+    lane a harness passes a key through with no file behind it; a ``providers``
+    subtree that names other vendors says nothing about this one. A tool that
+    reads its key through this on every call sees a key the user sets or
+    rotates in the file without a restart -- which is what an error message
+    telling them to set one has to be able to promise.
     """
     slot = web_provider_key(live, vendor)
     if slot:
@@ -383,13 +384,17 @@ def live_vendor_key(live: LiveConfig, vendor: str, *, boot: str | None) -> str:
     leaf = web_search_key(live) if vendor == "serper" else web_jina_key(live) if vendor == "jina" else None
     if leaf is not None:
         return leaf
-    from raven.config.schema import live_borrowed_web_key
+    from raven.config.schema import live_borrowed_web_answer
 
-    borrowed = live_borrowed_web_key(vendor, live.get("providers"))
-    if borrowed is not None:
+    named, borrowed = live_borrowed_web_answer(vendor, live.get("providers"))
+    if named:
         # A borrowing vendor's web slot is optional, so an empty one is the
         # ordinary state rather than the revocation it is for every other vendor.
-        return borrowed
+        # A rejected provider edit keeps the last admitted key, as every other
+        # reader here does; the answer itself may still be "" (a section that
+        # resolves to another host lends nothing).
+        admitted = _admit(live, f"web_borrowed_key:{vendor}", present=True, value=borrowed)
+        return "" if admitted is None else str(admitted)
     if slot == "" and _names_vendor(live, vendor):
         return ""
     return boot or ""

@@ -1147,12 +1147,52 @@ def web_vendor_llm_source(vendor: str) -> str:
     return WEB_VENDOR_BORROWED_KEYS.get(vendor, "")
 
 
+#: The first-party web host each borrowing vendor's endpoints live on. A key
+#: borrowed from the model provider is issued for this host; a section pointed
+#: anywhere else (a relay, a corporate gateway) lends nothing to the web tool,
+#: whose endpoints are literals.
+WEB_VENDOR_WEB_HOSTS: dict[str, str] = {"deepseek": "api.deepseek.com"}
+
+
+def is_web_vendor_address(vendor: str, api_base: str) -> bool:
+    """Whether ``api_base`` is ``vendor``'s own web host."""
+    host = WEB_VENDOR_WEB_HOSTS.get(vendor)
+    if not host:
+        return False
+    try:
+        return urlparse(api_base).hostname == host
+    except ValueError:
+        return False
+
+
+def _borrowed_key_for_section(vendor: str, section: Any) -> str:
+    """The key a model-provider section lends to ``vendor``'s web tools, or ``""``.
+
+    Resolved through ``provider_connection`` so the key, address and headers are
+    one group: an endpoint's key travels only with that endpoint's address, and
+    a section aimed at another host lends nothing to a tool whose endpoint is a
+    literal.
+    """
+    source = web_vendor_llm_source(vendor)
+    if not source or section is None:
+        return ""
+    from raven.config.update_providers import provider_connection
+
+    try:
+        api_base, api_key, _headers = provider_connection(source, section)
+    except Exception:  # noqa: BLE001 - a section the resolver cannot read lends nothing
+        return ""
+    return str(api_key or "") if is_web_vendor_address(vendor, api_base) else ""
+
+
 def borrowed_web_key(vendor: str, providers: Any) -> str:
     """The LLM credential a web vendor may borrow, or ``""``.
 
     ``providers`` is either the validated ``ProvidersConfig`` or the raw
     ``providers`` subtree from the config file; both answer the same key, and a
-    vendor this deployment does not configure answers an empty one.
+    vendor this deployment does not configure answers an empty one. A section
+    that resolves to another host answers an empty one too: its key was issued
+    for that host, not for the web endpoints this tool calls.
     """
     source = web_vendor_llm_source(vendor)
     if not source:
@@ -1162,30 +1202,34 @@ def borrowed_web_key(vendor: str, providers: Any) -> str:
             section = _provider_section(providers, source)
         except Exception:  # noqa: BLE001 - a malformed section is validated by the loader
             return ""
-        return str(section.api_key or "") if section is not None else ""
+        return _borrowed_key_for_section(vendor, section)
     try:
         section = providers.get(source)
     except Exception:  # noqa: BLE001 - an undeclared section is validated only when read
         return ""
-    return str(getattr(section, "api_key", "") or "")
+    return _borrowed_key_for_section(vendor, section)
 
 
-def live_borrowed_web_key(vendor: str, providers_section: Any) -> str | None:
-    """The file's answer for a borrowing vendor: ``None`` when it says nothing.
+def live_borrowed_web_answer(vendor: str, providers_section: Any) -> tuple[bool, str | None]:
+    """The file's answer for a borrowing vendor: ``(named, key)``.
 
-    The distinction is the live reader's: a provider the file names with an
-    empty key is a revocation, and one it does not name at all leaves the boot
-    value in charge. A section the schema rejects dispenses no new answer, the
-    same rule every other live key reader follows.
+    ``named`` False means the file says nothing about the provider, so the boot
+    value stays in charge. ``named`` True with ``key`` None means the file names
+    it with a section the schema rejects -- the live reader admits that state
+    through its last-good memory rather than rolling the credential back.
+    ``named`` True with a string is the answer this edit grants, possibly ``""``
+    when the section resolves to another host.
     """
     source = web_vendor_llm_source(vendor)
     if not source or not isinstance(providers_section, dict):
-        return None
+        return False, None
     try:
         section = _provider_section(providers_section, source)
     except Exception:  # noqa: BLE001 - a bad edit keeps the last admitted key
-        return None
-    return None if section is None else str(section.api_key or "")
+        return True, None
+    if section is None:
+        return False, None
+    return True, _borrowed_key_for_section(vendor, section)
 
 
 class ExecToolConfig(Base):

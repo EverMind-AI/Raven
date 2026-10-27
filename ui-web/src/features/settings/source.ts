@@ -455,8 +455,52 @@ export const keySet = (tool: string, vendor: string, raw: Record<string, unknown
    WEB_VENDOR_BORROWED_KEYS in raven/config/schema.py; the vendor tests hold
    the two lists equal. */
 export const BORROWED_VENDOR = new Set(['deepseek'])
-export const borrowedKey = (vendor: string, raw: Record<string, unknown>): string =>
-  BORROWED_VENDOR.has(vendor) ? str(raw, `providers.${vendor}.apiKey`) : ''
+
+/* The host each borrowing vendor's own web endpoints live on. A borrowed key
+   is issued for this host; a section pointed elsewhere lends nothing to a tool
+   whose endpoint is a literal. */
+const OWN_WEB_HOST: Record<string, string> = { deepseek: 'api.deepseek.com' }
+
+const asString = (value: unknown): string => (typeof value === 'string' ? value : '')
+
+const field = (value: Record<string, unknown>, camel: string, snake: string): string =>
+  asString(value[camel]) || asString(value[snake])
+
+const hostOf = (base: string): string => {
+  try {
+    return new URL(base).hostname
+  } catch {
+    return ''
+  }
+}
+
+/* The key and address provider_connection resolves for the section: the first
+   endpoint with a key, else the first endpoint, else the flat fields. Mirrors
+   raven/config/update_providers.py so the page cannot claim a borrow the server
+   will refuse. */
+const resolvedConnection = (section: Record<string, unknown>): { base: string; key: string } => {
+  const flatBase = field(section, 'apiBase', 'api_base')
+  const endpoints = (Array.isArray(section.endpoints) ? section.endpoints : []).filter(
+    (entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object',
+  )
+  if (endpoints.length) {
+    const chosen = endpoints.find((entry) => !!field(entry, 'apiKey', 'api_key')) ?? endpoints[0]!
+    return { base: field(chosen, 'apiBase', 'api_base') || flatBase, key: field(chosen, 'apiKey', 'api_key') }
+  }
+  const keyList = (Array.isArray(section.apiKeyList) ? section.apiKeyList : Array.isArray(section.api_key_list) ? section.api_key_list : []).filter(
+    (key): key is string => typeof key === 'string',
+  )
+  if (keyList.length) return { base: flatBase, key: keyList[0]! }
+  return { base: flatBase, key: field(section, 'apiKey', 'api_key') }
+}
+
+export const borrowedKey = (vendor: string, raw: Record<string, unknown>): string => {
+  if (!BORROWED_VENDOR.has(vendor)) return ''
+  const section = dig(raw, `providers.${vendor}`)
+  if (!section || typeof section !== 'object' || Array.isArray(section)) return ''
+  const { base, key } = resolvedConnection(section as Record<string, unknown>)
+  return base && hostOf(base) !== OWN_WEB_HOST[vendor] ? '' : key
+}
 
 /* Whether a web tool has what it needs to run: a vendor that needs no key, a
    key in its own slot (or the pre-vendor leaf), or a borrowed LLM-provider
