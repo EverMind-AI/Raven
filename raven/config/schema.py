@@ -2555,6 +2555,37 @@ class PlaybookConfig(Base):
     that send no mode needs those clients to send one."""
 
 
+class SubagentRuntimeConfig(Base):
+    """How the agent processes this host launches share its memory.
+
+    Read live by the host that launches them, so a change reaches the next
+    launch (and the next idle check) without a restart. None of it changes what
+    an agent does; it changes how many processes are kept around and what each
+    one has to load.
+    """
+
+    idle_close_s: float | None = 600.0
+    """Seconds a pooled ACP agent may sit with no request in flight and no frame
+    either way before its process is closed. ``None`` or ``0`` keeps every agent
+    until the host exits. Only an agent that can reopen its sessions
+    (``loadSession``) is closed, so a later turn resumes the conversation in a
+    fresh process; an agent holding a wake is still answering a prompt and is
+    never idle."""
+
+    llm_relay: bool = True
+    """Serve a Raven agent's LiteLLM calls from this process instead of loading
+    LiteLLM in each agent. The agent builds the request, retries and records
+    usage itself; only the call to the model, and the catalogue questions that
+    need LiteLLM's tables, cross to the host. An agent that cannot reach the host
+    loads LiteLLM as before."""
+
+    fork_template: bool = True
+    """On Linux, start Raven agents by forking a process that has already loaded
+    their code, so the loaded modules are shared between them instead of loaded
+    once per agent. Any agent the template cannot start is launched the ordinary
+    way. Has no effect on other systems."""
+
+
 class SubagentsConfig(Base):
     """The one table of agents raven can dispatch to.
 
@@ -2572,6 +2603,7 @@ class SubagentsConfig(Base):
         default_factory=list,
         validation_alias=AliasChoices("agents", "thirdParty", "third_party"),
     )
+    runtime: SubagentRuntimeConfig = Field(default_factory=SubagentRuntimeConfig)
 
     @model_validator(mode="after")
     def _dedupe_names(self) -> "SubagentsConfig":

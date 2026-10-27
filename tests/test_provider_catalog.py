@@ -202,6 +202,7 @@ def _concrete_provider_subclasses() -> set[type]:
     import raven.providers.minimax_oauth_provider  # noqa: F401
     import raven.providers.openai_codex_provider  # noqa: F401
     import raven.providers.per_model_provider  # noqa: F401
+    import raven.providers.relay_provider  # noqa: F401
 
     seen: set[type] = set()
     stack = list(LLMProvider.__subclasses__())
@@ -220,7 +221,7 @@ def _concrete_provider_subclasses() -> set[type]:
     return seen
 
 
-def test_exactly_seven_concrete_backend_classes() -> None:
+def test_exactly_these_concrete_backend_classes() -> None:
     # This asserts class existence only, not the dispatch wiring.
     from raven.providers.anthropic_messages_provider import AnthropicMessagesProvider
     from raven.providers.azure_openai_provider import AzureOpenAIProvider
@@ -230,6 +231,7 @@ def test_exactly_seven_concrete_backend_classes() -> None:
     from raven.providers.openai_codex_provider import OpenAICodexProvider
     from raven.providers.openai_responses_provider import OpenAIResponsesProvider
     from raven.providers.per_model_provider import PerModelProvider
+    from raven.providers.relay_provider import RelayProvider
     from raven.providers.resolving_provider import ResolvingProvider
 
     expected = {
@@ -247,6 +249,9 @@ def test_exactly_seven_concrete_backend_classes() -> None:
         # the LiteLLM chat path (providers.<slug>.protocol / modelProtocols).
         OpenAIResponsesProvider,
         AnthropicMessagesProvider,
+        # The LiteLLM chat path when the host that launched this agent makes its
+        # calls (the LLM relay): built in LiteLLMProvider's place by the factory.
+        RelayProvider,
     }
     assert _concrete_provider_subclasses() == expected
     for cls in expected:

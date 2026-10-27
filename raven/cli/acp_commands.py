@@ -22,6 +22,7 @@ from raven.acp.stdio import claim_stdout
 from raven.acp.stdio import open_stdin as _open_stdin
 from raven.cli._log_file import redirect_loguru_to_file
 from raven.config.loader import set_config_path
+from raven.providers.relay import target as relay_target
 from raven.utils import asyncio_runner as bounded_asyncio
 from raven.utils.heap import start_trimmer
 
@@ -119,6 +120,9 @@ def acp(
     """
     if ctx.invoked_subcommand is not None:
         return
+    # Taken out of the environment before anything this agent starts -- an MCP
+    # server, a shell command -- can inherit the host's LLM relay offer with it.
+    relay_target()
     if config:
         _use_config(config)
     try:

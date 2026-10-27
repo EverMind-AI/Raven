@@ -37,10 +37,13 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 from loguru import logger
 from pydantic.alias_generators import to_camel
+
+if TYPE_CHECKING:
+    from raven.config.schema import SubagentRuntimeConfig
 
 __all__ = [
     "LiveConfig",
@@ -65,6 +68,7 @@ __all__ = [
     "permissions_config",
     "routing_profile",
     "skill_gate_pin",
+    "subagent_runtime",
     "web_provider_keys",
     "web_search_key",
 ]
@@ -580,6 +584,27 @@ def memory_top_k(live: LiveConfig) -> int | None:
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             return value
     return None
+
+
+def subagent_runtime(live: LiveConfig) -> SubagentRuntimeConfig:
+    """``subagents.runtime`` validated, keeping the last valid answer; the defaults without one.
+
+    Read by the host when it launches an agent and on each idle check, so the
+    next launch and the next check follow an edit. A rejected edit keeps the
+    last admitted answer rather than falling back to the defaults, which would
+    switch sharing on or off behind the operator's back.
+    """
+    from raven.config.schema import SubagentRuntimeConfig
+
+    section = live.get("subagents.runtime")
+    present = isinstance(section, dict)
+    value = None
+    if present:
+        try:
+            value = SubagentRuntimeConfig.model_validate(section)
+        except ValueError:
+            value = None
+    return _admit(live, "subagent_runtime", present=present, value=value) or SubagentRuntimeConfig()
 
 
 def exec_timeout(live: LiveConfig) -> int | None:

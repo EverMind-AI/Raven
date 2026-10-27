@@ -39,6 +39,7 @@ from raven.providers.first_byte import (
 )
 from raven.providers.prompt_cache import accepts_cache_control
 from raven.providers.rates import DEFAULT_MAX_OUTPUT_TOKENS
+from raven.providers.relay import relayed
 from raven.providers.tool_names import normalized_tool_name
 from raven.providers.usage import reported_cost, token_count
 
@@ -421,6 +422,7 @@ def _visible_reserve(max_tokens: int) -> int:
     return max(1024, max_tokens // 2)
 
 
+@relayed(keep=bool)
 def _litellm_budgets() -> dict[str, int]:
     """litellm's own effort-to-budget table, or empty when it cannot be imported.
 
