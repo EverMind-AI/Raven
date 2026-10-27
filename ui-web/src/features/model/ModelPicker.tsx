@@ -240,7 +240,11 @@ function Pick(): JSX.Element {
   useEffect(() => {
     if (!at.offer.title) return
     let was = host.getBoundingClientRect().top
-    const off = (): void => {
+    const off = (e: Event): void => {
+      /* A scroll inside the panel is the reader choosing, not the row leaving:
+         the model list here is its own scroller, and sliding it can shift the
+         row's geometry without the list under the panel moving. */
+      if (box.current && e.target instanceof Node && box.current.contains(e.target)) return
       if (Math.abs(host.getBoundingClientRect().top - was) > 1) store.close()
     }
     const again = (): void => {
