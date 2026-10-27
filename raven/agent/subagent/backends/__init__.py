@@ -107,6 +107,14 @@ class AgentMeta(NamedTuple):
     runs there, the tag is the same. Appended last, for the reason
     ``model_choices`` gives."""
 
+    effort_choices: tuple[Any, ...] = ()
+    """The reasoning efforts this agent offers, or ``()`` when it offers none.
+
+    ``raven.acp_client.capabilities.AcpEffortChoice`` records, measured from
+    the ``thought_level`` config option in the same session response that gives
+    the model menu. Appended after ``machine`` for the reason ``model_choices``
+    gives: this is a NamedTuple several callers build positionally."""
+
 
 def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
     """The advertised capabilities of one agent config, any kind.
@@ -173,6 +181,7 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
         )
     modes: tuple[Any, ...] = ()
     model_choices: tuple[Any, ...] = ()
+    effort_choices: tuple[Any, ...] = ()
     if kind == "acp":
         if snapshot is None:
             snapshot = acp_snapshot_for(cfg)
@@ -186,6 +195,14 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
         # Same rule, same reason: the menu offered has to be the one the agent
         # serves, or a reader is handed a model the agent then refuses.
         model_choices = tuple(getattr(snapshot, "model_choices", ()) or ())
+        # And the reasoning effort the same session response advertised, when
+        # the agent has one (OpenCode 1.19.4's thought_level option). An agent
+        # with no such option may still advertise effort as its modes -- Pi,
+        # Grok, Kimi, DSH -- and `mode_efforts` takes those only when every
+        # mode id is a level name, never a permission or editor mode.
+        effort_choices = tuple(getattr(snapshot, "effort_choices", ()) or ()) or (
+            snapshot.mode_efforts() if snapshot is not None else ()
+        )
     elif kind == "openai":
         stateful = bool(getattr(cfg, "stateful", True))
     else:
@@ -207,6 +224,7 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
         bool(getattr(cfg, "owns_watched_work", False)),
         model_choices,
         machine,
+        effort_choices,
     )
 
 

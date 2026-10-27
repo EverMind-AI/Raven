@@ -1100,3 +1100,57 @@ describe('connections island', () => {
     expect(domSnapshot(main())).toMatchSnapshot()
   })
 })
+
+describe('the warm read', () => {
+  /* The hub is opened after the reader arrives, so this read runs while they
+     are still on the first screen: the module then draws its cards at once and
+     refreshes behind them. It is not the page's opening read, so it passes
+     `initial: false` -- a status that fails here must not toast over a screen
+     that has nothing to do with channels. */
+  it('reads the rows before the module opens, without the opening read\'s toast', async () => {
+    const rows = [chan({ on: true, running: true })]
+    const initial: boolean[] = []
+    install(rows, {
+      rows: async (first) => {
+        initial.push(!!first)
+        return rows
+      },
+    })
+
+    await store.warm()
+
+    expect(initial).toEqual([false])
+    expect(store.get().rows).toBe(rows)
+    expect(store.get().loaded).toBe(true)
+  })
+
+  it('waits out a warm still in flight, then reads again for the open', async () => {
+    const older = [chan({ on: false })]
+    const newer = [chan({ on: true, running: true })]
+    const initial: boolean[] = []
+    let releaseWarm: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      releaseWarm = resolve
+    })
+    install(newer, {
+      rows: async (first) => {
+        initial.push(!!first)
+        if (!first) {
+          await gate
+          return older
+        }
+        return newer
+      },
+    })
+
+    const warm = store.warm()
+    const fresh = store.refresh(true)
+    releaseWarm()
+    await Promise.all([warm, fresh])
+
+    /* The open did not join the warm's read; it read again after it, so the
+       catalogue's shared rows end on the newer answer. */
+    expect(initial).toEqual([false, true])
+    expect(store.get().rows).toBe(newer)
+  })
+})

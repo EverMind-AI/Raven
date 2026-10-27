@@ -20,6 +20,7 @@ const offMachine = {
   presets: async () => [],
   connectOnMachine: async () => ({ refused: 'no machine form in this test' }),
   cancelRun: async () => false,
+  refreshMenus: async (r: ExtAgentRow) => ({ ok: true, detail: '', models: r.model_choices || [] }),
 }
 
 /* React refuses act() outside a test runner it recognizes unless told. */

@@ -384,6 +384,8 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 "test_running": task is not None and not task.done(),
                 "model": getattr(cfg, "model", None),
                 "model_choices": [{"value": c.value, "name": c.name, "group": c.group} for c in meta.model_choices],
+                "effort": getattr(cfg, "effort", None),
+                "effort_choices": [{"value": c.value, "name": c.name} for c in meta.effort_choices],
                 # The row's editing rule, not ownership: what `subagents.update`
                 # accepts for `model` on this row. `own` is the ownership mark.
                 "model_source": _model_rule(cfg, snapshot, meta),
@@ -716,6 +718,15 @@ def _model_rule(cfg: Any, snapshot: Any, meta: Any) -> str:
     return "raven" if getattr(snapshot, "agent_name", "") == "raven" else "agent"
 
 
+def _no_such_effort(name: str, proposed: str, choices: list[str]) -> ConfigValidationError:
+    """The refusal of an effort the agent's thought_level option does not hold."""
+    offered = f"; it offers {', '.join(choices)}" if choices else "; it offers none"
+    return ConfigValidationError(
+        f"{name!r} has no reasoning effort {proposed!r}{offered}",
+        data={"field": "effort", "name": name},
+    )
+
+
 def _no_such_model(name: str, proposed: str, choices: list[str]) -> ConfigValidationError:
     """The refusal of a pick the agent's own menu does not hold, for add and update alike."""
     # Mirrors ``SubagentManager.set_instance_model``'s own message: the values are
@@ -963,6 +974,30 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
                         data={"field": "model", "name": name},
                     )
                 target["model"] = stored
+    if params.get("clear_effort") or params.get("effort") is not None:
+        if target.get("kind") != "acp":
+            raise ConfigFieldReadonlyError(
+                f"effort is not editable for kind {target.get('kind')!r}: only an acp agent advertises a thought_level menu",
+                data={"field": "effort", "name": name},
+            )
+        cfg_for_meta = _as_configs([target])[0]
+        snapshot = acp_snapshot_for(cfg_for_meta)
+        if snapshot is None and params.get("effort") is not None:
+            # A menu never measured is not "offers none": the thought_level
+            # option rides the same session response as the model menu, which
+            # the free handshake already takes.
+            try:
+                snapshot = await record_capabilities(cfg_for_meta)
+            except Exception as exc:  # noqa: BLE001 - judged on what is recorded, as the model pick is
+                logger.debug("subagents: {!r} effort menu not measured for a pick: {}", name, exc)
+        choices = [c.value for c in agent_meta(cfg_for_meta, snapshot=snapshot).effort_choices]
+        if params.get("clear_effort"):
+            target["effort"] = None
+        else:
+            proposed = str(params["effort"])
+            if proposed not in choices:
+                raise _no_such_effort(name, proposed, choices)
+            target["effort"] = proposed
     # A form saves every field it shows, so an edit can leave a folder's entry as
     # it found it, and a stored copy would then outlive the manifest it was taken
     # from. What is stored -- the switch, or nothing -- stands.
@@ -1594,6 +1629,128 @@ async def subagents_test_cancel(params: dict) -> dict:
     return {"cancelled": True}
 
 
+_MENU_TASKS: dict[str, asyncio.Task[Any]] = {}
+"""The menu reads in flight, by agent name, so concurrent asks share one handshake."""
+
+_MENU_READ_AT: dict[str, float] = {}
+"""``time.monotonic()`` when each agent's menu was last read successfully.
+
+Only a successful read is recorded: a failed one leaves the next automatic ask
+free to retry, where a cooldown stamped on failure would keep answering the old
+menu as though it had just been read."""
+
+_MENU_REFRESH_COOLDOWN_S = 5.0
+"""How long an automatic ask trusts the menu it just read.
+
+A picker opened, closed and opened again is one reader looking at one menu; it
+should not launch the agent a second time. A manual refresh (`force`) always
+reads, because that press means the menu itself moved."""
+
+_MENU_REFRESH_TIMEOUT_S = 60.0
+"""How long a menu read may take before the caller is told it did not answer.
+
+Under the Mirasim presets' own 150 s start budget and over the adapter's 30 s
+catalog read, so a slow host still answers where an agent that hung is reported."""
+
+
+def _wire_choices(choices: Any) -> list[dict[str, str]]:
+    """Model choices in the shape ``subagents.list`` sends them."""
+    return [{"value": c.value, "name": c.name, "group": c.group} for c in choices or ()]
+
+
+def _recorded_menu(cfg: Any) -> dict[str, Any]:
+    """The menu the capability store holds for ``cfg``, in ``subagents.list``'s shape."""
+    meta = agent_meta(cfg, snapshot=acp_snapshot_for(cfg))
+    return {"models": _wire_choices(meta.model_choices)}
+
+
+async def subagents_refresh_models(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
+    """Read an acp agent's model menu from its handshake again, spending no prompt.
+
+    An acp row's menu is a capability snapshot: a launch-config change invalidates
+    it, and a Test or a session response re-learns it. But the agent's own menu can
+    move while its launch stays identical -- Mirasim adds the user's provider
+    profiles to the catalog it answers with -- and then nothing marks the snapshot
+    stale. The picker goes on drawing yesterday's menu until someone runs a whole
+    Test, which spends a prompt, or starts a turn through the agent.
+
+    This is that read without the prompt: ``initialize`` plus ``session/new``, the
+    free handshake :func:`record_capabilities` records. A session is opened in a
+    throwaway directory and never prompted, so it costs no tokens.
+
+    ``force`` separates the two callers. A reader pressing refresh means the menu
+    moved since the last read, so it always launches. A picker opening on its own
+    does not: a menu read moments ago is taken as current rather than launching the
+    agent again. Concurrent asks for one agent share one handshake either way.
+
+    A read that fails keeps the recorded menu in place (``record_capabilities``
+    hands a failed measurement to ``_test_record``, which retains the previous
+    capabilities) and answers it with ``ok: false``, so the picker can show the old
+    list with the reason beside it instead of emptying.
+
+    Unlike a Test or a Connect, this does not take the login shell's environment
+    again. Those presses follow a fix made in a terminal; this one reads a menu,
+    and the press that follows a fix is still Check again or Test.
+
+    Only an acp row has a menu to read. Every other kind is refused rather than
+    answered with an empty one, which would read as an agent that offers nothing.
+    """
+    name = params.get("name", "")
+    source = params.get("source", "config")
+    force = bool(params.get("force", False))
+    cfg = _find(name, source)
+    if getattr(cfg, "kind", None) != "acp":
+        raise ConfigFieldReadonlyError(
+            f"sub-agent {name!r} has no model menu to re-read: only an acp agent advertises one",
+            data={"field": "model", "name": name},
+        )
+
+    task = _MENU_TASKS.get(name)
+    if task is None or task.done():
+        last = _MENU_READ_AT.get(name)
+        if not force and last is not None and time.monotonic() - last < _MENU_REFRESH_COOLDOWN_S:
+            return {"ok": True, "detail": "", **_recorded_menu(cfg)}
+        task = asyncio.ensure_future(record_capabilities(cfg))
+        _MENU_TASKS[name] = task
+        task.add_done_callback(lambda done, agent=name: _forget_menu_task(agent, done))
+
+    try:
+        snapshot = await asyncio.wait_for(task, timeout=_MENU_REFRESH_TIMEOUT_S)
+    except TimeoutError:
+        return {
+            "ok": False,
+            "detail": f"the agent did not report its menu within {_MENU_REFRESH_TIMEOUT_S:.0f}s",
+            **_recorded_menu(cfg),
+        }
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - one failed read must not end the connection
+        logger.warning("subagents: {!r} menu could not be read: {}", name, exc)
+        return {"ok": False, "detail": str(exc) or type(exc).__name__, **_recorded_menu(cfg)}
+
+    measured = bool(getattr(snapshot, "usable", False) and getattr(snapshot, "model_menu_measured", False))
+    if measured:
+        _MENU_READ_AT[name] = time.monotonic()
+    if source != "preset":
+        # The roster reads `stateful` and the menu from the table built the last
+        # time `apply` ran, so a snapshot written now has to reach the table or
+        # `subagents.list` and the instance picker answer different menus.
+        try:
+            _hot_apply(agent_loop_factory)
+        except Exception as exc:  # noqa: BLE001 - the measurement is already recorded
+            logger.warning("subagent menu refreshed but the agent table was not re-composed: {}", exc)
+    # The measured menu is the one just recorded; the store read is only for the
+    # paths where a failed read keeps the previous one in place.
+    models = _wire_choices(getattr(snapshot, "model_choices", ())) if measured else _recorded_menu(cfg)["models"]
+    return {"ok": measured, "detail": getattr(snapshot, "detail", "") or "", "models": models}
+
+
+def _forget_menu_task(name: str, done: asyncio.Task[Any]) -> None:
+    """Drop a finished read from the in-flight table, only while it is still this one."""
+    if _MENU_TASKS.get(name) is done:
+        _MENU_TASKS.pop(name, None)
+
+
 async def subagents_presets(params: dict) -> dict:
     """The presets an entry can be made from on a registered machine, and where each already is.
 
@@ -1689,6 +1846,12 @@ def register_subagents_methods(
     dispatcher.register("subagents.test", _test)
     dispatcher.register("subagents.test_cancel", subagents_test_cancel)
 
+    async def _refresh_models(params: dict) -> dict:
+        # Wrapped like the test: the handshake it records feeds the same table.
+        return await subagents_refresh_models(params, agent_loop_factory=agent_loop_factory)
+
+    dispatcher.register("subagents.refresh_models", _refresh_models)
+
 
 __all__ = [
     "subagents_list",
@@ -1700,5 +1863,6 @@ __all__ = [
     "subagents_build",
     "subagents_test",
     "subagents_test_cancel",
+    "subagents_refresh_models",
     "register_subagents_methods",
 ]

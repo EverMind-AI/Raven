@@ -187,8 +187,12 @@ async def test_a_new_session_offers_the_menus_and_the_agents_commands_and_starts
 ) -> None:
     result = await harness.ok("session/new", cwd=str(harness.tmp_path), mcpServers=[])
     validate_def("NewSessionResponse", result)
-    assert result["configOptions"][0]["currentValue"] == "sonnet"
-    assert result["modes"]["currentModeId"] == "high"
+    model = next(o for o in result["configOptions"] if o["category"] == "model")
+    effort = next(o for o in result["configOptions"] if o["category"] == "thought_level")
+    assert model["currentValue"] == "sonnet"
+    assert effort["currentValue"] == "high"
+    assert [choice["value"] for choice in effort["options"]] == ["low", "high", "max"]
+    assert "modes" not in result
     assert harness.prompts() == []
     await harness.host.wait_for(lambda: "available_commands_update" in harness.kinds())
     commands = harness.session_updates()[-1]
@@ -340,7 +344,7 @@ async def test_text_arrives_before_the_turn_ends(harness: Harness) -> None:
 async def test_a_model_without_rungs_is_sent_no_effort_and_a_rung_it_lacks_is_dropped(harness: Harness) -> None:
     sid = await harness.new()
     await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="glm-5.3-flash")
-    await harness.ok("session/set_mode", sessionId=sid, modeId="max")
+    await harness.ok("session/set_config_option", sessionId=sid, configId="effort", value="max")
     await harness.ok("session/prompt", sessionId=sid, prompt=text("hi"))
     sent = harness.prompts()[0]
     assert sent["model"] == "glm-5.3-flash" and "effort" not in sent
@@ -371,10 +375,10 @@ async def test_an_unoffered_model_or_effort_is_refused_with_what_is_offered(harn
     sid = await harness.new()
     error = await harness.refused("session/set_config_option", sessionId=sid, configId="model", value="gpt-9")
     assert error["code"] == INVALID_PARAMS and "'own:sonnet'" in error["message"]
-    error = await harness.refused("session/set_mode", sessionId=sid, modeId="ultra")
+    error = await harness.refused("session/set_config_option", sessionId=sid, configId="effort", value="ultra")
     assert error["code"] == INVALID_PARAMS and "'low'" in error["message"]
     error = await harness.refused("session/set_config_option", sessionId=sid, configId="theme", value="dark")
-    assert "only 'model'" in error["message"]
+    assert "'model'" in error["message"] and "'effort'" in error["message"]
     error = await harness.refused("session/set_config_option", sessionId=sid, configId="model", value="")
     assert error["code"] == INVALID_PARAMS
 
@@ -384,7 +388,7 @@ async def test_a_model_mirasim_added_since_the_menus_were_read_is_accepted(harne
     harness.host.catalogs["claude"]["models"].append({"id": "sonnet-next", "label": "Next"})
     harness.host.catalogs["claude"]["effort"].append({"id": "ultra", "label": "Ultra"})
     await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="sonnet-next")
-    await harness.ok("session/set_mode", sessionId=sid, modeId="ultra")
+    await harness.ok("session/set_config_option", sessionId=sid, configId="effort", value="ultra")
     assert any(frame.get("refresh") for frame in harness.host.frames("getCatalog"))
 
 
@@ -1728,6 +1732,15 @@ async def test_a_conversation_the_host_refuses_to_delete_is_said_so(harness: Har
 
 
 async def test_each_turn_names_the_effort_the_session_was_put_on(harness: Harness) -> None:
+    sid = await harness.new()
+    await harness.ok("session/set_config_option", sessionId=sid, configId="effort", value="max")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("hi"))
+    assert harness.prompts()[0]["effort"] == "max"
+
+
+async def test_an_effort_sent_as_a_session_mode_is_taken_as_the_old_alias(harness: Harness) -> None:
+    """A client that read the pre-migration menu still sends set_mode; the
+    adapter accepts the rung and applies it, while advertising no modes."""
     sid = await harness.new()
     await harness.ok("session/set_mode", sessionId=sid, modeId="max")
     await harness.ok("session/prompt", sessionId=sid, prompt=text("hi"))

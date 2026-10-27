@@ -92,7 +92,7 @@ def _no_live_handshake(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", _unmeasured)
 
 
-def _fake_agent_meta(choices: tuple[str, ...]):
+def _fake_agent_meta(choices: tuple[str, ...], efforts: tuple[str, ...] = ()):
     """A stand-in for ``agent_meta`` reporting a fixed acp model menu.
 
     Real ``agent_meta`` reads a capability snapshot off disk; these tests are
@@ -102,8 +102,32 @@ def _fake_agent_meta(choices: tuple[str, ...]):
 
     def fake(cfg, *, snapshot=None):
         if getattr(cfg, "kind", None) != "acp":
-            return SimpleNamespace(model_choices=())
-        return SimpleNamespace(model_choices=tuple(SimpleNamespace(value=v) for v in choices))
+            return SimpleNamespace(
+                name=getattr(cfg, "name", ""),
+                description=getattr(cfg, "description", ""),
+                model_choices=(),
+                effort_choices=(),
+                stateful=False,
+                reads_local_files=True,
+                live_progress=False,
+                owns="",
+                modes=(),
+                owns_watched_work=False,
+                machine="",
+            )
+        return SimpleNamespace(
+            name=getattr(cfg, "name", ""),
+            description=getattr(cfg, "description", ""),
+            model_choices=tuple(SimpleNamespace(value=v, name=v, group="") for v in choices),
+            effort_choices=tuple(SimpleNamespace(value=v, name=v) for v in efforts),
+            stateful=False,
+            reads_local_files=True,
+            live_progress=False,
+            owns="",
+            modes=(),
+            owns_watched_work=False,
+            machine="",
+        )
 
     return fake
 
@@ -137,6 +161,58 @@ async def test_update_rejects_any_model_when_a_third_party_acp_row_advertises_no
     monkeypatch.setattr("raven.rpc.methods.subagents.agent_meta", _fake_agent_meta(()))
     with pytest.raises(ConfigValidationError, match="offers none"):
         await subagents_update({"name": "Hermes Agent", "model": "vendor/a"})
+
+
+async def test_list_reports_the_effort_and_the_menu_that_offers_it(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _gate_answers(monkeypatch)
+    monkeypatch.setattr("raven.rpc.methods.subagents.agent_meta", _fake_agent_meta(("vendor/a",), ("low", "high")))
+    rows = (await subagents_list({"probe": False}))["rows"]
+    row = next(r for r in rows if r["name"] == "Hermes Agent")
+    assert row["effort"] is None
+    assert row["effort_choices"] == [
+        {"value": "low", "name": "low"},
+        {"value": "high", "name": "high"},
+    ]
+
+
+async def test_update_accepts_an_effort_the_acp_row_advertises(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _gate_answers(monkeypatch)
+    monkeypatch.setattr(
+        "raven.rpc.methods.subagents.agent_meta", _fake_agent_meta(("vendor/a",), ("low", "high", "default"))
+    )
+    out = await subagents_update({"name": "Hermes Agent", "effort": "high"})
+    assert out == {"updated": True, "name": "Hermes Agent"}
+    entry = next(e for e in _stored(config_path) if e["name"] == "Hermes Agent")
+    assert entry["effort"] == "high"
+
+
+async def test_update_rejects_an_effort_the_acp_row_does_not_advertise(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("raven.rpc.methods.subagents.agent_meta", _fake_agent_meta(("vendor/a",), ("low", "high")))
+    with pytest.raises(ConfigValidationError, match="reasoning effort"):
+        await subagents_update({"name": "Hermes Agent", "effort": "max"})
+    entry = next(e for e in _stored(config_path) if e["name"] == "Hermes Agent")
+    assert "effort" not in entry or entry["effort"] is None
+
+
+async def test_update_clears_an_effort_without_needing_a_menu(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Clearing must work after an agent upgrade removed the option; the stale
+    value would otherwise be unsendable and unremovable."""
+    _gate_answers(monkeypatch)
+    monkeypatch.setattr("raven.rpc.methods.subagents.agent_meta", _fake_agent_meta(("vendor/a",), ("high",)))
+    await subagents_update({"name": "Hermes Agent", "effort": "high"})
+    monkeypatch.setattr("raven.rpc.methods.subagents.agent_meta", _fake_agent_meta(("vendor/a",)))
+    out = await subagents_update({"name": "Hermes Agent", "clear_effort": True})
+    assert out == {"updated": True, "name": "Hermes Agent"}
+    entry = next(e for e in _stored(config_path) if e["name"] == "Hermes Agent")
+    assert entry["effort"] is None
 
 
 def _with_providers(config_path: Path, providers: dict) -> None:

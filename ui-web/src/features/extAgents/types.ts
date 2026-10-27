@@ -20,6 +20,22 @@ export interface ExtAgentModelChoice {
   group: string
 }
 
+/* One reasoning effort an acp agent advertised in its thought_level option:
+   the value `session/set_config_option` takes back, and what to show for it. */
+export interface ExtAgentEffortChoice {
+  value: string
+  name: string
+}
+
+/* What re-reading an acp agent's model menu answered: the menu now in force,
+   and whether the handshake landed. A failed read keeps the recorded menu in
+   place, so `models` is still drawable beside `detail` rather than emptying. */
+export interface ExtAgentMenuRefresh {
+  ok: boolean
+  detail: string
+  models: ExtAgentModelChoice[]
+}
+
 /* What `subagents.update` accepts for `model` on a row, by kind -- not
    ownership, which is `own`: 'raven' is the built-in row picking from raven's
    own providers, 'agent' an acp row picking from `model_choices`, 'fixed' an
@@ -84,6 +100,11 @@ export interface ExtAgentRow {
   /* Absent from a server that predates the model field, which is a server
      with no model write -- so the sheet draws no pill at all. */
   model_source?: ExtAgentModelSource
+  /* The reasoning effort this row sends, or null for the agent's own. */
+  effort?: string | null
+  /* The efforts the agent advertised in its thought_level option; empty for
+     an agent with no such menu, which is also every agent before 1.19.4. */
+  effort_choices?: ExtAgentEffortChoice[]
 }
 
 /* What the page can ask the server to do.
@@ -94,8 +115,18 @@ export interface ExtAgentRow {
    a question instead. They are here rather than on a row for that reason, and
    they live in the card. Remove is still gone with the buttons that named it.
    `model` is the row's own model, set or cleared: an `update` too on the
-   wire, kept apart here because its refusal is about the pick, not the row. */
-export type ExtAgentOp = 'build' | 'connect' | 'migrate' | 'model' | 'test' | 'test_cancel' | 'toggle' | 'update'
+   wire, kept apart here because its refusal is about the pick, not the row.
+   `effort` is the same for the agent's thought_level option. */
+export type ExtAgentOp =
+  | 'build'
+  | 'connect'
+  | 'effort'
+  | 'migrate'
+  | 'model'
+  | 'test'
+  | 'test_cancel'
+  | 'toggle'
+  | 'update'
 
 export interface ExtAgentActArgs {
   new_name?: string
@@ -107,6 +138,9 @@ export interface ExtAgentActArgs {
      it into the stored id. An acp row's values are the agent's own. */
   provider?: string
   clear_model?: boolean
+  /* The row's reasoning effort, from its agent's thought_level menu. */
+  effort?: string
+  clear_effort?: boolean
   /* Where a preset is connected to run: a registered machine's id, and for an
      acp or cli row the working directory there. Absent means this computer. */
   machine?: string
@@ -158,6 +192,12 @@ export interface ExtAgentsSource {
      when nothing was running, which leaves the connect past the point where
      it can be cancelled rather than cancelled (`awaitRun`). */
   cancelRun(name: string): Promise<boolean>
+  /* Re-read an acp row's model menu from its own handshake, spending no
+     prompt. `force` reads even when the menu was just read: a reader pressing
+     refresh means it moved, while the automatic read on opening a picker does
+     not. The menu now recorded, and whether the handshake answered -- a failed
+     read keeps the previous menu rather than emptying it. */
+  refreshMenus(row: ExtAgentRow, force?: boolean): Promise<ExtAgentMenuRefresh>
 }
 
 /* What fixes a refusal, as the server classified it: which kind of fix, and

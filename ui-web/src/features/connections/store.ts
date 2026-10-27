@@ -41,13 +41,41 @@ export function set(patch: Partial<ConnState>): void {
 
 export const source = (): ConnectionsSource => ds('connections')
 
-export async function refresh(initial = false): Promise<void> {
+export function refresh(initial = false): Promise<void> {
+  return read(initial, false)
+}
+
+/* The rows before the reader opens the module: the same status read, with no
+   toast on failure -- there is no page to report it on, and the open will
+   report it if the reader goes there. Opening still refreshes behind these
+   rows, so a channel that came up since this read is drawn as soon as the
+   answer lands. */
+export function warm(): Promise<void> {
+  return read(false, true)
+}
+
+let pending: Promise<void> | null = null
+
+async function read(initial: boolean, quiet: boolean): Promise<void> {
+  /* The status read mutates the catalogue's own row objects, so two of them
+     must not interleave: a warm still in flight when the reader opens the
+     module is waited out, then the open reads again on top of it. That keeps
+     the later answer the one on the objects as well as in the state. */
+  if (pending) await pending.catch(() => {})
+  const mine = (async () => {
+    try {
+      const rows = await source().rows(initial)
+      set({ rows, loaded: true, host: source().hostRunning?.() })
+    } catch (e) {
+      if (!quiet) toast(t('gui.op.load_failed', { detail: String((e as Error).message || e) }))
+      set({ loaded: true })
+    }
+  })()
+  pending = mine
   try {
-    const rows = await source().rows(initial)
-    set({ rows, loaded: true, host: source().hostRunning?.() })
-  } catch (e) {
-    toast(t('gui.op.load_failed', { detail: String((e as Error).message || e) }))
-    set({ loaded: true })
+    await mine
+  } finally {
+    if (pending === mine) pending = null
   }
 }
 
