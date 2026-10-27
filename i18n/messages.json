@@ -6168,8 +6168,8 @@
       "zh": "模式"
     },
     "gui.tier.scope": {
-      "en": "Reasoning depth, sub-agent mode and the rest follow this setting. This conversation only.",
-      "zh": "模型思考深度、子智能体运行强度等都跟着这一档走。只作用于本会话。"
+      "en": "The tier the sub-agents this conversation dispatches run at. This conversation only.",
+      "zh": "派出的子智能体按这一档运行。只作用于本会话。"
     },
     "gui.tier.failed": {
       "en": "Could not switch to {name}",

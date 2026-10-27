@@ -74,7 +74,9 @@ async function live({ session = null, answers = null }: Options = {}) {
       'src/state/banner': { draw: () => {} },
       'src/state/toast': { show: (text: string) => calls.push(['toast', text]) },
       'src/state/tier': { load: () => {} },
-      'src/state/effort': { load: () => {} },
+      /* The effort store's read is recorded, not run: what the staged write's
+         re-read is keyed to is the whole of what one case below pins. */
+      'src/state/effort': { load: (sid?: string | null, gen?: number) => calls.push(['loadEffort', { sid, gen }]) },
       'src/state/perm': { setFromConfig: (m: string) => calls.push(['setPermMode', m]) },
       'src/state/session/residency': { park: () => {} },
       'src/features/settings/store': {
@@ -111,6 +113,8 @@ async function live({ session = null, answers = null }: Options = {}) {
     startDraft: () => registry.switchToDraft(),
     applyStagedModel: (sessionId: string, gen: number) =>
       runtime.applyStagedModel(registry.viewRuntime(), sessionId, gen),
+    applyStagedEffort: (sessionId: string, gen: number) =>
+      runtime.applyStagedEffort(registry.viewRuntime(), sessionId, gen),
   }
   /* Everything the two sources read off the page. `modelSet` is the island's
      verb, faked above; the chip painter is the page's. */
@@ -144,6 +148,9 @@ async function live({ session = null, answers = null }: Options = {}) {
     },
     gen: () => generation(),
     effortRead: (sid?: string | null, gen?: number) => model.effortSource.read(sid, gen),
+    effortSet: (effort: string | null) => model.effortSource.set(effort),
+    /* Every read the effort store was asked for, as [conversation, ticket]. */
+    effortReads: () => calls.filter((c) => c[0] === 'loadEffort').map((c) => c[1] as { sid: string | null | undefined; gen: number | undefined }),
     inFlight: () => pending.map((p) => p.method),
     param: (i: number) => pending[i]!.params,
     settle: (i: number, answer: unknown) => {
@@ -593,6 +600,95 @@ describe('the staged draft-write recovery', () => {
     await applied
     expect(h.calls.filter((c) => c[0] === 'toast' || c[0] === 'modelSet')).toEqual([])
     expect(h.inFlight()).toEqual(['config.set'])
+  })
+})
+
+describe('the staged effort write', () => {
+  /* The real applyStagedEffort over the real switch counter, with the
+     `session.set_effort` write deferred. The re-read that follows the write is
+     about the session the promotion minted, and it has to carry the ticket the
+     promotion began under: a ticket taken after the await is whichever view the
+     reader has opened since, and under that one the effort source would paint
+     this session's rung over that view's own read. */
+  const reply = { session_key: 'a', effort: 'high', default: null, options: ['low', 'high'] }
+
+  it('re-reads the minted session under the promotion\'s ticket, not the one current after the write', async () => {
+    const h = await live({ session: 'a' })
+    h.overrides.staged.effort = 'high'
+    const began = h.gen()
+    const applied = h.overrides.applyStagedEffort('a', began)
+    expect(h.inFlight()).toEqual(['session.set_effort'])
+    expect(h.param(0)).toEqual({ session_key: 'a', effort: 'high' })
+    /* The reader opens another view while the write is in flight; that view
+       reads its own effort at once, under its own ticket. */
+    h.bump()
+    await h.settle(0, reply)
+    await applied
+    expect(h.effortReads()).toEqual([{ sid: null, gen: h.gen() }, { sid: 'a', gen: began }])
+    /* And that ticket is spent, so the read it starts is one the source drops. */
+    expect(began).not.toBe(h.gen())
+    const read = h.effortRead('a', began)
+    await h.settle(1, reply)
+    expect(await read).toBeNull()
+  })
+
+  it('re-reads under a ticket that still stands when the reader stayed', async () => {
+    const h = await live({ session: 'a' })
+    h.overrides.staged.effort = 'high'
+    const began = h.gen()
+    const applied = h.overrides.applyStagedEffort('a', began)
+    await h.settle(0, reply)
+    await applied
+    expect(h.effortReads()).toEqual([{ sid: 'a', gen: began }])
+    expect(began).toBe(h.gen())
+  })
+})
+
+describe('a draft\'s effort pick', () => {
+  /* A draft has no session to write to, so the pick is staged and the default
+     read back for the reply. Staged before the read, so a send during the round
+     trip carries it -- and put back when the read fails, because the caller then
+     says the pick was not made and repaints the old rung, and a value left
+     staged would run the first turn at a pick the reader was told did not take. */
+  const draft = { session_key: '', effort: null, default: 'low', options: ['low', 'high'] }
+
+  it('stages the pick before the draft read, and puts it back when that read fails', async () => {
+    const h = await live()
+    const failed = h.effortSet('high').catch((e: unknown) => e)
+    expect(h.overrides.staged.effort).toBe('high')
+    expect(h.inFlight()).toEqual(['session.set_effort'])
+    expect(h.param(0)).toEqual({ session_key: '' })
+    await h.fail(0, new Error('socket closed'))
+    expect(await failed).toEqual(new Error('socket closed'))
+    expect(h.overrides.staged.effort).toBeNull()
+  })
+
+  it('keeps the pick staged when the read lands, and answers it over the default', async () => {
+    const h = await live()
+    const set = h.effortSet('high')
+    await h.settle(0, draft)
+    expect(await set).toEqual({ ...draft, effort: 'high' })
+    expect(h.overrides.staged.effort).toBe('high')
+  })
+
+  it('puts back the last pick whose read landed, not the one a failing read overtook', async () => {
+    /* `high` landed; `medium` and then `low` go out and both fail. Neither
+       stood, so what is staged afterwards is `high` -- not `medium`, which is
+       merely what was staged when `low` was picked. */
+    const h = await live()
+    const first = h.effortSet('high')
+    await h.settle(0, draft)
+    await first
+    const second = h.effortSet('medium').catch((e: unknown) => e)
+    const third = h.effortSet('low').catch((e: unknown) => e)
+    expect(h.overrides.staged.effort).toBe('low')
+    await h.fail(1, new Error('socket closed'))
+    await second
+    /* The earlier failure finds a later pick staged and leaves it alone. */
+    expect(h.overrides.staged.effort).toBe('low')
+    await h.fail(2, new Error('socket closed'))
+    await third
+    expect(h.overrides.staged.effort).toBe('high')
   })
 })
 
