@@ -5,8 +5,11 @@ turn. ``listClis`` says whether the agent's CLI is installed and what Mirasim
 calls it; ``getCatalog`` names its models and effort rungs. The menus are
 advertised in the shapes Raven already reads off any ACP agent -- the model as
 the ``session/new`` config option whose ``category`` is ``model``, and the effort
-rungs as session modes -- so the model picker, a per-instance model and the
-session tier reach a Mirasim agent unchanged.
+rungs as the config option whose ``category`` is ``thought_level`` -- so the
+model picker and the reasoning-effort selector reach a Mirasim agent unchanged.
+The effort is deliberately not a session mode: that channel carries Raven's
+run-intensity tier, and effort on the same channel made the two
+indistinguishable.
 
 Three kinds of model share one catalog, told apart by ``routeByModel``: a row
 routed ``relay`` runs on the Mirasim platform's quota, one routed ``direct`` on
@@ -34,6 +37,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 MODEL_OPTION = "model"
+EFFORT_OPTION = "effort"
 
 PLATFORM_GROUP = ("platform", "Mirasim")
 OWN_KEY_GROUP = ("own-key", "Own key")
@@ -171,27 +175,34 @@ class AgentCatalog:
             "options": [{"group": group, "name": name, "options": opts} for (group, name), opts in groups.items()],
         }
 
-    def config_options(self, current: str | None) -> list[dict[str, Any]]:
-        option = self.model_option(current)
-        return [option] if option is not None else []
+    def effort_option(self, current: str | None) -> dict[str, Any] | None:
+        """The ``thought_level`` config option with ``current`` selected, or ``None`` without rungs.
 
-    def modes(self, current: str | None) -> dict[str, Any] | None:
-        """The session's mode state, or ``None`` where no effort can be said to be current.
-
-        That is an agent with no rungs, and one whose catalog names no default
-        (ZCode CLI): a turn there runs on an effort Mirasim does not report, so
-        any rung offered as current would be a guess -- and the menu itself is
-        what Raven fits its session tier onto.
+        Effort used to be advertised as session modes, which put the reasoning
+        effort on the same channel as a session mode and made Raven's run-tier
+        indistinguishable from it. It is a config option here for the reason
+        OpenCode 1.19.4 gives: the model list is models, effort is its own
+        ``thought_level`` option, and a client picks one of each.
         """
         ids = [rung for rung, _ in self.efforts]
         if not ids or self.default_effort not in ids:
+            # No rungs, or no default to mark as current (ZCode CLI). A menu
+            # with a guessed current would say the session is on a rung Mirasim
+            # never named, which is worse than no menu.
             return None
         return {
-            "currentModeId": current if current in ids else self.default_effort,
-            "availableModes": [
-                {"id": rung, "name": name, "description": f"Reasoning effort: {name}"} for rung, name in self.efforts
-            ],
+            "id": EFFORT_OPTION,
+            "name": "Effort",
+            "category": "thought_level",
+            "type": "select",
+            "currentValue": current if current in ids else self.default_effort,
+            "options": [{"value": rung, "name": name} for rung, name in self.efforts],
         }
+
+    def config_options(self, current: str | None, effort: str | None = None) -> list[dict[str, Any]]:
+        model = self.model_option(current)
+        effort_option = self.effort_option(effort)
+        return [option for option in (model, effort_option) if option is not None]
 
     def _group_of(self, entry: ModelEntry) -> tuple[str, str]:
         if entry.route == "relay" or entry.session_route == PLATFORM_ROUTE:
@@ -310,6 +321,7 @@ def _menu(agent: str, listed: list[ModelEntry]) -> tuple[list[ModelEntry], list[
 
 __all__ = [
     "DEFAULT_ROUTE",
+    "EFFORT_OPTION",
     "IMAGE_AGENTS",
     "MODEL_OPTION",
     "OWN_KEY_GROUP",

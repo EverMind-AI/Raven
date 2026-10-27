@@ -29,6 +29,7 @@ from loguru import logger
 
 from raven.acp_client.acp_agent import AcpAgentBackend, AcpEmptyTurnError
 from raven.acp_client.capabilities import (
+    AcpEffortChoice,
     AcpMode,
     AcpModelChoice,
     CapabilitySnapshot,
@@ -39,7 +40,12 @@ from raven.acp_client.capabilities import (
 )
 from raven.acp_client.pool import close_pool, get_pool
 from raven.acp_client.protocol import AcpRemoteError
-from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend, third_party_agent_meta
+from raven.agent.subagent.backends import (
+    acp_snapshot_for,
+    agent_meta,
+    build_third_party_backend,
+    third_party_agent_meta,
+)
 from raven.agent.subagent.instances import InstanceRegistry
 from raven.agent.subagent.manager import SubagentManager
 from raven.agent.subagent.probe import capabilities_wanted, probe_one, record_capabilities, run_test
@@ -181,6 +187,16 @@ async def test_verify_reads_capabilities_from_the_handshake() -> None:
         ("stub:model-a", "model-a", "Stub"),
         ("stub:model-b", "model-b", "Stub"),
     ]
+    # The reasoning effort is a second option, not part of the model ids: the
+    # entry is found by its thought_level category and keeps its own id, which
+    # is what a later session/set_config_option sends the value through.
+    assert snapshot.effort_option == "effort"
+    assert [(c.value, c.name) for c in snapshot.effort_choices] == [
+        ("low", "low"),
+        ("high", "high"),
+        ("max", "max"),
+        ("default", "default"),
+    ]
     assert snapshot.auth_methods == ("stub-auth",)
 
 
@@ -219,6 +235,123 @@ def test_the_per_session_mcp_promise_is_read_from_meta_and_survives_storage() ->
     # A row written before the field existed degrades to "did not promise".
     older = {k: v for k, v in stored.to_row().items() if k != "sessionMcp"}
     assert CapabilitySnapshot.from_row(older).session_mcp is False
+
+
+def test_a_mode_menu_of_effort_levels_is_offered_as_reasoning_effort() -> None:
+    """Pi, Grok, Kimi and DSH advertise effort as `modes`, not as thought_level.
+
+    The menu is taken as effort only when every id is a level name; the parser
+    has nothing else to go on, so one permission mode in the list disqualifies
+    the whole menu.
+    """
+    cfg = stub_config("a")
+    effort_like = CapabilitySnapshot(
+        agent="a",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        available_modes=(AcpMode("low", "Low"), AcpMode("high", "High")),
+    )
+    assert [(c.value, c.name) for c in effort_like.mode_efforts()] == [("low", "Low"), ("high", "High")]
+    assert [c.value for c in agent_meta(cfg, snapshot=effort_like).effort_choices] == ["low", "high"]
+
+    permission_modes = CapabilitySnapshot(
+        agent="a",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        available_modes=(
+            AcpMode("default", "Default"),
+            AcpMode("acceptEdits", "Accept edits"),
+            AcpMode("plan", "Plan"),
+        ),
+    )
+    assert permission_modes.mode_efforts() == ()
+    assert agent_meta(cfg, snapshot=permission_modes).effort_choices == ()
+
+
+def test_a_thought_level_menu_wins_over_effort_like_modes() -> None:
+    snapshot = CapabilitySnapshot(
+        agent="a",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        available_modes=(AcpMode("high", "High"),),
+        effort_choices=(AcpEffortChoice("low", "low"),),
+    )
+    assert snapshot.mode_efforts() == ()
+
+
+def test_ravens_own_modes_are_run_tiers_not_reasoning_effort() -> None:
+    snapshot = CapabilitySnapshot(
+        agent="a",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        agent_name="raven",
+        available_modes=(AcpMode("medium", "Medium"), AcpMode("high", "High")),
+    )
+    assert snapshot.mode_efforts() == ()
+
+
+async def test_an_effort_on_a_mode_menu_is_sent_through_set_mode() -> None:
+    """The row's effort wins over the tier sent just before it; a clear sends
+    the mode the session opened on back, because set_mode has no unset."""
+    snapshot = CapabilitySnapshot(
+        agent="a",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        available_modes=(AcpMode("low", "Low"), AcpMode("high", "High")),
+    )
+    calls: list[tuple[str, dict]] = []
+
+    class _Client:
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            calls.append((method, params))
+            return {}
+
+    backend = AcpAgentBackend(name="a", command="unused", snapshot=snapshot)
+    client = _Client()
+    backend._mode_baseline["s1"] = "low"
+
+    await backend._set_effort(client, "s1", "high", fallback_mode=None, budget=1)
+    await backend._set_effort(client, "s1", None, fallback_mode=None, budget=1)
+
+    assert calls == [
+        ("session/set_mode", {"sessionId": "s1", "modeId": "high"}),
+        ("session/set_mode", {"sessionId": "s1", "modeId": "low"}),
+    ]
+
+
+async def test_a_cleared_effort_leaves_the_tier_already_sent_in_place() -> None:
+    snapshot = CapabilitySnapshot(
+        agent="a",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        available_modes=(AcpMode("low", "Low"), AcpMode("high", "High")),
+    )
+    calls: list[tuple[str, dict]] = []
+
+    class _Client:
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            calls.append((method, params))
+            return {}
+
+    backend = AcpAgentBackend(name="a", command="unused", snapshot=snapshot)
+    client = _Client()
+
+    await backend._set_effort(client, "s1", "high", fallback_mode="low", budget=1)
+    await backend._set_effort(client, "s1", None, fallback_mode="low", budget=1)
+
+    assert calls[-1] == ("session/set_mode", {"sessionId": "s1", "modeId": "low"})
 
 
 async def test_verify_reports_a_rejected_handshake_as_present_but_unusable() -> None:
@@ -1165,17 +1298,35 @@ def test_nothing_is_invented_for_an_agent_never_measured(tmp_path: Path) -> None
 
 
 def _menu_reply(
-    *, models: list[dict[str, Any]] | None = None, modes: list[dict[str, str]] | None = None, unread: bool = False
+    *,
+    models: list[dict[str, Any]] | None = None,
+    efforts: list[dict[str, str]] | None = None,
+    modes: list[dict[str, str]] | None = None,
+    unread: bool = False,
 ) -> dict[str, Any]:
     """A session response carrying whichever menus are given, in the wire shapes."""
     from raven.acp_client.protocol import MENU_UNREAD_META
 
     reply: dict[str, Any] = {"sessionId": "s1"}
+    options: list[dict[str, Any]] = []
     if models is not None:
-        reply["configOptions"] = [
+        options += [
             {"id": "mode", "category": "mode", "type": "select", "options": [{"value": "not-a-model"}]},
             {"id": "model", "category": "model", "type": "select", "currentValue": "x", "options": models},
         ]
+    if efforts is not None:
+        options.append(
+            {
+                "id": "effort",
+                "name": "Effort",
+                "category": "thought_level",
+                "type": "select",
+                "currentValue": "default",
+                "options": efforts,
+            }
+        )
+    if options:
+        reply["configOptions"] = options
     if modes is not None:
         reply["modes"] = {"currentModeId": "fast", "availableModes": modes}
     if unread:
@@ -1212,6 +1363,27 @@ def test_a_session_response_rewrites_a_model_menu_the_probe_captured_long_ago(tm
     assert updated is not None and updated.model_choices == _GROUPED_CHOICES
     assert (updated.fingerprint, updated.measured_at_ms) == (stored.fingerprint, stored.measured_at_ms)
     assert store.load([cfg])["a"].model_choices == _GROUPED_CHOICES
+
+
+def test_a_session_response_rewrites_the_effort_menu_and_names_its_option(tmp_path: Path) -> None:
+    """The thought_level menu moves with the agent too, and its option id is
+    part of the measurement: it is the configId a later turn sends the value
+    through, so a version that renames it must not leave the old one in place."""
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    stored = _with_model_choices(cfg, AcpModelChoice(value="old/retired", name="retired", group="Old"))
+    store.record(stored)
+
+    updated = relearn_session_menus(
+        stored,
+        _menu_reply(efforts=[{"value": "low", "name": "Low"}, {"value": "max", "name": "Max"}]),
+        store=store,
+    )
+
+    assert updated is not None
+    assert updated.effort_option == "effort"
+    assert [(c.value, c.name) for c in updated.effort_choices] == [("low", "Low"), ("max", "Max")]
+    assert store.load([cfg])["a"].effort_choices == updated.effort_choices
 
 
 def test_a_relearned_record_measured_under_an_old_launch_config_stays_stale(tmp_path: Path) -> None:
@@ -6661,6 +6833,48 @@ async def test_no_model_asked_for_sends_no_frame(tmp_path: Path) -> None:
         name="quietmodel", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
     )
     assert "session/set_config_option" not in connection.client.stderr_tail()
+
+
+async def test_an_effort_reaches_the_session_before_it_is_prompted(tmp_path: Path) -> None:
+    """The reasoning effort is its own option: the agent names the id
+    (``effort`` here), and the value goes through session/set_config_option
+    beside the model rather than as a suffix on the model id."""
+    cfg = stub_config("effortful")
+    backend = build_third_party_backend(cfg)
+
+    reply = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, session_effort="high")
+
+    connection = await get_pool().acquire(
+        name="effortful", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    assert reply == "pong"
+    assert "session/set_config_option effort=high" in connection.client.stderr_tail()
+
+
+async def test_clearing_an_effort_puts_the_session_back_on_the_agents_own(tmp_path: Path) -> None:
+    """The option takes a value and has no unset, so a cleared effort is sent
+    back as the value the session opened on -- on the same remote session, which
+    is the only shape the bug has."""
+    cfg = stub_config("cleareffort")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    backend = AcpAgentBackend(
+        name="cleareffort",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("cleareffort", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+    key = {"workspace": tmp_path, "executor": None, "session_key": "s", "instance": "h1"}
+
+    await backend.run("ping", task_id="t1", session_effort="high", **key)
+    await backend.run("ping", task_id="t2", **key)
+
+    connection = await get_pool().acquire(
+        name="cleareffort", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    frames = [ln for ln in connection.client.stderr_tail(4000).splitlines() if "effort=" in ln]
+    assert any("effort=high" in ln for ln in frames), "the switch"
+    assert frames[-1].endswith("effort=default"), f"the restore, got {frames!r}"
 
 
 def _own_backend(cfg: Any) -> AcpAgentBackend:

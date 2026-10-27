@@ -2180,6 +2180,15 @@ class ThirdPartyAcpSubagentConfig(Base):
     reads nothing from this field."""
     model: str | None = None
     """The ``model`` sent with every ``session/new``, or ``None`` to let the agent pick its own default."""
+    effort: str | None = None
+    """The reasoning effort sent with every session, or ``None`` for the agent's own.
+
+    The value is one the agent advertised in its ``thought_level`` config option
+    (``low``, ``high``, ``max``, ``default`` on OpenCode 1.19.4), not one of
+    Raven's run-intensity tiers: it is set through ``session/set_config_option``
+    with the option's own id, separately from ``model``. An agent that packs
+    effort into model ids instead (OpenCode 1.14.31's ``.../low``) advertises no
+    such option and this field stays unset."""
 
     @model_validator(mode="before")
     @classmethod

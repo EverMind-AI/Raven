@@ -1172,6 +1172,23 @@ export interface SubagentRow {
    * What subagents.update accepts for model on this row, by rule rather than by kind, and not ownership, which is own: raven for the built-in row and for one of raven's own acp rows whose handshake advertised no menu -- both pick from raven's own provider catalogue; agent for an acp row picking from the choices its handshake advertised (model_choices); fixed for an openai row, whose model is a plain config value, and for a cli row, which has no menu at all. The menu, not the whole vocabulary: one of raven's own acp rows also accepts a host-qualified id under either rule, since it runs on raven's providers whatever it advertised.
    */
   model_source?: 'raven' | 'agent' | 'fixed';
+  /**
+   * The reasoning effort this row sends, or null to use the agent's own. A value from effort_choices; set through the agent's thought_level config option, separately from model.
+   */
+  effort?: string | null;
+  /**
+   * The reasoning efforts this row's agent advertised in its thought_level option, empty when it advertised none. An agent that packs effort into model ids instead has no such menu.
+   */
+  effort_choices?: {
+    /**
+     * The value the agent takes back, e.g. low, high or max.
+     */
+    value: string;
+    /**
+     * What the agent asked to be shown, usually the same word.
+     */
+    name?: string;
+  }[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4313,6 +4330,14 @@ export interface SubagentsUpdateParams {
    * Drop the row's own model, reverting to the agent's default. Wins over model when both are sent.
    */
   clear_model?: boolean;
+  /**
+   * A reasoning effort from the row's effort_choices, sent through the agent's thought_level option on every turn. An agent with no such option refuses it.
+   */
+  effort?: string;
+  /**
+   * Drop the row's own effort, reverting to the agent's default. Wins over effort when both are sent.
+   */
+  clear_effort?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4417,6 +4442,46 @@ export interface SubagentsTestCancelParams {
  */
 export interface SubagentsTestCancelResult {
   cancelled: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsRefreshModelsParams".
+ */
+export interface SubagentsRefreshModelsParams {
+  name: string;
+  source?: 'config' | 'preset' | 'vendored';
+  force?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsRefreshModelsResult".
+ */
+export interface SubagentsRefreshModelsResult {
+  /**
+   * Whether the handshake answered and reported the menu. False leaves the recorded menu in place.
+   */
+  ok: boolean;
+  /**
+   * Why the menu could not be read, when it could not.
+   */
+  detail?: string;
+  /**
+   * The menu now recorded for the agent, which is the previous one when this read failed.
+   */
+  models: {
+    /**
+     * The id the agent takes back.
+     */
+    value: string;
+    /**
+     * What the agent asked to be shown, usually far shorter than the value.
+     */
+    name?: string;
+    /**
+     * The agent's own bucketing, a provider typically. Empty when it offered none.
+     */
+    group?: string;
+  }[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

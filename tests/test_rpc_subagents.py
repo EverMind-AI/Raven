@@ -22,6 +22,7 @@ from raven.rpc.methods.subagents import (
     subagents_list,
     subagents_presets,
     subagents_probe,
+    subagents_refresh_models,
     subagents_test,
     subagents_test_cancel,
 )
@@ -2498,6 +2499,275 @@ async def test_an_acp_test_without_a_live_loop_still_reports(config_path: Path, 
     assert (await subagents_test({"name": "Coder", "source": "config"}))["ok"] is True
     out = await subagents_test({"name": "Coder", "source": "config"}, agent_loop_factory=lambda: None)
     assert out["ok"] is True
+
+
+@pytest.fixture
+def menu_reads(monkeypatch: pytest.MonkeyPatch):
+    """The refresh handler's process-wide read tables, empty for one test.
+
+    ``_MENU_READ_AT`` is a cooldown that outlives a test and would otherwise make
+    the next test's automatic read answer the previous test's menu.
+    """
+    from raven.rpc.methods import subagents as subagents_mod
+
+    subagents_mod._MENU_TASKS.clear()
+    subagents_mod._MENU_READ_AT.clear()
+    return subagents_mod
+
+
+def _menu_snapshot(**over):
+    from types import SimpleNamespace
+
+    values = {
+        "usable": True,
+        "model_menu_measured": True,
+        "detail": "connected; models: 2",
+        "model_choices": (
+            SimpleNamespace(value="m1", name="One", group="Group"),
+            SimpleNamespace(value="m2", name="Two", group="Group"),
+        ),
+    }
+    values.update(over)
+    return SimpleNamespace(**values)
+
+
+async def test_refresh_models_reads_the_handshake_and_returns_that_menu(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """An acp row's menu moves without its launch config moving: this is the free
+    handshake, and the menu it read is what the caller must draw."""
+    seen: list[str] = []
+
+    async def fake_record(cfg):
+        seen.append(cfg.name)
+        return _menu_snapshot()
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    out = await subagents_refresh_models({"name": "OpenCode", "source": "preset"})
+
+    assert seen == ["OpenCode"]
+    assert out == {
+        "ok": True,
+        "detail": "connected; models: 2",
+        "models": [
+            {"value": "m1", "name": "One", "group": "Group"},
+            {"value": "m2", "name": "Two", "group": "Group"},
+        ],
+    }
+
+
+async def test_refresh_models_refuses_a_row_with_no_menu_to_read(config_path: Path, menu_reads) -> None:
+    from raven.rpc.errors import ConfigFieldReadonlyError
+
+    with pytest.raises(ConfigFieldReadonlyError, match="no model menu"):
+        await subagents_refresh_models({"name": "Coder", "source": "config"})
+
+
+async def test_a_failed_menu_read_answers_the_recorded_menu(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """The picker must not go empty because the agent did not answer: the previous
+    menu is still the best evidence there is, and the reason travels beside it."""
+    from types import SimpleNamespace
+
+    async def fake_record(cfg):
+        return _menu_snapshot(
+            usable=False, model_menu_measured=True, detail="connected, but no session could be opened"
+        )
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    monkeypatch.setattr(menu_reads, "acp_snapshot_for", lambda cfg: object())
+    monkeypatch.setattr(
+        menu_reads,
+        "agent_meta",
+        lambda cfg, snapshot=None: SimpleNamespace(
+            model_choices=(SimpleNamespace(value="old", name="Old", group="Kept"),)
+        ),
+    )
+
+    out = await subagents_refresh_models({"name": "OpenCode", "source": "preset"})
+
+    assert out["ok"] is False
+    assert out["detail"] == "connected, but no session could be opened"
+    assert out["models"] == [{"value": "old", "name": "Old", "group": "Kept"}]
+
+
+async def test_an_unread_menu_is_not_reported_as_a_successful_refresh(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """Mirasim marks a catalog read that failed; answering ok for it would tell a
+    picker the old menu was just measured."""
+
+    async def fake_record(cfg):
+        return _menu_snapshot(model_menu_measured=False)
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    monkeypatch.setattr(menu_reads, "acp_snapshot_for", lambda cfg: None)
+    monkeypatch.setattr(menu_reads, "agent_meta", lambda cfg, snapshot=None: type("M", (), {"model_choices": ()})())
+
+    out = await subagents_refresh_models({"name": "OpenCode", "source": "preset"})
+    assert out["ok"] is False
+
+
+async def test_concurrent_menu_reads_share_one_handshake(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """Opening the picker and pressing refresh is one reader looking, not two launches."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def fake_record(cfg):
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        return _menu_snapshot()
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    first = asyncio.ensure_future(subagents_refresh_models({"name": "OpenCode", "source": "preset", "force": True}))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    second = asyncio.ensure_future(subagents_refresh_models({"name": "OpenCode", "source": "preset", "force": True}))
+    await asyncio.sleep(0)
+    release.set()
+
+    out = await asyncio.gather(first, second)
+    assert calls == 1
+    assert [o["models"] for o in out] == [out[0]["models"], out[0]["models"]]
+
+
+async def test_an_automatic_read_reuses_a_menu_read_moments_ago(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """A picker opened, closed and opened again is one look: no second launch."""
+    calls = 0
+
+    async def fake_record(cfg):
+        nonlocal calls
+        calls += 1
+        return _menu_snapshot()
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    # The cooldown answer comes from the recorded snapshot, which the fake read
+    # does not write; stand the store in with the menu the fake measured.
+    monkeypatch.setattr(menu_reads, "acp_snapshot_for", lambda cfg: object())
+    monkeypatch.setattr(
+        menu_reads,
+        "agent_meta",
+        lambda cfg, snapshot=None: type("M", (), {"model_choices": _menu_snapshot().model_choices})(),
+    )
+
+    first = await subagents_refresh_models({"name": "OpenCode", "source": "preset"})
+    again = await subagents_refresh_models({"name": "OpenCode", "source": "preset"})
+    forced = await subagents_refresh_models({"name": "OpenCode", "source": "preset", "force": True})
+
+    assert calls == 2, "the automatic second read must not launch; the forced one must"
+    assert first["models"] == again["models"] == forced["models"]
+
+
+async def test_refreshing_a_configured_agents_menu_recomposes_the_agent_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """The instance picker reads the table, not the snapshot file: without this it
+    keeps the menu the table was built with."""
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {"name": "Helped", "kind": "acp", "command": "helper --acp", "enabled": True},
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+
+    async def fake_record(cfg):
+        return _menu_snapshot()
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    applied: list[list] = []
+
+    class _Loop:
+        def apply_agents(self, configs: list) -> None:
+            applied.append(configs)
+
+    await subagents_refresh_models({"name": "Helped", "source": "config"}, agent_loop_factory=lambda: _Loop())
+
+    assert len(applied) == 1
+    assert "Helped" in [c.name for c in applied[0]]
+
+
+async def test_refreshing_a_preset_leaves_the_agent_table_alone(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    async def fake_record(cfg):
+        return _menu_snapshot()
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    applied: list[list] = []
+
+    class _Loop:
+        def apply_agents(self, configs: list) -> None:
+            applied.append(configs)
+
+    await subagents_refresh_models({"name": "OpenCode", "source": "preset"}, agent_loop_factory=lambda: _Loop())
+    assert applied == []
+
+
+async def test_the_menu_refresh_wrapper_carries_the_live_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """Registering the bare handler would leave every call the web UI makes on no table at all.
+
+    A preset would not tell the two apart -- no preset is on the table -- so this
+    dispatches a configured row, the one case whose rebuild is observable.
+    """
+    from raven.rpc.dispatcher import Dispatcher
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {"name": "Helped", "kind": "acp", "command": "helper --acp", "enabled": True},
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+
+    async def fake_record(cfg):
+        return _menu_snapshot()
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    applied: list[list] = []
+
+    class _Loop:
+        def apply_agents(self, configs: list) -> None:
+            applied.append(configs)
+
+    dispatcher = Dispatcher()
+    register_subagents_methods(dispatcher, agent_loop_factory=lambda: _Loop())
+    frame = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "subagents.refresh_models",
+            "params": {"name": "Helped", "source": "config"},
+        }
+    )
+    assert "error" not in frame, frame
+    assert frame["result"]["ok"] is True
+    assert applied and "Helped" in [c.name for c in applied[0]]
 
 
 async def test_cancel_stops_a_running_test(config_path: Path, monkeypatch) -> None:

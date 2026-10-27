@@ -153,6 +153,20 @@ describe('the page boot order', () => {
       .toEqual(['holdRail', 'watchNote', 'installPage', 'connect', ...STEPS.filter((n) => n !== 'sessionOpen')])
   })
 
+  /* The connections hub is warmed at boot, not when its module is opened. All
+     three reads are fire-and-forget: nothing on the first screen reads them,
+     and the agents one carries no probe. */
+  it('warms the connections hub after releasing the rail, without awaiting it', () => {
+    const at = bootText.indexOf('releaseRail()')
+    expect(at).toBeGreaterThan(-1)
+    const after = bootText.slice(at)
+
+    expect(after).toContain('void warmConnections()')
+    expect(after).toContain('void warmAgents()')
+    expect(after).toContain('void machinesStore.load()')
+    expect(after).not.toMatch(/await\s+(warmConnections|warmAgents|machinesStore\.load)\(/)
+  })
+
   /* And the queue is written in one place. Two modules could each queue a
      paint, and the page would draw twice from a seam that was whole only once.
    */

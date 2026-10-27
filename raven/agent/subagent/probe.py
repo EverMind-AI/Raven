@@ -1298,13 +1298,14 @@ def _launch_kw(cfg: Any) -> dict[str, Any]:
 async def record_capabilities(cfg: Any) -> Any:
     """Measure an acp entry's capabilities live and write them down; the snapshot.
 
-    The one writer the manual test and the connect share. A connect proves the
-    agent answers (``ping_agent``) but records nothing, so until now a row
-    connected from the page stayed "capabilities not recorded -- run a test",
-    stateless and menuless, until someone pressed Test or the gateway restarted
-    into the boot backfill: no ``instance`` for it, no model pill, an attention
-    dot on an agent that had just replied. The handshake this records costs no
-    tokens, so the connect can afford it.
+    The one writer the manual test, the connect and the model-menu refresh
+    (``subagents.refresh_models``) share. A connect proves the agent answers
+    (``ping_agent``) but records nothing, so until now a row connected from the
+    page stayed "capabilities not recorded -- run a test", stateless and
+    menuless, until someone pressed Test or the gateway restarted into the boot
+    backfill: no ``instance`` for it, no model pill, an attention dot on an agent
+    that had just replied. The handshake this records costs no tokens, so the
+    connect and the menu read can afford it.
     """
     from raven.acp_client.capabilities import SnapshotStore, verify_agent
 
@@ -1429,6 +1430,8 @@ def _test_record(snapshot: Any, previous: Any) -> Any:
                 snapshot,
                 available_models=previous.available_models,
                 model_choices=previous.model_choices,
+                effort_choices=previous.effort_choices,
+                effort_option=previous.effort_option,
                 available_modes=previous.available_modes,
                 model_menu_measured=True,
             )

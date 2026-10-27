@@ -121,7 +121,13 @@ export function createSubagents(env: FixtureEnv): SubagentsFixture {
 
   return {
     fixtures: {
-      'subagents.list': () => ({ rows: rows.map((r) => ({ ...r })) }),
+      'subagents.list': () => ({ rows: rows.map((r) => ({ effort: null, effort_choices: [], ...r })) }),
+      /* The free menu read. The fixture has one set of choices per row and no
+         agent behind it to ask again, so it answers the menu it holds. */
+      'subagents.refresh_models': (p) => {
+        const row = find(p.name)
+        return { ok: true, detail: '', models: [...(row?.model_choices || [])] }
+      },
       /* What the machine sheet's connect form chooses from: the presets a
          machine's node can start, whether or not a row here holds them, with
          where each already runs read off the roster. */
@@ -214,7 +220,7 @@ export function createSubagents(env: FixtureEnv): SubagentsFixture {
         if (row) row.test_running = false
         return { cancelled: true }
       },
-      'subagents.probe': () => ({ rows: rows.map((r) => ({ ...r })) }),
+      'subagents.probe': () => ({ rows: rows.map((r) => ({ effort: null, effort_choices: [], ...r })) }),
       /* No delegated work and no instances: a conversation replayed with no
          server behind it has none, and the canvas never invented any -- which
          is what `?desk-demo=1` below is for. */
