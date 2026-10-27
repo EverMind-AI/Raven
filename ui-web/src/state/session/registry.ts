@@ -274,7 +274,7 @@ export function switchToDraft(): void {
   // default's own answer. The tier and the permission mode are the same.
   void loadProviders(null, gen)
   void loadTier()
-  void loadEffort()
+  void loadEffort(null, gen)
   void loadPermMode(null, gen)
   $('#title')!.textContent = t('gui.new_task')
   pitch(); sessionDraw(); $('#ta')!.focus()
@@ -312,8 +312,11 @@ export async function switchTo(s: SessRow, turnOver = false): Promise<void> {
      the tier from before the gap. */
   void loadTier()
   /* The effort is kept on the session's record, so a reopen reads what it
-     was left at -- including after a gateway restart, unlike the tier. */
-  void loadEffort()
+     was left at -- including after a gateway restart, unlike the tier. Keyed
+     to s.id and the switch, as the permission mode is: the current session
+     is not switched over until below, so a read of "the current one" here
+     would be a read of the conversation being left. */
+  void loadEffort(s.id, gen)
   void loadPermMode(s.id, gen)
   // Opening it IS reading it. ``s`` can be a bare {id, title} from the
   // reconnect path, so clear the flag on the row in sessionRows(), not on the arg.
