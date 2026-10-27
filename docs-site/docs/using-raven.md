@@ -74,7 +74,9 @@ Two places set it:
 - **For one conversation**: the *Reasoning effort* row of the model picker in
   the WebUI (open it from the model chip beside the composer), or `/effort
   <word>` in the TUI. `/effort` alone reports the effort in force, and
-  `/effort default` returns the conversation to the global setting.
+  `/effort default` returns the conversation to the global setting. Inside a
+  direct chat with a sub-agent instance the command is refused: the pick is
+  the main conversation's, and an instance has none of its own.
 
 A pick made for one conversation outranks the global setting and the
 conversation's mode. It is kept on the conversation's own record, so it survives

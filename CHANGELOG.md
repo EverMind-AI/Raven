@@ -31,7 +31,11 @@ All notable changes to Raven are documented here.
   it. Clearing `agents.defaults.reasoningEffort` (*Provider default*) reaches a
   running gateway's next turn as well: the turn sends the effort in force on
   every call, the provider's own default included, instead of leaving a
-  cleared key to the copy the provider took at boot.
+  cleared key to the copy the provider took at boot. A fork keeps its
+  parent's pick with its model; the agent's own `raven_config` door accepts
+  null for `agents.defaults.reasoningEffort` as the settings page does; and
+  inside a TUI direct chat with an instance `/effort` is refused rather than
+  moving the main conversation while saying "this conversation".
 
 - The settings dialog's **Skills** and **Plugins** pages have an **Add**
   button. Neither page can install anything -- a skill is fetched from Skill

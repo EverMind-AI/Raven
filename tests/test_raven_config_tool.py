@@ -219,6 +219,39 @@ async def test_a_settings_page_setting_goes_through_the_lent_caller(config_file)
 
 
 @pytest.mark.asyncio
+async def test_the_reasoning_effort_may_be_cleared_through_the_lent_caller(config_file):
+    """``null`` hands the choice back to the provider's own default, as the
+    settings page's *Provider default* rung does; the door used to refuse it
+    while the page accepted it."""
+    calls = Calls({"settings.set": {"applied": True, "previous": "high"}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+    reply = await _run(tool, action="set", path="agents.defaults.reasoningEffort", value="null")
+    assert calls.calls == [("settings.set", {"key": "agents.defaults.reasoningEffort", "value": None})]
+    assert "next turn" in reply
+
+
+@pytest.mark.asyncio
+async def test_a_cleared_reasoning_effort_lands_as_null_in_the_file(config_file):
+    """Through the settings service itself: the key is written as null, which
+    is what the live reader takes as the provider's own default."""
+    from raven.rpc.methods import console as rpc_console
+
+    raw = json.loads(config_file.read_text())
+    raw["agents"] = {"defaults": {"reasoningEffort": "high"}}
+    config_file.write_text(json.dumps(raw), encoding="utf-8")
+
+    async def writer(method, params):
+        assert method == "settings.set"
+        return await rpc_console.settings_set(params)
+
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(writer)
+    await _run(tool, action="set", path="agents.defaults.reasoningEffort", value="null")
+    assert json.loads(config_file.read_text())["agents"]["defaults"]["reasoningEffort"] is None
+
+
+@pytest.mark.asyncio
 async def test_the_image_provider_may_be_set_to_volcengine(config_file):
     """The choices are the registry's, so a provider the roles card offers the image
     role is one a model may name here too."""
