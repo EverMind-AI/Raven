@@ -16,7 +16,10 @@ point, as ``python -m raven --fork-template``, and never imports it.
 
 **The template** is started through the same parent-death wrapper as any agent
 (``leftovers``), so it ends with the host, and its stdin is a lifeline only the
-host holds: letting go of it asks the template to stop.
+host holds: letting go of it asks the template to stop. It belongs to the event
+loop it was started on -- its pipes and the watcher that reaps it are that
+loop's -- so it is ended with that loop (``ForkTemplate._hold``), and a host on a
+later loop starts another.
 
 **A fork.** The host hands over the agent's argv, environment and working
 directory, and the three pipe ends that become its stdin, stdout and stderr.
@@ -200,6 +203,7 @@ class ForkTemplate:
         self._forking = 0
         self._idle_task: asyncio.Task | None = None
         self._log_task: asyncio.Task | None = None
+        self._hold_task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
         self.loop = asyncio.get_running_loop()
         """The loop its process and pipes were opened under; the handle is no use to another."""
@@ -245,6 +249,7 @@ class ForkTemplate:
         )
         leftovers.record(self._proc.pid, "fork-template")
         self._log_task = asyncio.get_running_loop().create_task(self._log_stderr(self._proc), name="fork-template-log")
+        self._hold_task = asyncio.get_running_loop().create_task(self._hold(self._proc), name="fork-template-hold")
         ready = await asyncio.wait_for(self._ready_report(self._proc), timeout=_READY_TIMEOUT_S)
         if not ready.get("ready"):
             raise RuntimeError(str(ready.get("reason") or "the template exited before it was ready"))
@@ -373,11 +378,30 @@ class ForkTemplate:
 
         self._idle_task = asyncio.get_running_loop().create_task(wait_then_close(), name="fork-template-idle")
 
+    async def _hold(self, proc: asyncio.subprocess.Process) -> None:
+        """Keep the template for as long as its loop runs, and end it with the loop.
+
+        The template's pipes and the watcher that reaps it belong to the loop it
+        was started on. ``asyncio.run`` cancels the tasks still pending when its
+        coroutine returns and lets them finish before it closes the loop, so,
+        cancelled here, the template is ended, reaped and its pipes closed while
+        that loop still can. A loop closed any other way leaves it to :meth:`abandon`.
+        """
+        try:
+            await proc.wait()
+        except asyncio.CancelledError:
+            if self._proc is proc:
+                await self.close()
+            raise
+
     def abandon(self) -> None:
         """End the template without the loop it was started on, which may be closed by now.
 
+        The fallback for a loop that closed without letting :meth:`_hold` finish.
         The agents it forked end with it (they armed its death signal); a loop
-        that has ended has no use for them either, their pipes being its.
+        that has ended has no use for them either, their pipes being its. Closing
+        the transport here may fail on that loop, but it marks the transport closed
+        first, so its finalizer does not try again on a loop that is gone.
         """
         from raven.acp_client import leftovers
 
@@ -386,6 +410,10 @@ class ForkTemplate:
             with contextlib.suppress(ProcessLookupError, PermissionError):
                 os.killpg(proc.pid, signal.SIGKILL)
             leftovers.forget(proc.pid)
+            transport = getattr(proc, "_transport", None)
+            if transport is not None:
+                with contextlib.suppress(Exception):
+                    transport.close()
         if self._dir is not None:
             import shutil
 
@@ -396,30 +424,45 @@ class ForkTemplate:
         from raven.acp_client import leftovers
 
         proc, self._proc = self._proc, None
-        if proc is not None and proc.returncode is None:
-            # Letting go of its stdin is how the template is asked to stop; the
-            # group kill after the grace is for one that does not.
-            if proc.stdin is not None:
-                with contextlib.suppress(Exception):
-                    proc.stdin.close()
-            with contextlib.suppress(asyncio.TimeoutError, ProcessLookupError):
-                await asyncio.wait_for(proc.wait(), timeout=_TEARDOWN_GRACE_S)
-            with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.killpg(proc.pid, signal.SIGKILL)
-        if proc is not None:
-            leftovers.forget(proc.pid)
-            transport = getattr(proc, "_transport", None)
-            if transport is not None:
-                with contextlib.suppress(Exception):
-                    transport.close()
-        if self._log_task is not None:
-            self._log_task.cancel()
-            self._log_task = None
-        if self._dir is not None:
-            import shutil
+        hold, self._hold_task = self._hold_task, None
+        try:
+            if proc is not None and proc.returncode is None:
+                # Letting go of its stdin is how the template is asked to stop; the
+                # group kill after the grace is for one that does not, and is waited
+                # out too, so the template is reaped before this returns.
+                if proc.stdin is not None:
+                    with contextlib.suppress(Exception):
+                        proc.stdin.close()
+                with contextlib.suppress(asyncio.TimeoutError, ProcessLookupError):
+                    await asyncio.wait_for(proc.wait(), timeout=_TEARDOWN_GRACE_S)
+                if proc.returncode is None:
+                    with contextlib.suppress(ProcessLookupError, PermissionError):
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    with contextlib.suppress(asyncio.TimeoutError, ProcessLookupError):
+                        await asyncio.wait_for(proc.wait(), timeout=_TEARDOWN_GRACE_S)
+        finally:
+            # Also when a wait above is cancelled, as when its loop ends: the
+            # template is not left running, and its pipes are closed while that
+            # loop can still close them.
+            if proc is not None:
+                if proc.returncode is None:
+                    with contextlib.suppress(ProcessLookupError, PermissionError):
+                        os.killpg(proc.pid, signal.SIGKILL)
+                leftovers.forget(proc.pid)
+                transport = getattr(proc, "_transport", None)
+                if transport is not None:
+                    with contextlib.suppress(Exception):
+                        transport.close()
+            if self._log_task is not None:
+                self._log_task.cancel()
+                self._log_task = None
+            if hold is not None and hold is not asyncio.current_task():
+                hold.cancel()
+            if self._dir is not None:
+                import shutil
 
-            shutil.rmtree(self._dir, ignore_errors=True)
-            self._dir = None
+                shutil.rmtree(self._dir, ignore_errors=True)
+                self._dir = None
 
 
 _TEMPLATE: ForkTemplate | None = None
