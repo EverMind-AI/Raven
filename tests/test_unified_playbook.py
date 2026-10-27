@@ -11,7 +11,7 @@ from raven.agent.subagent.dag_adjudication import Final, Report
 from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec
 from raven.agent.subagent.dag_runner import DagRunResult
 from raven.agent.subagent.dag_tool import _successful_final
-from raven.agent.subagent.delegate import current_delegate, delegate_scope
+from raven.agent.subagent.delegate import Worker, current_delegate, delegate_scope
 from raven.config.schema import PlaybookConfig
 from raven.playbook.agent_generator import (
     PERSONA_TOOL,
@@ -20,7 +20,8 @@ from raven.playbook.agent_generator import (
     TaskPlaybookGenerator,
     participant_function_syntax_guide,
 )
-from raven.playbook.agent_spec import AgentPlaybookSpec, DelegateEntry
+from raven.playbook.agent_spec import AgentPlaybookSpec, CoordinatorEntry, DelegateEntry
+from raven.playbook.run_record import PlaybookRunCapture, record_completed_dag, rewrite_completed_dag
 from raven.playbook.runtime import PlaybookRuntime
 from raven.playbook.store import PlaybookStore
 from raven.playbook.types import ParamSpec
@@ -723,3 +724,411 @@ def test_composite_workflow_may_mix_harness_aliases_and_registered_agents() -> N
         workflow=mixed,
     )
     assert [node.subagent for node in spec.workflow.nodes] == ["analyst", "Raven"]
+
+
+# --------------------------------------------------------------------------- #
+# Capturing a reassigned run                                                    #
+# --------------------------------------------------------------------------- #
+
+
+def _group_dag() -> SubAgentDagSpec:
+    """One graph-named instance group, plus an ordinary node that ran alone."""
+    return SubAgentDagSpec(
+        task_summary="Triage the issue",
+        confirm=True,
+        nodes=[
+            DagNodeSpec(
+                id="first",
+                subagent="alpha",
+                node_summary="Classify the issue",
+                prompt_template="Classify {{ ref:issue.md }}",
+                routes={"bug": "it is a bug", "docs": "it is a docs gap"},
+                select="many",
+                inputs={"issue": {"file": "issue.md"}},
+                skills=["triage"],
+                instance="shared",
+            ),
+            DagNodeSpec(
+                id="second",
+                subagent="alpha",
+                node_summary="Handle the bug",
+                prompt_template="Handle the report",
+                depends_on=["first"],
+                when="first.bug",
+                mcps=["mcp-one"],
+                instance="shared",
+            ),
+            DagNodeSpec(
+                id="third",
+                subagent="alpha",
+                node_summary="Summarise",
+                prompt_template="Summarise the outcome",
+                depends_on=["second"],
+            ),
+        ],
+    )
+
+
+def test_a_reassigned_group_is_captured_under_the_agent_its_session_ended_on() -> None:
+    original = _group_dag()
+    before = original.model_dump()
+    capture = PlaybookRunCapture(query="triage the issue", capture_workflow=True)
+
+    captured, harness = rewrite_completed_dag(
+        original,
+        harness=None,
+        workers={},
+        named_instance_groups={"first": ("alpha", "shared"), "second": ("alpha", "shared")},
+        execution_nodes={
+            "first": original.nodes[0],
+            "second": original.nodes[1].model_copy(update={"subagent": "beta"}),
+            "third": original.nodes[2].model_copy(update={"subagent": "beta"}),
+        },
+        instance_assignments={("alpha", "shared"): ("beta", "shared")},
+    )
+    record_completed_dag(
+        captured,
+        "run-1",
+        capture,
+        harness=harness,
+        attempt_agents={"first": ["alpha"], "second": ["alpha", "beta"], "third": ["alpha", "beta"]},
+    )
+    evidence = capture.dags[-1]
+
+    assert original.model_dump() == before, "the submitted graph is never rewritten in place"
+    assert evidence.spec.nodes[0].id == original.nodes[0].id
+    assert evidence.spec.nodes[0].prompt_template == original.nodes[0].prompt_template
+    assert evidence.spec.nodes[0].subagent == "beta"
+    assert evidence.spec.nodes[1].subagent == "beta", "one group, one session: the completed sibling follows"
+    assert evidence.spec.nodes[0].instance == evidence.spec.nodes[1].instance == "shared"
+    assert evidence.spec.nodes[2].subagent == "beta", "an ordinary node records its final effective agent"
+    assert harness is None, "a run with no worker table has no Harness to extend"
+    histories = evidence.attempt_agents
+    assert histories is not None
+    assert histories["first"] == ["alpha"], "the audit is not rewritten as replay advice"
+    assert histories["second"] == ["alpha", "beta"]
+    for index, node in enumerate(original.nodes):
+        copied = evidence.spec.nodes[index].model_dump(exclude={"subagent", "instance"})
+        assert copied == node.model_dump(exclude={"subagent", "instance"})
+    assert (evidence.spec.task_summary, evidence.spec.confirm) == (original.task_summary, original.confirm)
+
+
+def test_a_run_without_a_move_is_recorded_exactly_as_submitted() -> None:
+    original = _group_dag()
+    harness = _harness()
+    captured, captured_harness = rewrite_completed_dag(
+        original,
+        harness=harness,
+        workers={},
+        named_instance_groups={"first": ("alpha", "shared"), "second": ("alpha", "shared")},
+        execution_nodes={node.id: node for node in original.nodes},
+        instance_assignments={("alpha", "shared"): ("alpha", "shared")},
+    )
+    capture = PlaybookRunCapture(query="triage the issue", capture_workflow=True)
+    record_completed_dag(captured, "run-2", capture)
+
+    assert captured is original
+    assert captured_harness is harness
+    assert capture.dags[-1].as_dict() == {
+        "runId": "run-2",
+        "spec": original.model_dump(by_alias=True, exclude_none=True),
+    }
+
+
+def _worker_harness() -> AgentPlaybookSpec:
+    """Two roles on alpha, one of which already holds its first derived label."""
+    return AgentPlaybookSpec(
+        name="research-team",
+        description="A focused research team",
+        coordinator=CoordinatorEntry(brief="Own the turn", playbook={"memory": {"systemPrompt": "Coordinate."}}),
+        delegate=[
+            DelegateEntry(
+                **{
+                    "as": "writer",
+                    "name": "alpha",
+                    "brief": "Write the draft",
+                    "playbook": {"memory": {"systemPrompt": "Write clearly."}},
+                }
+            ),
+            DelegateEntry(
+                **{
+                    "as": "analyst",
+                    "name": "alpha",
+                    "brief": "Analyse the draft",
+                    "playbook": {"capability": {"tools": ["read_file"]}},
+                }
+            ),
+            DelegateEntry(**{"as": "writer--reassign-1", "name": "alpha", "brief": "An occupied label"}),
+        ],
+    )
+
+
+def _worker_dag() -> SubAgentDagSpec:
+    return SubAgentDagSpec(
+        task_summary="Write the brief",
+        nodes=[
+            DagNodeSpec(id="draft", subagent="writer", node_summary="Draft", prompt_template="Write the draft"),
+            DagNodeSpec(
+                id="review",
+                subagent="analyst",
+                node_summary="Review",
+                prompt_template="Review the draft",
+                instance="shared",
+            ),
+            DagNodeSpec(
+                id="edit",
+                subagent="analyst",
+                node_summary="Edit",
+                prompt_template="Edit the draft",
+                depends_on=["review"],
+                instance="shared",
+            ),
+            DagNodeSpec(
+                id="polish",
+                subagent="writer",
+                node_summary="Polish",
+                prompt_template="Polish the draft",
+                depends_on=["draft"],
+            ),
+        ],
+    )
+
+
+def _worker_workers() -> dict[str, Worker]:
+    return {
+        "draft": Worker("writer", "alpha", "Write the draft"),
+        "review": Worker("analyst", "alpha", "Analyse the draft"),
+        "edit": Worker("analyst", "alpha", "Analyse the draft"),
+        "polish": Worker("writer", "alpha", "Write the draft"),
+    }
+
+
+def _worker_projection() -> tuple[AgentPlaybookSpec, SubAgentDagSpec, SubAgentDagSpec, AgentPlaybookSpec]:
+    harness = _worker_harness()
+    original = _worker_dag()
+    captured, captured_harness = rewrite_completed_dag(
+        original,
+        harness=harness,
+        workers=_worker_workers(),
+        named_instance_groups={"review": ("alpha", "shared"), "edit": ("alpha", "shared")},
+        execution_nodes={
+            "draft": original.nodes[0].model_copy(update={"subagent": "beta"}),
+            # The completed sibling was never rebuilt; the group's final owner still governs it.
+            "review": original.nodes[1].model_copy(update={"subagent": "beta"}),
+            "edit": original.nodes[2],
+            "polish": original.nodes[3].model_copy(update={"subagent": "beta"}),
+        },
+        instance_assignments={("alpha", "shared"): ("beta", "shared")},
+    )
+    assert captured_harness is not None
+    return harness, original, captured, captured_harness
+
+
+def test_a_reassigned_worker_node_gets_one_derived_row_per_role_and_agent() -> None:
+    harness, original, captured, captured_harness = _worker_projection()
+
+    assert [node.subagent for node in captured.nodes] == [
+        "writer--reassign-2",
+        "analyst--reassign-1",
+        "analyst--reassign-1",
+        "writer--reassign-2",
+    ], "one label per (role, target), collision-free, in submitted-node order"
+    assert [entry.label for entry in captured_harness.delegate] == [
+        "writer",
+        "analyst",
+        "writer--reassign-1",
+        "writer--reassign-2",
+        "analyst--reassign-1",
+    ]
+    assert captured_harness.delegate[:3] == harness.delegate, "original rows are left alone"
+    assert len(harness.delegate) == 3, "the frozen source Harness is never mutated"
+    assert captured_harness.coordinator == harness.coordinator
+    assert captured_harness.name == harness.name
+    assert captured_harness.description == harness.description
+    derived = {entry.label: entry for entry in captured_harness.delegate[3:]}
+    assert {entry.name for entry in derived.values()} == {"beta"}
+    source = {entry.label: entry for entry in harness.delegate}
+    for label, role in (("writer--reassign-2", "writer"), ("analyst--reassign-1", "analyst")):
+        assert derived[label].brief == source[role].brief
+        assert derived[label].playbook == source[role].playbook
+        assert derived[label].playbook is not source[role].playbook
+    assert [node.instance for node in captured.nodes[1:3]] == ["shared", "shared"]
+    for index, node in enumerate(original.nodes):
+        copied = captured.nodes[index].model_dump(exclude={"subagent", "instance"})
+        assert copied == node.model_dump(exclude={"subagent", "instance"})
+
+
+def test_a_worker_node_that_returns_to_its_original_agent_keeps_its_role_row() -> None:
+    harness = _worker_harness()
+    submitted = SubAgentDagSpec(
+        task_summary="Write the draft",
+        nodes=[DagNodeSpec(id="draft", subagent="writer", node_summary="Draft", prompt_template="Write the draft")],
+    )
+
+    captured, captured_harness = rewrite_completed_dag(
+        submitted,
+        harness=harness,
+        workers={"draft": Worker("writer", "alpha", "Write the draft")},
+        named_instance_groups={},
+        execution_nodes={"draft": submitted.nodes[0].model_copy(update={"subagent": "alpha"})},
+        instance_assignments={},
+    )
+
+    assert captured is submitted, "the original role row already names the agent the run ended on"
+    assert captured_harness is harness
+
+
+def test_a_moved_ordinary_node_never_captures_a_minted_handle() -> None:
+    submitted = SubAgentDagSpec(
+        task_summary="Write the draft",
+        nodes=[DagNodeSpec(id="solo", subagent="alpha", node_summary="Draft", prompt_template="Write the draft")],
+    )
+
+    captured, harness = rewrite_completed_dag(
+        submitted,
+        harness=None,
+        workers={},
+        named_instance_groups={},
+        execution_nodes={"solo": submitted.nodes[0].model_copy(update={"subagent": "beta", "instance": "solo-minted"})},
+        instance_assignments={},
+    )
+
+    assert captured.nodes[0].subagent == "beta"
+    assert captured.nodes[0].instance is None, "a runtime-minted handle is not a name the graph gave"
+
+
+def test_the_effective_node_wins_over_a_differing_audit_history() -> None:
+    """The audit records every attempt; the replay follows the dispatch graph."""
+    submitted = SubAgentDagSpec(
+        task_summary="Write the draft",
+        nodes=[DagNodeSpec(id="solo", subagent="alpha", node_summary="Draft", prompt_template="Write the draft")],
+    )
+
+    captured, _harness = rewrite_completed_dag(
+        submitted,
+        harness=None,
+        workers={},
+        named_instance_groups={},
+        execution_nodes={"solo": submitted.nodes[0].model_copy(update={"subagent": "beta"})},
+        instance_assignments={},
+    )
+    capture = PlaybookRunCapture(query="write the draft", capture_workflow=True)
+    record_completed_dag(
+        captured,
+        "run-1",
+        capture,
+        attempt_agents={"solo": ["alpha", "beta", "alpha"]},
+    )
+
+    assert captured.nodes[0].subagent == "beta", "the effective dispatch decides the replay agent"
+    assert capture.dags[-1].attempt_agents == {"solo": ["alpha", "beta", "alpha"]}
+
+
+def test_a_node_missing_from_the_effective_graph_keeps_its_submitted_identity() -> None:
+    """Audit history is not a substitute for effective dispatch: with no entry in
+    the effective graph, the node's own agent stands, never its last attempt."""
+    submitted = SubAgentDagSpec(
+        task_summary="Write the draft",
+        nodes=[DagNodeSpec(id="solo", subagent="alpha", node_summary="Draft", prompt_template="Write the draft")],
+    )
+
+    captured, _harness = rewrite_completed_dag(
+        submitted,
+        harness=None,
+        workers={},
+        named_instance_groups={},
+        execution_nodes={},
+        instance_assignments={},
+    )
+    capture = PlaybookRunCapture(query="write the draft", capture_workflow=True)
+    record_completed_dag(
+        captured,
+        "run-1",
+        capture,
+        attempt_agents={"solo": ["alpha", "beta"]},
+    )
+
+    assert captured.nodes[0].subagent == "alpha", "the last attempt is not a fallback for the dispatch graph"
+    assert capture.dags[-1].attempt_agents == {"solo": ["alpha", "beta"]}
+
+
+def test_a_group_sibling_missing_from_the_effective_graph_keeps_the_groups_final_owner() -> None:
+    """History is not a substitute for the group's final pair: a sibling that ran
+    on the old agent must still replay inside the one session the group ended on."""
+    original = _group_dag()
+
+    captured, _harness = rewrite_completed_dag(
+        original,
+        harness=None,
+        workers={},
+        named_instance_groups={"first": ("alpha", "shared"), "second": ("alpha", "shared")},
+        execution_nodes={"second": original.nodes[1].model_copy(update={"subagent": "beta"})},
+        instance_assignments={("alpha", "shared"): ("beta", "shared")},
+    )
+    capture = PlaybookRunCapture(query="triage the issue", capture_workflow=True)
+    record_completed_dag(
+        captured,
+        "run-1",
+        capture,
+        attempt_agents={"first": ["alpha"], "second": ["alpha", "beta"]},
+    )
+
+    assert captured.nodes[0].subagent == "beta", "the last audit attempt is not the replay agent"
+    assert captured.nodes[0].instance == "shared"
+    assert capture.dags[-1].attempt_agents == {"first": ["alpha"], "second": ["alpha", "beta"]}
+
+
+@pytest.mark.asyncio
+async def test_the_projected_graph_compiles_against_the_extended_harness() -> None:
+    _harness_before, _original, captured, captured_harness = _worker_projection()
+    emitted = _emitted_from(captured, [node.model_dump(by_alias=True, exclude_none=True) for node in captured.nodes])
+    provider = _Provider(_call(EMIT_WORKFLOW, emitted))
+
+    compiled = await WorkflowCompiler(provider, "stub").compile(
+        query="Write the brief",
+        dag=captured,
+        run_id="pb-reassigned",
+        harness=captured_harness,
+    )
+
+    assert _preservation_errors(captured, compiled) == []
+    assert compiled.workflow is not None
+    assert [node.subagent for node in compiled.workflow.nodes] == [
+        "writer--reassign-2",
+        "analyst--reassign-1",
+        "analyst--reassign-1",
+        "writer--reassign-2",
+    ]
+    assert compiled.harness == captured_harness
+    payload = json.loads(provider.calls[0]["messages"][1]["content"])
+    assert payload["workerAliases"] == [entry.label for entry in captured_harness.delegate]
+    assert payload["acceptedDag"]["nodes"][0]["subagent"] == "writer--reassign-2"
+
+
+def test_the_run_record_audit_keeps_factual_attempt_histories() -> None:
+    _harness_before, _original, captured, captured_harness = _worker_projection()
+    capture = PlaybookRunCapture(query="write the brief", capture_workflow=True)
+
+    record_completed_dag(
+        captured,
+        "run-3",
+        capture,
+        harness=captured_harness,
+        attempt_agents={
+            "draft": ["alpha", "beta"],
+            "review": ["alpha", "beta"],
+            "edit": ["alpha"],
+            "polish": ["alpha", "beta"],
+        },
+    )
+
+    payload = capture.dags[-1].as_dict()
+    assert payload["spec"] == captured.model_dump(by_alias=True, exclude_none=True)
+    assert payload["harness"] == captured_harness.model_dump(by_alias=True, exclude_none=True)
+    assert payload["attemptAgents"] == {
+        "draft": ["alpha", "beta"],
+        "review": ["alpha", "beta"],
+        "edit": ["alpha"],
+        "polish": ["alpha", "beta"],
+    }
+    assert payload["attemptAgents"]["edit"] == ["alpha"], "a moved group's finished sibling keeps its own history"

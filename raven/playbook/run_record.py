@@ -11,10 +11,15 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator
 from uuid import uuid4
 
-from raven.agent.subagent.dag_graph import SubAgentDagSpec
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec
+from raven.agent.subagent.delegate import Worker
+from raven.playbook.agent_spec import AgentPlaybookSpec, DelegateEntry
 
 
 def _now() -> str:
@@ -25,6 +30,30 @@ def _now() -> str:
 class DagEvidence:
     run_id: str
     spec: SubAgentDagSpec
+    harness: AgentPlaybookSpec | None = None
+    """The run's frozen Harness when a reassignment extended it with a derived role.
+
+    ``None`` for a run that moved nothing: the turn's own Harness describes it
+    exactly, and a record carries no second copy of it.
+    """
+
+    attempt_agents: dict[str, list[str]] | None = None
+    """Every node's started attempts, in order, as the audit trail keeps them.
+
+    Factual rather than replay advice: a node captured under the agent its
+    session ended on still lists the agent each attempt actually ran on.
+    """
+
+    def as_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "runId": self.run_id,
+            "spec": self.spec.model_dump(by_alias=True, exclude_none=True),
+        }
+        if self.harness is not None:
+            payload["harness"] = self.harness.model_dump(by_alias=True, exclude_none=True)
+        if self.attempt_agents:
+            payload["attemptAgents"] = {node_id: list(agents) for node_id, agents in self.attempt_agents.items()}
+        return payload
 
 
 @dataclass
@@ -62,10 +91,7 @@ class PlaybookRunCapture:
             "startedAt": self.started_at,
             "completedAt": self.completed_at,
             "status": self.status,
-            "dags": [
-                {"runId": dag.run_id, "spec": dag.spec.model_dump(by_alias=True, exclude_none=True)}
-                for dag in self.dags
-            ],
+            "dags": [dag.as_dict() for dag in self.dags],
             "savedPlaybook": self.saved_playbook,
             "error": self.error,
         }
@@ -94,11 +120,135 @@ def workflow_capture_requested() -> bool:
     return bool(capture is not None and capture.capture_workflow)
 
 
-def record_completed_dag(spec: SubAgentDagSpec, run_id: str, capture: PlaybookRunCapture | None = None) -> None:
+def record_completed_dag(
+    spec: SubAgentDagSpec,
+    run_id: str,
+    capture: PlaybookRunCapture | None = None,
+    *,
+    harness: AgentPlaybookSpec | None = None,
+    attempt_agents: "Mapping[str, list[str]] | None" = None,
+) -> None:
     """Record a graph only after every node completed successfully."""
     capture = capture or _CAPTURE.get()
     if capture is not None:
-        capture.dags.append(DagEvidence(run_id=run_id, spec=spec))
+        capture.dags.append(
+            DagEvidence(
+                run_id=run_id,
+                spec=spec,
+                harness=harness,
+                attempt_agents=(
+                    {node_id: list(agents) for node_id, agents in attempt_agents.items()} if attempt_agents else None
+                ),
+            )
+        )
+
+
+_REASSIGN_LABEL = "{label}--reassign-{n}"
+
+
+def _derived_label(original: str, target: str, occupied: set[str], cache: dict[tuple[str, str], str]) -> str:
+    """A collision-free label for one ``(role, finishing agent)`` pair.
+
+    Cached so two nodes of one role that moved to the same agent share a row,
+    and derived against every label already in play so a Harness that happens to
+    carry ``<role>--reassign-1`` still yields a name no row answers to.
+    """
+    key = (original, target)
+    if (cached := cache.get(key)) is not None:
+        return cached
+    attempt = 1
+    while (label := _REASSIGN_LABEL.format(label=original, n=attempt)) in occupied:
+        attempt += 1
+    occupied.add(label)
+    cache[key] = label
+    return label
+
+
+def _final_pair(
+    node: DagNodeSpec,
+    worker: Worker | None,
+    groups: "Mapping[str, tuple[str, str]]",
+    execution_nodes: "Mapping[str, DagNodeSpec]",
+    instance_assignments: "Mapping[tuple[str, str], tuple[str, str | None]]",
+) -> tuple[str, str | None]:
+    """The agent and handle a completed node's replay should open.
+
+    A graph-named group is one session, so every member -- including a sibling
+    that finished before the move -- is recorded under the pair the handle ended
+    the run on. An ordinary node records the agent it would dispatch as, and
+    keeps the handle the graph gave it (which is none for a minted one).
+
+    A node absent from the effective graph keeps its own submitted identity.
+    The audit history is deliberately not a fallback: the last attempt is not
+    where a session necessarily ended, and reading it here would let a group
+    sibling replay on the agent that finished before the move.
+    """
+    resolved = worker.agent if worker is not None else node.subagent
+    group = groups.get(node.id)
+    if group is not None:
+        return instance_assignments.get(group, (resolved, node.instance))
+    effective = execution_nodes.get(node.id)
+    if effective is not None and effective.subagent:
+        return (effective.subagent, node.instance)
+    return (resolved, node.instance)
+
+
+def rewrite_completed_dag(
+    submitted: SubAgentDagSpec,
+    *,
+    harness: AgentPlaybookSpec | None,
+    workers: "Mapping[str, Worker]",
+    named_instance_groups: "Mapping[str, tuple[str, str]]",
+    execution_nodes: "Mapping[str, DagNodeSpec]",
+    instance_assignments: "Mapping[tuple[str, str], tuple[str, str | None]]",
+) -> tuple[SubAgentDagSpec, AgentPlaybookSpec | None]:
+    """Project a completed run onto the graph a replay should submit.
+
+    Starts from the graph as submitted -- never the prompts the runner folded
+    into it and never a handle it minted -- so a saved Playbook keeps the
+    authored order, branches, inputs, dependencies, prompt templates and skill
+    declarations. Only the two identity fields move: each node's agent becomes
+    the one its session ended on, and a group member's handle follows its group.
+    A worker-labelled node that moved keeps its role by gaining one derived row
+    per ``(role, agent)`` pair in the Harness; the source Harness is untouched.
+
+    The run's attempt history is not an input: it is audit evidence recorded
+    beside the projected graph, and reading it here would make a replay choice
+    out of it.
+    """
+    occupied: set[str] = set()
+    if harness is not None:
+        occupied.update(entry.label for entry in harness.delegate)
+    occupied.update(worker.label for worker in workers.values())
+    roles = {entry.label: entry for entry in harness.delegate} if harness is not None else {}
+    cache: dict[tuple[str, str], str] = {}
+    emitted: set[tuple[str, str]] = set()
+    derived: list[DelegateEntry] = []
+    nodes: list[DagNodeSpec] = []
+    for node in submitted.nodes:
+        worker = workers.get(node.id)
+        final_agent, final_instance = _final_pair(
+            node, worker, named_instance_groups, execution_nodes, instance_assignments
+        )
+        recorded = final_agent
+        if worker is not None and worker.agent != final_agent:
+            pair = (worker.label, final_agent)
+            role = roles.get(worker.label)
+            if role is not None:
+                recorded = _derived_label(*pair, occupied, cache)
+                if pair not in emitted:
+                    emitted.add(pair)
+                    derived.append(role.model_copy(deep=True, update={"as_": recorded, "name": final_agent}))
+        elif worker is not None:
+            recorded = node.subagent
+        nodes.append(node.model_copy(update={"subagent": recorded, "instance": final_instance}))
+    if nodes == submitted.nodes:
+        return submitted, harness
+    rewritten = submitted.model_copy(update={"nodes": nodes})
+    if not derived or harness is None:
+        return rewritten, harness
+    extended = harness.model_copy(deep=True)
+    return rewritten, extended.model_copy(update={"delegate": [*extended.delegate, *derived]})
 
 
 class RunRecordStore:
@@ -132,5 +282,6 @@ __all__ = [
     "capture_scope",
     "current_capture",
     "record_completed_dag",
+    "rewrite_completed_dag",
     "workflow_capture_requested",
 ]

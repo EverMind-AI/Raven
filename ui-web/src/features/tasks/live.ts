@@ -93,6 +93,12 @@ const blankNode = (id: string): TaskNode => ({
   tool_call_count: null, has_output: null, prompt_template: null, files: [],
 })
 
+/* A node's attempt history, as a frame or a manifest row carries it. Absent and
+   malformed are the same answer: a half-valid list would silently drop or
+   misplace an attempt, so the node keeps whatever history it already had. */
+const attemptsOf = (v: unknown): string[] | undefined =>
+  Array.isArray(v) && v.every((a) => typeof a === 'string' && a) ? [...v] : undefined
+
 /* How a branch came out, as a frame or a row says it: `reason` for a node a
    branch left out, `selected_routes` and `route_evidence` for a decision. Copied
    field by field and only the fields present -- a key the source never had is
@@ -172,15 +178,32 @@ export function applyNodeUpdated(rows: readonly TaskRow[], p: NodeUpdatedPayload
   if (at < 0) return { rows: [...rows] }
   const next = rows.map((row) => {
     if (row.kind !== 'dag' || row.id !== p.run_id) return row
-    const nodes = row.nodes.map((n) => (n.node_id === p.node
-      ? {
+    const nodes = row.nodes.map((n) => {
+      if (n.node_id !== p.node) return n
+      const held = n.attempt_agents
+      const history = attemptsOf(p.attempt_agents)
+      /* A frame that cannot claim a newer attempt than the node holds is from
+         the attempt it has moved past -- the frames of the agent that gave up
+         can still be in flight when the next one starts -- so it moves nothing. */
+      if (held !== undefined && (history === undefined || history.length < held.length)) return n
+      /* A longer history is a later attempt, and it supersedes what the node says
+         however that attempt ended: identity, status and timing move together. */
+      const newer = history !== undefined && (held === undefined || history.length > held.length)
+      return {
         ...n,
         status: p.status,
-        started_at: p.started_at ?? n.started_at,
-        ended_at: p.ended_at ?? n.ended_at,
+        started_at: newer ? (p.started_at ?? null) : (p.started_at ?? n.started_at),
+        ended_at: newer ? (p.ended_at ?? null) : (p.ended_at ?? n.ended_at),
+        ...(p.subagent !== undefined ? { agent: p.subagent } : {}),
+        /* Presence, not value: a present null clears the handle a stateless
+           retry left behind, while an absent key says this frame does not
+           speak for it. */
+        ...(Object.hasOwn(p, 'instance') ? { instance: p.instance ?? null } : {}),
+        ...(p.instance_auto !== undefined ? { instance_auto: p.instance_auto } : {}),
+        ...(history !== undefined ? { attempt_agents: history } : {}),
         ...outcomeOf(p),
       }
-      : n))
+    })
     return { ...row, nodes, counts: countsOf(nodes), status: deriveStatus(nodes) }
   })
   return { rows: next, refetch: NODE_SETTLED.has(p.status) ? { kind: 'dag', id: p.run_id } : undefined }
@@ -200,7 +223,26 @@ export function applyRunCompleted(rows: readonly TaskRow[], p: RunCompletedPaylo
   const nodes = files.length
     ? row.nodes.map((n) => {
       const f = files.find((x) => x.node === n.node_id)
-      return f ? { ...n, status: f.status, error: f.error ?? n.error, ...outcomeOf(f) } : n
+      if (!f) return n
+      const held = n.attempt_agents
+      const history = attemptsOf(f.attempt_agents)
+      /* The manifest of an attempt the node has moved past says what that
+         attempt ended as, not what the node is doing now. */
+      if (held !== undefined && (history === undefined || history.length < held.length)) return n
+      const newer = history !== undefined && (held === undefined || history.length > held.length)
+      return {
+        ...n,
+        status: f.status,
+        /* The frame carries no node timings, so a newer attempt it names keeps
+           none rather than the previous attempt's. */
+        ...(newer ? { started_at: null, ended_at: null } : {}),
+        ...(f.subagent !== undefined ? { agent: f.subagent } : {}),
+        ...(Object.hasOwn(f, 'instance') ? { instance: f.instance ?? null } : {}),
+        ...(f.instance_auto !== undefined ? { instance_auto: f.instance_auto } : {}),
+        ...(history !== undefined ? { attempt_agents: history } : {}),
+        error: f.error ?? n.error,
+        ...outcomeOf(f),
+      }
     })
     : row.nodes
   const next: TaskRow = {

@@ -74,6 +74,16 @@ def _present(source: dict, keys: tuple[str, ...]) -> dict:
     return {key: source[key] for key in keys if source.get(key) is not None}
 
 
+def _present_exact(source: dict, keys: tuple[str, ...]) -> dict:
+    """The given keys the source set at all, null included.
+
+    For the fields whose presence is the message: a reassigned node's
+    ``instance`` is null when its current attempt keeps no session, and dropping
+    that for looking empty would leave a client showing a handle the node left.
+    """
+    return {key: source[key] for key in keys if key in source}
+
+
 def _dag_payload(name: str, payload: dict) -> dict:
     """One progress event's wire payload."""
     common = {"run_id": payload.get("run_id"), **_present(payload, ("tool_call_id",))}
@@ -98,6 +108,10 @@ def _dag_payload(name: str, payload: dict) -> dict:
             "node": payload.get("node"),
             "status": payload.get("status"),
             **_present(payload, ("started_at", "ended_at", "reason", "selected_routes", "route_evidence")),
+            # Who runs the node now, and every agent that tried it. The runner
+            # sets these only once the node has been reassigned, so no frame of
+            # an ordinary run grows a key.
+            **_present_exact(payload, ("subagent", "instance", "instance_auto", "attempt_agents")),
         }
     if name == "dag_run_replanned":
         return {
@@ -126,6 +140,14 @@ def _dag_payload(name: str, payload: dict) -> dict:
             "node": entry.get("node"),
             "status": entry.get("status"),
             **_present(entry, ("output_file", "error", "reason", "selected_routes", "route_evidence")),
+            # The runner stamps the agent, handle and flag on every file; only a
+            # node it reassigned has more to say than its own start frame did,
+            # and only that one is allowed to grow the payload.
+            **(
+                _present_exact(entry, ("subagent", "instance", "instance_auto", "attempt_agents"))
+                if "attempt_agents" in entry
+                else {}
+            ),
         }
         for entry in manifest.get("files") or []
     ]

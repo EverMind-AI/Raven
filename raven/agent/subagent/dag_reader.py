@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from typing import Any
 
 from raven.agent.subagent.dag_store import memory_path_in, output_path_in, prompt_path_in, tally_node_statuses
@@ -194,6 +195,43 @@ def registry_outcome(row: dict) -> dict:
     return {ours: row[theirs] for theirs, ours in spelled.items() if row.get(theirs) is not None}
 
 
+def _validated_agents(value: Any) -> list[str] | None:
+    """``value`` as a list of agent names, or ``None`` when it is not one.
+
+    Deliberately strict about every element: a history is read back to show who
+    ran a node, and a half-valid list would silently drop or misplace an attempt.
+    """
+    if not isinstance(value, list):
+        return None
+    if not all(isinstance(agent, str) and agent for agent in value):
+        return None
+    return list(value)
+
+
+def attempt_fields(manifest: Mapping[str, Any], registry_row: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """The attempt history of a node that moved, in the manifest entry's spelling.
+
+    Only a node that has been reassigned carries one, so a run without a move
+    gets no key here -- not an empty list on every node. The manifest is
+    authoritative once it exists; until then the node's registry row is the
+    durable record (``attemptAgents``), which is what a live reload reads.
+
+    Effective agent and instance selection is deliberately *not* derived here:
+    each overlay reads the field it needs off the record it already holds, so
+    two readers cannot come to disagree about which attempt is current.
+
+    Args:
+        manifest (`dict`):
+            The node's manifest entry, or ``{}`` for a run that has not finalized.
+        registry_row (`dict` | None):
+            The node's ``dag-node`` registry row, when the caller has one.
+    """
+    agents = _validated_agents(manifest.get("attempt_agents"))
+    if agents is None and registry_row is not None:
+        agents = _validated_agents(registry_row.get("attemptAgents"))
+    return {"attempt_agents": agents} if agents is not None else {}
+
+
 async def read_run(backend: Any, root: str, run_id: str, nodes_root: str) -> dict:
     """Rebuild one run's manifest-shaped payload from its run dir.
 
@@ -243,6 +281,7 @@ async def read_run(backend: Any, root: str, run_id: str, nodes_root: str) -> dic
         prompt_file, output_file = await _artifact_paths(backend, entry, nodes_root, nid)
         mem_path = await _existing_path(backend, memory_path_in(backend, _artifact_root(entry, nodes_root), nid))
         agent = entry.get("subagent") or node.get("subagent") or entry.get("agent") or node.get("agent")
+        attempt = attempt_fields(entry)
         files.append(
             {
                 "node": nid,
@@ -268,6 +307,11 @@ async def read_run(backend: Any, root: str, run_id: str, nodes_root: str) -> dic
                 # about where k came from. Only from graph.json -- the manifest
                 # records what happened, not what was requested.
                 "inputs": node.get("inputs") if isinstance(node.get("inputs"), dict) else None,
+                # A node that moved carries the agents that tried it, and the
+                # auto flag its last attempt ended on. Absent for every other node:
+                # an empty history would claim a reassignment that never happened.
+                **attempt,
+                **({"instance_auto": bool(entry.get("instance_auto"))} if attempt else {}),
                 **branch_fields(entry, node),
             }
         )
@@ -390,4 +434,12 @@ async def _read_transcript(backend: Any, path: str) -> list[dict]:
     return entries
 
 
-__all__ = ["DagReadError", "branch_fields", "read_node", "read_run", "registry_outcome", "run_dir_of"]
+__all__ = [
+    "DagReadError",
+    "attempt_fields",
+    "branch_fields",
+    "read_node",
+    "read_run",
+    "registry_outcome",
+    "run_dir_of",
+]

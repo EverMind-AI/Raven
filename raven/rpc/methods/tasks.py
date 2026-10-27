@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from raven.agent.subagent import activity as run_activity
 from raven.agent.subagent.activity import merge_file_change
-from raven.agent.subagent.dag_reader import branch_fields, registry_outcome
+from raven.agent.subagent.dag_reader import attempt_fields, branch_fields, registry_outcome
 from raven.agent.subagent.dag_store import REGISTRY_FILENAME, RUNNING, UNRECORDED, node_live_key
 from raven.agent.subagent.history import dag_root, nodes_root, session_history_root, spawn_live_key
 from raven.agent.subagent.instances import get_registry
@@ -398,12 +398,27 @@ def _dag_row(
             # neither of which is a clock this node ever had.
             started = ended = None
         call_count = _tool_call_count(account)
-        agent = (entry or {}).get("subagent") or gnode.get("subagent") or ""
+        row = by_node.get(nid)
+        reassigned = isinstance(row, dict) and "attemptAgents" in row
+        # Until the manifest lands, the registry row is the only durable record
+        # of which agent is running this node: graph.json names the one that
+        # gave up. A finalized manifest already carries the last attempt's.
+        if entry is None and reassigned:
+            agent = row.get("agent") or ""
+        else:
+            agent = (entry or {}).get("subagent") or gnode.get("subagent") or ""
+        if entry is not None and "instance" in entry:
+            instance = entry.get("instance")
+        elif reassigned:
+            instance = row.get("nodeInstance")
+        else:
+            instance = gnode.get("instance")
+        attempt = attempt_fields(entry or {}, row if isinstance(row, dict) else None)
         node: dict[str, Any] = {
             "node_id": nid,
             "node_summary": gnode.get("node_summary") or None,
             "agent": canonical_agent_name(agent) if isinstance(agent, str) else agent,
-            "instance": (entry.get("instance") if entry is not None and "instance" in entry else gnode.get("instance")),
+            "instance": instance,
             "status": status,
             "depends_on": list(gnode.get("depends_on") or []),
             "started_at": started,
@@ -425,6 +440,16 @@ def _dag_row(
         # The reader `dag.get` answers from, so the two reads cannot name a branch differently.
         # Until the manifest names the node, what a branch decided is on its registry row.
         node.update(branch_fields(entry if entry is not None else registry_outcome(by_node.get(nid) or {}), gnode))
+        node.update(attempt)
+        if attempt:
+            # Only a node that moved reports the auto flag: every node's is in the
+            # manifest, and returning it for a plain run would change what every
+            # existing client sees for a run that never reassigned anything.
+            node["instance_auto"] = bool(
+                entry["instance_auto"]
+                if entry is not None and "instance_auto" in entry
+                else (row or {}).get("nodeInstanceAuto")
+            )
         _overlay_live(node, run_activity.live(live_key))
         nodes.append(node)
         statuses.append(status)

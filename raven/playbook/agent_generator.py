@@ -715,7 +715,7 @@ def build_table(spec: AgentPlaybookSpec, briefs: dict[str, str]) -> DelegateTabl
             charter=charter,
             payload=build_payload(brief, pb),
         )
-    return DelegateTable(workers=workers)
+    return DelegateTable(workers=workers, harness=spec.model_copy(deep=True))
 
 
 def build_coordinator_charter(spec: AgentPlaybookSpec) -> "Charter | None":

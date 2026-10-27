@@ -394,8 +394,13 @@ export const applyDagEvent = (event: DagEvent): void => {
       })
     }
   } else if (event.type === 'dag.node_updated') {
-    const { ended_at, node, run_id, status } = event.payload
+    const { ended_at, instance, node, run_id, status, subagent } = event.payload
     rows = upsert(rows, {
+      // Once the node has been reassigned, the frame names the agent and handle
+      // running it now. A present null handle is a clear -- the new attempt is
+      // stateless -- while an absent key means this frame does not speak for it.
+      ...(subagent ? { agent: subagent } : {}),
+      ...(Object.hasOwn(event.payload, 'instance') ? { instance: instance ?? undefined } : {}),
       endedAtMs: ended_at ?? undefined,
       id: `${run_id}/${node}`,
       kind: 'dag-node',
@@ -599,7 +604,7 @@ export const reconcileFromList = (items: SubagentCall[]): void => {
       callId: isDag ? undefined : item.id,
       endedAtMs: isoToMs(item.ended_at),
       id: item.id,
-      instance: item.instance,
+      instance: item.instance ?? undefined,
       kind: isDag ? 'dag-node' : 'spawn',
       label: item.label,
       nodeId: isDag ? item.node : undefined,

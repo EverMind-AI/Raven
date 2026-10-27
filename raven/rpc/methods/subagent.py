@@ -46,6 +46,7 @@ from loguru import logger
 
 from raven.agent.subagent import activity as run_activity
 from raven.agent.subagent.dag_live import live_run_ids
+from raven.agent.subagent.dag_reader import attempt_fields
 from raven.agent.subagent.dag_store import REGISTRY_FILENAME
 from raven.agent.subagent.history import dag_root, nodes_root, session_history_root, spawn_live_key
 from raven.agent.subagent.instances import get_registry
@@ -312,6 +313,7 @@ def _dag_rows(root: Path, session_id: str, live_runs: set[str]) -> list[dict[str
             nid = node["id"]
             entry = manifest.get(nid) if isinstance(manifest.get(nid), dict) else {}
             status = str(entry.get("status") or "pending")
+            reg = None
             if not finalized:
                 reg = by_run_node.get((run.name, nid))
                 if reg is not None:
@@ -335,27 +337,40 @@ def _dag_rows(root: Path, session_id: str, live_runs: set[str]) -> list[dict[str
             if status in ("skipped", "not_executed"):
                 continue
             tools = entry.get("tool_calls")
-            agent = entry.get("subagent") or node.get("subagent")
-            rows.append(
-                {
-                    # Not addressable by `id` alone -- a node id is unique inside
-                    # its run and nowhere else -- so the pair travels and the id
-                    # is only ever a label for the row.
-                    "id": f"{run.name}/{nid}",
-                    "kind": "dag",
-                    "run_id": run.name,
-                    "node": nid,
-                    "label": str(node.get("node_summary") or "") or nid,
-                    "status": _DAG_WIRE_STATUS.get(status, "run"),
-                    "agent": canonical_agent_name(agent) if isinstance(agent, str) else agent,
-                    "instance": entry.get("instance", node.get("instance")),
-                    "started_at": _iso(entry.get("started_at")),
-                    "ended_at": _iso(entry.get("ended_at")),
-                    "message_count": 2 if entry.get("output_file") else 1,
-                    "tokens": _tokens(entry),
-                    "tool_call_count": len(tools) if isinstance(tools, list) else None,
-                }
-            )
+            attempt = attempt_fields(entry, reg)
+            if attempt and reg is not None:
+                # The graph names the agent the node was submitted on; the
+                # registry row that ran it last is the durable record, and the
+                # row's own handle is synthetic, so the instance rides beside it.
+                agent = reg.get("agent")
+                instance = reg.get("nodeInstance")
+            else:
+                agent = entry.get("subagent") or node.get("subagent")
+                instance = entry.get("instance", node.get("instance"))
+            row: dict[str, Any] = {
+                # Not addressable by `id` alone -- a node id is unique inside
+                # its run and nowhere else -- so the pair travels and the id
+                # is only ever a label for the row.
+                "id": f"{run.name}/{nid}",
+                "kind": "dag",
+                "run_id": run.name,
+                "node": nid,
+                "label": str(node.get("node_summary") or "") or nid,
+                "status": _DAG_WIRE_STATUS.get(status, "run"),
+                "agent": canonical_agent_name(agent) if isinstance(agent, str) else agent,
+                "instance": instance,
+                "started_at": _iso(entry.get("started_at")),
+                "ended_at": _iso(entry.get("ended_at")),
+                "message_count": 2 if entry.get("output_file") else 1,
+                "tokens": _tokens(entry),
+                "tool_call_count": len(tools) if isinstance(tools, list) else None,
+                **attempt,
+            }
+            if attempt:
+                row["instance_auto"] = bool(
+                    entry["instance_auto"] if "instance_auto" in entry else (reg or {}).get("nodeInstanceAuto")
+                )
+            rows.append(row)
     return rows
 
 

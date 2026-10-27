@@ -21,7 +21,7 @@ import { show as showPage } from '../../state/page'
 import { show as toast } from '../../state/toast'
 import { Board } from '../dag/Board'
 import { DagGraph } from '../dag/DagGraph'
-import { layout } from '../dag/graph'
+import { formatAttemptAgents, layout } from '../dag/graph'
 import * as desk from '../desk/store'
 import { hasDiffBody } from '../workspace/store'
 import * as workspace from '../workspace/store'
@@ -970,16 +970,18 @@ function BranchFact({ label, children }: { label: string; children: ReactNode })
   )
 }
 
-/* What a node's detail says about its branch: why it was left out, the guard it
-   carries, and the judge's evidence for what it selected -- in full, the wire
-   having capped it already. Above whichever tab is open, so neither tab hides it.
-   A node with none of these draws nothing here, so a run that never branches
-   shows no branch facts at all. */
+/* What a node's detail says about its branch and its history: why it was left
+   out, the guard it carries, the judge's evidence for what it selected -- in
+   full, the wire having capped it already -- and, once it has been reassigned,
+   the agents that tried it in order. Above whichever tab is open, so neither tab
+   hides it. A node with none of these draws nothing here, so a run that never
+   branches and never moves a node shows no branch facts at all. */
 function BranchFacts({ node }: { node: TaskNode }): JSX.Element | null {
   const reason = node.status === 'not_executed' && node.reason && Object.hasOwn(REASON_KEY, node.reason)
     ? REASON_KEY[node.reason]
     : undefined
-  if (!reason && !node.when && !node.route_evidence) return null
+  const attempts = node.attempt_agents?.length ? formatAttemptAgents(node.attempt_agents) : ''
+  if (!reason && !node.when && !node.route_evidence && !attempts) return null
   return (
     <div className="tkbranch">
       {reason ? <BranchFact label={t('gui.tasks.node_reason')}>{t(reason)}</BranchFact> : null}
@@ -997,6 +999,7 @@ function BranchFacts({ node }: { node: TaskNode }): JSX.Element | null {
           </BranchFact>
         )
         : null}
+      {attempts ? <BranchFact label={t('gui.tasks.node_attempts')}>{attempts}</BranchFact> : null}
     </div>
   )
 }

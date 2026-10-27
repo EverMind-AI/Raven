@@ -584,3 +584,52 @@ describe('a node a branch left out', () => {
     }
   })
 })
+
+// The strip and the overlay name the agent a node is on, which moves when the
+// node is handed to another agent. A frame carries it only once it has.
+describe('a dag row whose node was reassigned', () => {
+  const rowFor = (id: string) => $liveAgents.get().find(r => r.id === id)
+  const update = (over: Record<string, unknown> = {}): DagNodeUpdatedEvent => ({
+    type: 'dag.node_updated',
+    payload: { run_id: 'run-1', node: 'write', status: 'running', ...over }
+  })
+
+  beforeEach(() => {
+    applyDagEvent(dagStarted())
+  })
+
+  it('moves the agent and the handle with the frame that carries them', () => {
+    applyDagEvent(
+      update({ subagent: 'claude', instance: 'write-minted', attempt_agents: ['research-raven', 'claude'] })
+    )
+
+    expect(rowFor('run-1/write')).toMatchObject({ agent: 'claude', instance: 'write-minted' })
+  })
+
+  it('keeps what an earlier frame said when this one names neither', () => {
+    applyDagEvent(update({ subagent: 'claude', instance: 'write-minted' }))
+    applyDagEvent(update({ status: 'completed' }))
+
+    expect(rowFor('run-1/write')).toMatchObject({ agent: 'claude', instance: 'write-minted', status: 'completed' })
+  })
+
+  it('clears the handle on a stateless retry', () => {
+    applyDagEvent(update({ subagent: 'claude', instance: 'write-minted' }))
+    applyDagEvent(update({ instance: null, subagent: 'codex' }))
+
+    expect(rowFor('run-1/write')?.instance).toBeUndefined()
+    expect(rowFor('run-1/write')?.agent).toBe('codex')
+  })
+
+  it('leaves a run that never reassigned its rows exactly as they were', () => {
+    applyDagEvent(update({ status: 'completed' }))
+
+    expect(rowFor('run-1/write')).toMatchObject({
+      agent: 'content-raven',
+      id: 'run-1/write',
+      kind: 'dag-node',
+      status: 'completed'
+    })
+    expect(rowFor('run-1/write')?.instance).toBeUndefined()
+  })
+})

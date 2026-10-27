@@ -600,6 +600,289 @@ def test_schema_match_the_frames_a_run_that_branches_emits(schema: dict[str, Any
         TypeAdapter(TurnEvent).validate_python(event)
 
 
+def test_schema_match_the_frames_a_reassigned_node_emits(schema: dict[str, Any]) -> None:
+    """A node handed to another agent reports the attempt that runs it now: which
+    agent, on which handle, whether that handle was minted, and every agent that
+    tried the node. Built through ``_dag_payload`` from the dicts the runner
+    emits, so a field the runner sends and the sink forgets to carry fails here.
+
+    ``instance: null`` is a value, not an omission: a stateless retry clears the
+    handle the node was carrying, and a sink that dropped it for looking empty
+    would leave a client showing a session the node is no longer on.
+    """
+    import jsonschema
+    from pydantic import TypeAdapter
+
+    from raven.rpc.models import TurnEvent
+    from raven.rpc.spine import _DAG_WIRE_EVENT, _dag_payload
+
+    frames = [
+        (
+            "dag_node_updated",
+            {
+                "run_id": "r1",
+                "node": "fix",
+                "status": "running",
+                "started_at": 10,
+                "subagent": "beta",
+                "instance": "fix-minted",
+                "instance_auto": True,
+                "attempt_agents": ["alpha", "beta"],
+            },
+        ),
+        (
+            "dag_node_updated",
+            {
+                "run_id": "r1",
+                "node": "fix",
+                "status": "running",
+                "started_at": 20,
+                "subagent": "gamma",
+                "instance": None,
+                "instance_auto": False,
+                "attempt_agents": ["alpha", "beta", "gamma"],
+            },
+        ),
+        (
+            "dag_run_completed",
+            {
+                "run_id": "r1",
+                "manifest": {
+                    "dir": "/w/r1",
+                    "summary": {"total": 1, "completed": 1},
+                    "files": [
+                        {
+                            "node": "fix",
+                            "status": "completed",
+                            "subagent": "gamma",
+                            "instance": None,
+                            "instance_auto": False,
+                            "attempt_agents": ["alpha", "beta", "gamma"],
+                        }
+                    ],
+                },
+            },
+        ),
+    ]
+    mapping = schema["components"]["schemas"]["TurnEvent"]["discriminator"]["mapping"]
+    for name, payload in frames:
+        event = {"type": _DAG_WIRE_EVENT[name], "payload": _dag_payload(name, payload)}
+        variant = {**_resolve_ref(mapping[event["type"]], schema), "components": schema["components"]}
+        jsonschema.validate(event, variant)
+        TypeAdapter(TurnEvent).validate_python(event)
+
+    wire_moved = _dag_payload("dag_node_updated", frames[0][1])
+    assert wire_moved["subagent"] == "beta"
+    assert wire_moved["instance"] == "fix-minted"
+    assert wire_moved["instance_auto"] is True
+    assert wire_moved["attempt_agents"] == ["alpha", "beta"]
+    wire_stateless = _dag_payload("dag_node_updated", frames[1][1])
+    assert "instance" in wire_stateless and wire_stateless["instance"] is None
+    assert wire_stateless["attempt_agents"] == ["alpha", "beta", "gamma"]
+    wire_completed = _dag_payload("dag_run_completed", frames[2][1])
+    assert wire_completed["files"][0]["attempt_agents"] == ["alpha", "beta", "gamma"]
+
+
+def test_schema_match_a_plain_frame_keeps_the_keys_it_had() -> None:
+    """A run that never reassigns a node must reach the wire exactly as before.
+
+    The runner stamps ``subagent``, ``instance`` and ``instance_auto`` on every
+    completed file, and carries them on every update only once the node has
+    moved. A sink that forwarded them unconditionally would add a null handle
+    and a false flag to every node of every run.
+    """
+    from raven.rpc.spine import _dag_payload
+
+    updated = _dag_payload("dag_node_updated", {"run_id": "r1", "node": "a", "status": "running", "started_at": 1})
+    assert updated == {"run_id": "r1", "node": "a", "status": "running", "started_at": 1}
+
+    completed = _dag_payload(
+        "dag_run_completed",
+        {
+            "run_id": "r1",
+            "manifest": {
+                "dir": "/w/r1",
+                "summary": {"total": 1},
+                "files": [
+                    {"node": "a", "status": "completed", "subagent": "alpha", "instance": None, "instance_auto": False}
+                ],
+            },
+        },
+    )
+    assert completed["files"] == [{"node": "a", "status": "completed"}]
+
+
+def test_schema_match_a_reassigned_node_reads_back_through_every_reader_model(schema: dict[str, Any]) -> None:
+    """The readers that report an attempt history answer with keys the published
+    models must accept, or a validating client loses the whole response.
+
+    One node's record, read three ways: ``dag.get``'s snapshot node, the task
+    board's node and the instance registry row it is collapsed from.
+    """
+    import jsonschema
+
+    from raven.rpc.models import DagSnapshotNode, InstanceRow, SubagentCall, TaskNode
+
+    components = schema["components"]
+    history = ["alpha", "alpha", "beta"]
+    cases = [
+        (
+            DagSnapshotNode,
+            "DagSnapshotNode",
+            {
+                "node": "fix",
+                "status": "running",
+                "subagent": "beta",
+                "instance": "fix-minted",
+                "instance_auto": True,
+                "attempt_agents": history,
+            },
+        ),
+        (
+            TaskNode,
+            "TaskNode",
+            {
+                "node_id": "fix",
+                "agent": "beta",
+                "instance": "fix-minted",
+                "instance_auto": True,
+                "status": "running",
+                "depends_on": [],
+                "files": [],
+                "attempt_agents": history,
+            },
+        ),
+        (
+            InstanceRow,
+            "InstanceRow",
+            {
+                "sessionKey": "s1",
+                "agent": "beta",
+                "handle": "fix",
+                "kind": "dag-node",
+                "nodeInstance": None,
+                "nodeInstanceAuto": False,
+                "attemptAgents": history,
+            },
+        ),
+        (
+            SubagentCall,
+            "SubagentCall",
+            {
+                "id": "r1/fix",
+                "kind": "dag",
+                "label": "fix",
+                "status": "run",
+                "message_count": 2,
+                "agent": "beta",
+                "instance": "fix-minted",
+                "instance_auto": True,
+                "attempt_agents": history,
+            },
+        ),
+    ]
+    for model, published, data in cases:
+        dumped = model.model_validate(data).model_dump(exclude_unset=True, by_alias=True)
+        jsonschema.validate(dumped, {**components["schemas"][published], "components": components})
+
+    # And the history is not an excuse to make the keys required: a plain
+    # record must still validate without any of them.
+    DagSnapshotNode.model_validate({"node": "a", "status": "pending"})
+    TaskNode.model_validate({"node_id": "a", "agent": "alpha", "status": "pending", "depends_on": [], "files": []})
+    InstanceRow.model_validate({"sessionKey": "s1", "agent": "alpha", "handle": "a", "kind": "dag-node"})
+
+
+async def test_schema_match_a_stateless_reassigned_node_reads_back_with_a_null_handle(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    """A moved node whose current attempt keeps no session is an ordinary state,
+    and the readers say so with ``instance: null``.
+
+    Both published components declared ``instance`` as a plain string, so a
+    validating client rejected the whole answer -- not the null, the response.
+    Validated from what the readers really answer: ``dag.get``'s snapshot node
+    off its run dir, and ``subagent.list``'s row as the node registry reports it.
+    """
+    import json
+
+    import jsonschema
+
+    from raven.agent.subagent.dag_reader import read_run
+    from raven.agent.subagent.prompt_backend import LocalFileBackend
+    from raven.rpc.models import SubagentCall
+
+    components = schema["components"]
+    run_id = "20260812T120000Z-deadbeef"
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    (run_dir / "graph.json").write_text(
+        json.dumps(
+            {
+                "task_summary": "moved",
+                "nodes": [
+                    {
+                        "id": "fix",
+                        "subagent": "alpha",
+                        "node_summary": "repair the tokenizer",
+                        "prompt_template": "Fix {{ inputs.k }}",
+                        "inputs": {"k": "the parser"},
+                        "depends_on": [],
+                    }
+                ],
+            }
+        )
+    )
+    # Every other field the reader reports has a value, so the stateless handle
+    # is the only thing a validating client could object to.
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "fix": {
+                    "status": "failed",
+                    "subagent": "beta",
+                    "instance": None,
+                    "instance_auto": False,
+                    "attempt_agents": ["alpha", "beta"],
+                    "started_at": 1000,
+                    "ended_at": 2000,
+                    "prompt_file": "/w/fix.prompt.md",
+                    "output_file": "/w/fix.out.md",
+                    "error": "beta could not parse it",
+                }
+            }
+        )
+    )
+
+    run = await read_run(LocalFileBackend(), str(tmp_path), run_id, str(tmp_path / "nodes"))
+    snapshot_node = run["files"][0]
+    assert snapshot_node["instance"] is None
+    # The reader answers two keys these models have never declared -- the run's
+    # ``nodes_root`` and a file's ``memory_file`` -- which is an older gap of its
+    # own. What the contract does declare is validated as a client reads it.
+    published = components["schemas"]["DagSnapshotNode"]
+    jsonschema.validate(
+        {key: value for key, value in snapshot_node.items() if key in published["properties"]},
+        {**published, "components": components},
+    )
+
+    # The row `subagent.list` reports for that same node, with the stateless
+    # handle its registry row carries.
+    call = SubagentCall.model_validate(
+        {
+            "id": f"{run_id}/fix",
+            "kind": "dag",
+            "label": "fix",
+            "status": "run",
+            "message_count": 1,
+            "agent": "beta",
+            "instance": None,
+            "instance_auto": False,
+            "attempt_agents": ["alpha", "beta"],
+        }
+    ).model_dump(exclude_unset=True)
+    jsonschema.validate(call, {**components["schemas"]["SubagentCall"], "components": components})
+
+
 def _where_shapes_part(oas: Any, pyd: Any, path: str = "") -> list[str]:
     """Every place two normalised shapes disagree, as paths a reader can go to."""
     if not (isinstance(oas, dict) and isinstance(pyd, dict)):
