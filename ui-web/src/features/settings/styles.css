@@ -286,6 +286,12 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
 }
 .settings-crumb {display:flex; align-items:center; gap:9px; padding:0 0 14px; flex-wrap:wrap}
 .settings-crumb .settings-nm {font-family:var(--disp); font-weight:600; font-size:16px}
+/* The skills page's search box shares the crumb row with its add button: the
+   box takes the width, and drops the bottom margin it carries standing alone. */
+.settings-crumb .settings-srch {flex:1; min-width:0; margin-bottom:0}
+/* The plugins page's note under its add button: the row's whole width, so it
+   reads as a line under the controls rather than as a fourth item among them. */
+.settings-addhint {flex-basis:100%; font-size:13px; line-height:1.55; color:var(--faint)}
 .settings-row .settings-sub2 {font-size:12px; color:var(--faint); margin-left:6px}
 .settings-pgrp2 {font-family:var(--disp); font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--faint);
   font-weight:600; padding:12px 15px 5px; background:var(--surface-2)}

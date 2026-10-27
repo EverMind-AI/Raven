@@ -542,30 +542,38 @@ async def session_create(
     }
 
 
-def _default_effort(agent_loop: object, config: Any, session_key: str | None) -> str | None:
-    """What a session runs at with no pick of its own.
-
-    Its mode's effort where the catalogue sets one (``raven-code`` does), else
-    ``agents.defaults.reasoningEffort``, else None: the provider's own default,
-    which is what an unset key means. Read fresh rather than off the loop, the
-    way ``default_reasoning_effort`` reads the file, so a settings edit shows
-    here without a restart.
-    """
+def _mode_effort(agent_loop: object, session_key: str | None) -> str | None:
+    """The session's mode's own effort, where the catalogue sets one (``raven-code`` does)."""
     policy = getattr(agent_loop, "session_policy", None)
     held = policy(session_key or "") if callable(policy) and session_key else None
     mode_effort = getattr(held, "reasoning_effort", None)
-    if isinstance(mode_effort, str) and mode_effort:
-        return mode_effort
+    return mode_effort if isinstance(mode_effort, str) and mode_effort else None
+
+
+def _configured_effort(config: Any) -> str | None:
+    """``agents.defaults.reasoningEffort`` as the file has it now, or None for an unset key.
+
+    Read fresh rather than off the loop, the way ``default_reasoning_effort``
+    reads the file, so a settings edit shows here without a restart.
+    """
     configured = getattr(getattr(getattr(config, "agents", None), "defaults", None), "reasoning_effort", None)
     return configured if isinstance(configured, str) and configured else None
 
 
+def _default_effort(agent_loop: object, config: Any, session_key: str | None) -> str | None:
+    """What a session runs at with no pick of its own: the one rule, with no pick.
+
+    ``session_effort.in_force`` ranks it, the same rule the turn runs at, so
+    what this reports and what the next turn sends cannot drift apart: None is
+    the provider's own default on both sides.
+    """
+    return session_effort.in_force(None, _mode_effort(agent_loop, session_key), _configured_effort(config))
+
+
 def _effort_in_force(agent_loop: object, config: Any, session_key: str | None) -> str | None:
-    """The effort this session's own calls run at: its pick, else the default."""
-    if not session_key:
-        return _default_effort(agent_loop, config, None)
-    picked = session_effort.read(manager_for(agent_loop, config), session_key)
-    return picked or _default_effort(agent_loop, config, session_key)
+    """The effort this session's own calls run at: its pick over the default, by the one rule."""
+    picked = session_effort.read(manager_for(agent_loop, config), session_key) if session_key else None
+    return session_effort.in_force(picked, _mode_effort(agent_loop, session_key), _configured_effort(config))
 
 
 def _read_knowledge(agent_loop: object, config: object, session_key: str | None) -> tuple[str, ...]:

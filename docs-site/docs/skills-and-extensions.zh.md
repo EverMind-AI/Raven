@@ -55,6 +55,9 @@ Bundle 下载有独立的同意设置：
 应使用 blocklist。执行前检查脚本；目录安全分数不是安全保证，当前策略也不会仅因缺少
 分数就直接拒绝。成功安装记录在 `<workspace>/skills/hub/installs.jsonl`。
 
+网页端设置弹窗的「技能」页只负责开关；页上的「新增」会把你带到对话里，并替你写好半句
+请求——技能是让 Raven 在对话里安装的，受上面的同意设置约束。
+
 ## 记忆与学习边界 { #memory-and-learning-boundaries }
 
 EverOS 是默认记忆后端插件，与 Raven core 独立发行，通过 Memory Engine 召回用户
@@ -146,6 +149,10 @@ slow path 可消耗有限模型调用生成计划，无有效计划时使用确�
 能力已由服务接口提供时使用 MCP。配置服务、核对工具列表与认证，再先测试只读操作，
 最后才允许修改。`raven plugin auth <server>` 处理已配置 MCP 的 OAuth，不是任意
 插件安装器。
+
+网页端设置弹窗的「插件」页负责开关、重试和授权已配置的服务；页上的「新增」会把你带到
+对话里，由 Raven 从 PlugHub 目录接入服务；目录里没有的服务，要手改 `config.json` 的
+`tools.mcpServers`。
 
 需要进程内工具、hook、服务或记忆后端时使用 Raven plugin。声明式
 `raven-plugin.toml` 列出贡献，代码运行于宿主信任域内。`raven plugins` 列出已安装
