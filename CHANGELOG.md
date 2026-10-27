@@ -28,7 +28,10 @@ All notable changes to Raven are documented here.
   New RPC `session.set_effort` (report, set or clear; every answer names what
   the default is on this install and the words), and `session.info` carries
   `reasoning_effort` for the status bar. The using-raven guide has a section on
-  it.
+  it. Clearing `agents.defaults.reasoningEffort` (*Provider default*) reaches a
+  running gateway's next turn as well: the turn sends the effort in force on
+  every call, the provider's own default included, instead of leaving a
+  cleared key to the copy the provider took at boot.
 
 - The settings dialog's **Skills** and **Plugins** pages have an **Add**
   button. Neither page can install anything -- a skill is fetched from Skill

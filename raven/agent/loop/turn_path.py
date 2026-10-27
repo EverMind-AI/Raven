@@ -780,8 +780,10 @@ class TurnPathMixin:
         # the turn's last word.
         synth_messages = messages + [{"role": "user", "content": prompt}]
         # The wrap-up is a model call of the same turn, so it pays the turn's
-        # effort; absent, the provider's configured default stands.
-        effort_kwargs: dict[str, Any] = {} if reasoning_effort is None else {"reasoning_effort": reasoning_effort}
+        # effort, sent the way the turn's other calls send it: None included,
+        # which is the provider's own default rather than the copy it took at
+        # boot (``gen_overrides`` in ``_run_agent_loop`` says why).
+        effort_kwargs: dict[str, Any] = {"reasoning_effort": reasoning_effort}
         # The wrap-up is asked for at the cliff edge, where the transcript is
         # longest, so it is sized to the room beside it like any other call.
         if reply_room := self._reply_room(synth_messages, None, model):
@@ -1135,13 +1137,15 @@ class TurnPathMixin:
         # Read once, here: a mode switched mid-turn lands on the next turn.
         policy = self.session_policy(session_key or "")
         iteration_cap = policy.max_iterations or self.max_iterations
-        # The effort this turn's own calls ask for, short of a hook's rollback
-        # override: the session's own pick over its mode's. Both are the
-        # session's and both land on the next turn; the pick wins because a
-        # person set it on this conversation, and the mode's is the
-        # catalogue's word for every conversation in that mode. None here
-        # leaves the configured default to ``gen_overrides``.
-        turn_effort = session_effort or policy.reasoning_effort
+        # The effort this turn's own calls run at, short of a hook's rollback
+        # override: the session's own pick over its mode's word over the
+        # configured default as the file has it now -- ``session_effort.in_force``,
+        # the one rule ``session.info`` reports from too. The pick wins because
+        # a person set it on this conversation, the mode's is the catalogue's
+        # word for every conversation in that mode, and all three land on the
+        # next turn. None is an answer, the provider's own default, and every
+        # call below sends it as one.
+        turn_effort = self.session_reasoning_effort(session_key, session_effort)
         # The other bound on this turn, and the only one a product supplies rather
         # than the loop: whatever a hook left under ``TURN_BUDGETS_KEY``. Read here
         # for the same reason the cap is, and defaulting to unbounded, so an agent
@@ -1470,13 +1474,14 @@ class TurnPathMixin:
             # the turn's default, and a gate re-sampling one call may still
             # move that one call.
             gen_overrides = {
-                # The configured default underneath, the session's effort over
-                # it (``turn_effort``: its own pick, else its mode's), a hook's
-                # rollback override on top. The default is here rather than
-                # left to the provider because the provider's copy is frozen
-                # at construction (see ``default_reasoning_effort``).
-                **({"reasoning_effort": self.default_reasoning_effort} if self.default_reasoning_effort else {}),
-                **({"reasoning_effort": turn_effort} if turn_effort else {}),
+                # The effort in force (``turn_effort``), a hook's rollback
+                # override on top. Always sent, None included: the provider's
+                # own copy of the key is frozen at construction (see
+                # ``default_reasoning_effort``), so a key left out of the call
+                # let a default cleared on a running gateway keep running at
+                # the word the gateway booted with. An explicit None is the
+                # provider's own default, nothing on the wire.
+                "reasoning_effort": turn_effort,
                 **(pending_gen_overrides or {}),
             }
             # Kept for an unchanged resend: it asks again with whatever rode this call.
