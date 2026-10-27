@@ -2596,6 +2596,19 @@ async def test_a_reply_that_is_only_a_thought_is_prefilled_whether_or_not_a_cut_
 
 
 @pytest.mark.asyncio
+@_THOUGHTS
+async def test_a_proactive_turn_shows_only_the_answer_a_thought_was_prefilled_into(workspace, monkeypatch, thought):
+    """A proactive turn holds its whole call, and what a cut held is dropped with the cut once the thought
+    is read as the uncut one: only the answer the prefill draws goes out, as when no cut split it."""
+    _served(monkeypatch, [*(make() for make in thought), _finished_stream("Report.")])
+
+    final, outcome, _last, streamed = await _ends_on(_litellm_agent(workspace), Origin.CRON)
+
+    assert final == "Report." and outcome.status == "completed"
+    assert "".join(streamed) == "Report."
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "script",
     [
