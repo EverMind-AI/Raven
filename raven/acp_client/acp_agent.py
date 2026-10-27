@@ -42,7 +42,6 @@ from raven.acp_client.acp_dialects import AcpDialect, ToolCall, agent_version, d
 from raven.acp_client.ask_user import AskUserResponder, clarify_responder
 from raven.acp_client.capabilities import (
     CapabilitySnapshot,
-    handshake_of,
     read_session_current_model,
     relearn_session_menus,
     steer_offered,
@@ -194,6 +193,11 @@ def _tokens_reported(result: Any) -> int | None:
 def _agent_version(connection: Any) -> str:
     """The build that answered the handshake on this connection.
 
+    Read straight off ``agentInfo.version`` rather than through the shared
+    handshake parser: that parser also casts ``protocolVersion`` to an int, so
+    an agent that spells it "1.0" makes the whole read raise and the version
+    disappear. Nothing else in the handshake is part of this fact.
+
     The live one, not a stored snapshot: a snapshot describes the build that
     was measured last, and a reader told "your agent is too old" out of a stale
     copy would keep hearing it after the upgrade that closed the gap.
@@ -203,7 +207,9 @@ def _agent_version(connection: Any) -> str:
     version to give.
     """
     try:
-        return handshake_of(connection.initialize).agent_version
+        payload = connection.initialize
+        info = payload.get("agentInfo") if isinstance(payload, dict) else None
+        return str(info.get("version") or "") if isinstance(info, dict) else ""
     except Exception:  # noqa: BLE001 - a version is a fact to add, never a reason to fail a turn
         return ""
 
