@@ -144,6 +144,8 @@ async function live({ session = null, answers = null }: Options = {}) {
     },
     gen: () => generation(),
     effortRead: (sid?: string | null, gen?: number) => model.effortSource.read(sid, gen),
+    tierRead: (sid?: string | null, gen?: number) => model.tierSource.read(sid, gen),
+    tierSet: (mode: string) => model.tierSource.set(mode),
     inFlight: () => pending.map((p) => p.method),
     param: (i: number) => pending[i]!.params,
     settle: (i: number, answer: unknown) => {
@@ -274,6 +276,47 @@ describe('the live effort read', () => {
     expect(await read).toEqual({ session_key: 'a', effort: 'low', default: null, options: ['low', 'high'] })
     void h.effortRead(null)
     expect(h.param(1)).toEqual({ session_key: '' })
+  })
+})
+
+describe('the live tier read', () => {
+  const MENU = [{ id: 'high', name: 'High' }, { id: 'max', name: 'Max' }]
+
+  it('asks about the conversation it was given, and drops an answer whose switch was overtaken', async () => {
+    /* The same shape as the effort read, for the same switch: the key is the
+       caller's to name, because a switch asks before the page's current
+       session moves over; and an answer about a view the reader has left is
+       dropped rather than painted. */
+    const h = await live()
+    h.bump()
+    const read = h.tierRead('b', h.gen())
+    expect(h.inFlight()).toEqual(['session.set_mode'])
+    expect(h.param(0)).toEqual({ session_key: 'b' })
+    h.bump()
+    await h.settle(0, { mode: 'max', availableModes: MENU })
+    expect(await read).toBeNull()
+  })
+
+  it('answers a read whose switch still stands, and reads the draft with no key', async () => {
+    const h = await live()
+    const read = h.tierRead('a', h.gen())
+    await h.settle(0, { mode: 'high', availableModes: MENU })
+    expect(await read).toEqual({ mode: 'high', availableModes: MENU })
+    void h.tierRead(null)
+    expect(h.param(1)).toEqual({ session_key: '' })
+  })
+
+  it('keeps the catalogue a dropped answer carried, which is the deployment\'s and not the conversation\'s', async () => {
+    /* A pick staged on a draft is echoed back with the catalogue last heard,
+       so the row can draw the rungs before any session exists -- and the
+       rungs are the same whichever conversation the answer was about. */
+    const h = await live()
+    h.bump()
+    const read = h.tierRead('b', h.gen())
+    h.bump()
+    await h.settle(0, { mode: 'max', availableModes: MENU })
+    expect(await read).toBeNull()
+    expect(await h.tierSet('high')).toEqual({ mode: 'high', availableModes: MENU })
   })
 })
 

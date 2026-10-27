@@ -659,7 +659,7 @@ export async function applyStagedTier(_rt: SessionRuntime, sessionId: string): P
   } catch (e) {
     toast(`${t('gui.tier.title')}: ${detailOf(e)}`)
   }
-  void loadTier()
+  void loadTier(sessionId)
 }
 
 /* The reasoning effort picked while this was still a draft, written now that

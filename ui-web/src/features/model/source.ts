@@ -353,13 +353,22 @@ export const modelSource: ModelSource = {
 let tierMenu: TierReply['availableModes'] = []
 
 export const tierSource: TierSource = {
-  read: async () => {
-    /* A draft asks too, and the handler answers the catalogue and its default
-       for a key it has never seen -- which is exactly what the first turn of a
-       new conversation will run at. */
-    const r = await gateway().call('session.set_mode', { session_key: sessionCurrent() || '' })
+  read: async (sid, gen) => {
+    /* The conversation named by the caller, else the one on screen: a switch
+       asks before the current session moves over, so "current" there is the
+       conversation being left (see TierSource). A draft asks too, with no key,
+       and the handler answers the catalogue and its default for a key it has
+       never seen -- which is exactly what the first turn of a new conversation
+       will run at. */
+    const target = sid !== undefined ? sid : sessionCurrent()
+    const ticket = gen !== undefined ? gen : generation()
+    const r = await gateway().call('session.set_mode', { session_key: target || '' })
+    /* The catalogue is the deployment's, not the conversation's, so it is
+       kept from every answer; the rung in force is the conversation's, and an
+       answer about a view the reader has already left is dropped rather than
+       painted -- the same guard `loadProviders` keeps. */
     tierMenu = (r && r.availableModes) || tierMenu
-    return r
+    return ticket === generation() ? r : null
   },
   set: async (mode: string) => {
     const sid = sessionCurrent()
