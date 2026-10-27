@@ -512,12 +512,31 @@ class WiringMixin:
         it only at a restart. Sent as an explicit argument instead, which is
         the path a session's pinned effort already takes.
 
-        None passes nothing, which leaves the provider's own default standing
-        -- an explicit None would switch it off instead.
+        None is an answer, not an absence: the turn sends it as an explicit
+        None, which the provider takes as its own default (nothing on the
+        wire). Leaving the key out instead let the provider fill it from that
+        frozen copy, so a key cleared on a running gateway kept every call at
+        the word it booted with (``session_effort.in_force`` says the rule).
         """
         from raven.config.live import held, reasoning_effort
 
         return held(_EFFORT_KEY, lambda: reasoning_effort(self._live_config))
+
+    def session_reasoning_effort(self, session_key: str | None, pick: str | None = None) -> str | None:
+        """The reasoning effort this session's own calls run at, short of a hook's override.
+
+        ``session_effort.in_force`` over this loop's inputs: the pick the caller
+        read off the session's record, the session's mode's word, and the
+        configured default as the file has it now. Beside ``session_tier`` for
+        the reason it gives -- the turn and the RPC need the one rule, and the
+        policy it reads lives here -- and reached on ``self`` by the turn, so
+        nothing imports anything new.
+        """
+        from raven.agent import session_effort
+
+        return session_effort.in_force(
+            pick, self.session_policy(session_key or "").reasoning_effort, self.default_reasoning_effort
+        )
 
     @property
     def personalization_enabled(self) -> bool:

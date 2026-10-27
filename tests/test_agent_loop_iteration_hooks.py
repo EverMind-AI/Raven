@@ -290,7 +290,9 @@ async def test_a_session_policy_pins_the_reasoning_effort_of_its_calls(tmp_path)
     other = _ScriptedProvider([_text("plain")])
     quiet = _loop(tmp_path, other, [])
     await quiet._process_message(_req())
-    assert "reasoning_effort" not in other.calls[0]
+    # Sent as None, the provider's own default, rather than left out for the
+    # provider to fill from the copy it took at boot.
+    assert other.calls[0]["reasoning_effort"] is None
 
 
 @pytest.mark.asyncio
