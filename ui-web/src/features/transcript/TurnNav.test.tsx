@@ -293,6 +293,38 @@ describe('the turn nav', () => {
     await settle(() => { stage().innerHTML = '' })
     expect($('.transcript-nav')).toBeNull()
   })
+
+  it('marks a turn the model chose not to answer by its question, live and after a reload', async () => {
+    /* A silent turn has its question and one quiet line, and no answer block:
+       the mark is the question's, so it needs nothing the answer would carry. */
+    await settle(() => {
+      mount.ask('anything new?')
+      const st = mount.step()
+      st.sayDelta('Checking the logs.')
+      st.seal()
+      st.dropSay()
+      mount.note('Raven chose not to reply.', '', { quiet: true })
+      mount.finishTurn(null, [st], '3s', true)
+      mount.ask('and now?')
+    })
+    expect($('.answer')).toBeNull()
+    expect(marks().map((m) => m.getAttribute('aria-label'))).toEqual(['Turn 1: anything new?', 'Turn 2: and now?'])
+    act(() => { fireEvent.mouseEnter(marks()[0]!) })
+    expect($('.transcript-navsaid')?.textContent).toBe('anything new?')
+
+    await settle(() => { stage().innerHTML = '' })
+    const t0 = Date.now() - 60_000
+    await settle(() => {
+      mount.history([
+        { role: 'user', text: 'anything new?', timestamp: new Date(t0).toISOString() },
+        { role: 'assistant', text: '[SILENT]', silent: true, timestamp: new Date(t0 + 5_000).toISOString() },
+        { role: 'user', text: 'and now?', timestamp: new Date(t0 + 20_000).toISOString() },
+        { role: 'assistant', text: 'Still nothing.', timestamp: new Date(t0 + 25_000).toISOString() },
+      ])
+    })
+    expect(marks().map((m) => m.getAttribute('aria-label'))).toEqual(['Turn 1: anything new?', 'Turn 2: and now?'])
+    expect(document.body.textContent).not.toContain('[SILENT]')
+  })
 })
 
 describe('readingTurn', () => {
