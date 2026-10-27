@@ -185,13 +185,15 @@ class AcpDialect:
     adapter that does not overrides this, and the run's file record then has to
     tell a creation from a rewrite some other way."""
 
-    prompt_usage_counts_the_turn = True
-    """Whether the prompt response's ``usage`` counts the whole turn.
+    def prompt_usage_counts_the_turn(self, version: str | None) -> bool:
+        """Whether the prompt response's ``usage`` counts the whole turn, for the adapter at ``version``.
 
-    The turn's token counts are read from it when it does. claude-agent-acp sums
-    every call of the turn into it; an adapter that reports something narrower
-    overrides this, and its counts are then left unread rather than recorded as
-    the turn's."""
+        The turn's token counts are read from it when it does. claude-agent-acp
+        sums every call of the turn into it; an adapter that reports something
+        narrower overrides this, and its counts are then left unread rather than
+        recorded as the turn's. ``version`` is the one ``agentInfo`` reports.
+        """
+        return True
 
     def tool_name(self, update: dict[str, Any]) -> str:
         """The transport's own name for the call, at the finest grain it gives.

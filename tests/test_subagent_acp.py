@@ -2592,16 +2592,26 @@ async def test_an_agent_counting_only_in_its_update_is_still_read(tmp_path: Path
 
 
 @pytest.mark.parametrize(
-    ("agent", "counted"),
-    [("claude-agent-acp", (1200, 34)), ("codex-acp", (None, None))],
+    ("agent", "version", "counted"),
+    [
+        ("claude-agent-acp", "0.94.0", (1200, 34)),
+        ("codex-acp", "2.2.2", (1200, 34)),
+        ("codex-acp", "2.1.1", (None, None)),
+        ("codex-acp", "", (None, None)),
+    ],
 )
 async def test_prompt_usage_is_read_only_where_it_counts_the_turn(
-    tmp_path: Path, agent: str, counted: tuple[int | None, None]
+    tmp_path: Path, agent: str, version: str, counted: tuple[int | None, int | None]
 ) -> None:
-    """claude-agent-acp sums the turn's calls; codex-acp 1.13.1 sends the last call
-    alone (``tokenUsage.last``), so a twenty-call turn would be recorded as one
-    call's tokens -- a confident undercount where there was no count before."""
-    env = {"ACP_STUB_AGENT_NAME": agent, "ACP_STUB_PROMPT_USAGE": json.dumps(_TURN_COUNTS)}
+    """claude-agent-acp sums the turn's calls, and so does codex-acp from 2.2.1.
+    Before that codex-acp sent the last call alone (``tokenUsage.last``), so a
+    twenty-call turn would be recorded as one call's tokens -- a confident
+    undercount where there was no count before."""
+    env = {
+        "ACP_STUB_AGENT_NAME": agent,
+        "ACP_STUB_AGENT_VERSION": version,
+        "ACP_STUB_PROMPT_USAGE": json.dumps(_TURN_COUNTS),
+    }
     assert await _counted(tmp_path, **env) == counted
 
 

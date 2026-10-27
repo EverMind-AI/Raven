@@ -99,9 +99,20 @@ _PATCH_TARGET = re.compile(r"^\*\*\* (?:Update|Add|Delete) File: (?P<path>.+?)\s
 # the transcript as garbage. Tab and newline are the two that carry meaning.
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x0c\x0e-\x1f]")
 
+_RELEASE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+_WHOLE_TURN_USAGE = (2, 2, 1)
+
 
 def _clean(text: str) -> str:
     return _CONTROL.sub("", text.replace("\r\n", "\n").replace("\r", "\n"))
+
+
+def _release(version: str | None) -> tuple[int, int, int] | None:
+    match = _RELEASE.match(version) if isinstance(version, str) else None
+    if match is None:
+        return None
+    major, minor, patch = match.groups()
+    return int(major), int(minor), int(patch)
 
 
 class CodexDialect(AcpDialect):
@@ -110,9 +121,13 @@ class CodexDialect(AcpDialect):
     plan_tool_name = "update_plan"
     """codex's own name for the tool behind a plan frame (``plan_tool.rs``)."""
 
-    prompt_usage_counts_the_turn = False
-    """codex-acp 1.13.1 builds the prompt response's ``usage`` from the app
-    server's ``tokenUsage.last``: the turn's final model call, not the turn."""
+    def prompt_usage_counts_the_turn(self, version: str | None) -> bool:
+        """From 2.2.1 the prompt response's ``usage`` is the thread's total at the
+        turn's end less its total at the start. 2.1.1 and earlier built it from
+        the app server's ``tokenUsage.last``: the turn's final model call, not the
+        turn. A version that is no release number is read as the older kind."""
+        release = _release(version)
+        return release is not None and release >= _WHOLE_TURN_USAGE
 
     def tool_name(self, update: dict[str, Any]) -> str:
         raw = _dict(update.get("rawInput"))

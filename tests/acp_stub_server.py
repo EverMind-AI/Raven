@@ -13,6 +13,7 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                      ``ACP_STUB_PROMPT_USAGE`` adds a ``usage`` to the prompt response (JSON).
                      ``ACP_STUB_EMPTY_PROMPTS=N`` ends the first N prompts empty, in any mode.
                      ``ACP_STUB_AGENT_NAME`` replaces ``agentInfo.name`` (``stub-agent``).
+                     ``ACP_STUB_AGENT_VERSION`` replaces ``agentInfo.version`` (``9.9.9``); empty drops it.
                      ``ACP_STUB_COST_PER_PROMPT`` reports a cumulative cost growing by it each prompt.
 - ``reject_init``  - answers ``initialize`` with a JSON-RPC error.
 - ``no_session``   - handshake fine, ``session/new`` errors (an auth-shaped message).
@@ -180,9 +181,14 @@ _SESSION_CAPS = {"fork": {}, "list": {}, "resume": {}}
 if MODE != "no_session_delete":
     _SESSION_CAPS["delete"] = {}
 
+_AGENT_VERSION = os.environ.get("ACP_STUB_AGENT_VERSION", "9.9.9")
+
 CAPABILITIES = {
     "protocolVersion": 1,
-    "agentInfo": {"name": os.environ.get("ACP_STUB_AGENT_NAME", "stub-agent"), "version": "9.9.9"},
+    "agentInfo": {
+        "name": os.environ.get("ACP_STUB_AGENT_NAME", "stub-agent"),
+        **({"version": _AGENT_VERSION} if _AGENT_VERSION else {}),
+    },
     "agentCapabilities": {
         "loadSession": True,
         "promptCapabilities": {"image": True},

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from raven.acp_client.acp_dialects import AcpDialect, ClaudeCodeDialect, CodexDialect, dialect_for
 
 
@@ -22,6 +24,26 @@ def test_the_dialect_is_chosen_from_the_agents_own_handshake() -> None:
 
     assert isinstance(claude, ClaudeCodeDialect)
     assert isinstance(codex, CodexDialect)
+
+
+@pytest.mark.parametrize(
+    ("version", "counts_the_turn"),
+    [
+        ("2.2.1", True),
+        ("2.3.0", True),
+        ("10.0.0", True),
+        ("2.1.1", False),
+        ("1.13.1", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_codex_prompt_usage_counts_the_turn_from_2_2_1(version: str | None, counts_the_turn: bool) -> None:
+    """2.2.1 builds the prompt response's ``usage`` from the thread's total at the
+    turn's end less its total at the start; 2.1.1 and earlier from ``tokenUsage.last``,
+    the turn's final model call. A version that is no release number is the older kind."""
+    assert CodexDialect().prompt_usage_counts_the_turn(version) is counts_the_turn
+    assert AcpDialect().prompt_usage_counts_the_turn(version) is True
 
 
 def test_an_unmeasured_adapter_gets_the_spec_and_not_a_guess() -> None:

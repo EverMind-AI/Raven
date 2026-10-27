@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.acp_client import remote, remote_runs
-from raven.acp_client.acp_dialects import AcpDialect, ToolCall, content_texts, dialect_for
+from raven.acp_client.acp_dialects import AcpDialect, ToolCall, agent_version, content_texts, dialect_for
 from raven.acp_client.ask_user import AskUserResponder, clarify_responder
 from raven.acp_client.capabilities import (
     CapabilitySnapshot,
@@ -336,6 +336,7 @@ class _TurnCollector:
         workspace: Path | None = None,
         limit: int | None = None,
         track_files: bool = True,
+        agent_version: str | None = None,
     ) -> None:
         # The reply's cap, renewed for every message rather than spent across
         # the turn: the reply is one message, and narration spending a shared
@@ -351,6 +352,7 @@ class _TurnCollector:
         # The spec by default, so a collector built without one (every test that
         # only cares about answer text) still reads tool calls correctly.
         self._dialect = dialect or AcpDialect()
+        self._agent_version = agent_version
         self._tool_ran = False
         self._steered = False
         # Where each message starts in `answer`. Only a step opens one: the
@@ -864,7 +866,8 @@ class _TurnCollector:
         window and the cost. Otherwise the update, where an earlier agent was seen
         to send its counts.
         """
-        if self._dialect.prompt_usage_counts_the_turn and isinstance(answered, dict) and answered:
+        counts_the_turn = self._dialect.prompt_usage_counts_the_turn(self._agent_version)
+        if counts_the_turn and isinstance(answered, dict) and answered:
             return answered
         return self.usage
 
@@ -1856,6 +1859,7 @@ class AcpAgentBackend:
                     workspace=Path(session_cwd) if launched is None else None,
                     limit=self.max_output_chars,
                     track_files=launched is None,
+                    agent_version=agent_version(connection.initialize),
                 )
                 # Built here, in the turn's context, for the reason `_TurnCollector`
                 # documents: the read loop's ContextVars predate this run, and the
