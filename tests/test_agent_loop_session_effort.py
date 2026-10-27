@@ -4,8 +4,10 @@ The loop reads its per-session policy once at the turn's start; when the policy
 names a reasoning effort, every model call of that turn -- the ReAct steps, the
 wrap-up after an exhausted budget and the head summary a compaction pays for --
 carries it as an explicit argument.
-A policy that names none passes nothing, so the provider's configured default
-applies exactly as before, and another session's turns are untouched.
+A policy that names none sends the configured default as the file has it now,
+None included: an unset key is the provider's own default, and the provider's
+own copy of the key -- frozen at boot -- is never what a call falls back to.
+Another session's turns are untouched.
 """
 
 from __future__ import annotations
@@ -15,9 +17,10 @@ import pytest
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.agent.window import compaction
+from raven.config.live import LiveConfig
 from raven.config.raven import CheckpointConfig, RuntimeConfig
 from raven.config.schema import CompactionConfig
-from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
+from raven.contracts.llm_provider import GenerationSettings, LLMResponse, ToolCallRequest
 from raven.providers.base import LLMProvider
 from raven.spine import ChatType, Origin, Source, TurnRequest
 
@@ -87,14 +90,15 @@ async def test_a_session_policys_effort_reaches_every_model_call(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_a_policy_naming_no_effort_passes_none_so_the_configured_default_stands(tmp_path):
+async def test_a_policy_naming_no_effort_sends_the_configured_default_none_included(tmp_path):
     provider = _ScriptedProvider([_text("done")])
     loop = _loop(tmp_path, provider)
     loop.set_session_policy("cli:c", mode="high")
 
     await loop._process_message(_req())
 
-    assert "reasoning_effort" not in provider.calls[0], "an explicit None would override the provider's sentinel"
+    assert "reasoning_effort" in provider.calls[0], "the key is never left to the provider's own boot copy"
+    assert provider.calls[0]["reasoning_effort"] is None, "an unset key is the provider's own default"
 
 
 @pytest.mark.asyncio
@@ -105,7 +109,68 @@ async def test_another_session_runs_on_the_defaults(tmp_path):
 
     await loop._process_message(_req(chat_id="d"))
 
-    assert "reasoning_effort" not in provider.calls[0]
+    assert provider.calls[0]["reasoning_effort"] is None
+
+
+class _BootedProvider(LLMProvider):
+    """A real provider booted with a configured effort, which ``chat_with_retry``
+    resolves through its sentinel when a call leaves the argument out."""
+
+    def __init__(self, booted: str) -> None:
+        super().__init__(api_key="test")
+        self.generation = GenerationSettings(reasoning_effort=booted)
+        self.efforts: list[str | None] = []
+
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
+        self.efforts.append(reasoning_effort)
+        return _text("done")
+
+    def get_default_model(self) -> str:
+        return "fake/model"
+
+
+def _live_default(tmp_path, effort: str | None) -> LiveConfig:
+    """The config file as a settings edit leaves it: the key held to ``effort``."""
+    import json
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"agents": {"defaults": {"reasoningEffort": effort}}}), encoding="utf-8")
+    return LiveConfig(path)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("live", "sent"),
+    [
+        pytest.param(None, None, id="cleared-to-provider-default"),
+        pytest.param("low", "low", id="control-a-word-reaches-the-call"),
+    ],
+)
+async def test_a_default_cleared_on_a_running_gateway_reaches_the_next_turn(tmp_path, live, sent):
+    """The provider's copy of ``agents.defaults.reasoningEffort`` is frozen at
+    boot. A key cleared afterwards (the picker's *Provider default*) used to
+    leave the call's argument out, which the provider filled from that copy:
+    the gateway kept calling at the word it booted with while ``session.info``
+    reported the clear. The turn now sends the effort in force, None included,
+    so the clear is on the wire from the next turn."""
+    provider = _BootedProvider(booted="high")
+    loop = _loop(tmp_path, provider)
+    loop._live_config = _live_default(tmp_path, live)
+
+    await loop._process_message(_req())
+
+    assert provider.efforts == [sent]
+    # The one rule the RPC reports from answers the same.
+    assert loop.session_reasoning_effort("cli:c", None) == sent
 
 
 @pytest.mark.asyncio

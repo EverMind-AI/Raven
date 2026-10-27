@@ -28,7 +28,23 @@ All notable changes to Raven are documented here.
   New RPC `session.set_effort` (report, set or clear; every answer names what
   the default is on this install and the words), and `session.info` carries
   `reasoning_effort` for the status bar. The using-raven guide has a section on
-  it.
+  it. Clearing `agents.defaults.reasoningEffort` (*Provider default*) reaches a
+  running gateway's next turn as well: the turn sends the effort in force on
+  every call, the provider's own default included, instead of leaving a
+  cleared key to the copy the provider took at boot.
+
+- The settings dialog's **Skills** and **Plugins** pages have an **Add**
+  button. Neither page can install anything -- a skill is fetched from Skill
+  Hub by `use_skill` and an MCP server is connected from the PlugHub catalogue
+  by the `plugin` tool, both in the chat -- so the button closes the dialog,
+  returns to the open conversation and puts a lead-in in the composer (*Help
+  me find a skill on Skill Hub and install it. My requirements are as
+  follows:*), the cursor on the line under it for the reader's own
+  requirement, sent by nobody but the reader; what was already typed stays,
+  with the lead-in after it. The Plugins page says under the button that
+  a server the catalogue does not list goes into `tools.mcpServers` in the
+  config file by hand, naming the file the gateway reported.
+
 - The history slot is filled by a **history strategy**, `context.history.strategy`:
   `compacting` (the new default) or `curator` (the previous behaviour, one
   setting away). Compacting keeps the conversation verbatim until the window

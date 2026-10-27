@@ -281,6 +281,11 @@ gateway and a resumed conversation runs at what it was left at. `_run_agent_loop
 it by the turn entrance that holds the record, the way the model is, and ranks it: the
 configured `agents.defaults.reasoningEffort` underneath, a Session Mode's own
 `reasoningEffort` over that, this pick over both, a hook's rollback override on top. The
+ranking is `session_effort.in_force`, one rule with one home: the turn runs at it
+(`session_reasoning_effort` on the loop) and `session.info` / `session.set_effort` report
+it, and the turn sends the word in force on every call, None included, so a default cleared
+on a running gateway lands on its next turn -- the provider's own copy of the key, frozen at
+boot, is never consulted. The
 words a session may pick are its model's provider's (`LLMProvider.reasoning_efforts`,
 forwarded by the wrappers the way `reasoning_wire_keys` is): the four every wire takes
 (`REASONING_EFFORTS`, `config/schema.py`), and `xhigh` and `max` over them on the Anthropic
@@ -292,13 +297,13 @@ is a session's own pick, never the install's default. The key is clearable (null
 provider's own default) and the settings page draws it, when unset, as a rung of its own
 rather than as `low`. The record may carry any rung this raven knows
 (`REASONING_EFFORT_RUNGS`, the retry descent's ladder read upward), because the model can
-move after the pick: the turn asks its own provider again (`session_effort.fit`) and runs a
-pick the new wire does not take at the highest rung it does take, logged, rather than at a
-request it would refuse -- the pick only; a mode's `reasoningEffort` is the catalogue's word
-and goes out as named. The page re-reads the row on a model switch and draws such a pick
-beside the words it can move to. Lands on the next turn, like a tier; reaches no sub-agent,
-unlike one -- a sub-agent is still told the configured default
-(`RAVEN_PARENT_REASONING_EFFORT`).
+move after the pick: the turn asks its own provider again (`session_effort.fit`, before
+`in_force` ranks the pick) and runs a pick the new wire does not take at the highest rung it
+does take, logged, rather than at a request it would refuse -- the pick only; a mode's
+`reasoningEffort` is the catalogue's word and goes out as named. The page re-reads the row on
+a model switch and draws such a pick beside the words it can move to. Lands on the next
+turn, like a tier; reaches no sub-agent, unlike one -- a sub-agent is still told the
+configured default (`RAVEN_PARENT_REASONING_EFFORT`).
 _Avoid_: reading the pick off `SessionPolicy`. A mode switch replaces the whole policy and a
 restart empties it; the record is the pick's one home, and the policy carries only the
 mode's own effort.

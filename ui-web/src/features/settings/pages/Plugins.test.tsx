@@ -2,8 +2,10 @@
 import { act, cleanup, fireEvent, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import * as settingsDialog from '../../../state/settings'
 import { resetSources, setSources } from '../../../state/sources'
 import { install, modelSource, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
+import { askInChat } from '../../composer/startTaskWith'
 import * as store from '../store'
 import { plugChip } from './Plugins'
 
@@ -170,5 +172,39 @@ describe('plugins page', () => {
     await act(async () => { await Promise.resolve() })
     expect(screen.getByText('gui.settings.plugins.no_credential')).toBeTruthy()
     expect(screen.queryByLabelText('Token')).toBeNull()
+  })
+
+  /* Connecting a server is not this page's: the plugin tool finds it in the
+     PlugHub catalogue and connects it in the chat. The button leads there
+     through the composer verb the app lends the dialog at boot -- lent here
+     as the real one, so the case sees the dialog close, the field filled and
+     focused, and nothing asked of the gateway. The line under the button
+     names the config file for a server the catalogue lacks, with the path the
+     gateway reported rather than a guess. */
+  it('the add button closes the dialog and puts the request in the composer, asking the gateway nothing', async () => {
+    const { calls } = install()
+    await mount('plugins')
+    document.body.insertAdjacentHTML('beforeend', '<textarea id="ta"></textarea>')
+    const ta = document.getElementById('ta') as HTMLTextAreaElement
+    store.lendAskInChat(askInChat)
+    expect(screen.getByText('gui.settings.plugins.add_hint {"path":"/home/me/.raven/config.json"}')).toBeTruthy()
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.plugins.add')) })
+    expect(settingsDialog.close).toHaveBeenCalledTimes(1)
+    expect(ta.value).toBe('gui.settings.plugins.add_prompt\n')
+    expect(document.activeElement).toBe(ta)
+    expect(calls).toEqual([])
+  })
+
+  it('the empty card offers the same button', async () => {
+    const { calls } = install(snap({ mcp: [] }))
+    await mount('plugins')
+    document.body.insertAdjacentHTML('beforeend', '<textarea id="ta"></textarea>')
+    const ta = document.getElementById('ta') as HTMLTextAreaElement
+    store.lendAskInChat(askInChat)
+    expect(screen.getAllByText('gui.settings.plugins.add')).toHaveLength(2)
+    await act(async () => { fireEvent.click(document.querySelector('.settings-empty .settings-ea')!) })
+    expect(settingsDialog.close).toHaveBeenCalledTimes(1)
+    expect(ta.value).toBe('gui.settings.plugins.add_prompt\n')
+    expect(calls).toEqual([])
   })
 })

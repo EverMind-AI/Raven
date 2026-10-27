@@ -91,3 +91,15 @@ def test_a_manager_that_cannot_patch_still_holds_the_pick(tmp_path: Path) -> Non
     mgr = _Broken(tmp_path)
     assert session_effort.write(mgr, "tui:1", "medium") is False
     assert session_effort.read(mgr, "tui:1") == "medium"
+
+
+def test_in_force_ranks_the_pick_over_the_mode_over_the_configured_default() -> None:
+    assert session_effort.in_force("minimal", "medium", "high") == "minimal"
+    assert session_effort.in_force(None, "medium", "high") == "medium"
+    assert session_effort.in_force(None, None, "high") == "high"
+
+
+def test_in_force_answers_none_for_the_providers_own_default() -> None:
+    """None, not absence: the turn sends it and the RPC reports it as one answer."""
+    assert session_effort.in_force(None, None, None) is None
+    assert session_effort.in_force("", "", "") is None

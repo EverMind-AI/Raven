@@ -9,7 +9,8 @@ outlive the gateway (a policy held only in memory goes back to the default on
 every restart, which is what the tier does), and the turn reads it where it
 reads the model.
 
-Where it ranks: the configured default underneath, a Session Mode's own
+Where it ranks (``in_force``, the one rule the turn runs at and the RPC
+reports): the configured default underneath, a Session Mode's own
 ``reasoningEffort`` over that, this pick over both, and a hook's rollback
 override over the lot (``_run_agent_loop``'s ``gen_overrides``). Raven's own
 calls only: a sub-agent is told the configured default, as before.
@@ -78,6 +79,27 @@ def fit(effort: str | None, words: Iterable[str] | None) -> str | None:
         return effort
     below = [word for word in REASONING_EFFORT_RUNGS[: REASONING_EFFORT_RUNGS.index(effort)] if word in taken]
     return below[-1] if below else None
+
+
+def in_force(pick: str | None, mode_effort: str | None, configured: str | None) -> str | None:
+    """The effort a session's own calls run at, short of a hook's rollback override.
+
+    One rule with one home. The turn freezes it at its start (``_run_agent_loop``)
+    and ``session.info`` / ``session.set_effort`` report it, and the two used to
+    spell the ranking out apart -- and to disagree on what no word meant. The
+    turn left the key out of the call, which let the provider fill it from its
+    own copy, frozen at boot from the same config key; so a default cleared on
+    a running gateway kept every call at the word it booted with, while the RPC
+    reported the clear as in force. Here None is one answer with one meaning,
+    the provider's own default, and the turn sends it as such: an explicit None,
+    nothing on the wire. The provider's boot copy is never consulted.
+
+    The pick is the record's (``of`` / ``read``), the mode's word is the
+    session's policy's, and the configured default is the file's as it is now
+    (the loop's live reader, the RPC's fresh load): each caller reads its own
+    inputs and this is the one place they are ranked.
+    """
+    return pick or mode_effort or configured or None
 
 
 def read(sessions: Any, session_key: str | None) -> str | None:

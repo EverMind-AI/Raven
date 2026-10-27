@@ -191,6 +191,24 @@ export function set(patch: Partial<SettingsState>): void {
 
 export const source = (): SettingsSource => ds('settings')
 
+/* Adding a skill or an MCP server is the chat's: use_skill fetches the Skill
+   Hub bundle and the plugin tool connects the PlugHub entry, and no row of the
+   two pages here can do either. So each page's "add" button leads into the
+   chat with the request half written. The verb is the composer's, lent at
+   boot (src/app/install.ts) rather than imported from a sibling domain;
+   unlent, the button does nothing, which is what a case that mounts the
+   dialog alone wants. */
+type AskInChat = (text: string) => void
+let askInChat: AskInChat | null = null
+
+export function lendAskInChat(fn: AskInChat | null): void {
+  askInChat = fn
+}
+
+export function addInChat(text: string): void {
+  askInChat?.(text)
+}
+
 /* ISO day, local time: the range the usage page asks for is the reader's
    calendar, and the server reads the same wall clock. */
 export function isoDay(d: Date): string {
@@ -539,4 +557,5 @@ export function _resetForTests(): void {
   store._resetForTests()
   store.set(initial())
   lazy = false
+  askInChat = null
 }
