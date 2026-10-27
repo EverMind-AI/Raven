@@ -159,6 +159,16 @@ def test_a_web_vendor_borrows_the_key_of_the_llm_provider_it_shares_an_account_w
     assert config.effective_web_vendor_keys() == {"deepseek": "sk-web"}
 
 
+def test_a_malformed_provider_section_yields_no_borrowed_key() -> None:
+    """The borrow is a read of somebody else's section: a value the schema
+    rejects, or a subtree that is not an object at all, answers no key rather
+    than raising out of the credential resolution."""
+    from raven.config.schema import borrowed_web_key
+
+    assert borrowed_web_key("deepseek", {"deepseek": {"apiKey": {"nested": 1}}}) == ""
+    assert borrowed_web_key("deepseek", ["not", "a", "dict"]) == ""
+
+
 # --------------------------------------------------------------------------- #
 # Search: what each vendor is sent
 
@@ -247,6 +257,25 @@ async def test_a_status_error_never_echoes_the_key(vendor: str, monkeypatch: pyt
 
     assert "SECRET-KEY-123" not in rendered
     assert rendered == f"Error: {SEARCH_PROVIDERS[vendor].label} answered HTTP 500"
+
+
+async def test_a_deepseek_query_over_the_vendor_limit_is_refused_before_the_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepSeek accepts 1-128 Unicode characters; a longer query is answered with
+    HTTP 400, which this tool renders as the status alone, so the model was never
+    told to shorten it. Refuse it here with both lengths, and leave the boundary
+    itself sendable."""
+    with _patched(monkeypatch, {}) as client:
+        rendered = await WebSearchTool(api_key="k", provider="deepseek").execute("x" * 129)
+
+    assert client.calls == [], "an over-limit query must not spend a request"
+    assert "128" in rendered and "129" in rendered
+
+    with _patched(monkeypatch, {}) as client:
+        await WebSearchTool(api_key="k", provider="deepseek").execute("x" * 128)
+
+    assert len(client.calls) == 1, "the limit itself is allowed"
 
 
 @pytest.mark.parametrize("vendor", sorted(_SEARCH_REQUESTS))

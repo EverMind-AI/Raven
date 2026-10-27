@@ -1398,6 +1398,13 @@ class TestLiveVendorKeyFollowsTheCanonicalOrder:
         _write(path, {"tools": {"web": {}}})
         assert live_vendor_key(LiveConfig(path), "deepseek", boot="sk-boot") == "sk-boot", "no file entry keeps boot"
 
+    def test_a_malformed_provider_section_dispenses_no_live_answer(self, tmp_path: Path) -> None:
+        """A provider block the schema rejects is not a new answer: the boot value
+        keeps serving, the same rule every live reader here follows."""
+        from raven.config.schema import live_borrowed_web_key
+
+        assert live_borrowed_web_key("deepseek", {"deepseek": {"apiKey": {"nested": 1}}}) is None
+
     def test_a_leaf_the_schema_rejects_dispenses_no_new_answer(self, tmp_path: Path) -> None:
         from raven.config.live import web_jina_key
 

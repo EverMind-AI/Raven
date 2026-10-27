@@ -742,6 +742,27 @@ async def test_each_search_vendor_normalises_into_the_render_shape(monkeypatch, 
     assert expected["title"] in rendered and expected["link"] in rendered
 
 
+@pytest.mark.asyncio
+async def test_a_deepseek_query_over_the_vendor_limit_is_refused_before_the_request(monkeypatch):
+    """The mirrored adapter forwards the same unbounded query; DeepSeek answers
+    HTTP 400 and the model is only told the status. Refuse it here too, so both
+    adapters honour the vendor's documented 1-128 character limit."""
+    transport = _CaptureTransport({"results": []})
+    _patch_client(monkeypatch, transport)
+    set_current_session("t")
+
+    rendered = await WebSearchTool(api_key="K", provider="deepseek").execute(query="x" * 129, count=3)
+
+    assert transport.seen == [], "an over-limit query must not spend a request"
+    assert "128" in rendered and "129" in rendered
+
+    allowed = transport.seen
+    allowed.clear()
+    await WebSearchTool(api_key="K", provider="deepseek").execute(query="x" * 128, count=3)
+
+    assert len(allowed) == 1, "the limit itself is allowed"
+
+
 @pytest.mark.parametrize("vendor", sorted(SEARCH_PROVIDERS))
 def test_a_vendor_that_serves_no_offset_tells_the_saturation_rule(vendor):
     """``paginates`` is the load-bearing field. A rule left on ``paginate``

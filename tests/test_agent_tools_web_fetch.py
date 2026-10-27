@@ -105,6 +105,19 @@ async def test_vendor_http_errors_use_direct_html(transport, vendor, status):
     assert tool._refusal.active(vendor, "secret") == (status if status in {401, 402} else None)
 
 
+async def test_a_deepseek_page_without_text_reports_it(transport):
+    """A 200 whose body carries no content is the vendor answering without a
+    page; it must read as that failure, not as an empty page."""
+    responses, calls = transport
+    responses["origin.example"] = httpx.Response(500)
+    responses["api.deepseek.com"] = httpx.Response(200, json={"title": "T", "content": ""})
+
+    result = json.loads(await web.WebFetchTool(api_key="k", provider="deepseek").execute("https://origin.example/a"))
+
+    assert result["error"] == "DeepSeek returned no page content"
+    assert [call.url.host for call in calls] == ["origin.example", "api.deepseek.com"]
+
+
 async def test_paused_vendor_still_allows_direct_read(transport):
     responses, calls = transport
     responses["origin.example"] = httpx.Response(200, text="<p>Body</p>", headers={"Content-Type": "text/html"})
