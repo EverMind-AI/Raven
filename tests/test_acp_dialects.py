@@ -30,8 +30,10 @@ def test_the_dialect_is_chosen_from_the_agents_own_handshake() -> None:
     ("version", "counts_the_turn"),
     [
         ("2.2.1", True),
+        ("2.2.1-preview.1", True),
         ("2.3.0", True),
         ("10.0.0", True),
+        ("2.1.2-preview.7", False),
         ("2.1.1", False),
         ("1.13.1", False),
         ("", False),
@@ -41,7 +43,11 @@ def test_the_dialect_is_chosen_from_the_agents_own_handshake() -> None:
 def test_codex_prompt_usage_counts_the_turn_from_2_2_1(version: str | None, counts_the_turn: bool) -> None:
     """2.2.1 builds the prompt response's ``usage`` from the thread's total at the
     turn's end less its total at the start; 2.1.1 and earlier from ``tokenUsage.last``,
-    the turn's final model call. A version that is no release number is the older kind."""
+    the turn's final model call. A version that is no release number is the older kind.
+
+    A pre-release reads as its release. 2.2.1's previews already counted the turn;
+    the last previews of 2.1.2, never released, did too and read as the older
+    kind, which leaves their counts unknown rather than wrong."""
     assert CodexDialect().prompt_usage_counts_the_turn(version) is counts_the_turn
     assert AcpDialect().prompt_usage_counts_the_turn(version) is True
 
