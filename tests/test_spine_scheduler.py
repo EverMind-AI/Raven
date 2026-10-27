@@ -15,7 +15,6 @@ from raven.spine import (
     OriginPools,
     Scheduler,
     Source,
-    TurnEnded,
     TurnFailed,
     TurnOutcome,
     TurnRequest,
@@ -118,19 +117,6 @@ async def test_failed_turn_result_is_the_report_the_lane_filed():
     result = await sched.submit(_req()).result()
     assert isinstance(result, TurnFailed)
     assert (result.error, result.cancelled) == ("ValueError: boom", False)
-
-
-async def test_a_silent_outcome_reaches_turn_ended():
-    outcome = TurnOutcome(usage=Usage(1, 2, 3), explicit_reply=False, silent=True)
-    events = await _lifecycle_of(SuccessRunner(outcome))
-    ended = next(e for e in events if isinstance(e, TurnEnded))
-    assert ended.silent is True and ended.explicit_reply is False
-
-
-async def test_an_ordinary_outcome_is_not_silent():
-    events = await _lifecycle_of(SuccessRunner())
-    ended = next(e for e in events if isinstance(e, TurnEnded))
-    assert ended.silent is False
 
 
 async def test_a_no_output_failure_reaches_turn_failed():

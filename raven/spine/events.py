@@ -146,8 +146,6 @@ class TurnEnded:
     explicit_reply: bool
     conversation_id: str | None = None
     turn_id: str = ""
-    # The turn ended on a silence marker, not on an answer.
-    silent: bool = False
 
 
 # Deliverable events — emitted by the runner, routed to outlets.

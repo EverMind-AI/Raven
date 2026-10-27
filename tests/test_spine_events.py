@@ -132,8 +132,7 @@ def test_the_kernel_and_the_providers_layer_cap_a_failure_at_one_number():
 
 def test_turn_ended_carries_usage_latency_and_explicit_reply():
     fields = {f.name for f in dataclasses.fields(TurnEnded)}
-    assert fields == {"usage", "latency_ms", "explicit_reply", "conversation_id", "turn_id", "silent"}
-    assert TurnEnded(usage=Usage(0, 0, 0), latency_ms=1.0, explicit_reply=False).silent is False
+    assert fields == {"usage", "latency_ms", "explicit_reply", "conversation_id", "turn_id"}
 
 
 def test_every_deliverable_defaults_source_to_none():

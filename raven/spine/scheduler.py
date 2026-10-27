@@ -591,7 +591,6 @@ class Lane:
                 explicit_reply=outcome.explicit_reply,
                 conversation_id=self._conversation_id,
                 turn_id=turn_id,
-                silent=outcome.silent,
             )
         )
         return outcome
