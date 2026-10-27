@@ -76,7 +76,7 @@ def test_every_concrete_path_is_a_schema_field():
     for s in surface.all_settings():
         if "*" in s.path or s.kind == "pin" or s.session or s.stored_at:
             continue
-        if surface.default_of(s.path) is None and not s.nullable and s.path != "agents.defaults.reasoningEffort":
+        if surface.default_of(s.path) is None and not s.nullable:
             missing.append(s.path)
     assert missing == []
 
@@ -122,6 +122,9 @@ def test_find_prefers_an_exact_entry_and_binds_wildcards():
         ("tools.disabledTools", ["exec"], True),
         ("tools.disabledTools", "exec", False),
         ("agents.defaults.contextWindowTokens", None, True),
+        ("agents.defaults.reasoningEffort", None, True),
+        ("agents.defaults.reasoningEffort", "high", True),
+        ("agents.defaults.reasoningEffort", "ultra", False),
         ("tools.exec.timeout", None, False),
         ("agents.defaults.model", {"provider": "openrouter", "model": "x/y"}, True),
         ("agents.defaults.model", {"provider": "openrouter"}, False),
@@ -134,6 +137,24 @@ def test_check_value(path, value, ok):
     else:
         with pytest.raises(ValueError):
             surface.check_value(setting, value)
+
+
+def test_the_reasoning_effort_words_have_one_owner():
+    """The agent's door offers the words ``REASONING_EFFORTS`` spells and none
+    of its own, and clears the key the way the settings page does: null is
+    the provider's own default on both doors."""
+    from raven.config.schema import REASONING_EFFORTS
+    from raven.rpc.methods import console
+
+    setting, _ = surface.find("agents.defaults.reasoningEffort")
+    assert setting.choices == REASONING_EFFORTS
+    assert setting.nullable
+    page = console._SETTINGS_SIMPLE_KEYS["agents.defaults.reasoningEffort"]
+    for word in REASONING_EFFORTS:
+        assert surface.check_value(setting, word) == word == page(word)
+    assert surface.check_value(setting, None) is None
+    assert page(None) is None
+    assert setting.describe()["nullable"] is True
 
 
 def test_change_line_states_the_effect_and_the_risk():

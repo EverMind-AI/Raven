@@ -27,6 +27,7 @@ export const PARAMS = {
   'session.compress': { session_id: 'b' },
   'session.branch': { session_id: 'b' },
   'session.set_mode': { session_key: 'b', mode: 'max' },
+  'session.set_effort': { session_key: 'b', effort: 'high' },
   'turn.subscribe': { session_key: 'a' },
   'turn.unsubscribe': { subscription_id: 'sub-1' },
   'turn.send': { session_key: 'a', content: 'look at the market' },

@@ -13,5 +13,5 @@ import type { DomainManifest } from '../manifests'
    model decision. */
 export const manifest: DomainManifest = {
   domain: 'model',
-  sources: ['model', 'tier'],
+  sources: ['model', 'tier', 'effort'],
 }

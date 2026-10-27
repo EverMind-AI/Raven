@@ -6,6 +6,25 @@ All notable changes to Raven are documented here.
 
 ### Added
 
+- The reasoning effort can be set **per conversation**: the *Reasoning
+  effort* row of the WebUI's model picker, beside the sub-agent tier, and
+  `/effort <minimal|low|medium|high|default>` in the TUI (`/effort` alone
+  reports, `default` returns to the global setting). The pick outranks
+  `agents.defaults.reasoningEffort` and the conversation's mode, is kept on the
+  conversation's own record so it survives a gateway restart and comes back on
+  resume, lands on the next turn, and moves Raven's own model calls only.
+  New RPC `session.set_effort` (report, set or clear; every answer names what
+  the default is on this install and the words), and `session.info` carries
+  `reasoning_effort` for the status bar. The using-raven guide has a section on
+  it. Clearing `agents.defaults.reasoningEffort` (*Provider default*) reaches a
+  running gateway's next turn as well: the turn sends the effort in force on
+  every call, the provider's own default included, instead of leaving a
+  cleared key to the copy the provider took at boot. A fork keeps its
+  parent's pick with its model; the agent's own `raven_config` door accepts
+  null for `agents.defaults.reasoningEffort` as the settings page does; and
+  inside a TUI direct chat with an instance `/effort` is refused rather than
+  moving the main conversation while saying "this conversation".
+
 - The settings dialog's **Skills** and **Plugins** pages have an **Add**
   button. Neither page can install anything -- a skill is fetched from Skill
   Hub by `use_skill` and an MCP server is connected from the PlugHub catalogue
@@ -482,6 +501,12 @@ All notable changes to Raven are documented here.
   from the session's mode overlay.
 
 ### Fixed
+
+- The settings page showed the reasoning effort as **Low** when the key was
+  not set at all, while the provider's own default was what ran. The unset
+  state is now its own rung, *Provider default*, which also clears the key
+  (`agents.defaults.reasoningEffort` accepts null) rather than leaving a word
+  the install never chose.
 
 - On native Windows a DAG node can read files by reference: `{{ ref:... }}`,
   `{{ ref_path:... }}` and a `{"file": ...}` input naming a file in the

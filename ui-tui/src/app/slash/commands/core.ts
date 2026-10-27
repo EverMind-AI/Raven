@@ -58,7 +58,7 @@ const flagFromArg = (arg: string, current: boolean): boolean | null => {
   return null
 }
 
-const RESET_WORDS = new Set(['reset', 'clear', 'default'])
+export const RESET_WORDS = new Set(['reset', 'clear', 'default'])
 const CYCLE_WORDS = new Set(['cycle', 'toggle'])
 
 const DETAILS_USAGE =

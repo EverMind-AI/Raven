@@ -1299,6 +1299,47 @@ def test_fork_of_an_unswitched_parent_carries_no_model(tmp_path: Path):
     assert "provider" not in child.metadata
 
 
+def test_fork_inherits_the_reasoning_effort_the_parent_picked(tmp_path: Path):
+    """The pick rides the record beside the model, and a fork continues the
+    conversation it was picked for -- so it continues at it, restart or not."""
+    from raven.agent import session_effort
+
+    mgr = SessionManager(tmp_path)
+    src = _seed(mgr, "cli:src10", ("user", "a"))
+    src.metadata["model"] = "anthropic/claude-opus-4-8"
+    src.metadata[session_effort.METADATA_KEY] = "high"
+    mgr.save(src)
+
+    child = mgr.fork("cli:src10")
+
+    reloaded = SessionManager(tmp_path).get_or_create(child.key)
+    assert session_effort.of(reloaded.metadata) == "high"
+    assert reloaded.metadata["model"] == "anthropic/claude-opus-4-8"
+
+
+def test_fork_of_a_parent_following_the_default_carries_no_effort(tmp_path: Path):
+    """A cleared pick is null on the record, not absent -- a metadata patch sets
+    keys and never removes one -- and the fork starts without the key either way."""
+    from raven.agent import session_effort
+
+    mgr = SessionManager(tmp_path)
+    src = _seed(mgr, "cli:src11", ("user", "a"))
+    src.metadata[session_effort.METADATA_KEY] = None
+    mgr.save(src)
+
+    child = mgr.fork("cli:src11")
+
+    assert session_effort.METADATA_KEY not in child.metadata
+
+
+def test_the_fork_carries_the_key_the_effort_pick_is_kept_under():
+    """The session layer spells the key rather than importing the agent's;
+    this is what keeps the two spellings one."""
+    from raven.agent import session_effort
+
+    assert session_effort.METADATA_KEY in manager_mod.FORK_CARRIES
+
+
 def test_fork_resets_pending_clarification(tmp_path: Path):
     """The child does not carry the source's clarification wait-state."""
     mgr = SessionManager(tmp_path)
