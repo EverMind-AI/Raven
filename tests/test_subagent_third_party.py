@@ -5522,6 +5522,15 @@ def test_the_diagnose_command_runs_the_model_the_row_is_pinned_to() -> None:
     assert diagnose_hint_for(pinned) == "opencode run --model opencode/big-pickle hi"
     plain = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp", model=None)
     assert diagnose_hint_for(plain) == "opencode run hi"
+    # A model id carrying a space stays one argument once the command is split.
+    spaced = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp", model="provider/model preview")
+    assert shlex.split(diagnose_hint_for(spaced)) == [
+        "opencode",
+        "run",
+        "--model",
+        "provider/model preview",
+        "hi",
+    ]
     # Another agent's command has no slot in it and is left as it was.
     assert diagnose_hint_for(SimpleNamespace(name="Qwen Code", preset="qwen_code", model="x")) == "qwen hi"
 
