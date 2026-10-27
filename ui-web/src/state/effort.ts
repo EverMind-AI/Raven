@@ -39,9 +39,16 @@ export interface EffortReply {
 
 /* The seam, published by the live layer over `session.set_effort` and by the
    demo shell over a fixture. `set(null)` clears: the session follows the
-   default again. */
+   default again.
+
+   `read` names the conversation it is about and the switch it was started
+   under, the way `loadPermMode` does: a switch asks for the conversation
+   being OPENED before the page's current session moves over to it, so a read
+   that asked "whichever is current" asked about the one being left -- and
+   painted its effort on the new view. The source answers null for a read
+   whose switch has been overtaken, and null paints nothing. */
 export interface EffortSource {
-  read(): Promise<EffortReply>
+  read(sid?: string | null, gen?: number): Promise<EffortReply | null>
   set(effort: string | null): Promise<EffortReply>
 }
 
@@ -129,12 +136,15 @@ function absorb(reply: EffortReply | null | undefined): void {
 
 /* Asked on every conversation change, including the change to none: a draft
    shows the default its first turn will run at, and stages a pick until that
-   turn mints a session (features/model/source.ts). A failure hides the row: a
+   turn mints a session (features/model/source.ts). `sid` is the conversation
+   the read is about -- the one being opened, which is not yet the current one
+   when a switch asks -- and `gen` the switch it belongs to; a caller with
+   neither is reading the view as it stands. A failure hides the row: a
    gateway without the method, or one that could not answer, leaves nothing
    honest to draw. */
-export async function load(): Promise<void> {
+export async function load(sid?: string | null, gen?: number): Promise<void> {
   try {
-    absorb(await ds('effort').read())
+    absorb(await ds('effort').read(sid, gen))
   } catch {
     store.set(shut)
   }
