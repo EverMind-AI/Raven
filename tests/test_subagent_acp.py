@@ -27,19 +27,20 @@ from unittest.mock import patch
 import pytest
 from loguru import logger
 
-from raven.acp_client.acp_agent import _SESSION_EFFORT, AcpAgentBackend, AcpEmptyTurnError
+from raven.acp_client.acp_agent import _SESSION_EFFORT, AcpAgentBackend, AcpEmptyTurnError, _session_effort_state
 from raven.acp_client.capabilities import (
     AcpEffortChoice,
     AcpMode,
     AcpModelChoice,
     CapabilitySnapshot,
     SnapshotStore,
+    read_session_effort,
     relearn_session_menus,
     snapshot_fingerprint,
     verify_agent,
 )
 from raven.acp_client.pool import close_pool, get_pool
-from raven.acp_client.protocol import AcpRemoteError
+from raven.acp_client.protocol import AcpError, AcpRemoteError
 from raven.agent.subagent.backends import (
     acp_snapshot_for,
     agent_meta,
@@ -241,6 +242,33 @@ def test_the_per_session_mcp_promise_is_read_from_meta_and_survives_storage() ->
     assert CapabilitySnapshot.from_row(older).session_mcp is False
 
 
+def test_a_snapshot_row_with_a_malformed_effort_list_reads_as_none() -> None:
+    stored = CapabilitySnapshot(agent="a", fingerprint="fp", status="ready", detail="", measured_at_ms=1)
+    row = stored.to_row()
+    row["effortChoices"] = "not a list"
+    assert CapabilitySnapshot.from_row(row).effort_choices == ()
+
+
+def test_a_grouped_effort_option_is_read_and_junk_entries_are_skipped() -> None:
+    option, current, choices = read_session_effort(
+        {
+            "configOptions": [
+                {
+                    "id": "effort",
+                    "category": "thought_level",
+                    "currentValue": "low",
+                    "options": [
+                        "junk",
+                        {"group": "ladder", "options": [{"value": "high", "name": "High"}]},
+                    ],
+                }
+            ]
+        }
+    )
+    assert (option, current) == ("effort", "low")
+    assert choices == (AcpEffortChoice(value="high", name="High"),)
+
+
 def test_a_mode_menu_of_effort_levels_is_offered_as_reasoning_effort() -> None:
     """Pi, Grok, Kimi and DSH advertise effort as `modes`, not as thought_level.
 
@@ -356,6 +384,63 @@ async def test_a_cleared_effort_leaves_the_tier_already_sent_in_place() -> None:
     await backend._set_effort(client, "s1", None, fallback_mode="low", budget=1)
 
     assert calls[-1] == ("session/set_mode", {"sessionId": "s1", "modeId": "low"})
+
+
+async def test_effort_refusals_and_missing_baselines_do_not_escape() -> None:
+    """Every refusal arm leaves the turn runnable, and a clear with no recorded
+    baseline says why once instead of sending a guessed value."""
+    snapshot = CapabilitySnapshot(
+        agent="a",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        available_modes=(AcpMode("low", "Low"), AcpMode("high", "High")),
+        effort_choices=(AcpEffortChoice("low", "Low"), AcpEffortChoice("high", "High")),
+        effort_option="effort",
+    )
+    calls: list[tuple[str, dict]] = []
+
+    class _Client:
+        def __init__(self, error: Exception | None = None) -> None:
+            self.error = error
+
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            calls.append((method, params))
+            if self.error is not None:
+                raise self.error
+            return {}
+
+    backend = AcpAgentBackend(name="a", command="unused", snapshot=snapshot)
+    backend._note_session_mode(None, {})
+    backend._note_session_effort(None, {})
+
+    state = _session_effort_state("a", "s1")
+    state.pushed = "high"
+    await backend._set_effort(_Client(), "s1", None, budget=1)
+    await backend._set_effort(
+        _Client(AcpRemoteError("session/set_config_option", -32000, "no")), "s1", "high", budget=1
+    )
+    await backend._set_effort(_Client(AcpError("broken")), "s1", "high", budget=1)
+
+    mode_snapshot = CapabilitySnapshot(
+        agent="b",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        available_modes=(AcpMode("low", "Low"), AcpMode("high", "High")),
+    )
+    mode_backend = AcpAgentBackend(name="b", command="unused", snapshot=mode_snapshot)
+    await mode_backend._set_effort(_Client(), "s2", None, budget=1)
+    mode_state = _session_effort_state("b", "s2")
+    mode_state.mode_pushed = "high"
+    await mode_backend._set_effort(_Client(), "s2", None, budget=1)
+    mode_state.mode_baseline = "low"
+    await mode_backend._set_effort(_Client(AcpRemoteError("session/set_mode", -32000, "no")), "s2", "high", budget=1)
+    await mode_backend._set_effort(_Client(AcpError("broken")), "s2", "high", budget=1)
+
+    assert calls  # every attempt reached the wire; none escaped as an exception
 
 
 async def test_verify_reports_a_rejected_handshake_as_present_but_unusable() -> None:
