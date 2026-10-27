@@ -109,6 +109,7 @@ from raven.agent.loop.recovery import (
     decide,
     empty_retry_delay,
     has_thinking_to_refeed,
+    is_silent_reply,
     next_step_down,
     reasoning_excerpt,
     reply_kind,
@@ -136,7 +137,6 @@ from raven.providers.first_byte import first_byte_budget
 from raven.providers.tool_calls import openai_tool_call
 from raven.session.refs import TOOL_RESULT_TRUNCATION_MARKER, tool_result_view
 from raven.spine.events import bound_failure_text
-from raven.spine.silence import is_silence
 from raven.spine.turn import PROACTIVE_ORIGINS, AnswerlessTurnError
 from raven.token_wise import usage_context
 from raven.token_wise.turn_spend import TurnSpend
@@ -2520,7 +2520,7 @@ class TurnPathMixin:
                 ),
                 synthesis_policy=turn_synthesis(turn_meta),
             )
-            silent = not reply_awaited and is_silence(final_content, origin)
+            silent = not reply_awaited and is_silent_reply(final_content, origin)
             await _settle_silence(wrap_up_gate, silent=silent)
             # Persist the wrap-up into history like any normal final reply.
             # Persistence downstream reads only the returned ``messages`` list,

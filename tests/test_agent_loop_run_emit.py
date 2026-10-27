@@ -1897,15 +1897,15 @@ async def test_a_turn_that_replied_emits_no_silent_notice(tmp_path):
 
 
 async def test_the_marker_is_not_streamed_to_a_person_that_prefixes_it(tmp_path):
-    """The strict rule's reader: what merely starts like a marker is held, and shown the moment it is no marker."""
-    chunks = [ChatDelta(content="NO"), ChatDelta(content="T yet")]
+    """What merely starts like the taught marker is held, and shown the moment it is no marker."""
+    chunks = [ChatDelta(content="[SIL"), ChatDelta(content="VER] tier")]
     loop = AgentLoop(provider=_FakeStreamProvider(chunks), workspace=tmp_path)
     _stub_edges(loop)
     sink = _EmitCollector()
 
     outcome = await loop.run_turn(_req("done?"), sink, _drain)
 
-    assert [e.delta for e in sink.events if isinstance(e, EvStreamDelta)] == ["NOT yet"]
+    assert [e.delta for e in sink.events if isinstance(e, EvStreamDelta)] == ["[SILVER] tier"]
     assert outcome.silent is False
 
 
@@ -1969,7 +1969,7 @@ async def test_a_marker_after_the_message_tool_sent_does_not_make_the_turn_silen
     provider = _FakeStreamToolProvider(
         [
             [_message_tool_call('{"content": "here you go"}')],
-            [ChatDelta(content="NO_REPLY")],
+            [ChatDelta(content="[SILENT]")],
         ]
     )
     loop = AgentLoop(provider=provider, workspace=tmp_path)

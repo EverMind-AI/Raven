@@ -202,7 +202,27 @@ def _kind(content, finish="stop", *, origin=Origin.USER, streamed=False, prev_ha
         # A marker is read before a declined finish: whatever a filter stamped on it, it is the model's
         # choice, and read as a refusal it would fail the turn quoting itself as the explanation.
         ("[SILENT]", "content_filter", {}, Origin.USER, False, ReplyKind.SILENT),
-        ("NO_REPLY", "refusal", {}, Origin.USER, True, ReplyKind.SILENT),
+        ("NO_REPLY", "refusal", {}, Origin.CRON, True, ReplyKind.SILENT),
+        # A person's turn is never taught a marker, so it honours only the bracketed spelling the
+        # runtime teaches, as the whole reply with nothing but whitespace around it. A one-word answer
+        # that spells a marker loosely is the person's answer.
+        ("  [SILENT]\n", "stop", {}, Origin.USER, False, ReplyKind.SILENT),
+        ("[SILENT]", "stop", {}, None, False, ReplyKind.SILENT),
+        ("Silent.", "stop", {}, Origin.USER, False, ReplyKind.TEXT),
+        ("silent", "stop", {}, Origin.USER, False, ReplyKind.TEXT),
+        ("No reply.", "stop", {}, Origin.USER, False, ReplyKind.TEXT),
+        ('"No reply"', "stop", {}, Origin.USER, False, ReplyKind.TEXT),
+        ("NO_REPLY", "stop", {}, Origin.USER, False, ReplyKind.TEXT),
+        ("NO_REPLY", "stop", {}, None, False, ReplyKind.TEXT),
+        ("**[SILENT]**", "stop", {}, Origin.USER, False, ReplyKind.TEXT),
+        ("[silent]", "stop", {}, Origin.USER, False, ReplyKind.TEXT),
+        ("NO_REPLY", "refusal", {}, Origin.USER, True, ReplyKind.REFUSAL),
+        # A proactive turn keeps its forgiving rules.
+        ("Silent.", "stop", {}, Origin.CRON, False, ReplyKind.SILENT),
+        ("No reply.", "stop", {}, Origin.SENTINEL, False, ReplyKind.SILENT),
+        ('"No reply"', "stop", {}, Origin.HEARTBEAT, False, ReplyKind.SILENT),
+        ("NO_REPLY", "stop", {}, Origin.SUBAGENT, False, ReplyKind.SILENT),
+        ("**[SILENT]**", "stop", {}, Origin.CRON, False, ReplyKind.SILENT),
         ("nothing new\n\n[SILENT]", "content_filter", {}, Origin.CRON, True, ReplyKind.SILENT),
         ("", "content_filter", {}, Origin.USER, False, ReplyKind.REFUSAL),
         ("I can't", "refusal", {}, Origin.USER, False, ReplyKind.REFUSAL),
@@ -3255,9 +3275,9 @@ async def test_the_gate_holds_a_marker_and_drops_it():
     seen, deliver = _collecting()
     gate = SilenceGate(deliver, hold_all=False)
 
-    for delta in ("NO", "_REP", "LY"):
+    for delta in ("[SI", "LEN", "T]"):
         await gate(delta)
-    assert seen == [], "every prefix of a marker is held, the whole marker included"
+    assert seen == [], "every prefix of the marker is held, the whole marker included"
     gate.discard()
     await gate("!")
     await gate.release()
@@ -3270,12 +3290,12 @@ async def test_a_held_prefix_that_was_not_a_marker_goes_out_at_the_end():
     seen, deliver = _collecting()
     gate = SilenceGate(deliver, hold_all=False)
 
-    await gate("NO")
+    await gate("[SIL")
     assert seen == []
     await gate.release()
-    assert seen == ["NO"]
-    await gate("pe")
-    assert seen == ["NO", "pe"], "a released gate is open for the rest of the call"
+    assert seen == ["[SIL"]
+    await gate("VER]")
+    assert seen == ["[SIL", "VER]"], "a released gate is open for the rest of the call"
 
 
 @pytest.mark.asyncio
@@ -3312,51 +3332,65 @@ async def test_the_gate_holds_leading_whitespace_until_the_reply_shows_what_it_i
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "deltas,held",
+    [
+        pytest.param(["  ", "[SIL", "ENT]", "\n"], ["  ", "[SIL", "ENT]", "\n"], id="whitespace_around_the_marker"),
+        pytest.param(["[SILENT]", "\n", "x"], ["[SILENT]", "\n"], id="prose_after_the_marker"),
+        pytest.param(["[SIL", " ENT]"], ["[SIL"], id="whitespace_inside_the_marker"),
+    ],
+)
+async def test_the_gate_holds_only_what_can_still_be_the_taught_marker(deltas, held):
+    """A person's turn honours only ``[SILENT]`` with whitespace around it, so that is all the gate holds:
+    the delta that makes the text anything else lets everything held go out with it."""
+    seen, deliver = _collecting()
+    gate = SilenceGate(deliver, hold_all=False)
+
+    for delta in held:
+        await gate(delta)
+    assert seen == []
+    for delta in deltas[len(held) :]:
+        await gate(delta)
+
+    assert seen == ([] if deltas == held else ["".join(deltas)])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "deltas",
     [
+        pytest.param(["Sil", "ent."], id="a_word"),
+        pytest.param(["No", " reply."], id="two_words"),
+        pytest.param(['"No', ' reply"'], id="quoted"),
+        pytest.param(["NO", "_REPLY"], id="an_untaught_marker"),
         pytest.param(["*", "NO_REPLY", "*"], id="bold_marker"),
         pytest.param(["**", "[SILENT]", "**"], id="bold_bracketed_marker"),
         pytest.param([".", "NO_REPLY"], id="stray_full_stop"),
         pytest.param(["\n\n", "-", " SILENT"], id="whitespace_and_a_dash"),
     ],
 )
-async def test_the_gate_holds_a_marker_wrapped_in_punctuation(deltas):
-    """The strict rule forgives edge punctuation, so ``*NO_REPLY*`` is a marker and none of it may be shown:
-    the ``*`` that arrives first is not the point at which the reply stopped being one."""
+async def test_a_reply_that_cannot_become_the_taught_marker_is_not_held(deltas):
+    """No spelling but the bracketed one ends a person's turn silent, so a reply that opens on anything
+    else is shown as it arrives -- a one-word ``Silent.`` included."""
     seen, deliver = _collecting()
     gate = SilenceGate(deliver, hold_all=False)
 
     for delta in deltas:
         await gate(delta)
-    assert seen == []
-    gate.discard()
 
-    assert seen == []
+    assert "".join(seen) == "".join(deltas)
+    assert seen[0] == deltas[0] or deltas[0].isspace(), "out at the first delta that is not whitespace"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("first", ["42", "1.", "\u4f60", "caf\u00e9"])
 async def test_a_reply_that_opens_on_a_letter_or_a_digit_is_not_held(first):
-    """No marker begins with a digit or a non-Latin letter, so the first delta already shows what the reply is."""
+    """The taught marker opens on its bracket, so the first letter or digit already shows what the reply is."""
     seen, deliver = _collecting()
     gate = SilenceGate(deliver, hold_all=False)
 
     await gate(first)
 
     assert seen == [first]
-
-
-@pytest.mark.asyncio
-async def test_the_gate_lets_punctuation_that_leads_prose_through_once_the_prose_shows():
-    seen, deliver = _collecting()
-    gate = SilenceGate(deliver, hold_all=False)
-
-    await gate("**")
-    assert seen == [], "nothing readable yet"
-    await gate("Summary")
-    assert seen == ["**Summary"], "released whole, in order, the moment the reply is plainly not a marker"
-    await gate("**")
-    assert seen == ["**Summary", "**"]
 
 
 @pytest.mark.asyncio
@@ -3369,9 +3403,8 @@ async def test_the_gate_lets_punctuation_that_leads_prose_through_once_the_prose
     ],
 )
 async def test_a_reply_that_opens_on_a_symbol_goes_out_at_its_first_delta(first):
-    """No marker starts with a symbol, and the strict rule forgives none at a marker's edge -- only
-    whitespace and punctuation -- so a reply that opens on an emoji, a box-drawing line or an arrow
-    shows at its first delta that it is not one."""
+    """The taught marker opens on its bracket and is forgiven only whitespace around it, so a reply
+    that opens on an emoji, a box-drawing line or an arrow shows at its first delta that it is not one."""
     seen, deliver = _collecting()
     gate = SilenceGate(deliver, hold_all=False)
 
@@ -3463,33 +3496,80 @@ async def test_a_marker_reply_closes_the_loop_silent_and_never_streams(workspace
 
 
 @pytest.mark.asyncio
-async def test_a_marker_wrapped_in_punctuation_is_silent_and_never_streams(workspace, monkeypatch):
-    _served(monkeypatch, [_finished_stream("**", "[SILENT]", "**")])
+@pytest.mark.parametrize("deltas", [["**", "[SILENT]", "**"], list("*NO_REPLY*")], ids=["bold_bracketed", "bold"])
+async def test_a_marker_wrapped_in_punctuation_is_silent_on_a_proactive_turn(workspace, monkeypatch, deltas):
+    """A proactive turn keeps the strict rule's forgiveness of edge punctuation, and holds its whole call."""
+    _served(monkeypatch, [_finished_stream(*deltas)])
     sink = _Sink()
 
     final, _used, messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
-        _seed(), on_token_delta=sink.delta
+        _seed(), on_token_delta=sink.delta, origin=Origin.CRON
     )
 
-    assert outcome.silent is True and final == "**[SILENT]**"
+    assert outcome.silent is True and final == "".join(deltas)
     assert messages[-1].get("_silent") is True
     assert sink.text == []
 
 
 @pytest.mark.asyncio
-async def test_a_bold_marker_streamed_a_character_at_a_time_is_silent_and_never_streams(workspace, monkeypatch):
-    """Read a delta at a time, the asterisk is still the punctuation the strict rule forgives, so
-    ``*NO_REPLY*`` is held however finely it arrives, and dropped."""
-    _served(monkeypatch, [_finished_stream(*"*NO_REPLY*")])
+@pytest.mark.parametrize(
+    "reply", ["Silent.", "silent", "No reply.", '"No reply"', "NO_REPLY", "**[SILENT]**", "*NO_REPLY*"]
+)
+async def test_a_persons_answer_that_spells_a_marker_loosely_is_delivered(workspace, monkeypatch, reply):
+    """A person's turn is never taught a marker, so a one-word answer that spells one loosely is the
+    person's answer: it types out as it streams, is returned, and is filed as a reply."""
+    _served(monkeypatch, [_finished_stream(*_chunked(reply))])
+    agent = _litellm_agent(workspace)
+    sink = _Sink()
+    silence: dict[str, bool] = {}
+
+    out = await agent._process_message(_turn(), session_key="s1", on_token_delta=sink.delta, silence=silence)
+
+    assert out == (reply, []) and silence == {}
+    assert sink.text == _chunked(reply), "nothing was held back"
+    assert "silent" not in agent.sessions.get_or_create("s1").messages[-1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply", ["[SILENT]", "  [SILENT]\n"])
+async def test_a_persons_turn_is_silent_on_the_taught_marker_with_whitespace_around_it(workspace, monkeypatch, reply):
+    _served(monkeypatch, [_finished_stream(*_chunked(reply, 3))])
+    agent = _litellm_agent(workspace)
+    sink = _Sink()
+    silence: dict[str, bool] = {}
+
+    out = await agent._process_message(_turn(), session_key="s1", on_token_delta=sink.delta, silence=silence)
+
+    assert out is None and silence == {"silent": True}
+    assert sink.text == []
+    assert agent.sessions.get_or_create("s1").messages[-1]["silent"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply", ["Silent.", "No reply.", '"No reply"', "NO_REPLY"])
+async def test_a_proactive_turn_still_reads_a_loosely_spelled_marker_as_silence(workspace, monkeypatch, reply):
+    _served(monkeypatch, [_reply(reply)])
+    agent = _litellm_agent(workspace)
+    silence: dict[str, bool] = {}
+
+    out = await agent._process_message(_turn(origin=Origin.CRON), session_key="s1", origin=Origin.CRON, silence=silence)
+
+    assert out is None and silence == {"silent": True}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin,silent", [(Origin.USER, False), (Origin.CRON, True)])
+async def test_a_wrap_up_that_spells_a_marker_loosely_is_read_by_its_turns_rule(workspace, monkeypatch, origin, silent):
+    _served(monkeypatch, [_tool_stream(), _finished_stream("No reply.")])
     sink = _Sink()
 
-    final, _used, messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
-        _seed(), on_token_delta=sink.delta
+    final, _used, messages, outcome = await _litellm_agent(workspace, max_iterations=1)._run_agent_loop(
+        _seed(), on_token_delta=sink.delta, origin=origin
     )
 
-    assert outcome.silent is True and final == "*NO_REPLY*"
-    assert messages[-1].get("_silent") is True
-    assert sink.text == []
+    assert final == "No reply." and outcome.silent is silent
+    assert bool(messages[-1].get("_silent")) is silent
+    assert "".join(sink.text) == ("" if silent else "No reply.")
 
 
 @pytest.mark.asyncio
@@ -3615,7 +3695,7 @@ async def test_a_marker_held_for_a_hook_is_still_never_shown(workspace, monkeypa
 @pytest.mark.parametrize(
     "origin,reply",
     [
-        pytest.param(Origin.USER, "NO", id="user_a_marker_prefix_that_is_no_marker"),
+        pytest.param(Origin.USER, "[SIL", id="user_a_marker_prefix_that_is_no_marker"),
         pytest.param(Origin.CRON, "2 deals filtered", id="proactive_report"),
     ],
 )
@@ -3677,15 +3757,15 @@ async def test_a_marker_after_a_cut_answer_leaves_what_streamed_as_the_answer(wo
 @pytest.mark.asyncio
 async def test_a_cut_reply_that_began_like_a_marker_still_shows_its_start(workspace, monkeypatch):
     """A held start is the answer so far once the stream is cut, and the continuation follows it."""
-    _served(monkeypatch, [_DyingStream("NO"), _finished_stream(" problem at all.")])
+    _served(monkeypatch, [_DyingStream("[SIL"), _finished_stream("VER] tier is active.")])
     sink = _Sink()
 
     final, _used, _messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
         _seed(), on_token_delta=sink.delta
     )
 
-    assert final == "NO problem at all." and outcome.silent is False
-    assert "".join(sink.text) == "NO problem at all."
+    assert final == "[SILVER] tier is active." and outcome.silent is False
+    assert "".join(sink.text) == "[SILVER] tier is active."
 
 
 @pytest.mark.asyncio
@@ -3722,7 +3802,7 @@ async def test_words_beside_a_tool_call_reach_the_reader_before_the_tool_runs(wo
     "origin,preamble,ending,seen",
     [
         pytest.param(
-            Origin.USER, "NO", "There is one file.", ["NO", "There is one file."], id="user_start_of_a_marker"
+            Origin.USER, "[SIL", "There is one file.", ["[SIL", "There is one file."], id="user_start_of_a_marker"
         ),
         pytest.param(
             Origin.CRON, "Checking the inbox", "[SILENT]", ["Checking the inbox"], id="proactive_words_then_a_marker"
@@ -3828,7 +3908,7 @@ async def test_a_marker_reply_ends_the_turn_silently(workspace, monkeypatch):
 @pytest.mark.asyncio
 async def test_a_marker_from_a_plain_call_ends_the_turn_silently(workspace, monkeypatch):
     """The same turn on a surface that does not stream: a plain call, one reply, which is the marker."""
-    _served(monkeypatch, [_reply("NO_REPLY")])
+    _served(monkeypatch, [_reply("[SILENT]")])
     agent = _litellm_agent(workspace)
     silence: dict[str, bool] = {}
 
@@ -3970,7 +4050,7 @@ async def test_a_proactive_turn_that_skips_after_send_stays_silent(workspace, mo
 async def test_a_marker_after_the_message_tool_sent_is_not_a_silent_turn(workspace, monkeypatch):
     """The reader has the answer from the tool; the marker only says there is nothing more.
     A turn that answered is not a turn that said nothing, and a surface told otherwise would drop the answer."""
-    _served(monkeypatch, [_tool_reply("message", _SEND), _reply("NO_REPLY")])
+    _served(monkeypatch, [_tool_reply("message", _SEND), _reply("[SILENT]")])
     agent = _litellm_agent(workspace)
     sent = _wire_message_tool(agent)
     silence: dict[str, bool] = {}
@@ -3979,7 +4059,7 @@ async def test_a_marker_after_the_message_tool_sent_is_not_a_silent_turn(workspa
 
     assert sent == ["here is your answer"]
     assert out is None and silence == {}
-    assert agent.sessions.get_or_create("s1").messages[-1]["content"] == "NO_REPLY"
+    assert agent.sessions.get_or_create("s1").messages[-1]["content"] == "[SILENT]"
 
 
 @pytest.mark.asyncio
