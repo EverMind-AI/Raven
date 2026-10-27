@@ -2648,6 +2648,9 @@ def test_a_count_nobody_reported_is_not_read_as_one() -> None:
     assert _tokens_reported({"usage": "none"}) is None
     assert _tokens_reported({"usage": {"inputTokens": 3}}) is None
     assert _tokens_reported({"usage": {"totalTokens": "many"}}) is None
+    assert _tokens_reported({"usage": {"totalTokens": None}}) is None
+    assert _tokens_reported({"usage": {"totalTokens": ""}}) is None
+    assert _tokens_reported({"usage": {"totalTokens": 0}}) == 0
     assert _tokens_reported({"usage": {"total_tokens": 7}}) == 7
     assert _agent_version(SimpleNamespace(initialize=None)) == ""
 

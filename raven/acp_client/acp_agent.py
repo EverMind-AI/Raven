@@ -196,8 +196,11 @@ def _tokens_reported(result: Any) -> int | None:
         return None
     for key in ("totalTokens", "total_tokens"):
         if key in usage:
+            value = usage[key]
+            if value is None:
+                return None
             try:
-                return int(usage[key] or 0)
+                return int(value)
             except (TypeError, ValueError):
                 return None
     return None
