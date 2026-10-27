@@ -4802,6 +4802,41 @@ async def test_a_turn_the_message_tool_answered_with_no_reply_of_its_own_files_t
 
 
 @pytest.mark.asyncio
+async def test_the_verdict_rides_the_last_row_with_text_or_a_call_and_never_a_notice_filed_after(
+    workspace, monkeypatch
+):
+    """Where the flag lands, as the wire describes it: the turn's last assistant row with text or tool
+    calls. Here the turn sent, then listed a directory, then said nothing, so that is the listing's
+    call, not the send; a notice the runtime files after the turn does not take it."""
+    import raven.permissions.turn as permissions_turn
+
+    asked: list[str] = []
+    filing = ("A question went unanswered.", {"kind": permissions_turn.UNANSWERED_KIND, "text": "q"})
+    monkeypatch.setattr(permissions_turn, "unanswered_filing", lambda: filing if asked else None)
+    _served(monkeypatch, [_tool_reply("message", _SEND), _tool_reply(), _reply(""), _reply("")])
+    agent = _litellm_agent(workspace)
+    _wire_message_tool(agent)
+    real_execute = agent.tools.execute
+
+    async def execute(name, arguments, **kwargs):
+        # The listing is where the turn met a question nobody was there to answer.
+        if name == "list_dir":
+            asked.append(name)
+        return await real_execute(name, arguments, **kwargs)
+
+    monkeypatch.setattr(agent.tools, "execute", execute)
+
+    out = await agent._process_message(_turn(), session_key="s1")
+
+    assert out is None
+    assistants = [m for m in agent.sessions.get_or_create("s1").messages if m["role"] == "assistant"]
+    assert [
+        (m["tool_calls"][0]["function"]["name"] if m.get("tool_calls") else "notice", bool(m.get("replied_via_tool")))
+        for m in assistants
+    ] == [("message", False), ("list_dir", True), ("notice", False)]
+
+
+@pytest.mark.asyncio
 async def test_a_marker_after_the_message_tool_sent_is_not_a_silent_turn(workspace, monkeypatch):
     """The reader has the answer from the tool; the marker only says there is nothing more.
     A turn that answered is not a turn that said nothing, and a surface told otherwise would drop the answer."""

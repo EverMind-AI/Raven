@@ -110,8 +110,8 @@ _NOTICE_KEY = "_notice"
 # ``_notice``: ``_save_turn`` writes it as ``silent``.
 _SILENT_KEY = "_silent"
 
-# Marks the last assistant row a turn files when its reply went out through the
-# message tool, read off ``MessageTool.sent_in_turn``: the live verdict, so a stored
+# Marks the last assistant row with text or tool calls of a turn whose reply went out
+# through the message tool, read off ``MessageTool.sent_in_turn``: the live verdict, so a stored
 # reader need not guess it from the calls it can see. ``_save_turn`` writes it as
 # ``replied_via_tool``.
 _REPLIED_VIA_TOOL_KEY = "_replied_via_tool"
@@ -417,11 +417,12 @@ def _file_composed_reply(messages: list[dict[str, Any]], reply: str) -> None:
 
 
 def _stamp_replied_via_tool(messages: list[dict[str, Any]], turn_base: int) -> None:
-    """Mark the last assistant row the turn files: the message tool sent this turn's reply to its own chat.
+    """Mark the turn's last assistant row with text or tool calls: the message tool sent this turn's reply.
 
-    An assistant row with no text and no call is not filed (``_save_turn``), and the commonest such
-    turn ends on one -- the tool sent, then the model said nothing -- so the mark goes on the row
-    before it that is. A turn that ends on its marker files the marker's row, which is the last.
+    An assistant row with neither is not filed (``_save_turn``), and the commonest such turn ends on
+    one -- the tool sent, then the model said nothing -- so the mark goes on the last row before it
+    that is filed, the turn's last tool call, which need not be the send. A turn that ends on its
+    marker has the marker's row marked. A notice ``_save_turn`` files after the turn is not marked.
     Replaced with a copy, so a list that shares the row is left as it was.
     """
     for index in range(len(messages) - 1, turn_base - 1, -1):

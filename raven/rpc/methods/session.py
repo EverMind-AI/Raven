@@ -373,8 +373,9 @@ def _map_to_wire(
       a new one around it.
     * ``silent`` — set on an assistant entry that is the model's silence marker,
       so a reload draws one muted line rather than the marker as an answer.
-    * ``replied_via_tool`` — set on the last assistant entry a turn the message
-      tool answered files, so a reader can tell such a turn from a Silent Turn.
+    * ``replied_via_tool`` — set on the last assistant entry with text or tool
+      calls of a turn the message tool answered, so a reader can tell such a turn
+      from a Silent Turn.
 
     ``deliveries_on_disk`` is false for a transcript recorded on another
     machine (an Imported Conversation): its delivered files are drawn as
