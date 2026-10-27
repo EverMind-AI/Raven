@@ -3390,14 +3390,16 @@ Two halves: the host's side in `acp_client` decides when to ask, starts and ends
 holds the endpoint a forked agent runs behind; the template's own side is a launcher beside the
 CLI, because it loads the surfaces by name and runs `python -m raven`, which the client shelf may
 not. The client starts it through Raven's entry point, which settles the certificate store first,
-and never imports it. It starts through the parent-death wrapper like any agent and its stdin is a
-lifeline only the host holds. Each forked agent leads a session of its own and arms the
-parent-death signal against the template. A product launcher's `os.execv` of `python -m raven`
-runs Raven in the same process. Agents write the modules they imported beside the template, per
-product, and the next template loads the modules at least two products import (one product's own
-while only one has been seen): a module one product alone imports is shared by no other process,
-so it is left for that product to import after the fork. Only the host's own interpreter starting
-`-m raven` or a product launcher is forked; anything else launches the ordinary way.
+and never imports it. It starts through the parent-death wrapper like any agent, its stdin is a
+lifeline only the host holds, and it belongs to the event loop that started it: its pipes and the
+watcher that reaps it are that loop's, so it is ended with that loop and a later loop starts
+another. Each forked agent leads a session of its own and arms the parent-death signal against the
+template. A product launcher's `os.execv` of `python -m raven` runs Raven in the same process.
+Agents write the modules they imported beside the template, per product, and the next template
+loads the modules at least two products import (one product's own while only one has been seen): a
+module one product alone imports is shared by no other process, so it is left for that product to
+import after the fork. Only the host's own interpreter starting `-m raven` or a product launcher
+is forked; anything else launches the ordinary way.
 
 **Leftover agent** (`raven/acp_client/leftovers.py`):
 An ACP agent process group whose launching host is no longer running. An ACP agent runs in a
