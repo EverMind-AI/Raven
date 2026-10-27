@@ -1921,3 +1921,44 @@ def test_a_saved_time_with_an_offset_is_read_as_local_time(tmp_path: Path, offse
     assert loaded is not None
     assert loaded.updated_at.tzinfo is None
     assert loaded.updated_at == saved.astimezone().replace(tzinfo=None)
+
+
+# ---- turn markers that index into the messages ------------------------------
+
+_TURN_MARKERS = ("output_limit_turn_at", "budget_stop_turn_at")
+
+
+def _session_with_two_turns_the_last_one_cut():
+    from raven.session.manager import Session
+
+    session = Session(key="tui:markers")
+    for role, text in (("user", "a"), ("assistant", "b"), ("user", "c"), ("assistant", "partial")):
+        session.add_message(role, text)
+    for key in _TURN_MARKERS:
+        session.metadata[key] = 2
+    return session
+
+
+def test_clearing_a_session_forgets_the_turn_markers():
+    """A marker says "the turn starting at index k was cut". After ``/new`` the
+    index starts again at 0, and a command that writes no marker of its own
+    (``/help``) begins at 0 <= k -- so ACP reported it cut."""
+    session = _session_with_two_turns_the_last_one_cut()
+
+    session.clear()
+
+    assert [session.metadata[key] for key in _TURN_MARKERS] == [None, None]
+
+
+def test_undoing_the_cut_turn_forgets_its_markers_and_keeps_an_earlier_ones():
+    session = _session_with_two_turns_the_last_one_cut()
+
+    session.undo_last_turn()
+
+    assert [session.metadata[key] for key in _TURN_MARKERS] == [None, None]
+
+    earlier = _session_with_two_turns_the_last_one_cut()
+    for key in _TURN_MARKERS:
+        earlier.metadata[key] = 0
+    earlier.undo_last_turn()
+    assert [earlier.metadata[key] for key in _TURN_MARKERS] == [0, 0], "the turn it marks is still there"

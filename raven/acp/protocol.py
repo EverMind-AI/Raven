@@ -89,14 +89,12 @@ STOP_REASONS = frozenset(
 )
 """Every value ``PromptResponse.stopReason`` may take.
 
-``max_turn_requests`` has no source in raven and is therefore never sent: it
-describes a limit the agent loop does not report hitting. ``max_tokens`` is sent
-for a turn whose generation stopped at the model's output ceiling, which is what
-a delegating client needs in order to weigh the reply -- refined from
-``end_turn`` in `raven/acp/methods.py`, and never over a reason that already
-says why the turn ended. Both stay in the set because it is the *schema's* enum,
-and a translator that latched one of them would be caught by the schema check
-rather than by this constant.
+``max_turn_requests`` is sent for a turn the agent loop's own budget ended (the
+tool cap, the wall clock or a stalled tool) and ``max_tokens`` for one whose
+generation stopped at the model's output ceiling: either way the reply is a
+wrap-up rather than the work, which is what a delegating client needs in order
+to weigh it. Both are refined from ``end_turn`` in `raven/acp/methods.py`, and
+never over a reason that already says why the turn ended.
 """
 
 

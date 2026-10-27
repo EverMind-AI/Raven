@@ -345,11 +345,28 @@ class Session:
         # rule in ``SessionManager._metadata_to_write``: a key this copy merely
         # omits comes back on the next save.
         self.metadata["annotated_through"] = 0
+        self._forget_turn_markers(0)
         self.truncations += 1
         self.log_id = uuid.uuid4().hex
         self.log_generation = 0
         self.log_started_at = datetime.now(timezone.utc).isoformat(timespec="microseconds")
         self.updated_at = datetime.now()
+
+    def _forget_turn_markers(self, from_index: int) -> None:
+        """Clear the turn markers whose turn starts at ``from_index`` or later.
+
+        The loop stamps a cut turn with the index its rows start at
+        (``output_limit_turn_at``, ``budget_stop_turn_at``) and ACP reports a
+        prompt as cut when one sits at or past where that prompt began. Once the
+        messages from ``from_index`` are gone, the next prompt begins there, and
+        a command that writes no marker of its own would be reported cut by a
+        turn that no longer exists. Cleared as None rather than dropped, per the
+        removal rule in ``SessionManager._metadata_to_write``.
+        """
+        for key in ("output_limit_turn_at", "budget_stop_turn_at"):
+            at = self.metadata.get(key)
+            if isinstance(at, int) and at >= from_index:
+                self.metadata[key] = None
 
     def undo_last_turn(self, n: int = 1) -> int:
         """Drop the last ``n`` user-turn blocks from the unconsolidated tail.
@@ -373,6 +390,7 @@ class Session:
         cursor = self.metadata.get("annotated_through")
         if isinstance(cursor, int) and cursor > cut_index:
             self.metadata["annotated_through"] = cut_index
+        self._forget_turn_markers(cut_index)
         self.truncations += 1
         self.log_generation += 1
         self.updated_at = datetime.now()

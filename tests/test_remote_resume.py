@@ -135,6 +135,22 @@ async def test_a_turn_cut_short_is_marked_partial_as_a_turn_ended_here_would_be(
     assert picked.status == "ok" and picked.reply.startswith("half\n\n[raven] stub@box stopped before finishing")
 
 
+async def test_a_picked_up_copilot_reply_that_is_its_providers_refusal_is_an_error(_pool):
+    """The pick-up reports a left run the way the turn would have ended here, and
+    a Copilot turn whose whole reply is its provider's refusal fails here."""
+    link = _Link()
+    backend = AcpAgentBackend(name="stub@box", command="stub", machine="box", preset="github_copilot")
+    picking = asyncio.ensure_future(remote_resume.pick_up(_run(), backend, pool=link))
+    await asyncio.sleep(0.05)
+    link.pipe.says(_chunk("Error: 402 Your credit balance is too low. Please add credits."))
+    link.pipe.says({"jsonrpc": "2.0", "id": 3, "result": {"stopReason": "end_turn"}})
+
+    picked = await asyncio.wait_for(picking, timeout=5)
+
+    assert picked.status == "error"
+    assert "for want of credit" in picked.reply
+
+
 async def test_a_machine_that_cannot_be_asked_or_a_link_that_cannot_attach_keeps_the_record(_pool):
     link = _Link(tasks=remote_path.NodeCallError("the Raven node on machine 'Lab box' (box) did not answer"))
     with pytest.raises(remote_resume.UnreachableError, match="did not answer"):

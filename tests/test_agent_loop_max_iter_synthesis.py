@@ -306,3 +306,69 @@ async def test_synthesis_falls_back_to_static_on_exception():
     synth = _bind_synth(provider, max_iterations=40)
     result = await synth([], "m", None)
     assert result == _MAX_ITER_STATIC_FALLBACK.format(n=40)
+
+
+# --------------------------------------------------------------------------- #
+# A turn cut by its own budget leaves a turn-scoped marker on the session      #
+# --------------------------------------------------------------------------- #
+
+
+class _AnswersProvider(LLMProvider):
+    """Answers at once: a turn that finishes inside its budget."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
+        return LLMResponse(content="done", finish_reason="stop")
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+def _user_turn(text: str) -> TurnRequest:
+    return TurnRequest(
+        origin=Origin.USER,
+        source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+        text=text,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_spent_its_tool_budget_is_marked_on_the_session(workspace):
+    """The wrap-up reads as an ordinary answer, so the session says the turn was cut.
+
+    Session-level for the reason ``output_limit_turn_at`` is: a surface that
+    reports the turn (ACP's stop reason) reads it after the turn, and stamped
+    with the index the turn's rows start at so an earlier turn's cut never
+    answers a later prompt.
+    """
+    agent = _make_agent(workspace, _ToolThenSynthProvider())
+
+    out = await agent._process_message(_user_turn("do the thing"), session_key="s1")
+
+    assert out is not None and out[0] == "Partial summary: did A and B; C is still pending."
+    assert agent.sessions.get_or_create("s1").metadata.get("budget_stop_turn_at") == 0
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_finished_clears_a_budget_stop_left_by_an_earlier_one(workspace):
+    """Written OR cleared every turn: `/new` and undo move the message index back
+    without touching metadata, so an old marker could otherwise answer for a turn
+    that finished."""
+    agent = _make_agent(workspace, _AnswersProvider())
+    agent.sessions.get_or_create("s1").metadata["budget_stop_turn_at"] = 0
+
+    out = await agent._process_message(_user_turn("hi"), session_key="s1")
+
+    assert out is not None and out[0] == "done"
+    assert agent.sessions.get_or_create("s1").metadata.get("budget_stop_turn_at") is None

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any
 
 import pytest
 
@@ -388,7 +389,7 @@ class TestTranslatedFrames:
 class TestUsage:
     """The one place raven's rich accounting maps cleanly onto ACP."""
 
-    def test_a_completion_carries_the_window_and_the_cost(self):
+    def test_a_completion_carries_the_window_and_the_sessions_cost(self):
         result = translate(
             {
                 "type": "message.complete",
@@ -397,12 +398,13 @@ class TestUsage:
                     "usage": {
                         "prompt_tokens": 100,
                         "completion_tokens": 20,
-                        "cost_usd": 0.0042,
+                        "cost_usd": 0.001,
                         "context_used": 13500,
                         "context_max": 200000,
                     },
                 },
-            }
+            },
+            session_cost=0.0042,
         )
 
         assert result.stop == "end_turn"
@@ -452,10 +454,53 @@ class TestUsage:
         """Zero is a real answer -- a cached reply cost nothing -- and different
         from not knowing."""
         result = translate(
-            {"type": "message.complete", "payload": {"usage": {"context_used": 1, "context_max": 2, "cost_usd": 0}}}
+            {"type": "message.complete", "payload": {"usage": {"context_used": 1, "context_max": 2, "cost_usd": 0}}},
+            session_cost=0,
         )
 
         assert result.updates[0]["cost"] == {"amount": 0.0, "currency": "USD"}
+
+    def test_a_turns_own_cost_is_not_the_sessions(self):
+        """ACP defines ``cost`` as the session's cumulative cost. The turn's cost
+        sent as it was made a client that follows the schema show the last
+        turn's spend as the whole session's."""
+        result = translate(
+            {"type": "message.complete", "payload": {"usage": {"context_used": 1, "context_max": 2, "cost_usd": 0.5}}}
+        )
+
+        assert "cost" not in result.updates[0]
+
+    @staticmethod
+    def _costs(session: AcpSession, *turn_costs: float | None) -> list[Any]:
+        written: list[dict] = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(session)
+        for cost in turn_costs:
+            usage = {"context_used": 1, "context_max": 100, **({} if cost is None else {"cost_usd": cost})}
+            asyncio.run(translator.send_frame(_event("message.complete", usage=usage)))
+        return [u.get("cost", {}).get("amount") for u in _updates(written)]
+
+    def test_each_turn_reports_what_the_session_has_cost_so_far(self):
+        assert self._costs(_session(), 0.01, 0.02, 0.5) == pytest.approx([0.01, 0.03, 0.53])
+
+    def test_an_unpriced_turn_leaves_the_total_where_it_was(self):
+        """A model with no published price adds an unknown amount; the total of
+        what was reported stands, and before any price there is none to send."""
+        assert self._costs(_session(), None, 0.01, None) == pytest.approx([None, 0.01, 0.01])
+
+    def test_a_session_that_was_resumed_counts_on_from_its_earlier_spend(self):
+        session = _session()
+        session.cost_usd = 1.5
+
+        assert self._costs(session, 0.25) == pytest.approx([1.75])
+
+    def test_a_session_whose_earlier_spend_is_unknown_reports_no_cost(self):
+        """A total started at zero would understate a resumed session as surely
+        as the turn's own cost did; without the earlier spend there is no total."""
+        session = _session()
+        session.cost_known = False
+
+        assert self._costs(session, 0.25, 0.5) == [None, None]
 
 
 class TestTerminationMapping:

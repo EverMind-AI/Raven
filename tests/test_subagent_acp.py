@@ -2550,6 +2550,188 @@ async def test_dispatch_accepts_the_managers_full_keyword_set(tmp_path: Path) ->
     assert reply == "pong"
 
 
+_TURN_COUNTS = {"inputTokens": 1200, "outputTokens": 34, "cachedReadTokens": 800, "totalTokens": 2034}
+
+
+async def _counted(tmp_path: Path, **env: str) -> tuple[int | None, int | None]:
+    """The run record's token counts for one turn of a stub reporting usage as ``env`` says."""
+    from raven.agent.subagent import activity
+
+    cfg = stub_config("a")
+    cfg.env.update(env)
+    backend = build_third_party_backend(cfg)
+    with activity.collecting() as did:
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    return did.tokens_in, did.tokens_out
+
+
+async def test_the_turns_token_counts_reach_the_run_record(tmp_path: Path) -> None:
+    """claude-agent-acp and codex-acp put a turn's counts on the prompt response.
+
+    Their ``usage_update`` carries the window (``used``, ``size``) and the cost,
+    no counts, and only it was read -- so every ACP run's record said nothing
+    about tokens, and the tasks board showed none for an agent that sent them.
+    """
+    assert await _counted(tmp_path, ACP_STUB_PROMPT_USAGE=json.dumps(_TURN_COUNTS)) == (1200, 34)
+
+
+async def test_counts_in_both_places_are_counted_once(tmp_path: Path) -> None:
+    """``note_usage`` adds, so an agent that repeats its counts in the update
+    must not have the turn's tokens doubled."""
+    both = {
+        "ACP_STUB_PROMPT_USAGE": json.dumps(_TURN_COUNTS),
+        "ACP_STUB_USAGE_UPDATE": json.dumps({"used": 42, "size": 1000, "inputTokens": 1200, "outputTokens": 34}),
+    }
+    assert await _counted(tmp_path, **both) == (1200, 34)
+
+
+async def test_an_agent_counting_only_in_its_update_is_still_read(tmp_path: Path) -> None:
+    """The spelling an earlier agent was seen sending stays read."""
+    update = {"used": 42, "size": 1000, "inputTokens": 1200, "outputTokens": 34}
+    assert await _counted(tmp_path, ACP_STUB_USAGE_UPDATE=json.dumps(update)) == (1200, 34)
+
+
+@pytest.mark.parametrize(
+    ("agent", "version", "counted"),
+    [
+        ("claude-agent-acp", "0.94.0", (1200, 34)),
+        ("codex-acp", "2.2.2", (1200, 34)),
+        ("codex-acp", "2.1.1", (None, None)),
+        ("codex-acp", "", (None, None)),
+    ],
+)
+async def test_prompt_usage_is_read_only_where_it_counts_the_turn(
+    tmp_path: Path, agent: str, version: str, counted: tuple[int | None, int | None]
+) -> None:
+    """claude-agent-acp sums the turn's calls, and so does codex-acp from 2.2.1.
+    Before that codex-acp sent the last call alone (``tokenUsage.last``), so a
+    twenty-call turn would be recorded as one call's tokens -- a confident
+    undercount where there was no count before."""
+    env = {
+        "ACP_STUB_AGENT_NAME": agent,
+        "ACP_STUB_AGENT_VERSION": version,
+        "ACP_STUB_PROMPT_USAGE": json.dumps(_TURN_COUNTS),
+    }
+    assert await _counted(tmp_path, **env) == counted
+
+
+async def _booked(tmp_path: Path, runs: int = 1, *, bound: bool = False, **env: str):
+    """What the usage ledger holds for ``runs`` turns on one instance of a stub reporting as ``env`` says."""
+    from datetime import datetime, timedelta, timezone
+
+    from raven.token_wise import usage_context
+    from raven.token_wise.usage_tracker import delegated_usage
+
+    cfg = stub_config("a")
+    cfg.env.update(env)
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    if bound:
+        await registry.commit("cli:root", "a", "work", "earlier-session", kind="acp")
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("a", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+    since = datetime.now(timezone.utc) - timedelta(seconds=1)
+    ledger = tmp_path / "telemetry"
+    with usage_context.bind("cli:root", {"root_session_key": "cli:root", "telemetry_dir": str(ledger)}):
+        for n in range(runs):
+            await backend.run(
+                "ping", task_id=f"t{n}", workspace=tmp_path, session_key="cli:root", instance="work", executor=None
+            )
+    return delegated_usage("cli:root", since, telemetry_dir=ledger)
+
+
+_CLAUDE_TURN = {
+    "ACP_STUB_AGENT_NAME": "claude-agent-acp",
+    "ACP_STUB_PROMPT_USAGE": json.dumps(_TURN_COUNTS),
+}
+
+
+async def test_a_third_party_agents_turn_is_booked_in_the_usage_ledger(tmp_path: Path) -> None:
+    """An in-process sub-agent's calls are booked under the conversation that
+    delegated them; an ACP agent's turn was not, so its spend was missing from
+    every total that conversation reported."""
+    got = await _booked(tmp_path, ACP_STUB_COST_PER_PROMPT="0.0125", **_CLAUDE_TURN)
+
+    assert (got.calls, got.input_tokens, got.output_tokens) == (1, 1200, 34)
+    assert got.cost_usd == pytest.approx(0.0125)
+
+
+@pytest.mark.parametrize(
+    "reported",
+    [
+        {},
+        {
+            "ACP_STUB_AGENT_NAME": "codex-acp",
+            "ACP_STUB_AGENT_VERSION": "2.1.1",
+            "ACP_STUB_PROMPT_USAGE": json.dumps(_TURN_COUNTS),
+        },
+    ],
+    ids=["no-counts", "last-call-counts"],
+)
+async def test_a_turn_whose_counts_are_unknown_still_books_its_cost(tmp_path: Path, reported: dict[str, str]) -> None:
+    """``usage_update`` carries the window and the cost and no counts, so a turn
+    can arrive with a cost and no counts that are the turn's. Its cost is booked
+    and its counts are left missing: not dropped with them, nor written as zeros."""
+    got = await _booked(tmp_path, ACP_STUB_COST_PER_PROMPT="0.0125", **reported)
+
+    assert got.calls == 1
+    assert got.cost_usd == pytest.approx(0.0125) and got.cost_missing_calls == 0
+    assert (got.input_missing_calls, got.output_missing_calls) == (1, 1)
+
+
+async def test_a_turn_with_neither_counts_nor_cost_books_nothing(tmp_path: Path) -> None:
+    """A row that knows nothing would still count as a call."""
+    got = await _booked(tmp_path)
+
+    assert got.calls == 0
+
+
+async def test_a_sessions_cumulative_cost_is_booked_once(tmp_path: Path) -> None:
+    """``usage_update.cost`` is the session's cumulative cost, so each turn books
+    what it added: two turns reporting 0.01 then 0.02 cost 0.02, not 0.03."""
+    got = await _booked(tmp_path, 2, ACP_STUB_COST_PER_PROMPT="0.01", **_CLAUDE_TURN)
+
+    assert got.calls == 2
+    assert got.cost_usd == pytest.approx(0.02)
+
+
+async def test_a_resumed_session_whose_earlier_spend_is_unknown_books_no_cost(tmp_path: Path) -> None:
+    """A session this process did not open (a restart, then a resume) reports a
+    total that includes turns booked before; its counts are booked, its cost is
+    left unknown rather than charged again."""
+    got = await _booked(tmp_path, bound=True, ACP_STUB_COST_PER_PROMPT="0.5", **_CLAUDE_TURN)
+
+    assert (got.calls, got.input_tokens) == (1, 1200)
+    assert got.cost_usd is None and got.cost_missing_calls == 1
+
+
+async def test_a_session_nobody_can_resume_leaves_no_spend_behind(tmp_path: Path) -> None:
+    """The cumulative cost is kept to measure a resumed session's next turn by.
+    A stateless agent's sessions are never resumed, and keeping one entry per
+    dispatch would grow for as long as the process lives."""
+    cfg = stub_config("a")
+    cfg.env.update({**_CLAUDE_TURN, "ACP_STUB_COST_PER_PROMPT": "0.01"})
+    backend = build_third_party_backend(cfg)
+
+    await backend.run("ping", task_id="t1", workspace=tmp_path, session_key="cli:root", executor=None)
+
+    assert backend.is_stateful is False
+    assert backend._session_spend == {}
+
+
+async def test_a_raven_agent_is_not_booked_twice(tmp_path: Path) -> None:
+    """A raven agent books its own calls under the delegating conversation (the
+    prompt's ``raven.usage``); booking its turn here as well counts it twice."""
+    env = {**_CLAUDE_TURN, "ACP_STUB_AGENT_NAME": "raven", "ACP_STUB_COST_PER_PROMPT": "0.0125"}
+    got = await _booked(tmp_path, **env)
+
+    assert got.calls == 0
+
+
 async def test_dispatch_truncates_to_max_output_chars(tmp_path: Path) -> None:
     backend = build_third_party_backend(stub_config("a", max_output_chars=2))
     assert await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None) == "po"
@@ -2884,6 +3066,100 @@ async def test_a_pruned_session_falls_back_to_a_fresh_one(tmp_path: Path) -> Non
     assert await backend.run("go", task_id="t1", workspace=tmp_path, session_key="s", instance="work", executor=None)
     rebound = await registry.lookup("s", "a", "work", kind="acp")
     assert rebound is not None and rebound != "pruned-session"
+
+
+async def test_a_pruned_session_says_its_reply_starts_over(tmp_path: Path) -> None:
+    """The fresh session is a working outcome, and it is not the one asked for.
+
+    The caller reused the handle to continue a conversation; the agent no
+    longer has it, so the reply comes from a session with none of that context
+    -- "apply the fix you proposed" answered from an empty history. Logged and
+    nothing else, the caller read it as the follow-up it asked for.
+    """
+    cfg = stub_config("a")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    await registry.commit("s", "a", "work", "pruned-session", kind="acp")
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("a", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    reply = await backend.run(
+        "now apply it",
+        task_id="t1",
+        workspace=tmp_path,
+        session_key="s",
+        instance="work",
+        executor=None,
+        on_delta=on_delta,
+    )
+
+    note = (
+        "\n\n[raven] Instance 'work' could not pick up its earlier conversation (Session not found), "
+        "so this reply comes from a fresh session that has none of it."
+    )
+    assert reply.endswith(note)
+    assert seen[-1] == note, "a caller that streamed reads it too"
+
+
+async def test_the_note_waits_for_a_reply_when_the_fresh_sessions_turn_fails(tmp_path: Path) -> None:
+    """The binding is dropped when the load is refused, so the next dispatch on the
+    handle opens yet another fresh session with no refusal of its own to report.
+    A note handed out only by the turn that hit the refusal is lost whenever that
+    turn fails -- and a caller retries precisely to continue the conversation."""
+    from raven.acp_client.acp_agent import AcpEmptyTurnError
+
+    cfg = stub_config("a")
+    cfg.env["ACP_STUB_EMPTY_PROMPTS"] = "1"
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    await registry.commit("s", "a", "work", "pruned-session", kind="acp")
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("a", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+
+    with pytest.raises(AcpEmptyTurnError):
+        await backend.run(
+            "now apply it", task_id="t1", workspace=tmp_path, session_key="s", instance="work", executor=None
+        )
+    reply = await backend.run(
+        "now apply it", task_id="t2", workspace=tmp_path, session_key="s", instance="work", executor=None
+    )
+
+    assert "could not pick up its earlier conversation (Session not found)" in reply
+    again = await backend.run(
+        "and the tests", task_id="t3", workspace=tmp_path, session_key="s", instance="work", executor=None
+    )
+    assert "[raven]" not in again, "said once, to the first reply"
+
+
+async def test_a_resumed_session_carries_no_such_note(tmp_path: Path) -> None:
+    cfg = stub_config("a")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    await registry.commit("s", "a", "work", "live-session", kind="acp")
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("a", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+
+    reply = await backend.run(
+        "go on", task_id="t1", workspace=tmp_path, session_key="s", instance="work", executor=None
+    )
+
+    assert "[raven]" not in reply
 
 
 async def test_load_fallback_reuses_the_same_mcp_grant(tmp_path: Path) -> None:

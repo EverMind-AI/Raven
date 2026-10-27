@@ -637,12 +637,28 @@ async def note_provider_usage(
 ) -> None:
     """Record one direct provider call in the run activity and usage ledger."""
     note_usage(usage)
+    await note_ledger_usage(usage, model=model, session_key=session_key, task_id=task_id)
+
+
+async def note_ledger_usage(
+    usage: Any,
+    *,
+    model: str,
+    session_key: str | None,
+    task_id: str,
+    counts_known: bool = True,
+) -> None:
+    """Book one delegated call in the usage ledger under the conversation that delegated it.
+
+    ``counts_known`` false books a call whose token counts are unknown: they are
+    stored as missing and only its cost is booked.
+    """
     if session_key is None or not isinstance(usage, dict):
         return
     try:
         from raven.token_wise.usage_tracker import record_delegated_usage
 
-        await record_delegated_usage(usage, model=model, root=session_key, task_id=task_id)
+        await record_delegated_usage(usage, model=model, root=session_key, task_id=task_id, counts_known=counts_known)
     except Exception:  # noqa: BLE001 - accounting must never fail the delegated run
         logger.debug("subagent activity: usage ledger write failed", exc_info=True)
 

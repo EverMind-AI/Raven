@@ -442,6 +442,7 @@ def build_third_party_backend(
             pool=pool,
             machine=getattr(cfg, "machine", None),
             remote_cwd=getattr(cfg, "remote_cwd", None),
+            preset=getattr(cfg, "preset", None),
         )
     if kind == "openai":
         return OpenAIApiBackend(

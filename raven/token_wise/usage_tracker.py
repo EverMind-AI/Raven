@@ -126,14 +126,22 @@ async def record_delegated_usage(
     model: str,
     root: str,
     task_id: str,
+    counts_known: bool = True,
 ) -> None:
-    """Persist one in-process sub-agent call under its delegation root."""
+    """Persist one delegated call under its delegation root.
+
+    ``counts_known`` false stores the call's input and output counts as missing
+    rather than the zeros ``normalize_usage`` reads an absent count as: a zero
+    says the call read and wrote nothing.
+    """
     if not root:
         return
     from raven.providers.usage import normalize_usage
 
     normalized = normalize_usage(usage)
     normalized.pop("total_tokens")
+    if not counts_known:
+        normalized.update(input_tokens=None, output_tokens=None)
     tracker = UsageTracker()
     await tracker.after_llm_call(
         {},

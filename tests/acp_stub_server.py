@@ -8,6 +8,13 @@ correlation and teardown rather than a mocked client.
 Behaviour is chosen by ``ACP_STUB_MODE``:
 
 - ``ok``           - full handshake, one text chunk plus a tool call, then end_turn.
+                     ``ACP_STUB_REPLY`` replaces the chunk's text (``pong``),
+                     ``ACP_STUB_USAGE_UPDATE`` the ``usage_update`` body (JSON), and
+                     ``ACP_STUB_PROMPT_USAGE`` adds a ``usage`` to the prompt response (JSON).
+                     ``ACP_STUB_EMPTY_PROMPTS=N`` ends the first N prompts empty, in any mode.
+                     ``ACP_STUB_AGENT_NAME`` replaces ``agentInfo.name`` (``stub-agent``).
+                     ``ACP_STUB_AGENT_VERSION`` replaces ``agentInfo.version`` (``9.9.9``); empty drops it.
+                     ``ACP_STUB_COST_PER_PROMPT`` reports a cumulative cost growing by it each prompt.
 - ``reject_init``  - answers ``initialize`` with a JSON-RPC error.
 - ``no_session``   - handshake fine, ``session/new`` errors (an auth-shaped message).
 - ``no_session_sdk`` - like ``no_session``, but refused the way both ACP SDKs wrap
@@ -174,9 +181,14 @@ _SESSION_CAPS = {"fork": {}, "list": {}, "resume": {}}
 if MODE != "no_session_delete":
     _SESSION_CAPS["delete"] = {}
 
+_AGENT_VERSION = os.environ.get("ACP_STUB_AGENT_VERSION", "9.9.9")
+
 CAPABILITIES = {
     "protocolVersion": 1,
-    "agentInfo": {"name": "stub-agent", "version": "9.9.9"},
+    "agentInfo": {
+        "name": os.environ.get("ACP_STUB_AGENT_NAME", "stub-agent"),
+        **({"version": _AGENT_VERSION} if _AGENT_VERSION else {}),
+    },
     "agentCapabilities": {
         "loadSession": True,
         "promptCapabilities": {"image": True},
@@ -330,6 +342,10 @@ def handle_prompt(request_id, params) -> None:
     global _PROMPTS
     _PROMPTS += 1
     session_id = params.get("sessionId") or "stub-session-1"
+    if _PROMPTS <= int(os.environ.get("ACP_STUB_EMPTY_PROMPTS", "0")):
+        # The first N prompts end with nothing said, whatever the mode.
+        ok(request_id, {"stopReason": "end_turn"})
+        return
     if MODE == "dies_mid_turn":
         # Half an answer, then the process is gone: the prompt went out and
         # fails on the client side with the connection, not with a reply.
@@ -696,9 +712,17 @@ def handle_prompt(request_id, params) -> None:
             "content": [{"type": "content", "content": {"type": "text", "text": "the file says hello"}}],
         },
     )
-    update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "pong"}})
-    update(session_id, {"sessionUpdate": "usage_update", "size": 1000, "used": 42})
-    ok(request_id, {"stopReason": "end_turn"})
+    reply = os.environ.get("ACP_STUB_REPLY", "pong")
+    update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": reply}})
+    reported = json.loads(os.environ.get("ACP_STUB_USAGE_UPDATE", '{"size": 1000, "used": 42}'))
+    if per_prompt := os.environ.get("ACP_STUB_COST_PER_PROMPT"):
+        # Cumulative, as the schema defines it: the process's whole spend so far.
+        reported["cost"] = {"amount": round(float(per_prompt) * _PROMPTS, 6), "currency": "USD"}
+    update(session_id, {"sessionUpdate": "usage_update", **reported})
+    answered: dict = {"stopReason": "end_turn"}
+    if counts := os.environ.get("ACP_STUB_PROMPT_USAGE"):
+        answered["usage"] = json.loads(counts)
+    ok(request_id, answered)
 
 
 def handle_cancel(params) -> None:
