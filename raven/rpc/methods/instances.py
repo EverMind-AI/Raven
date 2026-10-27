@@ -157,7 +157,19 @@ def _collapse_dag_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for key, candidates in linked.items():
         node = by_node[key]
         claimed.add(key)
-        current = next((row for row in candidates if row.get("agent") == node.get("agent")), node)
+        # Canonicalized on both sides: the rows are written under one name and a
+        # stored reference may still spell a legacy alias, which is the same agent
+        # and must not cost the card its addressable row.
+        current = next(
+            (
+                row
+                for row in candidates
+                if isinstance(row.get("agent"), str)
+                and isinstance(node.get("agent"), str)
+                and canonical_agent_name(row["agent"]) == canonical_agent_name(node["agent"])
+            ),
+            node,
+        )
         out.append(_reported(row=current, node=node))
     out.extend(node for key, node in by_node.items() if key not in claimed)
     return sorted(out, key=lambda r: r.get("updatedAtMs") or 0, reverse=True)

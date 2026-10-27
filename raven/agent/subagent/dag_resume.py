@@ -14,7 +14,7 @@ depending on which client asked.
 from collections.abc import Callable
 from typing import Any
 
-from raven.agent.subagent.dag_reader import attempt_fields, registry_outcome
+from raven.agent.subagent.dag_reader import current_assignment, registry_outcome
 from raven.agent.subagent.dag_store import tally_node_statuses
 from raven.agent.subagent.instances import get_registry
 from raven.config.agent_names import canonical_agent_name
@@ -87,15 +87,17 @@ async def read_run_reconciled(
             # Only the keys the entry lacks: a value it already has is the manifest's.
             for key, value in registry_outcome(row).items():
                 entry.setdefault(key, value)
-            entry.update(attempt_fields(entry, row))
+            assignment = current_assignment(entry, row)
+            if assignment.attempt_agents is not None:
+                entry["attempt_agents"] = list(assignment.attempt_agents)
             if "attemptAgents" in row:
                 # A node the row says was reassigned: it is the durable record of
                 # who runs the node now, and graph.json names the agent that gave
                 # up. Explicit nulls are taken as written -- a stateless attempt
                 # clears the handle the submitted node carried.
-                entry["subagent"] = canonical_agent_name(str(row.get("agent") or ""))
-                entry["instance"] = row.get("nodeInstance")
-                entry["instance_auto"] = bool(row.get("nodeInstanceAuto"))
+                entry["subagent"] = canonical_agent_name(str(assignment.agent or ""))
+                entry["instance"] = assignment.instance
+                entry["instance_auto"] = bool(assignment.instance_auto)
         statuses.append(entry["status"])
     run["summary"] = tally_node_statuses(statuses)
     return run

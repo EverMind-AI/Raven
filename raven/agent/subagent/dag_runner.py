@@ -1958,15 +1958,21 @@ async def _await_adjudications(
                 # Waiting for the round's other nodes would hold the move behind
                 # questions it does not depend on, and on a bound run those may
                 # never be answered at all.
+                answers = {nid: desk.peek(nid) for nid, task in node_tasks.items() if task in decided}
                 reassigned_nid = next(
-                    (
-                        nid
-                        for nid, task in sorted(node_tasks.items())
-                        if task in decided and (answer := desk.peek(nid)) is not None and answer.decision == REASSIGN
-                    ),
+                    (nid for nid in sorted(answers) if answers[nid] is not None and answers[nid].decision == REASSIGN),
                     None,
                 )
                 if reassigned_nid is not None:
+                    # Every other answer that landed in this batch is applied
+                    # before returning: the reassign hands control back at once,
+                    # and a sibling's already-decided continue or abandon must
+                    # not wait for the moved node's whole next attempt.
+                    for nid in sorted(answers):
+                        if nid == reassigned_nid:
+                            continue
+                        if (taken := desk.take(nid)) is not None:
+                            _apply_answer(nid, taken, status=status, errors=errors, continuations=continuations)
                     break
             still_bound = unbind is not None and not unbind.done()
             if decided:
@@ -2004,30 +2010,10 @@ async def _await_adjudications(
                 status[nid] = "failed"
                 errors[nid] = f"Nothing was decided for {timeout_s:g}s, so the node timed out."
                 continue
-            if answer.decision == CONTINUE and answer.message:
-                continuations[nid] = answer.message
-                status[nid] = "pending"
-            elif answer.decision == CONTINUE:
-                status[nid] = "failed"
-                errors[nid] = (
-                    "The main agent chose to continue but sent no message, so the node failed instead of resuming."
-                )
-            elif answer.decision == REPLAN:
-                # Left at "exception": `_apply_replan`, at the top of the next loop
-                # pass, is the single writer of a replanned node's terminal status
-                # and reason (naming the successor run). Writing "failed" here would
-                # both misname the cause and make `_apply_replan`'s own terminal-node
-                # guard skip this node as already resolved, since it checks this same
-                # `status` dict and only converts "running"/"exception"/"pending".
-                continue
-            elif answer.decision == REASSIGN:
-                # Only reachable when a replan ended the round in the same batch:
-                # the graph is being replaced, so this node is left for
-                # `_apply_replan` rather than charged as an abandonment.
-                continue
-            else:
-                status[nid] = "failed"
-                errors[nid] = "The main agent abandoned this node."
+            # A replan is left at "exception" for `_apply_replan`, at the top of
+            # the next loop pass, which is the single writer of a replanned
+            # node's terminal status and reason (naming the successor run).
+            _apply_answer(nid, answer, status=status, errors=errors, continuations=continuations)
     finally:
         if stop is not None and not stop.done():
             stop.cancel()
@@ -2058,6 +2044,35 @@ async def _await_adjudications(
         if reassigned_nid is None:
             for nid in open_nodes:
                 desk.close(nid)
+
+
+def _apply_answer(
+    node_id: str,
+    answer: Any,
+    *,
+    status: dict[str, str],
+    errors: dict[str, str],
+    continuations: dict[str, str],
+) -> None:
+    """Apply one node's decided answer to the scheduler's records.
+
+    ``REASSIGN`` and ``REPLAN`` are deliberately no-ops here: the move is parked
+    by the caller that owns it, and ``_apply_replan`` is a replanned node's single
+    terminal writer. Everything else is the ordinary continuation/failure path.
+    """
+    if answer.decision == CONTINUE and answer.message:
+        continuations[node_id] = answer.message
+        status[node_id] = "pending"
+    elif answer.decision == CONTINUE:
+        status[node_id] = "failed"
+        errors[node_id] = (
+            "The main agent chose to continue but sent no message, so the node failed instead of resuming."
+        )
+    elif answer.decision in (REPLAN, REASSIGN):
+        return
+    else:
+        status[node_id] = "failed"
+        errors[node_id] = "The main agent abandoned this node."
 
 
 def _reassign_waiting(desk: "AdjudicationDesk | None") -> bool:
@@ -2252,6 +2267,27 @@ def _move_movers(state: ReassignmentState, move: _StagedMove, status: dict[str, 
     return movers
 
 
+def _record_move_groups(
+    state: ReassignmentState,
+    members: frozenset[str],
+    target: tuple[str, str | None],
+) -> None:
+    """Record where the members a move actually takes now dispatch.
+
+    The target pair is unioned, not replaced: a graph may name one handle on two
+    agents, so the pair can already stand for another group whose members must
+    keep following it through later hops. A graph-named group is retargeted when
+    any of *this move's* members belongs to it -- the moved set can be the union
+    of several groups, so matching the node the move was decided for alone would
+    leave the others pointing at a pair they left.
+    """
+    if target[1] is not None:
+        state.original_groups[target] = state.original_groups.get(target, frozenset()) | members
+    for original in state.group_current:
+        if state.original_groups.get(original, frozenset()) & members:
+            state.group_current[original] = target
+
+
 async def _install_move(
     state: ReassignmentState,
     key: tuple[str, str],
@@ -2336,20 +2372,7 @@ async def _install_move(
         if move.instance_auto:
             state.auto_instances.add(nid)
     members = state.original_groups.get((move.source_agent, move.source_instance), move.members)
-    if move.target_instance is not None:
-        # Union, not replace: a graph may name one handle on two agents, so the
-        # target pair can already stand for another group whose members must
-        # keep following it through later hops.
-        pair = (move.target_agent, move.target_instance)
-        state.original_groups[pair] = state.original_groups.get(pair, frozenset()) | members
-    # Matched by the graph's own group, not by the pair that group sits on: a hop
-    # to a stateless target drops the handle, and the pair a later hop starts
-    # from then names no group at all. Every hop rewrites the value, so a group
-    # moved twice still reports one start and one end.
-    target = (move.target_agent, move.target_instance)
-    for original in state.group_current:
-        if move.node_id in state.original_groups.get(original, frozenset()):
-            state.group_current[original] = target
+    _record_move_groups(state, members, (move.target_agent, move.target_instance))
     state.revision += 1
     state.pending_moves.pop(key, None)
     if seed is not None:

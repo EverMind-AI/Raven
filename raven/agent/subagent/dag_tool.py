@@ -35,6 +35,7 @@ CustomEvent the web UI's DAG graph already renders.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import json
 import time
@@ -62,6 +63,7 @@ from raven.agent.subagent.dag_adjudication import (
 )
 from raven.agent.subagent.dag_capabilities import AgentCapabilities, validate_capabilities
 from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec, parse_dag_spec, validate_and_order
+from raven.agent.subagent.dag_handover import HandoverError, load_handover_turns, render_handover
 from raven.agent.subagent.dag_mcp_scope import run_mcp_scope
 from raven.agent.subagent.dag_reader import DagReadError, run_dir_of
 from raven.agent.subagent.dag_reader import read_node as _read_node
@@ -460,7 +462,24 @@ class _RunAdmission:
     submission: RunSubmission
     state: ReassignmentState
     capabilities: dict[str, AgentCapabilities]
+    mcp_servers: "Mapping[str, MCPServerConfig] | Callable[[], Mapping[str, MCPServerConfig]] | None" = None
+    mcp_scope: str | None = None
+    mcp_credential_gaps: "Callable[[], frozenset[str]] | None" = None
     reservations: dict[tuple[str, str], _Reservation] = field(default_factory=dict)
+
+    def mcp(self) -> "contextlib.AbstractContextManager[None]":
+        """Re-enter the run's own MCP definitions for a build done outside its task.
+
+        The definitions are scoped to the dispatching call, and the control tool
+        that prepares a reassignment runs in a different task: without this, a
+        playbook's own servers would resolve against the host's table and come
+        back "not connected" in every downgrade notice the model is shown. The
+        install inside the run's task already carries the context; this is for
+        the dry run at the door.
+        """
+        if self.mcp_servers is None and self.mcp_scope is None and self.mcp_credential_gaps is None:
+            return contextlib.nullcontext()
+        return run_mcp_scope(self.mcp_servers, scope=self.mcp_scope, credential_gaps=self.mcp_credential_gaps)
 
     def authored(self) -> dict[str, DagNodeSpec]:
         """The graph as submitted, by node id."""
@@ -490,7 +509,8 @@ class _RunAdmission:
         # a node the proposal never saw, and a target that cannot read that
         # node's paths must refuse the move rather than dispatch it.
         tool._check_reassign_paths(prepared, tool._effective_capabilities(self))
-        execution, backend, notices = await tool._execution_for(self, prepared)
+        with self.mcp():
+            execution, backend, notices = await tool._execution_for(self, prepared)
         for notice in notices:
             logger.warning("DAG reassign notice: {}", notice)
         return execution, backend
@@ -1705,6 +1725,9 @@ class SubAgentDagTool(Tool):
                 task_summary=task_summary,
                 capture_workflow=capture_workflow,
                 playbook_capture=playbook_capture,
+                mcp_servers=mcp_servers,
+                mcp_scope=mcp_scope,
+                mcp_credential_gaps=mcp_credential_gaps,
             )
 
     async def run_round(
@@ -1760,6 +1783,9 @@ class SubAgentDagTool(Tool):
                 stint=stint,
                 origin=_DagOrigin.from_dict(origin) if origin is not None else None,
                 confirm_question=confirm_question,
+                mcp_servers=mcp_servers,
+                mcp_scope=mcp_scope,
+                mcp_credential_gaps=mcp_credential_gaps,
             )
 
     async def _execute(
@@ -1773,6 +1799,9 @@ class SubAgentDagTool(Tool):
         stint: StintRef | None = None,
         origin: _DagOrigin | None = None,
         confirm_question: "Callable[[], str] | None" = None,
+        mcp_servers: "Mapping[str, MCPServerConfig] | Callable[[], Mapping[str, MCPServerConfig]] | None" = None,
+        mcp_scope: str | None = None,
+        mcp_credential_gaps: "Callable[[], frozenset[str]] | None" = None,
     ) -> str | ToolResult:
         # Refused whole rather than per node, and ahead of validation, for the
         # same reason validation runs early: a refused graph must cost zero
@@ -1872,6 +1901,9 @@ class SubAgentDagTool(Tool):
             stint=stint,
             submission=submission,
             capabilities=capabilities,
+            mcp_servers=mcp_servers,
+            mcp_scope=mcp_scope,
+            mcp_credential_gaps=mcp_credential_gaps,
         )
         result = _with_notices(result, notices)
         return _with_capture_notice(result) if capture_workflow else result
@@ -1890,6 +1922,9 @@ class SubAgentDagTool(Tool):
         stint: StintRef | None = None,
         submission: RunSubmission | None = None,
         capabilities: dict[str, AgentCapabilities] | None = None,
+        mcp_servers: "Mapping[str, MCPServerConfig] | Callable[[], Mapping[str, MCPServerConfig]] | None" = None,
+        mcp_scope: str | None = None,
+        mcp_credential_gaps: "Callable[[], frozenset[str]] | None" = None,
     ) -> str | ToolResult:
         """Start a validated, minted spec running and return its first result.
 
@@ -1927,6 +1962,9 @@ class SubAgentDagTool(Tool):
                 submission=submission,
                 state=ReassignmentState(),
                 capabilities=dict(capabilities or {}),
+                mcp_servers=mcp_servers,
+                mcp_scope=mcp_scope,
+                mcp_credential_gaps=mcp_credential_gaps,
             )
             self._run_contexts[run_id] = admission
         task = asyncio.create_task(
@@ -2222,30 +2260,13 @@ class SubAgentDagTool(Tool):
         return folded.nodes[0]
 
     async def _target_backend(self, node: DagNodeSpec, worker: "Worker | None") -> tuple[Any, list[str]]:
-        """The backend a moved node dispatches with, built as submission builds one.
+        """The backend a moved node dispatches with, built by submission's own rules.
 
-        The same sequence ``_preflight`` runs: the per-node resolution with its
-        skills narrowing and session-directory binding, the cross-process MCP
-        decision, and the frozen worker's charter around the whole thing. It
-        returns the same partial-grant notice ``_preflight`` appends: a move
-        must not lose the sentence that says a server could not be resolved.
+        Deliberately the same builder ``_preflight`` uses rather than a copy of
+        it: a check added to one that did not reach the other is how a move
+        would be admitted where a submission is refused.
         """
-        notices: list[str] = []
-        backend = self._resolve_node(node)
-        if backend is None:
-            raise DagValidationError(f"agent '{node.subagent}' has no backend on this machine")
-        row = self._registry.get(node.subagent)
-        if row is not None:
-            resolver = getattr(backend, "resolve_mcp_grant", None)
-            if row.injectable.mcps and resolver is not None:
-                async_resolver = getattr(backend, "resolve_mcp_grant_async", None)
-                grant = await async_resolver(node.mcps) if async_resolver is not None else resolver(node.mcps)
-                if note := grant.note_text():
-                    notices.append(f"node '{node.id}': {note}")
-                if getattr(backend, "kind", None) != "raven-loop":
-                    backend = _DispatchBackend(backend, mcp_grant=grant)
-            elif node.mcps is not None:
-                backend = _DispatchBackend(backend, drop_mcps=True)
+        backend, notices = await self._node_backend(node)
         if worker is not None:
             backend = _WorkerBackend(backend, charter=worker.charter, payload=worker.payload)
         return backend, notices
@@ -2482,6 +2503,17 @@ class SubAgentDagTool(Tool):
                 "agent under another name. Reassign only changes who runs the node; to have this agent try "
                 "again, choose continue. No decision was recorded, so the node is still waiting."
             )
+        if (
+            refusal := await self._handover_refusal(
+                admission,
+                node_id,
+                source_agent=source_agent,
+                source_instance=source_instance,
+                target_agent=target_agent,
+                message=text,
+            )
+        ) is not None:
+            return refusal
         key = _source_key(source_agent, source_instance, node_id)
         members = state.original_groups.get((source_agent, source_instance), frozenset({node_id}))
         shared = len(members | {node_id}) > 1
@@ -2540,25 +2572,26 @@ class SubAgentDagTool(Tool):
         prepared_nodes: list[DagNodeSpec] = []
         backends: dict[str, Any] = {}
         notices: list[str] = []
-        for nid in movers:
-            group_skills = self._group_skills(admission.submission, nid)
-            prepared = authored[nid].model_copy(
-                update={
-                    "subagent": target_agent,
-                    "instance": target_instance,
-                    "skills": list(group_skills) if group_skills is not None else authored[nid].skills,
-                }
-            )
-            try:
-                execution, backend, mover_notices = await self._execution_for(admission, prepared)
-            except DagValidationError as exc:
-                detail = str(exc).rstrip()
-                if detail and detail[-1] not in ".!?":
-                    detail += "."
-                return f"Error: {detail} No decision was recorded, so the node is still waiting."
-            prepared_nodes.append(execution)
-            backends[nid] = backend
-            notices.extend(mover_notices)
+        with admission.mcp():
+            for nid in movers:
+                group_skills = self._group_skills(admission.submission, nid)
+                prepared = authored[nid].model_copy(
+                    update={
+                        "subagent": target_agent,
+                        "instance": target_instance,
+                        "skills": list(group_skills) if group_skills is not None else authored[nid].skills,
+                    }
+                )
+                try:
+                    execution, backend, mover_notices = await self._execution_for(admission, prepared)
+                except DagValidationError as exc:
+                    detail = str(exc).rstrip()
+                    if detail and detail[-1] not in ".!?":
+                        detail += "."
+                    return f"Error: {detail} No decision was recorded, so the node is still waiting."
+                prepared_nodes.append(execution)
+                backends[nid] = backend
+                notices.extend(mover_notices)
         if note := self._machine_notice(source_agent, target_agent):
             notices.append(note)
         cancel = self._cancels.get(run_id)
@@ -2625,6 +2658,60 @@ class SubAgentDagTool(Tool):
             nodes=tuple(prepared_nodes),
             backends=backends,
             notices=tuple(notices),
+        )
+
+    async def _handover_refusal(
+        self,
+        admission: _RunAdmission,
+        node_id: str,
+        *,
+        source_agent: str,
+        source_instance: str | None,
+        target_agent: str,
+        message: str,
+    ) -> str | None:
+        """Refuse a move whose handover could never be rendered.
+
+        The handover keeps the node's original task whole, so a task that does
+        not fit -- or a history that will not load -- means no attempt after the
+        move could run. The commit happens before the handover is built, so this
+        has to be checked at the door: at install time the node would fail, and
+        every continuation would rebuild the same failing handover.
+
+        The dry run reads the same source and renders with the same budget the
+        install will, so a pass here is the install's own precondition.
+        """
+        store = DagRunStore(
+            self._backend,
+            admission.dirs.run_root,
+            admission.run_id,
+            nodes_root=admission.dirs.nodes_root,
+            registry_root=admission.dirs.subagents_root,
+        )
+        subagents_root = admission.dirs.subagents_root
+        session_dir = Path(subagents_root).parent if subagents_root else None
+        try:
+            loaded = await load_handover_turns(
+                store,
+                node_id,
+                session_dir=session_dir,
+                source_agent=source_agent,
+                source_instance=source_instance,
+                attempt_agents=admission.state.attempt_agents.get(node_id, ()),
+            )
+            task = await store.read_text(store.prompt_path(node_id))
+            render_handover(loaded.turns, task=task, to_agent=target_agent, next_message=message)
+        except HandoverError as exc:
+            detail = str(exc)
+        except OSError:
+            detail = "its original prompt is unreadable, so a handover cannot be built"
+        else:
+            return None
+        detail = detail.rstrip()
+        if detail and detail[-1] not in ".!?":
+            detail += "."
+        return (
+            f"Error: cannot reassign node '{node_id}': {detail} No decision was recorded, so the node is still waiting."
         )
 
     def commit_reassign(self, run_id: str, prepared: ReassignPlan, message: str) -> bool:
@@ -2812,6 +2899,45 @@ class SubAgentDagTool(Tool):
         """
         await self._emit_replanned(run_id, plan)
 
+    async def _node_backend(self, node: DagNodeSpec) -> tuple[Any, list[str]]:
+        """One node's dispatch backend, and the downgrade notices it earned.
+
+        The single site both a submission and a reassignment build from. A node
+        names an agent that must be on this machine and switched on; its skills
+        narrowing resolves here; a cross-process MCP decision wraps it -- with
+        the same partial-grant notice either way, because a move must not lose
+        the sentence that says a server could not be resolved.
+        """
+        row = self._registry.get(node.subagent)
+        if row is None:
+            raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
+        if not row.enabled:
+            raise DagValidationError(
+                f"node '{node.id}' names agent '{node.subagent}', which is turned off on this "
+                "machine -- enable it in the agents settings, or point the node at another agent"
+            )
+        backend = self._resolve_node(node)
+        if backend is None:
+            raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
+        notices: list[str] = []
+        resolver = getattr(backend, "resolve_mcp_grant", None)
+        if row.injectable.mcps and resolver is not None:
+            # The async form when there is one: see SubagentManager._preflight_mcp
+            # for why the acp backend must not capture the adapter's login shell
+            # on this thread.
+            async_resolver = getattr(backend, "resolve_mcp_grant_async", None)
+            grant = await async_resolver(node.mcps) if async_resolver is not None else resolver(node.mcps)
+            # A notice, never a refusal, whichever backend it is: the server that
+            # could not be resolved costs the node its tools and must not cost
+            # the graph its run.
+            if note := grant.note_text():
+                notices.append(f"node '{node.id}': {note}")
+            if getattr(backend, "kind", None) != "raven-loop":
+                backend = _DispatchBackend(backend, mcp_grant=grant)
+        elif node.mcps is not None:
+            backend = _DispatchBackend(backend, drop_mcps=True)
+        return backend, notices
+
     async def _preflight(self, spec: SubAgentDagSpec) -> Preflight:
         """Every pre-dispatch check that needs live registry data.
 
@@ -2864,35 +2990,8 @@ class SubAgentDagTool(Tool):
         # as well so a misspelled name is still a refusal the model can fix
         # in the same turn, not an announcement a turn later.
         for node in spec.nodes:
-            row = self._registry.get(node.subagent)
-            if row is None:
-                raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
-            if not row.enabled:
-                raise DagValidationError(
-                    f"node '{node.id}' names agent '{node.subagent}', which is turned off on this "
-                    f"machine -- enable it in the agents settings, or point the node at another agent"
-                )
-            backend = self._resolve_node(node)
-            resolver = getattr(backend, "resolve_mcp_grant", None)
-            if row.injectable.mcps and resolver is not None:
-                # The async form when there is one: see
-                # SubagentManager._preflight_mcp for why the acp backend must
-                # not capture the adapter's login shell on this thread.
-                async_resolver = getattr(backend, "resolve_mcp_grant_async", None)
-                grant = await async_resolver(node.mcps) if async_resolver is not None else resolver(node.mcps)
-                # A notice, never a refusal, whichever backend it is. MCP is a
-                # capability a node asked for on top of the work, so a server
-                # that could not be resolved costs the node its tools and must
-                # not cost the graph its run: refusing here throws away every
-                # other node too, over an optional attachment. The caller is
-                # told which node lost what, and the node's own reply carries
-                # the same sentence.
-                if note := grant.note_text():
-                    notices.append(f"node '{node.id}': {note}")
-                if getattr(backend, "kind", None) != "raven-loop":
-                    backend = _DispatchBackend(backend, mcp_grant=grant)
-            elif node.mcps is not None:
-                backend = _DispatchBackend(backend, drop_mcps=True)
+            backend, node_notices = await self._node_backend(node)
+            notices.extend(node_notices)
             if worker := workers.get(node.id):
                 backend = _WorkerBackend(backend, charter=worker.charter, payload=worker.payload)
             backends[node.id] = backend

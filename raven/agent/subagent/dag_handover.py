@@ -12,6 +12,7 @@ from typing import Any, Mapping, Sequence
 from raven.agent.subagent.dag_store import DagRunStore
 from raven.agent.subagent.instance_log import message_rows, transcript_path
 from raven.agent.subagent.prompt_errors import DagValidationError
+from raven.config.agent_names import canonical_agent_name
 from raven.security.trust import wrap_untrusted
 
 
@@ -218,6 +219,22 @@ async def _archived_attempt_prompts(store: DagRunStore, node_id: str, *, attempt
     return tuple(prompts)
 
 
+def _attempts_on(prompts: Sequence[str], agents: Sequence[str], agent: str) -> tuple[str, ...]:
+    """The archived prompts of the attempts that ran under ``agent``.
+
+    An instance log holds one agent's sessions, so only that agent's attempts
+    can be found in it. A node that moved before has earlier attempts in another
+    agent's session, and demanding those would report every second hop as an
+    incomplete log.
+    """
+    wanted = canonical_agent_name(agent)
+    return tuple(
+        prompt
+        for prompt, attempt_agent in zip(prompts, agents, strict=True)
+        if canonical_agent_name(attempt_agent) == wanted
+    )
+
+
 def _covers_archived_attempts(turns: Sequence[HandoverTurn], prompts: Sequence[str]) -> bool:
     """Whether the log proves it holds every archived attempt, the latest one last."""
     if not prompts:
@@ -254,7 +271,8 @@ async def load_handover_turns(
         turns = read_instance_turns(session_dir, agent=source_agent, handle=source_instance)
         if turns:
             prompts = await _archived_attempt_prompts(store, node_id, attempts=len(attempt_agents))
-            if prompts is not None and _covers_archived_attempts(turns, prompts):
+            own = _attempts_on(prompts, attempt_agents, source_agent) if prompts is not None else ()
+            if own and _covers_archived_attempts(turns, own):
                 return LoadedHandover(turns)
     return LoadedHandover(
         await read_node_turns(store, node_id, attempt_agents=attempt_agents),

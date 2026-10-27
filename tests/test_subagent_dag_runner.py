@@ -51,6 +51,25 @@ _DRAIN_TIMEOUT_S = 10.0
 _KILL_GRACE_S = 2.0
 
 
+def _carried(prompt: str, answer: str) -> bool:
+    """Whether ``answer`` is carried inside an untrusted fence in ``prompt``.
+
+    A handover's answers are sub-agent output, so they reach the destination
+    inside the same data boundary every other sub-agent output crosses; an
+    assertion that looks for the bare answer would pass just as well against the
+    unfenced text this replaced.
+    """
+    for begin in re.finditer(r"Assistant: \[BEGIN UNTRUSTED subagent #([0-9a-f]+)", prompt):
+        end = f"[END UNTRUSTED subagent #{begin.group(1)}]"
+        try:
+            stop = prompt.index(end, begin.end())
+        except ValueError:
+            continue
+        if answer in prompt[begin.end() : stop]:
+            return True
+    return False
+
+
 def _discover_child_pids() -> list[int]:
     """The pids of this process's direct children, without external binaries.
 
@@ -5753,6 +5772,63 @@ def _reassign_plan(waiter, *, node_id="a"):
     )
 
 
+def test_a_move_retargets_every_graph_named_group_whose_members_it_takes():
+    """The moved set can be the union of two graph-named groups that hopped onto
+    one pair. Retargeting only the anchor's own group left the other one pointing
+    at a pair its members had left, and a capture then replayed them there."""
+    from raven.agent.subagent.dag_runner import ReassignmentState, _record_move_groups
+
+    state = ReassignmentState()
+    state.original_groups = {
+        ("alpha", "shared"): frozenset({"x", "y"}),
+        ("gamma", "shared"): frozenset({"z", "w"}),
+        ("beta", "shared"): frozenset({"x", "y", "z", "w"}),
+    }
+    state.group_current = {
+        ("alpha", "shared"): ("beta", "shared"),
+        ("gamma", "shared"): ("beta", "shared"),
+    }
+
+    _record_move_groups(state, frozenset({"x", "y", "z", "w"}), ("delta", "shared"))
+
+    assert state.group_current == {
+        ("alpha", "shared"): ("delta", "shared"),
+        ("gamma", "shared"): ("delta", "shared"),
+    }
+    assert state.original_groups[("delta", "shared")] == frozenset({"x", "y", "z", "w"})
+
+
+def test_a_move_unions_the_target_pair_rather_than_replacing_it():
+    """The target pair may already stand for another group; replacing its
+    membership would drop that group's later hops."""
+    from raven.agent.subagent.dag_runner import ReassignmentState, _record_move_groups
+
+    state = ReassignmentState()
+    state.original_groups = {
+        ("alpha", "shared"): frozenset({"x", "y"}),
+        ("delta", "shared"): frozenset({"q"}),
+    }
+
+    _record_move_groups(state, frozenset({"x", "y"}), ("delta", "shared"))
+
+    assert state.original_groups[("delta", "shared")] == frozenset({"x", "y", "q"})
+
+
+def test_a_move_to_a_stateless_target_records_no_group_pair():
+    """A stateless target names no handle, so there is no pair to hold members --
+    but the graph-named group still ends where its members went."""
+    from raven.agent.subagent.dag_runner import ReassignmentState, _record_move_groups
+
+    state = ReassignmentState()
+    state.original_groups = {("alpha", "shared"): frozenset({"x", "y"})}
+    state.group_current = {("alpha", "shared"): ("alpha", "shared")}
+
+    _record_move_groups(state, frozenset({"x", "y"}), ("delta", None))
+
+    assert ("delta", None) not in state.original_groups
+    assert state.group_current == {("alpha", "shared"): ("delta", None)}
+
+
 async def test_await_adjudications_parks_a_reassign_and_leaves_a_sibling_open():
     """One accepted move returns control to the scheduler.
 
@@ -5807,6 +5883,59 @@ async def test_await_adjudications_parks_a_reassign_and_leaves_a_sibling_open():
     assert status["b"] == "pending"
     assert continuations["b"] == "keep going"
     assert "b" not in errors, f"the later answer must not be a timeout, got {errors.get('b')!r}"
+
+
+@pytest.mark.parametrize(
+    ("decision", "message", "expected_status", "expected_error"),
+    [
+        ("continue", "keep going", "pending", None),
+        ("abandon", None, "failed", "abandoned"),
+    ],
+)
+async def test_await_adjudications_applies_siblings_decided_in_the_same_batch(
+    decision, message, expected_status, expected_error
+):
+    """A sibling's answer decided alongside a reassign is applied before the call
+    returns. The move hands control back to the scheduler at once; leaving that
+    answer on the desk would strand it until the moved node's whole next attempt
+    ends, which is exactly what the base never did."""
+    from raven.agent.subagent.dag_adjudication import REASSIGN, AdjudicationDesk
+    from raven.agent.subagent.dag_runner import _await_adjudications
+
+    desk = AdjudicationDesk()
+    first = desk.open("a")
+    sibling = desk.open("b")
+    move = _reassign_plan(first)
+    status = {"a": "exception", "b": "exception"}
+    errors: dict[str, str] = {}
+    continuations: dict[str, str] = {}
+    reassignments: dict = {}
+    desk.resolve("a", REASSIGN, "use the parser", agent="beta", expected_waiter=first, reassignment=move)
+    desk.resolve("b", decision, message, expected_waiter=sibling)
+
+    await asyncio.wait_for(
+        _await_adjudications(
+            desk,
+            status,
+            errors,
+            continuations,
+            timeout_s=5,
+            cancel=None,
+            reassignments=reassignments,
+        ),
+        timeout=5,
+    )
+
+    assert status == {"a": "pending", "b": expected_status}
+    expected_continuations = {"a": "use the parser"}
+    if decision == "continue":
+        expected_continuations["b"] = "keep going"
+    assert continuations == expected_continuations
+    assert reassignments == {"a": move}
+    if expected_error is None:
+        assert errors == {}
+    else:
+        assert expected_error in errors["b"].lower()
 
 
 async def test_await_adjudications_leaves_no_task_waiting_after_a_reassign():
@@ -14116,7 +14245,7 @@ async def test_old_backend_return_is_not_the_handover_barrier(tmp_path: Path) ->
     assert [call["task_id"] for call in beta.calls] == ["r", "s"]
     prompt = beta.calls[0]["prompt"]
     assert prompt.count("<handover ") == 1
-    assert "Assistant: OUT[s]:do s" in prompt, "the seed carries the sibling's final answer"
+    assert _carried(prompt, "OUT[s]:do s"), "the seed carries the sibling's final answer"
     assert result.summary["completed"] == 3
     assert state.pending_handovers == {}, "the seed is consumed at the first destination dispatch"
 
@@ -14304,7 +14433,7 @@ async def test_a_running_sibling_that_suspends_joins_the_move(tmp_path: Path) ->
     assert [call["task_id"] for call in beta.calls] == ["z", "a"]
     prompt = beta.calls[0]["prompt"]
     assert prompt.count("<handover ") == 1
-    assert "Assistant: alpha answer" in prompt, "the seed carries the last attempt the sibling finished on alpha"
+    assert _carried(prompt, "alpha answer"), "the seed carries the last attempt the sibling finished on alpha"
     assert beta.calls[1]["prompt"] == dispatch_language_line("keep going")
     assert state.attempt_agents["a"] == ["alpha", "beta"]
     assert state.attempt_agents["z"] == ["alpha", "beta"]
@@ -15892,7 +16021,7 @@ async def test_end_to_end_reassign_through_the_real_control_tool(
     assert [call["task_id"] for call in beta.calls] == ["fix"]
     moved_prompt = beta.calls[0]["prompt"]
     assert moved_prompt.startswith('<handover from="alpha" to="beta" turns="1">')
-    assert "User: original task" in moved_prompt and "Assistant: partial answer" in moved_prompt
+    assert "User: original task" in moved_prompt and _carried(moved_prompt, "partial answer")
     assert "[Continuing this conversation." in moved_prompt
     assert moved_prompt.rstrip().endswith("use the parser")
     assert "## Skills for this step" in moved_prompt and "<name>briefer</name>" in moved_prompt, (
@@ -16196,7 +16325,7 @@ async def test_end_to_end_a_shared_instance_moves_its_pending_sibling_and_seeds_
     assert seeded.startswith('<handover from="alpha" to="beta" turns="2">'), seeded[:80]
     assert "User: write the report" in seeded
     assert "User: survey the docs" in seeded
-    assert "Assistant: surveyed the docs" in seeded, "the handover carries the turn that settled during the drain"
+    assert _carried(seeded, "surveyed the docs"), "the handover carries the turn that settled during the drain"
     assert "polish the draft" in seeded, "the sibling's own task follows the carried turns"
     assert "<handover" not in direct, "the seed is planted by the first dispatch on the handle, and only once"
     assert "use the report" in direct, "the source keeps its own follow-up as the message it dispatches"

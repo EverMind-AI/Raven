@@ -162,7 +162,10 @@ a brief; two labels may name one agent with different briefs, which is how a sin
 gets a worker per subject without registering an agent per pair. The label reaches the model
 as a live enum on `spawn`, `run_subagent_dag`, and `resolve_dag_node`, and resolves to the
 agent during DAG preflight or before a spawn dispatch, because a label resolves to no backend.
-The brief travels as a preamble on the task a worker is given. A stored Playbook's private DAG
+The brief travels as a preamble on the task a worker is given. A `reassign` deliberately
+names a roster agent rather than a label: the move takes the node out of this table, and
+the node keeps the Charter of the role it was submitted under (see **Charter**). A stored
+Playbook's private DAG
 tool never consults this turn-scoped table: its graph already names roster agents and carries
 its own authored prompts, so a coincidentally equal worker label cannot rewrite it.
 _Avoid_: reading the table itself as a permission. It decides who the dispatching model may
@@ -181,6 +184,10 @@ allows -- a charter may take a tool away and may not hand one back, may shorten 
 and may not lengthen one -- which is what makes it safe to accept from another process. And
 reading a refused judge as a refusal: source the gate rejects is dropped with a log line, and
 a judge that raises has said nothing, so the declarative rules beside it still apply.
+A reassigned node keeps the Charter of the role it was submitted under, even when the move
+names a roster agent the table does not carry: the role, not the agent, is what the Charter
+was authored for, and its structured fields are enforced by the Raven transports only, the
+same as they already are for the role itself.
 
 **Turn Runner**:
 The behavioural `Protocol` seam between Spine and an agent implementation:
@@ -3716,7 +3723,7 @@ subsystem; this one judges a single DAG node's output against its own prompt and
 follow-ups.
 
 **exception** (node status) -- a DAG node that did not accomplish its task and is
-waiting for the main agent to decide whether to continue, abandon, or replan it.
+waiting for the main agent to decide whether to continue, abandon, reassign or replan it.
 Reached by two routes: the backend raised, or the backend returned and the
 verdict said the task was not accomplished. Non-terminal: its dependents stay
 `pending` rather than cascading to `skipped`.
@@ -3837,6 +3844,10 @@ tool output and none of the old agent's private context -- and a `[failed]` row,
 the verdict or the error, is left out, so the main agent states what went wrong in its
 message. Carried text is escaped so it can neither open a turn of its own nor close the block
 early; that escape is a framing guard, not a sanitizer for instructions inside the text.
+Each carried answer is also wrapped with `wrap_untrusted` (`source="subagent"`), and a
+handover carried inside an earlier user row is fenced the same way, because both are
+sub-agent output by construction (the fence rule below); the task, the person's and the
+main agent's words, and the raven-minted trailer stay unfenced.
 _Avoid_: "handoff" -- the **Handoff Block** (`raven/agent/subagent/direct_chat.py`) is the
 raven-minted pointer block in the main agent's next turn after Direct Chat activity, and it
 carries no transcript text.

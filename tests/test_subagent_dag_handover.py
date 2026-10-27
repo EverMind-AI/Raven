@@ -618,6 +618,76 @@ async def test_available_instance_history_is_loaded_without_notice(tmp_path: Pat
     assert loaded.notices == ()
 
 
+async def test_a_second_hop_reads_the_instance_log_for_the_attempts_that_ran_there(tmp_path: Path):
+    """Attempt 1 ran on another agent's session; attempt 2 is this instance's
+    whole conversation. Demanding attempt 1's archived prompt from this log would
+    report every second hop as incomplete."""
+    store = _local_store(tmp_path)
+    await store.write_text(store.prompt_path("node"), "original task")
+    await store.write_text(store.attempt_prompt_path("node", 1), "original task")
+    await store.write_text(store.attempt_output_path("node", 1), "alpha answer")
+    await store.write_text(store.attempt_prompt_path("node", 2), "moved task")
+    await store.write_text(store.attempt_output_path("node", 2), "beta answer")
+    append_turn(
+        tmp_path,
+        agent="beta",
+        handle="shared",
+        session_key="session",
+        kind="dag",
+        prompt="moved task",
+        answer="beta answer",
+    )
+
+    loaded = await load_handover_turns(
+        store,
+        "node",
+        session_dir=tmp_path,
+        source_agent="beta",
+        source_instance="shared",
+        attempt_agents=("alpha", "beta"),
+    )
+    assert loaded.turns == (HandoverTurn("beta", "moved task", "beta answer"),)
+    assert loaded.notices == ()
+
+
+async def test_a_fenced_handover_prompt_still_proves_the_instance_log(tmp_path: Path):
+    """The archived attempt prompt and the log's user row are the same rendered
+    text, fence markers included; a second hop must not read as incomplete just
+    because the prompt it carries is itself a handover."""
+    store = _local_store(tmp_path)
+    await store.write_text(store.prompt_path("node"), "original task")
+    await store.write_text(store.attempt_prompt_path("node", 1), "original task")
+    await store.write_text(store.attempt_output_path("node", 1), "alpha answer")
+    moved = render_handover(
+        (HandoverTurn("alpha", "original task", "alpha answer"),),
+        task="original task",
+        to_agent="beta",
+        next_message="use the parser",
+    ).text
+    await store.write_text(store.attempt_prompt_path("node", 2), moved)
+    await store.write_text(store.attempt_output_path("node", 2), "beta answer")
+    append_turn(
+        tmp_path,
+        agent="beta",
+        handle="shared",
+        session_key="session",
+        kind="dag",
+        prompt=moved,
+        answer="beta answer",
+    )
+
+    loaded = await load_handover_turns(
+        store,
+        "node",
+        session_dir=tmp_path,
+        source_agent="beta",
+        source_instance="shared",
+        attempt_agents=("alpha", "beta"),
+    )
+    assert loaded.turns == (HandoverTurn("beta", moved, "beta answer"),)
+    assert loaded.notices == ()
+
+
 async def test_instance_log_missing_the_current_archived_attempt_falls_back(tmp_path: Path):
     store = _local_store(tmp_path)
     await store.write_text(store.prompt_path("node"), "current task")

@@ -153,7 +153,9 @@ this page. What follows is what the four decisions mean, not how to spell them.
   of the node that failed.
 - `reassign` hands the node to another sub-agent on the roster. The node keeps its id, its
   task and its place in the graph -- its next attempt runs on the agent you name, called
-  `agent`, which is a roster name rather than a worker label. That agent's first prompt
+  `agent`, which is a roster name rather than a worker label. On a run dispatched from a
+  Worker Table a roster name takes the node out of that table: it keeps the charter of the
+  role it was submitted under. That agent's first prompt
   carries a **handover** of the visible conversation so far -- what was asked and what it
   answered, as plain text -- followed by the message that attempt would otherwise have been
   given. When the node runs on an `instance`, the handover is the instance's whole
@@ -192,7 +194,7 @@ finished keeps the agent that did the work.
 Three cases are worth planning for. A target `agent` that already has a conversation under
 the node's named `instance` in this conversation is refused -- choose another agent, or replan
 with a new instance name. A run submitted with `confirm: true` asks the user again before the
-hand-off, naming each node that would move, and a refusal records no decision. And when
+reassignment, naming each node that would move, and a refusal records no decision. And when
 either the old or the new agent runs on a registered machine, the files the earlier attempts
 wrote stay where they were made: the result says so, and your message has to carry what the
 new agent needs.
