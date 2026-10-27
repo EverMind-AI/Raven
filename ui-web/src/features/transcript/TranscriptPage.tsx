@@ -954,11 +954,6 @@ const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg: StepDa
   const one = seg.calls.length > 0 && seg.calls.every((c) => c.name === (seg.calls[0] as CallData).name)
   const live = seg.calls.some((c) => !c.done)
   const failedN = seg.calls.filter((c) => c.done && !c.ok).length
-  /* A step that delegated keeps its rows on screen. The summary row is a
-     one-line stand-in for calls a reader does not need to tell apart; a spawn
-     or a dag call is not one of those -- which sub-agent ran, and how far its
-     graph got, is the point -- so the list is not folded over it. */
-  const keepCalls = seg.calls.some(store.callKeepsOpen)
   const showSum = seg.calls.length > 1
   /* The rows behind a closed summary are not mounted, so the summary carries
      the clock for them. Timed from the call in flight rather than the step's
@@ -977,11 +972,11 @@ const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg: StepDa
     : seg.thinkMs >= 1000
       ? t('gui.transcript.think_done', { label: thinkWord, t: store.durText(seg.thinkMs) })
       : thinkWord
-  const wkinHidden = seg.calls.length === 0
-    ? true
-    : seg.calls.length === 1 || keepCalls
-      ? false
-      : !seg.wkOpen
+  /* One state, one writer: the summary's `open` class and this body read the
+     same `seg.wkOpen`, so the row cannot say "open" over a body that is shut.
+     `wkOpen` is the default `paintWork` sets (open for a delegating step) or
+     the reader's own toggle (`toggleWork`), never a second rule layered here. */
+  const wkinHidden = seg.calls.length === 0 ? true : seg.calls.length === 1 ? false : !seg.wkOpen
   if (stepBlank(seg)) return null
   return (
     <div className="step in">

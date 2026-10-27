@@ -790,6 +790,24 @@ describe('what the transcript folds by default', () => {
     expect(f).toContain('ran 2 commands')
   })
 
+  it('lets the reader fold the work under a long message by hand', () => {
+    /* The message rule picks the untouched default; a reader's close is
+       `foldStore`'s and outranks it. Driven through `toggleFold` with the same
+       default the row's own click passes, not through a seeded key. */
+    resetFolds()
+    toggleFold('', 'seg:a', true)
+    const episodes: Episode[] = [
+      { index: 0, narration: LONG, reasoning: '', tools: [] },
+      { index: 1, narration: '', reasoning: '', tools: [call('a', 'exec', 'ls'), call('b', 'exec', 'pwd')] }
+    ]
+
+    const f = view(episodes)
+
+    expect(f).toContain('ran 2 commands')
+    expect(f).not.toContain('pwd')
+    resetFolds()
+  })
+
   it('keeps every delegation in a running stretch, not only the latest call', () => {
     // `read_file` after the two graphs leaves both dag calls behind the call in
     // hand. The folded live view used to render a panel for the latest tool

@@ -1083,11 +1083,25 @@ function newCallData(
   return c
 }
 
-/* The row-fold transitions: the step that just outgrew a single call folds its
+/* A call whose information a one-line summary cannot stand in for. A spawn or
+   a dag row is the only place the delegation is visible -- which sub-agent ran,
+   and how far its graph got -- so the default-open rules read this predicate
+   rather than restating it. The reader's own toggle still decides either way:
+   this answers "what does an untouched step do", never "may the reader shut
+   it". */
+const callKeepsOpen = (c: CallData): boolean => c.kind === 'spawn' || c.kind === 'dag'
+
+/* The row-fold transitions: a step that just outgrew a single call folds its
    rows for the first time, and a failure is the one thing worth opening
-   unasked -- unless the reader pinned the fold. */
+   unasked. Both are defaults -- `wkPinned` is the reader having taken the fold
+   over, and from then on nothing here moves it. A step holding a spawn or dag
+   call defaults open instead of folding, so the delegation is readable without
+   a click; the reader can still shut it. */
 function paintWork(lane: Lane, seg: StepData, grewPast1: boolean): void {
-  if (seg.calls.length > 1 && grewPast1 && !seg.wkPinned) seg.wkOpen = false
+  if (seg.calls.length > 1 && !seg.wkPinned) {
+    if (seg.calls.some(callKeepsOpen)) seg.wkOpen = true
+    else if (grewPast1) seg.wkOpen = false
+  }
   if (seg.calls.length > 1 && seg.failed && !seg.wkPinned && !seg.wkOpen) seg.wkOpen = true
   bump(lane, seg)
 }
@@ -1238,12 +1252,6 @@ export function newStep(lane: Lane): StepHandle {
 
 const stepSolid = (s: StepData): boolean =>
   s.calls.length > 0 || (s.thinkShown && s.hasThink) || !!s.say.trim()
-
-/* A call whose information a one-line summary cannot stand in for. A spawn or
-   a dag row is the only place the delegation is visible -- which sub-agent ran,
-   and how far its graph got -- so the fold rules here and the step's own work
-   list both read this predicate rather than restating it. */
-export const callKeepsOpen = (c: CallData): boolean => c.kind === 'spawn' || c.kind === 'dag'
 
 /* Whether a turn's work reads as important enough not to fold away. Two things
    qualify, and both are display defaults rather than a change to what folding
@@ -1445,12 +1453,20 @@ function replaceStep(lane: Lane, at: StepData, next: StepData | null): boolean {
 function mergeRun(lane: Lane, group: StepData[]): void {
   const calls = group.flatMap((s) => s.calls)
   if (!calls.length || !calls.every((c) => c.done)) return
+  /* A merged step is a fresh default, unless one of the steps it replaces was
+     the reader's: then their choice travels with the calls it was made about.
+     Otherwise the same rule `paintWork` applies holds -- a run holding a
+     delegation stays open until someone closes it. */
+  const pinned = group.find((s) => s.wkPinned)
   const holder: StepData = {
     v: 0, id: nextId(), kind: 'step',
     think: '', thinkLive: false, thinkT0: 0, thinkMs: 0, thinkOpen: false, thinkPinned: false, thinkShown: false,
     say: '', sayCaret: false, hasSay: false, hasThink: false, hasQA: false,
     failed: calls.some((c) => !c.ok),
-    calls, wkOpen: false, wkPinned: false, merged: true,
+    calls,
+    wkOpen: pinned ? pinned.wkOpen : calls.some(callKeepsOpen),
+    wkPinned: Boolean(pinned),
+    merged: true,
   }
   replaceStep(lane, group[0] as StepData, holder)
   group.slice(1).forEach((s) => replaceStep(lane, s, null))

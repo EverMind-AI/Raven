@@ -646,3 +646,39 @@ describe('what keeps a finished turn\'s fold open', () => {
     expect(after[1]?.open).toBe(true)
   })
 })
+
+/* A run of silent steps is merged into one row. The merged row is a fresh
+   default -- open when it delegated -- unless one of the steps it replaces was
+   the reader's, whose choice travels with the calls it was made about. */
+describe('a merged run of silent steps', () => {
+  const ran = (lane: Lane, name: string, id: string): StepHandle => {
+    const st: StepHandle = store.newStep(lane)
+    st.tool(name, {}, name, id).done(true, 'ok', 5)
+    st.seal()
+    return st
+  }
+  const mergedOf = (lane: Lane): StepData | undefined =>
+    lane.segs.find((s): s is StepData => s.kind === 'step' && s.merged)
+
+  it('stays open when the run delegated', () => {
+    const lane = store.newLane('main:merge-spawn', true)
+    const a = ran(lane, 'spawn', 'c1')
+    const b = ran(lane, 'read_file', 'c2')
+
+    store.foldRuns(lane, [a.seg, b.seg])
+
+    expect(mergedOf(lane)?.wkOpen).toBe(true)
+  })
+
+  it('carries the reader\'s close into the merged row', () => {
+    const lane = store.newLane('main:merge-pin', true)
+    const a = ran(lane, 'spawn', 'c1')
+    const b = ran(lane, 'read_file', 'c2')
+    store.toggleWork(lane, a.seg)
+
+    store.foldRuns(lane, [a.seg, b.seg])
+
+    expect(mergedOf(lane)?.wkPinned).toBe(true)
+    expect(mergedOf(lane)?.wkOpen).toBe(false)
+  })
+})

@@ -883,7 +883,7 @@ describe('transcript island, history', () => {
     expect(fold?.textContent).toContain(long)
   })
 
-  it('does not put a delegating step\'s call rows behind its summary', () => {
+  it('shows a delegating step\'s call rows by default, without locking them open', () => {
     const t0 = Date.now() - 60000
     act(() => {
       mount.history([
@@ -905,6 +905,43 @@ describe('transcript island, history', () => {
     expect($('.tfold')?.classList.contains('open')).toBe(true)
     expect($('.wkin')?.hasAttribute('hidden')).toBe(false)
     expect($$('.wkin .wrow .vb')).toHaveLength(2)
+  })
+
+  it('lets the reader shut a delegating step, and keeps it shut', () => {
+    /* `keepCalls` used to make the body visible regardless of `wkOpen`, so the
+       summary stayed clickable while the click could never hide anything. The
+       default and the reader's decision are two different things: the first is
+       `paintWork`'s, the second is `wkPinned`'s. */
+    let st!: ReturnType<typeof mount.step>
+    act(() => {
+      mount.ask('fan it out')
+      st = mount.step()
+      st.tool('spawn', { task: 'look' }, null, 'c1')
+      st.tool('read_file', { path: '/tmp/a' }, null, 'c2').done(true, 'x', 5)
+    })
+    const sum = (): HTMLElement => $('.wrow.sum') as HTMLElement
+    const body = (): HTMLElement => $('.wkin') as HTMLElement
+
+    /* Untouched: open, and the summary's own marker agrees with the body. */
+    expect(sum().classList.contains('open')).toBe(true)
+    expect(body().hidden).toBe(false)
+
+    /* The reader shuts it. Style and body are asserted together, because a
+       summary still reading "open" over a shut body is the same defect one
+       layer up. */
+    act(() => sum().click())
+    expect(body().hidden).toBe(true)
+    expect(sum().classList.contains('open')).toBe(false)
+
+    /* A call landing afterwards is a default, not an instruction to reopen. */
+    act(() => { st.tool('read_file', { path: '/tmp/b' }, null, 'c3').done(true, 'y', 5) })
+    expect(body().hidden).toBe(true)
+    expect(sum().classList.contains('open')).toBe(false)
+
+    /* And the reader can open it again, style and body still agreeing. */
+    act(() => sum().click())
+    expect(body().hidden).toBe(false)
+    expect(sum().classList.contains('open')).toBe(true)
   })
 
   it('keeps a redirection whole: an ACP shell title stays one row, one command', () => {
@@ -3108,7 +3145,7 @@ describe('transcript island, the delegation verbs', () => {
       st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const row = $$('.wkin .wrow')[0] as HTMLElement
     act(() => { row.click() })
     return row.nextElementSibling as HTMLElement
@@ -3167,7 +3204,7 @@ describe('transcript island, the delegation verbs', () => {
       st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const row = $$('.wkin .wrow')[0] as HTMLElement
     act(() => { row.click() })
     await act(async () => { await Promise.resolve() })
@@ -3213,7 +3250,7 @@ describe('transcript island, tool episodes', () => {
 
   it('opens a settled row into its detail card and closes it again', () => {
     twoCalls()
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const row = $$('.wkin .wrow')[0] as HTMLElement
     expect(row.classList.contains('tog')).toBe(true)
     /* Shut is not built at all, so the row stands with no card behind it. */
@@ -3242,7 +3279,7 @@ describe('transcript island, tool episodes', () => {
       st.tool('raven_config', { action: 'describe' }).done(true, '{}', 5)
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const row = $$('.wkin .wrow')[0] as HTMLElement
     act(() => { row.click() })
     const dtl = row.nextElementSibling as HTMLElement
@@ -3267,7 +3304,7 @@ describe('transcript island, tool episodes', () => {
         st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
         st.seal()
       })
-      act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+      openWork()
       const row = $$('.wkin .wrow')[0] as HTMLElement
       act(() => { row.click() })
       return (row.nextElementSibling as HTMLElement).querySelector<HTMLElement>('.bd pre .pth')!
@@ -4356,7 +4393,7 @@ describe('transcript island, delegated calls', () => {
         { run_id: 'r-1', tool_call_id: 'call-1', node: 'alpha', status: 'failed' })
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const cards = $$('.wkin .wrow').map((row) => row.nextElementSibling as HTMLElement)
     const calls = store._dagCallsForTests()
 
@@ -4394,7 +4431,7 @@ describe('transcript island, delegated calls', () => {
       st.tool('run_subagent_dag', { nodes: [{ id: 'beta' }, { id: 'beta2' }] }, null, 'call-2')
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const cards = $$('.wkin .wrow').map((row) => row.nextElementSibling as HTMLElement)
 
     expect(cards.map((c) => dagField(c, 'gui.dag.run_id'))).toEqual(['r-1', 'r-2'])
@@ -4882,7 +4919,7 @@ describe('transcript island, an imported conversation', () => {
       st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const row = $$('.wkin .wrow')[0] as HTMLElement
     act(() => { row.click() })
     return row.nextElementSibling as HTMLElement
@@ -4940,7 +4977,7 @@ describe('transcript island, an imported conversation', () => {
       st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     act(() => { ($$('.wkin .wrow')[0] as HTMLElement).click() })
     await act(async () => { await Promise.resolve() })
     expect(asked).toEqual([])
