@@ -110,7 +110,7 @@ def _dag_spec(**over):
 
 
 def _branching_nodes() -> list[NodeSpec]:
-    """A decision, the branch one of its routes opens, and a step that waits on both."""
+    """A decision node, the branch one of its routes opens, and a step that waits on both."""
     return [
         NodeSpec(
             id="triage",
@@ -395,6 +395,29 @@ async def test_an_empty_skills_list_is_written_not_blank():
 
     assert plan.kind == "questions"
     assert "already specifies" in plan.reply
+
+
+async def test_a_route_condition_reaches_the_judge_with_its_params_filled_and_its_secrets_withheld():
+    """The judge reads a condition as it was dispatched, so a reference left in one is text
+    it has to guess at -- and a secret filled into one would leave the host with it."""
+    tool = FakeDagTool()
+    ex = PlaybookExecutor(dag_tool=tool)
+    triage, *rest = _branching_nodes()
+    routes = {"bug": "a defect at least ${params.severity}", "other": "anything else {{ params.TOKEN }}"}
+    spec = _dag_spec(
+        params={
+            "severity": ParamSpec(type="string", required=True, description="how severe must a defect be?"),
+            "TOKEN": ParamSpec(type="secret", description="the tracker token"),
+        },
+        nodes=[triage.model_copy(update={"routes": routes}), *rest],
+    )
+
+    plan = await ex.execute(spec, params={"severity": "major", "TOKEN": "s3cr3t-value"}, confirmed=True)
+
+    assert plan.kind == "dag", plan.reply
+    dispatched = {node["id"].rsplit("-", 1)[-1]: node for node in tool.calls[0]["nodes"]}
+    assert dispatched["triage"]["routes"]["bug"] == "a defect at least major"
+    assert "s3cr3t-value" not in json.dumps(tool.calls[0]["nodes"])
 
 
 async def test_executor_dag_hands_nodes_to_the_graph_tool_with_params_filled():
@@ -891,10 +914,24 @@ def test_the_prompts_allow_a_branch_and_still_refuse_a_loop():
     assert "design no run-time loops (a conditional branch is expressible)" in compose
 
 
+def test_the_dag_mode_section_gives_a_branch_its_fields_and_the_one_rule_about_them():
+    """A generated dag playbook is written from this section, not from the prompt-mode
+    paragraph that says a branch can be expressed, so it is read here on its own."""
+    section = SYSTEM_PROMPT.split("# nodes (dag mode)\n", 1)[1].split("\n# ", 1)[0]
+    flat = " ".join(section.split())
+
+    assert "the whole graph language" not in flat
+    for field in ("`routes`", "`select`", "`when`"):
+        assert field in flat
+    assert "A node that depends on a decision node must name it in its `when`" in flat
+    assert "<id>.<route>" in flat and "<id>.done" in flat
+    assert "{{ <id>.output }}" in flat
+
+
 def test_the_compose_prompt_gives_a_branch_its_fields_and_the_one_rule_about_them():
     """A prompt that says a branch is expressible has to hand over the fields to write one
     with, and the one rule a branch breaks when it is forgotten: a node that depends on
-    a decision names it in its guard."""
+    a decision node names it in its guard."""
     compose = " ".join(build_compose_prompt("assemble it", COMPOSE_PROFILES, []).split())
 
     listed = {word.strip() for word in compose.split("camelCase fields:", 1)[-1].split(")", 1)[0].split("/")}

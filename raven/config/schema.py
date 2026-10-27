@@ -1298,6 +1298,7 @@ class MCPServerConfig(Base):
     command: str = ""  # Stdio: command to run (e.g. "npx")
     args: list[str] = Field(default_factory=list)  # Stdio: command arguments
     env: dict[str, str] = Field(default_factory=dict)  # Stdio: extra env vars
+    cwd: str = ""  # Stdio: working directory of the server process
     url: str = ""  # HTTP/SSE: endpoint URL
     # Any header can carry a credential (Authorization, X-Custom-Auth), whatever it is called.
     headers: dict[str, str] = Field(

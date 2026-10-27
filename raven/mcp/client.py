@@ -175,6 +175,17 @@ async def _report_redirect(response: httpx.Response) -> None:
         )
 
 
+def _configured_cwd(cfg) -> str | None:
+    """The stdio server's working directory, or ``None`` for the default.
+
+    ``isinstance`` rather than truthiness: a stub configuration whose
+    ``cwd`` was never set answers with a mock, and handing that to the SDK
+    turns a test into a validation error about a field nobody configured.
+    """
+    value = getattr(cfg, "cwd", "")
+    return value if isinstance(value, str) and value else None
+
+
 @asynccontextmanager
 async def open_mcp_transport(
     cfg,
@@ -201,14 +212,25 @@ async def open_mcp_transport(
             # would be the choice of registry PlugHub's vetting refuses a
             # catalogue entry (see market/vetting.py). A server the sandbox
             # starts is fetched in there, so only its command line can carry one.
+            # The registry probe runs without the server's cwd on purpose: a
+            # package root is third-party content, and a .npmrc there must not
+            # choose the registry or the payload. The cost is that a host
+            # server's own project .npmrc is not seen either; telling the two
+            # apart needs a source marker on the config, not a looser probe.
             sandboxed = executor is not None and executor.supports_process_spawning
             command, *args = await mirrors.package_launch_async(
                 [cfg.command, *cfg.args], {**os.environ, **(cfg.env or {})}, local=not sandboxed
             )
+            cwd = _configured_cwd(cfg)
             if executor is not None and executor.supports_process_spawning:
-                read, write = await executor.start_process(command, args, env=cfg.env or None)
+                read, write = await executor.start_process(command, args, env=cfg.env or None, cwd=cwd)
             else:
-                params = StdioServerParameters(command=command, args=args, env=cfg.env or None)
+                params = StdioServerParameters(
+                    command=command,
+                    args=args,
+                    env=cfg.env or None,
+                    cwd=cwd,
+                )
                 read, write = await stack.enter_async_context(stdio_client(params))
         elif transport_type == "sse":
 

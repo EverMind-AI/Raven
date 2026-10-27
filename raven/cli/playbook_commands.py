@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+import yaml
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
@@ -127,7 +128,7 @@ def playbook_validate(
         probe = PlaybookStore(path.parent.parent, builtin_root=path.parent.parent)
         try:
             spec = probe.load(path.parent.name)
-        except (ValidationError, ValueError) as exc:
+        except (ValidationError, ValueError, yaml.YAMLError) as exc:
             errors.append(str(exc))
     else:
         store = _store(config)
@@ -135,7 +136,7 @@ def playbook_validate(
         path = store.path_for(target)
         try:
             spec = store.load(target)
-        except (ValidationError, ValueError) as exc:
+        except (ValidationError, ValueError, yaml.YAMLError) as exc:
             errors.append(str(exc))
 
     if spec is not None:

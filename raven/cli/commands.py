@@ -201,6 +201,12 @@ from raven.cli.plugin_commands import plugin_app
 
 app.add_typer(plugin_app, name="plugin")
 
+# Portable Agent Plugins 1.0 packages: data-only packages that carry
+# skills, not the kernel plugins above.
+from raven.cli.agent_plugin_commands import agent_plugin_app
+
+app.add_typer(agent_plugin_app, name="agent-plugins")
+
 from raven import i18n
 from raven.cli.import_commands import import_app
 

@@ -35,6 +35,7 @@ repository's commit conventions.
 | `acp` | ACP server interface for exposing Raven to external agent hosts |
 | `acp_client` | ACP client, capability negotiation, and adapters for third-party agent events |
 | `agent` | Agent Loop, Harness Modules, tool execution, and subagent orchestration |
+| `agent_plugins` | Portable Agent Plugins 1.0 packages: manifest reading, package discovery, skill import, and the package ledger |
 | `auth` | Authentication and authorization primitives |
 | `browser` | Browser automation, session management, and navigation checks |
 | `channels` | Messaging adapters and their shared channel contract |

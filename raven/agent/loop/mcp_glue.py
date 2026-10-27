@@ -418,10 +418,34 @@ class McpGlueMixin:
         return {n: _cfg_fingerprint(c) for n, c in a.items()} == {n: _cfg_fingerprint(c) for n, c in b.items()}
 
     def _live_mcp_servers(self) -> dict | None:
-        """The MCP server set the file names now, or ``None`` for "no answer"."""
+        """The MCP server set the file names now, or ``None`` for "no answer".
+
+        The portable Agent Plugin packages' servers ride along: they are a
+        fact about the packages on disk, not an answer the file gives, so a
+        file that says nothing about the host's own servers still leaves them
+        in place.
+        """
         from raven.config.live import mcp_server_configs
 
-        return mcp_server_configs(self._live_config)
+        return self._with_package_servers(mcp_server_configs(self._live_config))
+
+    def _with_package_servers(self, servers: dict | None) -> dict | None:
+        """The host's servers with the packages' servers added.
+
+        ``None`` stays ``None``: that is the "no answer" the live reader
+        returns for an absent or torn ``tools.mcpServers``, and the caller
+        keeps the set the process already has. Turning it into a real answer
+        here would make the next reconcile detach every host server.
+
+        A host server always wins a name collision: the operator configured
+        it, and a package may not replace it.
+        """
+        packages = getattr(self, "_package_mcp_servers", None)
+        if not packages or servers is None:
+            return servers
+        merged = dict(packages)
+        merged.update(servers)
+        return merged
 
     def mcp_config_changed(self, cfg_servers: dict) -> bool:
         """Whether :meth:`apply_mcp_config` would do anything, without doing it.
@@ -429,8 +453,13 @@ class McpGlueMixin:
         The gate in front of every caller that can fire on a timer -- the reload
         RPC, a config-file watch. Answering it stays in memory, so an unchanged
         config never reaches a transport.
+
+        The answer is taken over the set :meth:`apply_mcp_config` would apply,
+        package servers included: a caller that passes only the file's servers
+        would otherwise hear "changed" every time a package contributes one,
+        and prompt for a reload that does nothing.
         """
-        return self.mcp_manager.config_changed(cfg_servers)
+        return self.mcp_manager.config_changed(self._with_package_servers(cfg_servers) or {})
 
     async def apply_mcp_config(self, cfg_servers: dict, *, attempts: dict | None = None) -> "ApplyReport":
         """Reconcile live MCP connections with ``cfg_servers``.
@@ -444,12 +473,13 @@ class McpGlueMixin:
         Reconciling, not restarting: servers whose config did not change are not
         touched, so this is safe to call while turns are running.
         """
-        self._mcp_servers = cfg_servers
+        servers = self._with_package_servers(cfg_servers)
+        self._mcp_servers = servers
         # The blacklist is re-applied by the manager's post_connect hook, on every
         # connect rather than only the first -- an MCP server can register a name
         # that is also in disabled_tools.
         report = await self.mcp_manager.apply_config(
-            cfg_servers, executor_provider=self.mcp_executor_provider, attempts=attempts
+            servers, executor_provider=self.mcp_executor_provider, attempts=attempts
         )
         # After the apply, not only after a connect: a *detach* can take the last
         # server that served resources with it, and no connect fires for that.

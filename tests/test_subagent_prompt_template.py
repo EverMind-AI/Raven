@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -90,6 +91,68 @@ def test_confinement_rejects_an_escaping_ref(tmp_path: Path) -> None:
         check_confined("../secrets.md", what="ref", roots=(str(tmp_path),))
 
 
+def test_an_absolute_reference_lands_in_its_root_written_with_either_slash(tmp_path: Path) -> None:
+    (tmp_path / "notes.md").write_text("n", encoding="utf-8")
+
+    for path in (str(tmp_path / "notes.md"), (tmp_path / "notes.md").as_posix()):
+        check_confined(path, what="ref", roots=(str(tmp_path),))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="only a Windows filesystem reads a path regardless of case")
+def test_on_windows_a_reference_typed_in_another_case_lands_in_its_root(tmp_path: Path) -> None:
+    """The comparison keeps case; what makes this hold is ``realpath`` giving each existing
+    component its on-disk case, on the reference's side and the root's alike."""
+    work = tmp_path / "Work"
+    (work / "Sub").mkdir(parents=True)
+    (work / "Sub" / "Notes.md").write_text("n", encoding="utf-8")
+
+    for path in (str(work / "Sub" / "Notes.md").upper(), str(work / "sub" / "missing.md").lower()):
+        check_confined(path, what="ref", roots=(str(work),))
+
+
+@pytest.mark.parametrize("form", ["ref", "input"])
+@pytest.mark.parametrize("spelling", ["backslashes", "drive"])
+async def test_a_nodes_reference_spelled_for_windows_cannot_read_past_the_node_root(
+    tmp_path: Path, form: str, spelling: str
+) -> None:
+    """On a Windows host both spellings passed the lexical check, and the read returned the
+    file they named."""
+    work, history = tmp_path / "work", tmp_path / "session" / "subagents"
+    nodes = history / "nodes"
+    work.mkdir()
+    nodes.mkdir(parents=True)
+    secret = tmp_path / "secret.md"
+    secret.write_text("TOP SECRET", encoding="utf-8")
+    path = "@nodes/" + (r"..\..\..\secret.md" if spelling == "backslashes" else str(secret))
+    template = "{{ ref:" + path + " }}" if form == "ref" else "{{ inputs.f }}"
+    inputs = {"f": {"file": path}} if form == "input" else {}
+
+    with pytest.raises(DagValidationError, match="node artifacts"):
+        await render_template(
+            template,
+            inputs,
+            backend=LocalFileBackend(),
+            cwd=str(work),
+            nodes_root=str(nodes),
+            roots=(str(work), str(history)),
+        )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="only Windows has a path rooted without a drive")
+def test_a_rooted_path_is_read_on_the_drive_of_the_directory_it_resolves_against() -> None:
+    """``check_confined`` resolves ``\\notes.md`` against the workdir's drive. Python 3.12
+    calls that path absolute, so it was read on the process's current drive instead -- a
+    file the check never looked at. 3.13 joins it, and passes this either way."""
+    assert LocalFileBackend().abspath(r"\notes.md", cwd=r"Z:\work") == r"Z:\notes.md"
+
+
+def _link(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("this host cannot create a symlink")
+
+
 def test_a_symlink_out_of_every_root_is_refused(tmp_path: Path) -> None:
     """The escape this guard missed while it compared strings.
 
@@ -103,7 +166,7 @@ def test_a_symlink_out_of_every_root_is_refused(tmp_path: Path) -> None:
     (outside / "secret.txt").write_text("TOP SECRET", encoding="utf-8")
     work = tmp_path / "work"
     work.mkdir()
-    (work / "notes.md").symlink_to(outside / "secret.txt")
+    _link(work / "notes.md", outside / "secret.txt")
 
     with pytest.raises(DagValidationError, match="outside the session workdir"):
         check_confined("notes.md", what="ref", roots=(str(work),))
@@ -116,7 +179,7 @@ def test_a_symlinked_directory_cannot_be_walked_out_of_a_root(tmp_path: Path) ->
     (outside / "secret.txt").write_text("TOP SECRET", encoding="utf-8")
     work = tmp_path / "work"
     work.mkdir()
-    (work / "escape").symlink_to(tmp_path / "outside")
+    _link(work / "escape", tmp_path / "outside")
 
     with pytest.raises(DagValidationError, match="outside the session workdir"):
         check_confined("escape/deep/secret.txt", what="ref", roots=(str(work),))
@@ -127,7 +190,7 @@ def test_a_symlink_that_stays_inside_a_root_is_allowed(tmp_path: Path) -> None:
     work = tmp_path / "work"
     (work / "real").mkdir(parents=True)
     (work / "real" / "plan.md").write_text("ship it", encoding="utf-8")
-    (work / "plan.md").symlink_to(work / "real" / "plan.md")
+    _link(work / "plan.md", work / "real" / "plan.md")
 
     check_confined("plan.md", what="ref", roots=(str(work),))
 
@@ -141,7 +204,7 @@ def test_a_root_reached_through_a_symlink_still_holds_its_own_files(tmp_path: Pa
     real.mkdir()
     (real / "plan.md").write_text("ship it", encoding="utf-8")
     linked = tmp_path / "linked"
-    linked.symlink_to(real)
+    _link(linked, real)
 
     check_confined("plan.md", what="ref", roots=(str(linked),))
 
@@ -150,6 +213,15 @@ def test_within_is_textual_and_prefix_exact() -> None:
     assert within("/a/b/c", "/a/b")
     assert within("/a/b", "/a/b")
     assert not within("/a/bc", "/a/b")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="only a Windows host takes either slash as a separator")
+def test_within_reads_windows_separators_and_keeps_case() -> None:
+    assert within(r"C:\Work\Notes.md", "C:/Work")
+    assert within("C:/Work", "C:\\Work\\")
+    assert not within(r"C:\Workshop\notes.md", r"C:\Work")
+    # Two directories that differ only in case are two directories here.
+    assert not within(r"C:\Data\WORK\secret.md", r"C:\Data\work")
 
 
 def test_the_grammar_travels_with_the_layer() -> None:

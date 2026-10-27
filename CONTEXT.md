@@ -1798,6 +1798,26 @@ factory returning `None`. The wheel carries its own shelf of such plugins,
 `RuntimeHandles.playbook_runtime` funnel, so the loop keeps one dispatch gate, one quota and
 one announce path while the tools ride the plugin contract.
 
+**Agent Plugin Package** (`agent_plugins/`):
+A directory whose root holds a `plugin.json` that validates against the Agent Plugins 1.0.0
+manifest schema, with optional `skills/` and `mcp.json` components -- the portable package
+format of Agent Plugins 1.0 (`https://agent-plugins.org/specification`). It contributes skills
+and MCP servers, not code loaded into the host process: a package's `mcp.json` server is a
+separate process. It is not a **Plugin** (the kernel kind, which ships Python factories in
+`raven-plugin.toml` and runs inside the host), and it is seated inner (see Layer Seats): it
+imports `config`, `security`, `skill_hub` and `utils`, and no surface. The loader imports
+a package's skills into the workspace skill tree under `<workspace>/skills/<package name>/`,
+one directory per package, so the pool mints one source label per package rather than one
+per skill; the copy is recorded in the package ledger (`<home>/agent-plugins.json`), which is
+what makes removal safe. An imported skill carries no unconditional-injection flag: `always`
+is dropped from the copy, so a third-party package cannot put text into every turn. A package
+may also carry `mcp.json`, and those servers are composed under the package's own names
+(`<package>__<server>`) with the package root as their working directory and `PLUGIN_ROOT` /
+`PLUGIN_DATA` in their environment; they start only for a package named in
+`agentPlugins.mcpPackages`, because a server entry is a process on the operator's machine.
+_Avoid_: "portable plugin", "third-party plugin", "plugin package" unqualified, "Agent
+Plugin" unqualified.
+
 **Plugin Registry** (`plugins/registry.py`):
 The `PluginRegistry` discovers manifests, activates those not in `plugins.disabled`,
 resolves each `module:callable` factory by dynamic import, and registers
@@ -2013,7 +2033,8 @@ _Avoid_: "telemetry" for either half -- it names neither the machinery nor the m
 Where every package sits, as the machine enforces it. Inner (may not import a surface):
 the shelves and engines the contract lists as sources (`tracing` among them -- a kernel
 member, seated inner here as well so every package appears in one roster), `config` and
-`utils` and `i18n` (cross-cutting leaves), `mcp`, `playbook`, `knowledge`, `skill_hub`, `trajectory`,
+`utils` and `i18n` (cross-cutting leaves), `agent_plugins` (the portable package loader: it
+imports `config`, `security`, `skill_hub` and `utils`, and no surface), `mcp`, `playbook`, `knowledge`, `skill_hub`, `trajectory`,
 `permissions` (the gate the registry consults; its turn context is bound by entrances),
 `eval_engine` and `proactive_engine` (L3 shelf members -- proactive_engine originates
 turns through its schedulers and sentinel but is an engine the loop and the assembly root
@@ -2972,7 +2993,10 @@ files, by path. A relative reference resolves against the working directory; eit
 may also be named absolute. `@nodes/<node_id>...` is a third, narrower address -- this
 session's own node artifacts alone, checked lexically against that one prefix rather than
 against these roots -- reaching a node's own prompt file too, which the short
-`{{ <node_id>.output }}` form cannot.
+`{{ <node_id>.output }}` form cannot. A reference resolves by the host's path rules, so on
+Windows a backslash separates and a drive anchors; the lexical checks -- on `@nodes/`, and on
+a reference checked without roots -- refuse what would escape under POSIX or Windows rules
+alike, so they answer the same on every host.
 Stops at Subagent history rather than at Agent home on purpose. Agent home also holds user
 memory, installed skills, and every *other* conversation's transcript and sub-agent history,
 already off limits to a working directory (`workdir.py`'s `_PROTECTED_SUBTREES`) -- and a
@@ -2983,8 +3007,10 @@ memory, into a sub-agent's prompt. Containment is decided on where the reference
 disk rather than on how it is spelled: both the resolved path and each root go through
 `realpath`, so a symlink inside a root that points outside every one of them is refused
 rather than followed, and a root reached through a symlink still contains its own files. The
-error names the path the author wrote, never the physical one, which could describe a
-directory they were not entitled to learn about.
+comparison keeps the case `realpath` gives each existing component rather than folding it,
+so two directories differing only in case, which a case-sensitive Windows directory can
+hold, stay two. The error names the path the author wrote, never the physical one, which
+could describe a directory they were not entitled to learn about.
 
 **The fence rule** (`raven/agent/subagent/prompt_render.py`, `dag_render.py`):
 What a resolved reference's content gets on the way into a prompt, decided by the kind of
@@ -3608,14 +3634,19 @@ Nothing the node writes selects a route: the same constrained verdict call that 
 also picks the route, as a tool argument, and a selection is valid only if the judge reports
 one of the declared names, so a node that writes "route: bug" into its own answer has said
 nothing about the branch. `select` says how many an answer may take: `"one"` — exactly one,
-and what unset means once `routes` is set — or `"many"`, any number including none. A node
-may be a decision and guarded at once, which is a nested branch. Its selection is recorded
+and what unset means once `routes` is set — or `"many"`, any number including none. A decision
+node may also be guarded, which is a nested branch. Its selection is recorded
 per run (`selected_routes`, plus the judge's `route_evidence`) and read by clients beside
 the status. Where an ordinary node's judge failure or timeout reads as accomplished, a
 decision node whose route cannot be established fails ("The route could not be determined:
 ..."), its output withdrawn and its dependents skipped, with no fallback route and no
 adjudication. For the same reason a graph declaring routes is refused on a host with no
 provider to judge with.
+_Avoid_: "decision" alone, for the node or for what it chose -- the word already has two
+senses: in a DAG run, the main agent's answer to an **exception** report, the `decision` that
+`resolve_dag_node` takes (continue, abandon or replan); and a choice the host puts to the user,
+which stays open until they make it (**Host role**). Say decision node for the node, and its
+selection or selected routes for what its judge chose.
 
 **Route (DAG branch)** (a key of `routes`; `raven/agent/subagent/dag_graph.py`):
 One branch a decision node chooses between, named by the graph's author. A guard names it
@@ -3629,6 +3660,8 @@ _Avoid_: the routing-table rows of a **Routing entry** (`routes` on an agent tab
 which pick the backend a task runs on), and the runner's unrelated `_route_available`
 (`raven/agent/subagent/dag_runner.py`), which asks whether the main agent has any way to
 call `resolve_dag_node` — neither is a branch of a graph.
+_Avoid_: "branch" for any other part of a graph, such as what waits on a failed node --
+that is the node's dependents; a branch is the path a route selects.
 
 **Guard** (`when` on `DagNodeSpec`; `raven/agent/subagent/dag_guard.py`):
 The condition under which a node runs, as a three-valued expression over atoms
@@ -3637,7 +3670,7 @@ The condition under which a node runs, as a three-valued expression over atoms
 evaluated by a hand-written parser, never `eval`. An atom may name only a decision node of
 this graph that is in the node's `depends_on`, and only a route that node declares or
 `done`; every decision node of the graph in `depends_on` must appear in the guard, since a
-node cannot depend on a decision and stay silent about it. Two guards that can never hold
+node cannot depend on a decision node and stay silent about it. Two guards that can never hold
 are refused at submission: two un-negated routes of one `select: "one"` node in one `and`
 chain, and `not <node>.done`. These checks preserve surrounding negation and disjunction:
 an impossible arm does not reject an `or` whose other arm can hold. The runner reads a guard
@@ -3656,14 +3689,18 @@ Distinct from `skipped`, which says something went wrong and poisons its depende
 `not_executed` dependency poisons nothing, so a merge node with one input left out is not
 stopped by it and reads the fixed sentence in its place. Three reasons, recorded beside the
 status and read back as `reason`: `when_false` (the guard is false — the branch was not
-selected), `when_unknown` (the guard is unknown — a decision it names was never made), and
+selected), `when_unknown` (the guard is unknown — a decision node it names never chose), and
 `upstream_not_executed` (every dependency this node has in the graph was left out, which is
-decided before the guard and is why `<node>.done`, true whatever the decision did, cannot
+decided before the guard and is why `<node>.done`, true whatever the decision node chose, cannot
 revive a node with no input left on that path). Terminal in every reader: it is never
 rewritten to `interrupted`, a replan and a stop leave it as it is, and a later run naming
 one is refused with "its branch was not selected, so it wrote no output" — the id stays
 claimed. The run's tally counts it only when there is one, so a run without branches tallies
 exactly as before.
+_Avoid_: "skipped" for it -- `skipped` is the status of a node that never ran because
+something went wrong before it (a dependency failed, was abandoned or was itself skipped, or
+the run was stopped), and it skips that node's dependents in turn. A node a branch left out
+is not executed, and nothing went wrong.
 
 **replan** (adjudication decision; `raven/agent/subagent/dag_adjudication.py`) -- the answer
 to an exception report that replaces the plan instead of the node: the agent hands

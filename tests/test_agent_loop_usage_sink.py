@@ -19,9 +19,12 @@ import httpx
 import pytest
 
 import raven.agent.loop.turn_path as agent_loop_main
+import raven.rpc.methods.session as session_methods
 from raven.agent.harness.action import DefaultAction
+from raven.agent.hook import AgentHook, HookDecision
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
+from raven.agent.loop.bundles import EngineWiring, HostWiring, ToolWiring, TurnPolicy
+from raven.config.loader import load_config
 from raven.config.raven import ContextConfig
 from raven.contracts.llm_provider import ToolCallRequest
 from raven.contracts.token_strategy import UsageSnapshot
@@ -29,6 +32,7 @@ from raven.contracts.tool import Tool
 from raven.providers import rates, usage_record
 from raven.providers.base import LLMProvider, LLMResponse
 from raven.providers.binding import ModelBinding, use_binding
+from raven.session.manager import SessionManager
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
 from raven.token_wise import usage_context
@@ -89,6 +93,7 @@ def _make_agent(
     *,
     strategies: StrategyRegistry | None = None,
     context_config: ContextConfig | None = None,
+    hooks: list[AgentHook] | None = None,
 ) -> AgentLoop:
     kwargs: dict = {}
     if window is not None or strategies is not None or context_config is not None:
@@ -97,6 +102,8 @@ def _make_agent(
             strategies=strategies,
             context_config=context_config,
         )
+    if hooks is not None:
+        kwargs["host"] = HostWiring(hooks=hooks)
     return AgentLoop(
         provider=provider,
         workspace=workspace,
@@ -659,6 +666,7 @@ def _costing_agent(
     script: list[LLMResponse],
     *,
     strategies: StrategyRegistry | None = None,
+    hooks: list[AgentHook] | None = None,
 ) -> AgentLoop:
     """An agent whose every billed call is the loop's own.
 
@@ -675,6 +683,7 @@ def _costing_agent(
         window=40000,
         strategies=strategies,
         context_config=ContextConfig(drop_segments=["curator"]),
+        hooks=hooks,
     )
 
 
@@ -859,3 +868,177 @@ async def test_a_turn_is_not_billed_for_a_delegation_of_another_session(workspac
     await _turn(agent, sink)
 
     assert sink["cost_usd"] == pytest.approx(0.005)
+
+
+# --------------------------------------------------------------------------- #
+# the reading outlives the turn: stored on the reply, read back on a resume     #
+# --------------------------------------------------------------------------- #
+
+
+def _measured(prompt_tokens: int, completion_tokens: int, **extra) -> dict:
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
+        **extra,
+    }
+
+
+async def _resumed_usage(workspace: Path, monkeypatch, session_key: str) -> dict:
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(workspace)
+    cfg.agents.defaults.context_window_tokens = 40000
+    monkeypatch.setattr(session_methods, "load_config", lambda: cfg)
+    result = await session_methods.session_resume({"session_id": session_key})
+    return result["info"]["usage"]
+
+
+def _stored_replies(workspace: Path, session_key: str) -> list[dict]:
+    session = SessionManager(workspace).peek(session_key)
+    assert session is not None, "the turn was not persisted"
+    return [m for m in session.messages if m.get("role") == "assistant"]
+
+
+@pytest.mark.asyncio
+async def test_each_reply_is_stored_with_the_window_its_call_measured(workspace):
+    """The gauge's reading is kept on the reply its call produced.
+
+    Live, the reading reaches the meter through the stream caller's sink and is
+    gone once ``message.complete`` is sent. A reload has nothing to redraw it
+    from but the stored log, which is not what the model was sent: the context
+    engine compacts on its own. So every reply carries the reading of the call
+    that wrote it -- the tool-calling one as well as the answer -- with no sink
+    asked for, since a conversation held on a channel is opened in the browser
+    too.
+    """
+    agent = _costing_agent(
+        workspace,
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(id="c1", name="list_dir", arguments={"path": "."})],
+                usage=_measured(6000, 200),
+            ),
+            LLMResponse(content="done", finish_reason="stop", usage=_measured(6500, 300)),
+        ],
+    )
+
+    await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="hi",
+        ),
+        session_key="tui:c1",
+    )
+
+    replies = _stored_replies(workspace, "tui:c1")
+    assert [r.get("context_used") for r in replies] == [6200, 6800]
+    assert all("_context_used" not in r for r in replies), f"the in-flight private key was stored: {replies}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("extra", "used"),
+    [
+        ({"cache_read_input_tokens": 30000, "prompt_tokens_include_cache": False}, 38000),
+        ({"cache_read_input_tokens": 30000}, 8000),
+    ],
+    ids=["cache_reported_apart_from_prompt_tokens", "cache_already_inside_prompt_tokens"],
+)
+async def test_a_resumed_session_shows_the_reading_the_live_turn_showed(workspace, monkeypatch, extra, used):
+    """The meter must not move when the page reloads or the reader switches back."""
+    agent = _costing_agent(
+        workspace, [LLMResponse(content="ok", finish_reason="stop", usage=_measured(6000, 2000, **extra))]
+    )
+    sink: dict = {}
+    await _turn(agent, sink, session_key="tui:c1")
+
+    usage = await _resumed_usage(workspace, monkeypatch, "tui:c1")
+
+    assert sink["context_used"] == used
+    assert (usage["context_used"], usage["context_percent"]) == (sink["context_used"], sink["context_percent"])
+    assert usage["context_estimated"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("usage", [{}, _measured(0, 0)], ids=["no_usage_reported", "zero_tokens_reported"])
+async def test_a_reply_whose_call_reported_no_usage_carries_no_reading(workspace, usage):
+    """Absent means unknown, so a resume reads past it to an earlier reading
+    rather than drawing an empty window."""
+    agent = _costing_agent(workspace, [LLMResponse(content="ok", finish_reason="stop", usage=usage)])
+
+    await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="hi",
+        ),
+        session_key="tui:c1",
+    )
+
+    (reply,) = _stored_replies(workspace, "tui:c1")
+    assert "context_used" not in reply and "_context_used" not in reply, reply
+
+
+class _ReviseTheAnswer(AgentHook):
+    async def after_iteration(self, ctx):
+        if ctx.response is not None and not ctx.response.has_tool_calls:
+            return HookDecision(short_circuit_result="reviewed answer")
+        return HookDecision()
+
+
+class _RefuseTheTools(AgentHook):
+    async def before_execute_tools(self, ctx):
+        return HookDecision(short_circuit_result="tools refused")
+
+
+class _EndAfterTheTools(AgentHook):
+    async def after_iteration(self, ctx):
+        if ctx.response is not None and ctx.response.has_tool_calls:
+            return HookDecision(short_circuit_result="stopped after the tools")
+        return HookDecision()
+
+
+_CALLS_A_TOOL = LLMResponse(
+    content="",
+    tool_calls=[ToolCallRequest(id="c1", name="list_dir", arguments={"path": "."})],
+    usage=_measured(6000, 2000),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("hook", "reply", "put_in_place"),
+    [
+        (
+            _ReviseTheAnswer(),
+            LLMResponse(content="first draft", finish_reason="stop", usage=_measured(6000, 2000)),
+            "reviewed answer",
+        ),
+        (_RefuseTheTools(), _CALLS_A_TOOL, "tools refused"),
+        (_EndAfterTheTools(), _CALLS_A_TOOL, "stopped after the tools"),
+    ],
+    ids=[
+        "after_iteration_replaces_the_answer",
+        "before_execute_tools_replaces_a_tool_call",
+        "after_iteration_ends_after_the_tools",
+    ],
+)
+async def test_a_reply_a_hook_put_in_place_of_the_calls_keeps_that_calls_reading(
+    workspace, monkeypatch, hook, reply, put_in_place
+):
+    """A hook's text stands in for what the model said, not for the call: the
+    live meter already showed that call's window, so a resume must show it too.
+    After a tool call, the call's own row carries the reading, so the text a
+    hook ends the turn with there needs none."""
+    agent = _costing_agent(workspace, [reply], hooks=[hook])
+    sink: dict = {}
+    await _turn(agent, sink, session_key="tui:c1")
+
+    usage = await _resumed_usage(workspace, monkeypatch, "tui:c1")
+
+    assert put_in_place in [r.get("content") for r in _stored_replies(workspace, "tui:c1")], "the hook's text was filed"
+    assert sink["context_used"] == 8000
+    assert (usage["context_used"], usage["context_percent"]) == (sink["context_used"], sink["context_percent"])
+    assert usage["context_estimated"] is False

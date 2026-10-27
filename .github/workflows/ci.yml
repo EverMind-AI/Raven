@@ -427,6 +427,15 @@ jobs:
           $env:PATH = (Join-Path $env:ProgramFiles 'Git\usr\bin') + ';' + $env:PATH
           uv run --frozen --python 3.13 --no-sync pytest tests/test_subagent_dag_runner.py -k 'test_the_finish_text or test_branch_e2e_one_tool_call' -q -n 0 --tb=short
 
+      # A file reference is confined with the host's path rules -- a backslash
+      # separates and a drive anchors -- which the Linux shards never exercise.
+      # One pytest call: a failing native command earlier in a PowerShell step
+      # does not fail the step.
+      - name: Test DAG file-reference confinement
+        run: |
+          $env:PATH = (Join-Path $env:ProgramFiles 'Git\usr\bin') + ';' + $env:PATH
+          uv run --frozen --python 3.13 --no-sync pytest tests/test_subagent_prompt_template.py tests/test_playbook_validate.py tests/test_subagent_dag_core.py tests/test_subagent_dag_runner.py -k 'template or validate or reference or node_root or nodes_prefix or may_not_execute or both_ref_forms or history or addressable or reachable_by_path' -q -n 0 --tb=short
+
       # A launch rewrites the agents' prompt files. Keeping a private file's
       # DACL and recovering from a read-only one are Windows facts the Linux
       # shards skip.
@@ -540,6 +549,34 @@ jobs:
           npm run type-check
           npm test
         working-directory: ui-web
+
+  web-browser:
+    name: web layout in a real browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      # The browser extra carries playwright; the runner's own Chrome is the
+      # browser measured with, so no browser download runs here. The dev group
+      # carries pytest-xdist, which the project's addopts require.
+      - name: Install the test environment
+        run: uv sync --frozen --extra browser --extra dev --dev --python 3.12
+
+      # A real-environment test, so it is wired to its own job: the unit shards
+      # leave tests/integration out, and happy-dom lays nothing out, so this is
+      # the only place the tasks board card's agent line is measured.
+      - name: Measure the tasks board card's agent line in Chromium
+        run: uv run --frozen --python 3.12 --no-sync pytest tests/integration/test_web_task_card_real_browser.py -m integration -q -n 0 --tb=short
 
   page:
     name: page checks

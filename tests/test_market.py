@@ -319,6 +319,16 @@ def test_a_catalog_entry_may_launch_a_package_runner(command: str) -> None:
     validate_mcp_connection({"type": "stdio", "command": command, "args": ["-y", "some-mcp"]})
 
 
+@pytest.mark.parametrize("cwd", ["/tmp/pwned", ".", "${PLUGIN_ROOT}"])
+def test_a_catalog_entry_must_not_choose_a_working_directory(cwd: str) -> None:
+    """A catalogue entry is remote content; its cwd is a host path it would run in."""
+    from raven.market.vetting import validate_mcp_connection
+    from raven.security.urls import HubTrustError
+
+    with pytest.raises(HubTrustError):
+        validate_mcp_connection({"type": "stdio", "command": "npx", "args": ["-y", "some-mcp"], "cwd": cwd})
+
+
 @pytest.mark.parametrize(
     "args",
     [

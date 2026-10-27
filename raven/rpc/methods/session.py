@@ -682,8 +682,9 @@ async def session_resume(
     zero baseline is right for a brand-new session and wrong for a resumed one:
     a client that shows how full the window is would read 0% on a session
     already carrying 40 messages, until the next turn happened to report real
-    usage. The number is a tiktoken estimate of what the next call will send, so
-    ``context_estimated`` marks it as such.
+    usage. The number is the window the session's last model call measured, or
+    a tiktoken estimate where no call recorded one, which ``context_estimated``
+    marks (:func:`_fill_resumed_context`).
     """
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
@@ -730,22 +731,29 @@ async def session_resume(
 
 
 def _fill_resumed_context(usage: dict[str, Any], session: Any) -> None:
-    """Estimate how full the context window is, into a caller's usage mapping.
+    """How full the context window is, into a caller's usage mapping.
 
-    Estimation, not measurement: no provider has been called yet in this
-    process, so the only honest number available is what the next call would
-    cost to send. Failures leave the zero baseline alone rather than guessing --
-    a wrong denominator is worse than an unknown one.
+    Read off the newest stored reply that carries the window its call measured
+    (``context_used``): that is the number the meter showed when the turn ended.
+    The stored log cannot stand in for it. The context engine compacts on its
+    own and leaves the log whole, so ``last_consolidated`` never moves and the
+    log is not what the model was sent: a long session's log estimated at forty
+    times the window its last call measured, and a short one at a few tokens,
+    the system prompt and the tool list being no part of it.
 
-    Measured over ``get_history(max_messages=0)``, not over the stored
-    transcript. Those are different lists: history slices at
-    ``last_consolidated``, and the runtime consolidates on every user-inbound
-    turn, so estimating over everything stored reported the size of a context
-    that was already archived. A session a quarter full read as 100%. That call
-    -- argument included -- is the one the next turn makes, which is what the
-    number claims to be.
+    A session with no reading -- written before replies carried one, or never
+    answered -- falls back to a tiktoken estimate of
+    ``get_history(max_messages=0)``, marked ``context_estimated``. Failures
+    leave the zero baseline alone rather than guessing -- a wrong denominator is
+    worse than an unknown one.
     """
     if session is None:
+        return
+    context_max = usage.get("context_max") or 0
+    if measured := _last_window_reading(session.messages):
+        usage["context_used"] = measured
+        usage["context_percent"] = round(100 * measured / context_max) if context_max else 0
+        usage["context_estimated"] = False
         return
     try:
         # max_messages=0 is "all of it", which is what both places that build or
@@ -765,10 +773,18 @@ def _fill_resumed_context(usage: dict[str, Any], session: Any) -> None:
     except Exception:
         logger.exception("session.*: context estimate failed")
         return
-    context_max = usage.get("context_max") or 0
     usage["context_used"] = used
     usage["context_percent"] = round(100 * used / context_max) if context_max else 0
     usage["context_estimated"] = True
+
+
+def _last_window_reading(messages: list[Any]) -> int:
+    """The window the newest reading-carrying reply measured, or 0 for none."""
+    for message in reversed(messages):
+        used = message.get("context_used") if isinstance(message, dict) else None
+        if isinstance(used, int) and not isinstance(used, bool) and used > 0:
+            return used
+    return 0
 
 
 def _session_to_list_item(info: dict[str, Any]) -> dict[str, Any]:
@@ -1457,7 +1473,7 @@ async def session_usage(
     process: one row per call, from the day this session first existed to today.
     The counters are a flow -- summed over the session, ``total`` being the four
     the panel prints -- while ``context_*`` is a gauge: how full the window is
-    now, estimated the way ``session.resume`` estimates it.
+    now, read the way ``session.resume`` reads it.
     """
     session_key = str(params.get("session_id") or "")
     if not session_key:

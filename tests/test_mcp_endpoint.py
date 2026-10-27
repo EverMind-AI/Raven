@@ -299,15 +299,15 @@ class _FakeBox:
     supports_process_spawning = True
 
     def __init__(self) -> None:
-        self.spawned: list[tuple[str, tuple[str, ...]]] = []
+        self.spawned: list[tuple[str, tuple[str, ...], str | None]] = []
         self._pumps: list[asyncio.Task] = []
 
-    async def start_process(self, command, args, env=None):
+    async def start_process(self, command, args, env=None, cwd=None):
         import anyio
         from mcp.shared.message import SessionMessage
         from mcp.types import JSONRPCMessage
 
-        self.spawned.append((command, tuple(args)))
+        self.spawned.append((command, tuple(args), cwd))
         read_send, read_recv = anyio.create_memory_object_stream(16)
         write_send, write_recv = anyio.create_memory_object_stream(16)
 
@@ -349,7 +349,9 @@ async def test_a_bridged_stdio_upstream_is_spawned_through_the_host_executor():
         await endpoints.aclose()
         await box.aclose()
 
-    assert box.spawned == [("raven-mcp-not-on-this-host", ("--root", "/x"))]
+    # A host server without a configured working directory still passes None:
+    # the executor decides the default, and only a package server names one.
+    assert box.spawned == [("raven-mcp-not-on-this-host", ("--root", "/x"), None)]
     assert replies[3]["result"] == {"in_the_box": "tools/list"}
 
 

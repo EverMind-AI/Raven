@@ -10,7 +10,9 @@ from raven.agent import workdir as workdir_mod
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, SubagentWiring, TurnPolicy
 from raven.agent.workdir import WorkdirPolicy, WorkdirResolver
+from raven.config.schema import MCPServerConfig
 from raven.contracts.llm_provider import LLMResponse
+from raven.sandbox import SandboxConfig
 from raven.session.manager import SessionManager
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
@@ -252,6 +254,31 @@ def test_sandbox_skips_the_home_volume_when_the_mount_already_covers_it(tmp_path
 
     assert recorded["workspace"] == tmp_path
     assert recorded["extra_volumes"] == []
+
+
+def test_sandbox_mounts_the_plugin_data_root_for_package_stdio_servers(tmp_path: Path, monkeypatch) -> None:
+    """PLUGIN_DATA has to be a guest path too, so its root gets a fixed mount."""
+    recorded: dict = {}
+
+    def _fake_build_executor(cfg, workspace, owned_ids=None, extra_volumes=(), *, sandbox_dir=None):
+        recorded["extra_volumes"] = list(extra_volumes)
+
+        class _Stub:
+            is_sandboxed = True
+
+        return _Stub()
+
+    data_root = tmp_path / "plugin-data"
+    monkeypatch.setattr("raven.config.paths.get_package_data_root", lambda: data_root)
+    monkeypatch.setattr("raven.agent.loop.main.build_executor", _fake_build_executor)
+    AgentLoop(
+        provider=_FakeChatProvider(),
+        workspace=tmp_path,
+        sandbox_config=SandboxConfig(backend="boxlite"),
+        package_mcp_servers={"demo__search": MCPServerConfig(type="stdio", command="demo")},
+    )
+
+    assert recorded["extra_volumes"] == [(str(data_root), "/plugin-data", "rw")]
 
 
 def test_sandboxed_turn_refuses_a_workdir_outside_the_mount(tmp_path, monkeypatch):

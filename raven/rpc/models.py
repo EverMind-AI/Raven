@@ -1867,7 +1867,10 @@ class SessionUsageResult(_Strict):
     )
     cost_missing_calls: int = Field(..., description="Calls with no reported price, left out of cost_usd.")
     context_max: int = Field(..., description="Context window of the session's model; 0 when unknown.")
-    context_used: int = Field(..., description="Estimated tokens the next call would send.")
+    context_used: int = Field(
+        ...,
+        description="Tokens the session's last model call filled the window with; a tiktoken estimate when no call recorded one.",
+    )
     context_percent: int = Field(..., description="context_used as a percentage of context_max.")
     context_estimated: bool = Field(..., description="True when context_used is a tiktoken estimate.")
 

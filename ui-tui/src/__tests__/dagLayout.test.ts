@@ -33,7 +33,7 @@ describe('layoutDag', () => {
   })
 
   it('places a join below its deepest dependency, not its first', () => {
-    // `join` depends on both a one-step and a two-step branch. Placing it one
+    // `join` depends on both a one-step and a two-step path. Placing it one
     // below `a` would draw an edge pointing back up the graph.
     const levels = layoutDag([node('a'), node('mid', ['a']), node('join', ['a', 'mid'])])
 
