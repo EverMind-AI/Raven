@@ -84,11 +84,40 @@ describe('the reasoning effort', () => {
     expect(effort.offered()).toBe(false)
   })
 
-  it('shows a word this build does not know as the server spelt it', async () => {
-    answer = async () => ({ effort: 'xhigh', default: null, options: [...WORDS, 'xhigh'] })
+  it('names the two rungs over high when the server lists them, which the Anthropic Messages wire does', async () => {
+    answer = async () => ({ effort: null, default: null, options: [...WORDS, 'xhigh', 'max'] })
     await effort.load()
-    expect(names()).toContain('xhigh')
-    expect(ticked()).toEqual(['xhigh'])
+    expect(names()).toEqual([
+      'gui.effort.default', 'gui.effort.minimal', 'gui.effort.low', 'gui.effort.medium',
+      'gui.effort.high', 'gui.effort.xhigh', 'gui.effort.max',
+    ])
+    expect(effort.label('xhigh')).toBe('gui.effort.xhigh')
+    expect(effort.label('max')).toBe('gui.effort.max')
+  })
+
+  it('shows a word this build does not know as the server spelt it', async () => {
+    answer = async () => ({ effort: 'ultra', default: null, options: [...WORDS, 'ultra'] })
+    await effort.load()
+    expect(names()).toContain('ultra')
+    expect(ticked()).toEqual(['ultra'])
+  })
+
+  it('draws a pick the words do not carry after them, ticked, so it can be moved off', async () => {
+    /* max picked on a Claude, then the conversation switched to a model whose
+       wire takes the four: the record still says max, the words are the new
+       model's, and the row must not stand with no rung pressed. */
+    answer = async () => ({ effort: 'max', default: 'low', options: WORDS })
+    await effort.load()
+    expect(names()).toEqual([
+      'gui.effort.default', 'gui.effort.minimal', 'gui.effort.low', 'gui.effort.medium', 'gui.effort.high', 'gui.effort.max',
+    ])
+    expect(ticked()).toEqual(['max'])
+    answer = async (id) => ({ effort: id === undefined ? null : id, default: 'low', options: WORDS })
+    effort.pick('high')
+    await Promise.resolve()
+    expect(asked).toEqual([undefined, 'high'])
+    expect(names()).not.toContain('gui.effort.max')
+    expect(ticked()).toEqual(['high'])
   })
 
   it('takes the effort from the reply, not from the rung that was clicked', async () => {

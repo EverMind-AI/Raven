@@ -149,9 +149,12 @@ export interface SettingsFixture {
 export function createSettings(env: FixtureEnv, ext: ExtFixture): SettingsFixture {
   const config = seed(ext)
   let tier = 'high'
-  /* The effort the library's conversation runs at: null is the default rung. */
+  /* The effort the library's conversation runs at: null is the default rung.
+     The words are the model's, and the library's conversation runs on a
+     Claude over the Anthropic Messages wire (sessions.ts), which takes the
+     two rungs over high. */
   let effort: string | null = null
-  const EFFORTS = ['minimal', 'low', 'medium', 'high'] as const
+  const EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
   return {
     fixtures: {

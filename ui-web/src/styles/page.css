@@ -2709,9 +2709,13 @@ textarea:focus, textarea:focus-visible,
   box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
 /* The effort row's control takes the line under its label: five rungs do not
    fit beside a label in 340px, and a label squeezed onto two lines read as two
-   rows. Stretched, so the five share the width as one control. */
+   rows. Stretched, so the rungs share the width as one control. A wire that
+   takes two rungs over high (anthropic_messages: xhigh, max) has seven, which
+   is more than one line holds in English; a rung's word stays whole and the
+   control wraps between rungs, each line's rungs sharing that line, rather
+   than breaking a word inside its button. */
 .mpick .model-effort .model-seg { flex: 1 1 100%; }
-.mpick .model-effort .model-seg button { flex: 1; text-align: center; }
+.mpick .model-effort .model-seg button { flex: 1; text-align: center; white-space: nowrap; }
 .mpick .foot { border-top: 1px solid var(--line-soft); padding: 7px 12px;
   display: flex; justify-content: space-between; align-items: center; }
 .mpick .foot button { font-size: 11.5px; color: var(--amber); }

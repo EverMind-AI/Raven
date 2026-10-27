@@ -14,17 +14,25 @@ Where it ranks: the configured default underneath, a Session Mode's own
 override over the lot (``_run_agent_loop``'s ``gen_overrides``). Raven's own
 calls only: a sub-agent is told the configured default, as before.
 
-The words are ``REASONING_EFFORTS`` (``config/schema.py``); the provider maps
-each to its own wire, and a model with no thinking to move ignores it.
+The words a session may pick are its model's provider's
+(``LLMProvider.reasoning_efforts``: the four every wire takes, ``xhigh`` and
+``max`` over them where the wire takes them), checked when the pick is set.
+The record may carry any rung this raven knows (``REASONING_EFFORT_RUNGS``),
+because the model can move after the pick -- ``/model``, the picker -- and the
+turn asks its own provider again (:func:`fit`): a word the new wire does not
+take runs at the highest rung it does take, not at a request it would refuse.
+The provider maps each word to its own wire, and a model with no thinking to
+move ignores it.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from loguru import logger
 
-from raven.config.schema import REASONING_EFFORTS
+from raven.config.schema import REASONING_EFFORT_RUNGS
 
 #: Where the pick is kept on a session: the metadata dict ``model`` lives in.
 #: Null, not absent, once cleared -- a metadata patch can set a key and not
@@ -35,14 +43,41 @@ METADATA_KEY = "reasoning_effort"
 def of(metadata: Any) -> str | None:
     """The pick a session record carries, or None while it follows the default.
 
-    A word outside ``REASONING_EFFORTS`` reads as none: a record written by a
-    later raven is not a request this one can send, and the turn is better off
-    at the default than refused by the provider.
+    A word outside ``REASONING_EFFORT_RUNGS`` reads as none: a record written
+    by a later raven is not a request this one can send, and the turn is
+    better off at the default than refused by the provider. Whether the
+    session's own wire takes the word is :func:`fit`'s question, not this
+    one's.
     """
     if not isinstance(metadata, dict):
         return None
     stored = metadata.get(METADATA_KEY)
-    return stored if isinstance(stored, str) and stored in REASONING_EFFORTS else None
+    return stored if isinstance(stored, str) and stored in REASONING_EFFORT_RUNGS else None
+
+
+def fit(effort: str | None, words: Iterable[str] | None) -> str | None:
+    """The rung a wire that takes ``words`` runs ``effort`` at.
+
+    The word itself when the wire takes it; else the highest of ``words``
+    below it; else None, the default. For a pick made on one wire and run on
+    another: ``max`` picked on a Claude, then the session moved to a model
+    whose wire takes the four, runs at ``high`` -- as much thinking as that
+    wire takes, which is what the person asked for -- rather than at a
+    request the wire would refuse, or at the default they moved away from.
+
+    ``words`` None is a provider that cannot say, and the word stands as
+    named, the way the empty-retry descent reads labels on their own without
+    ``wire_keys``. A word this raven does not rank stands as named too: a
+    mode's catalogue may say what this file cannot place, and the wire is the
+    one to answer it.
+    """
+    if not effort or words is None:
+        return effort or None
+    taken = tuple(words)
+    if effort in taken or effort not in REASONING_EFFORT_RUNGS:
+        return effort
+    below = [word for word in REASONING_EFFORT_RUNGS[: REASONING_EFFORT_RUNGS.index(effort)] if word in taken]
+    return below[-1] if below else None
 
 
 def read(sessions: Any, session_key: str | None) -> str | None:

@@ -244,11 +244,11 @@
     "effort": {
       "en": {
         "name": "effort",
-        "help": "show or set how much the model thinks for this conversation [minimal|low|medium|high|default]"
+        "help": "show or set how much the model thinks for this conversation [minimal|low|medium|high|xhigh|max|default]"
       },
       "zh": {
         "name": "思考深度",
-        "help": "查看或设置本会话的思考深度 [minimal|low|medium|high|default]"
+        "help": "查看或设置本会话的思考深度 [minimal|low|medium|high|xhigh|max|default]"
       }
     },
     "fast": {
@@ -6194,6 +6194,14 @@
     "gui.effort.high": {
       "en": "High",
       "zh": "高"
+    },
+    "gui.effort.xhigh": {
+      "en": "Extra high",
+      "zh": "超高"
+    },
+    "gui.effort.max": {
+      "en": "Max",
+      "zh": "最高"
     },
     "gui.effort.scope": {
       "en": "How much the model thinks before each answer, for this conversation only. Sub-agents are not affected.",

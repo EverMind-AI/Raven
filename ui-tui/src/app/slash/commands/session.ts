@@ -635,9 +635,10 @@ export const sessionCommands: SlashCommand[] = [
   },
 
   {
-    help: 'show or set how much the model thinks for this conversation [minimal|low|medium|high|default]',
+    help: 'show or set how much the model thinks for this conversation [minimal|low|medium|high|xhigh|max|default]',
     name: 'effort',
-    usage: '/effort [minimal|low|medium|high|default]   -- default/reset/clear follow the global setting again',
+    usage:
+      '/effort [minimal|low|medium|high|xhigh|max|default]   -- xhigh and max where the model\'s provider takes them (Anthropic); default/reset/clear follow the global setting again',
     run: (arg, ctx) => {
       if (!ctx.sid) {
         return ctx.transcript.sys('no active session')
@@ -646,8 +647,10 @@ export const sessionCommands: SlashCommand[] = [
       // The session's own reasoning effort, kept on its record by the server:
       // a bare `/effort` reports, a word sets it from the next turn on, and
       // the reset words drop it so the conversation follows the global
-      // setting (or its mode's) again. The words are the server's to refuse,
-      // and its refusal names them, so none are spelt here.
+      // setting (or its mode's) again. The words are the model's provider's
+      // (six on the Anthropic Messages wire, four elsewhere) and the server's
+      // to refuse -- its refusal names the ones it takes -- so none are
+      // checked here; the usage line lists them all for the reader.
       const want = arg.trim().toLowerCase()
       const params: Record<string, unknown> = { session_key: ctx.sid }
 

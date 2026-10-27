@@ -34,6 +34,10 @@ interface Options {
  */
 async function live({ session = null, answers = null }: Options = {}) {
   const calls: Call[] = []
+  /* How often the effort row was re-read: its own count, not a `calls`
+     entry, because the cases below assert the exact traffic of a write and
+     the re-read is a read of another store, not traffic. */
+  let effortLoads = 0
   const pending: Deferred[] = []
   const selections: Deferred[] = []
   /* A view switch re-reads the default model and the permission mode, and
@@ -74,6 +78,7 @@ async function live({ session = null, answers = null }: Options = {}) {
       'src/state/banner': { draw: () => {} },
       'src/state/toast': { show: (text: string) => calls.push(['toast', text]) },
       'src/state/tier': { load: () => {} },
+      'src/state/effort': { load: () => { effortLoads += 1 } },
       'src/state/perm': { setFromConfig: (m: string) => calls.push(['setPermMode', m]) },
       'src/state/session/residency': { park: () => {} },
       'src/features/settings/store': {
@@ -159,6 +164,7 @@ async function live({ session = null, answers = null }: Options = {}) {
       return tick()
     },
     modelsSet: () => calls.filter((c) => c[0] === 'modelSet').map((c) => c[1]),
+    effortLoads: () => effortLoads,
   }
 }
 
@@ -279,6 +285,20 @@ describe('the live model persist', () => {
   it('an applied session write resolves and says nothing', async () => {
     const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: true, previous: 'm1', scope: 'session' } } })
     await expect(h.settings.persistModel('m2', 'minimax', 'session')).resolves.toBeUndefined()
+  })
+
+  it('an applied session write re-reads the effort row, whose words are the model\'s', async () => {
+    /* Six rungs on the Anthropic Messages wire, four elsewhere: a switched
+       conversation must not keep offering the old wire's words. */
+    const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: true, previous: 'm1', scope: 'session' } } })
+    await h.settings.persistModel('m2', 'minimax', 'session')
+    expect(h.effortLoads()).toBe(1)
+  })
+
+  it('a refused session write re-reads nothing: the model did not move', async () => {
+    const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: false, previous: null, scope: 'session' } } })
+    await h.settings.persistModel('m2', 'minimax', 'session').catch(() => {})
+    expect(h.effortLoads()).toBe(0)
   })
 
   it('a default write moves a visible draft chip, which follows the default like an unswitched session', async () => {

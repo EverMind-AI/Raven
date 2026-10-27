@@ -3401,6 +3401,125 @@ async def test_an_unknown_effort_is_refused_naming_the_words(tmp_path, monkeypat
     assert "reasoning_effort" not in loop.sessions.peek("tui:1").metadata, "a refused set must not half-land"
 
 
+class _WireLoop(_EffortLoop):
+    """A loop whose sessions run on a provider that can say which rungs its wire takes."""
+
+    def __init__(self, tmp_path: Path, provider: object, model: str = "claude-opus-5") -> None:
+        super().__init__(tmp_path)
+        self.provider = provider
+        self._model = model
+        self.asked: list[str | None] = []
+
+    def session_model(self, key: str) -> str:
+        return self._model
+
+    def binding_for_session(self, key: str):
+        self.asked.append(key)
+        return SimpleNamespace(provider=self.provider, model=self._model)
+
+
+class _FourWire:
+    def reasoning_efforts(self, model: str | None = None) -> tuple[str, ...]:
+        return ("minimal", "low", "medium", "high")
+
+
+def _anthropic():
+    from raven.providers.anthropic_messages_provider import AnthropicMessagesProvider
+
+    return AnthropicMessagesProvider(api_key="k", default_model="claude-opus-5")
+
+
+async def test_the_words_are_the_providers_of_the_sessions_model(tmp_path, monkeypatch) -> None:
+    """A conversation on the Anthropic Messages wire is offered ``xhigh`` and
+    ``max`` over the four; one on a wire that sends the label verbatim is
+    not. Asked of the session's own binding, which is where a switched model
+    lives, not of the loop's default."""
+    _configured_effort(monkeypatch, None)
+    loop = _WireLoop(tmp_path, _anthropic())
+    result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert result["options"] == ["minimal", "low", "medium", "high", "xhigh", "max"]
+    assert loop.asked == ["tui:1"]
+
+    four = _WireLoop(tmp_path, _FourWire(), model="gpt-5")
+    result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: four)
+    assert result["options"] == ["minimal", "low", "medium", "high"]
+
+
+async def test_a_higher_rung_lands_where_the_wire_takes_it(tmp_path, monkeypatch) -> None:
+    _configured_effort(monkeypatch, "low")
+    loop = _WireLoop(tmp_path, _anthropic())
+    _filed(loop.sessions, "tui:1")
+    result = await session_module.session_set_effort(
+        {"session_key": "tui:1", "effort": "max"}, agent_loop_factory=lambda: loop
+    )
+    assert result["effort"] == "max" and result["default"] == "low"
+    assert SessionManager(tmp_path).peek("tui:1").metadata["reasoning_effort"] == "max"
+    again = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert again["effort"] == "max", "read back as recorded, through the record's own reader"
+
+
+async def test_a_rung_the_wire_does_not_take_is_refused_naming_the_ones_it_does(tmp_path, monkeypatch) -> None:
+    """The refusal names the model and its wire's words, so the TUI's error
+    line and the page's toast say what would have been accepted."""
+    from raven.rpc.errors import ConfigValidationError
+
+    _configured_effort(monkeypatch, None)
+    loop = _WireLoop(tmp_path, _FourWire(), model="gpt-5")
+    _filed(loop.sessions, "tui:1")
+    with pytest.raises(ConfigValidationError) as exc:
+        await session_module.session_set_effort(
+            {"session_key": "tui:1", "effort": "xhigh"}, agent_loop_factory=lambda: loop
+        )
+    assert "'xhigh'" in str(exc.value) and "gpt-5" in str(exc.value)
+    assert "minimal, low, medium, high" in str(exc.value) and "xhigh" not in str(exc.value).split("takes")[1]
+    assert "reasoning_effort" not in loop.sessions.peek("tui:1").metadata, "a refused set must not half-land"
+
+
+async def test_a_pick_is_reported_as_recorded_after_the_model_moved(tmp_path, monkeypatch) -> None:
+    """``max`` picked on a Claude, then the session switched to a model whose
+    wire takes the four: the read reports the pick as the record has it, with
+    the new wire's words -- the turn is what fits it (session_effort.fit), and
+    the control draws the pick beside the words it can move to."""
+    _configured_effort(monkeypatch, None)
+    loop = _WireLoop(tmp_path, _anthropic())
+    _filed(loop.sessions, "tui:1")
+    await session_module.session_set_effort({"session_key": "tui:1", "effort": "max"}, agent_loop_factory=lambda: loop)
+    loop.provider, loop._model = _FourWire(), "gpt-5"
+    result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert result["effort"] == "max"
+    assert result["options"] == ["minimal", "low", "medium", "high"]
+
+
+async def test_a_draft_is_offered_the_default_models_words(tmp_path, monkeypatch) -> None:
+    """No key: the loop's default binding answers, since that is what the
+    draft's first turn runs on; its session binding is never asked."""
+    _configured_effort(monkeypatch, None)
+    loop = _WireLoop(tmp_path, _anthropic())
+    result = await session_module.session_set_effort({"session_key": ""}, agent_loop_factory=lambda: loop)
+    assert result["options"] == ["minimal", "low", "medium", "high", "xhigh", "max"]
+    assert loop.asked == []
+
+
+async def test_a_provider_that_cannot_say_offers_the_four(tmp_path, monkeypatch) -> None:
+    """No method, a method that raises, or an answer with nothing in it: the
+    four every wire takes, so nothing offered is a word a turn would be
+    refused on."""
+    _configured_effort(monkeypatch, None)
+
+    class _Raises:
+        def reasoning_efforts(self, model=None):
+            raise RuntimeError("no credentials for this vendor yet")
+
+    class _Empty:
+        def reasoning_efforts(self, model=None):
+            return ()
+
+    for provider in (object(), _Raises(), _Empty()):
+        loop = _WireLoop(tmp_path, provider)
+        result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+        assert result["options"] == ["minimal", "low", "medium", "high"]
+
+
 async def test_a_draft_reads_the_default_but_cannot_set_without_a_key(tmp_path, monkeypatch) -> None:
     """The page's draft has no session yet; it still draws the row from the
     default and the words, and stages a pick until the first message mints one."""

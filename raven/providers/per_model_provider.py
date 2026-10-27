@@ -115,6 +115,11 @@ class PerModelProvider(LLMProvider):
         a property of that endpoint's wire."""
         return self._pick(model).reasoning_wire_keys(model, reasoning_effort)
 
+    def reasoning_efforts(self, model: str | None = None) -> tuple[str, ...]:
+        """Asked of the endpoint that would serve this model, like
+        ``reasoning_wire_keys``: which rungs a wire takes is that wire's."""
+        return self._pick(model).reasoning_efforts(model)
+
     def supports_assistant_prefill(self, model: str | None = None) -> bool:
         """Asked of the endpoint that would serve this model, like
         ``supports_prompt_caching``: the vendor rule rides on that endpoint."""

@@ -51,22 +51,28 @@ raven agent --continue -m "Expand the previous summary; do not modify files"
 
 ## 设置思考深度 { #set-the-reasoning-effort }
 
-思考深度是模型每次回答前思考多少。可选的词是 `minimal`、`low`、`medium`、`high`。
-各厂商把它们映射成自己的请求参数（Anthropic 的自适应思考强度与思考预算，OpenAI 风格
-接口的 `reasoning_effort` 字段），没有思考能力的模型会忽略它。不设置时使用厂商自己的默认值。
+思考深度是模型每次回答前思考多少。可选的词是 `minimal`、`low`、`medium`、`high`；
+模型由 Anthropic Messages 适配器提供的对话还可以选 `xhigh` 和 `max`，这是该接口在
+`high` 之上多出的两档。各厂商把这些词映射成自己的请求参数（Anthropic 的自适应思考强度与
+思考预算，OpenAI 风格接口的 `reasoning_effort` 字段），没有思考能力的模型会忽略它。
+不设置时使用厂商自己的默认值。
 
 两处可以设置：
 
 - **对所有对话**：在 WebUI 打开设置页，在「主对话」一行点「参数」，再选「思考深度」；
   或在 `~/.raven/config.json` 里设置 `agents.defaults.reasoningEffort`。第一档
-  「厂商默认」会清掉这个键。
+  「厂商默认」会清掉这个键。这个设置只接受所有厂商都认的四个词，因为它作用于 Raven
+  的每一次模型调用——不管对话切到了哪家厂商，也包括每个子智能体。
 - **只对当前对话**：WebUI 模型选择器（点输入框旁的模型标签打开）里的「思考深度」行，
   或 TUI 里的 `/effort <词>`。单独输入 `/effort` 查看当前生效的档位，`/effort default`
-  让这个对话重新跟随全局设置。
+  让这个对话重新跟随全局设置。这一行列出的是当前对话所用模型认的词；`/effort` 给一个
+  该模型厂商不认的词会被拒绝，并告诉你它认哪些。
 
 单个对话的选择优先于全局设置和该对话的模式。它记录在对话自己的档案里，网关重启后仍在，
 恢复对话时一并带回，从下一轮开始生效。它只影响 Raven 自己的模型调用；子智能体仍按全局
-默认值运行。
+默认值运行。如果之后把对话切到一个厂商不认这个词的模型（比如在 Claude 上选了 `max`，
+再切到只认四个词的模型），下一轮会按该厂商认的最高一档运行，选择器里会把这个选择显示
+在可切换的词旁边。
 
 ## 有目的地增加能力 { #add-capability-deliberately }
 

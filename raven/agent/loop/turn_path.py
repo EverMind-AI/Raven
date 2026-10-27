@@ -84,6 +84,7 @@ from raven.agent.loop.dead_end import NO_RESPONSE_FALLBACK, dead_reasons
 from raven.agent.loop.failure_text import attach_full_detail, response_failure_text
 from raven.agent.loop.first_call import FirstCallGuard
 from raven.agent.loop.recovery import ContinuationGate, DraftGate, cut_reasoning_head, lower_reasoning_effort
+from raven.agent.session_effort import fit as session_effort_fit
 from raven.agent.session_effort import of as session_effort_of
 from raven.agent.tools.registry import call_failed
 from raven.agent.tools.removals import RemovalWatch
@@ -318,6 +319,38 @@ def _log_what_the_model_said(response: Any) -> None:
     spent = (getattr(response, "usage", None) or {}).get("reasoning_tokens")
     if not (isinstance(thought, str) and thought.strip()) and spent:
         logger.info("Assistant thought for {} tokens the provider did not return", spent)
+
+
+def _fit_reasoning_effort(effort: str | None, provider: Any, model: str | None, session_key: str | None) -> str | None:
+    """The session's own pick as this turn's wire takes it (``session_effort.fit``).
+
+    The pick was checked against the provider of the session's model when it
+    was set; the model may have moved since (``/model``, the picker), and a
+    word the new wire does not take runs at the highest rung it does take
+    rather than being refused. The pick only: a mode's effort is the
+    catalogue's word and is sent as named. Asked the way
+    ``_reasoning_wire_keys`` asks: a provider that cannot answer -- a test
+    double, an adapter from before the method -- leaves the word as named,
+    and nothing here fails the turn.
+    """
+    ask = getattr(provider, "reasoning_efforts", None)
+    if not effort or not callable(ask):
+        return effort or None
+    try:
+        words = tuple(ask(model))
+    except Exception:  # noqa: BLE001 - an unanswerable question leaves the word as named
+        return effort
+    fitted = session_effort_fit(effort, words)
+    if fitted != effort:
+        logger.info(
+            "session {}: reasoning effort {} is not a word {} takes ({}); running at {}",
+            session_key,
+            effort,
+            model,
+            ", ".join(words),
+            fitted or "the default",
+        )
+    return fitted
 
 
 def _reasoning_wire_keys(provider: Any, model: str | None) -> Any:
@@ -956,8 +989,17 @@ class TurnPathMixin:
         # session's and both land on the next turn; the pick wins because a
         # person set it on this conversation, and the mode's is the
         # catalogue's word for every conversation in that mode. None here
-        # leaves the configured default to ``gen_overrides``.
-        turn_effort = session_effort or policy.reasoning_effort
+        # leaves the configured default to ``gen_overrides``. The pick is
+        # fitted to this turn's wire -- it was checked against the provider of
+        # the session's model when it was set, and the model may have moved
+        # since -- and a pick nothing on this wire can stand in for falls to
+        # the mode's word. The mode's word goes out as the catalogue named it:
+        # it is the product's statement, checked against no provider, and
+        # what it sends was never this file's to second-guess.
+        turn_effort = (
+            _fit_reasoning_effort(session_effort, self.provider, effective_model, session_key)
+            or policy.reasoning_effort
+        )
         # The other bound on this turn, and the only one a product supplies rather
         # than the loop: whatever a hook left under ``TURN_BUDGETS_KEY``. Read here
         # for the same reason the cap is, and defaulting to unbounded, so an agent

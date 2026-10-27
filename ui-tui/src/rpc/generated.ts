@@ -4764,7 +4764,7 @@ export interface SessionSetModeResult {
 export interface SessionSetEffortParams {
   session_key: string;
   /**
-   * One of the words in options. Omit it to report without changing.
+   * One of the words in options, which are the words this session's model takes; a word its provider does not take is refused, naming the ones it does. Omit it to report without changing.
    */
   effort?: string;
   /**
@@ -4787,7 +4787,7 @@ export interface SessionSetEffortResult {
    */
   default?: string | null;
   /**
-   * The words effort accepts, least first.
+   * The words effort accepts on this session's model, least first: the four every provider takes (minimal, low, medium, high), plus xhigh and max where the provider takes them (the Anthropic Messages adapter). A draft gets the default model's.
    */
   options?: string[];
 }

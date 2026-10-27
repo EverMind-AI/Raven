@@ -17,9 +17,12 @@
  * pick, what the session runs at without one (`default`), and the words
  * (`options`), so one round trip is enough to draw the control. The first rung
  * is always the default: the pick cleared, the session following its mode's
- * effort or the configured `agents.defaults.reasoningEffort`. A gateway older
- * than this page refuses the method, the read fails, and the row stays hidden
- * rather than drawing a control over nothing.
+ * effort or the configured `agents.defaults.reasoningEffort`. The words are
+ * the model's: its provider's answer, four on most wires and six (xhigh and
+ * max over them) on the Anthropic Messages wire, which is why the row is
+ * re-read when the conversation's model is switched (features/model/source.ts).
+ * A gateway older than this page refuses the method, the read fails, and the
+ * row stays hidden rather than drawing a control over nothing.
  */
 
 import { t } from '../i18n/t'
@@ -79,6 +82,8 @@ const NAME: Record<string, string> = {
   low: 'gui.effort.low',
   medium: 'gui.effort.medium',
   high: 'gui.effort.high',
+  xhigh: 'gui.effort.xhigh',
+  max: 'gui.effort.max',
 }
 
 export function label(id: string): string {
@@ -96,13 +101,20 @@ export const current = (): string => get().effort
 /** What "default" means right now, as a word, or '' for the provider's own. */
 export const fallback = (): string => get().fallback
 
-/** The default rung first, then every word the server offers. */
+/** The default rung first, then every word the server offers, then a pick
+    the server lists no word for. */
 export const options = (): readonly EffortRow[] => {
   if (!offered()) return []
   const { effort, options: words } = get()
+  /* A pick the words do not carry: made on another model's wire (the
+     conversation switched models since, and the words are the model's) and
+     still the record's -- the next turn runs at the highest rung this wire
+     takes. Drawn after the words, ticked, so it is seen and can be moved off,
+     rather than a row with no rung pressed. */
+  const rungs = effort && !words.includes(effort) ? [...words, effort] : words
   return [
     { id: '', name: label(''), ticked: effort === '' },
-    ...words.map((id) => ({ id, name: label(id), ticked: id === effort })),
+    ...rungs.map((id) => ({ id, name: label(id), ticked: id === effort })),
   ]
 }
 

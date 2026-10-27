@@ -17,6 +17,18 @@ All notable changes to Raven are documented here.
   the default is on this install and the words), and `session.info` carries
   `reasoning_effort` for the status bar. The using-raven guide has a section on
   it.
+- Two more reasoning-effort rungs, **`xhigh`** and **`max`**, for a
+  conversation whose model is served by the Anthropic Messages adapter: the
+  picker row and `/effort` offer them there. The words a conversation may pick
+  now come from its model's provider (`LLMProvider.reasoning_efforts`: the four
+  every provider takes, six on that wire) rather than from one global list, so
+  `session.set_effort` answers `options` per model and refuses a word the
+  provider does not take, naming the ones it does. The global
+  `agents.defaults.reasoningEffort` keeps the four words every provider takes,
+  since it reaches every model call and every sub-agent. A pick the
+  conversation's model no longer takes (`max`, then a switch to a four-word
+  model) runs at the highest word that provider takes, and the empty-reply
+  retry descends from the new rungs like any other.
 - The history slot is filled by a **history strategy**, `context.history.strategy`:
   `compacting` (the new default) or `curator` (the previous behaviour, one
   setting away). Compacting keeps the conversation verbatim until the window

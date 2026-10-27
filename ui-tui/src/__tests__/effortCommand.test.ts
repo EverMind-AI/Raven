@@ -54,6 +54,11 @@ beforeEach(() => {
 })
 
 describe('/effort', () => {
+  it('lists every rung a provider may take in its usage, the two over high included', () => {
+    expect(cmd.usage).toContain('[minimal|low|medium|high|xhigh|max|default]')
+    expect(cmd.help).toContain('xhigh|max')
+  })
+
   it('refuses without a session and asks the gateway nothing', () => {
     const { lines, rpc } = run('high', undefined, null)
 

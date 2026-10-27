@@ -1098,6 +1098,11 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "agents.defaults.enablePersonalization": _chk_bool("agents.defaults.enablePersonalization"),
     # Clearable: null hands the choice back to the provider's own default,
     # which is what an unset key means and what the settings page offers.
+    # The four every wire takes, not the union of what the adapters offer:
+    # this key reaches every model call on every vendor and every sub-agent,
+    # so a rung only one wire takes (xhigh, max) is a session's own pick
+    # (session.set_effort, checked against its model's provider), never the
+    # install's default. The reason is written on REASONING_EFFORTS.
     "agents.defaults.reasoningEffort": _chk_enum_or_null("agents.defaults.reasoningEffort", *REASONING_EFFORTS),
     "permissions.mode": _chk_enum("permissions.mode", "ask", "smart", "full"),
     "agents.defaults.maxToolIterations": _chk_int("agents.defaults.maxToolIterations", 1, 200),
