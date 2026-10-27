@@ -180,11 +180,15 @@ def vendor_key(config: dict, vendor: str, host: dict | None = None) -> str:
         key = render.dig(config, legacy)
     if key:
         return key
-    from raven.config.schema import borrowed_web_key
+    from raven.config import schema
 
-    return borrowed_web_key(vendor, config.get("providers") or {}) or borrowed_web_key(
-        vendor, (host or {}).get("providers") or {}
-    )
+    # This file can outlive its raven, so a name this PR introduced is looked up
+    # at call time; a launcher on an older raven borrows nothing instead of
+    # raising on its first key lookup.
+    borrow = getattr(schema, "borrowed_web_key", None)
+    if borrow is None:
+        return ""
+    return borrow(vendor, config.get("providers") or {}) or borrow(vendor, (host or {}).get("providers") or {})
 
 
 def selected_vendors(config: dict) -> tuple[str, str]:

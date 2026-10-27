@@ -1050,6 +1050,16 @@ def test_a_borrowed_key_reaches_the_plugin_slice_on_the_own_key_branch(grounded,
     assert flow["fetch"]["apiKey"] == "sk-deepseek"
 
 
+def test_a_launcher_without_the_borrow_helper_reads_no_borrowed_key(launcher, monkeypatch):
+    """A stamped launcher can run on a raven that predates the helper; the first
+    key lookup must answer no key rather than raising ImportError."""
+    from raven.config import schema
+
+    monkeypatch.delattr(schema, "borrowed_web_key")
+
+    assert launcher.vendor_key({"tools": {"web": {}}}, "jina") == ""
+
+
 def test_a_label_two_retirements_old_is_sent_to_the_end_of_the_chain():
     """The fork's table sends `-askuser` to `-derive`; this product sends `-derive` on.
 

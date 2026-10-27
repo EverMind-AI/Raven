@@ -733,6 +733,20 @@ def test_a_borrowed_web_key_falls_back_to_the_hosts_llm_provider(grounded, tmp_p
     assert data["tools"]["web"]["fetch"]["provider"] == "deepseek"
 
 
+def test_the_launcher_borrows_nothing_under_a_raven_without_the_helper(grounded, monkeypatch):
+    """A stamped launcher can load on a raven that predates the web-key borrow;
+    the missing name must read as "borrow nothing" rather than ImportError."""
+    from raven.config import schema
+
+    monkeypatch.delattr(schema, "borrowed_web_key")
+    config = {"tools": {"web": {}}}
+
+    carried = grounded.inherit_web_vendors(config, {"providers": {"deepseek": {"apiKey": "sk-deepseek"}}})
+
+    assert carried == []
+    assert "providers" not in config["tools"]["web"]
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
 def test_the_rendered_file_is_owner_only_under_the_state_root(grounded, tmp_path):
     rendered = grounded.render_config(RUN_PY.parent / "config.json")

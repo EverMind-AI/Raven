@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from raven.config import product_render as render
-from raven.config.schema import WEB_VENDOR_ENV_VARS, borrowed_web_key
+from raven.config.schema import WEB_VENDOR_ENV_VARS
 from raven.home import raven_home
 
 HERE = Path(__file__).resolve().parent
@@ -197,13 +197,22 @@ def inherit_web_vendors(config: dict, host: dict) -> list[str]:
     Returns the vendors whose key was carried.
     """
     carried = []
+    # This file can outlive its raven, so a name this PR introduced is looked up
+    # at call time: a stamped launcher must load (and borrow nothing) on a raven
+    # that predates the helper.
+    from raven.config import schema
+
+    borrow = getattr(schema, "borrowed_web_key", None)
     for vendor in WEB_VENDOR_ENV_VARS:
         slot = ("tools", "web", "providers", vendor, "apiKey")
         own = OWN_WEB_KEYS.get(vendor)
         if render.dig(config, slot) or (own and env_value(own)):
             continue
-        if key := (render.dig(host, slot) or borrowed_web_key(vendor, host.get("providers") or {})):
-            render.put(config, slot, key)
+        candidate = render.dig(host, slot)
+        if not candidate and borrow is not None:
+            candidate = borrow(vendor, host.get("providers") or {})
+        if candidate:
+            render.put(config, slot, candidate)
             carried.append(vendor)
     for slot in WEB_SELECTION_SLOTS:
         if not render.dig(config, slot) and (chosen := render.dig(host, slot)):
