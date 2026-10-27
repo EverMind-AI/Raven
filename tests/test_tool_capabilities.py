@@ -180,6 +180,7 @@ def test_a_search_key_borrowed_from_the_llm_provider_agrees_on_both_sides(worksp
     cap = next(c for c in CAPABILITIES if c.tool == "web_search")
     assert is_configured(cap, config) and loop.tools.offers_by_name("web_search")
     assert configured_from(cap, config) == "borrowed: providers.deepseek.apiKey"
+    assert has_credential(cap, config), "a borrowed key is a credential, not only a configured tool"
 
 
 def test_the_env_var_alone_agrees_on_both_sides(workspace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

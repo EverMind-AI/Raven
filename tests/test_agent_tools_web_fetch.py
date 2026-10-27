@@ -349,3 +349,26 @@ async def test_size_limited_html_is_available_when_jina_fails(transport):
     assert result["truncated"] is True
     assert result["text"] == "x" * 50000
     assert stream.closed
+
+
+async def test_the_deepseek_reader_dials_through_the_configured_proxy(transport, monkeypatch):
+    """The reader's client is built with the configured proxy; nothing asserted
+    that for any vendor, so a dropped ``proxy`` would go unnoticed."""
+    responses, _calls = transport
+    seen: list[str | None] = []
+    inner = web.httpx.AsyncClient
+
+    def factory(**kwargs):
+        seen.append(kwargs.pop("proxy", None))
+        return inner(**kwargs)
+
+    monkeypatch.setattr(web.httpx, "AsyncClient", factory)
+    responses["origin.example"] = httpx.Response(500)
+    responses["api.deepseek.com"] = httpx.Response(200, json={"title": "T", "content": "PAGE"})
+
+    raw = await web.WebFetchTool(api_key="k", provider="deepseek", proxy="http://127.0.0.1:7890").execute(
+        "https://origin.example/a"
+    )
+
+    assert json.loads(raw)["extractor"] == "deepseek-fetch"
+    assert seen[-1] == "http://127.0.0.1:7890", "the provider client carries the configured proxy"

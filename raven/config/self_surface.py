@@ -338,7 +338,7 @@ SECTIONS: tuple[Section, ...] = (
             Setting("tools.exec.pathAppend", "Directories appended to PATH for shell commands", "str", _E.RELOAD),
             Setting(
                 "tools.web.search.provider",
-                "Web search vendor; web_search runs only once this vendor's key is set (keenable needs none)",
+                "Web search vendor; web_search runs once this vendor's key, or the model-provider key it borrows, is set (keenable needs none)",
                 "enum",
                 _E.NEXT_TURN,
                 writer="settings",
