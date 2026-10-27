@@ -1108,6 +1108,36 @@ def _prompt_meta(skey: Any) -> dict[str, Any]:
     return meta
 
 
+@dataclass
+class _SessionEffortState:
+    """What this process knows about one session's effort, across backend instances.
+
+    Held here rather than on ``AcpAgentBackend`` because a config change hot-applies
+    the agent table and replaces every backend instance. A session outlives that
+    replacement, and so must the baseline it opened on and the override this host
+    pushed -- otherwise clearing a row's effort finds an empty ``pushed`` and never
+    sends the session back, leaving a live direct chat on the old value."""
+
+    option: str = ""
+    baseline: str = ""
+    pushed: str = ""
+    mode_baseline: str = ""
+    mode_pushed: str = ""
+
+
+_SESSION_EFFORT: dict[tuple[str, str], _SessionEffortState] = {}
+
+
+def _session_effort_state(agent: str, session_id: str) -> _SessionEffortState:
+    """The shared effort record for ``(agent, session id)``, created on first use."""
+    key = (agent, session_id)
+    state = _SESSION_EFFORT.get(key)
+    if state is None:
+        state = _SessionEffortState()
+        _SESSION_EFFORT[key] = state
+    return state
+
+
 class AcpAgentBackend:
     """Runs a task as one ``session/prompt`` against a pooled ACP connection."""
 
@@ -1155,18 +1185,9 @@ class AcpAgentBackend:
         # send that choice again -- and nothing else remembers what it was.
         self._model_baseline: dict[str, str] = {}
         self._model_pushed: dict[str, str] = {}
-        # The reasoning effort option has the same lifecycle as the model: the
-        # option's own id comes from the session response (``effort`` on
-        # OpenCode 1.19.4), the baseline is what the agent opened on, and the
-        # pushed value is what this host may need to undo.
-        self._effort_option: dict[str, str] = {}
-        self._effort_baseline: dict[str, str] = {}
-        self._effort_pushed: dict[str, str] = {}
-        # For an agent whose effort IS its mode menu (Pi, Grok, Kimi, DSH), the
-        # row's effort is sent through session/set_mode; the baseline is what the
-        # session opened on, and the push is what a cleared effort must undo.
-        self._mode_baseline: dict[str, str] = {}
-        self._mode_effort_pushed: dict[str, str] = {}
+        # Reasoning effort's option id, baseline and pushed value live in
+        # `_SESSION_EFFORT`, keyed by (agent, session id), because a hot apply
+        # replaces this instance while the session it describes continues.
         # Values this agent has refused, so a refusal re-attempted on every
         # route into a session -- and on every fresh session a spawn opens --
         # is said once per value rather than once per turn.
@@ -1367,11 +1388,14 @@ class AcpAgentBackend:
 
     def _note_session_mode(self, session_id: str | None, result: Any) -> None:
         """Remember the mode a session opened on, for a menu that is effort."""
-        if not session_id or session_id in self._mode_baseline:
+        if not session_id:
+            return
+        state = _session_effort_state(self.name, session_id)
+        if state.mode_baseline:
             return
         current = read_session_current_mode(result)
         if current:
-            self._mode_baseline[session_id] = current
+            state.mode_baseline = current
 
     def _note_session_effort(self, session_id: str | None, result: Any) -> None:
         """Remember the effort option's id and what the session opened on.
@@ -1384,11 +1408,12 @@ class AcpAgentBackend:
         """
         if not session_id:
             return
+        state = _session_effort_state(self.name, session_id)
         option, current, _choices = read_session_effort(result)
-        if option and session_id not in self._effort_option:
-            self._effort_option[session_id] = option
-        if current and session_id not in self._effort_baseline:
-            self._effort_baseline[session_id] = current
+        if option and not state.option:
+            state.option = option
+        if current and not state.baseline:
+            state.baseline = current
 
     def _relearn_menus(self, result: Any) -> None:
         """Take the modes and models a session response advertises over the cached ones.
@@ -2577,7 +2602,8 @@ class AcpAgentBackend:
         unless a falling-back tier mode is already what the session was put on.
         Never fatal, for the reason the model push gives.
         """
-        option = self._effort_option.get(session_id) or str(getattr(self._snapshot, "effort_option", "") or "")
+        state = _session_effort_state(self.name, session_id)
+        option = state.option or str(getattr(self._snapshot, "effort_option", "") or "")
         if not option:
             snapshot = self._snapshot
             mode_efforts = getattr(snapshot, "mode_efforts", None)
@@ -2585,13 +2611,13 @@ class AcpAgentBackend:
                 return
             await self._set_mode_effort(client, session_id, effort, fallback_mode=fallback_mode, budget=budget)
             return
-        pushed = self._effort_pushed.get(session_id)
+        pushed = state.pushed
         if effort:
             target = effort
-        elif pushed is None:
+        elif not pushed:
             return
         else:
-            target = self._effort_baseline.get(session_id, "")
+            target = state.baseline
             if not target:
                 logger.warning(
                     "acp agent {!r}: session {} was put on effort {!r} and reported no earlier effort; "
@@ -2600,7 +2626,7 @@ class AcpAgentBackend:
                     session_id,
                     pushed,
                 )
-                self._effort_pushed.pop(session_id, None)
+                state.pushed = ""
                 return
         try:
             await client.request(
@@ -2629,10 +2655,7 @@ class AcpAgentBackend:
             )
             return
         self._effort_refused.discard(target)
-        if effort:
-            self._effort_pushed[session_id] = target
-        else:
-            self._effort_pushed.pop(session_id, None)
+        state.pushed = target if effort else ""
 
     async def _set_mode_effort(
         self,
@@ -2649,13 +2672,14 @@ class AcpAgentBackend:
         tier; a clear restores the tier that was already sent, or the mode the
         session opened on when there is no tier. Never fatal, like its siblings.
         """
-        pushed = self._mode_effort_pushed.get(session_id)
+        state = _session_effort_state(self.name, session_id)
+        pushed = state.mode_pushed
         if effort:
             target = effort
-        elif pushed is None:
+        elif not pushed:
             return
         else:
-            target = fallback_mode or self._mode_baseline.get(session_id, "")
+            target = fallback_mode or state.mode_baseline
             if not target:
                 logger.warning(
                     "acp agent {!r}: session {} was put on effort mode {!r} and reported no earlier mode; "
@@ -2664,7 +2688,7 @@ class AcpAgentBackend:
                     session_id,
                     pushed,
                 )
-                self._mode_effort_pushed.pop(session_id, None)
+                state.mode_pushed = ""
                 return
         try:
             await client.request("session/set_mode", {"sessionId": session_id, "modeId": target}, timeout=budget)
@@ -2688,10 +2712,7 @@ class AcpAgentBackend:
                 exc,
             )
             return
-        if effort:
-            self._mode_effort_pushed[session_id] = target
-        else:
-            self._mode_effort_pushed.pop(session_id, None)
+        state.mode_pushed = target if effort else ""
 
     def _say_effort_refused(self, value: str, message: str, *args: Any) -> None:
         first = value not in self._effort_refused
