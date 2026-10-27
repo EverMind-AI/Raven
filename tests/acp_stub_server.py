@@ -94,7 +94,7 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                      loop, so this is what fails if answering one blocks it.
 - ``two_messages`` - a preamble, the tool calls it announced, then the answer, in the
                      order measured on codex-acp. One turn, two messages, and no
-                     boundary in the chunks themselves.
+                     boundary in the chunks themselves. ``ACP_STUB_REPLY`` replaces the answer.
 - ``cancelled``    - streams one chunk, then reports ``stopReason: "cancelled"``. The
                      shape measured on codex-acp when a turn is torn down part-way: a
                      reply that reads finished and is not.
@@ -634,9 +634,12 @@ def handle_prompt(request_id, params) -> None:
         update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "look."}})
         update(session_id, {"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "ls", "status": "pending"})
         update(session_id, {"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"})
-        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "it is "}})
+        answer = os.environ.get("ACP_STUB_REPLY")
+        opening, rest = ("it is ", "a repo.") if answer is None else ("", answer)
+        if opening:
+            update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": opening}})
         update(session_id, {"sessionUpdate": "usage_update", "size": 1000, "used": 7})
-        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "a repo."}})
+        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": rest}})
         ok(request_id, {"stopReason": "end_turn"})
         return
     if MODE in ("many_steps", "many_steps_held"):
