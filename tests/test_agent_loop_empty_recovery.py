@@ -2377,21 +2377,31 @@ async def test_a_whole_body_that_lacks_a_finish_is_delivered_as_it_stands(worksp
 
 
 @pytest.mark.asyncio
-async def test_a_cut_answer_that_goes_on_to_call_a_tool_leaves_its_partial_out_of_the_final_reply(
-    workspace, monkeypatch
-):
-    """The partial belongs to the step that was cut; once the model acts instead of finishing it, it is not the start of the answer."""
+async def test_a_cut_answer_that_goes_on_to_call_a_tool_keeps_its_partial_on_that_step(workspace, monkeypatch):
+    """The partial belongs to the step that was cut: once the model acts instead of finishing it, it is
+    not the start of the answer, but it is what that step said beside its call. The reader saw it there,
+    so the session files it there, and a reload shows the words above the call rather than an empty row."""
+    from raven.rpc.methods.session import _map_to_wire
+
     calls = _served(
         monkeypatch, [_DyingStream("Let me look. "), _tool_stream(), _finished_stream("There is one file.")]
     )
+    agent = _litellm_agent(workspace)
+    sink = _Sink()
 
-    final, _used, _messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
-        _seed(), on_token_delta=_Sink().delta
-    )
+    out = await agent._process_message(_turn(), session_key="s1", on_token_delta=sink.delta)
 
     assert len(calls) == 3
-    assert final == "There is one file."
-    assert outcome.status == "completed"
+    assert out == ("There is one file.", [])
+    assert "".join(sink.text) == "Let me look. There is one file."
+    rows = agent.sessions.get_or_create("s1").messages
+    assert [(m["role"], m.get("content"), bool(m.get("tool_calls"))) for m in rows] == [
+        ("user", "hi", False),
+        ("assistant", "Let me look.", True),
+        ("tool", rows[2]["content"], False),
+        ("assistant", "There is one file.", False),
+    ]
+    assert _map_to_wire(rows, "s1")[1]["text"] == "Let me look."
 
 
 @pytest.mark.asyncio

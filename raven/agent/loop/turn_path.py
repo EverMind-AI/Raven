@@ -1631,7 +1631,11 @@ class TurnPathMixin:
                 # A reply that does something ends the run of empty ones, and a
                 # cut answer the model went on to act on is no longer the start of
                 # the one it gives after the tools, which starts with no
-                # continuation of its own.
+                # continuation of its own. It is what this step said beside its
+                # call, which the reader saw, so the call's row keeps it.
+                said_beside = (
+                    ("".join(recovery.parts) + (response.content or "")).strip() if recovery.parts else response.content
+                )
                 recovery.empty_streak.clear()
                 recovery.parts.clear()
                 recovery.step_asks.clear()
@@ -1683,7 +1687,7 @@ class TurnPathMixin:
                 tool_call_dicts = [openai_tool_call(tc) for tc in response.tool_calls]
                 messages = self.context.add_assistant_message(
                     messages,
-                    response.content,
+                    said_beside,
                     tool_call_dicts,
                     reasoning_content=response.reasoning_content,
                     thinking_blocks=response.thinking_blocks,
