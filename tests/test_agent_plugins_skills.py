@@ -620,6 +620,7 @@ def test_import_package_removes_a_skill_the_package_no_longer_ships(tmp_path: Pa
 
 
 def test_remove_tree_retries_a_read_only_entry_as_writable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(skills_module, "_RETRIES_READ_ONLY_ENTRIES", True)
     root = tmp_path / "skill"
     root.mkdir()
     read_only = root / "data.txt"
@@ -639,6 +640,32 @@ def test_remove_tree_retries_a_read_only_entry_as_writable(tmp_path: Path, monke
     remove_tree(root)
 
     assert not root.exists()
+
+
+def test_remove_tree_leaves_posix_modes_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Read-only retrying is an NTFS rule; a POSIX PermissionError is the parent directory."""
+    monkeypatch.setattr(skills_module, "_RETRIES_READ_ONLY_ENTRIES", False)
+    captured: dict = {}
+
+    def _fake_rmtree(path, *, onexc):
+        captured["onexc"] = onexc
+
+    chmods: list[Path] = []
+    monkeypatch.setattr(skills_module.shutil, "rmtree", _fake_rmtree)
+    monkeypatch.setattr(skills_module.os, "chmod", lambda path, mode: chmods.append(Path(path)))
+
+    remove_tree(tmp_path / "skill")
+
+    retried: list[Path] = []
+
+    def _delete(path):
+        retried.append(Path(path))
+
+    with pytest.raises(PermissionError):
+        captured["onexc"](_delete, tmp_path / "skill" / "SKILL.md", PermissionError(13, "denied"))
+
+    assert chmods == []
+    assert retried == []
 
 
 def test_import_package_keeps_ownership_when_a_stale_skill_cannot_be_removed(

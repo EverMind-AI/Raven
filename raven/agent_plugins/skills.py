@@ -40,11 +40,18 @@ _MAX_NAME_LENGTH = 64
 _MAX_DESCRIPTION_LENGTH = 1024
 
 
+_RETRIES_READ_ONLY_ENTRIES = os.name == "nt"
+"""NTFS refuses to delete a read-only file; POSIX unlink only needs the parent writable."""
+
+
 def remove_tree(path: Path) -> None:
     """Remove a tree, retrying Windows read-only entries as writable."""
 
     def _retry_writable(function, failing_path, error):
-        if not isinstance(error, PermissionError):
+        # On POSIX the same PermissionError means the parent directory is not
+        # writable, and chmod(path, S_IWRITE) would leave the retained copy
+        # unreadable; leave that failure to the caller.
+        if not _RETRIES_READ_ONLY_ENTRIES or not isinstance(error, PermissionError):
             raise error
         os.chmod(failing_path, stat.S_IWRITE)
         function(failing_path)
