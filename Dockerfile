@@ -37,9 +37,12 @@ COPY ui-web/package.json ui-web/package-lock.json ./ui-web/
 RUN --mount=type=cache,target=/root/.npm npm ci --prefix ui-web
 
 # i18n/messages.json is the catalogue build.py inlines; it is shared with the
-# TUI and lives at the repo root, not under ui-web.
+# TUI and lives at the repo root, not under ui-web. ui-shared/verbs.json is the
+# same kind of input: the page imports it at build time, so it has to be in this
+# stage too.
 COPY ui-web ./ui-web
 COPY i18n ./i18n
+COPY ui-shared ./ui-shared
 RUN npm run --prefix ui-web build && python3 ui-web/build.py
 
 # --- the engine's dependencies ----------------------------------------------
