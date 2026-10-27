@@ -8,6 +8,7 @@ a human -- the asker and question autofill, which arm on the user origin only.
 """
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -34,6 +35,7 @@ from raven.spine import (
 )
 from raven.spine.delivery import Capabilities, DeliveryHub
 from raven.spine.message import Media
+from raven.spine.turn import BusyPolicy
 
 
 def _src(channel="telegram", chat_id="c1") -> Source:
@@ -921,6 +923,91 @@ async def test_only_a_turn_a_user_started_is_told_it_is_over(origin, told):
         await teardown()
 
     assert ch.ended == (["c7"] if told else [])
+
+
+class _MergingAgent(_ReplyAgent):
+    """A turn the runtime opened on a person's chat: it waits for ``go``, takes in
+    whatever was sent to it meanwhile, then ends with no reply, or raises."""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        super().__init__()
+        self.running = asyncio.Event()
+        self.go = asyncio.Event()
+        self.merged: list[TurnRequest] = []
+        self._fail = fail
+
+    async def run_turn(self, req, emit, drain, *, stream, usage_sink=None, text_sink=None) -> TurnOutcome:
+        self.running.set()
+        await self.go.wait()
+        self.merged.extend(drain())
+        if self._fail:
+            raise RuntimeError("boom")
+        return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=False, silent=True)
+
+
+def _proactive_on_c7(turn_id: str = "") -> TurnRequest:
+    return replace(
+        _req(channel="telegram", chat_id="c7", conversation="telegram:c7", origin=Origin.SUBAGENT), turn_id=turn_id
+    )
+
+
+async def _run_proactive_on_c7(agent: _MergingAgent, scheduler, *, person_writes: bool, turn_id: str = "") -> None:
+    handle = scheduler.submit(_proactive_on_c7(turn_id))
+    await agent.running.wait()
+    if person_writes:
+        scheduler.submit(replace(_user_req(), busy=BusyPolicy.INJECT))
+    agent.go.set()
+    await handle.result()
+
+
+async def test_a_proactive_turn_a_persons_message_was_merged_into_tells_the_chat_it_is_over():
+    """A person writing while a runtime-opened turn runs on their chat has the
+    message merged into that turn, and the message started an indicator like any
+    other. When the turn then sends nothing, nothing else would stop it."""
+    ch = _EndsTurns("telegram")
+    agent = _MergingAgent()
+    scheduler, _hub, _rb, _sources, teardown = build_gateway(agent, {"telegram": ch})
+    try:
+        await _run_proactive_on_c7(agent, scheduler, person_writes=True)
+    finally:
+        await teardown()
+
+    assert [merged.origin for merged in agent.merged] == [Origin.USER]
+    assert ch.ended == ["c7"]
+
+
+async def test_a_proactive_turn_no_person_wrote_into_is_not_told_it_is_over():
+    """Running on the person's own chat changes nothing by itself: no message of
+    theirs reached the turn, so it has no indicator of its own to end."""
+    ch = _EndsTurns("telegram")
+    agent = _MergingAgent()
+    scheduler, _hub, _rb, _sources, teardown = build_gateway(agent, {"telegram": ch})
+    try:
+        await _run_proactive_on_c7(agent, scheduler, person_writes=False)
+    finally:
+        await teardown()
+
+    assert agent.merged == []
+    assert ch.ended == []
+
+
+async def test_a_merged_message_is_forgotten_with_the_turn_that_failed():
+    """A failed turn is answered with its error, which stops the indicator, so the
+    merge it took in is dropped with it. The id is reused to see whether it is
+    still held: a later silent turn with nothing merged is not told."""
+    ch = _EndsTurns("telegram")
+    failing = _MergingAgent(fail=True)
+    scheduler, _hub, _rb, _sources, teardown = build_gateway(failing, {"telegram": ch})
+    try:
+        await _run_proactive_on_c7(failing, scheduler, person_writes=True, turn_id="t1")
+        failing._fail = False
+        failing.running.clear()
+        await _run_proactive_on_c7(failing, scheduler, person_writes=False, turn_id="t1")
+    finally:
+        await teardown()
+
+    assert [merged.origin for merged in failing.merged] == [Origin.USER]
+    assert ch.ended == []
 
 
 @pytest.mark.parametrize("how", ["ended", "failed", "cancelled"])

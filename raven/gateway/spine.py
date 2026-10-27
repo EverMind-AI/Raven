@@ -78,17 +78,32 @@ class GatewayTurnRunner(AgentTurnRunner):
     TUI runner, which pops every turn because its turns are homogeneous — it stores
     only the read-back origins' text, keyed by conversation; the submitter pops it
     after ``result()``. A delivery-only turn (a channel user or heartbeat reply) is
-    never stored, so the long-running daemon does not accumulate."""
+    never stored, so the long-running daemon does not accumulate.
+
+    ``merged`` records, by turn id, where each person's message the turn took in
+    while it ran came from; the sink pops it when the turn ends."""
 
     def __init__(
         self,
         agent_loop: AgentLoop,
         readback_texts: dict[str, str],
         sources: dict[str, Source],
+        merged: dict[str, list[Source]] | None = None,
     ) -> None:
         super().__init__(agent_loop, stream=False)
         self._readback_texts = readback_texts
         self._sources = sources
+        self._merged = {} if merged is None else merged
+
+    def _noting_merges(self, req: TurnRequest, drain: Drain) -> Drain:
+        def noted() -> list[TurnRequest]:
+            taken = drain()
+            people = [merged.source for merged in taken if merged.origin is Origin.USER]
+            if people:
+                self._merged.setdefault(req.turn_id, []).extend(people)
+            return taken
+
+        return noted
 
     async def run(self, req: TurnRequest, emit: Emit, drain: Drain) -> TurnOutcome:
         # Stash the turn's reply address so the sink can route a TurnFailed error
@@ -97,6 +112,7 @@ class GatewayTurnRunner(AgentTurnRunner):
         # on TurnEnded/TurnFailed so the daemon does not accumulate.
         cid = _cid(req)
         self._sources[cid] = req.source
+        drain = self._noting_merges(req, drain)
         # The same per-turn rebinding RpcTurnRunner applies, but deliberately
         # not its SUBAGENT widening: a channel session has no watched-signal to
         # gate on, and widening here would regress an abandoned-channel
@@ -169,6 +185,7 @@ def _make_gateway_sink(
     cut_by_reload: Callable[[], bool] | None = None,
     channels: Mapping[str, Channel] | None = None,
     ending: set[asyncio.Task[None]] | None = None,
+    merged: dict[str, list[Source]] | None = None,
 ) -> Callable[[TurnEvent], Awaitable[None]]:
     """Adapt the delivery hub into the gateway's EventSink, with the
     lifecycle side effects the plain hub sink does not carry: on TurnEnded or
@@ -181,10 +198,12 @@ def _make_gateway_sink(
     generation swap did the cancelling, in which case the channel is told the
     reply was cut. A turn a user started that ended with no reply tells its
     channel so (``end_turn``): the typing indicator the user's message started
-    is otherwise stopped only by a send, and no other origin starts one. That
-    runs as a task held in ``ending``, not inline: the scheduler resolves a turn
-    only after this sink returns, and stopping an indicator can be a network
-    call.
+    is otherwise stopped only by a send, and no other origin starts one. A turn
+    any origin opened tells the chat of each person's message merged into it
+    while it ran (``merged``, filled by the runner), for the indicator that
+    message started. That runs as a task held in ``ending``, not inline: the
+    scheduler resolves a turn only after this sink returns, and stopping an
+    indicator can be a network call.
 
     notify fires on every origin (cron / sentinel / heartbeat / channel) rather
     than on user turns only -- benign and slightly more correct:
@@ -193,6 +212,7 @@ def _make_gateway_sink(
     stranded."""
 
     ending = set() if ending is None else ending
+    merged = {} if merged is None else merged
     # The origin of each live turn, from its TurnStarted until it ends, fails or
     # is cancelled.
     origins: dict[str, Origin | None] = {}
@@ -204,6 +224,7 @@ def _make_gateway_sink(
         if isinstance(event, (TurnEnded, TurnFailed)):
             source = sources.pop(event.conversation_id, None)
             origin = origins.pop(event.turn_id, None)
+            people = merged.pop(event.turn_id, [])
             if isinstance(event, TurnFailed) and source is not None:
                 if not event.cancelled:
                     # No one is waiting on a cron run, and its job records the
@@ -216,18 +237,17 @@ def _make_gateway_sink(
                     # /stop is the user's own act and stays silent; a reload is
                     # not, so the reply it cut is owed at least a sentence.
                     await hub.dispatch(Text(content=_TURN_CUT_BY_RELOAD_REPLY, source=source))
-            elif (
-                isinstance(event, TurnEnded)
-                and not event.explicit_reply
-                and origin is Origin.USER
-                and source is not None
-            ):
-                # Only a user's message starts an indicator: ending a proactive
-                # turn here would cancel the one a user turn is running in the
+            elif isinstance(event, TurnEnded) and not event.explicit_reply:
+                # Only a person's message starts an indicator, the one that
+                # opened this turn or one merged into it: ending a turn no person
+                # wrote into would cancel the one a user turn is running in the
                 # same chat.
-                task = asyncio.create_task(_end_turn((channels or {}).get(source.channel), source.chat_id))
-                ending.add(task)
-                task.add_done_callback(ending.discard)
+                if origin is Origin.USER and source is not None:
+                    people = [source, *people]
+                for channel_name, chat_id in dict.fromkeys((person.channel, person.chat_id) for person in people):
+                    task = asyncio.create_task(_end_turn((channels or {}).get(channel_name), chat_id))
+                    ending.add(task)
+                    task.add_done_callback(ending.discard)
             agent_loop.notify_turn_complete()
             return
         await hub.dispatch(event)
@@ -298,13 +318,14 @@ def build_gateway(
     readback_texts: dict[str, str] = {}
     sources: dict[str, Source] = {}
     ending: set[asyncio.Task[None]] = set()
+    merged: dict[str, list[Source]] = {}
     # user>1 is safe now that per-turn tool state (message routing, context) is
     # turn-local: concurrent user turns no longer clobber each other's reply
     # target. system>1 lets a cron and a heartbeat/sentinel turn overlap.
     scheduler = Scheduler(
-        GatewayTurnRunner(agent_loop, readback_texts, sources),
+        GatewayTurnRunner(agent_loop, readback_texts, sources, merged),
         OriginPools(user=user_pool, system=system_pool),
-        _make_gateway_sink(hub, agent_loop, sources, cut_by_reload, channels, ending),
+        _make_gateway_sink(hub, agent_loop, sources, cut_by_reload, channels, ending, merged),
     )
 
     async def teardown() -> None:
