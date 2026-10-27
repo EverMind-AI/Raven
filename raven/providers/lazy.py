@@ -174,6 +174,15 @@ class LazyProvider(LLMProvider):
         """
         return self._built().supports_prompt_caching(model)
 
+    def reasoning_efforts(self, model: str | None = None) -> tuple[str, ...]:
+        """Forwarded through a build, like ``supports_prompt_caching``: this is
+        asked to draw a control (the picker's effort row, ``/effort``), and
+        the base answer before the build would draw four rungs that turn into
+        six after the first turn. The build it forces is the one ``prewarm``
+        started at construction, so in practice this waits on that thread
+        rather than paying the import itself."""
+        return self._built().reasoning_efforts(model)
+
     def reasoning_wire_keys(self, model: str | None, reasoning_effort: str | None) -> Any:
         """Forwarded post-materialization, like ``request_generation``: only the
         inner provider knows whether its wire can tell two efforts apart, and the

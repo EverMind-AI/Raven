@@ -352,6 +352,21 @@ describe('the live model persist', () => {
     await expect(h.settings.persistModel('m2', 'minimax', 'session')).resolves.toBeUndefined()
   })
 
+  it('an applied session write re-reads the effort row, whose words are the model\'s', async () => {
+    /* Six rungs on the Anthropic Messages wire, four elsewhere: a switched
+       conversation must not keep offering the old wire's words. */
+    const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: true, previous: 'm1', scope: 'session' } } })
+    await h.settings.persistModel('m2', 'minimax', 'session')
+    expect(h.effortReads().at(-1)).toEqual({ sid: 'sess-1', gen: h.gen() })
+  })
+
+  it('a refused session write re-reads nothing: the model did not move', async () => {
+    const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: false, previous: null, scope: 'session' } } })
+    const reads = h.effortReads().length
+    await h.settings.persistModel('m2', 'minimax', 'session').catch(() => {})
+    expect(h.effortReads().length).toBe(reads)
+  })
+
   it('a default write moves a visible draft chip, which follows the default like an unswitched session', async () => {
     const h = await live({ answers: { 'config.set': { applied: true } } })
     await h.settings.persistModel('m2', 'minimax', 'default')

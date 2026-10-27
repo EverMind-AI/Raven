@@ -18,20 +18,26 @@ dropped to None, the provider's own default, and the stored pick is left on the
 record so it applies again if a later model declares it. Raven's own calls
 only: a sub-agent is told the configured default, as before.
 
-The words are ``REASONING_EFFORT_LADDER`` (``contracts/llm_provider.py``); the
-provider maps each to its own wire, and a model with no thinking to move
-ignores it. The install-wide ``agents.defaults.reasoningEffort`` keeps its
-four-word ``REASONING_EFFORTS`` list; this module accepts the six-word ladder
-because a session pick may now be ``xhigh``/``max``.
+The words a session may pick are its model's provider's
+(``LLMProvider.reasoning_efforts``: the four every wire takes, ``xhigh`` and
+``max`` over them where the wire takes them), checked when the pick is set.
+The record may carry any rung this raven knows (``REASONING_EFFORT_RUNGS``),
+because the model can move after the pick -- ``/model``, the picker -- and the
+turn asks its own provider again (:func:`fit`): a word the new wire does not
+take runs at the highest rung it does take, not at a request it would refuse.
+The provider maps each word to its own wire, and a model with no thinking to
+move ignores it. The install-wide ``agents.defaults.reasoningEffort`` keeps
+its four-word ``REASONING_EFFORTS`` list, since it reaches every model call.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from loguru import logger
 
-from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
+from raven.config.schema import REASONING_EFFORT_RUNGS
 
 #: Where the pick is kept on a session: the metadata dict ``model`` lives in.
 #: Null, not absent, once cleared -- a metadata patch can set a key and not
@@ -42,14 +48,16 @@ METADATA_KEY = "reasoning_effort"
 def of(metadata: Any) -> str | None:
     """The pick a session record carries, or None while it follows the default.
 
-    A word outside ``REASONING_EFFORT_LADDER`` reads as none: a record written
-    by a later raven is not a request this one can send, and the turn is better
-    off at the default than refused by the provider.
+    A word outside ``REASONING_EFFORT_RUNGS`` reads as none: a record written
+    by a later raven is not a request this one can send, and the turn is
+    better off at the default than refused by the provider. Whether the
+    session's own wire takes the word is :func:`fit`'s question, not this
+    one's.
     """
     if not isinstance(metadata, dict):
         return None
     stored = metadata.get(METADATA_KEY)
-    return stored if isinstance(stored, str) and stored in REASONING_EFFORT_LADDER else None
+    return stored if isinstance(stored, str) and stored in REASONING_EFFORT_RUNGS else None
 
 
 def in_force(pick: str | None, mode_effort: str | None, configured: str | None) -> str | None:
@@ -83,6 +91,31 @@ def clamp(value: str | None, levels: tuple[str, ...] | None) -> str | None:
     from raven.providers.effort_levels import clamp as _clamp
 
     return _clamp(value, levels)
+
+
+def fit(effort: str | None, words: Iterable[str] | None) -> str | None:
+    """The rung a wire that takes ``words`` runs ``effort`` at.
+
+    The word itself when the wire takes it; else the highest of ``words``
+    below it; else None, the default. For a pick made on one wire and run on
+    another: ``max`` picked on a Claude, then the session moved to a model
+    whose wire takes the four, runs at ``high`` -- as much thinking as that
+    wire takes, which is what the person asked for -- rather than at a
+    request the wire would refuse, or at the default they moved away from.
+
+    ``words`` None is a provider that cannot say, and the word stands as
+    named, the way the empty-retry descent reads labels on their own without
+    ``wire_keys``. A word this raven does not rank stands as named too: a
+    mode's catalogue may say what this file cannot place, and the wire is the
+    one to answer it.
+    """
+    if not effort or words is None:
+        return effort or None
+    taken = tuple(words)
+    if effort in taken or effort not in REASONING_EFFORT_RUNGS:
+        return effort
+    below = [word for word in REASONING_EFFORT_RUNGS[: REASONING_EFFORT_RUNGS.index(effort)] if word in taken]
+    return below[-1] if below else None
 
 
 def read(sessions: Any, session_key: str | None) -> str | None:

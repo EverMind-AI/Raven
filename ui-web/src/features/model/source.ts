@@ -361,6 +361,9 @@ export async function persistModel(
        reported, because the rollback this needs is the one the catch already
        does, and `data.detail` is the shape it renders. */
     if (r && r.applied === false) throw { data: { detail: t('gui.model.refused') } }
+    /* The effort row's words are the model's (its provider's answer: six on
+       the Anthropic Messages wire, four elsewhere), so a switched model is
+       re-read rather than left offering the old wire's rungs. */
     void loadEffort(sid, gen)
     return
   }

@@ -3635,6 +3635,36 @@ def test_a_wire_that_sends_the_label_verbatim_skips_no_rung():
     assert next_step_down("high", shape) == "low"
 
 
+def test_a_turn_runs_a_pick_at_the_rung_its_wire_takes():
+    """``_fit_reasoning_effort``: the pick was checked against the session's
+    provider when set, and the model may have moved since. A wire that takes
+    the four runs ``max`` at ``high``; one that takes six runs it as named; a
+    provider that cannot answer, or whose answer raises, leaves the word alone
+    -- this is asked on every turn, and must not be what fails one."""
+    from raven.agent.loop.turn_path import _fit_reasoning_effort
+    from raven.providers.anthropic_messages_provider import AnthropicMessagesProvider
+    from raven.providers.base import LLMProvider
+
+    class _Four(LLMProvider):
+        async def chat(self, *a, **k):  # pragma: no cover - never called
+            raise AssertionError
+
+        def get_default_model(self) -> str:
+            return "m"
+
+    class _Raises(_Four):
+        def reasoning_efforts(self, model=None):
+            raise RuntimeError("no")
+
+    six = AnthropicMessagesProvider(api_key="k", default_model="claude-opus-5")
+    assert _fit_reasoning_effort("max", _Four(), "m", "s1") == "high"
+    assert _fit_reasoning_effort("max", six, "claude-opus-5", "s1") == "max"
+    assert _fit_reasoning_effort("high", _Four(), "m", "s1") == "high"
+    assert _fit_reasoning_effort(None, _Four(), "m", "s1") is None
+    assert _fit_reasoning_effort("max", SimpleNamespace(), "m", "s1") == "max"
+    assert _fit_reasoning_effort("max", _Raises(), "m", "s1") == "max"
+
+
 def test_a_provider_that_cannot_answer_leaves_the_descent_on_the_labels():
     """A test double or an older adapter: no method, no shape, previous behaviour."""
     from raven.agent.loop.turn_path import _reasoning_wire_keys

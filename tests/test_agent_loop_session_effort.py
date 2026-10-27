@@ -471,14 +471,14 @@ async def test_an_undeclared_pick_falls_back_to_the_mode_or_configured_word(tmp_
 
 async def test_a_routed_model_bounds_the_effort_the_turn_sends(tmp_path, monkeypatch):
     """A router can hand the turn a model other than the session's binding; the
-    clamp must follow the model the calls actually name."""
-    from raven.agent.loop import wiring
-
-    def levels(model, declared=(), refresh=False):
-        return ("low", "medium") if model == "router/model-b" else ("high",)
-
-    monkeypatch.setattr(wiring.effort_levels, "levels_for", levels)
+    fit must follow the model the calls actually name."""
     provider = _ScriptedProvider([_text("done")])
+    monkeypatch.setattr(
+        provider,
+        "reasoning_efforts",
+        lambda model=None: ("low", "medium") if model == "router/model-b" else ("minimal", "low", "medium", "high"),
+        raising=False,
+    )
     loop = _loop(tmp_path, provider)
     session = loop.sessions.get_or_create("cli:c")
     session.metadata["model"] = "router/model-b"
@@ -486,7 +486,7 @@ async def test_a_routed_model_bounds_the_effort_the_turn_sends(tmp_path, monkeyp
 
     await loop._process_message(_req())
 
-    assert provider.calls[0]["reasoning_effort"] is None
+    assert provider.calls[0]["reasoning_effort"] == "medium"
 
 
 async def test_a_model_that_declares_no_reasoning_drops_the_pick(tmp_path, monkeypatch):

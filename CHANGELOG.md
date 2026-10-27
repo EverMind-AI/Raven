@@ -38,6 +38,19 @@ All notable changes to Raven are documented here.
   inside a TUI direct chat with an instance `/effort` is refused rather than
   moving the main conversation while saying "this conversation".
 
+- Two more reasoning-effort rungs, **`xhigh`** and **`max`**, for a
+  conversation whose model is served by the Anthropic Messages adapter: the
+  picker row and `/effort` offer them there. The words a conversation may pick
+  now come from its model's provider (`LLMProvider.reasoning_efforts`: the four
+  every provider takes, six on that wire) rather than from one global list, so
+  `session.set_effort` answers `options` per model and refuses a word the
+  provider does not take, naming the ones it does. The global
+  `agents.defaults.reasoningEffort` keeps the four words every provider takes,
+  since it reaches every model call and every sub-agent. A pick the
+  conversation's model no longer takes (`max`, then a switch to a four-word
+  model) runs at the highest word that provider takes, and the empty-reply
+  retry descends from the new rungs like any other.
+
 - The settings dialog's **Skills** and **Plugins** pages have an **Add**
   button. Neither page can install anything -- a skill is fetched from Skill
   Hub by `use_skill` and an MCP server is connected from the PlugHub catalogue
