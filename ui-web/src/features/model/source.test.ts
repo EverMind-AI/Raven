@@ -73,7 +73,9 @@ async function live({ session = null, answers = null }: Options = {}) {
       'src/lib/session': { current: () => session, setCurrent: () => {} },
       'src/state/banner': { draw: () => {} },
       'src/state/toast': { show: (text: string) => calls.push(['toast', text]) },
-      'src/state/tier': { load: () => {} },
+      /* The tier store's read is recorded, not run: what the staged write's
+         re-read is keyed to is the whole of what one case below pins. */
+      'src/state/tier': { load: (sid?: string | null, gen?: number) => calls.push(['loadTier', { sid, gen }]) },
       'src/state/effort': { load: () => {} },
       'src/state/perm': { setFromConfig: (m: string) => calls.push(['setPermMode', m]) },
       'src/state/session/residency': { park: () => {} },
@@ -111,6 +113,8 @@ async function live({ session = null, answers = null }: Options = {}) {
     startDraft: () => registry.switchToDraft(),
     applyStagedModel: (sessionId: string, gen: number) =>
       runtime.applyStagedModel(registry.viewRuntime(), sessionId, gen),
+    applyStagedTier: (sessionId: string, gen: number) =>
+      runtime.applyStagedTier(registry.viewRuntime(), sessionId, gen),
   }
   /* Everything the two sources read off the page. `modelSet` is the island's
      verb, faked above; the chip painter is the page's. */
@@ -146,6 +150,8 @@ async function live({ session = null, answers = null }: Options = {}) {
     effortRead: (sid?: string | null, gen?: number) => model.effortSource.read(sid, gen),
     tierRead: (sid?: string | null, gen?: number) => model.tierSource.read(sid, gen),
     tierSet: (mode: string) => model.tierSource.set(mode),
+    /* Every read the tier store was asked for, as [conversation, ticket]. */
+    tierReads: () => calls.filter((c) => c[0] === 'loadTier').map((c) => c[1] as { sid: string | null | undefined; gen: number | undefined }),
     inFlight: () => pending.map((p) => p.method),
     param: (i: number) => pending[i]!.params,
     settle: (i: number, answer: unknown) => {
@@ -642,6 +648,45 @@ describe('the staged draft-write recovery', () => {
 /* The permission chip's refresh runs the same race as the model's: two opens in
    a row, the first answer landing last. Same ticket, same outcome -- the chip
    shows the conversation the reader is in, which is the one the gate runs. */
+describe('the staged tier write', () => {
+  /* The real applyStagedTier over the real switch counter, with the
+     `session.set_mode` write deferred. The re-read that follows the write is
+     about the session the promotion minted, and it has to carry the ticket the
+     promotion began under: a ticket taken after the await is whichever view the
+     reader has opened since, and under that one the tier source would paint
+     this session's rung over that view's own read. */
+  it('re-reads the minted session under the promotion\'s ticket, not the one current after the write', async () => {
+    const h = await live({ session: 'a' })
+    h.overrides.staged.tier = 'max'
+    const began = h.gen()
+    const applied = h.overrides.applyStagedTier('a', began)
+    expect(h.inFlight()).toEqual(['session.set_mode'])
+    expect(h.param(0)).toEqual({ session_key: 'a', mode: 'max' })
+    /* The reader opens another view while the write is in flight; that view
+       reads its own tier at once, under its own ticket. */
+    h.bump()
+    await h.settle(0, { mode: 'max', availableModes: [] })
+    await applied
+    expect(h.tierReads()).toEqual([{ sid: null, gen: h.gen() }, { sid: 'a', gen: began }])
+    /* And that ticket is spent, so the read it starts is one the source drops. */
+    expect(began).not.toBe(h.gen())
+    const read = h.tierRead('a', began)
+    await h.settle(1, { mode: 'max', availableModes: [] })
+    expect(await read).toBeNull()
+  })
+
+  it('re-reads under a ticket that still stands when the reader stayed', async () => {
+    const h = await live({ session: 'a' })
+    h.overrides.staged.tier = 'max'
+    const began = h.gen()
+    const applied = h.overrides.applyStagedTier('a', began)
+    await h.settle(0, { mode: 'max', availableModes: [] })
+    await applied
+    expect(h.tierReads()).toEqual([{ sid: 'a', gen: began }])
+    expect(began).toBe(h.gen())
+  })
+})
+
 describe('the live permission-mode refresh', () => {
   it('drops a superseded refresh even when its response lands last', async () => {
     const h = await live()

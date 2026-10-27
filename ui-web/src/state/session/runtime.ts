@@ -596,7 +596,7 @@ export async function promote(preview?: string, atPointer?: (id: string) => void
   claimComposerDraft(sessionCurrent())
   claimDeskDraft(sessionCurrent())
   await applyStagedModel(draftRt, s.id, gen)
-  await applyStagedTier(draftRt, s.id)
+  await applyStagedTier(draftRt, s.id, gen)
   await applyStagedEffort(draftRt, s.id)
   await applyStagedPerm(draftRt, s.id)
   sessionDraw()
@@ -650,8 +650,15 @@ export async function applyStagedModel(rt: SessionRuntime, sessionId: string, ge
 
    A failure is said rather than reversed silently, and then re-read: the chip is
    showing the staged tier as though it were in force, so leaving it there after
-   a refusal is the one outcome worse than the refusal. */
-export async function applyStagedTier(_rt: SessionRuntime, sessionId: string): Promise<void> {
+   a refusal is the one outcome worse than the refusal.
+
+   `gen` is the ticket the promotion began under, as `applyStagedModel` takes
+   it: the re-read runs after the awaited write, and a ticket taken then is
+   whichever view the reader has opened since -- so a reader who left for
+   another conversation while the write was in flight got this session's rung
+   painted over that conversation's own read. Under the promotion's ticket the
+   source drops that answer instead. */
+export async function applyStagedTier(_rt: SessionRuntime, sessionId: string, gen: number): Promise<void> {
   const mode = stagedTier()
   if (!mode) return
   try {
@@ -659,7 +666,7 @@ export async function applyStagedTier(_rt: SessionRuntime, sessionId: string): P
   } catch (e) {
     toast(`${t('gui.tier.title')}: ${detailOf(e)}`)
   }
-  void loadTier(sessionId)
+  void loadTier(sessionId, gen)
 }
 
 /* The reasoning effort picked while this was still a draft, written now that
