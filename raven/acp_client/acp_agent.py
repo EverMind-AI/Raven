@@ -81,6 +81,7 @@ from raven.contracts.tool import FileChange
 from raven.home import subagent_role_env
 from raven.mcp.endpoint import McpEndpoints, bridge_command
 from raven.ops import remote_path
+from raven.providers.usage import reported_cost, token_count
 from raven.spine.message import Media
 
 if TYPE_CHECKING:
@@ -225,10 +226,6 @@ class AcpProviderRefusalError(AcpEmptyTurnError):
         self.said = said
 
 
-def _counted(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
-
-
 def _ledger_counts(counts: Any) -> dict[str, Any] | None:
     """One ACP turn's token counts in the shape the usage ledger reads, or ``None`` without them.
 
@@ -241,19 +238,17 @@ def _ledger_counts(counts: Any) -> dict[str, Any] | None:
     """
     if not isinstance(counts, dict):
         return None
-    read, wrote = counts.get("inputTokens"), counts.get("outputTokens")
-    if not (_counted(read) and _counted(wrote)):
+    read, wrote = token_count(counts.get("inputTokens")), token_count(counts.get("outputTokens"))
+    if read is None or wrote is None:
         return None
-    cached_read, cached_write = counts.get("cachedReadTokens"), counts.get("cachedWriteTokens")
-    thought, total = counts.get("thoughtTokens"), counts.get("totalTokens")
     return {
         "prompt_tokens": read,
         "prompt_tokens_include_cache": False,
         "completion_tokens": wrote,
-        "cache_read_input_tokens": cached_read if _counted(cached_read) else None,
-        "cache_creation_input_tokens": cached_write if _counted(cached_write) else None,
-        "reasoning_tokens": thought if _counted(thought) else 0,
-        "total_tokens": total if _counted(total) else None,
+        "cache_read_input_tokens": token_count(counts.get("cachedReadTokens")),
+        "cache_creation_input_tokens": token_count(counts.get("cachedWriteTokens")),
+        "reasoning_tokens": token_count(counts.get("thoughtTokens")) or 0,
+        "total_tokens": token_count(counts.get("totalTokens")),
     }
 
 
@@ -268,12 +263,12 @@ def _turn_cost(reported: Any, spent_before: float | None) -> tuple[float | None,
     the agent counts some other way, and is read as unknown for the same reason.
     """
     cost = reported.get("cost") if isinstance(reported, dict) else None
-    amount = cost.get("amount") if isinstance(cost, dict) and cost.get("currency") == "USD" else None
-    if not isinstance(amount, (int, float)) or isinstance(amount, bool) or amount < 0:
+    amount = reported_cost(cost.get("amount")) if isinstance(cost, dict) and cost.get("currency") == "USD" else None
+    if amount is None:
         return None, spent_before
     if spent_before is None or amount < spent_before:
-        return None, float(amount)
-    return float(amount) - spent_before, float(amount)
+        return None, amount
+    return amount - spent_before, amount
 
 
 def _holds_session(exc: AcpRemoteError) -> bool:
