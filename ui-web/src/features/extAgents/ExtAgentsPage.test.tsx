@@ -157,7 +157,7 @@ function install(
       refreshes.push([r.name, !!force])
       const why = refuse ? refuse('refresh_menus') : null
       if (why) throw { data: { detail: why } }
-      return { ok: true, detail: '', models: r.model_choices || [] }
+      return { ok: true, detail: '', models: r.model_choices || [], effortChoices: [] }
     },
     ...rest,
   }
@@ -583,6 +583,7 @@ describe('the Mirasim family card', () => {
           ok: true,
           detail: '',
           models: [...CODEX_CHOICES, { value: 'profile:x', name: 'deepseek-flash', group: 'Own key' }],
+          effortChoices: [],
         }
       },
     })
@@ -2105,7 +2106,12 @@ describe('the model pill', () => {
     install([r], {
       refreshMenus: async (row, force) => {
         calls.push([row.name, !!force])
-        return { ok: true, detail: '', models: [...choices, { value: 'profile:x', name: 'deepseek-flash', group: 'Own key' }] }
+        return {
+          ok: true,
+          detail: '',
+          models: [...choices, { value: 'profile:x', name: 'deepseek-flash', group: 'Own key' }],
+          effortChoices: [],
+        }
       },
     })
     await mount()
@@ -2125,7 +2131,12 @@ describe('the model pill', () => {
     install([r], {
       refreshMenus: async (_row, force) => {
         calls.push(!!force)
-        return { ok: true, detail: '', models: [...choices, { value: 'profile:x', name: 'deepseek-flash', group: 'Own key' }] }
+        return {
+          ok: true,
+          detail: '',
+          models: [...choices, { value: 'profile:x', name: 'deepseek-flash', group: 'Own key' }],
+          effortChoices: [],
+        }
       },
     })
     await mount()
@@ -2147,7 +2158,12 @@ describe('the model pill', () => {
   it('keeps the recorded menu when the re-read fails, and says why', async () => {
     const r = row({ model_source: 'agent', model_choices: choices })
     install([r], {
-      refreshMenus: async () => ({ ok: false, detail: 'the Mirasim host is down', models: choices }),
+      refreshMenus: async () => ({
+        ok: false,
+        detail: 'the Mirasim host is down',
+        models: choices,
+        effortChoices: [],
+      }),
     })
     await mount()
     await openSheet('claude_code')
@@ -2227,7 +2243,7 @@ describe('the model pill', () => {
   it('a menuless row can still be re-read, and the pill opens once it has a menu', async () => {
     const r = row({ model_source: 'agent', model_choices: [] })
     install([r], {
-      refreshMenus: async () => ({ ok: true, detail: '', models: choices }),
+      refreshMenus: async () => ({ ok: true, detail: '', models: choices, effortChoices: [] }),
     })
     await mount()
     await openSheet('claude_code')

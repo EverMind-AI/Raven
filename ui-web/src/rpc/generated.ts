@@ -3500,6 +3500,19 @@ export interface SubagentsRefreshModelsResult {
      */
     group?: string;
   }[];
+  /**
+   * The effort menu recorded by the same read, in subagents.list's shape.
+   */
+  effort_choices?: {
+    /**
+     * The value the agent takes back, e.g. low, high or max.
+     */
+    value: string;
+    /**
+     * What the agent asked to be shown, usually the same word.
+     */
+    name?: string;
+  }[];
 }
 export interface SubagentsInstancesParams {
   session_key: string;
