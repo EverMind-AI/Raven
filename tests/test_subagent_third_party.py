@@ -5519,7 +5519,13 @@ def test_the_diagnose_command_runs_the_model_the_row_is_pinned_to() -> None:
     from raven.agent.subagent.presets import diagnose_hint_for
 
     pinned = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp", model="opencode/big-pickle")
-    assert diagnose_hint_for(pinned) == "opencode run --model opencode/big-pickle hi"
+    assert shlex.split(diagnose_hint_for(pinned)) == [
+        "opencode",
+        "run",
+        "--model",
+        "opencode/big-pickle",
+        "hi",
+    ]
     plain = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp", model=None)
     assert diagnose_hint_for(plain) == "opencode run hi"
     # A model id carrying a space stays one argument once the command is split.
