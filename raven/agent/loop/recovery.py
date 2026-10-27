@@ -335,11 +335,10 @@ def _read_think_tag(tag: str, closing: str | None) -> str | bool | None:
 
     An opening tag when ``closing`` is None, else the closing tag of the block that name opened. The
     tag's name once ``tag`` is the whole of it, True while more text could still make it one, and
-    None once nothing can.
+    None once nothing can. A closing tag's lone ``<`` is None too: the reader inside a block starts
+    the tag again on every ``<`` (``_Reading.read``), so the ``/`` after it continues it.
     """
     lead = "<" if closing is None else "</"
-    if len(tag) < len(lead):
-        return True if lead.startswith(tag) else None
     if not tag.startswith(lead):
         return None
     names = _THINK_NAMES if closing is None else (closing,)

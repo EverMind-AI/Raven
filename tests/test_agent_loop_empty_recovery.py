@@ -3789,6 +3789,48 @@ async def test_a_reply_that_is_no_marker_once_its_think_blocks_are_out_goes_out(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deltas,shown",
+    [
+        pytest.param(
+            ["<think>is 2 < 3?</think>", "[SILENT]"],
+            ["<think>is 2 < 3?</think>"],
+            id="a_bracket_inside_the_block_that_opens_no_tag",
+        ),
+        pytest.param(
+            ["<think>a stray < think> tag</think>", "[SILENT]"],
+            ["<think>a stray < think> tag</think>"],
+            id="a_bracket_inside_the_block_that_closes_nothing",
+        ),
+        pytest.param(
+            ["<:think>x</:think>", "[SILENT]"],
+            ["<:think>x</:think>", "[SILENT]"],
+            id="an_empty_namespace_opens_no_block",
+        ),
+        pytest.param(
+            ["<think>x</:think>", "[SILENT]"],
+            ["<think>x</:think>", "[SILENT]"],
+            id="an_empty_namespace_closes_no_block",
+        ),
+    ],
+)
+async def test_the_gate_reads_a_think_tag_exactly_as_the_loop_strips_one(deltas, shown):
+    """What the gate takes for a think block is what ``strip_think_blocks`` takes out: a ``<`` inside a
+    block that starts no closing tag leaves it open, and a tag with an empty namespace is no think tag,
+    to open a block or to close one. What the loop would read as text goes out; what follows a block it
+    would strip is held."""
+    seen, deliver = _collecting()
+    gate = SilenceGate(deliver, hold_all=False)
+
+    for delta in deltas:
+        await gate(delta)
+
+    assert seen == shown
+    whole = "".join(deltas)
+    assert (strip_think_blocks(whole) == "[SILENT]") is (shown != deltas)
+
+
+@pytest.mark.asyncio
 async def test_a_proactive_turn_holds_the_whole_call():
     seen, deliver = _collecting()
     gate = SilenceGate(deliver, hold_all=True)
