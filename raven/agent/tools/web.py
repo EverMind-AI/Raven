@@ -71,6 +71,9 @@ class FetchProviderSpec:
 
 DEFAULT_SEARCH_PROVIDER = "serper"
 DEFAULT_FETCH_PROVIDER = "jina"
+# DeepSeek's Search API accepts 1-128 Unicode characters in ``query``; longer
+# answers HTTP 400, which the status-only error path cannot explain back.
+DEEPSEEK_SEARCH_QUERY_MAX_CHARS = 128
 DIRECT_FETCH_MAX_BYTES = 2 * 1024 * 1024
 DIRECT_FETCH_TIMEOUT_S = 10.0
 
@@ -380,6 +383,14 @@ class WebSearchTool(Tool):
         if (refused := self._refusal.active(vendor, key)) is not None:
             error, detail = refusal_text(spec, refused, kind="search", sent=False)
             return f"Error: {error}. {detail}"
+        if vendor == "deepseek" and len(query) > DEEPSEEK_SEARCH_QUERY_MAX_CHARS:
+            # The vendor's own limit, checked before the request: its 400 reads as
+            # a bare status through this tool's error path, so the model would
+            # otherwise never learn to shorten the query.
+            return (
+                f"Error: DeepSeek accepts at most {DEEPSEEK_SEARCH_QUERY_MAX_CHARS} characters in a search "
+                f"query; this one is {len(query)}. Shorten it and call web_search again."
+            )
         try:
             n = min(max(count or self.max_results, 1), 10)
             logger.debug("WebSearch[{}]: {}", vendor, "proxy enabled" if self.proxy else "direct connection")

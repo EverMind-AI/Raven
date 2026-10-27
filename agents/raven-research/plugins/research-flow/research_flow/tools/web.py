@@ -205,6 +205,9 @@ class SearchProviderSpec:
 
 
 DEFAULT_SEARCH_PROVIDER = "serper"
+# DeepSeek's Search API accepts 1-128 Unicode characters in ``query``; longer
+# answers HTTP 400, which the ledger's status-only error path cannot explain.
+DEEPSEEK_SEARCH_QUERY_MAX_CHARS = 128
 
 SEARCH_PROVIDERS: dict[str, SearchProviderSpec] = {
     "serper": SearchProviderSpec(
@@ -1071,6 +1074,16 @@ class WebSearchTool(Tool):
                 f"Error: {self.spec.label} API key not configured. Set it in "
                 '~/.raven/config.json under plugins.config["research-flow"].search.apiKey '
                 f"(or export {self.spec.env_var}), then restart the gateway.",
+                [],
+                dict(_NO_SHAPING),
+            )
+        if self.provider == "deepseek" and len(query) > DEEPSEEK_SEARCH_QUERY_MAX_CHARS:
+            # The vendor's own limit, checked before the request: its 400 reads as
+            # a bare status through this tool's error path, so the model would
+            # otherwise never learn to shorten the query.
+            return (
+                f"Error: DeepSeek accepts at most {DEEPSEEK_SEARCH_QUERY_MAX_CHARS} characters in a search "
+                f"query; this one is {len(query)}. Shorten it and call web_search again.",
                 [],
                 dict(_NO_SHAPING),
             )
