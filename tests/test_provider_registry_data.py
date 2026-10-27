@@ -320,9 +320,15 @@ def test_an_embedding_model_is_recognised_from_its_name_when_nothing_publishes_i
     # other order would file every one of them as an embedder.
     assert inferred_tags("BAAI/bge-reranker-v2-m3") == ("rerank",)
     assert inferred_tags("gte-rerank-v2") == ("rerank",)
+    # A GPT Image model the snapshot has never heard of is still an image
+    # model: the family name is stable across every release.
+    assert inferred_tags("gpt-image-2.5") == ("image-generation",)
+    assert inferred_tags("GPT-Image-2") == ("image-generation",)
+    assert inferred_tags("custom/gpt-image-2.5-sunburst") == ("image-generation",)
     # And nothing else is touched.
     assert inferred_tags("anthropic/claude-opus-5") == ()
     assert inferred_tags("deepseek-v4-pro") == ()
+    assert inferred_tags("google/gemini-2.5-flash-image") == ()
 
 
 def test_no_chat_model_in_the_bundled_catalogue_is_mistaken_for_an_embedder() -> None:
@@ -330,7 +336,8 @@ def test_no_chat_model_in_the_bundled_catalogue_is_mistaken_for_an_embedder() ->
     against the examples it was written from.
 
     A guess is only worth making if it is this narrow: anything it marks must
-    really be an embedder or a reranker, because the icon it draws is a claim.
+    really be an embedder, a reranker, or an OpenAI image model, because the
+    icon it draws is a claim.
     """
     from raven.providers.registry_data import _models, inferred_tags
 
@@ -338,7 +345,9 @@ def test_no_chat_model_in_the_bundled_catalogue_is_mistaken_for_an_embedder() ->
     assert marked, "the corpus has embedding models; the rule matching none of them is the other failure"
     for mid in marked:
         bare = mid.rsplit("/", 1)[-1].lower()
-        assert any(hint in bare for hint in ("embed", "rerank", "bge", "gte", "e5", "m3e", "text2vec", "uae")), mid
+        assert any(
+            hint in bare for hint in ("embed", "rerank", "bge", "gte", "e5", "m3e", "text2vec", "uae", "gpt-image")
+        ), mid
 
 
 def test_a_catalogued_capability_is_never_argued_with_by_a_guess() -> None:
@@ -374,6 +383,11 @@ def test_a_model_no_catalogue_carries_still_lands_in_the_right_bucket() -> None:
     row = describe("siliconflow", "BAAI/bge-m3")
     assert row.capabilities == ("embedding",)
     assert kind_of(row.capabilities, row.output_modalities) == "embedding"
+
+
+    row = describe("custom", "gpt-image-2.5")
+    assert row.capabilities == ("image-generation",)
+    assert kind_of(row.capabilities, row.output_modalities) == "image"
 
 
 def test_a_model_its_provider_does_not_list_is_still_known_from_elsewhere() -> None:
