@@ -1978,9 +1978,9 @@ class AcpAgentBackend:
                             f"{detail.strip() or '<no detail>'}"
                         )
 
-                    if (refused := self._provider_refusal(text)) is not None:
+                    if (refused := self._provider_refusal(collector.reply)) is not None:
                         span.error("the reply is the model provider's refusal")
-                        raise AcpProviderRefusalError(refused, said=text)
+                        raise AcpProviderRefusalError(refused, said=collector.reply)
 
                     if not resumed and self.is_stateful:
                         # Deferred commit, as the cli transport does it: binding a handle
