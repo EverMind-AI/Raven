@@ -11,7 +11,8 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                      ``ACP_STUB_REPLY`` replaces the chunk's text (``pong``),
                      ``ACP_STUB_USAGE_UPDATE`` the ``usage_update`` body (JSON), and
                      ``ACP_STUB_PROMPT_USAGE`` adds a ``usage`` to the prompt response (JSON).
-                     ``ACP_STUB_EMPTY_PROMPTS=N`` ends the first N prompts empty, in any mode.
+                     ``ACP_STUB_EMPTY_PROMPTS=N`` ends the first N prompts empty, in any mode,
+                     still with the ``ACP_STUB_PROMPT_USAGE`` they spent.
                      ``ACP_STUB_AGENT_NAME`` replaces ``agentInfo.name`` (``stub-agent``).
                      ``ACP_STUB_AGENT_VERSION`` replaces ``agentInfo.version`` (``9.9.9``); empty drops it.
                      ``ACP_STUB_COST_PER_PROMPT`` reports a cumulative cost growing by it each prompt.
@@ -338,13 +339,21 @@ def _permission_input() -> dict:
 _PROMPTS = 0
 
 
+def _ended() -> dict:
+    """A finished prompt's result, with ``ACP_STUB_PROMPT_USAGE`` as its ``usage`` when set."""
+    answered: dict = {"stopReason": "end_turn"}
+    if counts := os.environ.get("ACP_STUB_PROMPT_USAGE"):
+        answered["usage"] = json.loads(counts)
+    return answered
+
+
 def handle_prompt(request_id, params) -> None:
     global _PROMPTS
     _PROMPTS += 1
     session_id = params.get("sessionId") or "stub-session-1"
     if _PROMPTS <= int(os.environ.get("ACP_STUB_EMPTY_PROMPTS", "0")):
         # The first N prompts end with nothing said, whatever the mode.
-        ok(request_id, {"stopReason": "end_turn"})
+        ok(request_id, _ended())
         return
     if MODE == "dies_mid_turn":
         # Half an answer, then the process is gone: the prompt went out and
@@ -722,10 +731,7 @@ def handle_prompt(request_id, params) -> None:
         # Cumulative, as the schema defines it: the process's whole spend so far.
         reported["cost"] = {"amount": round(float(per_prompt) * _PROMPTS, 6), "currency": "USD"}
     update(session_id, {"sessionUpdate": "usage_update", **reported})
-    answered: dict = {"stopReason": "end_turn"}
-    if counts := os.environ.get("ACP_STUB_PROMPT_USAGE"):
-        answered["usage"] = json.loads(counts)
-    ok(request_id, answered)
+    ok(request_id, _ended())
 
 
 def handle_cancel(params) -> None:
