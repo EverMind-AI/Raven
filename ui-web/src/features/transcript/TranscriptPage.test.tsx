@@ -861,6 +861,52 @@ describe('transcript island, history', () => {
     expect($('.answer .prose')?.textContent).toBe('the config was wrong')
   })
 
+  it('keeps a turn open when its agent message runs to two rendered lines', () => {
+    /* Importance is read off the message's length, not off the rendered rows:
+       the threshold is the one constant `collapse` applies. */
+    const t0 = Date.now() - 60000
+    const long = 'x'.repeat(store.FOLD_KEEP_OPEN_CHARS)
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'check the login timeout', timestamp: iso(t0) },
+        {
+          role: 'assistant', text: long,
+          tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{"path":"/tmp/a.log"}' }],
+        },
+        { role: 'tool', tool_call_id: 'c1', name: 'read_file', text: 'line1\nline2' },
+        { role: 'assistant', text: 'the config was wrong', timestamp: iso(t0 + 3000) },
+      ])
+    })
+    const fold = $('.tfold')
+    expect(fold).toBeTruthy()
+    expect(fold?.classList.contains('open')).toBe(true)
+    expect(fold?.textContent).toContain(long)
+  })
+
+  it('does not put a delegating step\'s call rows behind its summary', () => {
+    const t0 = Date.now() - 60000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'fan it out', timestamp: iso(t0) },
+        {
+          role: 'assistant', text: '',
+          tool_calls: [
+            { id: 'c1', name: 'spawn', arguments: '{"agent":"Coder","task":"look"}' },
+            { id: 'c2', name: 'read_file', arguments: '{"path":"/tmp/a"}' },
+          ],
+        },
+        { role: 'tool', tool_call_id: 'c1', name: 'spawn', text: 'started' },
+        { role: 'tool', tool_call_id: 'c2', name: 'read_file', text: 'x' },
+        { role: 'assistant', text: 'done', timestamp: iso(t0 + 3000) },
+      ])
+    })
+    /* The turn's own fold is open by the same rule, and the step's work list is
+       not shut over the spawn row: the call has to be visible without a click. */
+    expect($('.tfold')?.classList.contains('open')).toBe(true)
+    expect($('.wkin')?.hasAttribute('hidden')).toBe(false)
+    expect($$('.wkin .wrow .vb')).toHaveLength(2)
+  })
+
   it('keeps a redirection whole: an ACP shell title stays one row, one command', () => {
     act(() => {
       mount.history([
@@ -1508,7 +1554,7 @@ describe('a thought box while the model is still thinking', () => {
  * is asserted here is that a spawn in flight buys the fold nothing: not at the
  * turn's end, and not when the next turn shuts the folds before it.
  */
-describe('a fold holding a run that has not finished', () => {
+describe('a fold holding a delegated run', () => {
   const RUNNING = {
     agent: 'Raven', instance: 'raven-9bc249', label: 'draw the poster',
     status: 'running', tool_call_id: 'call_7', call_id: 'rec-1',
@@ -1534,7 +1580,7 @@ describe('a fold holding a run that has not finished', () => {
     return st
   }
 
-  /* An ordinary turn after it -- the one that used to shut the first. */
+  /* An ordinary turn after it. */
   function askAgain(): void {
     let st!: ReturnType<typeof mount.step>
     act(() => {
@@ -1547,20 +1593,21 @@ describe('a fold holding a run that has not finished', () => {
     act(() => { mount.finishTurn(st, [st], '2s') })
   }
 
-  it('shuts at the end of its own turn', () => {
+  it('opens at the end of its own turn, so the delegation stays in sight', () => {
     dispatched('running')
-    expect(openFlags()).toEqual([false])
+    expect(openFlags()).toEqual([true])
   })
 
-  it('finds no reason to stay open when the next turn arrives', () => {
+  it('stays open when the next turn arrives, which folds itself', () => {
     dispatched('running')
     askAgain()
-    expect(openFlags()).toEqual([false, false])
+    expect(openFlags()).toEqual([true, false])
   })
 
-  it('arrives shut on replay too, with the run still going under it', () => {
-    /* A reopened conversation opens no fold, the last turn's included, and a
-       run still in flight under it buys it nothing there either. */
+  it('arrives open on replay too, with the run still going under it', () => {
+    /* A reopened conversation used to open no fold, the last turn's included.
+       A spawn or dag call is the exception: its row is the only place the
+       delegation is visible. */
     wire({
       spawnList: async () => [{
         id: '20260827T095926366482Z-78da7ea7', kind: 'spawn', agent: 'Raven',
@@ -1579,11 +1626,11 @@ describe('a fold holding a run that has not finished', () => {
         { role: 'assistant', text: 'dispatching it now', timestamp: iso(t0 + 3000) },
       ])
     })
-    expect(openFlags()).toEqual([false])
+    expect(openFlags()).toEqual([true])
 
     askAgain()
 
-    expect(openFlags()).toEqual([false, false])
+    expect(openFlags()).toEqual([true, false])
   })
 })
 

@@ -9,6 +9,8 @@ import { resetSources, setSources } from '../../state/sources'
 import { cleanPreview, okOf } from './source'
 import * as store from './store'
 
+import type { FoldData, Lane, StepData, StepHandle } from './types'
+
 
 beforeEach(() => {
   resetSources()
@@ -574,5 +576,73 @@ describe('a mid-turn message on the live path', () => {
     store.askText(lane, 'Q4 only', null, { midTurn: true })
 
     expect(store.turnKept(lane)).toBe(true)
+  })
+})
+
+/* A finished turn folds its work behind one line. Three kinds of content are
+   important enough that the fold opens itself instead -- an agent message of
+   two or more rendered lines, and a spawn or dag call, whose whole point is
+   that the reader can see it ran. The reader's own toggle still wins: a fold
+   they shut stays shut across the turns that follow. */
+describe('what keeps a finished turn\'s fold open', () => {
+  const folds = (lane: Lane): FoldData[] =>
+    lane.segs.filter((s): s is FoldData => s.kind === 'fold')
+  const turn = (lane: Lane, said: string, call: string): void => {
+    store.askText(lane, 'Q')
+    const first: StepHandle = store.newStep(lane)
+    first.setSay(said)
+    first.tool(call, {}, call, `c-${call}`).done(true, 'ok', 5)
+    const last: StepHandle = store.newStep(lane)
+    last.sayDelta('done')
+    store.finishTurn(lane, last, [first.seg, last.seg], '5s')
+  }
+
+  it('opens over a narration of two or more rendered lines', () => {
+    const lane = store.newLane('main:long', true)
+    turn(lane, 'x'.repeat(store.FOLD_KEEP_OPEN_CHARS), 'read_file')
+
+    const [fold] = folds(lane)
+    expect(fold?.open).toBe(true)
+    const [step] = fold ? fold.steps : []
+    expect((step as StepData | undefined)?.say).toHaveLength(store.FOLD_KEEP_OPEN_CHARS)
+  })
+
+  it('stays shut over a narration shorter than that', () => {
+    const lane = store.newLane('main:short', true)
+    turn(lane, 'x'.repeat(store.FOLD_KEEP_OPEN_CHARS - 1), 'read_file')
+
+    expect(folds(lane)[0]?.open).toBe(false)
+  })
+
+  it('opens over a spawn call without asking', () => {
+    /* `spawn` is display-only here: the fold default is the whole contract. */
+    const lane = store.newLane('main:spawn', true)
+    turn(lane, 'delegating', 'spawn')
+
+    expect(folds(lane)[0]?.open).toBe(true)
+  })
+
+  it('opens over a dag call without asking', () => {
+    const lane = store.newLane('main:dag', true)
+    turn(lane, 'running the graph', 'run_subagent_dag')
+
+    expect(folds(lane)[0]?.open).toBe(true)
+  })
+
+  it('leaves a fold the reader shut shut, even when a later turn would open one', () => {
+    /* The rule is a default, not a lock: `toggleFold` takes the fold over, and
+       nothing the runtime does afterwards reopens it. */
+    const lane = store.newLane('main:pinned', true)
+    turn(lane, 'x'.repeat(store.FOLD_KEEP_OPEN_CHARS), 'spawn')
+    const [first] = folds(lane)
+    store.toggleFold(lane, first as FoldData)
+    expect(first?.open).toBe(false)
+
+    turn(lane, 'x'.repeat(store.FOLD_KEEP_OPEN_CHARS), 'read_file')
+
+    const after = folds(lane)
+    expect(after).toHaveLength(2)
+    expect(after[0]?.open).toBe(false)
+    expect(after[1]?.open).toBe(true)
   })
 })

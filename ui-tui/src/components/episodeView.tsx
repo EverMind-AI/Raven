@@ -17,6 +17,7 @@ import {
   cardDefaultOpen,
   detailBlockShape,
   failureNote,
+  keepsWorkOpen,
   segmentTurn,
   toolArgument,
   toolParts,
@@ -46,6 +47,10 @@ import { Spinner } from './thinking.js'
 const INDENT = transcriptGutterWidth('assistant', '')
 const STEP = 2
 const MIN_TAIL = 12
+
+/* A call whose result is a panel. Its title box is the only row that names it,
+   so every rule that keeps a delegation visible reads this one. */
+const isPanelTool = (tool: EpisodeTool) => Boolean(tool.dag || tool.spawn)
 
 // The part of a click a fold control needs. Declared structurally rather than
 // imported: the fork does not export its ClickEvent, and appLayout.tsx already
@@ -533,7 +538,7 @@ const WorkSegment = memo(function WorkSegment({
   // open: a call with no argument and no output renders no block, and a blank row
   // above nothing is a one-line band spending two rows.
   const callRow = (tool: EpisodeTool, depth: number, onToggle: () => void, opened = false) => {
-    if (tool.dag || tool.spawn) {
+    if (isPanelTool(tool)) {
       return null
     }
 
@@ -622,14 +627,16 @@ const WorkSegment = memo(function WorkSegment({
     )
   }
 
-  // ── Running: the summary so far, plus only the call in hand ──
+  // ── Running: the summary so far, the call in hand, and every delegation ──
   //
   // Quiet by default and openable all the same. What a reader wants from a call
   // is most urgent while it runs -- the command a two-minute `exec` is actually
   // running is a question that cannot wait for it to finish -- so the rows here
   // carry the same toggles the settled ones do. Only the default differs: the
-  // stretch stays compressed to the summary and the call in hand until the
-  // reader opens it (see `detailDefaultOpen`, which does not fire in flight).
+  // stretch stays compressed to the summary, the call in hand and a panel per
+  // delegation until the reader opens it (see `detailDefaultOpen`, which does
+  // not fire in flight). A delegation gets its panel at this depth because the
+  // panel is the only row that names it.
   if (inFlight) {
     const latest = [...tools].reverse().find(tool => !tool.done) ?? tools[tools.length - 1]!
     const done = totalDurationMs(tools.filter(tool => tool.done))
@@ -693,8 +700,16 @@ const WorkSegment = memo(function WorkSegment({
                 width={width}
               />
             )}
-            {dagFor(latest, INDENT + STEP)}
-            {spawnFor(latest, INDENT + STEP)}
+            {/* Every delegation in the stretch, not only the one in hand: a
+                spawn or dag panel is the only place the call is named, so a
+                later plain call must not fold an earlier delegation out of
+                sight while the turn runs. */}
+            {tools.filter(isPanelTool).map(tool => (
+              <Box flexDirection="column" key={tool.id}>
+                {dagFor(tool, INDENT + STEP)}
+                {spawnFor(tool, INDENT + STEP)}
+              </Box>
+            ))}
             {cardOpen(latest) ? detailFor(latest, INDENT + STEP, () => toggleCall(latest.id)) : null}
           </>
         )}
@@ -774,9 +789,10 @@ export const EpisodeView = memo(function EpisodeView({
   closedKeys?: readonly string[]
   cols?: number
   compact?: boolean
-  /** Trace-box rendering: no breathing rows between segments, and a static
-   *  reasoning row carries a tail of its text instead of standing bare. The
-   *  height estimator's own `dense` must agree (see `estimatedMsgHeight`). */
+  /** Trace-box rendering: no breathing rows between segments. A folded
+   *  reasoning row stays a bare label here -- the reader opened the box to
+   *  watch the run, not to read the scratch work. The height estimator's own
+   *  `dense` must agree (see `estimatedMsgHeight`). */
   dense?: boolean
   episodes: Episode[]
   live?: boolean
@@ -877,9 +893,13 @@ export const EpisodeView = memo(function EpisodeView({
               onToggle={() => toggle(`rsn:${ep.index}`)}
               running={thinking}
               t={t}
-              // In a trace box the row is static, so without the tail it reads
-              // as a bare label -- the one word "reasoning" says nothing.
-              tail={(thinking || dense) && !rsnOpen ? reasoning : ''}
+              // Only the live row shows a tail. A trace box renders a settled
+              // run, where the reader asked to watch the run, not to read the
+              // model's scratch work: the row names the thought and how long it
+              // took, and its text is one click away. Printing a line of it
+              // there is the reasoning expanded by default, which is exactly
+              // what this view must not do.
+              tail={thinking && !rsnOpen ? reasoning : ''}
               time={durationLabel(reasoningMs, Boolean(thinking))}
               width={width}
             />
@@ -909,11 +929,11 @@ export const EpisodeView = memo(function EpisodeView({
     )
   }
 
-  const renderWork = (seg: Extract<Segment, { kind: 'work' }>) => {
+  const renderWork = (seg: Extract<Segment, { kind: 'work' }>, keepOpen: boolean) => {
     // The tools whose result is a panel: a summary line cannot say which node
     // failed or what a delegated run is doing, so a stretch holding one opens
     // itself, and folding it by hand still leaves the panel.
-    const hasPanel = seg.tools.some(tool => tool.dag || tool.spawn)
+    const hasPanel = seg.tools.some(isPanelTool)
     // A solo stretch has no "expanded" depth of its own: its fold state gates the
     // detail block directly (WorkSegment's solo branch above), so for one call
     // this state IS the card's own fold, and the card's predicate is what answers
@@ -933,16 +953,22 @@ export const EpisodeView = memo(function EpisodeView({
     // unfolds itself as the calls land is the churn the compressed live view
     // exists to avoid. A reader's own open still stands -- `foldOpen` reads it
     // first.
+    //
+    // `keepOpen` is the message rule: a multi-call stretch introduced by an
+    // agent message of two or more rendered lines opens on its own, so the rows
+    // the message led to are readable beside it (see `keepsWorkOpen`). A solo
+    // call is already one visible row, so the rule has nothing to reveal there
+    // and leaves its detail block folded.
     const detailDefaultOpen =
       seg.tools.length === 1
         ? !hasPanel && Boolean(seg.tools[0]!.done) && cardDefaultOpen(seg.tools[0]!)
-        : hasPanel && !seg.live
+        : (hasPanel || keepOpen) && !seg.live
 
     return (
       <WorkSegment
         closedCalls={closedCalls}
         compact={compact}
-        defaultOpen={hasPanel}
+        defaultOpen={hasPanel || keepOpen}
         isOpen={foldOpen(`seg:${seg.key}`, detailDefaultOpen)}
         key={`w:${seg.key}`}
         live={seg.live}
@@ -976,7 +1002,7 @@ export const EpisodeView = memo(function EpisodeView({
           key={seg.kind === 'talk' ? `t:${seg.episode.index}` : `w:${seg.key}`}
           marginTop={i > 0 && !dense ? 1 : 0}
         >
-          {seg.kind === 'talk' ? renderTalk(seg.episode) : renderWork(seg)}
+          {seg.kind === 'talk' ? renderTalk(seg.episode) : renderWork(seg, keepsWorkOpen(segments, i))}
         </Box>
       ))}
 

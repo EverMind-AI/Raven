@@ -954,6 +954,11 @@ const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg: StepDa
   const one = seg.calls.length > 0 && seg.calls.every((c) => c.name === (seg.calls[0] as CallData).name)
   const live = seg.calls.some((c) => !c.done)
   const failedN = seg.calls.filter((c) => c.done && !c.ok).length
+  /* A step that delegated keeps its rows on screen. The summary row is a
+     one-line stand-in for calls a reader does not need to tell apart; a spawn
+     or a dag call is not one of those -- which sub-agent ran, and how far its
+     graph got, is the point -- so the list is not folded over it. */
+  const keepCalls = seg.calls.some(store.callKeepsOpen)
   const showSum = seg.calls.length > 1
   /* The rows behind a closed summary are not mounted, so the summary carries
      the clock for them. Timed from the call in flight rather than the step's
@@ -972,7 +977,11 @@ const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg: StepDa
     : seg.thinkMs >= 1000
       ? t('gui.transcript.think_done', { label: thinkWord, t: store.durText(seg.thinkMs) })
       : thinkWord
-  const wkinHidden = seg.calls.length === 0 ? true : seg.calls.length === 1 ? false : !seg.wkOpen
+  const wkinHidden = seg.calls.length === 0
+    ? true
+    : seg.calls.length === 1 || keepCalls
+      ? false
+      : !seg.wkOpen
   if (stepBlank(seg)) return null
   return (
     <div className="step in">
@@ -1596,9 +1605,11 @@ const FoldView = memo(function FoldView({ lane, seg }: { lane: Lane; seg: FoldDa
       </button>
       {/* A shut body is not built, which is where the weight was: a forty-turn
           session built 7361 nodes of which 6400 sat in shut fold bodies. On the
-          conversation's lane the runtime opens none: a turn that just finished
-          shuts its own (`collapse`) and a replayed one arrives shut, so the only
-          bodies built are the ones the reader opened.
+          conversation's lane the runtime opens a turn only when its work holds
+          a message of two or more rendered lines or a spawn/dag call
+          (`foldKeepsOpen`); every other finished turn shuts its own and a
+          replayed one arrives shut, so the bodies built are the reader's and
+          those few.
 
           A delegated pane opens every turn's, and is a different size of thing:
           measured on the two largest instance records on hand, 55 messages in

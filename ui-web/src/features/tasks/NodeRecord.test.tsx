@@ -585,12 +585,14 @@ describe('fold memory', () => {
   it('keeps a fold open across a remount when the node key is the same', () => {
     const steps: NodeStep[] = [{ kind: 'think', text: 'first, check the dates' }]
     const first = render(<StepList steps={steps} running={false} nodeKey="dag:r1:n1" />)
-    fireEvent.click(first.container.querySelector('.tkthh') as HTMLElement)
+    /* A sub-agent's reasoning is folded until asked for; the click is the ask. */
     expect(first.container.querySelector('blockquote')).toBeNull()
+    fireEvent.click(first.container.querySelector('.tkthh') as HTMLElement)
+    expect(first.container.querySelector('blockquote')).not.toBeNull()
     first.unmount()
 
     const second = render(<StepList steps={steps} running={false} nodeKey="dag:r1:n1" />)
-    expect(second.container.querySelector('blockquote')).toBeNull()
+    expect(second.container.querySelector('blockquote')).not.toBeNull()
   })
 
   it('does not carry one node\'s fold onto a different node', () => {
@@ -600,7 +602,7 @@ describe('fold memory', () => {
     a.unmount()
 
     const b = render(<StepList steps={steps} running={false} nodeKey="dag:r1:n2" />)
-    expect(b.container.querySelector('blockquote')).not.toBeNull()
+    expect(b.container.querySelector('blockquote')).toBeNull()
   })
 })
 

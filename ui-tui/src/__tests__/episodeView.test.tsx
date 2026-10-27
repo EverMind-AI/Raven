@@ -12,6 +12,7 @@ import type { Episode, EpisodeTool, Msg } from '../types.js'
 import { $directChat, viewKeyOf } from '../app/directChatStore.js'
 import { resetFolds, toggleFold } from '../app/foldStore.js'
 import { EpisodeMessage, EpisodeView, turnFoldScope } from '../components/episodeView.js'
+import { MESSAGE_FOLD_KEEP_OPEN_CHARS } from '../config/limits.js'
 import { foldDirectTurns } from '../domain/directEpisodes.js'
 import { TOOL_PREVIEW_ROWS } from '../domain/episodeSummary.js'
 import { TRANSCRIPT_GUTTER_INSET, transcriptGutterWidth } from '../lib/inputMetrics.js'
@@ -754,5 +755,76 @@ describe('the reasoning row once the model has stopped', () => {
 
   it('still hides the reasoning itself behind the row', () => {
     expect(settled({ reasoningMs: 12_000 })).not.toContain('weighing the two shapes')
+  })
+})
+
+/* Three defaults the transcript's reader asked for: an agent message of two or
+   more rendered lines keeps the work it introduced open, a delegation stays
+   visible while the turn is still running, and a trace box does not print a
+   line of the model's reasoning unasked. */
+describe('what the transcript folds by default', () => {
+  const LONG = 'x'.repeat(MESSAGE_FOLD_KEEP_OPEN_CHARS)
+
+  it('keeps the work open when the message that introduced it runs to two lines', () => {
+    const episodes: Episode[] = [
+      { index: 0, narration: LONG, reasoning: '', tools: [] },
+      { index: 1, narration: '', reasoning: '', tools: [call('a', 'exec', 'ls'), call('b', 'exec', 'pwd')] }
+    ]
+
+    const f = view(episodes)
+
+    // Both calls on their own rows under the summary, rather than the summary
+    // alone standing in for them.
+    expect(f).toContain('ls')
+    expect(f).toContain('pwd')
+  })
+
+  it('still folds the work under a message shorter than that', () => {
+    const episodes: Episode[] = [
+      { index: 0, narration: 'x'.repeat(MESSAGE_FOLD_KEEP_OPEN_CHARS - 1), reasoning: '', tools: [] },
+      { index: 1, narration: '', reasoning: '', tools: [call('a', 'exec', 'ls'), call('b', 'exec', 'pwd')] }
+    ]
+
+    const f = view(episodes)
+
+    expect(f).toContain('ran 2 commands')
+  })
+
+  it('keeps every delegation in a running stretch, not only the latest call', () => {
+    // `read_file` after the two graphs leaves both dag calls behind the call in
+    // hand. The folded live view used to render a panel for the latest tool
+    // only, so the earlier delegations disappeared while the turn ran.
+    const second = { ...DAG_RUN, runId: 'dag-2' }
+    const episodes: Episode[] = [
+      {
+        index: 0,
+        narration: '',
+        reasoning: '',
+        tools: [
+          call('s1', 'run_subagent_dag', 'first graph', { dag: DAG_RUN }),
+          call('s2', 'run_subagent_dag', 'second graph', { dag: second }),
+          call('t1', 'read_file', 'notes.md', { done: false })
+        ]
+      }
+    ]
+
+    const f = view(episodes, { live: true })
+
+    expect(f).toContain('dag-1')
+    expect(f).toContain('dag-2')
+  })
+
+  it('does not print a line of reasoning in a trace box unless it is opened', () => {
+    const THOUGHT = 'the model weighs the two options and picks the safer one'
+    const episodes: Episode[] = [{ index: 0, narration: '', reasoning: THOUGHT, tools: [] }]
+
+    // Dense is the trace-box rendering. Folded, the row names the thought and
+    // nothing else; the text is behind the row's own toggle.
+    const folded = view(episodes, { dense: true })
+    expect(folded).toContain('thought')
+    expect(folded).not.toContain(THOUGHT)
+
+    const open = view(episodes, { dense: true, openKeys: ['rsn:0'] })
+    expect(open).toContain(THOUGHT)
   })
 })

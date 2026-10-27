@@ -66,6 +66,14 @@ const shortPath = (p: string): string => {
 const MIN_RUN_STEPS = 2
 export const DTL_MAX_LINES = 80
 
+/* An agent message this long keeps its turn's fold open. Importance is read
+   off the message's length rather than off measured rows -- a rendered-lines
+   test would need a layout pass per segment, and the caller has only the
+   string. 140 characters is about two lines at the transcript's reading width
+   (a ~70-glyph measure at 15px), so a message that fills two lines is on the
+   open side of the threshold. Tune it here, not at a call site. */
+export const FOLD_KEEP_OPEN_CHARS = 140
+
 export { actName, argPath, firstErrLine, phraseOf, shortArg, verbIngOf, verbOf }
 
 /* The demo replay hands the one string it displays where the live RPC hands
@@ -1231,16 +1239,37 @@ export function newStep(lane: Lane): StepHandle {
 const stepSolid = (s: StepData): boolean =>
   s.calls.length > 0 || (s.thinkShown && s.hasThink) || !!s.say.trim()
 
+/* A call whose information a one-line summary cannot stand in for. A spawn or
+   a dag row is the only place the delegation is visible -- which sub-agent ran,
+   and how far its graph got -- so the fold rules here and the step's own work
+   list both read this predicate rather than restating it. */
+export const callKeepsOpen = (c: CallData): boolean => c.kind === 'spawn' || c.kind === 'dag'
+
+/* Whether a turn's work reads as important enough not to fold away. Two things
+   qualify, and both are display defaults rather than a change to what folding
+   can do -- the reader may still shut the fold by hand:
+ *
+ *  - an agent message of two or more rendered lines (`FOLD_KEEP_OPEN_CHARS`);
+ *  - a spawn or dag call, whose whole point is that the reader can see the
+ *    delegation happened. */
+const foldKeepsOpen = (steps: StepData[]): boolean =>
+  steps.some((s) => s.say.trim().length >= FOLD_KEEP_OPEN_CHARS || s.calls.some(callKeepsOpen))
+
 /* Every fold this lane opened by itself, shut. The reader's own are left
  * alone: `toggleFold` clears `auto`, so a fold they have touched is no longer
  * one of these.
  *
- * A running sub-agent under a fold does not hold it open. The run's own status
- * lives on the task rows, which is where a reader follows it; the fold is the
- * turn's, and the turn is over. */
+ * A fold holding a message or a delegation the rule protects stays open. The
+ * rule is re-read here rather than latched at creation because the work that
+ * completes it can land after the fold exists.
+ *
+ * A run still executing under the fold is not what holds it open -- the run's
+ * own status lives on the task rows, which is where a reader follows it. It is
+ * the call's kind that does: a spawn or dag row is the only place the
+ * delegation is visible, whether or not the run has finished. */
 function shutAutoFolds(lane: Lane, except: FoldData | null): void {
   lane.segs.forEach((s) => {
-    if (s.kind !== 'fold' || s === except || !s.auto) return
+    if (s.kind !== 'fold' || s === except || !s.auto || foldKeepsOpen(s.steps)) return
     s.auto = false
     s.open = false
     bump(lane, s)
@@ -1254,12 +1283,13 @@ function shutAutoFolds(lane: Lane, except: FoldData | null): void {
  * the whole time the turn ran; once the answer lands they fold shut behind the
  * one line, so what stays on screen is the answer and not the trail that led
  * to it. The trail is one click away, and the row's clock says there is one.
- * A sub-agent still running under it does not keep it open: that run is
- * followed on the task rows, not here.
  *
- * Replay opens none: a reopened conversation arrives with every turn shut, the
- * last one included, the same as a turn watched live ends. That is also what
- * the weight asks for -- a forty-turn session built 7361 nodes and 6400 of them
+ * `foldKeepsOpen` is the exception, and it applies on both paths: a turn whose
+ * work carries an agent message of two or more rendered lines, or a spawn or
+ * dag call, arrives with its fold open. That is a default, not a lock -- a
+ * reader who shuts it keeps it shut (`toggleFold` clears `auto`). What the
+ * weight still gets is every other turn, and the shut bodies of every fold a
+ * reader never opened: a forty-turn session built 7361 nodes and 6400 of them
  * sat in shut fold bodies. */
 export function collapse(lane: Lane, time?: string | null, live = false): void {
   const segs = lane.segs
@@ -1293,6 +1323,11 @@ export function collapse(lane: Lane, time?: string | null, live = false): void {
       fold!.steps.push(s)
     })
     fold.time = time || null
+    /* Work joining a fold the runtime still owns brings the rule with it: a
+       long message or a delegation that completes the turn opens the fold
+       around it. A fold the reader touched has `auto` cleared and is left the
+       way they left it. */
+    if (fold.auto && foldKeepsOpen(fold.steps)) fold.open = true
     bump(lane, fold)
     bumpList(lane)
     return
@@ -1304,10 +1339,16 @@ export function collapse(lane: Lane, time?: string | null, live = false): void {
      instance's conversation is short enough to read at once, which is why
      `shutAutoFolds` stays on the live path, where a whole session's folds
      accumulate. Marked `auto` either way, so the reader's own collapse takes it
-     over from the runtime (`toggleFold`) and survives the next poll. */
+     over from the runtime (`toggleFold`) and survives the next poll.
+
+     The main conversation's fold opens on the same rule when its work carries
+     a long message or a delegation (`foldKeepsOpen`), and stays open across
+     later turns because `shutAutoFolds` re-reads that rule rather than the one
+     decision made here. */
   const born = !lane.main
+  const keepOpen = born || foldKeepsOpen(loose)
   const f: FoldData = {
-    v: 0, id: nextId(), kind: 'fold', time: time || null, open: born, auto: born, steps: [],
+    v: 0, id: nextId(), kind: 'fold', time: time || null, open: keepOpen, auto: true, steps: [],
   }
   if (live) shutAutoFolds(lane, f)
   segs.splice(firstAt, 0, f)
