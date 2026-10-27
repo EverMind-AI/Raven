@@ -842,7 +842,10 @@ stays in the history holding the model's whole reply -- the marker, or, from a p
 the note around it -- filed with `silent: true` so a reload does not read it as an answer, and it
 carries the turn's Response Meta. The turn reports itself as
 `TurnOutcome.silent` and, for a surface drawing it live, as a closing `NoticeKind.SILENT_TURN`
-notice; the spine's `TurnEnded` carries no flag of its own, so the kernel knows nothing of markers.
+notice. The kernel holds no marker rules -- they live in `agent/context/silence.py` -- and the
+spine's `TurnEnded` carries no flag of its own; what the kernel names of silence is the outcome
+(`TurnOutcome.silent`), the notice (`NoticeKind.SILENT_TURN`) and which origins are proactive
+(`PROACTIVE_ORIGINS`).
 The `after_send` hook chain still runs, with
 `outbound_content` None: a response modifier is left unasked, so a nudge it would pop stays
 queued for the next reply, and the personalizer learns nothing; text a hook composes there is

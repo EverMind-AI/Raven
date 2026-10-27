@@ -196,10 +196,10 @@ export const STAGES: readonly Stage[] = [
     /* The model ended the turn on its silence marker, so the turn has no answer:
        the reply the open step was streaming is taken back, and the turn lands
        without promoting anything it said on the way. The row below is all of it.
-       The server holds a marker back while it streams, so there is usually
-       nothing to take back; a reply whose thinking was inlined streamed whole
-       before it was read as one. An exhausted turn's wrap-up shares its step
-       with the last call's narration, which stays.
+       The server holds a marker back while it streams -- past a think block the
+       model inlined, which streams as it comes, and across a stream cut and its
+       continuation -- so there is usually nothing to take back. An exhausted
+       turn's wrap-up shares its step with the last call's narration, which stays.
        Not marked while this page is cancelling the turn: the stop already folded
        it, and the message.complete that would read and clear the mark is
        dropped, so the next turn would land under it. */
