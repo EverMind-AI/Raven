@@ -407,6 +407,10 @@ async def test_check_key_asks_the_vendor_about_the_unsaved_key_and_writes_nothin
     assert seen["section_override"] == {"api_key": "sk-or-never-issued"}
     config = fake_home / ".raven" / "config.json"
     assert not config.exists() or "sk-or-never-issued" not in config.read_text()
+    # And nothing remembered: a refused key listed nothing.
+    from raven.providers.served_models import recall
+
+    assert recall("openrouter") == {}
 
 
 @pytest.mark.parametrize(
@@ -429,6 +433,37 @@ async def test_check_key_reports_what_is_not_the_keys_fault_without_refusing(
     assert result["status"] == status
     assert result["refused"] is False
     assert result["models_count"] == answer.get("models_count")
+    # An answer that carries no list remembers none, whatever its status.
+    from raven.providers.served_models import recall
+
+    assert recall("openrouter") == {}
+
+
+async def test_check_key_remembers_what_a_valid_key_serves(fake_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The connect's check is the one ask a connect makes, so it is what writes
+    the served-models cache (`raven/providers/served_models.py`): without it a
+    valid connect left every picker on the bundled catalogue until an
+    add-model sheet was opened, and `model.options` recalled nothing."""
+    from raven.providers.served_models import recall
+
+    seen: dict = {}
+    monkeypatch.setattr(
+        "raven.config.update_providers.test_provider",
+        _probe_answering(
+            {"ok": True, "status": "valid", "http_status": 200, "models_count": 1, "model_ids": ["zz-live-only-model"]},
+            seen,
+        ),
+    )
+
+    result = await model_check_key({"slug": "openrouter", "api_key": "sk-or-good"})
+
+    assert result["status"] == "valid" and result["refused"] is False
+    # The whole catalogue, as the verified read asks for it, not a count.
+    assert seen["full_catalogue"] is True
+    assert [m for m in recall("openrouter") if "zz-live-only-model" in m]
+    # Still a read of the config: the key is the form's until save_key.
+    config = fake_home / ".raven" / "config.json"
+    assert not config.exists() or "sk-or-good" not in config.read_text()
 
 
 async def test_check_key_sends_only_the_fields_the_form_holds(fake_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:

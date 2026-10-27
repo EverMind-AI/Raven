@@ -2218,12 +2218,13 @@ class ModelCheckKeyResult(_Strict):
         description=(
             "The probe's word: `valid`, `invalid_key`, `key_unchecked`, `no_credits`, `rate_limited`, "
             "`network_error`, `proxy_unreachable`, `certificate_untrusted`, `no_probe_endpoint`, "
-            "`not_configured`, `http_NNN`."
+            "`not_configured`, `unknown_provider`, `oauth_token_missing`, `http_NNN`; `unknown` when the probe "
+            "gave no word."
         )
     )
-    http_status: int | None = None
-    models_count: int | None = None
-    error: str | None = None
+    http_status: int | None = Field(None, description="The HTTP status the probe met, when it met one.")
+    models_count: int | None = Field(None, description="How many models the vendor listed, when it listed any.")
+    error: str | None = Field(None, description="What went wrong, when something did.")
     refused: bool = Field(
         description=(
             "The vendor itself refused this key -- answered it with 401, or named it invalid -- so storing it "

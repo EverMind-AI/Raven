@@ -2452,7 +2452,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.providers.key_not_ascii':
       "This doesn't look like an API key: it has characters a key never contains. Check what was pasted",
     'gui.settings.providers.key_refused':
-      "{vendor} rejected this key, so it was not saved: check that it is complete and is this vendor's key, then connect again",
+      "{vendor} rejected this key, so it was not saved: check that it is complete and is this vendor's key, then submit it again",
     'gui.settings.providers.key_rejected': 'Key rejected',
     'gui.settings.providers.base': 'Service address',
     'gui.settings.providers.api_base': 'API address',
@@ -5811,7 +5811,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       '没有新的 API key 要保存。要更换，先在「API 密钥」框里填入新的，再点「{button}」。',
     'gui.settings.providers.key_not_ascii': '这不像是 API key：里面有 Key 不会包含的字符，请检查粘贴的内容',
     'gui.settings.providers.key_refused':
-      '{vendor} 不认这个 Key，没有保存：检查有没有复制全、是不是这家的 Key，改好再点「连接」',
+      '{vendor} 不认这个 Key，没有保存：检查有没有复制全、是不是这家的 Key，改好再提交一次',
     'gui.settings.providers.key_rejected': 'Key 被拒',
     'gui.settings.providers.base': '服务地址',
     'gui.settings.providers.api_base': 'API 地址',

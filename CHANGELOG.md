@@ -434,7 +434,8 @@ All notable changes to Raven are documented here.
   (`model.check_key`): a key answered with 401, or named invalid, is refused
   with the reason in the form and nothing is written, where before it was
   stored, marked **Connected** and reported as rejected on the same row. A
-  stored key the vendor later refuses reads **Key rejected** on its row.
+  stored key the vendor refuses when it is checked again (the row's Check or
+  Retry, or a connect) reads **Key rejected** on its row.
   `raven onboard` and `raven provider test` confirm the key itself at the
   vendor's key endpoint where the model list answers anyone (OpenRouter),
   instead of reporting "Connected! (468 models available)" for a key the

@@ -3161,12 +3161,21 @@ export interface ModelCheckKeyParams {
 export interface ModelCheckKeyResult {
   ok: boolean;
   /**
-   * The probe's word: `valid`, `invalid_key`, `key_unchecked`, `no_credits`, `rate_limited`, `network_error`, `proxy_unreachable`, `certificate_untrusted`, `no_probe_endpoint`, `not_configured`, `http_NNN`.
+   * The probe's word: `valid`, `invalid_key`, `key_unchecked`, `no_credits`, `rate_limited`, `network_error`, `proxy_unreachable`, `certificate_untrusted`, `no_probe_endpoint`, `not_configured`, `unknown_provider`, `oauth_token_missing`, `http_NNN`; `unknown` when the probe gave no word.
    */
   status: string;
-  http_status?: number;
-  models_count?: number;
-  error?: string;
+  /**
+   * The HTTP status the probe met, when it met one.
+   */
+  http_status?: number | null;
+  /**
+   * How many models the vendor listed, when it listed any.
+   */
+  models_count?: number | null;
+  /**
+   * What went wrong, when something did.
+   */
+  error?: string | null;
   /**
    * The vendor itself refused this key -- answered it with 401, or named it invalid -- so storing it would store a key that cannot work. Every other answer leaves the key worth storing.
    */
