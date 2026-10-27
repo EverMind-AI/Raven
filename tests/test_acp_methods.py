@@ -64,6 +64,15 @@ class _Stack:
         self.dispatcher.register("session.resume", self._resume)
         self.dispatcher.register("model.options", self._model_options)
         self.dispatcher.register("config.set", self._config_set)
+        # What ``session.usage`` reports a session to have spent; an exception is raised.
+        self.usage_result: dict | Exception = {"cost_usd": None}
+        self.dispatcher.register("session.usage", self._usage)
+
+    async def _usage(self, params: dict) -> dict:
+        self.calls.append(("session.usage", params))
+        if isinstance(self.usage_result, Exception):
+            raise self.usage_result
+        return self.usage_result
 
     async def _model_options(self, params: dict) -> dict:
         self.calls.append(("model.options", params))
@@ -572,6 +581,42 @@ class TestSessionLoad:
         # servers were an attachment to it. The two above are the request itself
         # being unanswerable.
         assert "error" not in servers, servers
+
+
+class TestSessionCost:
+    """``usage_update.cost`` is the session's cumulative cost, so a session
+    opened here starts from what it had already spent: the same figure the
+    session's own usage panel reports, which outlives the process."""
+
+    async def _opened(self, rig, method: str):
+        rig.stack.stored["acp:old"] = [{"role": "user", "text": "hi"}]
+        await rig.handshake()
+        await rig.call(method, {"sessionId": "acp:old", "cwd": str(rig.tmp_path / "project"), "mcpServers": []})
+        return rig.translator.get("acp:old")
+
+    @pytest.mark.parametrize("method", ["session/load", "session/resume"])
+    async def test_a_session_opened_here_starts_from_what_it_had_spent(self, rig, method):
+        rig.stack.usage_result = {"cost_usd": 1.5}
+
+        session = await self._opened(rig, method)
+
+        assert (session.cost_usd, session.cost_known) == (1.5, True)
+        assert ("session.usage", {"session_id": "acp:old"}) in rig.stack.calls
+
+    async def test_a_session_whose_spend_cannot_be_read_has_no_total(self, rig):
+        rig.stack.usage_result = RuntimeError("telemetry unreadable")
+
+        session = await self._opened(rig, "session/load")
+
+        assert session.cost_known is False
+
+    async def test_a_new_session_has_spent_nothing_and_asks_nobody(self, rig):
+        await rig.handshake()
+        response = await rig.call("session/new", {"cwd": str(rig.tmp_path / "project"), "mcpServers": []})
+
+        session = rig.translator.get(response["result"]["sessionId"])
+        assert (session.cost_usd, session.cost_known) == (None, True)
+        assert not any(name == "session.usage" for name, _ in rig.stack.calls)
 
 
 class TestSessionResume:

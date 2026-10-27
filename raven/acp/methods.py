@@ -379,12 +379,11 @@ class AcpMethods:
         self._bind_workdir(session_id, cwd)
         session = self._translator.get(session_id)
         if session is None:
-            session = AcpSession(
-                session_id=session_id,
-                session_key=session_id,
-                cwd=cwd,
-                subscription_id=await self._subscribe(session_id),
-            )
+            session = AcpSession(session_id=session_id, session_key=session_id, cwd=cwd)
+            # Before the subscription, so nothing is awaited between subscribing
+            # and adding: an event in that gap finds no session and is dropped.
+            await self._seed_cost(session)
+            session.subscription_id = await self._subscribe(session_id)
             self._translator.add(session)
         else:
             # Loading a session this connection already holds. Its stream is
@@ -399,6 +398,26 @@ class AcpMethods:
         logger.info("acp: replayed {} update(s) for {}", len(updates), session_id)
         self._announce_commands(session_id)
         return self._with_modes({}, session_id)
+
+    async def _seed_cost(self, session: AcpSession) -> None:
+        """Start a session opened here from what it had already spent.
+
+        ``usage_update.cost`` is the session's cumulative cost, and turns run
+        before this process -- or on another connection -- are part of it. Read
+        from ``session.usage``, the account that outlives the process, once per
+        session opened rather than per turn: it walks every day of telemetry
+        since the session began. Unreadable, the session sends no cost at all; a
+        total counted from here would understate it.
+        """
+        try:
+            spent = await self._call("session.usage", {"session_id": session.session_key})
+        except Exception as exc:  # noqa: BLE001 - accounting must not refuse the session
+            logger.warning("acp: what session {} had spent could not be read: {}", session.session_id, exc)
+            session.cost_known = False
+            return
+        cost = spent.get("cost_usd") if isinstance(spent, dict) else None
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0:
+            session.cost_usd = float(cost)
 
     async def _session_resume(self, params: dict[str, Any]) -> dict[str, Any]:
         """Reopen a stored session for its own state, without replaying it.
@@ -435,12 +454,11 @@ class AcpMethods:
         self._bind_workdir(session_id, cwd)
         session = self._translator.get(session_id)
         if session is None:
-            session = AcpSession(
-                session_id=session_id,
-                session_key=session_id,
-                cwd=cwd,
-                subscription_id=await self._subscribe(session_id),
-            )
+            session = AcpSession(session_id=session_id, session_key=session_id, cwd=cwd)
+            # Before the subscription, so nothing is awaited between subscribing
+            # and adding: an event in that gap finds no session and is dropped.
+            await self._seed_cost(session)
+            session.subscription_id = await self._subscribe(session_id)
             self._translator.add(session)
         else:
             session.cwd = cwd
