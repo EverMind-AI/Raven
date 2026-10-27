@@ -8659,3 +8659,18 @@ def test_a_narrower_embedding_model_still_fails_the_wizard_check(monkeypatch: py
     monkeypatch.setattr(onboard_everos, "_probe_embedding_dim", lambda url, headers, model: 768)
 
     assert not onboard_everos._verify_embedding_dim(model="m", api_key="k", base_url="http://p", non_interactive=True)
+
+
+def test_the_wizard_reads_a_borrowed_web_key(tmp_path: Path) -> None:
+    """A DeepSeek key under providers.* pays for the web tools too, so the
+    wizard must not ask for a second one -- or probe with an empty string."""
+    import json
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"providers": {"deepseek": {"apiKey": "sk-llm"}}}), encoding="utf-8")
+    set_config_path(cfg)
+    try:
+        assert onboard_web._stored_key("deepseek") == "sk-llm"
+        assert onboard_web._stored_key("tavily") == ""
+    finally:
+        set_config_path(None)

@@ -71,10 +71,12 @@ def _stored_provider(kind: str) -> str:
 
 
 def _stored_key(vendor: str) -> str:
-    """One vendor's key as config holds it, unredacted."""
+    """One vendor's key as config holds it, unredacted -- the model-provider key
+    a borrowing vendor runs on included, exactly as the tool resolves it."""
+    from raven.config.live import default_live, live_vendor_key
     from raven.config.update_tools import get_web_provider_key
 
-    return get_web_provider_key(vendor, redact=False)
+    return get_web_provider_key(vendor, redact=False) or live_vendor_key(default_live(), vendor, boot="")
 
 
 def rc_targets_for(shell_name: str) -> list[Path]:
@@ -307,9 +309,9 @@ def _step5_web(
     oc.console.print(
         t(
             "  [dim]web_search[/dim]  Search the web — needs the chosen vendor's key, except Keenable;\n"
-            "              without one the tool is not offered to the model at all.\n"
+            "              DeepSeek borrows the model-provider key. Without either, the tool is not offered.\n"
             "  [dim]web_fetch [/dim]  Read a page — Jina and Keenable work with no key at a lower\n"
-            "              rate limit; every other reader needs its key."
+            "              rate limit; other readers need a key or a borrowed model-provider key."
         ),
         highlight=False,
     )
@@ -332,7 +334,8 @@ def _step5_web(
         keys[search] = search_key.strip()
         # A stored key that Enter kept is probed too: it may have been revoked
         # since it was typed. No key at all means web_search stays withheld,
-        # which is a choice, not a failure.
+        # which is a choice, not a failure -- unless a borrowing vendor answers
+        # from the model-provider key, which the stored-key read includes.
         live = keys[search] or _stored_key(search)
         if not live or _verify_search_key(search, live, non_interactive=non_interactive):
             break
