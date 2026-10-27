@@ -123,7 +123,7 @@ QUALIFIED_RESOLUTION = {
     "longcat": "openai/longcat-2.0",
     "modelscope": "openai/Qwen/Qwen3-235B-A22B-Instruct-2507",
     "qiniu": "openai/deepseek-v3",
-    # Fourteen resale gateways, all reached through OpenAI's driver: the route
+    # Fifteen resale gateways, all reached through OpenAI's driver: the route
     # is that driver's and the address in config is what tells them apart. The
     # id after it is the shelf's own spelling of somebody else's model and is
     # sent verbatim -- 302.AI's "gpt-5.5" is not OpenAI's, and is never treated

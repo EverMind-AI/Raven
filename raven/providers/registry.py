@@ -425,7 +425,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         renames_models=True,
     ),
     # === Resale gateways reached through OpenAI's driver ===================
-    # Fourteen shelves that resell other vendors' models over an
+    # Fifteen shelves that resell other vendors' models over an
     # OpenAI-compatible endpoint. LiteLLM routes none of them, so each borrows
     # OpenAI's driver and states the address that distinguishes it -- the same
     # shape as SiliconFlow above, and a gateway for the same reason: a model id
