@@ -20,6 +20,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from raven.agent.context.silence import SILENCE_INSTRUCTION
 from raven.core.cron_stack import make_on_cron_job
 from raven.proactive_engine.schedulers.cron.types import (
     CronJob,
@@ -28,7 +29,6 @@ from raven.proactive_engine.schedulers.cron.types import (
     CronSchedule,
 )
 from raven.spine import Origin, TurnFailed, TurnOutcome, Usage
-from raven.spine.silence import SILENCE_INSTRUCTION
 
 
 def _make_job(

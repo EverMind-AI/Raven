@@ -2,8 +2,7 @@
 
 import pytest
 
-from raven.spine import PROACTIVE_ORIGINS, Origin
-from raven.spine.silence import (
+from raven.agent.context.silence import (
     SILENCE_INSTRUCTION,
     SILENCE_MARKERS,
     SILENCE_MAX_CHARS,
@@ -13,6 +12,7 @@ from raven.spine.silence import (
     is_silence,
     may_become_silence,
 )
+from raven.spine import PROACTIVE_ORIGINS, Origin
 
 
 def test_the_marker_set_and_its_length_cap_are_the_agreed_values():

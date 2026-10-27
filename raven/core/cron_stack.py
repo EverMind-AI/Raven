@@ -195,8 +195,8 @@ def make_on_cron_job(
     """
 
     async def on_cron_job(job: "CronJob") -> str | None:
+        from raven.agent.context.silence import SILENCE_INSTRUCTION
         from raven.spine import ChatType, Origin, Source, TurnFailed, TurnRequest
-        from raven.spine.silence import SILENCE_INSTRUCTION
 
         # Include the originally-scheduled time so the reminder text can
         # echo "set at 17:05" back to the user — otherwise the agent only

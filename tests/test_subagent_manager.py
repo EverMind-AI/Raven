@@ -26,6 +26,7 @@ import pytest
 from pydantic import ValidationError
 
 from raven.agent import workdir
+from raven.agent.context.silence import SILENCE_INSTRUCTION
 from raven.agent.subagent import manager as manager_mod
 from raven.agent.subagent.backends.base import clamp_output
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
@@ -44,7 +45,6 @@ from raven.contracts.subagent_backend import SubagentActionAbortedError
 from raven.providers.base import LLMResponse, ToolCallRequest
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.sandbox import ExecResult, SandboxExecutor
-from raven.spine.silence import SILENCE_INSTRUCTION
 from raven.tracing import trace
 from tests._everos_presence import everos_plugin_absent
 

@@ -67,11 +67,11 @@ from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
+from raven.agent.context.silence import SILENT_MARKER, is_silence
 from raven.config import schema as config_schema
 from raven.contracts.llm_provider import REASONING_EFFORT_LADDER, LLMResponse
 from raven.providers.streaming import DECLINED_FINISH_REASONS, STREAM_CUT
 from raven.providers.usage import reported_cost, token_count
-from raven.spine.silence import SILENT_MARKER, is_silence
 from raven.spine.turn import PROACTIVE_ORIGINS, Origin
 
 # In-content thinking markers. Some models (Ollama, certain Qwen gateways) put

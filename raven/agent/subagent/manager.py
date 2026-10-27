@@ -13,6 +13,7 @@ from loguru import logger
 
 from raven.acp_client import remote_runs
 from raven.agent import workdir
+from raven.agent.context.silence import SILENCE_INSTRUCTION
 from raven.agent.subagent import activity
 from raven.agent.subagent.attachments import retarget_note, with_attachment_note, with_undeliverable_note
 from raven.agent.subagent.backends import (
@@ -60,7 +61,6 @@ from raven.providers.pool import ProviderPool, live_pin_resolver
 from raven.sandbox import SandboxConfig, SandboxExecutor, build_executor
 from raven.security.trust import wrap_untrusted
 from raven.spine.message import Media
-from raven.spine.silence import SILENCE_INSTRUCTION
 from raven.tracing import trace
 
 # One hour: a runaway re-injection loop fires fast and trips the limit quickly,
