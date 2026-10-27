@@ -1622,6 +1622,48 @@ async def test_raven_loop_backend_tools_allow_filters_the_registry(tmp_path, mon
     assert none_at_all == []
 
 
+@pytest.mark.asyncio
+async def test_a_subagent_web_fetch_reads_a_borrowed_key_live(tmp_path, monkeypatch):
+    """The fetch tool's vendor and key are resolved per call, like the main
+    loop's: the DeepSeek key the host configured for chat -- or a rotation of
+    it -- reaches a running sub-agent without a respawn."""
+    from raven.agent.subagent.backends import raven_loop
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.config.live import LiveConfig
+
+    home = tmp_path / "home"
+    config_path = home / "config.json"
+    home.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps({"providers": {"deepseek": {"apiKey": "sk-llm"}}}))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("JINA_API_KEY", raising=False)
+    monkeypatch.setattr(raven_loop, "_LIVE_CONFIG", LiveConfig(config_path))
+
+    seen: list[Any] = []
+    real = ToolRegistry.register
+
+    def _spy(self, tool):  # noqa: ANN001, ANN202
+        real(self, tool)
+        if tool.name == "web_fetch":
+            seen.append(tool)
+
+    monkeypatch.setattr(ToolRegistry, "register", _spy)
+    backend = raven_loop.RavenLoopBackend(
+        provider=_WhitelistStubProvider(),
+        model="stub",
+        agent_home=tmp_path,
+        web_fetch_provider="deepseek",
+    )
+    await backend.run("task", task_id="t1", workspace=tmp_path, executor=None)
+
+    tool = seen[0]
+    assert tool.provider == "deepseek" and tool.api_key == "sk-llm"
+
+    config_path.write_text(json.dumps({"providers": {"deepseek": {"apiKey": ""}}}))
+    assert tool.provider == "jina", "a revoked key re-evaluates the Jina fallback on the next call"
+    assert tool.api_key == ""
+
+
 def test_build_subagent_prompt_skills_allow_narrows_the_menu(tmp_path):
     """None keeps the full catalog, [] hides the menu, a list shows only the
     named skills."""

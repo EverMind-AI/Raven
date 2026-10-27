@@ -744,27 +744,30 @@ _Avoid_: "function" — a Tool is the agent-facing capability, not a Python func
 
 **Web Vendor** (`config/schema.py`, `WebProvidersConfig`):
 Who issues a web credential, as opposed to which tool spends it. Keys live at
-`tools.web.providers.<vendor>.apiKey` because one AnySearch, Tavily, Exa, Firecrawl or Keenable
-account serves both `web_search` and `web_fetch`; a key held per tool would have to be
+`tools.web.providers.<vendor>.apiKey` because one AnySearch, Tavily, Exa, Firecrawl, Keenable or
+DeepSeek account serves both `web_search` and `web_fetch`; a key held per tool would have to be
 pasted twice and could drift into two values for one credential. The pre-vendor leaves
 (`tools.web.search.apiKey`, `tools.web.jinaApiKey`) are still read, after the vendor
 slot, and only for Serper and Jina. `~/.raven/env` mirrors every vendor key out under
-its bare env var.
+its bare env var. DeepSeek's web endpoints run on the account its chat API uses, so its
+web slot is optional: when it is empty, `Config.effective_web_vendor_key` answers with
+`providers.deepseek.apiKey` instead of asking for the same key twice.
 _Avoid_: "provider" unqualified — that is the LLM Provider in this vocabulary; and
 "the web key" — there is one per vendor.
 
 **Web Search Provider** / **Web Fetch Provider** (`agent/tools/web.py`, `SEARCH_PROVIDERS` / `FETCH_PROVIDERS`):
 Which interchangeable backend each web tool calls: `tools.web.search.provider` selects
-`serper` (default), `anysearch`, `serpapi`, `tavily`, `exa`, `brave`, `firecrawl`, `serply` or
-`keenable`, and `tools.web.fetch.provider` selects `jina` (default), `anysearch`, `tavily`, `exa`,
-`firecrawl` or `keenable`. Every endpoint is a literal in the tool, so a selection names a vendor and
-never a URL. `web_search` is registered whatever the config holds and *withheld* from the
-offered set while the selected vendor's key does not resolve (Keenable searches without
-one and is offered keyless, as Jina reads pages keyless), so a key pasted mid-run
-surfaces it without a restart -- read live from the vendor slot and, for Serper, from the
-pre-vendor leaf, in the order `WebToolsConfig.vendor_key` resolves them, and an empty slot
-is a revocation rather than a miss; `web_fetch` is always offered, falling back to Jina,
-which reads pages without a key. The two sub-agent launchers inherit the host's selection
+`serper` (default), `anysearch`, `serpapi`, `tavily`, `exa`, `brave`, `firecrawl`, `serply`,
+`keenable` or `deepseek`, and `tools.web.fetch.provider` selects `jina` (default), `anysearch`,
+`tavily`, `exa`, `firecrawl`, `keenable` or `deepseek`. Every endpoint is a literal in the tool,
+so a selection names a vendor and never a URL. `web_search` is registered whatever the config
+holds and *withheld* from the offered set while the selected vendor's key does not resolve
+(Keenable searches without one and is offered keyless, as Jina reads pages keyless), so a key
+pasted mid-run surfaces it without a restart -- read live from the vendor slot and, for Serper,
+from the pre-vendor leaf, in the order `WebToolsConfig.vendor_key` resolves them, and an empty
+slot is a revocation rather than a miss (except for a borrowing vendor, whose empty slot is the
+ordinary state and whose LLM provider key answers instead); `web_fetch` is always offered,
+falling back to Jina, which reads pages without a key. The two sub-agent launchers inherit the host's selection
 differently: the in-process backend (`agent/subagent/backends/raven_loop.py`) takes it and
 then declines to *register* `web_search` when no key resolves and the vendor needs one, while
 the agent launcher (`agents/raven-research/run.py`, and the retired fork before it -- its

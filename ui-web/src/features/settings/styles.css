@@ -101,6 +101,8 @@ h1 {font-size:34px; font-weight:700; letter-spacing:-.02em; margin:8px 0 8px}
 .settings-stepper .settings-v {min-width:58px; text-align:center; font-family:var(--mono); font-size:14px; font-variant-numeric:tabular-nums}
 .settings-tbox {font:inherit; font-family:var(--mono); font-size:14px; border:1px solid var(--line); border-radius:var(--ctl-r);
   background:var(--paper); color:var(--text); padding:5px 10px; min-width:170px; height:var(--ctl-h); box-sizing:border-box}
+/* The web key row's field: twice the base width, so a pasted key stays readable. */
+.settings-tbox.keyrow-tbox {min-width:340px; max-width:100%}
 .settings-tbox:focus {outline:none; border-color:var(--amber); box-shadow:var(--ctl-focus)}
 textarea.settings-tbox {height:auto}
 /* page.css pins bare `input[type=text]`/`select` at 13px with type selectors
@@ -357,6 +359,9 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
    buttons at the right end where the row's own controls are. */
 .settings-cfg .settings-row.settings-stack .settings-taglist {width:100%}
 .settings-cfg .settings-row.settings-stack .settings-tbox {flex:1; min-width:180px}
+/* The web key row's field: twice the stack's base width, so a pasted key stays
+   readable. Named at the same depth as the rule above, or its min-width wins. */
+.settings-cfg .settings-row.settings-stack .settings-tbox.keyrow-tbox {flex:1; min-width:340px}
 .settings-cfg .settings-row .settings-k:empty {display:none}
 .settings-cfg .settings-row:has(> .settings-k:empty) {grid-template-columns:minmax(0,1fr)}
 .settings-cfg .settings-row:has(> .settings-k:empty) .settings-ctl {justify-self:stretch}

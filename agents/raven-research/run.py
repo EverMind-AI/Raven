@@ -162,18 +162,29 @@ PLUGIN_WEB_MIRROR = {
 SEARCH_ENV_VAR = WEB_VENDOR_ENV_VARS[DEFAULT_SEARCH_VENDOR]
 
 
-def vendor_key(config: dict, vendor: str) -> str:
+def vendor_key(config: dict, vendor: str, host: dict | None = None) -> str:
     """One vendor's credential, in trunk raven's own resolution order.
 
     The vendor slot first, then the pre-vendor leaf for the two vendors that
-    still have one. Restated here rather than imported because the launcher
-    reads plain JSON, not the schema objects ``WebToolsConfig.vendor_key``
-    walks; the order is pinned against it by the launcher tests.
+    still have one, then the LLM provider key a vendor shares an account with
+    (DeepSeek serves its web endpoints on the chat account). Restated here
+    rather than imported because the launcher reads plain JSON, not the schema
+    objects ``WebToolsConfig.vendor_key`` walks; the order is pinned against it
+    by the launcher tests. ``host`` is the second borrow source: a product
+    running on its own LLM key never inherited the host's ``providers`` block,
+    but the borrowed web key still belongs to the deployment.
     """
-    if key := render.dig(config, ("tools", "web", "providers", vendor, "apiKey")):
-        return key
+    key = render.dig(config, ("tools", "web", "providers", vendor, "apiKey"))
     legacy = LEGACY_VENDOR_SLOTS.get(vendor)
-    return render.dig(config, legacy) if legacy else ""
+    if not key and legacy:
+        key = render.dig(config, legacy)
+    if key:
+        return key
+    from raven.config.schema import borrowed_web_key
+
+    return borrowed_web_key(vendor, config.get("providers") or {}) or borrowed_web_key(
+        vendor, (host or {}).get("providers") or {}
+    )
 
 
 def selected_vendors(config: dict) -> tuple[str, str]:
@@ -209,20 +220,22 @@ def log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
 
-def require_search(config: dict) -> None:
+def require_search(config: dict, host: dict | None = None) -> None:
     """Refuse to launch when search has no key anywhere.
 
     Search is what this agent is for; withheld, the tool is absent and a run
     answers from the model's own memory -- which reads as an ordinary run, in
     the one failure mode nobody inspects. The bare env var counts because the
     tool resolves its key at call time from the config value or that var, and
-    a vendor that searches without a key (Keenable) needs neither.
+    a vendor that searches without a key (Keenable) needs neither. ``host`` is
+    the deployment's config, so a vendor whose key is borrowed from the LLM
+    provider is found even on the product's own-key branch.
     """
     from raven.agent.tools.web import SEARCH_PROVIDERS
 
     vendor, _ = selected_vendors(config)
     env_var = WEB_VENDOR_ENV_VARS.get(vendor, SEARCH_ENV_VAR)
-    if not SEARCH_PROVIDERS[vendor].needs_key or vendor_key(config, vendor) or os.environ.get(env_var):
+    if not SEARCH_PROVIDERS[vendor].needs_key or vendor_key(config, vendor, host) or os.environ.get(env_var):
         return
     raise SystemExit(
         f"error: search has no key for {vendor}; put RESEARCH_{env_var} in "
@@ -386,7 +399,7 @@ def render_config(source: Path) -> Path:
             )
         log(f"[run] llm: inherited from the host ({taken})")
 
-    require_search(config)
+    require_search(config, host)
 
     root = state_root()
     defaults = config.setdefault("agents", {}).setdefault("defaults", {})
@@ -424,7 +437,7 @@ def render_config(source: Path) -> Path:
         # anonymously on the other.
         slots.append((DEFAULT_FETCH_VENDOR, ("fetch", "fallbackApiKey")))
     for vendor, slice_path in slots:
-        if key := vendor_key(config, vendor):
+        if key := vendor_key(config, vendor, host):
             render.put(flow_slice, slice_path, key)
     log(f"[run] web: search={search_vendor} fetch={fetch_vendor}")
     # Same mirror, same reason as the web keys: the fork's assembly was CALLED

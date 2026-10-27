@@ -90,6 +90,9 @@ SEARCH_PROVIDERS: dict[str, SearchProviderSpec] = {
     "keenable": SearchProviderSpec(
         "keenable", "Keenable", WEB_VENDOR_ENV_VARS["keenable"], "https://keenable.ai", needs_key=False
     ),
+    "deepseek": SearchProviderSpec(
+        "deepseek", "DeepSeek", WEB_VENDOR_ENV_VARS["deepseek"], "https://platform.deepseek.com/api_keys"
+    ),
 }
 
 FETCH_PROVIDERS: dict[str, FetchProviderSpec] = {
@@ -108,6 +111,14 @@ FETCH_PROVIDERS: dict[str, FetchProviderSpec] = {
     ),
     "keenable": FetchProviderSpec(
         "keenable", "Keenable", WEB_VENDOR_ENV_VARS["keenable"], "https://keenable.ai", "keenable-fetch", False
+    ),
+    "deepseek": FetchProviderSpec(
+        "deepseek",
+        "DeepSeek",
+        WEB_VENDOR_ENV_VARS["deepseek"],
+        "https://platform.deepseek.com/api_keys",
+        "deepseek-fetch",
+        True,
     ),
 }
 
@@ -530,6 +541,17 @@ class WebSearchTool(Tool):
                 headers=headers,
                 timeout=10.0,
             )
+        if vendor == "deepseek":
+            return await client.post(
+                "https://api.deepseek.com/v1/tools/search",
+                json={"query": query, "count": n},
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {key}",
+                },
+                timeout=10.0,
+            )
         return await client.post(
             "https://api.anysearch.com/v1/search",
             json={"query": query, "max_results": n},
@@ -597,6 +619,20 @@ class WebSearchTool(Tool):
                 "organic": [
                     {**row, "snippet": " ".join(str(row["snippet"]).split())[:300]}
                     for row in _rows(data.get("results"), url="url", snippet="snippet")
+                ]
+            }
+        if vendor == "deepseek":
+            # ``summary`` (600-800 characters) is the field the vendor documents
+            # as the one the model reads; ``snippet`` is the UI line beside it.
+            return {
+                "organic": [
+                    {
+                        "title": str(item.get("title") or ""),
+                        "link": str(item.get("url") or ""),
+                        "snippet": str(item.get("summary") or item.get("snippet") or ""),
+                    }
+                    for item in (data.get("results") or [])
+                    if isinstance(item, dict)
                 ]
             }
         # AnySearch publishes the request shape but not the response: results may
@@ -1301,6 +1337,20 @@ class WebFetchTool(Tool):
             text = str(data.get("content") or "") if isinstance(data, dict) else ""
             if not text:
                 raise _ProviderPageError("Keenable returned no page content")
+            return text, r.status_code, {"title": str(data["title"])} if data.get("title") else {}
+
+        if vendor == "deepseek":
+            async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
+                r = await client.post(
+                    "https://api.deepseek.com/v1/tools/fetch",
+                    json={"url": url},
+                    headers={**json_headers, "Authorization": f"Bearer {key}"},
+                )
+                r.raise_for_status()
+            data = r.json()
+            text = str(data.get("content") or "") if isinstance(data, dict) else ""
+            if not text:
+                raise _ProviderPageError("DeepSeek returned no page content")
             return text, r.status_code, {"title": str(data["title"])} if data.get("title") else {}
 
         # AnySearch: a 200 whose envelope reports the failure is the other shape

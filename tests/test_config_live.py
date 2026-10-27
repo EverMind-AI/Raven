@@ -1361,6 +1361,43 @@ class TestLiveVendorKeyFollowsTheCanonicalOrder:
 
         assert live_vendor_key(LiveConfig(path), "jina", boot="sk-jina-boot") == ""
 
+    def test_a_borrowing_vendor_reads_the_llm_providers_key_live(self, tmp_path: Path) -> None:
+        """DeepSeek's web slot is optional; the key under ``providers.deepseek``
+        pays for it too, and a rotation there has to reach the next call the way
+        every other key in this reader does."""
+        from raven.config.live import live_vendor_key
+
+        path = tmp_path / "config.json"
+        _write(
+            path,
+            {
+                "providers": {"deepseek": {"apiKey": "sk-llm"}},
+                "tools": {"web": {"providers": {"deepseek": {"apiKey": ""}}}},
+            },
+        )
+        assert live_vendor_key(LiveConfig(path), "deepseek", boot="") == "sk-llm"
+
+        _write(
+            path,
+            {
+                "providers": {"deepseek": {"apiKey": "sk-rotated"}},
+                "tools": {"web": {"providers": {"deepseek": {"apiKey": ""}}}},
+            },
+        )
+        assert live_vendor_key(LiveConfig(path), "deepseek", boot="sk-llm") == "sk-rotated"
+
+        _write(
+            path,
+            {
+                "providers": {"deepseek": {"apiKey": ""}},
+                "tools": {"web": {"providers": {"deepseek": {"apiKey": ""}}}},
+            },
+        )
+        assert live_vendor_key(LiveConfig(path), "deepseek", boot="sk-llm") == "", "a cleared LLM key revokes"
+
+        _write(path, {"tools": {"web": {}}})
+        assert live_vendor_key(LiveConfig(path), "deepseek", boot="sk-boot") == "sk-boot", "no file entry keeps boot"
+
     def test_a_leaf_the_schema_rejects_dispenses_no_new_answer(self, tmp_path: Path) -> None:
         from raven.config.live import web_jina_key
 

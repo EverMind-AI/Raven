@@ -13,7 +13,7 @@ import { KeyRow, VendorSelect, blocker } from './pages/Tools'
 import { Providers } from './providers/Providers'
 import { RoleRows, Roles } from './providers/Roles'
 import { SetupWait } from './Skeletons'
-import { FETCH_KEYLESS, SEARCH_KEYLESS, WEB_VENDOR, WEB_VENDOR_LABEL, WEB_VENDOR_URL, keySet, legacyKey, vendorKey, webVendor } from './source'
+import { FETCH_KEYLESS, SEARCH_KEYLESS, WEB_VENDOR, WEB_VENDOR_LABEL, WEB_VENDOR_URL, borrowedKey, legacyKey, str, vendorKey, webKeyReady, webVendor } from './source'
 import * as store from './store'
 
 import type { JSX } from 'react'
@@ -63,7 +63,9 @@ export function WebStepBody(): JSX.Element {
   const searchReady = !blocker('web_search', raw)
   const searchOptional = SEARCH_KEYLESS.has(searchVendor)
   const fetchOptional = FETCH_KEYLESS.has(fetchVendor)
-  const fetchReady = fetchOptional || keySet('web_fetch', fetchVendor, raw)
+  const fetchReady = webKeyReady('web_fetch', raw)
+  const searchBorrowed = !str(raw, vendorKey(searchVendor)) && !!borrowedKey(searchVendor, raw)
+  const fetchBorrowed = !str(raw, vendorKey(fetchVendor)) && !!borrowedKey(fetchVendor, raw)
   const searchLabel = searchOptional
     ? `${t('gui.settings.tools.vendor_key', { name: WEB_VENDOR_LABEL[searchVendor] || searchVendor })} · ${t('gui.settings.roles.optional')}`
     : t('gui.settings.tools.vendor_key', { name: WEB_VENDOR_LABEL[searchVendor] || searchVendor })
@@ -87,6 +89,7 @@ export function WebStepBody(): JSX.Element {
               keyName={vendorKey(searchVendor)} legacy={legacyKey('web_search', searchVendor)} url={WEB_VENDOR_URL[searchVendor]} raw={raw}
             />
             {searchOptional && <Row><Rov>{t('gui.settings.setup.search_keyless_hint')}</Rov></Row>}
+            {searchBorrowed && <Row><Rov>{t('gui.settings.tools.borrowed_key', { name: WEB_VENDOR_LABEL[searchVendor] || searchVendor })}</Rov></Row>}
           </Card>
           <Card title={t('gui.settings.setup.web_fetch')}>
             <Row label={<>
@@ -98,6 +101,7 @@ export function WebStepBody(): JSX.Element {
             </Row>
             <KeyRow label={fetchLabel} keyName={vendorKey(fetchVendor)} legacy={legacyKey('web_fetch', fetchVendor)} url={WEB_VENDOR_URL[fetchVendor]} raw={raw} />
             {fetchOptional && <Row><Rov>{t('gui.settings.setup.fetch_keyless_hint')}</Rov></Row>}
+            {fetchBorrowed && <Row><Rov>{t('gui.settings.tools.borrowed_key', { name: WEB_VENDOR_LABEL[fetchVendor] || fetchVendor })}</Rov></Row>}
           </Card>
         </>
       ) : (

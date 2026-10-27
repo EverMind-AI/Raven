@@ -657,6 +657,10 @@ _SEARCH_PAYLOADS: dict[str, tuple[dict, dict]] = {
         {"results": [{"title": "T", "url": "https://e.com/a", "description": "", "snippet": "S"}]},
         {"title": "T", "link": "https://e.com/a", "snippet": "S"},
     ),
+    "deepseek": (
+        {"results": [{"title": "T", "url": "https://e.com/a", "snippet": "short", "summary": "S"}]},
+        {"title": "T", "link": "https://e.com/a", "snippet": "S"},
+    ),
 }
 
 
@@ -864,6 +868,7 @@ async def test_a_fetch_backend_with_no_anonymous_tier_refuses_before_the_request
         ("firecrawl", {"success": True, "data": {"markdown": "page body"}}),
         ("anysearch", {"code": 0, "data": {"content": "page body"}}),
         ("keenable", {"url": "https://example.com/a", "title": "T", "content": "page body", "description": ""}),
+        ("deepseek", {"title": "T", "content": "page body"}),
     ],
 )
 @pytest.mark.asyncio

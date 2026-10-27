@@ -520,10 +520,11 @@ describe('the wizard step-done predicates', () => {
     tools: Record<string, unknown>,
     agentsDefaults: Record<string, unknown> = {},
     providers: Array<Record<string, unknown>> = [],
+    rawProviders: Record<string, unknown> = {},
   ): Promise<void> {
     setGateway({
       call: async (method: string) => {
-        if (method === 'settings.get') return { settings: { tools, agents: { defaults: agentsDefaults } }, config_path: '~/.raven/config.json' }
+        if (method === 'settings.get') return { settings: { tools, agents: { defaults: agentsDefaults }, providers: rawProviders }, config_path: '~/.raven/config.json' }
         if (method === 'model.options') return { providers, model: '' }
         throw new Error(`unmocked ${method}`)
       },
@@ -559,5 +560,8 @@ describe('the wizard step-done predicates', () => {
     expect(webStepDone()).toBe(true)
     await loadRaw({ web: { fetch: { provider: 'tavily' } } })
     expect(webStepDone()).toBe(false)
+    // A borrowed model-provider key is a key on file, as the tools page reads it.
+    await loadRaw({ web: { search: { provider: 'deepseek' } } }, {}, [], { deepseek: { apiKey: 'sk-llm' } })
+    expect(webStepDone()).toBe(true)
   })
 })

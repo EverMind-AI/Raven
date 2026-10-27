@@ -143,6 +143,22 @@ async def test_the_unconfigured_error_names_the_selected_vendors_slot(tmp_path) 
     assert str(cfg) in answer
 
 
+def test_a_web_vendor_borrows_the_key_of_the_llm_provider_it_shares_an_account_with() -> None:
+    """DeepSeek serves its search and fetch endpoints on the same account as its
+    chat API, so the key already configured for the model pays for the web tools
+    too. The web slot stays optional: an explicit key there still wins."""
+    config = Config.model_validate({"providers": {"deepseek": {"apiKey": "sk-llm"}}})
+
+    assert config.tools.web.vendor_key("deepseek") == "", "no web key was written"
+    assert config.effective_web_vendor_key("deepseek") == "sk-llm"
+    assert config.effective_web_vendor_keys() == {"deepseek": "sk-llm"}
+    assert WebSearchTool.is_configured(config.effective_web_vendor_key("deepseek"), "deepseek")
+
+    config.tools.web.providers.deepseek.api_key = "sk-web"
+    assert config.effective_web_vendor_key("deepseek") == "sk-web"
+    assert config.effective_web_vendor_keys() == {"deepseek": "sk-web"}
+
+
 # --------------------------------------------------------------------------- #
 # Search: what each vendor is sent
 
@@ -197,6 +213,12 @@ _SEARCH_REQUESTS: dict[str, tuple[str, str, dict[str, Any], dict[str, str]]] = {
         "https://api.keenable.ai/v1/search",
         {"json": {"query": "q1", "max_results": 4}},
         {"x-api-key": "k", "X-Keenable-Title": "Raven"},
+    ),
+    "deepseek": (
+        "POST",
+        "https://api.deepseek.com/v1/tools/search",
+        {"json": {"query": "q1", "count": 4}},
+        {"Authorization": "Bearer k"},
     ),
 }
 
@@ -307,6 +329,7 @@ _SEARCH_PAYLOADS: dict[str, Any] = {
     "firecrawl": {"success": True, "data": [{"title": "T1", "url": "https://a.example", "description": "S1"}]},
     "serply": {"results": [{"title": "T1", "link": "https://a.example", "description": "S1"}]},
     "keenable": {"results": [{"title": "T1", "url": "https://a.example", "description": "", "snippet": "S1"}]},
+    "deepseek": {"results": [{"title": "T1", "url": "https://a.example", "snippet": "SHORT", "summary": "S1"}]},
 }
 
 
@@ -319,6 +342,18 @@ async def test_each_search_vendor_renders_through_the_shared_path(vendor: str, m
     assert "1. T1\n   https://a.example\n   S1" in rendered
     # Exa's whole-page ``text`` never reaches the rendering; only the highlight does.
     assert "xxxx" not in rendered
+
+
+async def test_deepseek_renders_the_summary_it_publishes_for_the_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DeepSeek's ``snippet`` is the 100-200 character line for a UI; ``summary``
+    is the 600-800 character one its reference says the model reads. This render
+    path has one slot, so the summary is what goes in."""
+    payload = {"results": [{"title": "T1", "url": "https://a.example", "snippet": "SHORT", "summary": "S1"}]}
+    with _patched(monkeypatch, payload):
+        rendered = await WebSearchTool(api_key="k", provider="deepseek").execute("q1")
+
+    assert "S1" in rendered
+    assert "SHORT" not in rendered
 
 
 async def test_a_firecrawl_refusal_inside_a_200_reads_as_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -435,6 +470,12 @@ _FETCH_CASES: dict[str, tuple[str, str, dict[str, Any], Any]] = {
         "https://api.keenable.ai/v1/fetch",
         {"params": {"url": "https://a.example"}},
         {"url": "https://a.example", "title": "T", "content": "PAGE", "description": ""},
+    ),
+    "deepseek": (
+        "POST",
+        "https://api.deepseek.com/v1/tools/fetch",
+        {"json": {"url": "https://a.example"}},
+        {"title": "T", "content": "PAGE"},
     ),
 }
 
@@ -981,7 +1022,7 @@ def test_the_settings_page_offers_exactly_the_schemas_vendors() -> None:
     assert search["vendors"] == list(get_args(WebSearchProvider))
     assert fetch["vendors"] == list(get_args(WebFetchProvider))
     # Not vacuous: the parse found real lists, so an empty one cannot pass.
-    assert len(search["vendors"]) == 9 and len(fetch["vendors"]) == 6
+    assert len(search["vendors"]) == 10 and len(fetch["vendors"]) == 7
     assert search["fallback"] == DEFAULT_SEARCH_PROVIDER
     assert fetch["fallback"] == DEFAULT_FETCH_PROVIDER
     assert search["path"] == "tools.web.search.provider"
@@ -1015,6 +1056,21 @@ def test_the_settings_page_names_every_vendor_the_way_the_spec_table_does() -> N
 
     assert labels == spec_labels
     assert set(labels) == set(WEB_VENDOR_ENV_VARS), "every vendor a key can be held for needs a label"
+
+
+def _tsx_borrowed_vendors() -> set[str]:
+    body = _SETTINGS_PAGE.read_text(encoding="utf-8")
+    found = re.search(r"export const BORROWED_VENDOR = new Set\(\[(.*?)\]\)", body, re.S)
+    assert found, f"BORROWED_VENDOR is gone from {_SETTINGS_PAGE.name}"
+    return set(re.findall(r"'([^']+)'", found.group(1)))
+
+
+def test_the_settings_page_borrows_exactly_the_schemas_borrowing_vendors() -> None:
+    """The page decides the "needs setup" badge itself, so its borrow list is a
+    third copy of the rule. Held to the schema's copy here rather than trusted."""
+    from raven.config.schema import WEB_VENDOR_BORROWED_KEYS
+
+    assert _tsx_borrowed_vendors() == set(WEB_VENDOR_BORROWED_KEYS)
 
 
 # --------------------------------------------------------------------------- #

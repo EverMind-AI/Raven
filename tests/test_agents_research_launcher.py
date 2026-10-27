@@ -1011,6 +1011,45 @@ def test_the_vendor_slots_are_the_trunks_own_vendors(launcher):
     assert launcher.FETCH_VENDORS == set(FETCH_PROVIDERS)
 
 
+def test_a_web_vendor_borrows_the_llm_key_on_the_same_account(launcher):
+    """The web slot stays optional: the key the host already configured for chat
+    pays for search and fetch too, and an explicit web key still wins."""
+    config = {"providers": {"deepseek": {"apiKey": "sk-llm"}}}
+
+    assert launcher.vendor_key(config, "deepseek") == "sk-llm"
+
+    config["tools"] = {"web": {"providers": {"deepseek": {"apiKey": "sk-web"}}}}
+    assert launcher.vendor_key(config, "deepseek") == "sk-web"
+
+    assert launcher.vendor_key({"providers": {}}, "deepseek") == ""
+    # The config file's own snake_case spelling reaches the borrow too.
+    assert launcher.vendor_key({"providers": {"deepseek": {"api_key": "sk-snake"}}}, "deepseek") == "sk-snake"
+
+
+def test_a_borrowed_key_reaches_the_plugin_slice_on_the_own_key_branch(grounded, tmp_path, monkeypatch):
+    """The product's own LLM key means ``inherit_llm`` never runs, so the host's
+    ``providers`` block is absent from the rendered config. The launch must
+    still find the borrowed web key: the host config is the second source."""
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(
+        json.dumps(
+            {
+                "providers": {"deepseek": {"apiKey": "sk-deepseek"}},
+                "tools": {"web": {"search": {"provider": "deepseek"}, "fetch": {"provider": "deepseek"}}},
+            }
+        )
+    )
+    monkeypatch.setenv("RESEARCH_WEB_SEARCH_PROVIDER", "deepseek")
+    monkeypatch.setenv("RESEARCH_WEB_FETCH_PROVIDER", "deepseek")
+
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+
+    flow = data["plugins"]["config"]["research-flow"]
+    assert flow["search"]["apiKey"] == "sk-deepseek"
+    assert flow["fetch"]["apiKey"] == "sk-deepseek"
+
+
 def test_a_label_two_retirements_old_is_sent_to_the_end_of_the_chain():
     """The fork's table sends `-askuser` to `-derive`; this product sends `-derive` on.
 

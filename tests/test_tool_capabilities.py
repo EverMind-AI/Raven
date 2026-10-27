@@ -163,6 +163,25 @@ def test_a_configured_search_key_agrees_on_both_sides(workspace, tmp_path: Path)
     assert configured_from(cap, config) == "tools.web.search.apiKey"
 
 
+def test_a_search_key_borrowed_from_the_llm_provider_agrees_on_both_sides(workspace, tmp_path: Path) -> None:
+    """DeepSeek's web tools run on the account the chat API already uses, so the
+    doctor row has to say "reusing the key you have" rather than send the
+    deployer after a second one."""
+    config = _config(tmp_path)
+    config.tools.web.search.provider = "deepseek"
+    config.providers.deepseek.api_key = "sk-deepseek"
+    loop = _loop(
+        workspace,
+        config,
+        web_search_provider="deepseek",
+        web_provider_keys=config.effective_web_vendor_keys(),
+    )
+
+    cap = next(c for c in CAPABILITIES if c.tool == "web_search")
+    assert is_configured(cap, config) and loop.tools.offers_by_name("web_search")
+    assert configured_from(cap, config) == "borrowed: providers.deepseek.apiKey"
+
+
 def test_the_env_var_alone_agrees_on_both_sides(workspace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The half of the deploys a config-only reading would answer wrong."""
     monkeypatch.setenv("SERPER_API_KEY", "sk-from-env")

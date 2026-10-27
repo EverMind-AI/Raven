@@ -472,11 +472,21 @@ class RavenLoopBackend:
             if image_search.api_key:
                 tools.register(image_search)
         if allowed("web_fetch"):
-            fetch_provider = WebFetchTool.effective_provider(
-                self.web_fetch_provider, self._web_key(self.web_fetch_provider)
-            )
+            # Both halves are read live, as the main loop's fetch tool reads
+            # them: the selection picks the vendor per call and the key is
+            # resolved for that vendor, so a key that appears -- or a borrowed
+            # one that rotates or is revoked -- reaches the next call rather
+            # than the next spawn.
             tools.register(
-                WebFetchTool(api_key=live_key(fetch_provider), proxy=self.web_proxy, provider=fetch_provider)
+                WebFetchTool(
+                    api_key=lambda: live_vendor_key(
+                        _LIVE_CONFIG,
+                        self.web_fetch_provider,
+                        boot=self._web_key(self.web_fetch_provider),
+                    ),
+                    proxy=self.web_proxy,
+                    provider=lambda: self.web_fetch_provider,
+                )
             )
         # The same browser the parent drives, in a tab of this run's own: the
         # tools name the run in flight as their owner, so two sub-agents

@@ -365,14 +365,17 @@ def live_vendor_key(live: LiveConfig, vendor: str, *, boot: str | None) -> str:
     Resolved in the order ``WebToolsConfig.vendor_key`` uses: the canonical
     ``tools.web.providers.<vendor>.apiKey`` slot, then the pre-vendor leaf that
     is Serper's (``tools.web.search.apiKey``) or Jina's (``tools.web.jinaApiKey``),
-    then ``boot``. A vendor the file names with an empty key is revoked, not
-    missed. The boot value serves only when the file says nothing about the
-    vendor at all -- no slot of its own and no leaf -- which is the lane a
-    harness passes a key through with no file behind it; a ``providers``
-    subtree that names other vendors says nothing about this one. A tool that
-    reads its key through this on every call sees a key the user sets or
-    rotates in the file without a restart -- which is what an error message
-    telling them to set one has to be able to promise.
+    then the LLM provider key a borrowing vendor shares an account with, then
+    ``boot``. A vendor the file names with an empty key is revoked, not
+    missed -- except a borrowing vendor, whose own slot is optional and whose
+    source is the provider section. The boot value serves only when the file
+    says nothing about the vendor at all -- no slot of its own, no leaf, and no
+    provider section -- which is the lane a harness passes a key through with
+    no file behind it; a ``providers`` subtree that names other vendors says
+    nothing about this one. A tool that reads its key through this on every
+    call sees a key the user sets or rotates in the file without a restart --
+    which is what an error message telling them to set one has to be able to
+    promise.
     """
     slot = web_provider_key(live, vendor)
     if slot:
@@ -380,6 +383,13 @@ def live_vendor_key(live: LiveConfig, vendor: str, *, boot: str | None) -> str:
     leaf = web_search_key(live) if vendor == "serper" else web_jina_key(live) if vendor == "jina" else None
     if leaf is not None:
         return leaf
+    from raven.config.schema import live_borrowed_web_key
+
+    borrowed = live_borrowed_web_key(vendor, live.get("providers"))
+    if borrowed is not None:
+        # A borrowing vendor's web slot is optional, so an empty one is the
+        # ordinary state rather than the revocation it is for every other vendor.
+        return borrowed
     if slot == "" and _names_vendor(live, vendor):
         return ""
     return boot or ""

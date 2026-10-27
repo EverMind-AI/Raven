@@ -65,6 +65,7 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
                 "firecrawl",
                 "serply",
                 "keenable",
+                "deepseek",
             )
         ),
         "tools.media.image.apiKey",

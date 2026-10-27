@@ -281,7 +281,7 @@ def build_runtime(
             web_proxy=config.tools.web.proxy or None,
             web_search_provider=config.tools.web.search.provider,
             web_fetch_provider=config.tools.web.fetch.provider,
-            web_provider_keys=config.tools.web.vendor_keys(),
+            web_provider_keys=config.effective_web_vendor_keys(),
             image_search=config.tools.web.search.images,
             connection_add=config.tools.connection_add,
             media_config=config.effective_media_config(),

@@ -91,6 +91,7 @@ async def test_vendor_http_errors_use_direct_html(transport, vendor, status):
         "api.firecrawl.dev",
         "api.anysearch.com",
         "api.keenable.ai",
+        "api.deepseek.com",
     ]:
         responses[host] = httpx.Response(status)
     tool = web.WebFetchTool(api_key="secret", provider=vendor)

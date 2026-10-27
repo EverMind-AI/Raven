@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from raven.config import product_render as render
-from raven.config.schema import WEB_VENDOR_ENV_VARS
+from raven.config.schema import WEB_VENDOR_ENV_VARS, borrowed_web_key
 from raven.home import raven_home
 
 HERE = Path(__file__).resolve().parent
@@ -188,10 +188,13 @@ def inherit_web_vendors(config: dict, host: dict) -> list[str]:
     Per vendor, a key this product already holds wins: one its config states in
     the vendor slot, or the own-key env var of a vendor with a pre-vendor leaf
     (that key sits in the leaf, which trunk reads only after an empty vendor
-    slot, so inheriting the host's slot would silently outrank it). The search
-    and fetch vendor choices follow the host where this config names none, so
-    a host that searches through another vendor hands over the key and the
-    choice together. Returns the vendors whose key was carried.
+    slot, so inheriting the host's slot would silently outrank it). A vendor
+    with no slot of its own on the host borrows the LLM provider key it shares
+    an account with (DeepSeek's web endpoints run on its chat account), so the
+    product carries that key like any other. The search and fetch vendor
+    choices follow the host where this config names none, so a host that
+    searches through another vendor hands over the key and the choice together.
+    Returns the vendors whose key was carried.
     """
     carried = []
     for vendor in WEB_VENDOR_ENV_VARS:
@@ -199,7 +202,7 @@ def inherit_web_vendors(config: dict, host: dict) -> list[str]:
         own = OWN_WEB_KEYS.get(vendor)
         if render.dig(config, slot) or (own and env_value(own)):
             continue
-        if key := render.dig(host, slot):
+        if key := (render.dig(host, slot) or borrowed_web_key(vendor, host.get("providers") or {})):
             render.put(config, slot, key)
             carried.append(vendor)
     for slot in WEB_SELECTION_SLOTS:

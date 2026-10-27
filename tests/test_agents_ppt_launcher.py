@@ -710,6 +710,29 @@ def test_optional_keys_fall_back_per_slot_to_the_host_config(grounded, tmp_path)
     assert data["tools"]["web"]["search"]["apiKey"] == "host-serper"
 
 
+def test_a_borrowed_web_key_falls_back_to_the_hosts_llm_provider(grounded, tmp_path):
+    """DeepSeek's web key lives on its chat account. A deck running on its own
+    LLM key never inherits the host's ``providers`` block, so the launcher has
+    to carry the borrowed key into the vendor slot itself -- the runtime reads
+    the slot, not the host's provider section, once the product has its own."""
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(
+        json.dumps(
+            {
+                "providers": {"deepseek": {"apiKey": "sk-deepseek"}},
+                "tools": {"web": {"search": {"provider": "deepseek"}, "fetch": {"provider": "deepseek"}}},
+            }
+        )
+    )
+
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+
+    assert data["tools"]["web"]["providers"]["deepseek"]["apiKey"] == "sk-deepseek"
+    assert data["tools"]["web"]["search"]["provider"] == "deepseek"
+    assert data["tools"]["web"]["fetch"]["provider"] == "deepseek"
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
 def test_the_rendered_file_is_owner_only_under_the_state_root(grounded, tmp_path):
     rendered = grounded.render_config(RUN_PY.parent / "config.json")

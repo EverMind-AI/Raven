@@ -8765,6 +8765,10 @@
       "en": "Needs setup",
       "zh": "待配置"
     },
+    "gui.settings.tools.borrowed_key": {
+      "en": "{name} API key is already set.",
+      "zh": "{name} API key 已设置。"
+    },
     "gui.settings.tools.builtin_locked": {
       "en": "This tool is built in and cannot be switched here.",
       "zh": "该工具为内置，无法在此手动开关。"

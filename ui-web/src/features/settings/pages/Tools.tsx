@@ -8,7 +8,7 @@ import { t } from '../../../i18n/t'
 import { show as toast } from '../../../state/toast'
 import { Card, Chip, KeyLink, Row, Rov, Switch, Xrow } from '../Fields'
 import { ROLES, RolePill, disabledTools, roleValue } from '../providers/Roles'
-import { FETCH_KEYLESS, SEARCH_KEYLESS, WEB_VENDOR, WEB_VENDOR_LABEL, WEB_VENDOR_URL, keySet, legacyKey, str, vendorKey, webVendor } from '../source'
+import { FETCH_KEYLESS, WEB_VENDOR, WEB_VENDOR_LABEL, WEB_VENDOR_URL, borrowedKey, legacyKey, str, vendorKey, webKeyReady, webVendor } from '../source'
 import * as store from '../store'
 import GROUPS from '../toolGroups.json'
 
@@ -38,13 +38,8 @@ const ROLE_OF: Record<string, string> = {
    the web tools by their vendor's key, the media tools by their role. */
 export function blocker(id: string, raw: Record<string, unknown>): string {
   const snap = store.get().snap
-  if (id === 'web_search') {
-    const vendor = webVendor(id, raw)
-    return !SEARCH_KEYLESS.has(vendor) && !keySet(id, vendor, raw) ? 'key' : ''
-  }
-  if (id === 'web_fetch') {
-    const vendor = webVendor(id, raw)
-    return !FETCH_KEYLESS.has(vendor) && !keySet(id, vendor, raw) ? 'key' : ''
+  if (id === 'web_search' || id === 'web_fetch') {
+    return webKeyReady(id, raw) ? '' : 'key'
   }
   const roleId = ROLE_OF[id]
   if (roleId) {
@@ -76,7 +71,7 @@ export function KeyRow({ label, keyName, legacy, url, raw }: {
   return (
     <Row stack label={<>{label}<KeyLink url={url} /></>}>
       <span className="settings-taglist">
-        <KeyInput className="settings-tbox" value={value} aria-label={label}
+        <KeyInput className="settings-tbox keyrow-tbox" value={value} aria-label={label}
           placeholder={isSet ? t('gui.settings.key_set_ph') : t('gui.settings.key_ph')}
           onChange={(e) => setValue(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
         <button type="button" className="mini" onClick={save}>{isSet ? t('gui.settings.update') : t('gui.save')}</button>
@@ -114,6 +109,9 @@ function Panel({ id, raw }: { id: string; raw: Record<string, unknown> }): JSX.E
         {(keyed || FETCH_KEYLESS.has(vendor)) && (
           <KeyRow label={t('gui.settings.tools.vendor_key', { name: WEB_VENDOR_LABEL[vendor] || vendor })}
             keyName={vendorKey(vendor)} legacy={legacyKey(id, vendor)} url={WEB_VENDOR_URL[vendor]} raw={raw} />
+        )}
+        {!str(raw, vendorKey(vendor)) && !!borrowedKey(vendor, raw) && (
+          <Row><Rov>{t('gui.settings.tools.borrowed_key', { name: WEB_VENDOR_LABEL[vendor] || vendor })}</Rov></Row>
         )}
       </>
     )
