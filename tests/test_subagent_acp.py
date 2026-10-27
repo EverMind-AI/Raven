@@ -2726,6 +2726,14 @@ async def test_a_turn_that_answered_nothing_usable_still_books_its_spend(
     assert (got.calls, got.input_tokens, got.output_tokens) == (1, 1200, 34)
 
 
+@pytest.mark.parametrize("amount", [float("inf"), float("nan"), -0.5, True, "0.5"])
+def test_a_reported_cost_that_is_no_finite_amount_is_unknown_and_keeps_the_baseline(amount: Any) -> None:
+    """A baseline of ``inf`` or ``nan`` would leave every later turn of the session unpriced."""
+    from raven.acp_client.acp_agent import _turn_cost
+
+    assert _turn_cost({"cost": {"amount": amount, "currency": "USD"}}, 0.25) == (None, 0.25)
+
+
 async def test_a_sessions_cumulative_cost_is_booked_once(tmp_path: Path) -> None:
     """``usage_update.cost`` is the session's cumulative cost, so each turn books
     what it added: two turns reporting 0.01 then 0.02 cost 0.02, not 0.03."""
