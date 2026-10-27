@@ -281,6 +281,11 @@ gateway and a resumed conversation runs at what it was left at. `_run_agent_loop
 it by the turn entrance that holds the record, the way the model is, and ranks it: the
 configured `agents.defaults.reasoningEffort` underneath, a Session Mode's own
 `reasoningEffort` over that, this pick over both, a hook's rollback override on top. The
+ranking is `session_effort.in_force`, one rule with one home: the turn runs at it
+(`session_reasoning_effort` on the loop) and `session.info` / `session.set_effort` report
+it, and the turn sends the word in force on every call, None included, so a default cleared
+on a running gateway lands on its next turn -- the provider's own copy of the key, frozen at
+boot, is never consulted. The
 words are `REASONING_EFFORTS` (`config/schema.py`), shared with the console's checker for
 `agents.defaults.reasoningEffort` -- a key that is clearable (null is the provider's own
 default) and that the settings page draws, when unset, as a rung of its own rather than as

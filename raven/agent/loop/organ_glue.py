@@ -548,7 +548,7 @@ class OrganGlueMixin:
     # CancelledError is not an Exception and still propagates.
     _WATCH_JUDGEMENT_TIMEOUT_S: float = 60.0
 
-    async def _judge_watch_work(self, message: str, effort_kwargs: dict[str, str]) -> Any:
+    async def _judge_watch_work(self, message: str, effort_kwargs: dict[str, str | None]) -> Any:
         """The turn's watch-work verdict, a quiet no when the model does not answer."""
         import asyncio
 
@@ -582,10 +582,11 @@ class OrganGlueMixin:
     ) -> str:
         """The steering line this look earned, or "". The CALLER places it.
 
-        ``reasoning_effort`` is the turn's pinned effort: the judgement this
+        ``reasoning_effort`` is the effort the turn runs at: the judgement this
         helper may pay for is a model call of the turn like any other, so it
-        asks for the session's effort too. ``None`` passes nothing and the
-        provider's configured default stands.
+        asks for the same one, sent the same way -- None included, which is
+        the provider's own default rather than the copy the provider took at
+        boot (``_run_agent_loop``'s ``gen_overrides`` says why).
 
         Returned separately rather than appended to ``result`` because of where
         the result goes next: every tool result is fenced as untrusted data
@@ -611,7 +612,7 @@ class OrganGlueMixin:
         reasoning, and ignored, while a fact arriving in a tool result was acted
         on.
         """
-        effort_kwargs: dict[str, str] = {} if reasoning_effort is None else {"reasoning_effort": reasoning_effort}
+        effort_kwargs: dict[str, str | None] = {"reasoning_effort": reasoning_effort}
         # Only a real hand-off answers the question this line asks for the rest
         # of the turn. The first cut treated every spawn as one and silenced the
         # nudges on refusal too -- at exactly the moment the model chose to run
