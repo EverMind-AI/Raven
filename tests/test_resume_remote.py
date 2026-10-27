@@ -76,7 +76,7 @@ class _Manager:
     def remember_session(self, session_key: str) -> None:
         self.remembered.append(session_key)
 
-    async def _announce_result(self, task_id, summary, task, result, origin, status, record_path=None, activity=None):
+    async def _announce_result(self, task_id, summary, task, result, origin, status, record_path=None):
         self.announced.append(
             {
                 "task_id": task_id,
