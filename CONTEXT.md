@@ -3409,15 +3409,20 @@ attempt and the `relayed` catalogue lookups crossing to the host. Retry, classif
 records and traces stay in the agent; the host's calls run under `recorded_by_caller` so a call
 is billed once. An agent that cannot reach the host loads LiteLLM and works as before.
 
-**Fork template** (`raven/acp_client/fork_template.py`, `subagents.runtime.forkTemplate`):
+**Fork template** (`raven/acp_client/fork_template.py`, `raven/cli/_fork_template.py`, `subagents.runtime.forkTemplate`):
 On Linux, one process per host that has imported what Raven agents import, frozen out of the
-collector's reach, and forks each Raven agent the host launches, so the agents share those
-pages. It starts through the parent-death wrapper like any agent; each forked agent leads a
-session of its own and arms the parent-death signal against the template. A product launcher's
-`os.execv` of `python -m raven` runs Raven in the same process. Agents write the modules they
-imported beside the template, per product, and the next template loads the modules at least two
-products import (one product's own while only one has been seen): a module one product alone imports
-is shared by no other process, so it is left for that product to import after the fork. Only the host's own interpreter starting
+collector's reach, and forks each Raven agent the host launches, so the agents share those pages.
+Two halves: the host's side in `acp_client` decides when to ask, starts and ends the template and
+holds the endpoint a forked agent runs behind; the template's own side is a launcher beside the
+CLI, because it loads the surfaces by name and runs `python -m raven`, which the client shelf may
+not. The client starts it through Raven's entry point, which settles the certificate store first,
+and never imports it. It starts through the parent-death wrapper like any agent and its stdin is a
+lifeline only the host holds. Each forked agent leads a session of its own and arms the
+parent-death signal against the template. A product launcher's `os.execv` of `python -m raven`
+runs Raven in the same process. Agents write the modules they imported beside the template, per
+product, and the next template loads the modules at least two products import (one product's own
+while only one has been seen): a module one product alone imports is shared by no other process,
+so it is left for that product to import after the fork. Only the host's own interpreter starting
 `-m raven` or a product launcher is forked; anything else launches the ordinary way.
 
 **Leftover agent** (`raven/acp_client/leftovers.py`):
