@@ -1027,6 +1027,24 @@ def remote_check_handle() -> str:
     return remote.CHECK_HANDLE
 
 
+def _version_in_chain(exc: BaseException) -> str:
+    """The handshake version on ``exc`` or the first of its causes that carries one.
+
+    A wrapper states its own reason and re-raises the failure under it
+    (``McpDispatchError`` for a withheld MCP grant), so the version sits one
+    level down and a top-level read finds nothing.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        version = str(getattr(current, "agent_version", "") or "")
+        if version:
+            return version
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return ""
+
+
 def _ping_refusal(cfg: Any, exc: BaseException) -> tuple[str, Remedy | None]:
     """What a ping that raised is reported as, and the fix when one is known.
 
@@ -1046,7 +1064,7 @@ def _ping_refusal(cfg: Any, exc: BaseException) -> tuple[str, Remedy | None]:
         # The version the agent answered the handshake with, when the failure
         # carried one: it is the build that was asked, and a floor is about a
         # build.
-        return _process_refusal(cfg, str(exc), str(getattr(exc, "agent_version", "") or "")) or (text, None)
+        return _process_refusal(cfg, str(exc), _version_in_chain(exc)) or (text, None)
     shipped = _shipped_command(cfg)
     run = f"`{shipped}`" if shipped else "this agent's launch command"
     advice = f"connect again, or run {run} once in a terminal to fetch it with no time limit"

@@ -5643,6 +5643,36 @@ def test_a_full_prompt_timeout_tail_keeps_the_command_that_prints_the_reason() -
     assert remedy == Remedy("silent", "qwen hi")
 
 
+def test_a_wrapped_empty_turn_still_names_the_build_under_the_floor() -> None:
+    """A wrapper's own text carries no version; the empty-turn error under it does.
+
+    The MCP-grant note re-raises the failure under ``McpDispatchError``, and the
+    version lives one level down, so a top-level read found nothing and the
+    floor note disappeared for exactly the rows that had an MCP server.
+    """
+    from types import SimpleNamespace
+
+    from raven.acp_client.acp_agent import AcpEmptyTurnError
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.mcp_grant import McpDispatchError
+
+    inner = AcpEmptyTurnError(
+        "acp agent 'OpenCode' ended its turn with no content (stopReason='end_turn'); stderr tail: <empty>",
+        agent_version="1.14.31",
+    )
+    try:
+        raise inner
+    except AcpEmptyTurnError as exc:
+        try:
+            raise McpDispatchError(f"{exc}\n\n[raven] session MCP withheld.") from exc
+        except McpDispatchError as wrapped:
+            outer = wrapped
+    code = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp", command="opencode acp")
+    text, _ = probe_mod._ping_refusal(code, outer)
+    assert "1.18.0" in text
+    assert "opencode upgrade" in text
+
+
 async def test_a_test_whose_launch_quit_names_it_the_way_the_connect_does(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test fails on the handshake first, and that verdict named no fix for a launch that quit.
 
