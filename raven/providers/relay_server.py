@@ -2,8 +2,9 @@
 
 One server per host process, started the first time a Raven agent is launched
 with the relay on, listening where only this user can reach it -- a socket in a
-fresh ``0700`` directory on POSIX, loopback TCP on Windows -- and answering
-only requests carrying the token it handed out in the launch environment.
+fresh ``0700`` directory, or loopback TCP where the system has no Unix sockets
+(Windows) -- and answering only requests carrying the token it handed out in the
+launch environment.
 
 Each request is one connection: open, one frame in, the answer out, close. A
 stream answers with a frame per delta and a closing frame, and a connection the
@@ -68,7 +69,7 @@ class RelayServer:
     def __init__(self, *, build: ProviderBuilder = build_litellm_provider, tcp: bool | None = None) -> None:
         self._build = build
         # Loopback TCP where there is no Unix socket to put in a private directory.
-        self._tcp = sys.platform == "win32" if tcp is None else tcp
+        self._tcp = not hasattr(asyncio, "start_unix_server") if tcp is None else tcp
         self._token = secrets.token_urlsafe(32)
         self._server: asyncio.AbstractServer | None = None
         self._address = ""

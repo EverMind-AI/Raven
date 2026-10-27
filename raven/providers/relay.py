@@ -145,11 +145,25 @@ def request_frame(op: str, **fields: Any) -> dict[str, Any]:
     return {"token": found[1], "op": op, **fields}
 
 
+def _unreachable_kind(kind: str) -> RelayUnavailableError | None:
+    """Why an offer of this kind cannot be reached from this system, or ``None``.
+
+    A system without Unix sockets (Windows) cannot connect to a ``unix:`` offer,
+    which only a host on another system could have made; that is a relay this
+    process does not have, not a failure of the call.
+    """
+    if kind == "unix" and not (hasattr(socket, "AF_UNIX") and hasattr(asyncio, "open_unix_connection")):
+        return RelayUnavailableError("this system has no Unix sockets for a unix: relay", connecting=True)
+    return None
+
+
 def _connect_sync(timeout: float) -> socket.socket:
     found = target()
     if found is None:
         raise RelayUnavailableError("no relay was offered to this process")
     kind, where = _split(found[0])
+    if (unreachable := _unreachable_kind(kind)) is not None:
+        raise unreachable
     try:
         if kind == "unix":
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -168,6 +182,8 @@ async def connect() -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     if found is None:
         raise RelayUnavailableError("no relay was offered to this process")
     kind, where = _split(found[0])
+    if (unreachable := _unreachable_kind(kind)) is not None:
+        raise unreachable
     limit = relay_wire.MAX_FRAME_BYTES
     try:
         if kind == "unix":

@@ -182,7 +182,12 @@ class _Wire(LLMProvider):
             raise
 
 
-@pytest.fixture(params=["unix", "tcp"])
+# TCP is the transport a Windows host uses, and the only one a system without
+# Unix sockets can serve.
+_TRANSPORTS = ["unix", "tcp"] if hasattr(asyncio, "start_unix_server") else ["tcp"]
+
+
+@pytest.fixture(params=_TRANSPORTS)
 async def served(request, monkeypatch: pytest.MonkeyPatch):
     """A relay with a scripted provider, on each transport: TCP is the one Windows hosts use."""
     script: dict[str, Any] = {"specs": []}
@@ -624,6 +629,7 @@ async def test_a_single_call_that_fails_on_the_host_raises_the_same_class_here(s
         await provider.chat(messages=[{"role": "user", "content": "q"}])
 
 
+@pytest.mark.skipif(not hasattr(asyncio, "start_unix_server"), reason="the bare host listens on a Unix socket")
 async def test_a_stream_the_host_ends_oddly_or_drops_is_a_failure_here(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
@@ -774,3 +780,39 @@ def test_a_new_event_loop_gets_a_relay_that_answers(monkeypatch: pytest.MonkeyPa
     assert answer == relay._RELAYED["raven.providers.rates:_table_entry"]("gpt-4o")
     if first[relay.RELAY_ENV].startswith("unix:"):
         assert not os.path.exists(first[relay.RELAY_ENV].removeprefix("unix:"))
+
+
+def test_a_host_without_unix_sockets_serves_on_loopback_tcp(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert relay_server.RelayServer()._tcp is not hasattr(asyncio, "start_unix_server")
+    monkeypatch.delattr(asyncio, "start_unix_server", raising=False)
+    assert relay_server.RelayServer()._tcp is True
+
+
+async def test_a_unix_address_on_a_system_without_unix_sockets_runs_here(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Windows has no Unix-socket API: a ``unix:`` offer there is a relay this process cannot reach."""
+    import socket as socket_mod
+
+    from raven.providers import rates
+
+    monkeypatch.setenv(relay.RELAY_ENV, f"unix:{tmp_path / 'relay.sock'}")
+    monkeypatch.setenv(relay.RELAY_TOKEN_ENV, "t")
+    monkeypatch.delattr(asyncio, "open_unix_connection", raising=False)
+    monkeypatch.delattr(socket_mod, "AF_UNIX", raising=False)
+    relay._reset_for_tests()
+    local = relay._RELAYED["raven.providers.rates:_may_query_endpoint"]("gpt-4o")
+
+    assert rates._may_query_endpoint("gpt-4o") == local
+    assert not relay.active()
+
+    # The first read took the offer out of the environment.
+    monkeypatch.setenv(relay.RELAY_ENV, f"unix:{tmp_path / 'relay.sock'}")
+    monkeypatch.setenv(relay.RELAY_TOKEN_ENV, "t")
+    relay._reset_for_tests()
+    assert relay.active()
+    provider = relay_provider.RelayProvider(default_model="custom/m", provider_name="custom")
+    here = _Wire({}, {})
+    monkeypatch.setattr(provider, "_locally", lambda: here)
+    assert (await provider.chat(messages=[{"role": "user", "content": "q"}])).content == "answered q"
+    assert not relay.active()
