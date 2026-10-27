@@ -939,6 +939,30 @@ describe('error', () => {
 
     expect(h.did('noteRow')).toEqual([['noteRow', 'FAILED_LABEL', 'short', ['full', 'retry']]])
   })
+
+  it('moves the context ring to the window the failed turn measured', async () => {
+    const h = await harness()
+
+    h.dispatch({
+      type: 'error',
+      payload: {
+        message: 'turn_failed',
+        reason: 'internal',
+        detail: 'no content',
+        usage: { prompt_tokens: 7000, completion_tokens: 0, total_tokens: 7000, context_used: 7000, context_max: 40000 },
+      },
+    })
+
+    expect(h.did('setCtx')).toEqual([['setCtx', 7000, 40000]])
+  })
+
+  it('leaves the context ring alone when the failure measured nothing', async () => {
+    const h = await harness()
+
+    h.dispatch({ type: 'error', payload: { message: 'turn_failed', reason: 'internal', detail: 'boom' } })
+
+    expect(h.did('setCtx')).toEqual([])
+  })
 })
 
 describe('cron.delivered', () => {

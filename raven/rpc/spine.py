@@ -252,7 +252,16 @@ class RpcTurnRunner(AgentTurnRunner):
                 self._readback_texts[req.conversation] = text
             return outcome
         usage_sink: dict[str, Any] = {}
-        outcome = await self._loop.run_turn(req, emit, drain, stream=True, usage_sink=usage_sink)
+        try:
+            outcome = await self._loop.run_turn(req, emit, drain, stream=True, usage_sink=usage_sink)
+        except Exception as exc:
+            # A failed turn still measured the calls it made, and its stored
+            # record carries that reading. It rides the failure the way
+            # ``full_detail`` does -- the lane copies it onto ``TurnFailed`` --
+            # rather than the per-lane register, which a queued turn shares.
+            if usage_sink:
+                BaseException.__dict__["__dict__"].__get__(exc)["turn_usage"] = dict(usage_sink)
+            raise
 
         # A synthetic tool.complete when the message tool fired (the loop
         # skips it on the general tool path), so the UI records the agent acted —
@@ -528,6 +537,7 @@ class RpcOutlet:
         target: dict[str, str] | None = None,
         turn_id: str = "",
         full_detail: str = "",
+        usage: dict[str, Any] | None = None,
     ) -> None:
         """A turn's failure, tagged with the turn it belongs to when known.
 
@@ -541,6 +551,9 @@ class RpcOutlet:
 
         ``full_detail`` is the failure's long account beside the bounded
         ``detail``, sent only when the runner had more to say.
+
+        ``usage`` is what the failed turn measured, in ``message.complete``'s
+        shape, sent only when one of its calls reported any.
         """
         payload: dict[str, Any] = {"code": code, "message": message, "reason": reason}
         if turn_id:
@@ -549,6 +562,8 @@ class RpcOutlet:
             payload["detail"] = detail
         if full_detail:
             payload["full_detail"] = full_detail
+        if usage:
+            payload["usage"] = usage
         if target is not None:
             payload["target"] = target
         await self._emitter.emit(self._subscription(conversation_id, target), {"type": "error", "payload": payload})
@@ -654,6 +669,7 @@ def _make_rpc_sink(
                     # started yet.
                     turn_id=event.turn_id,
                     full_detail=event.full_detail or "",
+                    usage=event.turn_usage,
                 )
             return
         if isinstance(event, TurnStarted):

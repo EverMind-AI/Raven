@@ -125,6 +125,11 @@ class TurnFailed:
     reader expand the row: built, scrubbed and capped by the runner, which sets
     it on the exception it lets out. None when the runner set none. ``error``
     stays the bounded text every other consumer reads.
+
+    ``turn_usage`` is what the failed turn's calls measured, in the shape a
+    finished turn reports its usage in, set on the exception the same way. A
+    failed turn's record still carries the reading, so a client showing how
+    full the window is has to be told it too. None when the runner set none.
     """
 
     error: str
@@ -137,6 +142,7 @@ class TurnFailed:
     # output ceiling) once recovery was spent; with recovery off, no text at all, a refusal excepted, which
     # fails as a refusal either way. Earlier attempts are not covered.
     no_output: bool = False
+    turn_usage: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

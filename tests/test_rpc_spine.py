@@ -17,6 +17,7 @@ from raven.contracts.permissions import ApprovalChoice, ApprovalOutcome
 from raven.permissions.builtin import BuiltinRulings
 from raven.permissions.gate import PermissionGate
 from raven.permissions.turn import current_turn
+from raven.rpc.models import ErrorEvent
 from raven.rpc.spine import (
     RpcOutlet,
     RpcTurnRunner,
@@ -45,6 +46,7 @@ from raven.spine import (
 )
 from raven.spine.delivery import Outlet, SupportsStreaming
 from raven.spine.message import Media
+from raven.spine.scheduler import turn_usage_of
 
 
 def _src(channel="tui", chat_id="c1") -> Source:
@@ -2138,3 +2140,84 @@ async def test_a_failed_turn_sends_the_runners_long_account():
     payload = emitter.emitted[-1][1]["payload"]
     assert payload["detail"] == "RuntimeError: boom"
     assert payload["full_detail"] == "RuntimeError: boom, at length"
+
+
+# --- a failed turn's usage reaches the page on its error event ---
+
+
+_A_FAILED_TURNS_LAST_CALL = {
+    "prompt_tokens": 7000,
+    "completion_tokens": 0,
+    "total_tokens": 7000,
+    "context_max": 40000,
+    "context_used": 7000,
+    "context_percent": 18,
+}
+
+
+class _MeasuresThenFails(_RunTurnLoop):
+    """Fills the usage sink the way a loop that made calls does, then gives up."""
+
+    async def run_turn(self, req, emit, drain, *, stream, usage_sink=None, text_sink=None) -> TurnOutcome:
+        if usage_sink is not None and self._usage:
+            usage_sink.update(self._usage)
+        raise AnswerlessTurnError("The model returned no content on 3 attempt(s).")
+
+
+async def test_runner_hands_a_failed_turns_measured_usage_to_its_failure():
+    """A turn that fails still measured the calls it made, and its stored record
+    carries that reading, so the failure has to hand it on as well: on the
+    exception the lane copies onto ``TurnFailed``, never in the per-lane
+    register a queued turn shares."""
+    usages: dict[str, dict] = {}
+    runner = RpcTurnRunner(_MeasuresThenFails(usage=_A_FAILED_TURNS_LAST_CALL), FakeEmitter(), usages, {})
+    req = TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1")
+    _events, emit = _collect()
+
+    with pytest.raises(AnswerlessTurnError) as failed:
+        await runner.run(req, emit, lambda: [])
+
+    assert turn_usage_of(failed.value) == _A_FAILED_TURNS_LAST_CALL
+    assert "tui:c1" not in usages
+
+
+@pytest.mark.parametrize(
+    ("measured", "carried"),
+    [(_A_FAILED_TURNS_LAST_CALL, _A_FAILED_TURNS_LAST_CALL), (None, None)],
+    ids=["measured_a_call", "measured_nothing"],
+)
+async def test_a_failed_turn_hands_its_measured_usage_to_its_error(measured, carried):
+    """Without it the context ring stays on the turn before while a resume reads
+    the failed turn's own record, so the two disagree until the next turn."""
+    emitter = FakeEmitter()
+    scheduler, hub, turn_ids, teardown = build_rpc_spine(_MeasuresThenFails(usage=measured), emitter)
+    try:
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
+        await handle.result()
+    finally:
+        await teardown()
+
+    assert emitter.types() == ["error"]
+    event = emitter.emitted[-1][1]
+    assert event["payload"].get("usage") == carried
+    ErrorEvent.model_validate(event)
+
+
+async def test_a_non_owning_turns_failure_does_not_report_the_owners_usage():
+    """The register is keyed by lane, and a queued turn shares the key with the
+    turn that owns it: its failure must not hand on the owner's reading."""
+    from raven.rpc.spine import RpcOutlet, _make_rpc_sink
+    from raven.spine.delivery import DeliveryHub
+    from raven.spine.events import TurnFailed
+
+    hub = DeliveryHub()
+    emitter = FakeEmitter()
+    usages: dict[str, dict] = {"tui:c1": dict(_A_FAILED_TURNS_LAST_CALL)}
+    outlet = RpcOutlet("tui", emitter, {})
+    hub.register(outlet)
+    sink = _make_rpc_sink(hub, outlet, "tui", {"tui:c1": "owner"}, usages, {}, None)
+
+    await sink(TurnFailed(error="boom", cancelled=False, conversation_id="tui:c1", turn_id="queued-1"))
+
+    errors = [e for _k, e in emitter.emitted if e["type"] == "error"]
+    assert errors and "usage" not in errors[-1]["payload"]

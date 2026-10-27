@@ -12,7 +12,7 @@ import time
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
-from typing import get_args
+from typing import Any, get_args
 from uuid import uuid4
 
 from loguru import logger
@@ -61,6 +61,17 @@ def full_detail_of(exc: BaseException) -> str | None:
     """
     value = BaseException.__dict__["__dict__"].__get__(exc).get("full_detail")
     return value if isinstance(value, str) and value.strip() else None
+
+
+def turn_usage_of(exc: BaseException) -> dict[str, Any] | None:
+    """What the failed turn measured, for ``TurnFailed.turn_usage``.
+
+    Read the way ``full_detail_of`` reads: from the exception's instance
+    dictionary, where a runner puts a ``turn_usage`` mapping. Anything else, or
+    an empty mapping, means nothing was measured.
+    """
+    value = BaseException.__dict__["__dict__"].__get__(exc).get("turn_usage")
+    return dict(value) if isinstance(value, dict) and value else None
 
 
 def conversation_id(req: TurnRequest) -> str:
@@ -573,6 +584,7 @@ class Lane:
                 reported=isinstance(exc, AnswerlessTurnError),
                 full_detail=full_detail_of(exc),
                 no_output=isinstance(exc, AnswerlessTurnError) and exc.no_output,
+                turn_usage=turn_usage_of(exc),
             )
             await self._sink(failed)
             self._payload_reported = True

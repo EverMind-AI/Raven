@@ -1033,7 +1033,8 @@ A `TurnFailed` is `reported` when the runner worded `error` itself (an `Answerle
 rather than it being whatever a crash carried — in-process only, so a consumer deciding what to
 show a stranger can quote a report and refuse to quote a crash.
 A `TurnFailed` may also carry `full_detail`, the failure's long account, which the runner builds and
-the lane copies off the exception (see **AnswerlessTurnError**).
+the lane copies off the exception (see **AnswerlessTurnError**), and `turn_usage`, what the failed
+turn's calls measured, copied the same way so a client's context gauge moves on with the record.
 Per-conversation **Lanes** are the unit of both ordering and cancellation. Deliberately
 not a broadcast bus.
 _Avoid_: "the bus" — there is no Bus; "queue" for Lane — Lane is a serial+cancel domain.
