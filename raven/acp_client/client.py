@@ -142,6 +142,44 @@ async def _end(pgid: int, proc: Any) -> None:
         pass
 
 
+async def _share_with_raven_agent(
+    name: str, argv: list[str], env: dict[str, str], cwd: str | None, base_env: dict[str, str]
+) -> Any:
+    """What this host shares with a Raven agent it launches: its model calls, and its loaded code.
+
+    Returns the environment to launch with -- the relay's address added when
+    the host's ``subagents.runtime.llmRelay`` is on -- or, when the fork
+    template started the agent, the endpoint it is already running behind.
+    Anything that is not a Raven agent on this interpreter is returned its
+    environment unchanged, and every failure here falls back to that.
+    """
+    from raven.acp_client import fork_template, leftovers
+    from raven.agent.subagent.backends.env import host_identity_env
+    from raven.agent.subagent.role import subagent_role_env
+    from raven.config.live import default_live, subagent_runtime
+
+    if not fork_template.raven_agent_argv(argv):
+        return env
+    runtime = subagent_runtime(default_live())
+    relayed = False
+    if runtime.llm_relay:
+        from raven.providers.relay_server import relay_env
+
+        try:
+            env = {**env, **(await relay_env())}
+            relayed = True
+        except Exception as exc:  # noqa: BLE001 - the agent loads LiteLLM itself, as before
+            logger.warning("acp agent {!r}: no llm relay for it: {}", name, exc)
+    if runtime.fork_template:
+        template_env = {**base_env, **host_identity_env(), **subagent_role_env(), **leftovers.launch_env()}
+        endpoint = await fork_template.fork_launch(
+            argv, env, cwd, base_env=template_env, skip=("litellm",) if relayed else ()
+        )
+        if endpoint is not None:
+            return endpoint
+    return env
+
+
 def _retrieved(task: asyncio.Task) -> None:
     """Read the outcome of a task nobody waits on, so a failure is not reported as never retrieved."""
     if not task.cancelled():
@@ -494,6 +532,16 @@ class AcpClient:
         # The agent's own argv, for what this logs and reports: the spawned one
         # may lead with the wrapper that ties the agent to this host.
         program_argv = argv
+        shared = await _share_with_raven_agent(name, argv, child_env, cwd, base_env)
+        if isinstance(shared, dict):
+            child_env = shared
+        else:
+            client = cls(
+                name=name, endpoint=shared, on_request=on_request, on_notification=on_notification, journal=journal
+            )
+            client._start_loops()
+            logger.info("acp agent {!r}: forked {} from the template (pid {})", name, program_argv[:2], shared.pid)
+            return client
         argv = leftovers.bind_to_host(argv, child_env, cwd)
         job = None
         try:
@@ -594,7 +642,7 @@ class AcpClient:
         if self._closed:
             return
         self._closed = True
-        if isinstance(self._endpoint, _ProcessEndpoint):
+        if hasattr(self._endpoint, "grace"):
             self._endpoint.grace = self._granted_grace()
         try:
             await self._endpoint.end()
@@ -852,6 +900,12 @@ class AcpClient:
         the condition under which another session's open can only queue.
         """
         return any(method == "session/prompt" for method in self._request_methods.values())
+
+    @property
+    def busy(self) -> bool:
+        """Whether either side is waiting on the other: a request of raven's own
+        unanswered (a turn, a held wake included) or one of the agent's being answered."""
+        return bool(self._pending) or bool(self._answer_tasks)
 
     @property
     def idle_seconds(self) -> float:

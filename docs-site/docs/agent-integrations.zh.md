@@ -62,6 +62,24 @@ roster。不要假定修改显示名就创建了新身份。可通过 `raven onb
 launcher。readiness probe 成功或收到委派回执，都不代表任务已完成；仍需检查结果、文件、
 测试或报告产物。
 
+### 与宿主共享内存 { #sharing-memory-with-the-host }
+
+每个原生 Agent 都是一个独立的 Raven 进程。宿主 `config.json` 中 `subagents.runtime`
+下的三个设置让它不必每个 Agent 都占用一整份 Raven 的内存。三者默认开启，并实时读取，
+修改后从下一次启动起生效。
+
+| 键 | 默认值 | 作用 |
+| --- | --- | --- |
+| `idleCloseS` | `600` | Agent 空闲达到该秒数（双方都没有在途请求，也没有任何消息）后关闭其进程。只关闭能重新加载会话的 Agent，因此下一轮会在新进程中续上原对话。`0` 或 `null` 表示一直保留到宿主退出。 |
+| `llmRelay` | `true` | 由宿主代为发出原生 Agent 的 LiteLLM 调用，Agent 自身不再加载 LiteLLM。请求组装、重试和用量记录仍由 Agent 自己完成。 |
+| `forkTemplate` | `true` | 在 Linux 上，原生 Agent 从一个已加载 Raven 的进程 fork 出来，共享这些内存页，而不是各自加载一份。其他系统仍按原方式启动。 |
+
+模板只预加载至少两个原生 Agent 共用的模块，某个 Agent 独有的模块由它在 fork 之后自行
+导入，因此模板的大小取决于各 Agent 的共同部分，而不是 Agent 的种类数。模板本身也是一个
+进程，因此同时运行两个及以上原生 Agent 时才会省内存；只有一个 Agent 时，它的占用会略多于
+它省下的部分。只会运行单个 Agent 的设备可将 `forkTemplate` 设为 `false`。中转或模板无法服务的 Agent（宿主不可达，或 Agent 使用另一个解释器）
+会按原方式启动。
+
 ### 最小 ACP 调用 { #minimal-acp-invocation }
 
 随 Raven 发布的每个 Agent 都由自己的 launcher 启动。使用对应命令：

@@ -468,6 +468,9 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/agent/tools/capabilities.py",
         "raven/config/update_providers.py",
         "raven/providers/litellm_provider.py",
+        # Forwards the key the agent's provider was built with to the host that
+        # sends the request with it (the LLM relay); rules on nothing.
+        "raven/providers/relay_provider.py",
         "raven/providers/factory.py",
         # The router reads the OpenRouter key in order to call OpenRouter with it;
         # the read moved here from the assembly root with the vendor knowledge,

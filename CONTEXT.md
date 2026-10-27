@@ -3366,6 +3366,34 @@ and every tool result.
 _Avoid_: calling it a transcript - a reader drawing a delegated run wants the Instance Log
 or `transcript.jsonl`, not this.
 
+**Idle close** (`AcpConnectionPool.close_idle`, `subagents.runtime.idleCloseS`):
+The pool ending a pooled ACP agent's process once the connection has been quiet for the
+configured budget: no request of the host's unanswered (a held wake is one), none of the
+agent's being answered, no frame from the agent and no lease for the whole budget. Only an
+agent that advertises `loadSession`, or one that never opened a session, is closed, so a
+stateful instance's next turn reopens its session in a fresh process with `session/load`.
+_Avoid_: calling it a timeout - nothing in flight is cut short.
+
+**LLM relay** (`raven/providers/relay.py`, `relay_provider.py`, `relay_server.py`, `subagents.runtime.llmRelay`):
+The host making a Raven agent's LiteLLM calls for it. The host offers a local socket and a
+token in the launch environment (`RAVEN_LLM_RELAY`), and an agent that reads them builds a
+`RelayProvider` where it would have built a `LiteLLMProvider`: the same construction and the
+same answers (both stand on `LiteLLMShape`), with only the single `chat` / `chat_stream`
+attempt and the `relayed` catalogue lookups crossing to the host. Retry, classification, usage
+records and traces stay in the agent; the host's calls run under `recorded_by_caller` so a call
+is billed once. An agent that cannot reach the host loads LiteLLM and works as before.
+
+**Fork template** (`raven/acp_client/fork_template.py`, `subagents.runtime.forkTemplate`):
+On Linux, one process per host that has imported what Raven agents import, frozen out of the
+collector's reach, and forks each Raven agent the host launches, so the agents share those
+pages. It starts through the parent-death wrapper like any agent; each forked agent leads a
+session of its own and arms the parent-death signal against the template. A product launcher's
+`os.execv` of `python -m raven` runs Raven in the same process. Agents write the modules they
+imported beside the template, per product, and the next template loads the modules at least two
+products import (one product's own while only one has been seen): a module one product alone imports
+is shared by no other process, so it is left for that product to import after the fork. Only the host's own interpreter starting
+`-m raven` or a product launcher is forked; anything else launches the ordinary way.
+
 **Leftover agent** (`raven/acp_client/leftovers.py`):
 An ACP agent process group whose launching host is no longer running. An ACP agent runs in a
 session of its own, so it gets none of the signals sent to its host's process group or
