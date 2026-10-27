@@ -33,5 +33,6 @@ export const TOOL_VERBS: Record<string, string> = {
 // word for "thinking" and for "calling a tool".
 //
 // The list itself lives in ui-shared/verbs.json so the GUI rotates the same
-// words; scripts/gen-verbs.mjs projects that file into verbs.generated.ts.
+// words; scripts/gen-shared.mjs projects that file into verbs.generated.ts
+// (run it with `npm run gen:shared`).
 export { VERB_ROTATION_MS, VERBS } from './verbs.generated.js'
