@@ -2165,6 +2165,48 @@ async def test_a_turn_whose_continuation_was_cut_replies_instead_of_failing(work
     assert not any(m.get("turn_ended") for m in stored), "no failure marker was filed"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "streams",
+    [
+        pytest.param(
+            lambda: [_DyingStream("The answer is 42."), *[_unfinished_empty_stream() for _ in range(6)]],
+            id="continuation_cut_before_new_text",
+        ),
+        pytest.param(
+            lambda: [_DyingStream(text) for text in ("The ", "answer ", "is ", "42.")], id="continuations_spent"
+        ),
+    ],
+)
+async def test_a_turn_that_ends_on_a_cut_answer_is_not_marked_as_one_its_budget_stopped(
+    workspace, monkeypatch, streams
+):
+    """A cut answer delivered with the note ends ``interrupted`` as a spent budget does, but nothing
+    of the turn's budget was spent: the stream was cut. The session's budget-stop marker is what ACP
+    reports ``max_turn_requests`` from, so it stays clear."""
+    _served(monkeypatch, streams())
+    _recorded_sleeps(monkeypatch)
+    agent = _litellm_agent(workspace)
+
+    out = await agent._process_message(_turn(), session_key="s1", on_token_delta=_Sink().delta)
+
+    assert out is not None and out[0] == "The answer is 42.\n\n" + PARTIAL_STREAM_NOTE
+    assert agent.sessions.get_or_create("s1").metadata.get("budget_stop_turn_at") is None
+
+
+@pytest.mark.asyncio
+async def test_a_cut_answer_the_last_iteration_left_no_room_for_is_marked_as_a_budget_stop(workspace, monkeypatch):
+    """The control: a cut answer that ends the turn because no iteration is left for its continuation
+    is a turn its budget stopped, so the marker is written."""
+    _served(monkeypatch, [_DyingStream("The answer is 4"), _finished_stream("Wrap-up: here.")])
+    agent = _litellm_agent(workspace, max_iterations=1)
+
+    out = await agent._process_message(_turn(), session_key="s1", on_token_delta=_Sink().delta)
+
+    assert out is not None and out[0] == "The answer is 4\n\n" + PARTIAL_STREAM_NOTE
+    assert agent.sessions.get_or_create("s1").metadata.get("budget_stop_turn_at") == 0
+
+
 class _ContinuationErrors(LLMProvider):
     """Streams its words and dies; the continuation it is then asked for fails outright, with the
     kind of error a wait or another model could mend."""

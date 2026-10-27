@@ -2477,6 +2477,9 @@ class TurnPathMixin:
             and not ended_answered
             and (stalled_tool is not None or iteration >= iteration_cap or stopped_by == "wall_clock")
         )
+        # Assigned, not latched, as ``output_limited`` is: a rerun's own run decides.
+        if hook_metadata is not None:
+            hook_metadata["budget_stopped"] = exhausted
         if exhausted and recovery.parts:
             # The turn ran out -- of iterations or of time -- with a cut answer waiting on its
             # continuation, which there is no room left to ask for. A wrap-up would stream onto
@@ -3230,11 +3233,14 @@ class TurnPathMixin:
                     # The reader asks whether this is an int, which None is not.
                     session.metadata["output_limit_turn_at"] = None
                 # The same slot for a turn its own budget ended -- the tool cap, the
-                # wall clock or a stalled tool, which is all ``interrupted`` means.
-                # Its wrap-up reads as an ordinary answer, so a surface that reports
-                # the turn (ACP's stop reason) has only this to tell it from one
-                # that finished. Written or cleared on the same terms as above.
-                session.metadata["budget_stop_turn_at"] = _turn_start() if outcome.status == "interrupted" else None
+                # wall clock or a stalled tool. Its wrap-up reads as an ordinary
+                # answer, so a surface that reports the turn (ACP's stop reason) has
+                # only this to tell it from one that finished. Not every
+                # ``interrupted`` turn: one that ends on a cut stream's partial is
+                # interrupted too, and no budget of its was spent. Written or
+                # cleared on the same terms as above.
+                budget_stopped = outcome.status == "interrupted" and bool(turn_hook_meta.get("budget_stopped"))
+                session.metadata["budget_stop_turn_at"] = _turn_start() if budget_stopped else None
                 # The loop gave up on the model. Its ladder, its rerun and its
                 # salvage have all had their say, so what is left is a turn with
                 # no answer: the failure the handler below files and the lane
