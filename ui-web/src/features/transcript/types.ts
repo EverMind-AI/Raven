@@ -156,6 +156,12 @@ export interface StepData {
   kind: 'step'
   think: string
   thinkLive: boolean
+  /* When the live thought opened, and how long it ran once it closed. Kept on
+     the step so the row can print `Thinking… (5s)` while it grows and
+     `Thought for 12s` after it stops; a thought restored from history never
+     opened live, so both stay zero and the row keeps its bare label. */
+  thinkT0: number
+  thinkMs: number
   thinkOpen: boolean
   thinkPinned: boolean
   thinkShown: boolean

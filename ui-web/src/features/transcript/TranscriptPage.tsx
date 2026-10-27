@@ -7,6 +7,7 @@ import {
 import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { flushSync } from 'react-dom'
 
+import charmSpec from '../../../../ui-shared/charms.json'
 import { FileBadge, FileMark, Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
 import * as attachmentCache from '../../lib/attachmentCache'
@@ -501,6 +502,32 @@ const shortOr = (p: string): string => {
 
 /* ── call rows ─────────────────────────────────────────────────────────── */
 
+/* The TUI's long-run tool phrases (ui-shared/charms.json), on the cadence its
+   `useLongRunToolCharms` uses: the first at 8 s, a second at 18 s, never more.
+   The page prints the phrase alone -- the row already carries the elapsed
+   clock, so appending the TUI's `(tool · 8s)` here would print one number
+   twice. */
+const LONG_RUN_CHARMS = charmSpec.charms
+const CHARM_DELAY_MS = 8_000
+const CHARM_INTERVAL_MS = 10_000
+const CHARM_MAX = 2
+
+/* Drawn once per step and held, so a repaint every second does not reshuffle
+   the phrase under the reader. The step is a function of the row's own clock,
+   which is why this needs no timer of its own; a step of zero drops it. */
+function useLongRunCharm(step: number): string | null {
+  const [picked, setPicked] = useState<{ step: number; word: string } | null>(null)
+  useEffect(() => {
+    if (step === 0) {
+      if (picked) setPicked(null)
+      return
+    }
+    if (picked?.step === step) return
+    setPicked({ step, word: LONG_RUN_CHARMS[Math.floor(Math.random() * LONG_RUN_CHARMS.length)] ?? '' })
+  }, [picked, step])
+  return step > 0 ? (picked?.word ?? null) : null
+}
+
 const CallRow = memo(function CallRow({ lane, c }: { lane: Lane; c: CallData }): ReactElement {
   useSeg(lane, c)
   if (c.kind === 'dag') return <DagCard lane={lane} c={c} />
@@ -529,6 +556,10 @@ function PlainCallRow({ lane, c }: { lane: Lane; c: CallData }): ReactElement {
      from a stopped one. Same hook and wording as the spawn card and the dag
      row, down to the ellipsis under a second. */
   const elapsed = useTick(!c.done, c.t0)
+  const charmStep = c.done ? 0
+    : elapsed >= CHARM_DELAY_MS + CHARM_INTERVAL_MS ? CHARM_MAX
+      : elapsed >= CHARM_DELAY_MS ? 1 : 0
+  const charm = useLongRunCharm(charmStep)
   return (
     <>
       <div ref={rowRef} className={cls}
@@ -542,6 +573,9 @@ function PlainCallRow({ lane, c }: { lane: Lane; c: CallData }): ReactElement {
           <span className="diffn"><span className="a">+{c.hunk.add}</span> <span className="d">-{c.hunk.del}</span></span>
         ) : null}
         {err ? <span className="err">{err}</span> : null}
+        {/* Decorative: the row's own clock is the fact, and a phrase that
+            changes twice per tool must not be announced. */}
+        {charm ? <span className="transcript-charm" aria-hidden="true">{charm}</span> : null}
         {/* Where the chevron sits once the row is finished, so the eye finds
             both in one place. */}
         {!c.done
@@ -927,6 +961,17 @@ const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg: StepDa
      counting finished work would answer a different question. */
   const inFlight = seg.calls.find((c) => !c.done)
   const sumElapsed = useTick(!!inFlight, inFlight ? inFlight.t0 : 0)
+  /* The TUI's two wordings, in the page's own catalogue: present tense with a
+     moving clock while the model is at it, past tense with the span it took
+     once it stops. A thought restored from history never opened live, so both
+     timestamps are zero and it keeps the bare label. */
+  const thinkElapsed = useTick(seg.thinkLive, seg.thinkT0)
+  const thinkWord = t(seg.thinkLive ? 'gui.think.live' : 'gui.think.label')
+  const thinkLabel = seg.thinkLive
+    ? `${thinkWord}${thinkElapsed >= 1000 ? ` (${store.durText(thinkElapsed)})` : ''}`
+    : seg.thinkMs >= 1000
+      ? t('gui.transcript.think_done', { label: thinkWord, t: store.durText(seg.thinkMs) })
+      : thinkWord
   const wkinHidden = seg.calls.length === 0 ? true : seg.calls.length === 1 ? false : !seg.wkOpen
   if (stepBlank(seg)) return null
   return (
@@ -934,7 +979,7 @@ const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg: StepDa
       <div ref={thinkRef}
         className={'think tog' + (seg.thinkLive ? ' live' : '') + (seg.thinkOpen ? ' open' : '')}
         hidden={!seg.thinkShown} tabIndex={0} onClick={flipThink} onKeyDown={onKeyToggle(flipThink)}>
-        <span className="lb">{t(seg.thinkLive ? 'gui.think.live' : 'gui.think.label')}</span>
+        <span className="lb">{thinkLabel}</span>
         <Chev />
       </div>
       <div ref={cotRef} className="cot" hidden={!seg.thinkOpen}>{seg.think}</div>

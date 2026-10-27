@@ -516,7 +516,7 @@ jobs:
           npm run lint
           npm run lint:rpc
           npm run lint:i18n
-          npm run lint:verbs
+          npm run lint:shared
           npm run type-check
           npm test
           npm run build

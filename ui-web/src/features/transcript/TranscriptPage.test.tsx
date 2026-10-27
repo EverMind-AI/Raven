@@ -1341,6 +1341,79 @@ describe('a thought box while the model is still thinking', () => {
     expect(cot().hidden).toBe(true)
   })
 
+  it('clocks a live thought and reports the span it took once it stops', () => {
+    vi.useFakeTimers()
+    try {
+      let st!: ReturnType<typeof mount.step>
+      act(() => {
+        mount.ask('why did it fail')
+        st = mount.step()
+        st.thinkAppend('first line')
+        st.reveal()
+      })
+      const label = (): string => (document.querySelector('.msg.ai .think .lb') as HTMLElement).textContent as string
+      expect(label()).toBe('en:gui.think.live')
+
+      act(() => { vi.advanceTimersByTime(5_000) })
+      expect(label()).toBe('en:gui.think.live (5s)')
+
+      act(() => { st.thinkDone() })
+      /* The translator mock keeps the key and its variables, so this is the
+         page's own template (`{label} for {t}`) with the real elapsed value. */
+      expect(label()).toBe('en:gui.transcript.think_done {"label":"en:gui.think.label","t":"5s"}')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('adds the shared long-run phrase at 8s, a second at 18s, and no more', () => {
+    vi.useFakeTimers()
+    try {
+      const random = vi.spyOn(Math, 'random').mockReturnValue(0)
+      act(() => {
+        mount.ask('wait for it')
+        mount.step().tool('read_file', { path: '/tmp/a.log' }, null)
+      })
+      const row = (): Element => [...document.querySelectorAll('.wrow')].at(-1)!
+      expect(row().querySelector('.transcript-charm')).toBeNull()
+
+      act(() => { vi.advanceTimersByTime(8_000) })
+      expect(row().querySelector('.transcript-charm')!.textContent).toBe('still cooking…')
+
+      /* The second draw is a different word, so the DOM can tell the second
+         charm from the first; the row still carries one, not a stack. */
+      random.mockReturnValue(0.9)
+      act(() => { vi.advanceTimersByTime(10_000) })
+      expect(row().querySelectorAll('.transcript-charm')).toHaveLength(1)
+      expect(row().querySelector('.transcript-charm')!.textContent).toBe('asking the void nicely…')
+
+      act(() => { vi.advanceTimersByTime(10_000) })
+      expect(row().querySelector('.transcript-charm')!.textContent).toBe('asking the void nicely…')
+      expect(row().querySelectorAll('.transcript-charm')).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('drops the phrase when the tool finishes', () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(Math, 'random').mockReturnValue(0)
+      let call!: ReturnType<ReturnType<typeof mount.step>['tool']>
+      act(() => {
+        mount.ask('wait for it')
+        call = mount.step().tool('read_file', { path: '/tmp/a.log' }, null)
+      })
+      act(() => { vi.advanceTimersByTime(8_000) })
+      expect(document.querySelector('.transcript-charm')).not.toBeNull()
+
+      act(() => { call.done(true, 'line1', 12) })
+      expect(document.querySelector('.transcript-charm')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('follows a chunk far bigger than the old forty-pixel threshold', async () => {
     /* The bug, in one case. The follow used to be gated on the distance to the
        bottom measured AFTER the append, so a chunk taller than 40px -- about

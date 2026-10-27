@@ -1107,7 +1107,7 @@ function callDone(lane: Lane, seg: StepData, c: CallData,
 export function newStep(lane: Lane): StepHandle {
   const seg: StepData = {
     v: 0, id: nextId(), kind: 'step',
-    think: '', thinkLive: false, thinkOpen: false, thinkPinned: false, thinkShown: false,
+    think: '', thinkLive: false, thinkT0: 0, thinkMs: 0, thinkOpen: false, thinkPinned: false, thinkShown: false,
     say: '', sayCaret: false, hasSay: false, hasThink: false, hasQA: false, failed: false,
     calls: [], wkOpen: true, wkPinned: false, merged: false,
   }
@@ -1118,7 +1118,10 @@ export function newStep(lane: Lane): StepHandle {
      click away -- where it follows its newest line for as long as it grows. */
   const reveal = (): void => {
     seg.thinkShown = true
-    if (!seg.thinkLive) seg.thinkLive = true
+    if (!seg.thinkLive) {
+      seg.thinkLive = true
+      seg.thinkT0 = Date.now()
+    }
     poke(lane)
     bump(lane, seg)
   }
@@ -1127,6 +1130,7 @@ export function newStep(lane: Lane): StepHandle {
     if (!seg.thinkShown) return
     if (seg.thinkLive) {
       seg.thinkLive = false
+      seg.thinkMs = seg.thinkT0 ? Date.now() - seg.thinkT0 : 0
       if (!seg.thinkPinned) seg.thinkOpen = false
     }
     bump(lane, seg)
@@ -1146,7 +1150,10 @@ export function newStep(lane: Lane): StepHandle {
       seg.hasThink = true
       seg.think += text || ''
       seg.thinkShown = true
-      if (!seg.thinkLive) seg.thinkLive = true
+      if (!seg.thinkLive) {
+        seg.thinkLive = true
+        seg.thinkT0 = Date.now()
+      }
       poke(lane)
       scheduleFlush(lane, seg)
     },
@@ -1383,7 +1390,7 @@ function mergeRun(lane: Lane, group: StepData[]): void {
   if (!calls.length || !calls.every((c) => c.done)) return
   const holder: StepData = {
     v: 0, id: nextId(), kind: 'step',
-    think: '', thinkLive: false, thinkOpen: false, thinkPinned: false, thinkShown: false,
+    think: '', thinkLive: false, thinkT0: 0, thinkMs: 0, thinkOpen: false, thinkPinned: false, thinkShown: false,
     say: '', sayCaret: false, hasSay: false, hasThink: false, hasQA: false,
     failed: calls.some((c) => !c.ok),
     calls, wkOpen: false, wkPinned: false, merged: true,

@@ -25,8 +25,8 @@
     "gen:rpc": "node scripts/gen-rpc-types.mjs",
     "gen:i18n": "node scripts/gen-i18n.mjs",
     "lint:i18n": "node scripts/gen-i18n.mjs --check",
-    "gen:verbs": "node scripts/gen-verbs.mjs",
-    "lint:verbs": "node scripts/gen-verbs.mjs --check",
+    "gen:shared": "node scripts/gen-shared.mjs",
+    "lint:shared": "node scripts/gen-shared.mjs --check",
     "lint:rpc": "node scripts/gen-rpc-types.mjs --check"
   },
   "dependencies": {

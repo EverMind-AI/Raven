@@ -2187,6 +2187,10 @@
       "en": "Turn {n}",
       "zh": "第 {n} 轮"
     },
+    "gui.transcript.think_done": {
+      "en": "{label} for {t}",
+      "zh": "{label} {t}"
+    },
     "gui.freq.cron": {
       "en": "Custom",
       "zh": "自定义"

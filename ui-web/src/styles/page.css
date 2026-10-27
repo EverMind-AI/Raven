@@ -1635,6 +1635,13 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   transition: transform .16s ease, color .12s;
 }
 .open > .cv, .tfold.open > .tfh > .cv { transform: rotate(90deg); }
+/* A long-running tool's phrase, from the catalogue shared with the TUI. It is
+   the quietest thing on the row and the only part allowed to clip: the verb
+   and the clock are the facts, and the phrase is the aside. */
+.wrow .transcript-charm {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--chat-quiet); opacity: .72; font-style: italic;
+}
 /* How long a step in flight has been going. Monospace so the digits do not
    shuffle the row as they tick, and `flex: none` so a long verb clips before
    this does -- the number is the part that says the step is alive. */
