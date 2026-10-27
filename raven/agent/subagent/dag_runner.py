@@ -2337,7 +2337,11 @@ async def _install_move(
             state.auto_instances.add(nid)
     members = state.original_groups.get((move.source_agent, move.source_instance), move.members)
     if move.target_instance is not None:
-        state.original_groups[(move.target_agent, move.target_instance)] = members
+        # Union, not replace: a graph may name one handle on two agents, so the
+        # target pair can already stand for another group whose members must
+        # keep following it through later hops.
+        pair = (move.target_agent, move.target_instance)
+        state.original_groups[pair] = state.original_groups.get(pair, frozenset()) | members
     # Matched by the graph's own group, not by the pair that group sits on: a hop
     # to a stateless target drops the handle, and the pair a later hop starts
     # from then names no group at all. Every hop rewrites the value, so a group

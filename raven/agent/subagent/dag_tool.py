@@ -490,7 +490,9 @@ class _RunAdmission:
         # a node the proposal never saw, and a target that cannot read that
         # node's paths must refuse the move rather than dispatch it.
         tool._check_reassign_paths(prepared, tool._effective_capabilities(self))
-        execution, backend, _notices = await tool._execution_for(self, prepared)
+        execution, backend, notices = await tool._execution_for(self, prepared)
+        for notice in notices:
+            logger.warning("DAG reassign notice: {}", notice)
         return execution, backend
 
 
@@ -2219,13 +2221,16 @@ class SubAgentDagTool(Tool):
         folded, _notices = self._with_skills(spec, self._effective_capabilities(admission), admission.dirs.workdir)
         return folded.nodes[0]
 
-    async def _target_backend(self, node: DagNodeSpec, worker: "Worker | None") -> Any:
+    async def _target_backend(self, node: DagNodeSpec, worker: "Worker | None") -> tuple[Any, list[str]]:
         """The backend a moved node dispatches with, built as submission builds one.
 
         The same sequence ``_preflight`` runs: the per-node resolution with its
         skills narrowing and session-directory binding, the cross-process MCP
-        decision, and the frozen worker's charter around the whole thing.
+        decision, and the frozen worker's charter around the whole thing. It
+        returns the same partial-grant notice ``_preflight`` appends: a move
+        must not lose the sentence that says a server could not be resolved.
         """
+        notices: list[str] = []
         backend = self._resolve_node(node)
         if backend is None:
             raise DagValidationError(f"agent '{node.subagent}' has no backend on this machine")
@@ -2235,13 +2240,15 @@ class SubAgentDagTool(Tool):
             if row.injectable.mcps and resolver is not None:
                 async_resolver = getattr(backend, "resolve_mcp_grant_async", None)
                 grant = await async_resolver(node.mcps) if async_resolver is not None else resolver(node.mcps)
+                if note := grant.note_text():
+                    notices.append(f"node '{node.id}': {note}")
                 if getattr(backend, "kind", None) != "raven-loop":
                     backend = _DispatchBackend(backend, mcp_grant=grant)
             elif node.mcps is not None:
                 backend = _DispatchBackend(backend, drop_mcps=True)
         if worker is not None:
             backend = _WorkerBackend(backend, charter=worker.charter, payload=worker.payload)
-        return backend
+        return backend, notices
 
     async def _execution_for(self, admission: _RunAdmission, node: DagNodeSpec) -> tuple[DagNodeSpec, Any, list[str]]:
         """One prepared mover's execution node, backend and downgrade notices."""
@@ -2253,7 +2260,8 @@ class SubAgentDagTool(Tool):
                 f"node '{folded.id}': agent '{folded.subagent}' cannot take injected mcp servers, "
                 f"so its 'mcps' list is ignored"
             )
-        backend = await self._target_backend(folded, admission.submission.workers.get(node.id))
+        backend, grant_notices = await self._target_backend(folded, admission.submission.workers.get(node.id))
+        notices.extend(grant_notices)
         return folded, backend, notices
 
     def _check_reassign_paths(self, node: DagNodeSpec, capabilities: dict[str, AgentCapabilities]) -> None:
