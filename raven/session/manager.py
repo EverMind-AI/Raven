@@ -888,7 +888,7 @@ class SessionManager:
         A turn the message tool answered is the exception: the tool is what
         delivers a reply to the reader, so such a turn answered whatever the
         model ended it on, and it stays the activity the session is ordered by.
-        Its closing row carries the live turn's verdict, read from one place
+        Its last stored row carries the live turn's verdict, read from one place
         (``raven/session/turn_shape.py``), the same one the ACP replay reads the
         turn with, so the two surfaces cannot come to disagree about which turn
         answered.

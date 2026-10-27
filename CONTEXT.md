@@ -851,8 +851,9 @@ is then not silent. A turn the message tool has already answered (`MessageTool.s
 to the turn's own chat that went out) is not a Silent Turn whatever it ends on -- its answer reached
 the reader, so no
 `SILENT_TURN` notice goes out; a marker it ends on is still filed `silent: true`, so a reload
-draws the muted line after the delivered reply where the live view drew none. The turn's closing row
-carries that live verdict as `replied_via_tool`, and the two surfaces that read a stored turn -- the
+draws the muted line after the delivered reply where the live view drew none. The last assistant row
+the turn stores -- the marker's row when it ends on one, else the row before an empty closing reply,
+which is not stored -- carries that live verdict as `replied_via_tool`, and the two surfaces that read a stored turn -- the
 ACP replay, which draws it, and the session list, which orders sessions by it -- read the flag from
 one place (`session/turn_shape.py`) rather than guess it from the calls they can see, where a send
 that failed or went to another chat would look like an answer.

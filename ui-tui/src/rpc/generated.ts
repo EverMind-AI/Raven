@@ -304,7 +304,7 @@ export interface TranscriptMessage {
    */
   silent?: boolean;
   /**
-   * Set on the assistant entry that closes a turn whose reply the message tool sent to the turn's own chat: the live turn's verdict, so a send that failed or went to another chat does not set it. Such a turn answered whatever it ends on, `silent` included, and is not a Silent Turn.
+   * Set on the last assistant entry of a turn whose reply the message tool sent to the turn's own chat: the live turn's verdict, so a send that failed or went to another chat does not set it. That entry is the turn's closing one, its `silent` marker included, unless the turn closed on a reply with no text, which is not stored; then it is the entry that made the call. Such a turn answered whatever it ends on, and is not a Silent Turn.
    */
   replied_via_tool?: boolean;
 }

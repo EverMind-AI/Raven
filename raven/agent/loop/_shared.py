@@ -110,9 +110,9 @@ _NOTICE_KEY = "_notice"
 # ``_notice``: ``_save_turn`` writes it as ``silent``.
 _SILENT_KEY = "_silent"
 
-# Marks the stored row that closes a turn whose reply went out through the message
-# tool, read off ``MessageTool.sent_in_turn``: the live verdict, so a stored reader
-# need not guess it from the calls it can see. ``_save_turn`` writes it as
+# Marks the last assistant row a turn files when its reply went out through the
+# message tool, read off ``MessageTool.sent_in_turn``: the live verdict, so a stored
+# reader need not guess it from the calls it can see. ``_save_turn`` writes it as
 # ``replied_via_tool``.
 _REPLIED_VIA_TOOL_KEY = "_replied_via_tool"
 
@@ -417,13 +417,16 @@ def _file_composed_reply(messages: list[dict[str, Any]], reply: str) -> None:
 
 
 def _stamp_replied_via_tool(messages: list[dict[str, Any]], turn_base: int) -> None:
-    """Mark the turn's closing assistant row: the message tool sent this turn's reply to its own chat.
+    """Mark the last assistant row the turn files: the message tool sent this turn's reply to its own chat.
 
+    An assistant row with no text and no call is not filed (``_save_turn``), and the commonest such
+    turn ends on one -- the tool sent, then the model said nothing -- so the mark goes on the row
+    before it that is. A turn that ends on its marker files the marker's row, which is the last.
     Replaced with a copy, so a list that shares the row is left as it was.
     """
     for index in range(len(messages) - 1, turn_base - 1, -1):
         row = messages[index]
-        if row.get("role") == "assistant":
+        if row.get("role") == "assistant" and (row.get("content") or row.get("tool_calls")):
             messages[index] = {**row, _REPLIED_VIA_TOOL_KEY: True}
             return
 

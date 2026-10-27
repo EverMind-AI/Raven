@@ -97,7 +97,7 @@ def _without_silent_runtime_turns(entries: list[dict[str, Any]]) -> list[dict[st
     user row carrying ``origin`` opens a turn that can be taken back, so a
     person's own message stays when the model answers it with silence. A turn
     the message tool answered stays too: it is not a Silent Turn whatever it ends
-    on, and its reply reached the reader. Its closing row carries the live turn's
+    on, and its reply reached the reader. Its last stored row carries the live turn's
     verdict, read from one place (``raven/session/turn_shape.py``), so the session
     list and this replay cannot come to disagree about which turn answered.
     """

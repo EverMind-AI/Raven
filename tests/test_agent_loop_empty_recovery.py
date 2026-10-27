@@ -4586,6 +4586,23 @@ async def test_a_stored_turn_reads_the_message_tools_live_verdict(workspace, mon
 
 
 @pytest.mark.asyncio
+async def test_a_turn_the_message_tool_answered_with_no_reply_of_its_own_files_the_verdict(workspace, monkeypatch):
+    """The commonest shape: the tool sends, and the model then says nothing. The empty closing row is not
+    filed, so the verdict rides the last assistant row that is: the call that sent."""
+    _served(monkeypatch, [_tool_reply("message", _SEND), _reply(""), _reply("")])
+    agent = _litellm_agent(workspace)
+    _wire_message_tool(agent)
+
+    out = await agent._process_message(_turn(), session_key="s1")
+
+    assert out is None
+    rows = agent.sessions.get_or_create("s1").messages
+    assistants = [m for m in rows if m["role"] == "assistant"]
+    assert [bool(m.get("replied_via_tool")) for m in assistants] == [True]
+    assert assistants[0]["tool_calls"][0]["function"]["name"] == "message"
+
+
+@pytest.mark.asyncio
 async def test_a_marker_after_the_message_tool_sent_is_not_a_silent_turn(workspace, monkeypatch):
     """The reader has the answer from the tool; the marker only says there is nothing more.
     A turn that answered is not a turn that said nothing, and a surface told otherwise would drop the answer."""
