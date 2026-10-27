@@ -692,8 +692,8 @@ def _fill_resumed_context(usage: dict[str, Any], session: Any) -> None:
     times the window its last call measured, and a short one at a few tokens,
     the system prompt and the tool list being no part of it.
 
-    A session with no reading -- written before replies carried one, or never
-    answered -- falls back to a tiktoken estimate of
+    A session with no reading -- written before rows carried one, or whose
+    calls never reported their usage -- falls back to a tiktoken estimate of
     ``get_history(max_messages=0)``, marked ``context_estimated``. Failures
     leave the zero baseline alone rather than guessing -- a wrong denominator is
     worse than an unknown one.

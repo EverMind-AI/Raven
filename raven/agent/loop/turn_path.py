@@ -363,9 +363,13 @@ def _stamp_context_used_on_kept(messages: list[dict[str, Any]], response: Any) -
 
     An empty reply never becomes a row of its own in the session: recovery
     stands scaffolding in for it, the loop gives up on it, or it is filed empty
-    and dropped on save. The live gauge still showed that call's window, and
-    the window it measured ends at the newest row the turn keeps, so the
-    reading goes there.
+    and dropped on save. Nor does a provider's error, which is never filed. The
+    live gauge still showed that call's window, and the window it measured ends
+    at the newest row the turn keeps, so the reading goes there. When that row
+    is the turn's question it is already on disk and the stamp never reaches
+    it: the turn either files a row of its own later, which takes a newer
+    reading, or ends on the marker ``_save_broken_turn`` files, which carries
+    it.
     """
     used = _window_reading(getattr(response, "usage", None))
     if used <= 0:
@@ -928,6 +932,7 @@ class TurnPathMixin:
         turn_log: TurnLog | None = None,
         rungs_used: set[str] | None = None,
         reply_awaited: bool = False,
+        window_reading: dict[str, int] | None = None,
     ) -> tuple[str | None, list[str], list[dict], LoopOutcome]:
         """Run the agent iteration loop.
 
@@ -987,6 +992,11 @@ class TurnPathMixin:
         thinking-only reply down to, each asked for once. A caller that may run
         the loop again for one turn hands every run the same set; omitted, this
         run keeps a set of its own.
+
+        ``window_reading``, when given, is kept at ``context_used`` with the
+        newest window a call of this loop measured. It outlives the loop the way
+        ``spend`` does: a turn that fails or is stopped files it on its marker,
+        which can be the only row the turn adds.
         """
         spend = spend if spend is not None else TurnSpend(session_key)
         messages = initial_messages
@@ -1621,6 +1631,8 @@ class TurnPathMixin:
                 context_used = _window_reading(response.usage)
                 if context_used > 0:
                     window.last_context_used = context_used
+                    if window_reading is not None:
+                        window_reading["context_used"] = context_used
             if usage_sink is not None and response.usage:
                 # An explicitly configured window always wins over the live
                 # table -- that is what setting it means. Otherwise the live
@@ -2211,6 +2223,7 @@ class TurnPathMixin:
                     status = "error"
                     error_detail = _llm_failure_detail(clean, verdict)
                     error_full = response_failure_text(clean, response.call_record)
+                    _stamp_context_used_on_kept(messages, response)
                     break
 
                 if recovery.parts:
@@ -3173,6 +3186,12 @@ class TurnPathMixin:
         # turn: a set per attempt would pay for ``high`` and ``low`` again.
         rungs_used: set[str] = set()
 
+        # The newest window a call of this turn measured, held across attempts.
+        # A turn that fails or is stopped after calls that each came back empty
+        # or as an error has filed no row of its own, and the question it would
+        # otherwise end on is already on disk, so its marker carries the reading.
+        reading: dict[str, int] = {}
+
         async def _attempt(seed: list[dict], attempt: int):
             pending.update(rerun=False, reasons=[])
             # The record this attempt persists from, for the rescue paths below as
@@ -3206,6 +3225,7 @@ class TurnPathMixin:
                 turn_log=live["log"],
                 rungs_used=rungs_used,
                 reply_awaited=reply_awaited,
+                window_reading=reading,
             )
 
         # Taken BEFORE the first attempt, because the loop appends to the list it is
@@ -3367,6 +3387,7 @@ class TurnPathMixin:
                 None,
                 streamed,
                 status="cancelled",
+                context_used=reading.get("context_used"),
             )
             raise
         except AnswerlessTurnError as exc:
@@ -3382,6 +3403,7 @@ class TurnPathMixin:
                 status="failed",
                 reason=str(exc),
                 full_detail=attach_full_detail(exc),
+                context_used=reading.get("context_used"),
             )
             raise
         except Exception as exc:
@@ -3397,6 +3419,7 @@ class TurnPathMixin:
                 # and a model both read back.
                 reason=bound_failure_text(str(exc)),
                 full_detail=attach_full_detail(exc),
+                context_used=reading.get("context_used"),
             )
             raise
         self._stash_recovery(key, outcome)
@@ -3540,6 +3563,7 @@ class TurnPathMixin:
         reason: str | None = None,
         full_detail: str | None = None,
         inbound_original: str | None = None,
+        context_used: int | None = None,
     ) -> None:
         """Persist what a cancelled or failed turn got as far as producing.
 
@@ -3560,6 +3584,9 @@ class TurnPathMixin:
           ``_marker_failure``).
           ``turn_ended.full_detail`` is the long account beside the bounded
           ``reason``, filed only when there is more to it.
+          ``context_used`` is the newest window the turn measured, filed on the
+          marker because it is the newest row: a resume reads the window from
+          there, and a turn whose calls left no row of their own has no other.
 
         ``received_at`` and ``inbound_original`` describe the turn's question,
         which ``_process_message`` files before the attempt starts and hands
@@ -3624,6 +3651,8 @@ class TurnPathMixin:
                     **({"full_detail": full_detail} if full_detail else {}),
                 },
             }
+            if context_used:
+                marker[_CONTEXT_USED_KEY] = context_used
             tail.append(marker)
             self._save_turn(session, tail, 0, received_at=received_at, inbound_original=inbound_original)
             self.sessions.save(session)

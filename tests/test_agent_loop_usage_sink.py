@@ -8,6 +8,7 @@ TUI context bar stayed frozen at 0% and never showed cost.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import tempfile
 import threading
@@ -31,11 +32,11 @@ from raven.contracts.llm_provider import ToolCallRequest
 from raven.contracts.token_strategy import UsageSnapshot
 from raven.contracts.tool import Tool
 from raven.providers import rates, usage_record
-from raven.providers.base import LLMProvider, LLMResponse
+from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse
 from raven.providers.binding import ModelBinding, use_binding
 from raven.session.manager import SessionManager
 from raven.spine.message import ChatType, Source
-from raven.spine.turn import Origin, TurnRequest
+from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
 from raven.token_wise import usage_context
 from raven.token_wise.registry import StrategyRegistry
 from raven.token_wise.usage_tracker import UsageTracker
@@ -994,3 +995,135 @@ async def test_a_turn_that_ends_on_an_empty_reply_keeps_that_calls_reading(
     assert sink["context_used"] == live
     assert (usage["context_used"], usage["context_percent"]) == (sink["context_used"], sink["context_percent"])
     assert usage["context_estimated"] is False
+
+
+def _fails_to_answer(usage: dict) -> LLMResponse:
+    return LLMResponse(
+        content="Error calling LLM (network@stub): connection reset",
+        finish_reason="error",
+        usage=usage,
+        error_classification=ErrorClassification("network", retryable=False),
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_answered_turn_that_ends_on_a_provider_error_keeps_that_calls_reading(workspace, monkeypatch):
+    """The answer went out through the message tool, so the provider error
+    that follows ends the turn without failing it, and its reply is not filed
+    either. The live meter showed that call's window, which ends at the newest
+    row the turn kept."""
+    agent = AgentLoop(
+        provider=ScriptedProvider("stub", [_ANSWERS_THROUGH_THE_MESSAGE_TOOL, _fails_to_answer(_measured(7100, 0))]),
+        workspace=workspace,
+        model="stub",
+        engine=EngineWiring(context_window_tokens=40000, context_config=ContextConfig(drop_segments=["curator"])),
+        policy=TurnPolicy(max_iterations=6, empty_recovery=RecoveryLimits(llm_error_retry_delays=())),
+        tools=ToolWiring(restrict_to_workspace=True),
+    )
+
+    async def _delivered(_content: str, _media: list[str]) -> None:
+        return None
+
+    agent.tools.get("message").set_send_callback(_delivered)
+    sink: dict = {}
+    await _turn(agent, sink, session_key="tui:c1")
+
+    usage = await _resumed_usage(workspace, monkeypatch, "tui:c1")
+
+    assert sink["context_used"] == 7100
+    assert (usage["context_used"], usage["context_percent"]) == (sink["context_used"], sink["context_percent"])
+    assert usage["context_estimated"] is False
+
+
+def _failing_agent(workspace: Path, limits: RecoveryLimits, script: list[LLMResponse]) -> AgentLoop:
+    return AgentLoop(
+        provider=ScriptedProvider("stub", script),
+        workspace=workspace,
+        model="stub",
+        engine=EngineWiring(context_window_tokens=40000, context_config=ContextConfig(drop_segments=["curator"])),
+        policy=TurnPolicy(max_iterations=6, empty_recovery=limits),
+        tools=ToolWiring(restrict_to_workspace=True),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("limits", "script", "live"),
+    [
+        (RecoveryLimits(enabled=False), [_says_nothing(_measured(7000, 0))], 7000),
+        (
+            RecoveryLimits(llm_error_retry_delays=()),
+            [_says_nothing(_measured(7000, 0)), _says_nothing(_measured(7400, 0))],
+            7400,
+        ),
+        (RecoveryLimits(llm_error_retry_delays=()), [_says_nothing(_measured(7000, 0)), _says_nothing({})], 7000),
+        (RecoveryLimits(llm_error_retry_delays=()), [_fails_to_answer(_measured(7100, 0))], 7100),
+    ],
+    ids=["first_reply_empty", "every_retry_empty", "last_retry_unreported", "provider_error"],
+)
+async def test_a_failed_turn_that_filed_no_reply_keeps_its_reading_on_the_failure(
+    workspace, monkeypatch, limits, script, live
+):
+    """No call of the turn left a row behind: each reply was empty or an error,
+    and the question was filed before the first call. The failure the turn
+    files is then the only row it adds, so that is where the live meter's last
+    reading has to go for a resume to show it."""
+    agent = _failing_agent(workspace, limits, script)
+    sink: dict = {}
+
+    with pytest.raises(AnswerlessTurnError):
+        await _turn(agent, sink, session_key="tui:c1")
+
+    failure = _stored_replies(workspace, "tui:c1")[-1]
+    usage = await _resumed_usage(workspace, monkeypatch, "tui:c1")
+
+    assert sink["context_used"] == live
+    assert failure["turn_ended"]["status"] == "failed"
+    assert failure["context_used"] == live
+    assert (usage["context_used"], usage["context_percent"]) == (sink["context_used"], sink["context_percent"])
+    assert usage["context_estimated"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cut", "status"),
+    [(asyncio.CancelledError, "cancelled"), (RuntimeError, "failed")],
+    ids=["cancelled", "crashed"],
+)
+async def test_a_turn_cut_short_after_a_call_keeps_that_calls_reading_on_its_marker(
+    workspace, monkeypatch, cut, status
+):
+    """A stop or a crash files the same marker an answerless turn does, and it
+    can come right after a call whose empty reply left no row behind."""
+    agent = _failing_agent(workspace, RecoveryLimits(llm_error_retry_delays=()), [_says_nothing(_measured(7000, 0))])
+    strip = agent._strip_think
+    seen: list[str | None] = []
+
+    def _cut_on_the_retry(text):
+        seen.append(text)
+        if len(seen) > 1:
+            raise cut("the turn was cut short")
+        return strip(text)
+
+    monkeypatch.setattr(agent, "_strip_think", _cut_on_the_retry)
+
+    with pytest.raises(cut):
+        await _turn(agent, {}, session_key="tui:c1")
+
+    marker = _stored_replies(workspace, "tui:c1")[-1]
+    usage = await _resumed_usage(workspace, monkeypatch, "tui:c1")
+
+    assert marker["turn_ended"]["status"] == status
+    assert marker["context_used"] == 7000
+    assert (usage["context_used"], usage["context_estimated"]) == (7000, False)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_turn_that_measured_nothing_files_no_reading(workspace):
+    """Nothing measured means nothing to file, so a resume falls back to its estimate."""
+    agent = _failing_agent(workspace, RecoveryLimits(llm_error_retry_delays=()), [_fails_to_answer({})])
+
+    with pytest.raises(AnswerlessTurnError):
+        await _turn(agent, {}, session_key="tui:c1")
+
+    assert "context_used" not in _stored_replies(workspace, "tui:c1")[-1]
