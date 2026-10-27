@@ -3436,6 +3436,62 @@ async def test_a_long_hold_costs_each_delta_only_its_own_length():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deltas,shown",
+    [
+        pytest.param(
+            ["<think>", "nothing new", "</think>", "[SIL", "ENT]"],
+            ["<think>", "nothing new", "</think>"],
+            id="a_block_then_the_marker",
+        ),
+        pytest.param(
+            ["\n<mm:th", "ink>x</MM:Think>", "\n[SILENT]\n"],
+            ["\n<mm:think>x</MM:Think>"],
+            id="a_namespaced_block_split_across_deltas",
+        ),
+        pytest.param(
+            ["<think>a</think><reasoning>b", "</reasoning>", " [SILENT]"],
+            ["<think>a</think>", "<reasoning>b", "</reasoning>"],
+            id="two_blocks",
+        ),
+    ],
+)
+async def test_a_think_block_streams_while_the_marker_after_it_is_held(deltas, shown):
+    """The loop reads a reply with its inline think blocks out, so the gate does too: a block streams as
+    it arrives, and what follows it is held while it could still be the marker, then dropped."""
+    seen, deliver = _collecting()
+    gate = SilenceGate(deliver, hold_all=False)
+
+    for delta in deltas:
+        await gate(delta)
+    assert seen == shown
+    gate.discard()
+
+    assert seen == shown
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deltas,seen_after",
+    [
+        pytest.param(
+            ["<think>x</think>", "The answer"], ["<think>x</think>", "The answer"], id="an_answer_after_a_block"
+        ),
+        pytest.param(["<b>", "bold"], ["<b>", "bold"], id="a_tag_that_is_no_think_tag"),
+        pytest.param(["<think>x</thinking>", "[SILENT]"], ["<think>x</thinking>", "[SILENT]"], id="a_mismatched_pair"),
+    ],
+)
+async def test_a_reply_that_is_no_marker_once_its_think_blocks_are_out_goes_out(deltas, seen_after):
+    seen, deliver = _collecting()
+    gate = SilenceGate(deliver, hold_all=False)
+
+    for delta in deltas:
+        await gate(delta)
+
+    assert seen == seen_after
+
+
+@pytest.mark.asyncio
 async def test_a_proactive_turn_holds_the_whole_call():
     seen, deliver = _collecting()
     gate = SilenceGate(deliver, hold_all=True)
@@ -3528,6 +3584,38 @@ async def test_a_persons_answer_that_spells_a_marker_loosely_is_delivered(worksp
     assert out == (reply, []) and silence == {}
     assert sink.text == _chunked(reply), "nothing was held back"
     assert "silent" not in agent.sessions.get_or_create("s1").messages[-1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deltas,final,silent,shown",
+    [
+        pytest.param(
+            ["<think>nothing new</think>", "[SIL", "ENT]"],
+            "[SILENT]",
+            True,
+            "<think>nothing new</think>",
+            id="a_block_then_the_marker",
+        ),
+        pytest.param(
+            ["<think>x</think>", "The answer"], "The answer", False, "<think>x</think>The answer", id="an_answer"
+        ),
+        pytest.param(["<think>", "[SILENT]"], "<think>[SILENT]", False, "<think>[SILENT]", id="a_block_never_closed"),
+    ],
+)
+async def test_a_persons_turn_reads_the_marker_after_its_inline_thinking(
+    workspace, monkeypatch, deltas, final, silent, shown
+):
+    """The gate and the loop read the same reply: think blocks out, then the taught marker. A block the
+    stream never closes is the text the loop reads it as, and the reader has it."""
+    _served(monkeypatch, [_finished_stream(*deltas)])
+    sink = _Sink()
+
+    out, _used, messages, outcome = await _litellm_agent(workspace)._run_agent_loop(_seed(), on_token_delta=sink.delta)
+
+    assert out == final and outcome.silent is silent
+    assert bool(messages[-1].get("_silent")) is silent
+    assert "".join(sink.text) == shown
 
 
 @pytest.mark.asyncio

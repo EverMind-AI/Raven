@@ -87,6 +87,9 @@ _THINK_BLOCK_RE = re.compile(
     rf"<{_NS}(think|thinking|reasoning)>([\s\S]*?)</{_NS}\1>",
     re.IGNORECASE,
 )
+# The same spellings, read a character at a time by the silence gate (``_read_think_tag``).
+_THINK_NAMES = ("think", "thinking", "reasoning")
+_TAG_NAMESPACE_RE = re.compile(r"[a-z][\w.-]{0,15}", re.IGNORECASE)
 
 MAX_CONTINUATIONS = 3
 REASONING_EXCERPT_MAX = 500
@@ -325,6 +328,33 @@ def has_thinking_to_refeed(response: LLMResponse) -> bool:
     :func:`has_thinking` and leave a prefill nothing to carry.
     """
     return bool(response.thinking_blocks) or bool(_thinking_text(response))
+
+
+def _read_think_tag(tag: str, closing: str | None) -> str | bool | None:
+    """Read ``tag``, text from a ``<`` on, as an inline think tag spelled as ``_THINK_BLOCK_RE`` spells one.
+
+    An opening tag when ``closing`` is None, else the closing tag of the block that name opened. The
+    tag's name once ``tag`` is the whole of it, True while more text could still make it one, and
+    None once nothing can.
+    """
+    lead = "<" if closing is None else "</"
+    if len(tag) < len(lead):
+        return True if lead.startswith(tag) else None
+    if not tag.startswith(lead):
+        return None
+    names = _THINK_NAMES if closing is None else (closing,)
+    body = tag[len(lead) :]
+    namespace, colon, name = body.removesuffix(">").partition(":")
+    if not colon:
+        namespace, name = "", namespace
+    if colon and not _TAG_NAMESPACE_RE.fullmatch(namespace):
+        return None
+    if body.endswith(">"):
+        return name.lower() if name.lower() in names else None
+    if colon:
+        return True if any(n.startswith(name.lower()) for n in names) else None
+    # No colon yet: the text so far may be a name, or the namespace in front of one.
+    return True if not name or _TAG_NAMESPACE_RE.fullmatch(name) else None
 
 
 def _is_taught_marker(text: object) -> bool:
@@ -666,10 +696,14 @@ class SilenceGate:
     (:func:`is_silent_reply`), deltas are held while the text so far could still become that, and go
     out together with everything after them the moment it cannot -- which a reply that begins with
     anything but whitespace or the marker's bracket does at its first delta, so an ordinary answer
-    waits for nothing. Each delta is read on its own against what the ones before it left, so a long
-    hold costs a delta no more than a short one. A turn from a proactive origin (``hold_all``) is
-    read by the loose rule, whose marker may close a report on its last line, and only the whole
-    call can show that, so every delta waits for :meth:`release` or :meth:`discard`.
+    waits for nothing. The loop reads a reply with its inline think blocks taken out
+    (``strip_think_blocks``), and so does the gate: a think block opened before any of the reply
+    streams as it arrives, each delta of it out the moment it comes, only the opening tag waiting for
+    the delta that completes it; what follows the block is held while it could still be the marker.
+    Each delta is read on its own against what the ones before it left, so a long hold costs a delta
+    no more than a short one. A turn from a proactive origin (``hold_all``) is read by the loose
+    rule, whose marker may close a report on its last line, and only the whole call can show that,
+    so every delta waits for :meth:`release` or :meth:`discard`.
 
     The loop decides once it has read the reply: ``discard`` for a marker, which goes to no one,
     ``release`` for anything else, and for a reply that ends in tool calls, whose words are not a
@@ -682,8 +716,12 @@ class SilenceGate:
         self._held: list[str] = []
         self._open = False
         self._dropped = False
-        # The held text with its leading whitespace off: a prefix of the marker while the gate holds.
+        # The text read so far with its whitespace and think blocks off: a prefix of the marker while
+        # the gate holds.
         self._body = ""
+        # The name of the think block the text is inside, and a tag still being read.
+        self._block: str | None = None
+        self._tag = ""
 
     async def __call__(self, delta: str) -> None:
         if self._dropped:
@@ -691,22 +729,57 @@ class SilenceGate:
         if self._open:
             await self._deliver(delta)
             return
-        self._held.append(delta)
-        if not self._hold_all and not self._undecided_with(delta):
-            await self.release()
+        if self._hold_all:
+            self._held.append(delta)
+            return
+        start = 0
+        for index, char in enumerate(delta):
+            step = self._read(char)
+            if step is None:
+                self._held.append(delta[start:])
+                await self.release()
+                return
+            if step == "closed" and not self._body:
+                self._held.append(delta[start : index + 1])
+                await self._show_held()
+                start = index + 1
+        self._held.append(delta[start:])
+        if self._block is not None and not self._body:
+            await self._show_held()
 
-    def _undecided_with(self, delta: str) -> bool:
-        """Whether the held text, ``delta`` now included, could still become the taught marker."""
-        for char in delta:
-            if char.isspace():
-                # Whitespace may only stand before the marker or after the whole of it.
-                if self._body and self._body != SILENT_MARKER:
-                    return False
-                continue
-            self._body += char
-            if not SILENT_MARKER.startswith(self._body):
-                return False
-        return True
+    def _read(self, char: str) -> str | bool | None:
+        """Read one more character: None once the text can no longer be the marker, ``"closed"`` when it
+        closes a think block, True otherwise."""
+        if self._block is not None:
+            if self._tag or char == "<":
+                self._tag += char
+                tag = _read_think_tag(self._tag, self._block)
+                if tag is None:
+                    self._tag = "<" if char == "<" else ""
+                elif tag is not True:
+                    self._block, self._tag = None, ""
+                    return "closed"
+            return True
+        if self._tag or char == "<":
+            self._tag += char
+            tag = _read_think_tag(self._tag, None)
+            if tag is None:
+                return None
+            if tag is not True:
+                self._block, self._tag = tag, ""
+            return True
+        if char.isspace():
+            # Whitespace may only stand before the marker or after the whole of it.
+            return True if not self._body or self._body == SILENT_MARKER else None
+        self._body += char
+        return True if SILENT_MARKER.startswith(self._body) else None
+
+    async def _show_held(self) -> None:
+        """Deliver what is held without opening the gate: a think block before any of the reply."""
+        text = "".join(self._held)
+        self._held = []
+        if text:
+            await self._deliver(text)
 
     async def release(self) -> None:
         """Deliver what is held, then let the rest through untouched."""
