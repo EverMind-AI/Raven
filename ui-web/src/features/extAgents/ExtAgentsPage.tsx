@@ -364,7 +364,10 @@ function ModelPill({
         />
         ) : null}
       </div>
-      {row.effort_choices?.length ? (
+      {/* A preset has no row to write an effort to until Connect adds it. The
+          model can ride that add (the family drawer's pick); effort cannot, so
+          the field appears on the card the add writes, not on the preset. */}
+      {row.effort_choices?.length && !pending ? (
         <label className="extAgents-fld">
           <span className="extAgents-k">{t('gui.agent.effort_label')}</span>
           <select

@@ -2203,6 +2203,20 @@ describe('the model pill', () => {
     ])
   })
 
+  it('leaves effort to the row Connect writes, not to the preset', async () => {
+    install([
+      row({
+        configured: false,
+        model_source: 'agent',
+        model_choices: choices,
+        effort_choices: [{ value: 'high', name: 'High' }],
+      }),
+    ])
+    await mount()
+    await openSheet('claude_code')
+    expect(sheet()!.querySelector('.extAgents-effort')).toBeNull()
+  })
+
   it('draws no effort field for an agent that advertises none', async () => {
     install([row({ model_source: 'agent', model_choices: choices })])
     await mount()
