@@ -2267,6 +2267,15 @@ class TestPageBehindSources:
 
         assert serve_commands.page_behind_sources(source) is True
 
+    def test_a_newer_shared_catalogue_puts_the_page_behind(self, two_candidates) -> None:
+        _packaged, source = two_candidates
+        ui = source.parent
+        self._stamp(source / "index.html", 2_000.0)
+        self._stamp(ui / "src" / "main.tsx", 1_000.0)
+        self._stamp(ui.parent / "ui-shared" / "verbs.json", 3_000.0)
+
+        assert serve_commands.page_behind_sources(source) is True
+
     def test_tests_harnesses_and_snapshots_do_not_count(self, two_candidates) -> None:
         _packaged, source = two_candidates
         ui = source.parent

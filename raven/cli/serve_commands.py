@@ -121,8 +121,8 @@ def page_behind_sources(dist: Optional[Path]) -> bool:
 
     Only the checkout's own ``ui-web/dist`` can fall behind: the wheel's copy
     ships beside the code it was built with. Judged by mtime, the way make
-    would -- a pull that touches ``ui-web/src`` or the message catalogue leaves
-    those files newer than ``dist/index.html`` until the next build. The
+    would -- a pull that touches ``ui-web/src`` or one of the shared catalogues
+    leaves those files newer than ``dist/index.html`` until the next build. The
     build's own files count too (the assembler, the bundler config, the
     dependency lock, the icon it copies): a pull that moves only those changes
     the page as surely as a source edit. Tests, the test harness layer and
@@ -134,7 +134,11 @@ def page_behind_sources(dist: Optional[Path]) -> bool:
         built = (dist / "index.html").stat().st_mtime
     except OSError:
         return False
-    inputs = [_UI_DIR.parent / "i18n" / "messages.json", *(_UI_DIR / name for name in _PAGE_BUILD_FILES)]
+    inputs = [
+        _UI_DIR.parent / "i18n" / "messages.json",
+        *(_UI_DIR.parent / "ui-shared").glob("*.json"),
+        *(_UI_DIR / name for name in _PAGE_BUILD_FILES),
+    ]
     inputs.extend(
         path
         for path in (_UI_DIR / "src").rglob("*")
