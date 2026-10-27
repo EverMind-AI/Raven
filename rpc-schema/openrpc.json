@@ -1324,16 +1324,28 @@
             },
             "status": {
               "type": "string",
-              "description": "The probe's word: `valid`, `invalid_key`, `key_unchecked`, `no_credits`, `rate_limited`, `network_error`, `proxy_unreachable`, `certificate_untrusted`, `no_probe_endpoint`, `not_configured`, `http_NNN`."
+              "description": "The probe's word: `valid`, `invalid_key`, `key_unchecked`, `no_credits`, `rate_limited`, `network_error`, `proxy_unreachable`, `certificate_untrusted`, `no_probe_endpoint`, `not_configured`, `unknown_provider`, `oauth_token_missing`, `http_NNN`; `unknown` when the probe gave no word."
             },
             "http_status": {
-              "type": "integer"
+              "type": [
+                "integer",
+                "null"
+              ],
+              "description": "The HTTP status the probe met, when it met one."
             },
             "models_count": {
-              "type": "integer"
+              "type": [
+                "integer",
+                "null"
+              ],
+              "description": "How many models the vendor listed, when it listed any."
             },
             "error": {
-              "type": "string"
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "What went wrong, when something did."
             },
             "refused": {
               "type": "boolean",
