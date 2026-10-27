@@ -59,7 +59,16 @@ function SkillList(): JSX.Element {
   const groups = all.filter(([, rows]) => rows.length)
   return (
     <>
-      <Search id="skq" value={s.skq} placeholder={t('gui.settings.skills.search')} onChange={(v) => store.set({ skq: v })} />
+      {/* The search and the add button on one line. Installing is not this
+          page's: use_skill fetches a Skill Hub bundle on Raven's own judgment,
+          which no row here can do, so the button leads into the chat with the
+          request half written (store.addInChat says how it gets there). */}
+      <div className="settings-crumb">
+        <Search id="skq" value={s.skq} placeholder={t('gui.settings.skills.search')} onChange={(v) => store.set({ skq: v })} />
+        <button type="button" className="mini" onClick={() => store.addInChat(t('gui.settings.skills.add_prompt'))}>
+          {t('gui.settings.skills.add')}
+        </button>
+      </div>
       {groups.map(([label, rows]) => {
         const onN = rows.filter((r) => !blocked.has(r.name)).length
         const count = onN === rows.length ? String(rows.length) : t('gui.settings.skills.on_of', { on: onN, total: rows.length })
