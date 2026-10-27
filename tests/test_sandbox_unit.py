@@ -1107,9 +1107,7 @@ class TestBoxliteTranslateProcessPath:
             lambda: [(PureWindowsPath("C:/workspace"), "/workspace")],
         )
 
-        translated = executor._translate_process_path(
-            r"C:\workspace\packages\demo\bin;C:\outside\bin"
-        )
+        translated = executor._translate_process_path(r"C:\workspace\packages\demo\bin;C:\outside\bin")
 
         assert translated == r"/workspace/packages/demo/bin;C:\outside\bin"
 

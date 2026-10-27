@@ -619,9 +619,7 @@ def test_import_package_removes_a_skill_the_package_no_longer_ships(tmp_path: Pa
     assert not (workspace / "skills" / PACKAGE_NAME / "beta").exists()
 
 
-def test_remove_tree_retries_a_read_only_entry_as_writable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_remove_tree_retries_a_read_only_entry_as_writable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path / "skill"
     root.mkdir()
     read_only = root / "data.txt"
