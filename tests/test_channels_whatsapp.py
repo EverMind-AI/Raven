@@ -381,6 +381,55 @@ def test_ensure_bridge_dir_rebuilds_a_build_that_does_not_match_the_source(
     assert (built / "src" / "index.ts").exists()
 
 
+def test_the_bridge_install_fetches_from_a_mirror_when_npm_cannot_be_reached(tmp_path, monkeypatch):
+    """`npm install` is the one step of the build that needs the registry, and
+    the only one started with the mirror in its environment. Asked about the
+    directory it installs in, raven's own, whose lockfile is raven's too."""
+    from raven.utils import mirrors
+
+    source = _bridge_source_tree(tmp_path / "source")
+    built = _installed_build(tmp_path / "installed", None)
+    runs: list[tuple[list[str], object, object]] = []
+    asked: list[object] = []
+    monkeypatch.setattr(wb, "_find_bridge_source", lambda: source)
+    monkeypatch.setattr("raven.config.paths.get_bridge_install_dir", lambda: built)
+    monkeypatch.setattr(wb.shutil, "which", lambda _name: "/usr/bin/npm")
+    monkeypatch.setattr(
+        wb.subprocess, "run", lambda cmd, **kwargs: runs.append((list(cmd[1:]), kwargs.get("env"), kwargs.get("cwd")))
+    )
+
+    def npm_registry_env(env, cwd=None):
+        asked.append(cwd)
+        return {"npm_config_registry": mirrors.NPM_REGISTRY}
+
+    monkeypatch.setattr(mirrors, "npm_registry_env", npm_registry_env)
+
+    wb.ensure_bridge_dir()
+
+    (install, install_env, install_cwd), (build, build_env, _build_cwd) = runs
+    assert install == ["install"] and install_env["npm_config_registry"] == mirrors.NPM_REGISTRY
+    assert "PATH" in install_env or "Path" in install_env, "the rest of the environment comes along"
+    assert asked == [str(install_cwd)], "asked about the directory npm installs in"
+    assert build == ["run", "build"] and build_env is None
+
+
+def test_the_bridge_install_inherits_the_environment_when_npm_answers(tmp_path, monkeypatch):
+    from raven.utils import mirrors
+
+    source = _bridge_source_tree(tmp_path / "source")
+    built = _installed_build(tmp_path / "installed", None)
+    envs: list[object] = []
+    monkeypatch.setattr(wb, "_find_bridge_source", lambda: source)
+    monkeypatch.setattr("raven.config.paths.get_bridge_install_dir", lambda: built)
+    monkeypatch.setattr(wb.shutil, "which", lambda _name: "/usr/bin/npm")
+    monkeypatch.setattr(wb.subprocess, "run", lambda cmd, **kwargs: envs.append(kwargs.get("env")))
+    monkeypatch.setattr(mirrors, "npm_registry_env", lambda env, cwd=None: {})
+
+    wb.ensure_bridge_dir()
+
+    assert envs == [None, None]
+
+
 def test_source_fingerprint_follows_a_changed_src_file(tmp_path):
     source = _bridge_source_tree(tmp_path / "source")
     before = wb.source_fingerprint(source)

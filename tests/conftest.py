@@ -869,6 +869,23 @@ def _no_codex_version_network(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_mirror_fallback(monkeypatch):
+    """Keep the mirror fallback, and the probes it makes, off the network.
+
+    Every launch of a uvx or npx agent or MCP server, every bridge build, and
+    the upgrade helper's uv first ask whether the default registry answers, so an
+    un-mocked test would reach registry.npmjs.org or pypi.org and wait on
+    whatever the runner's network does. Opted out by env for the whole suite,
+    which is the launch each test was written against; tests that exercise a
+    fallback clear the variable.
+    """
+    from raven.utils import mirrors
+
+    monkeypatch.setenv(mirrors.OPT_OUT_ENV, "1")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_provider_probe(monkeypatch):
     """Keep the credential probe's socket off the network, and only the socket.
 

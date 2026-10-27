@@ -109,6 +109,61 @@ def test_an_unexpected_answer_falls_back_quietly(monkeypatch: pytest.MonkeyPatch
     assert codex_client_version.resolve() == codex_client_version.FALLBACK_VERSION
 
 
+def _serve_through_the_mirror(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """npm unreachable, its mirror answering."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        if str(request.url) == codex_client_version.DIST_TAGS_URL:
+            raise httpx.ConnectTimeout("timed out", request=request)
+        return httpx.Response(200, json={"latest": "0.170.0"})
+
+    def fake_get(url, **kwargs):
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            return client.get(url, **{k: v for k, v in kwargs.items() if k != "timeout"})
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    monkeypatch.setattr(codex_client_version, "_fetch_latest", _REAL_FETCH)
+    monkeypatch.delenv("RAVEN_NO_MIRROR", raising=False)
+    return seen
+
+
+def test_an_unreachable_npm_is_asked_through_its_mirror(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _serve_through_the_mirror(monkeypatch)
+
+    assert codex_client_version.resolve() == "0.170.0"
+    assert seen == [codex_client_version.DIST_TAGS_URL, codex_client_version.DIST_TAGS_MIRROR_URL]
+
+
+def test_the_mirror_is_the_same_path_on_npmmirror() -> None:
+    assert codex_client_version.DIST_TAGS_MIRROR_URL == (
+        "https://registry.npmmirror.com/-/package/@openai/codex/dist-tags"
+    )
+
+
+def test_the_opt_out_keeps_npm_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _serve_through_the_mirror(monkeypatch)
+    monkeypatch.setenv("RAVEN_NO_MIRROR", "1")
+
+    assert codex_client_version.resolve() == codex_client_version.FALLBACK_VERSION
+    assert seen == [codex_client_version.DIST_TAGS_URL]
+
+
+def test_an_npm_that_answers_with_an_error_is_not_asked_through_the_mirror(monkeypatch: pytest.MonkeyPatch) -> None:
+    asked: list[str] = []
+
+    def fake_get(url, **kwargs):
+        asked.append(url)
+        return httpx.Response(429, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    monkeypatch.setattr(codex_client_version, "_fetch_latest", _REAL_FETCH)
+
+    assert codex_client_version.resolve() == codex_client_version.FALLBACK_VERSION
+    assert asked == [codex_client_version.DIST_TAGS_URL]
+
+
 def test_an_error_status_falls_back_quietly(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_get(url, **kwargs):
         return httpx.Response(429, request=httpx.Request("GET", url))

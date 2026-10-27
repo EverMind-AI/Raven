@@ -457,6 +457,25 @@ All notable changes to Raven are documented here.
   state is now its own rung, *Provider default*, which also clears the key
   (`agents.defaults.reasoningEffort` accepts null) rather than leaving a word
   the install never chose.
+- A sub-agent of the in-process or OpenAI-API kind whose model ends its turn
+  with nothing visible -- the one-space
+  reply OpenRouter hands back for an empty turn, or the empty reply of a
+  vendor that keeps no native finish reason -- no longer completes with that
+  as its answer. The in-process backend read only a missing reply as no
+  answer, so a blank one was recorded completed, a spawn told the parent it
+  returned, and a DAG node was left to its judge with nothing to judge. A
+  blank reply now gets the one wrap-up call a run out of rounds gets, worded
+  for what happened, and a run that answers nothing twice fails with
+  `SubagentNoAnswerError` saying so, rather than that it used all its rounds.
+  The OpenAI-API backend handed a blank reply back as the answer too; it now
+  fails the run as one with no answer. A cli entry's answer is what it
+  printed, and is not changed here.
+  In a direct chat an answer the backend waited for rather than streamed --
+  the wrap-up's, on either path, or the one it asks for again after a cut
+  stream -- now streams like any other reply: once anything had streamed
+  before it, the turn sent no closing text, and the answer was recorded but
+  never shown.
+
 - In the TUI on native Windows, typing with a Chinese IME no longer duplicates
   characters. The console was told to re-encode keys through Kitty keyboard /
   modifyOtherKeys, which doubles IME commits before they reach Raven's input

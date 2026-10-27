@@ -529,7 +529,12 @@ for line in sys.stdin:
     request = json.loads(line)
     method = request.get("method")
     if method == "env":
-        result = {"login": os.environ.get("FROM_LOGIN"), "entry": os.environ.get("FROM_ENTRY"), "cwd": os.getcwd()}
+        result = {
+            "login": os.environ.get("FROM_LOGIN"),
+            "entry": os.environ.get("FROM_ENTRY"),
+            "args": sys.argv[1:],
+            "cwd": os.getcwd(),
+        }
     elif method == "spawn":
         child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
         result = {"pid": child.pid}
@@ -624,6 +629,143 @@ async def test_an_agent_starts_in_its_root_in_the_login_environment_plus_the_ent
     await host.until(lambda: host.notified(protocol.AGENT_EXIT))
     assert host.notified(protocol.AGENT_EXIT) == [{"channel": 1, "rc": 0}]
     assert host.node.agents == {}
+
+
+async def _what_the_agent_saw(host: "_Host", cwd: str, agent, env: dict[str, str]) -> dict:
+    await host.ask(protocol.AGENT_LAUNCH, {"channel": 1, "command": agent, "cwd": cwd, "env": env})
+    await host.tell(protocol.AGENT_FRAME, {"channel": 1, "line": _frame("env", 5)})
+    await host.until(lambda: host.notified(protocol.AGENT_FRAME))
+    seen = json.loads(host.notified(protocol.AGENT_FRAME)[0]["line"])["result"]
+    await host.ask(protocol.AGENT_CLOSE, {"channel": 1}, request_id=2)
+    await host.until(lambda: host.notified(protocol.AGENT_EXIT))
+    return seen
+
+
+@pytest.mark.slow
+async def test_an_agent_starts_the_way_this_machine_s_mirror_fallback_says(tmp_path, agent, monkeypatch):
+    """Decided here, on the machine the agent runs on: whether the host can reach
+    a registry says nothing about whether this machine can. Asked with the
+    environment the agent starts with and the directory it starts in, and
+    started with the answer."""
+    from raven.utils import mirrors
+
+    monkeypatch.setattr(server, "capture_login_env", lambda: {**os.environ, "FROM_LOGIN": "yes"})
+    asked: list[tuple[list[str], object, object, object]] = []
+
+    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None):
+        asked.append((list(argv), env.get("FROM_LOGIN"), env.get("FROM_ENTRY"), cwd, deadline, cache_root))
+        return [*argv, "--as-the-answer-says"]
+
+    monkeypatch.setattr(mirrors, "package_launch", package_launch)
+
+    host = _Host()
+    seen = await _what_the_agent_saw(host, str(tmp_path), agent, {"FROM_ENTRY": "1"})
+
+    assert seen["args"] == ["--as-the-answer-says"]
+    (argv, login, entry, cwd, deadline, cache_root), *_ = asked
+    assert argv[0] == sys.executable
+    assert (login, entry) == ("yes", "1"), "asked with the environment the agent starts with"
+    assert cwd == str(tmp_path), "and where it starts, where npx would look for what the project has"
+    assert deadline is not None and 0 < deadline - time.monotonic() <= protocol.AGENT_LAUNCH_PREPARE_S, (
+        "with the budget the host waits for the answer"
+    )
+    assert cache_root == host.node.daemon.root / "npx", "and with a cache of this node's own"
+
+
+@pytest.mark.slow
+async def test_launches_that_outnumber_the_workers_are_answered_within_the_budget(tmp_path, agent, monkeypatch):
+    """The daemon admits as many launches at once as the protocol allows and
+    prepares them in a pool with as many workers as the machine has cores:
+    more launches than workers. Every answer comes within the budget the
+    protocol names, so the host keeps the machine's link instead of dropping
+    every agent of it."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from raven.utils import mirrors
+
+    monkeypatch.setattr(server, "capture_login_env", lambda: {**os.environ})
+    monkeypatch.setattr(protocol, "AGENT_LAUNCH_PREPARE_S", 1.0)
+    release = threading.Event()
+
+    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None):
+        release.wait(10)
+        return list(argv)
+
+    monkeypatch.setattr(mirrors, "package_launch", package_launch)
+    asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
+    host = _Host()
+    # Captured before the launches, so the one worker of the pool is free for
+    # the preparation and not for this.
+    await host.node.daemon.env()
+    began = time.monotonic()
+    try:
+        answers = await asyncio.gather(
+            *(
+                host.ask(
+                    protocol.AGENT_LAUNCH,
+                    {"channel": channel, "command": agent, "cwd": str(tmp_path / f"agent{channel}")},
+                    request_id=channel,
+                )
+                for channel in (1, 2, 3)
+            )
+        )
+
+        assert time.monotonic() - began < 8.0, "every launch was answered within the budget"
+        assert all("result" in answer for answer in answers), "no launch was refused"
+    finally:
+        release.set()
+        await host.node.daemon.end_all()
+
+
+@pytest.mark.slow
+async def test_the_hosts_own_opt_out_turns_the_fallback_off_on_the_machine(tmp_path, agent, monkeypatch):
+    """The daemon decides on its own machine and cannot read the host's
+    environment, so the host's switch travels with the launch."""
+    from raven.utils import mirrors
+
+    monkeypatch.setattr(server, "capture_login_env", lambda: {**os.environ})
+    monkeypatch.delenv("RAVEN_NO_MIRROR", raising=False)
+    asked: list[dict[str, str]] = []
+    real = mirrors.package_launch
+
+    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None):
+        asked.append(dict(env))
+        return real(argv, env, cwd, local=local, deadline=deadline, cache_root=cache_root)
+
+    monkeypatch.setattr(mirrors, "package_launch", package_launch)
+    host = _Host()
+
+    await host.ask(
+        protocol.AGENT_LAUNCH,
+        {"channel": 1, "command": agent, "cwd": str(tmp_path), "no_mirror": True},
+    )
+
+    assert asked and asked[0].get("RAVEN_NO_MIRROR") == "1", "the host's switch reaches the decision"
+
+
+@pytest.mark.slow
+async def test_a_launch_whose_own_environment_says_so_is_left_alone(tmp_path, agent, monkeypatch):
+    """The switch in the entry's environment is the user's own, on this
+    machine too."""
+    from raven.utils import mirrors
+
+    monkeypatch.setattr(server, "capture_login_env", lambda: {**os.environ})
+    monkeypatch.delenv("RAVEN_NO_MIRROR", raising=False)
+    asked: list[dict[str, str]] = []
+
+    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None):
+        asked.append(dict(env))
+        return list(argv)
+
+    monkeypatch.setattr(mirrors, "package_launch", package_launch)
+    host = _Host()
+
+    await host.ask(
+        protocol.AGENT_LAUNCH,
+        {"channel": 1, "command": agent, "cwd": str(tmp_path), "env": {"RAVEN_NO_MIRROR": "1"}},
+    )
+
+    assert asked and asked[0].get("RAVEN_NO_MIRROR") == "1"
 
 
 @pytest.mark.slow

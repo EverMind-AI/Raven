@@ -103,6 +103,7 @@ div.app
         button#backpill.backpill
           svg
             path
+        div#turnNav
         div#wsGrip.grip
         div#brand
           span.mk

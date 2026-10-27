@@ -70,6 +70,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 from raven.node import bundle, protocol
+from raven.utils import mirrors
 
 _PARSE_ERROR = -32700
 _INVALID_REQUEST = -32600
@@ -1246,10 +1247,26 @@ class Daemon:
         try:
             argv = _argv(params)
             env = {**await self.env(), **_env(params)}
+            cwd = Path(_text(params, "cwd")).expanduser()
+            # The host's own switch travels with the launch, and this machine's
+            # own environment is read as well: a user who turned mirrors off
+            # where Raven runs meant it there too.
+            mirror_env = {**env, mirrors.OPT_OUT_ENV: "1"} if _flag(params, "no_mirror") else env
+            # Asked here rather than by the host: whether a registry answers
+            # from this machine is not something the host's network can tell.
+            # The answer has to come in time: the host waits
+            # protocol.AGENT_LAUNCH_TIMEOUT_S and drops every agent of this
+            # machine when it does not.
+            argv = await mirrors.package_launch_async(
+                argv,
+                mirror_env,
+                str(cwd),
+                budget=protocol.AGENT_LAUNCH_PREPARE_S,
+                cache_root=self.root / "npx",
+            )
             found = shutil.which(argv[0], path=env.get("PATH"))
             if found is None:
                 raise _RefusedError(protocol.NOT_FOUND, f"{argv[0]!r} is not on this machine's PATH")
-            cwd = Path(_text(params, "cwd")).expanduser()
             record = self.record_dir(task_id)
             try:
                 cwd.mkdir(parents=True, exist_ok=True)

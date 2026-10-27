@@ -39,6 +39,10 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
+
+from raven.utils import mirrors
 
 #: This package's own directory. The two resource trees hang off it, which is
 #: exactly how ``core.tokenizer`` and the deepdoc ``_onnx`` reader find them --
@@ -51,6 +55,10 @@ PACKAGE = Path(__file__).resolve().parent
 #: project we do not otherwise depend on.
 DICTIONARY_REPO = "https://raw.githubusercontent.com/infiniflow/resource/main/rag"
 
+#: The same directory through jsDelivr, for when raw.githubusercontent.com
+#: cannot be reached; from mainland China it times out more often than not.
+DICTIONARY_MIRROR = f"{mirrors.JSDELIVR_GITHUB}/infiniflow/resource@main/rag"
+
 #: The vision models, from the Hugging Face repository RAGFlow publishes them
 #: in. Named by file rather than snapshotted whole: the repo is 663 MB, and all
 #: but 103 MB of that is the same models in a second serialisation plus three
@@ -61,6 +69,10 @@ DICTIONARY_REPO = "https://raw.githubusercontent.com/infiniflow/resource/main/ra
 #: so no Raven artifact carries one; what that leaves for anyone who ships an
 #: image with them already fetched is in NOTICES.md, under "deepdoc models".
 DEEPDOC_REPO = "InfiniFlow/deepdoc"
+
+#: The Hub to read that repository from when huggingface.co cannot be reached,
+#: which from mainland China it cannot.
+DEEPDOC_MIRROR = mirrors.HF_ENDPOINT
 
 
 @dataclass(frozen=True)
@@ -186,36 +198,90 @@ def _present(resource: Resource, expected: int | None) -> bool:
     return False
 
 
+#: How long a download waits on its host, as it always has.
+_TIMEOUT = 120.0
+#: How long a host with a mirror behind it gets to accept a connection, and
+#: then to send the next bytes, before it counts as unreachable. A dropped
+#: packet is waited on rather than refused, and Linux keeps retrying a connect
+#: for about two minutes, so the full wait would hold the download that long
+#: before its mirror is asked.
+_CONNECT_TIMEOUT = 15.0
+_READ_TIMEOUT = 30.0
+
+
+def _host(url: str) -> str:
+    return urlsplit(url).hostname or url
+
+
+def _switching(away_from: str, to: str, exc: BaseException) -> None:
+    # The transport's own words when a library wrapped them: huggingface_hub's
+    # wrapper says only "check your connection".
+    reason = exc.__cause__ or exc
+    print(f"  {_host(away_from)} could not be reached ({reason}); fetching from {_host(to)} instead")
+    print(f"  (set {mirrors.OPT_OUT_ENV}=1 to never fall back to a mirror)")
+
+
 def fetch_dictionary(resources: "tuple[Resource, ...]", *, force: bool) -> int:
-    """Download the tokenizer's dictionary. Returns how many files were written."""
+    """Download the tokenizer's dictionary. Returns how many files were written.
+
+    From its publisher, and through jsDelivr when the publisher cannot be
+    reached at all.
+    """
     import httpx
 
+    hosts = [DICTIONARY_REPO, DICTIONARY_MIRROR] if mirrors.enabled() else [DICTIONARY_REPO]
     written = 0
     resources[0].into.mkdir(parents=True, exist_ok=True)
-    with httpx.Client(follow_redirects=True, timeout=120.0) as client:
+    with httpx.Client(follow_redirects=True, timeout=_TIMEOUT) as client:
         for resource in resources:
-            url = f"{DICTIONARY_REPO}/{resource.name}"
-            expected: int | None = None
-            try:
-                head = client.head(url)
-                expected = int(head.headers.get("content-length") or 0) or None
-            except httpx.HTTPError:
-                pass
-            if not force and _present(resource, expected):
-                print(f"  {resource.path.name}: already here ({resource.purpose})")
-                continue
-            print(f"  {resource.path.name}: downloading {_human(expected or 0)} ({resource.purpose})")
-            # To a temporary name first: a half-written dictionary that keeps
-            # the real name is one every later run treats as present.
-            staged = resource.path.with_suffix(resource.path.suffix + ".part")
-            with client.stream("GET", url) as response:
-                response.raise_for_status()
-                with staged.open("wb") as handle:
-                    for chunk in response.iter_bytes(1 << 20):
-                        handle.write(chunk)
-            staged.replace(resource.path)
-            written += 1
+            while True:
+                base, last = hosts[0], len(hosts) == 1
+                timeout = httpx.Timeout(_TIMEOUT) if last else httpx.Timeout(_READ_TIMEOUT, connect=_CONNECT_TIMEOUT)
+                try:
+                    written += _fetch_dictionary_file(
+                        client, f"{base}/{resource.name}", resource, force, last=last, timeout=timeout
+                    )
+                    break
+                except Exception as exc:
+                    if last or not mirrors.unreachable(exc):
+                        raise
+                    _switching(base, hosts[1], exc)
+                    # The files after this one go straight to the mirror, rather
+                    # than each waiting out the same timeout first.
+                    hosts = hosts[1:]
     return written
+
+
+def _fetch_dictionary_file(
+    client: Any, url: str, resource: Resource, force: bool, *, last: bool, timeout: object
+) -> int:
+    import httpx
+
+    expected: int | None = None
+    try:
+        head = client.head(url, timeout=timeout)
+        expected = int(head.headers.get("content-length") or 0) or None
+    except httpx.HTTPError as exc:
+        # The size is a convenience, so failing to learn it is no reason to
+        # stop -- unless the host could not be reached at all and another one
+        # is waiting, when the download would only spend a second timeout
+        # finding that out.
+        if not last and mirrors.unreachable(exc):
+            raise
+    if not force and _present(resource, expected):
+        print(f"  {resource.path.name}: already here ({resource.purpose})")
+        return 0
+    print(f"  {resource.path.name}: downloading {_human(expected or 0)} ({resource.purpose})")
+    # To a temporary name first: a half-written dictionary that keeps the real
+    # name is one every later run treats as present.
+    staged = resource.path.with_suffix(resource.path.suffix + ".part")
+    with client.stream("GET", url, timeout=timeout) as response:
+        response.raise_for_status()
+        with staged.open("wb") as handle:
+            for chunk in response.iter_bytes(1 << 20):
+                handle.write(chunk)
+    staged.replace(resource.path)
+    return 1
 
 
 def warm_dictionary() -> None:
@@ -248,16 +314,42 @@ def warm_dictionary() -> None:
         print(f"  index: built, {_human(cache.stat().st_size)}")
 
 
+def _hub_mirror_allowed(exc: BaseException) -> bool:
+    """Whether a failure to reach the Hub may be retried on its mirror.
+
+    Not when HF_ENDPOINT names a Hub: that is the operator's choice of host,
+    and the mirror would replace it with ours.
+    """
+    return mirrors.enabled() and not os.environ.get("HF_ENDPOINT") and mirrors.unreachable(exc)
+
+
 def fetch_deepdoc(resources: "tuple[Resource, ...]", *, force: bool) -> int:
-    """Download the vision models. Returns how many files were written."""
-    from huggingface_hub import hf_hub_download, model_info
+    """Download the vision models. Returns how many files were written.
+
+    From the Hub huggingface_hub is configured for, and from its mirror once
+    that Hub cannot be reached at all.
+    """
+    from huggingface_hub import HfApi, hf_hub_download, model_info
 
     KNOWLEDGE_RES.mkdir(parents=True, exist_ok=True)
+    # None is the Hub huggingface_hub would pick on its own, so until a
+    # fallback happens every call below is the one this function always made.
+    endpoint: str | None = None
     sizes = {}
     try:
         sizes = {f.rfilename: f.size for f in model_info(DEEPDOC_REPO, files_metadata=True).siblings}
     except Exception as exc:  # noqa: BLE001 - the index is a convenience, not the download
-        print(f"  (could not read the published sizes: {exc})")
+        if not _hub_mirror_allowed(exc):
+            print(f"  (could not read the published sizes: {exc})")
+        else:
+            _switching("https://huggingface.co", DEEPDOC_MIRROR, exc)
+            endpoint = DEEPDOC_MIRROR
+            try:
+                # Without the user's token, like every call to the mirror (see _hub_download).
+                info = HfApi(endpoint=endpoint, token=False).model_info(DEEPDOC_REPO, files_metadata=True)
+                sizes = {f.rfilename: f.size for f in info.siblings}
+            except Exception as again:  # noqa: BLE001 - as above
+                print(f"  (could not read the published sizes: {again})")
 
     written = 0
     for resource in resources:
@@ -269,10 +361,25 @@ def fetch_deepdoc(resources: "tuple[Resource, ...]", *, force: bool) -> int:
         # Into the cache and then copied, rather than symlinked into place: an
         # image build throws the cache layer away, and a symlink into a
         # directory that no longer exists is worse than no file at all.
-        cached = hf_hub_download(repo_id=DEEPDOC_REPO, filename=resource.name)
+        try:
+            cached = _hub_download(hf_hub_download, resource.name, endpoint)
+        except Exception as exc:
+            if endpoint is not None or not _hub_mirror_allowed(exc):
+                raise
+            _switching("https://huggingface.co", DEEPDOC_MIRROR, exc)
+            endpoint = DEEPDOC_MIRROR
+            cached = _hub_download(hf_hub_download, resource.name, endpoint)
         shutil.copyfile(cached, resource.path)
         written += 1
     return written
+
+
+def _hub_download(download: "Callable[..., str]", filename: str, endpoint: str | None) -> str:
+    # huggingface_hub sends a logged-in user's token to whatever endpoint it is
+    # given. That token is for huggingface.co, and these models are public, so
+    # the mirror is asked without one.
+    extra = {} if endpoint is None else {"endpoint": endpoint, "token": False}
+    return download(repo_id=DEEPDOC_REPO, filename=filename, **extra)
 
 
 def main(argv: "list[str] | None" = None) -> int:

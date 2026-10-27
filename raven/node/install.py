@@ -53,7 +53,6 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import os
 import shlex
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -63,6 +62,7 @@ from raven.acp_client import remote
 from raven.node import bundle, protocol
 from raven.node.client import node_dir as registered_node_dir
 from raven.ops.transport import TIMED_OUT_RC
+from raven.utils import mirrors
 
 #: Roughly what a node takes, for the free-space check: Raven's code with
 #: pillow, loguru and ripgrep-bin (measured 2026-10-10), a Python 3.12 when
@@ -99,8 +99,9 @@ _STEP_TIMEOUT_S = 900.0
 MIRRORS = ("https://pypi.tuna.tsinghua.edu.cn/simple", "https://mirrors.aliyun.com/pypi/simple")
 #: Set on this computer to 1, true, yes or on to keep every install on the
 #: index the machine would use: nothing is timed, and no mirror is asked.
-NO_MIRROR_ENV = "RAVEN_NO_MIRROR"
-_TRUTHY = frozenset({"1", "true", "yes", "on"})
+#: The same switch the runtime's mirror fallback reads, and the same reader,
+#: so the two cannot read it differently.
+NO_MIRROR_ENV = mirrors.OPT_OUT_ENV
 #: How long the fetch that times an index may take, in seconds.
 _TIMED_S = 6
 #: Below this many bytes a second an index is slow: a Raven node's downloads
@@ -357,7 +358,7 @@ def plan(machine_id: str, *, node_dir: str | None = None, run: Runner = _run) ->
         raise InstallError(str(exc)) from None
     where = (node_dir or "").strip().rstrip("/") or registered_node_dir(target)
     install_name = bundle.install_name()
-    timed = os.environ.get(NO_MIRROR_ENV, "").strip().lower() not in _TRUTHY
+    timed = not mirrors.opt_out()
     rc, out = run(target, probe_script(where, install_name, bundle.digest(), timed=timed))
     if rc != 0:
         raise InstallError(remote.explain(target, rc, out) or f"could not look at machine {target.label}")
