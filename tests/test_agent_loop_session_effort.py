@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import pytest
 
+from raven.agent import session_effort
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.agent.window import compaction
@@ -114,12 +115,14 @@ async def test_another_session_runs_on_the_defaults(tmp_path):
 
 class _BootedProvider(LLMProvider):
     """A real provider booted with a configured effort, which ``chat_with_retry``
-    resolves through its sentinel when a call leaves the argument out."""
+    and ``chat_stream`` resolve through their sentinel when a call leaves the
+    argument out. Answers from ``responses`` in order, the last one repeating."""
 
-    def __init__(self, booted: str) -> None:
+    def __init__(self, booted: str, responses: list[LLMResponse] | None = None) -> None:
         super().__init__(api_key="test")
         self.generation = GenerationSettings(reasoning_effort=booted)
         self.efforts: list[str | None] = []
+        self._responses = list(responses or [_text("done")])
 
     async def chat(
         self,
@@ -132,7 +135,7 @@ class _BootedProvider(LLMProvider):
         tool_choice=None,
     ):
         self.efforts.append(reasoning_effort)
-        return _text("done")
+        return self._responses[min(len(self.efforts) - 1, len(self._responses) - 1)]
 
     def get_default_model(self) -> str:
         return "fake/model"
@@ -171,6 +174,80 @@ async def test_a_default_cleared_on_a_running_gateway_reaches_the_next_turn(tmp_
     assert provider.efforts == [sent]
     # The one rule the RPC reports from answers the same.
     assert loop.session_reasoning_effort("cli:c", None) == sent
+
+
+# The effort in force, under three readings the turn's side calls must agree
+# with: the configured default where the policy names no word, the session's
+# own pick over it, and a cleared key -- which is sent as an explicit None, not
+# left out. The provider is booted at ``high`` in every case, so a call that
+# leaves the argument out is caught: the provider fills it from the copy it
+# took at boot, and ``high`` is a word no case asks for.
+_SIDE_CALL_CASES = [
+    pytest.param("low", None, "low", id="configured-default-where-the-policy-names-none"),
+    pytest.param("low", "high", "high", id="the-sessions-own-pick"),
+    pytest.param(None, None, None, id="cleared-is-sent-as-none-not-left-out"),
+]
+
+
+def _picked(loop: AgentLoop, pick: str | None) -> None:
+    """The session's own pick, on the record the turn entrance reads it off."""
+    if pick is not None:
+        session_effort.write(loop.sessions, "cli:c", pick)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("live", "pick", "sent"), _SIDE_CALL_CASES)
+async def test_the_wrap_up_runs_at_the_effort_in_force_not_the_policys_word(tmp_path, live, pick, sent):
+    """The exhaustion wrap-up asks for the effort the turn froze -- the pick,
+    else the configured default as the file has it -- and sends it the way the
+    turn's other calls do, None included. The policy names no word here, so a
+    wrap-up handed the policy's effort instead of the turn's sends None where a
+    word is due; and one that leaves the key out on None lets the provider
+    fill it from the copy it took at boot, which is the clear never reaching
+    the wire."""
+    provider = _BootedProvider("high", [_tool_call("list_dir", {"path": "."})] * 3 + [_text("summary")])
+    loop = _loop(tmp_path, provider, max_iterations=1)
+    loop._live_config = _live_default(tmp_path, live)
+    _picked(loop, pick)
+
+    out = await loop._process_message(_req())
+
+    assert out is not None
+    # The one ReAct step, then the wrap-up: both at the effort in force.
+    assert provider.efforts == [sent, sent]
+
+
+def _with_oncall_roster(monkeypatch) -> None:
+    """The ``spawn`` tool's roster names an on-call agent, so a look at a path
+    earns the judgement. On the class: the tool keeps slots."""
+    from raven.agent.subagent.backends import AgentMeta
+    from raven.agent.subagent.spawn_tool import SpawnTool
+
+    roster = [AgentMeta("Raven-Oncall", "", False, False, owns_watched_work=True)]
+    monkeypatch.setattr(SpawnTool, "_agents", lambda self: roster)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("live", "pick", "sent"), _SIDE_CALL_CASES)
+async def test_the_watch_work_judgement_is_paid_at_the_effort_in_force(tmp_path, monkeypatch, live, pick, sent):
+    """The judgement a look at a path earns is a model call of the turn, made
+    through ``chat_stream``: the turn hands the helper the effort it froze and
+    the provider sees that word -- or an explicit None -- never the copy it
+    booted with. Pinned at the provider rather than at the helper's door, so
+    the call site handing the policy's word, or the helper dropping the key,
+    both show up here."""
+    verdict = _text('{"watched": true, "paths": ["/tmp/arena"]}')
+    provider = _BootedProvider("high", [_tool_call("list_dir", {"path": "."}), verdict, _text("done")])
+    loop = _loop(tmp_path, provider)
+    loop._live_config = _live_default(tmp_path, live)
+    _with_oncall_roster(monkeypatch)
+    _picked(loop, pick)
+
+    out = await loop._process_message(_req())
+
+    assert out is not None
+    # The ReAct step, the judgement the look earned, and the step after it.
+    assert provider.efforts == [sent, sent, sent]
 
 
 @pytest.mark.asyncio
