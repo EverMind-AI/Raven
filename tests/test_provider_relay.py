@@ -782,6 +782,21 @@ def test_a_new_event_loop_gets_a_relay_that_answers(monkeypatch: pytest.MonkeyPa
         assert not os.path.exists(first[relay.RELAY_ENV].removeprefix("unix:"))
 
 
+async def test_a_loop_in_another_thread_is_offered_the_relay_this_loop_serves(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The RPC server runs a CLI command's own asyncio.run on a worker thread, beside its own loop."""
+    from raven.providers import litellm_setup
+
+    monkeypatch.setattr(litellm_setup, "warm_up_in_background", lambda: None)
+    try:
+        here = await relay_server.relay_env()
+        server = relay_server._SERVER
+        beside = await asyncio.to_thread(asyncio.run, relay_server.relay_env())
+        assert beside == here
+        assert relay_server._SERVER is server and server is not None and server.serving
+    finally:
+        await relay_server.close_relay()
+
+
 def test_a_host_without_unix_sockets_serves_on_loopback_tcp(monkeypatch: pytest.MonkeyPatch) -> None:
     assert relay_server.RelayServer()._tcp is not hasattr(asyncio, "start_unix_server")
     monkeypatch.delattr(asyncio, "start_unix_server", raising=False)
