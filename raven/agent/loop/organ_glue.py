@@ -148,8 +148,8 @@ class OrganGlueMixin:
         """The candidate message view, asked of the Memory role that owns it."""
         return self.harness.memory.candidate_messages(session)
 
-    def _wire_output_ceiling(self, model: str | None = None) -> int:
-        """The output ceiling a request for ``model`` will actually carry.
+    def _wire_output_ceiling(self, model: str | None = None, *, pinned: int | None = None) -> int:
+        """The output ceiling a request for ``model`` will actually carry, asking for ``pinned`` if given.
 
         The turn path's reservations go through here so they read the id the
         request goes out under rather than the one it is configured with. The
@@ -167,6 +167,7 @@ class OrganGlueMixin:
         return send_max_tokens(
             getattr(self.provider, "generation", None),
             getattr(self.provider, "wire_model_id", lambda m: m)(model or self.model),
+            pinned=pinned,
             allow_fetch=False,
         )
 

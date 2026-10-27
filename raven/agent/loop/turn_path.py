@@ -1431,9 +1431,12 @@ class TurnPathMixin:
             # ``prompt + max_tokens <= window`` refuses the request outright. A
             # hook's own ``max_tokens`` override stands; the doubled ceiling of an
             # output-limit continuation does not, since the same refusal awaits it.
-            if "max_tokens" not in gen_overrides or (
-                call_overrides is not None and call_overrides is continuation_overrides
-            ):
+            # Nor may that doubled ceiling pass the model's own: not every provider
+            # clamps what it is asked for.
+            continuing = call_overrides is not None and call_overrides is continuation_overrides
+            if continuing:
+                gen_overrides["max_tokens"] = self._wire_output_ceiling(call_model, pinned=gen_overrides["max_tokens"])
+            if "max_tokens" not in gen_overrides or continuing:
                 if reply_room := self._reply_room(call_messages, call_tools, call_model):
                     gen_overrides["max_tokens"] = min(gen_overrides.get("max_tokens", reply_room), reply_room)
             # A reply that is a silence marker is shown to no one, so the start of one is
@@ -2332,9 +2335,9 @@ class TurnPathMixin:
                     # Cut at the ceiling with nothing in it: the model is told so
                     # and given more room. Effort is left alone -- there was no
                     # reasoning to blame. The ceiling doubles per continuation from
-                    # the one the first cut call carried; the provider clamps it
-                    # to what the model accepts (``send_max_tokens``), and the call
-                    # to the room its prompt leaves in the window.
+                    # the one the first cut call carried; the call holds it to the
+                    # model's own output ceiling and to the room its prompt leaves
+                    # in the window.
                     recovery.continuations += 1
                     if recovery.max_tokens_base is None:
                         recovery.max_tokens_base = response.max_tokens

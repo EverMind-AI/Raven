@@ -1044,6 +1044,47 @@ async def test_a_continuation_keeps_doubling_until_the_room_beside_its_prompt_ru
     assert [call["max_tokens"] for call in calls] == [4096, 8192, 16384, 20_000]
 
 
+class _UnclampedCuts:
+    """A provider that sends the ``max_tokens`` it is asked for as it stands, with no clamp of its own,
+    and whose every reply is cut at that ceiling with nothing in it. Asked for none, it sends
+    ``default``."""
+
+    def __init__(self, default: int) -> None:
+        self.default = default
+        self.asked: list[int] = []
+
+    async def chat_with_retry(self, messages, tools=None, model=None, fallback_models=None, max_tokens=None, **_kw):
+        sent = max_tokens if isinstance(max_tokens, int) else self.default
+        self.asked.append(sent)
+        return LLMResponse(content="", finish_reason="length", truncated=True, max_tokens=sent)
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "default,asked",
+    [
+        pytest.param(32_768, [32_768] * 4, id="the_first_call_already_asked_the_ceiling"),
+        pytest.param(4096, [4096, 8192, 16_384, 32_768], id="doubling_up_to_the_ceiling"),
+        pytest.param(12_000, [12_000, 24_000, 32_768, 32_768], id="held_once_it_would_pass_it"),
+    ],
+)
+async def test_a_continuation_never_asks_more_than_the_models_own_ceiling(workspace, monkeypatch, default, asked):
+    """The doubled ceiling is held to the model's output ceiling, not only to the room beside the
+    prompt: a provider that does not clamp would send twice its maximum and be refused."""
+    monkeypatch.setattr(rates, "resolve_max_output_tokens", lambda *_a, **_k: 32_768)
+    provider = _UnclampedCuts(default)
+    agent = _make_agent(workspace, provider, RecoveryLimits())
+    agent._reply_room = lambda messages, tools, model: None
+
+    _final, _used, _messages, outcome = await agent._run_agent_loop(_seed())
+
+    assert outcome.status == "error"
+    assert provider.asked == asked
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "cuts_before_the_tool,attempts",
