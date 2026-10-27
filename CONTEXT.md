@@ -834,7 +834,8 @@ nothing is delivered for it: `_process_message` returns no reply, so a channel s
 a surface that streams is shown none of the marker -- the `SilenceGate` holds the start of a reply
 while it could still become `[SILENT]` (a reply that opens with anything but whitespace or the
 bracket goes out at once), reads past an inline think block the way the loop does (the block streams
-as it arrives, and what follows it is held), keeps holding across a stream cut while the reply could
+as it arrives, and what follows it is held; a closing tag with no block open is debris, as the loop
+reads it, and does not end the hold), keeps holding across a stream cut while the reply could
 still be the marker, and drops what it held when the loop reads the reply as
 a marker (a turn from a proactive origin, whose marker may close a report, holds the
 whole call instead). An exhausted turn's wrap-up is gated and read the same way. The marker row

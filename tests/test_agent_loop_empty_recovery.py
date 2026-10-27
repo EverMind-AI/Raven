@@ -2599,6 +2599,18 @@ async def test_a_cut_thought_whose_continuation_calls_a_tool_files_only_the_word
 
 
 @pytest.mark.asyncio
+async def test_a_stray_closing_think_tag_after_a_cut_marker_shows_none_of_it(workspace, monkeypatch):
+    """A continuation that is only a closing think tag with no block open adds nothing, as the loop reads
+    it, so the marker the cut carried ends the turn silent and the gate shows none of it."""
+    _served(monkeypatch, [_DyingStream("[SILENT]"), _finished_stream("</think>")])
+
+    out, outcome, last, streamed = await _ends_on(_litellm_agent(workspace), Origin.USER)
+
+    assert out == "[SILENT]" and outcome.silent is True
+    assert streamed == []
+
+
+@pytest.mark.asyncio
 async def test_an_ordinary_cut_answer_streams_as_it_did(workspace, monkeypatch):
     """The control: a person's answer is out from its first letter, and its continuation follows as it comes."""
     _served(monkeypatch, [_DyingStream("The answer is "), _finished_stream("42", ".")])
@@ -3956,6 +3968,23 @@ async def test_the_gate_reads_a_think_tag_exactly_as_the_loop_strips_one(deltas,
     assert seen == shown
     whole = "".join(deltas)
     assert (strip_think_blocks(whole) == "[SILENT]") is (shown != deltas)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deltas", [["[SILENT]", "</think>"], ["</thi", "nk>[SILENT]"], ["[SILENT]</MM:Think>\n"]], ids=str
+)
+async def test_the_gate_reads_a_closing_think_tag_with_no_block_open_as_debris(deltas):
+    """The loop reads a lone closing tag as the debris a reasoning parser leaves, not as text, so the gate
+    holds a marker beside one as it holds the marker alone."""
+    seen, deliver = _collecting()
+    gate = SilenceGate(deliver, hold_all=False)
+
+    for delta in deltas:
+        await gate(delta)
+    gate.discard()
+
+    assert seen == []
 
 
 @pytest.mark.asyncio

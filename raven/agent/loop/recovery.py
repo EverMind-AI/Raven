@@ -712,12 +712,17 @@ class _Reading:
             return True
         if self.tag or char == "<":
             self.tag += char
-            tag = _read_think_tag(self.tag, None)
-            if tag is None:
-                return None
-            if tag is not True:
-                self.block, self.tag = tag, ""
-            return True
+            opening = _read_think_tag(self.tag, None)
+            if opening is not None and opening is not True:
+                self.block, self.tag = opening, ""
+                return True
+            closing = [_read_think_tag(self.tag, name) for name in _THINK_NAMES]
+            if any(tag not in (None, True) for tag in closing):
+                # A closing tag with no block open is the debris a reasoning parser leaves, which
+                # the loop reads as nothing (``is_only_think_debris``): not a word of the reply.
+                self.tag = ""
+                return True
+            return True if opening is True or True in closing else None
         if char.isspace():
             # Whitespace may only stand before the marker or after the whole of it.
             return True if not self.body or self.body == SILENT_MARKER else None
