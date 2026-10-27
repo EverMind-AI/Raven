@@ -21,8 +21,9 @@ import pytest
 import raven.agent.loop.turn_path as agent_loop_main
 import raven.rpc.methods.session as session_methods
 from raven.agent.harness.action import DefaultAction
+from raven.agent.hook import AgentHook, HookDecision
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
+from raven.agent.loop.bundles import EngineWiring, HostWiring, ToolWiring, TurnPolicy
 from raven.config.loader import load_config
 from raven.config.raven import ContextConfig
 from raven.contracts.llm_provider import ToolCallRequest
@@ -92,6 +93,7 @@ def _make_agent(
     *,
     strategies: StrategyRegistry | None = None,
     context_config: ContextConfig | None = None,
+    hooks: list[AgentHook] | None = None,
 ) -> AgentLoop:
     kwargs: dict = {}
     if window is not None or strategies is not None or context_config is not None:
@@ -100,6 +102,8 @@ def _make_agent(
             strategies=strategies,
             context_config=context_config,
         )
+    if hooks is not None:
+        kwargs["host"] = HostWiring(hooks=hooks)
     return AgentLoop(
         provider=provider,
         workspace=workspace,
@@ -557,6 +561,7 @@ def _costing_agent(
     script: list[LLMResponse],
     *,
     strategies: StrategyRegistry | None = None,
+    hooks: list[AgentHook] | None = None,
 ) -> AgentLoop:
     """An agent whose every billed call is the loop's own.
 
@@ -573,6 +578,7 @@ def _costing_agent(
         window=40000,
         strategies=strategies,
         context_config=ContextConfig(drop_segments=["curator"]),
+        hooks=hooks,
     )
 
 
@@ -773,6 +779,15 @@ def _measured(prompt_tokens: int, completion_tokens: int, **extra) -> dict:
     }
 
 
+async def _resumed_usage(workspace: Path, monkeypatch, session_key: str) -> dict:
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(workspace)
+    cfg.agents.defaults.context_window_tokens = 40000
+    monkeypatch.setattr(session_methods, "load_config", lambda: cfg)
+    result = await session_methods.session_resume({"session_id": session_key})
+    return result["info"]["usage"]
+
+
 def _stored_replies(workspace: Path, session_key: str) -> list[dict]:
     session = SessionManager(workspace).peek(session_key)
     assert session is not None, "the turn was not persisted"
@@ -833,13 +848,8 @@ async def test_a_resumed_session_shows_the_reading_the_live_turn_showed(workspac
     )
     sink: dict = {}
     await _turn(agent, sink, session_key="tui:c1")
-    cfg = load_config()
-    cfg.agents.defaults.workspace = str(workspace)
-    cfg.agents.defaults.context_window_tokens = 40000
-    monkeypatch.setattr(session_methods, "load_config", lambda: cfg)
 
-    result = await session_methods.session_resume({"session_id": "tui:c1"})
-    usage = result["info"]["usage"]
+    usage = await _resumed_usage(workspace, monkeypatch, "tui:c1")
 
     assert sink["context_used"] == used
     assert (usage["context_used"], usage["context_percent"]) == (sink["context_used"], sink["context_percent"])
@@ -864,3 +874,66 @@ async def test_a_reply_whose_call_reported_no_usage_carries_no_reading(workspace
 
     (reply,) = _stored_replies(workspace, "tui:c1")
     assert "context_used" not in reply and "_context_used" not in reply, reply
+
+
+class _ReviseTheAnswer(AgentHook):
+    async def after_iteration(self, ctx):
+        if ctx.response is not None and not ctx.response.has_tool_calls:
+            return HookDecision(short_circuit_result="reviewed answer")
+        return HookDecision()
+
+
+class _RefuseTheTools(AgentHook):
+    async def before_execute_tools(self, ctx):
+        return HookDecision(short_circuit_result="tools refused")
+
+
+class _EndAfterTheTools(AgentHook):
+    async def after_iteration(self, ctx):
+        if ctx.response is not None and ctx.response.has_tool_calls:
+            return HookDecision(short_circuit_result="stopped after the tools")
+        return HookDecision()
+
+
+_CALLS_A_TOOL = LLMResponse(
+    content="",
+    tool_calls=[ToolCallRequest(id="c1", name="list_dir", arguments={"path": "."})],
+    usage=_measured(6000, 2000),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("hook", "reply", "put_in_place"),
+    [
+        (
+            _ReviseTheAnswer(),
+            LLMResponse(content="first draft", finish_reason="stop", usage=_measured(6000, 2000)),
+            "reviewed answer",
+        ),
+        (_RefuseTheTools(), _CALLS_A_TOOL, "tools refused"),
+        (_EndAfterTheTools(), _CALLS_A_TOOL, "stopped after the tools"),
+    ],
+    ids=[
+        "after_iteration_replaces_the_answer",
+        "before_execute_tools_replaces_a_tool_call",
+        "after_iteration_ends_after_the_tools",
+    ],
+)
+async def test_a_reply_a_hook_put_in_place_of_the_calls_keeps_that_calls_reading(
+    workspace, monkeypatch, hook, reply, put_in_place
+):
+    """A hook's text stands in for what the model said, not for the call: the
+    live meter already showed that call's window, so a resume must show it too.
+    After a tool call, the call's own row carries the reading, so the text a
+    hook ends the turn with there needs none."""
+    agent = _costing_agent(workspace, [reply], hooks=[hook])
+    sink: dict = {}
+    await _turn(agent, sink, session_key="tui:c1")
+
+    usage = await _resumed_usage(workspace, monkeypatch, "tui:c1")
+
+    assert put_in_place in [r.get("content") for r in _stored_replies(workspace, "tui:c1")], "the hook's text was filed"
+    assert sink["context_used"] == 8000
+    assert (usage["context_used"], usage["context_percent"]) == (sink["context_used"], sink["context_percent"])
+    assert usage["context_estimated"] is False

@@ -1336,11 +1336,11 @@ class TurnPathMixin:
                 completion_tokens = int(response.usage.get("completion_tokens", 0) or 0)
                 # One reading for every consumer: the sink gauge below, the
                 # proactive compaction trigger at the top of the next
-                # iteration, and the reply this call produced, which keeps it
-                # for a resume (``_stamp_context_used``). They differ in their
-                # thresholds, not in what they measure -- and what they measure
-                # is how full the window is, which is not what the prompt was
-                # billed as (see ``_window_reading``).
+                # iteration, and the reply that stands for this call, which
+                # keeps it for a resume (``_stamp_context_used``). They differ
+                # in their thresholds, not in what they measure -- and what
+                # they measure is how full the window is, which is not what
+                # the prompt was billed as (see ``_window_reading``).
                 context_used = _window_reading(response.usage)
                 if context_used > 0:
                     window.last_context_used = context_used
@@ -1422,6 +1422,7 @@ class TurnPathMixin:
                         # leaves dangling calls that strict providers reject.
                         final_content = str(decision.short_circuit_result)
                         messages = self.context.add_assistant_message(messages, final_content)
+                        _stamp_context_used(messages, response)
                         break
                 # Blocking a call is handled where the call is: the
                 # branch below refuses it and cancels the siblings the
@@ -2076,6 +2077,7 @@ class TurnPathMixin:
                     if decision.short_circuit_result is not None:
                         final_content = str(decision.short_circuit_result)
                         messages = self.context.add_assistant_message(messages, final_content)
+                        _stamp_context_used(messages, response)
                         break
 
                 messages = self.context.add_assistant_message(
