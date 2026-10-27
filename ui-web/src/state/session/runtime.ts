@@ -20,7 +20,7 @@ import { claimDraft as claimComposerDraft } from '../../features/composer/mount'
 import { drawMeter, goPaint as goState, queuePush, queueShift, turn } from '../../features/composer/mount'
 import { reduce } from '../../features/composer/turn'
 import { claimDraft as claimDeskDraft } from '../../features/desk/store'
-import { adoptSelection, chipModel, loadProviders, rememberUsed, stagedTier } from '../../features/model/source'
+import { adoptSelection, chipModel, loadProviders, rememberUsed, stagedEffort, stagedTier } from '../../features/model/source'
 import { rowPreview, touchSession } from '../../features/rail/source'
 import { draw as sessionDraw } from '../../features/rail/store'
 import { plainTitle } from '../../features/rail/title'
@@ -39,6 +39,7 @@ import { hasNamingFlag, hasTurnDuration } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
 import { ask as confirmAsk } from '../confirm'
 import { set as setCtx } from '../ctxChip'
+import { load as loadEffort } from '../effort'
 import { adopt as adoptBases, staged as stagedBases } from '../mentions'
 import { ds, sources } from '../sources'
 import { load as loadTier } from '../tier'
@@ -133,7 +134,7 @@ export class SessionRuntime {
 
   /* A model, tier and permission mode picked while this was still a draft.
      Applied to the conversation the first message mints, then forgotten. */
-  staged: Staging = { model: null, tier: null, perm: null }
+  staged: Staging = { model: null, tier: null, perm: null, effort: null }
 
   wsRoot: string | null = null
 
@@ -595,7 +596,8 @@ export async function promote(preview?: string, atPointer?: (id: string) => void
   claimComposerDraft(sessionCurrent())
   claimDeskDraft(sessionCurrent())
   await applyStagedModel(draftRt, s.id, gen)
-  await applyStagedTier(draftRt, s.id)
+  await applyStagedTier(draftRt, s.id, gen)
+  await applyStagedEffort(draftRt, s.id, gen)
   await applyStagedPerm(draftRt, s.id)
   sessionDraw()
   await subscribe(s.id)
@@ -648,8 +650,15 @@ export async function applyStagedModel(rt: SessionRuntime, sessionId: string, ge
 
    A failure is said rather than reversed silently, and then re-read: the chip is
    showing the staged tier as though it were in force, so leaving it there after
-   a refusal is the one outcome worse than the refusal. */
-export async function applyStagedTier(_rt: SessionRuntime, sessionId: string): Promise<void> {
+   a refusal is the one outcome worse than the refusal.
+
+   `gen` is the ticket the promotion began under, as `applyStagedModel` takes
+   it: the re-read runs after the awaited write, and a ticket taken then is
+   whichever view the reader has opened since -- so a reader who left for
+   another conversation while the write was in flight got this session's rung
+   painted over that conversation's own read. Under the promotion's ticket the
+   source drops that answer instead. */
+export async function applyStagedTier(_rt: SessionRuntime, sessionId: string, gen: number): Promise<void> {
   const mode = stagedTier()
   if (!mode) return
   try {
@@ -657,7 +666,29 @@ export async function applyStagedTier(_rt: SessionRuntime, sessionId: string): P
   } catch (e) {
     toast(`${t('gui.tier.title')}: ${detailOf(e)}`)
   }
-  void loadTier()
+  void loadTier(sessionId, gen)
+}
+
+/* The reasoning effort picked while this was still a draft, written now that
+   there is a session_key to write it under. Awaited before the turn is sent,
+   for the reason the tier is: the turn's first call reads it, and a pick that
+   lands after the call went out is one that turn did not run at. Said rather
+   than reversed silently on a failure, and then re-read, as the tier is.
+
+   The re-read is about the session the promotion minted and carries the
+   ticket the promotion began under, as `applyStagedModel`'s does: a ticket
+   taken after the awaited write is whichever view the reader has opened
+   since, and under that one the source would paint this session's rung over
+   that view's own read. The source drops the late answer instead. */
+export async function applyStagedEffort(_rt: SessionRuntime, sessionId: string, gen: number): Promise<void> {
+  const effort = stagedEffort()
+  if (!effort) return
+  try {
+    await gateway().call('session.set_effort', { session_key: sessionId, effort })
+  } catch (e) {
+    toast(`${t('gui.effort.title')}: ${detailOf(e)}`)
+  }
+  void loadEffort(sessionId, gen)
 }
 
 /* The permission mode picked while this was still a draft, written now that

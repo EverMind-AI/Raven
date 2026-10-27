@@ -49,6 +49,26 @@ raven agent --continue -m "Expand the previous summary; do not modify files"
 交互式会话通过 UI 的对话选择器切换。子 Agent 的 `instance` 续接子 Agent 对话，
 不是宿主 session id 或 DAG node id，详见[DAG 编排](orchestration.md)。
 
+## 设置思考深度 { #set-the-reasoning-effort }
+
+思考深度是模型每次回答前思考多少。可选的词是 `minimal`、`low`、`medium`、`high`。
+各厂商把它们映射成自己的请求参数（Anthropic 的自适应思考强度与思考预算，OpenAI 风格
+接口的 `reasoning_effort` 字段），没有思考能力的模型会忽略它。不设置时使用厂商自己的默认值。
+
+两处可以设置：
+
+- **对所有对话**：在 WebUI 打开设置页，在「主对话」一行点「参数」，再选「思考深度」；
+  或在 `~/.raven/config.json` 里设置 `agents.defaults.reasoningEffort`。第一档
+  「厂商默认」会清掉这个键。
+- **只对当前对话**：WebUI 模型选择器（点输入框旁的模型标签打开）里的「思考深度」行，
+  或 TUI 里的 `/effort <词>`。单独输入 `/effort` 查看当前生效的档位，`/effort default`
+  让这个对话重新跟随全局设置。在与某个子智能体实例直聊时这条命令会被拒绝：这个选择
+  属于主对话，实例自己没有思考深度可设。
+
+单个对话的选择优先于全局设置和该对话的模式。它记录在对话自己的档案里，网关重启后仍在，
+恢复对话时一并带回，从下一轮开始生效。它只影响 Raven 自己的模型调用；子智能体仍按全局
+默认值运行。
+
 ## 有目的地增加能力 { #add-capability-deliberately }
 
 可复用指令用 skill，外部工具用 MCP，运行时贡献用 plugin。需要独立身份和执行配置
