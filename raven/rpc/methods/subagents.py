@@ -1667,10 +1667,18 @@ def _wire_choices(choices: Any) -> list[dict[str, str]]:
     return [{"value": c.value, "name": c.name, "group": c.group} for c in choices or ()]
 
 
+def _wire_efforts(choices: Any) -> list[dict[str, str]]:
+    """Effort choices in the shape ``subagents.list`` sends them."""
+    return [{"value": c.value, "name": c.name} for c in choices or ()]
+
+
 def _recorded_menu(cfg: Any) -> dict[str, Any]:
     """The menu the capability store holds for ``cfg``, in ``subagents.list``'s shape."""
     meta = agent_meta(cfg, snapshot=acp_snapshot_for(cfg))
-    return {"models": _wire_choices(meta.model_choices)}
+    return {
+        "models": _wire_choices(meta.model_choices),
+        "effort_choices": _wire_efforts(getattr(meta, "effort_choices", ())),
+    }
 
 
 async def subagents_refresh_models(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
@@ -1750,9 +1758,29 @@ async def subagents_refresh_models(params: dict, *, agent_loop_factory: "AgentLo
         except Exception as exc:  # noqa: BLE001 - the measurement is already recorded
             logger.warning("subagent menu refreshed but the agent table was not re-composed: {}", exc)
     # The measured menu is the one just recorded; the store read is only for the
-    # paths where a failed read keeps the previous one in place.
-    models = _wire_choices(getattr(snapshot, "model_choices", ())) if measured else _recorded_menu(cfg)["models"]
-    return {"ok": measured, "detail": getattr(snapshot, "detail", "") or "", "models": models}
+    # paths where a failed read keeps the previous one in place. The effort menu
+    # is sent too: for a model-specific option it moves with the model, and the
+    # picker that asked for this read is still open on the old rungs.
+    recorded = _recorded_menu(cfg)
+    if measured:
+        # Read the two menus off the snapshot the read just returned rather than
+        # through `agent_meta`, which also derives policy a refresh must not
+        # re-evaluate (and which test doubles for the handshake do not carry).
+        efforts = tuple(getattr(snapshot, "effort_choices", ()) or ())
+        if not efforts:
+            mode_efforts = getattr(snapshot, "mode_efforts", None)
+            efforts = mode_efforts() if callable(mode_efforts) else ()
+        models = _wire_choices(getattr(snapshot, "model_choices", ()))
+        effort_choices = _wire_efforts(efforts)
+    else:
+        models = recorded["models"]
+        effort_choices = recorded["effort_choices"]
+    return {
+        "ok": measured,
+        "detail": getattr(snapshot, "detail", "") or "",
+        "models": models,
+        "effort_choices": effort_choices,
+    }
 
 
 def _forget_menu_task(key: tuple[str, str], done: asyncio.Task[Any]) -> None:

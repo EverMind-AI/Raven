@@ -369,6 +369,7 @@ describe('the model menu re-read', () => {
       ok: true,
       detail: 'connected; models: 2',
       models: [{ value: 'm1', name: 'One', group: 'Own key' }, { value: '', name: 'dropped' }],
+      effort_choices: [{ value: 'high', name: 'High' }, { value: '', name: 'dropped' }],
     })
 
     const out = await extAgentsSource.refreshMenus(card({ configured: true }), true)
@@ -380,11 +381,17 @@ describe('the model menu re-read', () => {
       ok: true,
       detail: 'connected; models: 2',
       models: [{ value: 'm1', name: 'One', group: 'Own key' }],
+      effortChoices: [{ value: 'high', name: 'High' }],
     })
   })
 
   it('sends a preset row as preset, and keeps a failed read drawable', async () => {
-    const asked = menus({ ok: false, detail: 'the host is down', models: [{ value: 'old' }] })
+    const asked = menus({
+      ok: false,
+      detail: 'the host is down',
+      models: [{ value: 'old' }],
+      effort_choices: [{ value: 'low' }],
+    })
 
     const out = await extAgentsSource.refreshMenus(card({ configured: false }))
 
@@ -396,6 +403,7 @@ describe('the model menu re-read', () => {
       ok: false,
       detail: 'the host is down',
       models: [{ value: 'old', name: '', group: '' }],
+      effortChoices: [{ value: 'low', name: '' }],
     })
   })
 })

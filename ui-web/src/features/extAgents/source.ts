@@ -466,6 +466,9 @@ export const extAgentsSource: ExtAgentsSource = {
       models: (got.models || [])
         .filter((c) => c && c.value)
         .map((c) => ({ value: c.value, name: c.name || '', group: c.group || '' })),
+      effortChoices: (got.effort_choices || [])
+        .filter((c) => c && c.value)
+        .map((c) => ({ value: c.value, name: c.name || '' })),
     }
   },
 }
