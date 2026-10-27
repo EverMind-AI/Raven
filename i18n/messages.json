@@ -8670,8 +8670,8 @@
       "zh": "新增"
     },
     "gui.settings.skills.add_prompt": {
-      "en": "Help me find a skill on Skill Hub that can ... and install it",
-      "zh": "帮我在 Skill Hub 找一个能……的技能并安装"
+      "en": "Help me find a skill on Skill Hub and install it. My requirements are as follows:",
+      "zh": "帮我在 Skill Hub 找一个技能并安装，我的要求如下："
     },
     "gui.settings.skills.builtin": {
       "en": "Built-in",
@@ -8834,8 +8834,8 @@
       "zh": "新增"
     },
     "gui.settings.plugins.add_prompt": {
-      "en": "Help me connect the ... MCP server",
-      "zh": "帮我接入……的 MCP 服务"
+      "en": "Help me connect an MCP server. My requirements are as follows:",
+      "zh": "帮我接入一个 MCP 服务，我的要求如下："
     },
     "gui.settings.plugins.add_hint": {
       "en": "A server the catalogue does not list goes into tools.mcpServers in {path} by hand.",

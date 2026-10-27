@@ -11,9 +11,9 @@
  * `askInChat` is the other door, for the settings dialog. A skill or an MCP
  * server is added by asking Raven in the chat (use_skill fetches the Skill Hub
  * bundle, the plugin tool connects the PlugHub entry), which no row of those
- * two pages can do -- so each page's "add" button puts the request in the OPEN
- * conversation's composer, with the blank left for the reader to fill, and
- * sends nothing.
+ * two pages can do -- so each page's "add" button puts a lead-in in the OPEN
+ * conversation's composer, a sentence that ends where the reader's own
+ * requirement starts on the next line, and sends nothing.
  */
 
 import { t } from '../../i18n/t'
@@ -42,12 +42,16 @@ export function startTaskWith(promptKey: string, name: string, vars: Record<stri
 
 /* The dialog closes and a module page that covers the chat is put away; the
    conversation itself is left as it was, a running turn included (Enter on a
-   busy turn queues, as it always does). What was already typed is kept, with
-   the sentence after it: opening the dialog must not cost a draft. */
+   busy turn queues, as it always does). The lead-in ends with a line break,
+   so the cursor lands on a line of its own for the reader's requirement: in
+   this field Enter sends, and the break is one they could only type with
+   Shift. What was already typed is kept, with the lead-in after it: opening
+   the dialog must not cost a draft. */
 export function askInChat(text: string): void {
   settings.close()
   if (page.get() !== null) page.show(null)
   const ta = field()
   const typed = ta.value
-  fill(ta, typed.trim() ? `${typed.replace(/\s+$/, '')}\n\n${text}` : text)
+  const lead = `${text}\n`
+  fill(ta, typed.trim() ? `${typed.replace(/\s+$/, '')}\n\n${lead}` : lead)
 }

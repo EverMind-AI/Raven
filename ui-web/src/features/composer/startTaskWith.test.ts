@@ -36,27 +36,27 @@ const heard = (): string[] => {
 }
 
 describe('askInChat', () => {
-  it('closes the dialog, fills the field, tells the dock, and leaves the cursor after the text', () => {
+  it('closes the dialog, fills the field, tells the dock, and leaves the cursor on the line after the lead-in', () => {
     const seen = heard()
     askInChat('find me a skill')
     expect(settings.close).toHaveBeenCalledTimes(1)
-    expect(ta().value).toBe('find me a skill')
-    expect(seen).toEqual(['find me a skill'])
+    expect(ta().value).toBe('find me a skill\n')
+    expect(seen).toEqual(['find me a skill\n'])
     expect(document.activeElement).toBe(ta())
-    expect([ta().selectionStart, ta().selectionEnd]).toEqual([15, 15])
+    expect([ta().selectionStart, ta().selectionEnd]).toEqual([16, 16])
   })
 
   it('keeps what was typed, with the sentence after it', () => {
     ta().value = 'half a thought  \n'
     askInChat('find me a skill')
-    expect(ta().value).toBe('half a thought\n\nfind me a skill')
+    expect(ta().value).toBe('half a thought\n\nfind me a skill\n')
     expect(ta().selectionStart).toBe(ta().value.length)
   })
 
   it('does not keep a draft that is only whitespace', () => {
     ta().value = '  \n'
     askInChat('x')
-    expect(ta().value).toBe('x')
+    expect(ta().value).toBe('x\n')
   })
 
   it('puts a module page away first, and asks nothing of the switch when none covers the chat', () => {

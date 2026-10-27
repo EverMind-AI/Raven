@@ -10,9 +10,11 @@ All notable changes to Raven are documented here.
   button. Neither page can install anything -- a skill is fetched from Skill
   Hub by `use_skill` and an MCP server is connected from the PlugHub catalogue
   by the `plugin` tool, both in the chat -- so the button closes the dialog,
-  returns to the open conversation and puts the request in the composer with
-  the blank left to fill, sent by nobody but the reader; what was already typed
-  stays, with the request after it. The Plugins page says under the button that
+  returns to the open conversation and puts a lead-in in the composer (*Help
+  me find a skill on Skill Hub and install it. My requirements are as
+  follows:*), the cursor on the line under it for the reader's own
+  requirement, sent by nobody but the reader; what was already typed stays,
+  with the lead-in after it. The Plugins page says under the button that
   a server the catalogue does not list goes into `tools.mcpServers` in the
   config file by hand, naming the file the gateway reported.
 
