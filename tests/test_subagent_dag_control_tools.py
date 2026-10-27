@@ -2040,6 +2040,15 @@ async def _refusal_scene(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: 
         await _wait_until(lambda: len(state.attempt_agents.get("b", [])) == 1)
         return _Scene(tool, run_id, "gamma", "use the parser", "stateful", fakes, ask, charge)
 
+    if case == "oversized_task":
+        # The handover keeps the node's original task whole; a task over the
+        # renderer's budget could never be carried, so the move is refused at the
+        # door rather than committed and failed at install time.
+        tool, fakes, ask, charge = _real_tool(tmp_path, monkeypatch)
+        run_id = await _suspended(tool)
+        (Path(tool._nodes_root(session)) / "a.prompt.md").write_text("T" * 128001, encoding="utf-8")
+        return _Scene(tool, run_id, "beta", "use the parser", "128000", fakes, ask, charge)
+
     if case == "occupied_instance":
         from raven.agent.subagent import instances as instances_mod
 
@@ -2074,6 +2083,7 @@ _REFUSAL_CASES = [
     "path_gate",
     "shared_group_stateless_target",
     "occupied_instance",
+    "oversized_task",
 ]
 
 
@@ -2774,6 +2784,37 @@ async def test_a_moved_node_dispatches_through_the_correct_grant_wrapper(
         assert beta.calls[0]["kwargs"]["mcp_grant"] is beta.grants[-1][1], (
             "the dispatched attempt uses the grant its own prepared backend resolved"
         )
+        tool.request_cancel(run_id)
+
+
+class _PartialGrantAgent(_GrantingAgent):
+    """A backend whose grant resolves, but only partially: the note says what is missing."""
+
+    def resolve_mcp_grant(self, mcps: list[str] | None = None) -> Any:
+        grant = SimpleNamespace(note_text=lambda: "server 'db' is not connected on this machine")
+        self.grants.append((list(mcps or []), grant))
+        return grant
+
+
+async def test_a_reassign_keeps_the_partial_mcp_grant_notice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A move must not lose the sentence that says a server could not be resolved:
+    the model is choosing a target partly by what that target can reach."""
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    beta = _PartialGrantAgent("fixed")
+    async with draining_dag_runs():
+        tool, _fakes, _ask, _charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha"), ThirdPartyCliSubagentConfig(name="beta", command="cat {mcp_file}")],
+            backends={"alpha": _FakeAgent("partial"), "beta": beta},
+        )
+        run_id = await _suspended(tool, nodes=[_node_spec(mcps=["db"])])
+
+        plan = await tool.prepare_reassign(run_id, "a", "beta", "use the parser", _REASSIGN_SESSION)
+
+        assert isinstance(plan, ReassignPlan), plan
+        assert any("not connected" in notice for notice in plan.notices), plan.notices
         tool.request_cancel(run_id)
 
 

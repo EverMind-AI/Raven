@@ -28,6 +28,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from raven.agent.subagent.dag_reader import current_assignment
 from raven.agent.subagent.dag_store import REGISTRY_FILENAME
 from raven.agent.subagent.history import node_file_in
 from raven.config.agent_names import canonical_agent_name
@@ -263,13 +264,16 @@ def dag_exchanges(
     before it rendered, and deriving a path for it reaches whatever later task
     took the id back, answering for a node that provably wrote nothing.
 
-    ``assignments`` is the registry record of a node that was reassigned. The
-    latest flat artifact then belongs to the agent running it *now*, so the
-    graph's submitted agent must not be given it merely because the graph named
-    it. What that agent did run -- its earlier attempts -- is reachable by node
-    and attempt, and only when the graph's own handle names the instance being
-    asked about: without that, there is no record of which old instance owned
-    those attempts, and guessing one would attach them to the wrong conversation.
+    ``assignments`` is the registry record of a node that was reassigned. A node
+    that moved is read from its per-attempt archives only, for the attempts that
+    ran on the agent being asked about: the flat ``prompt.md``/``out.md`` pair
+    belongs to whichever attempt wrote them last, and while a moved attempt is
+    still running that pair still holds the source agent's answer -- reading it
+    for the destination would show one agent's work as another's own turn. The
+    submitted agent's earlier attempts are reachable by node and attempt, and
+    only when the graph's own handle names the instance being asked about:
+    without that, there is no record of which old instance owned those attempts,
+    and guessing one would attach them to the wrong conversation.
     """
     try:
         runs = [p for p in root.iterdir() if p.is_dir()]
@@ -283,41 +287,41 @@ def dag_exchanges(
             if not isinstance(node, dict):
                 continue
             record = (assignments or {}).get((run.name, node_id))
-            current_agent = node.get("subagent") if record is None else record.get("agent")
-            current_instance = node.get("instance") if record is None else record.get("nodeInstance")
-            if _same_agent(current_agent, agent) and (current_instance or node_id) == handle:
-                started = int(node.get("started_at") or 0)
-                out.append(
-                    _exchange(
-                        f"{run.name}/{node_id}",
-                        _named(node.get("prompt_file")),
-                        _named(node.get("output_file")),
-                        started,
-                        int(node.get("ended_at") or started),
-                    )
+            assignment = current_assignment(node, record)
+            if assignment.attempt_agents:
+                submitted = _graph_node(run, node_id)
+                current = _same_agent(assignment.agent, agent) and (assignment.instance or node_id) == handle
+                was_submitted = (
+                    _same_agent(submitted.get("subagent"), agent) and (submitted.get("instance") or node_id) == handle
                 )
-                continue
-            if record is None:
-                continue
-            history = [a for a in record.get("attemptAgents") or [] if isinstance(a, str)]
-            if not history:
-                continue
-            submitted = _graph_node(run, node_id)
-            if not _same_agent(submitted.get("subagent"), agent) or (submitted.get("instance") or node_id) != handle:
-                continue
-            for attempt, attempt_agent in enumerate(history, start=1):
-                if not _same_agent(attempt_agent, agent):
+                if not (current or was_submitted):
                     continue
-                archived = _archived_exchange(
-                    f"{run.name}/{node_id}#{attempt}",
-                    run,
-                    node_id,
-                    nodes_root,
-                    attempt,
-                    int(node.get("started_at") or 0),
+                for attempt, attempt_agent in enumerate(assignment.attempt_agents, start=1):
+                    if not _same_agent(attempt_agent, agent):
+                        continue
+                    archived = _archived_exchange(
+                        f"{run.name}/{node_id}#{attempt}",
+                        run,
+                        node_id,
+                        nodes_root,
+                        attempt,
+                        int(node.get("started_at") or 0),
+                    )
+                    if archived is not None:
+                        out.append(archived)
+                continue
+            if not (_same_agent(assignment.agent, agent) and (assignment.instance or node_id) == handle):
+                continue
+            started = int(node.get("started_at") or 0)
+            out.append(
+                _exchange(
+                    f"{run.name}/{node_id}",
+                    _named(node.get("prompt_file")),
+                    _named(node.get("output_file")),
+                    started,
+                    int(node.get("ended_at") or started),
                 )
-                if archived is not None:
-                    out.append(archived)
+            )
     return out
 
 

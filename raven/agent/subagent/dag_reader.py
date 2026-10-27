@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from raven.agent.subagent.dag_store import memory_path_in, output_path_in, prompt_path_in, tally_node_statuses
@@ -232,6 +233,74 @@ def attempt_fields(manifest: Mapping[str, Any], registry_row: Mapping[str, Any] 
     return {"attempt_agents": agents} if agents is not None else {}
 
 
+@dataclass(frozen=True)
+class NodeAssignment:
+    """Who runs a node now, and the history that got it there.
+
+    One answer for every reader. A registry row that records a move wins: it is
+    the only durable record of the agent about to run the node while the run is
+    still in flight, and once the manifest is written the two agree. The graph's
+    submitted agent is what both fall back to for a node that never moved.
+    """
+
+    agent: str | None
+    instance: str | None
+    instance_auto: bool | None
+    attempt_agents: list[str] | None
+
+
+def current_assignment(
+    manifest: Mapping[str, Any] | None,
+    registry_row: Mapping[str, Any] | None = None,
+    graph_node: Mapping[str, Any] | None = None,
+) -> NodeAssignment:
+    """Resolve a node's current agent, handle, auto flag and attempt history.
+
+    ``registry_row`` is a ``dag-node`` row, and ``graph_node`` the node as
+    ``graph.json`` submitted it. The row's ``attemptAgents`` is what marks the
+    node as moved -- a row written before reassignment existed carries no key,
+    and an explicit null ``nodeInstance`` on a moved row is a stateless attempt
+    and must survive as one.
+
+    Args:
+        manifest (`dict` | None):
+            The node's manifest entry, or ``{}``.
+        registry_row (`dict` | None):
+            The node's ``dag-node`` registry row, when the caller has one.
+        graph_node (`dict` | None):
+            The node as the graph submitted it, for a run with neither record.
+    """
+    entry = manifest if isinstance(manifest, Mapping) else {}
+    row = registry_row if isinstance(registry_row, Mapping) else None
+    graph = graph_node if isinstance(graph_node, Mapping) else {}
+    moved = row is not None and "attemptAgents" in row
+    manifest_history = _validated_agents(entry.get("attempt_agents"))
+    if manifest_history is not None:
+        # A manifest naming an attempt history is authoritative: it is written
+        # last, from the attempt that actually ran, so a registry write that was
+        # lost behind it cannot move the node back to an earlier agent.
+        agent = entry.get("subagent") or graph.get("subagent")
+        instance = entry.get("instance") if "instance" in entry else graph.get("instance")
+        instance_auto: bool | None = bool(entry["instance_auto"]) if "instance_auto" in entry else None
+        history = manifest_history
+    elif moved:
+        agent = row.get("agent")
+        instance = row.get("nodeInstance")
+        instance_auto = bool(row.get("nodeInstanceAuto"))
+        history = _validated_agents(row.get("attemptAgents"))
+    else:
+        agent = entry.get("subagent") or graph.get("subagent")
+        instance = entry.get("instance") if "instance" in entry else graph.get("instance")
+        instance_auto = None
+        history = None
+    return NodeAssignment(
+        agent=agent,
+        instance=instance,
+        instance_auto=instance_auto,
+        attempt_agents=history,
+    )
+
+
 async def read_run(backend: Any, root: str, run_id: str, nodes_root: str) -> dict:
     """Rebuild one run's manifest-shaped payload from its run dir.
 
@@ -436,8 +505,10 @@ async def _read_transcript(backend: Any, path: str) -> list[dict]:
 
 __all__ = [
     "DagReadError",
+    "NodeAssignment",
     "attempt_fields",
     "branch_fields",
+    "current_assignment",
     "read_node",
     "read_run",
     "registry_outcome",
