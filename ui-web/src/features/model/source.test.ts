@@ -74,6 +74,7 @@ async function live({ session = null, answers = null }: Options = {}) {
       'src/state/banner': { draw: () => {} },
       'src/state/toast': { show: (text: string) => calls.push(['toast', text]) },
       'src/state/tier': { load: () => {} },
+      'src/state/effort': { load: () => {} },
       'src/state/perm': { setFromConfig: (m: string) => calls.push(['setPermMode', m]) },
       'src/state/session/residency': { park: () => {} },
       'src/features/settings/store': {
@@ -142,6 +143,7 @@ async function live({ session = null, answers = null }: Options = {}) {
       return generation()
     },
     gen: () => generation(),
+    effortRead: (sid?: string | null, gen?: number) => model.effortSource.read(sid, gen),
     inFlight: () => pending.map((p) => p.method),
     param: (i: number) => pending[i]!.params,
     settle: (i: number, answer: unknown) => {
@@ -246,6 +248,32 @@ describe('the live model refresh', () => {
     expect(h.param(0)).toEqual({})
     h.settings.loadProviders('a')
     expect(h.param(1)).toEqual({ session_id: 'a' })
+  })
+})
+
+describe('the live effort read', () => {
+  it('asks about the conversation it was given, and drops an answer whose switch was overtaken', async () => {
+    /* A switch asks for the conversation being opened before the page's
+       current session moves over, so the key is the caller's to name; and an
+       answer about a view the reader has left is dropped, as the provider
+       refresh drops its own. */
+    const h = await live()
+    h.bump()
+    const read = h.effortRead('b', h.gen())
+    expect(h.inFlight()).toEqual(['session.set_effort'])
+    expect(h.param(0)).toEqual({ session_key: 'b' })
+    h.bump()
+    await h.settle(0, { session_key: 'b', effort: 'high', default: null, options: ['low', 'high'] })
+    expect(await read).toBeNull()
+  })
+
+  it('answers a read whose switch still stands, and reads the draft with no key', async () => {
+    const h = await live()
+    const read = h.effortRead('a', h.gen())
+    await h.settle(0, { session_key: 'a', effort: 'low', default: null, options: ['low', 'high'] })
+    expect(await read).toEqual({ session_key: 'a', effort: 'low', default: null, options: ['low', 'high'] })
+    void h.effortRead(null)
+    expect(h.param(1)).toEqual({ session_key: '' })
   })
 })
 
