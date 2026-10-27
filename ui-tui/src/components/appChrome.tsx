@@ -17,7 +17,7 @@ import { $liveAgents, liveAgentCounts } from '../app/liveAgentsStore.js'
 import { useTurnSelector } from '../app/turnStore.js'
 import { $uiState } from '../app/uiStore.js'
 import { FACES } from '../content/faces.js'
-import { VERBS } from '../content/verbs.js'
+import { VERB_ROTATION_MS, VERBS } from '../content/verbs.js'
 import { fmtDuration } from '../domain/messages.js'
 import { t as uiText } from '../i18n/index.js'
 import { hasMeaningfulReasoning } from '../lib/reasoning.js'
@@ -26,7 +26,6 @@ import { clipToWidth, clipToWidthFromEnd, fmtK } from '../lib/text.js'
 import { useScrollbarSnapshot } from '../lib/viewportStore.js'
 import { Spinner } from './thinking.js'
 
-const FACE_TICK_MS = 2500
 const HEART_COLORS = ['#ff5fa2', '#ff4d6d']
 
 // Keep verb segment width stable so status-bar content to the right doesn't
@@ -67,7 +66,7 @@ const renderIndicator = (style: IndicatorStyle, tick: number, brandMark: string)
   if (style === 'kaomoji') {
     return {
       frame: FACES[tick % FACES.length] ?? '',
-      intervalMs: FACE_TICK_MS,
+      intervalMs: VERB_ROTATION_MS,
       showSpinner: true,
       showVerb: true
     }
@@ -127,7 +126,7 @@ export function FaceTicker({ color, startedAt }: { color: string; startedAt?: nu
     const clock = setInterval(() => setNow(Date.now()), 1000)
     // Verb timer is gated on `showVerb` — `unicode` style hides the verb
     // entirely, so cycling `verbTick` would be an avoidable re-render.
-    const verb = showVerb ? setInterval(() => setVerbTick(n => n + 1), FACE_TICK_MS) : null
+    const verb = showVerb ? setInterval(() => setVerbTick(n => n + 1), VERB_ROTATION_MS) : null
 
     return () => {
       clearInterval(glyph)

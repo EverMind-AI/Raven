@@ -31,19 +31,7 @@ export const TOOL_VERBS: Record<string, string> = {
 // `remembering` is the one that fits best and cannot be used -- `TOOL_VERBS`
 // already spends it on the memory tool, and the ticker would then say the same
 // word for "thinking" and for "calling a tool".
-export const VERBS = [
-  'circling',
-  'scouting',
-  'gathering',
-  'sifting',
-  'tracing',
-  'turning',
-  'weighing',
-  'prying',
-  'homing',
-  'tallying',
-  'caching',
-  'watching',
-  'perching',
-  'plotting'
-]
+//
+// The list itself lives in ui-shared/verbs.json so the GUI rotates the same
+// words; scripts/gen-verbs.mjs projects that file into verbs.generated.ts.
+export { VERB_ROTATION_MS, VERBS } from './verbs.generated.js'

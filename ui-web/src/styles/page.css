@@ -2367,11 +2367,10 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 
 /* ── the work indicator ───────────────────────────────────────────────────
    One glyph for "this is happening now", in every place that used to say it in
-   its own words: the turn's own row (which switched between starting / writing
-   / working), a sub-agent's row and its open transcript, a command still
-   running. Several vocabularies for one fact made them read as different kinds
-   of event; they are the same fact, and the clock beside the glyph is what
-   says how long it has been true.
+   its own words: the turn's own row, a sub-agent's row and its open transcript,
+   a command still running. Several vocabularies for one fact made them read as
+   different kinds of event; they are the same fact, and the clock beside the
+   glyph is what says how long it has been true.
 
    `currentColor`, not a fixed amber: the same three dots have to sit in an
    amber turn row and a muted panel row without a variant each.
@@ -2396,20 +2395,36 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
   .wkg i { animation: none; opacity: .62; }
 }
 
-/* One appearance for the whole turn: the glyph and the clock never change. The
-   word used to (starting / writing / working) and it was the only part that did
-   -- a state the reader is not meant to act on, reading as three events. The
-   clock is what proves the stream is alive; the glyph is what says it is.
+/* One appearance for the whole turn: the glyph, the word and the clock. The
+   word rotates on a fixed cadence through the catalogue shared with the TUI
+   (ui-shared/verbs.json) instead of switching on stream state -- the phase a
+   turn is in is not something the reader acts on, while how long it has been
+   running is. The glyph says the turn is alive and the clock proves it.
+
+   The verb sits in a fixed-width slot so the clock never shifts as the
+   catalogue moves between short and long entries (`min-width` is the longest
+   entry, 9 characters, and both sides must grow together if that changes). It
+   fades in on each change rather than jumping: the TUI's cadence, in the
+   page's own motion language. Under reduced motion the fade is off and the
+   word still rotates, because the text is information and only the motion is
+   decoration.
 
    It rides the tail of the transcript, so it sits where the answer's own footer
    will sit once the turn lands -- same column, same size -- and the one reads as
    the other settling. */
+@keyframes tvfade { from { opacity: 0; } to { opacity: 1; } }
 .turnlive {
   display: flex; align-items: center; gap: 8px; margin: 9px 0 2px;
   font-family: var(--mono); font-size: 11px; color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 .turnlive .wkg { color: var(--amber); }
+.turnlive .cp-tv { display: inline-flex; align-items: baseline; gap: 6px; }
+.turnlive .cp-verb { display: inline-block; flex: none; min-width: 9ch; animation: tvfade .22s ease-out; }
+.turnlive .cp-sep { opacity: .5; }
+@media (prefers-reduced-motion: reduce) {
+  .turnlive .cp-verb { animation: none; }
+}
 
 .queued { margin-bottom: 9px; display: grid; gap: 3px; }
 .dock-in .queued { margin: 0; padding: 0 16px; }

@@ -108,6 +108,7 @@ lint-tui:
 	npm run lint --prefix ui-tui
 	npm run lint:rpc --prefix ui-tui
 	npm run lint:i18n --prefix ui-tui
+	npm run lint:verbs --prefix ui-tui
 	npm run type-check --prefix ui-tui
 
 lint-bridge:

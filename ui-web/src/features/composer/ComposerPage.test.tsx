@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import verbSpec from '../../../../ui-shared/verbs.json'
 import { Lightbox } from '../../chrome/Lightbox'
 import { setTranslator } from '../../i18n/t'
 import * as attachmentCache from '../../lib/attachmentCache'
@@ -717,6 +718,43 @@ describe('the live turn row', () => {
     store.setLiveAnchor(anchor - 61000)
     act(() => { store.drawTurnLive() })
     expect((document.querySelector('.turnlive .lb') as HTMLElement).textContent).toBe('1m01s')
+  })
+
+  it('shows a word from the shared catalogue, kept out of the readable name', () => {
+    wire()
+    turn.dispatch({ type: 'stream', cancellable: true })
+    mountLive()
+    act(() => { store.drawTurnLive() })
+    const row = document.querySelector('.turnlive') as HTMLElement
+    const word = row.querySelector('.cp-verb') as HTMLElement
+    expect(verbSpec.verbs).toContain(word.textContent)
+    expect(word.getAttribute('aria-hidden')).toBe('true')
+    expect(row.getAttribute('aria-label')).not.toContain(word.textContent)
+  })
+
+  it('starts at a random offset, as the TUI does', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    wire()
+    turn.dispatch({ type: 'stream', cancellable: true })
+    mountLive()
+    act(() => { store.drawTurnLive() })
+    const expected = verbSpec.verbs[Math.floor(0.5 * verbSpec.verbs.length)]
+    expect(document.querySelector('.turnlive .cp-verb')).toHaveProperty('textContent', expected)
+  })
+
+  it('rotates one step per shared interval and keeps the clock in place', () => {
+    vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    wire()
+    turn.dispatch({ type: 'stream', cancellable: true })
+    mountLive()
+    act(() => { store.drawTurnLive() })
+    expect((document.querySelector('.turnlive .cp-verb') as HTMLElement).textContent).toBe(verbSpec.verbs[0])
+    expect((document.querySelector('.turnlive .lb') as HTMLElement).textContent).toBe('0s')
+    act(() => { vi.advanceTimersByTime(verbSpec.rotationMs) })
+    expect((document.querySelector('.turnlive .cp-verb') as HTMLElement).textContent).toBe(verbSpec.verbs[1])
+    /* `formatDuration` rounds, so 2500ms reads as 3s. */
+    expect((document.querySelector('.turnlive .lb') as HTMLElement).textContent).toBe('3s')
   })
 
   it('paints the meter from the source', () => {

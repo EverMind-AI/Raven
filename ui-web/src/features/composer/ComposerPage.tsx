@@ -1,6 +1,7 @@
 import { Cancel01Icon, File01Icon } from '@hugeicons/core-free-icons'
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
+import verbSpec from '../../../../ui-shared/verbs.json'
 import { FileBadge, Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
 import * as lightbox from '../../state/lightbox'
@@ -166,21 +167,44 @@ function WorkGlyph(): ReactElement {
   return <span className="wkg" aria-hidden="true"><i /><i /><i /></span>
 }
 
-/* The clock, and nothing else. It used to switch between three words
-   (starting / writing / working) for a distinction the reader cannot act on:
-   whether the stream has produced a token yet does not change what to do next,
-   and the glyph already says the turn is alive. The word survives as the row's
-   accessible name, where a reader who gets the row as text still needs it. */
+/* The ticker's vocabularies, read from the same catalogue the TUI rotates in
+   ui-shared/verbs.json: one edit moves both front ends. The word cycles every
+   `rotationMs`, and the shared list is what keeps the two aligned. */
+const VERBS = verbSpec.verbs
+const VERB_ROTATION_MS = verbSpec.rotationMs
+
+/* The clock and the rotating word. The word used to be fixed (starting /
+   writing / working) for a distinction the reader cannot act on: whether the
+   stream has produced a token yet does not change what to do next, and the
+   glyph already says the turn is alive. It rotates again, now from the shared
+   catalogue and on a fixed cadence rather than by state, because a turn's
+   duration says more than which of three phases it is in -- and the same words
+   the TUI ticks through are the ones the page shows.
+
+   The word starts at a random offset, as the TUI's does, so two turns do not
+   open with the same one; it is decoration, not the row's accessible name. The
+   row still reads as one sentence built from `gui.live.busy`, and a word that
+   changes every 2.5s must not be announced. */
 export function TurnLive({ afterPaint }: { afterPaint?: () => void }): ReactElement | null {
   useComposer()
   const live = store.get().live
+  const [seed, setSeed] = useState(() => Math.floor(Math.random() * VERBS.length))
   useEffect(() => { if (afterPaint) afterPaint() })
+  useEffect(() => {
+    if (live) setSeed(Math.floor(Math.random() * VERBS.length))
+  }, [live])
   if (!live) return null
-  const clock = store.durText(store.liveMs())
+  const ms = store.liveMs()
+  const verb = VERBS[(seed + Math.floor(ms / VERB_ROTATION_MS)) % VERBS.length] ?? ''
+  const clock = store.durText(ms)
   return (
     <div className="turnlive" aria-live="off" aria-label={t('gui.live.busy', { t: clock })}>
       <WorkGlyph />
-      <span className="lb">{clock}</span>
+      <span className="cp-tv">
+        <span className="cp-verb" key={verb} aria-hidden="true">{verb}</span>
+        <span className="cp-sep" aria-hidden="true">·</span>
+        <span className="lb">{clock}</span>
+      </span>
     </div>
   )
 }
