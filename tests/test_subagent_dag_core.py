@@ -10,6 +10,7 @@ import json
 import pathlib
 import posixpath
 import re
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -4413,6 +4414,52 @@ async def test_read_run_keeps_an_empty_selection_as_an_empty_list() -> None:
     assert "route_evidence" not in scan, "no quote was recorded, so no key is invented"
 
 
+async def test_read_run_carries_the_attempt_history_a_reassigned_node_recorded() -> None:
+    """A finalized run's manifest is the record of which agents ran a node. The
+    reader hands it on as it stands, and a node that never moved carries none."""
+    from raven.agent.subagent.dag_reader import attempt_fields
+
+    be = _FakeBackend()
+    nodes = [{"id": "fix", "subagent": "alpha"}, {"id": "audit", "subagent": "alpha"}]
+    be.files[f"/hist/mas_dag/{_BRANCH_RUN_ID}/graph.json"] = (
+        parse_dag_spec({"task_summary": "moved", "nodes": nodes}).model_dump_json().encode()
+    )
+    manifest = {
+        "fix": _recorded(
+            [], "completed", subagent="beta", instance="fix-h", instance_auto=True, attempt_agents=["alpha", "beta"]
+        ),
+        "audit": _recorded([], "completed"),
+    }
+    be.files[f"/hist/mas_dag/{_BRANCH_RUN_ID}/manifest.json"] = json.dumps(manifest).encode()
+
+    run = await read_run(be, "/hist/mas_dag", _BRANCH_RUN_ID, "/hist/nodes")
+
+    by_node = {entry["node"]: entry for entry in run["files"]}
+    assert by_node["fix"]["attempt_agents"] == ["alpha", "beta"]
+    assert (by_node["fix"]["subagent"], by_node["fix"]["instance"], by_node["fix"]["instance_auto"]) == (
+        "beta",
+        "fix-h",
+        True,
+    )
+    assert not {"attempt_agents", "instance_auto"} & set(by_node["audit"])
+    assert attempt_fields({}) == {}
+
+
+def test_attempt_fields_takes_only_a_validated_history_from_whichever_record_has_one() -> None:
+    """The manifest wins once it exists; until then the registry row is the record.
+    A malformed value is dropped rather than half-read as a shorter history."""
+    from raven.agent.subagent.dag_reader import attempt_fields
+
+    assert attempt_fields({"attempt_agents": ["alpha", "beta"]}) == {"attempt_agents": ["alpha", "beta"]}
+    assert attempt_fields({}, {"attemptAgents": ["alpha", "beta"]}) == {"attempt_agents": ["alpha", "beta"]}
+    assert attempt_fields({"attempt_agents": ["alpha", "beta"]}, {"attemptAgents": ["gamma", "delta"]}) == {
+        "attempt_agents": ["alpha", "beta"]
+    }, "the manifest is what the run recorded"
+    assert attempt_fields({}, {"attemptAgents": ["alpha", 7]}) == {}
+    assert attempt_fields({"attempt_agents": "alpha"}, {"attemptAgents": None}) == {}
+    assert attempt_fields({}, {"attemptAgents": []}) == {"attempt_agents": []}
+
+
 async def test_read_run_names_a_decisions_routes_in_declaration_order_and_not_their_conditions() -> None:
     run = await _read_branching_run()
 
@@ -4837,6 +4884,101 @@ def test_the_skill_names_a_node_that_prints_a_route_as_an_anti_pattern() -> None
     assert "The exception is a node that also depends on something outside the branch" not in anti_patterns
 
 
+def test_the_skill_teaches_the_four_decisions_and_when_each_applies() -> None:
+    """The section is the model's whole account of the adjudication choices. Each
+    decision is chosen by what the report says is missing, and a guide that lists
+    only three leaves the fourth unreachable in practice."""
+    section = _flat(_heading_span(_repo_text(_SKILL), "## When a node cannot do its job"))
+
+    assert "four decisions" in section
+    assert "three decisions" not in section
+    for decision in ("`continue`", "`abandon`", "`replan`", "`reassign`"):
+        assert decision in section, f"the guide never names {decision}"
+    for marker in ("you can supply", "lacks what the task needs", "the plan itself", "turns out not to be needed"):
+        assert marker in section, f"the guide does not say when to choose by {marker}"
+
+
+def test_the_skill_says_reassign_keeps_the_task_and_spends_a_continuation() -> None:
+    """Two promises a copying model acts on: the node is the same task in the same
+    place, and the attempt budget it already spent is still spent."""
+    section = _flat(_heading_span(_repo_text(_SKILL), "## When a node cannot do its job"))
+
+    assert "keeps its id, its task and its place in the graph" in section
+    assert "spends a continuation, like `continue`" in section
+    assert "attempt budget is not reset" in section
+
+
+def test_the_skill_says_what_the_handover_carries_and_what_it_leaves_out() -> None:
+    """The new agent is shown the conversation, not the old agent's tools; the
+    main agent writes the diagnosis into its message because the verdict is not
+    carried either."""
+    section = _flat(_heading_span(_repo_text(_SKILL), "## When a node cannot do its job"))
+
+    assert "visible conversation" in section
+    assert "no tool calls" in section
+    assert "no tool output" in section
+    assert "private context" in section
+    assert "what went wrong in your message" in section
+    # A moved instance group shares one seed: the whole instance conversation,
+    # planted by whichever mover reaches the new agent first.
+    assert "instance's whole conversation" in section
+    assert "whichever moved node reaches the new agent first" in section
+    assert "not necessarily the node you answered" in section
+
+
+def test_the_skill_says_an_instance_moves_and_the_other_limits_of_a_reassign() -> None:
+    """Four behaviours a model cannot infer from the schema: the instance travels,
+    a shared instance needs a stateful target, a confirm run asks again, and a
+    named instance the target already holds is refused."""
+    section = _flat(_heading_span(_repo_text(_SKILL), "## When a node cannot do its job"))
+
+    assert "unfinished nodes on that instance move" in section
+    assert "`[stateful]`" in section
+    assert "`confirm: true`" in section
+    assert "already has a conversation under" in section
+    assert "choose another agent" in section
+
+
+def test_the_skill_says_where_the_earlier_attempts_files_stay() -> None:
+    """Raven cannot move files between a registered machine and this computer, so
+    the guide promises the notice and the message that has to carry the content --
+    never that the new agent finds the files where it runs."""
+    section = _flat(_heading_span(_repo_text(_SKILL), "## When a node cannot do its job"))
+
+    assert "registered machine" in section
+    assert "stay where they were made" in section
+    assert "carry what the new agent needs" in section
+    assert "files follow" not in section
+
+
+def test_the_skills_reassign_example_is_a_call_the_real_schema_accepts() -> None:
+    """The example is copied, so it is checked against the tool's declared schema
+    with a real roster behind it: every field declared, the decision inside the
+    enum, and the example's agent placeholder replaced by a name the enum admits."""
+    from raven.agent.subagent.dag_control_tools import ResolveDagNodeTool
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+
+    section = _heading_span(_repo_text(_SKILL), "## When a node cannot do its job")
+    block = section.split("```json", 1)[1].split("```", 1)[0]
+    arguments = json.loads(block)
+
+    graph = SubAgentDagTool(
+        workspace=Path(tempfile.gettempdir()),
+        agents=[ThirdPartyCliSubagentConfig(name="alpha", command="true")],
+    )
+    loop = SimpleNamespace(tools=SimpleNamespace(get=lambda name: graph if name == "run_subagent_dag" else None))
+    params = ResolveDagNodeTool(loop).parameters
+
+    assert set(arguments) <= set(params["properties"]), "the example names a field the tool does not declare"
+    assert arguments["decision"] in params["properties"]["decision"]["enum"]
+    roster = params["properties"]["agent"]["enum"]
+    assert roster, "a schema without the real roster enum would make the check below vacuous"
+    assert arguments["agent"] not in roster, "the placeholder is not itself a name the enum admits"
+    arguments["agent"] = roster[0]
+    assert arguments["agent"] in roster, "a real roster name has to pass the enum"
+    assert arguments["message"].strip()
+
+
 def test_the_skills_resident_description_names_the_branch_in_one_graph() -> None:
     """The description rides in every system prompt and is the only part of this
     guide an ordinary turn reads, so a model that never opens the body still has to
@@ -5110,6 +5252,88 @@ def test_the_changelog_entry_names_the_feature_and_the_retired_switch() -> None:
     assert "`raven playbook run` judges its nodes too" in changed
     assert "A host with no model to judge with refuses a graph that declares routes." in changed
     assert "reads exactly as it did" not in added
+
+
+@pytest.mark.parametrize("page", [_DOCS_EN, _DOCS_ZH], ids=["en", "zh"])
+def test_the_docs_site_names_the_fourth_decision(page: str) -> None:
+    """The published page is the user-facing account of an exception. Both
+    languages name the decision the same way -- the wire value is code -- and the
+    paragraph that explains it carries the same code in the same order as its
+    twin."""
+    text = _repo_text(page)
+    raw_section = _docs_section(text, "Failure handling and replanning", "failure-handling-and-replanning")
+    section = _flat(raw_section)
+
+    assert "`resolve_dag_node`" in section
+    assert "`reassign`" in section, "the decision's own wire value is named in both languages"
+    assert "`instance`" in section
+    assert "`[stateful]`" in section
+    assert "| `exception` |" in section
+
+    twin = _DOCS_ZH if page == _DOCS_EN else _DOCS_EN
+    twin_section = _docs_section(_repo_text(twin), "Failure handling and replanning", "failure-handling-and-replanning")
+    assert _code_spans(_paragraph_with(raw_section, "`resolve_dag_node`")) == _code_spans(
+        _paragraph_with(twin_section, "`resolve_dag_node`")
+    ), "the reassign paragraph says something its twin does not"
+
+
+def test_the_english_docs_page_says_what_a_reassign_keeps_and_what_it_cannot_move() -> None:
+    """The English page's own words for the rules the code-span check shares: the
+    node stays the same, the history is conversation rather than tools, and files
+    on a machine are not carried over."""
+    section = _flat(
+        _docs_section(_repo_text(_DOCS_EN), "Failure handling and replanning", "failure-handling-and-replanning")
+    )
+
+    assert "keeps the node's id, task and dependencies" in section
+    assert "visible conversation so far" in section
+    assert "without the earlier agent's tool calls or tool output" in section
+    assert "spends one continuation" in section
+    assert "other unfinished nodes on that instance" in section
+    assert "files follow" not in section
+
+
+def test_the_changelog_entry_names_the_reassign_decision_and_its_scope() -> None:
+    """`## Unreleased` is hand-kept. A shipped decision the entry never names is
+    undiscoverable, and a scope the entry omits -- stint rounds -- is one a reader
+    would take as supported."""
+    added = _flat(_heading_span(_heading_span(_repo_text("CHANGELOG.md"), "## Unreleased"), "### Added"))
+
+    assert "`reassign`" in added
+    assert "`agent`" in added
+    assert "handover" in added.lower()
+    assert "stint" in added
+    assert "attempt budget is not reset" in added
+
+
+def test_context_md_defines_the_reassign_decision_and_the_handover() -> None:
+    """Two terms a reader of the DAG controls cannot guess: the fourth decision,
+    and the text that seeds the new agent -- which is not the Handoff Block."""
+    text = _repo_text("CONTEXT.md")
+
+    reassign = _flat(_glossary_entry(text, "**reassign**"))
+    assert "`raven/agent/subagent/dag_adjudication.py`" in reassign
+    assert "keeps the node's id" in reassign
+    assert "one continuation" in reassign
+    assert "`instance`" in reassign
+    assert "Handover" in reassign
+
+    handover = _flat(_glossary_entry(text, "**Handover**"))
+    assert "<handover" in handover
+    assert "`User:`" in handover and "`Assistant:`" in handover
+    assert "no tool calls" in handover
+    assert "_Avoid_" in handover, "the entry has to rule out the Handoff Block"
+    assert "**Handoff Block**" in handover
+    assert "carries no transcript text" in handover
+    # The incomplete-history notice is conditional: a stateless reassign has no
+    # instance history to miss and reports none. The entry may not read as if a
+    # notice always accompanies the archived-attempt fallback.
+    assert "when a recorded instance history was expected but could not be used" in handover
+    assert "with a notice that the instance history is unavailable" not in handover
+    # A moved instance group shares one seed: the whole instance conversation,
+    # planted by the first mover to dispatch.
+    assert "instance's whole conversation" in handover
+    assert "whichever moved node dispatches first" in handover
 
 
 @pytest.mark.parametrize("encoded", [False, True])

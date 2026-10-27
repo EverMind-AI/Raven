@@ -162,3 +162,11 @@ def test_a_new_instance_is_logged_under_the_current_name(tmp_path: Path) -> None
     open_instance_log(tmp_path, agent="Raven", handle="old", session_key="s1", kind="spawn", title="Draft")
 
     assert transcript_path(tmp_path, GENERIC_AGENT, "fresh").parent == instance_root(tmp_path, GENERIC_AGENT)
+
+
+def test_traversal_shaped_names_stay_inside_the_instances_root(tmp_path: Path) -> None:
+    path = transcript_path(tmp_path, "../../etc", "../passwd")
+    instances = (tmp_path / "subagents" / "instances").resolve()
+
+    assert path.resolve().parent.parent == instances
+    assert "/" not in path.name and "\\" not in path.name

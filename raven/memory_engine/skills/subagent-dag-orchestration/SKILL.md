@@ -140,8 +140,8 @@ nodes that depend on it wait.
 
 Answer it by calling `resolve_dag_node` through `tool_call`: it is not in your tool list,
 and `tool_call` is the only way to name it. The report you receive carries that tool's
-complete schema, so take the field names from there and not from this page. What follows is
-what the three decisions mean, not how to spell them.
+complete schema and a copyable invocation, so take the field names from there and not from
+this page. What follows is what the four decisions mean, not how to spell them.
 
 - `continue` sends your message to the node and lets it try again, keeping the graph and
   everything it has already done.
@@ -151,15 +151,51 @@ what the three decisions mean, not how to spell them.
   nodes you supply. Nodes this run completed are referenced (`depends_on` plus
   `{{ <id>.output }}`), never re-declared; every other node needs a new id, including a redo
   of the node that failed.
+- `reassign` hands the node to another sub-agent on the roster. The node keeps its id, its
+  task and its place in the graph -- its next attempt runs on the agent you name, called
+  `agent`, which is a roster name rather than a worker label. That agent's first prompt
+  carries a **handover** of the visible conversation so far -- what was asked and what it
+  answered, as plain text -- followed by the message that attempt would otherwise have been
+  given. When the node runs on an `instance`, the handover is the instance's whole
+  conversation, and whichever moved node reaches the new agent first plants it -- not
+  necessarily the node you answered -- each mover then following it with its own prompt. The
+  handover leaves out everything the old agent did with its tools -- there are no tool calls,
+  no tool output and no private context of that agent -- so say what went wrong in your
+  message.
+
+The report's invocation looks like this, with the values filled in:
+
+```json
+{"run_id": "<run id>", "node_id": "<node id>", "decision": "reassign",
+ "agent": "<roster name>", "message": "<what the new sub-agent should do>"}
+```
 
 **Choosing between them:** when you can supply what the report says is missing, `continue` --
 and if only the user can supply it -- a credential, a decision, a fact about what they want --
 ask them first and then continue the node with their answer, because that is the case this
 whole mechanism exists for and abandoning instead throws away work one sentence could have
-unblocked. When what is missing is the plan itself, `replan`. `abandon` is for work that turns
-out not to be needed. Replanning because a node is hard is how a graph loops without
-progressing -- each replan starts its nodes on a fresh attempt budget, and the only thing that
-stops the loop is the session's hourly dispatch limit.
+unblocked. When the sub-agent lacks what the task needs -- a tool, access to the files, a
+skill, or the strength for it -- `reassign`, choosing by how well the roster's descriptions
+and tags fit the task; an agent that already tried the node is not excluded, because a failure
+may have been chance. When what is missing is the plan itself, `replan`. `abandon` is for work
+that turns out not to be needed. Replanning because a node is hard is how a graph loops
+without progressing -- each replan starts its nodes on a fresh attempt budget, and the only
+thing that stops the loop is the session's hourly dispatch limit.
+
+A `reassign` spends a continuation, like `continue`, and the attempt budget is not reset.
+When the node runs on an `instance`, the run's other unfinished nodes on that instance move
+to the same agent; a node running at that moment finishes its attempt first and joins only if
+that attempt lands unfinished. When more than one node of the run shares the instance, the
+target must be tagged `[stateful]`, and the instance moves with the node. A node that already
+finished keeps the agent that did the work.
+
+Three cases are worth planning for. A target `agent` that already has a conversation under
+the node's named `instance` in this conversation is refused -- choose another agent, or replan
+with a new instance name. A run submitted with `confirm: true` asks the user again before the
+hand-off, naming each node that would move, and a refusal records no decision. And when
+either the old or the new agent runs on a registered machine, the files the earlier attempts
+wrote stay where they were made: the result says so, and your message has to carry what the
+new agent needs.
 
 Two limits worth knowing. A node gets a small number of continuations before it fails for
 good, so a message that does not actually change anything wastes one. And the run does not

@@ -19,7 +19,7 @@ import json
 from contextvars import ContextVar
 from typing import Any
 
-from raven.agent.subagent.dag_adjudication import ABANDON, CONTINUE, DECISIONS, REPLAN
+from raven.agent.subagent.dag_adjudication import ABANDON, CONTINUE, DECISIONS, REASSIGN, REPLAN
 from raven.agent.subagent.dag_live import awaiting_decision, cancel_run, live_run_ids, owning_tool, resolve_node
 from raven.agent.subagent.dag_reader import DagReadError
 from raven.agent.subagent.dag_resume import read_run_reconciled
@@ -171,8 +171,9 @@ class CancelDagTool(_ControlTool):
 
 
 class ResolveDagNodeTool(_ControlTool):
-    """Answer a suspended node: continue it with a message, abandon it, or replan with a new graph.
-    On a bound foreground run, then wait for the next report or the final result."""
+    """Answer a suspended node: continue it with a message, abandon it, reassign it to
+    another roster agent, or replan with a new graph. On a bound foreground run, then
+    wait for the next report or the final result."""
 
     @property
     def name(self) -> str:
@@ -182,10 +183,11 @@ class ResolveDagNodeTool(_ControlTool):
     def description(self) -> str:
         return (
             "Decide what happens to a DAG node that reported it could not accomplish its "
-            "task: continue it with a message, abandon it and skip its dependents, or "
-            "replan -- hand over a new node list, which stops this run and starts a new one "
-            "from that list. On a run started with background=false this call also waits, "
-            "and returns the next report or the run's final result."
+            "task: continue it with a message, abandon it and skip its dependents, reassign "
+            "it to another sub-agent on the roster, or replan -- hand over a new node list, "
+            "which stops this run and starts a new one from that list. On a run started with "
+            "background=false this call also waits, and returns the next report or the run's "
+            "final result."
         )
 
     @property
@@ -193,6 +195,17 @@ class ResolveDagNodeTool(_ControlTool):
         tool = _registered_tool(self._loop)
         getter = getattr(tool, "node_schema", None)
         schema = getter() if callable(getter) else {"type": "object"}
+        registry = getattr(tool, "registry", None)
+        names = registry.names() if registry is not None and callable(getattr(registry, "names", None)) else []
+        agent: dict[str, Any] = {
+            "type": "string",
+            "description": (
+                "The roster name of the sub-agent to hand the node to, read only when "
+                "reassigning. A worker label is not a roster name and is refused."
+            ),
+        }
+        if names:
+            agent["enum"] = names
         return {
             "type": "object",
             "properties": {
@@ -200,20 +213,24 @@ class ResolveDagNodeTool(_ControlTool):
                 "node_id": {"type": "string", "description": "The node that reported the exception."},
                 "decision": {
                     "type": "string",
-                    "enum": [CONTINUE, ABANDON, REPLAN],
+                    "enum": [CONTINUE, ABANDON, REPLAN, REASSIGN],
                     "description": (
                         "'continue' sends your message to the node and lets it try again. "
                         "'abandon' fails the node and skips its dependents; the rest of the "
-                        "graph carries on. 'replan' replaces what is left of the graph with "
-                        "the `nodes` you supply: this run stops, and a new run starts from "
-                        'your list. To stop everything instead, use tool_call name "cancel_dag".'
+                        "graph carries on. 'reassign' hands the node to another sub-agent on "
+                        "the roster, named by `agent`, and keeps its task and place in the "
+                        "graph. 'replan' replaces what is left of the graph with the `nodes` "
+                        "you supply: this run stops, and a new run starts from your list. To "
+                        'stop everything instead, use tool_call name "cancel_dag".'
                     ),
                 },
+                "agent": agent,
                 "message": {
                     "type": "string",
                     "description": (
-                        "What to tell the node, required when continuing. Supply what it said "
-                        "was missing. Ask the user first if only they can provide it."
+                        "What to tell the node, required when continuing, reassigning or "
+                        "replanning. Supply what it said was missing. Ask the user first if "
+                        "only they can provide it."
                     ),
                 },
                 "nodes": {
@@ -233,9 +250,10 @@ class ResolveDagNodeTool(_ControlTool):
         """Authored to declare this schema dynamic, not to change its shape.
 
         ``nodes`` carries ``run_subagent_dag``'s own node schema, whose
-        ``subagent`` enum is built from the hot-appliable agent table. Left to
-        the snapshot the registry takes at admission, the advertisement would
-        name the roster as it stood when the loop was wired.
+        ``subagent`` enum is built from the hot-appliable agent table, and
+        ``agent`` carries that table's enabled roster names. Left to the snapshot
+        the registry takes at admission, either would advertise the roster as it
+        stood when the loop was wired.
         """
         return super().to_schema()
 
@@ -264,6 +282,7 @@ class ResolveDagNodeTool(_ControlTool):
         message: str | None = None,
         nodes: list[dict] | None = None,
         action: str | None = None,
+        agent: str | None = None,
     ) -> "str | ToolResult":
         # `action` is the name the model reaches for -- three runs in a row
         # (2026-09-03/04) spent a call each on "missing required decision". The
@@ -271,9 +290,9 @@ class ResolveDagNodeTool(_ControlTool):
         if decision is None and action is not None:
             decision = action
         if decision is None:
-            return f"Error: decision is required: '{CONTINUE}', '{ABANDON}' or '{REPLAN}'."
+            return f"Error: decision is required: '{CONTINUE}', '{ABANDON}', '{REPLAN}' or '{REASSIGN}'."
         if decision not in DECISIONS:
-            return f"Error: decision must be '{CONTINUE}', '{ABANDON}' or '{REPLAN}', not {decision!r}."
+            return f"Error: decision must be '{CONTINUE}', '{ABANDON}', '{REPLAN}' or '{REASSIGN}', not {decision!r}."
         if decision in (CONTINUE, REPLAN) and not (message or "").strip():
             what = (
                 "telling it what to do differently" if decision == CONTINUE else "saying why the plan is being changed"
@@ -297,6 +316,62 @@ class ResolveDagNodeTool(_ControlTool):
                 f"Cannot resolve node '{node_id}' of DAG run {run_id}: run ownership cannot be "
                 "resolved here (no run_subagent_dag tool is registered), so nothing was signalled."
             )
+        if decision == REASSIGN:
+            # Its own admission, not the resolver helpers': those take a replan's
+            # plan and would smuggle this decision through a shape it was not
+            # meant for. The owning instance checks, confirms and hands off; the
+            # registered one holds no bookkeeping for a run it did not dispatch.
+            owner = owning_tool(self._loop, run_id)
+            prepared = await owner.prepare_reassign(
+                run_id, node_id, (agent or ""), (message or ""), self._session.get()
+            )
+            if isinstance(prepared, str):
+                return prepared
+            if not owner.commit_reassign(run_id, prepared, (message or "").strip()):
+                # The hand-off can refuse for two different situations, and the
+                # model acts differently on them: a node whose question is gone
+                # cannot be answered, while a proposal overtaken by a change in
+                # the run is worth asking for again.
+                still_waiting = False
+                awaiting = getattr(owner, "is_awaiting_decision", None)
+                if awaiting is not None:
+                    try:
+                        still_waiting = bool(awaiting(run_id, node_id))
+                    except Exception:  # noqa: BLE001 - the refusal stands either way
+                        still_waiting = False
+                if still_waiting:
+                    return (
+                        "The run's state changed while the reassign was being prepared, so nothing was "
+                        "applied and the proposal must be requested again. No decision was recorded, and "
+                        f"node '{node_id}' is still waiting."
+                    )
+                return (
+                    f"Node '{node_id}' of run {run_id} is no longer waiting for a decision, so the "
+                    "reassign was not applied, no decision was recorded, and the node stayed where it "
+                    'was. tool_call name "dag_status" shows where every node stands.'
+                )
+            text = f"Node '{node_id}' of run {run_id} will run again on {prepared.target_agent} with your message."
+            others = [node.id for node in prepared.nodes if node.id != node_id]
+            if others:
+                named = ", ".join(f"'{nid}'" for nid in others)
+                where = f" on instance '{prepared.target_instance}'" if prepared.target_instance else ""
+                text += f"\nNodes {named} may move with it{where}."
+            # Registered before yielding, for the reason the continue path below
+            # is: the commit woke the runner, and only a taker already parked on
+            # this run's outbox can be handed the next thing it says.
+            await_run = getattr(owner, "await_run", None)
+            event = None
+            if await_run is not None:
+                try:
+                    event = await await_run(run_id)
+                except asyncio.CancelledError:
+                    abort = getattr(owner, "abort_run", None)
+                    if abort is not None:
+                        abort(run_id)
+                    raise
+            if event is not None:
+                return _with_notices(owner.render_event(run_id, event), list(prepared.notices))
+            return _with_notices(text, list(prepared.notices))
         # Ownership first: a run id must resolve under this conversation's run
         # history before the node is answered, or one chat's model could
         # resolve another chat's suspended node -- deciding continue or

@@ -644,3 +644,62 @@ describe('/dag <node> on a branching run', () => {
     expect((await paged('fix', history)).lines[1]).toBe('not executed: decision missing')
   })
 })
+
+describe('/dag on a reassigned node', () => {
+  const paged = async (arg: string) => {
+    const page = vi.fn()
+    const rpc = vi.fn((_method: string, params: { node: string; run_id: string }) =>
+      Promise.resolve({
+        node: {
+          run_id: params.run_id,
+          node: params.node,
+          prompt: 'p',
+          output: 'o',
+          output_chars: 1,
+          output_truncated: false
+        }
+      })
+    )
+    const ctx = buildCtx(rpc)
+    ;(ctx.transcript as unknown as { page: unknown }).page = page
+
+    dagCmd.run(arg, ctx, 'dag')
+
+    await vi.waitFor(() => expect(page).toHaveBeenCalled())
+
+    return { lines: String(page.mock.calls[0]![0]).split('\n'), rpc, title: page.mock.calls[0]![1] as string }
+  }
+
+  it('pages the agents that tried the node, in order', async () => {
+    turnController.reset()
+    openRun()
+    turnController.recordDagEvent({
+      type: 'dag.node_updated',
+      payload: {
+        run_id: 'dag-1',
+        node: 'b',
+        status: 'running',
+        started_at: 10,
+        subagent: 'claude',
+        instance: 'b-minted',
+        attempt_agents: ['echo', 'echo', 'claude']
+      }
+    })
+
+    const { lines, title } = await paged('b')
+
+    expect(title).toBe('b @ dag-1')
+    expect(lines[0]).toBe('── b @ dag-1 (1 chars) ──')
+    expect(lines[1]).toBe('attempts: echo x2 -> claude')
+    expect(lines[2]).toBe('prompt:')
+  })
+
+  it('pages a node that never moved exactly as it always did', async () => {
+    turnController.reset()
+    openRun()
+
+    const { lines } = await paged('b')
+
+    expect(lines).toEqual(['── b @ dag-1 (1 chars) ──', 'prompt:', 'p', 'output:', 'o'])
+  })
+})

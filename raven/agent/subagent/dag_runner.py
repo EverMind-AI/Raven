@@ -14,7 +14,7 @@ import asyncio
 import contextlib
 import json
 import time
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -26,9 +26,11 @@ from raven.agent.subagent import activity
 from raven.agent.subagent.backends.base import llm_error_reply, optional_keyword
 from raven.agent.subagent.dag_adjudication import (
     CONTINUE,
+    REASSIGN,
     REPLAN,
     REPORT_DELIVERY_ATTEMPTS,
     AdjudicationDesk,
+    ReassignPlan,
     deliver_report,
 )
 from raven.agent.subagent.dag_capabilities import AgentCapabilities
@@ -41,6 +43,11 @@ from raven.agent.subagent.dag_graph import (
     validate_and_order,
 )
 from raven.agent.subagent.dag_guard import DONE, Atom, Guard, Value, evaluate
+from raven.agent.subagent.dag_handover import (
+    HandoverTurn,
+    load_handover_turns,
+    render_handover,
+)
 from raven.agent.subagent.dag_render import render_prompt
 from raven.agent.subagent.dag_store import (
     NOT_EXECUTED,
@@ -52,6 +59,7 @@ from raven.agent.subagent.dag_store import (
     tally_node_statuses,
 )
 from raven.agent.subagent.dag_verdict import RouteUndeterminedError, Verdict
+from raven.agent.subagent.instance_log import message_rows
 from raven.agent.subagent.instances import get_registry, hold_handle
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent_memory import (
@@ -72,6 +80,9 @@ from raven.tracing import trace
 # .out.md always holds the full text.
 _MAX_OUTPUT_CHARS = 128000
 _MAX_ERROR_CHARS = 500
+#: How much of an attempt's reason is kept for a later move report and handover
+#: request. One line, not the whole error: this text is repeated per attempt.
+_MAX_ATTEMPT_REASON_CHARS = 300
 
 # A registry write is ordinary async file I/O behind a lock and should complete
 # in well under this; the bound exists only so a wedged registry (lock
@@ -225,6 +236,7 @@ async def _write_node_status(
     reason: str | None = None,
     selected_routes: list[str] | None = None,
     route_evidence: str | None = None,
+    assignment: dict[str, Any] | None = None,
 ) -> None:
     """Best-effort registry write for one node's status, swallowing any failure.
 
@@ -240,6 +252,11 @@ async def _write_node_status(
     outcome, present on the same terms as on its finish event and in the manifest.
     A terminal write passes them, so a run read back before it finalizes still says
     what a branch decided.
+
+    ``assignment`` is ``_assignment_fields``' answer for a node that moved: the
+    history and the attempt identity the row must keep carrying. The record is
+    rebuilt on every write, so a later write that dropped them would erase the
+    only durable record of who runs the node now.
     """
     if not session_key:
         return
@@ -250,6 +267,12 @@ async def _write_node_status(
         for key, value in (("reason", reason), ("selected_routes", selected_routes), ("route_evidence", route_evidence))
         if value is not None
     }
+    if assignment and "attempt_agents" in assignment:
+        outcome.update(
+            attempt_agents=list(assignment["attempt_agents"]),
+            instance=assignment.get("instance"),
+            instance_auto=bool(assignment.get("instance_auto")),
+        )
     try:
         await asyncio.wait_for(
             get_registry().upsert_dag_node(session_key, run_id, node_id, agent, status, **outcome),
@@ -289,6 +312,169 @@ class DagRunResult:
     files: list[dict] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
     replanned_into: str | None = None
+    # Internal only, never serialized here: the node each id would dispatch as,
+    # and where each graph-named instance group ended up. A capture projects
+    # them onto a saved graph; no reader of a run consumes them yet.
+    execution_nodes: dict[str, DagNodeSpec] = field(default_factory=dict)
+    instance_assignments: dict[tuple[str, str], tuple[str, str | None]] = field(default_factory=dict)
+
+
+def _node_pair(node: DagNodeSpec) -> tuple[str, str | None]:
+    """The agent and handle a node dispatches under."""
+    return (node.subagent, node.instance)
+
+
+def _source_key(agent: str, instance: str | None, node_id: str) -> tuple[str, str]:
+    """The key a node's dispatch group is staged and seeded under.
+
+    A node naming no handle still runs alone, and two such nodes of one agent
+    are not a group: their own ids keep them apart.
+    """
+    return (agent, instance or f"\x00node\x00{node_id}")
+
+
+def _group_key(node: DagNodeSpec) -> tuple[str, str]:
+    """The pair a node's sequential group is keyed by."""
+    return _source_key(node.subagent, node.instance, node.id)
+
+
+@dataclass
+class _PendingHandover:
+    """The conversation a moved group's new session is seeded with.
+
+    Built once, after every source attempt has settled, and claimed by the first
+    moved node that actually dispatches on the destination pair. ``anchor_node_id``
+    names the node the move was decided for: its task is the turn the budget
+    always keeps whole, and its own failure is what a source without a usable
+    history falls back to.
+    """
+
+    anchor_node_id: str
+    source_agent: str
+    source_instance: str | None
+    target_agent: str
+    target_instance: str | None
+    target_named: bool
+    movers: frozenset[str]
+    turns: tuple[HandoverTurn, ...]
+    task: str
+    notices: tuple[str, ...] = ()
+
+
+@dataclass
+class _StagedMove:
+    """A move the desk accepted whose source attempts have not all settled.
+
+    While staged its source group is unavailable for new dispatch: ready entries
+    on that pair are withheld, a queued group entry returns to the scheduler
+    when it reaches the gate, and the move installs only once
+    ``ReassignmentState.active_attempts`` holds no attempt on the source pair.
+    """
+
+    node_id: str
+    source_agent: str
+    source_instance: str | None
+    target_agent: str
+    target_stateful: bool
+    target_instance: str | None
+    instance_auto: bool
+    revision: int
+    members: frozenset[str]
+    backends: dict[str, Any]
+
+
+@dataclass
+class ReassignmentState:
+    """One run's node assignments, and the moves that change them.
+
+    ``effective_nodes`` and ``backends`` are the pair a dispatch reads: the
+    submitted node and its resolved backend until a move installs, another
+    agent's pair afterwards. Every attempt freezes the pair it started with in
+    ``last_attempt_nodes``, so a later move cannot relabel work already running.
+    ``attempt_agents`` and ``attempt_reasons`` are positional, one entry per
+    attempt of the node; a successful attempt's reason is the empty string.
+
+    ``original_groups`` keeps each named instance group's membership, keyed by
+    every pair that group has dispatched under, and ``group_current`` maps the
+    pair the graph named to where the group ended up -- terminal members stay
+    where they ran, but the session a capture replays belongs to the group.
+    ``pending_moves`` and ``pending_handovers`` are keyed by
+    ``(source agent, source handle or node id)``: a handle for a named group,
+    the node id for a node that runs alone.
+    """
+
+    effective_nodes: dict[str, DagNodeSpec] = field(default_factory=dict)
+    backends: dict[str, Any] = field(default_factory=dict)
+    last_attempt_nodes: dict[str, DagNodeSpec] = field(default_factory=dict)
+    attempt_agents: dict[str, list[str]] = field(default_factory=dict)
+    attempt_reasons: dict[str, list[str]] = field(default_factory=dict)
+    reassigned: set[str] = field(default_factory=set)
+    auto_instances: set[str] = field(default_factory=set)
+    revision: int = 0
+    original_groups: dict[tuple[str, str], frozenset[str]] = field(default_factory=dict)
+    group_current: dict[tuple[str, str], tuple[str, str | None]] = field(default_factory=dict)
+    pending_moves: dict[tuple[str, str], _StagedMove] = field(default_factory=dict)
+    pending_handovers: dict[tuple[str, str], _PendingHandover] = field(default_factory=dict)
+    active_attempts: dict[str, tuple[str, str | None]] = field(default_factory=dict)
+    """The pair each node's in-flight attempt is running under, by node id.
+
+    Read-only by convention, like ``status``: the runner is its only writer. A
+    node listed here has not settled, so its status -- ``completed`` from the
+    backend's return until the judge rules -- is still provisional, and a caller
+    deciding which nodes may move reads both.
+    """
+    submitted_auto: set[str] = field(default_factory=set)
+    dropped_moves: set[tuple[str, str]] = field(default_factory=set)
+    """Keys of staged moves the run dropped without installing them.
+
+    A move that had nothing to relocate, a refused target, a build failure or a
+    cancellation drops its staged record; a caller that reserved the group needs
+    to know the move will never install so it can release the reservation rather
+    than hold it for the rest of the run.
+    """
+
+    status: dict[str, str] = field(default_factory=dict)
+    """The run's own per-node status, bound by ``run_dag`` to the scheduler's dict.
+
+    The same object, not a copy, so a caller asking mid-run reads current values.
+    Read-only by convention: the runner is its only writer. A node is a possible
+    mover exactly when this says it may still be relocated.
+    """
+
+    def effective(self, node_id: str, fallback: DagNodeSpec) -> DagNodeSpec:
+        """The node as it would dispatch now."""
+        return self.effective_nodes.get(node_id, fallback)
+
+    def blocked(self, node: DagNodeSpec) -> bool:
+        """Whether a staged move has taken this node's group off dispatch."""
+        move = self.pending_moves.get(_group_key(node))
+        return move is not None and node.id in move.members
+
+    def handover_for(self, node: DagNodeSpec) -> "_PendingHandover | None":
+        """The unclaimed seed this dispatch would plant, if any."""
+        for seed in self.pending_handovers.values():
+            if node.id in seed.movers and seed.target_agent == node.subagent and seed.target_instance == node.instance:
+                return seed
+        return None
+
+    def claim_handover(self, seed: "_PendingHandover") -> bool:
+        """Take the seed for one dispatch; False when another mover claimed it first."""
+        key = _source_key(seed.source_agent, seed.source_instance, seed.anchor_node_id)
+        if self.pending_handovers.get(key) is not seed:
+            return False
+        self.pending_handovers.pop(key)
+        return True
+
+    def release_handover(self, seed: "_PendingHandover") -> None:
+        """Put an unplanted seed back, so a later destination dispatch can try again."""
+        key = _source_key(seed.source_agent, seed.source_instance, seed.anchor_node_id)
+        self.pending_handovers.setdefault(key, seed)
+
+    def release_moves(self) -> None:
+        """Drop every staged move and unclaimed seed; nothing will dispatch under them."""
+        self.dropped_moves.update(self.pending_moves)
+        self.pending_moves.clear()
+        self.pending_handovers.clear()
 
 
 WHEN_FALSE = "when_false"
@@ -360,6 +546,8 @@ async def run_dag(
     released: asyncio.Event | None = None,
     provider: Any = None,
     model: str | None = None,
+    reassignment_state: ReassignmentState | None = None,
+    build_reassigned: "Callable[[DagNodeSpec], Awaitable[tuple[DagNodeSpec, Any]]] | None" = None,
 ) -> DagRunResult:
     """Run a validated DAG, passing messages through files.
 
@@ -472,10 +660,38 @@ async def run_dag(
     this run has ended. Until it is set the adjudication wait has no deadline;
     ``adjudication_timeout_s`` is measured from the release. ``None`` clocks the
     wait from entry, which is what a backgrounded run wants.
+
+    ``reassignment_state``, when given, is the record of which agent and handle
+    every node dispatches under for this run: it starts from the submitted graph
+    and accumulates each attempt's agent, the moves that have installed and the
+    handovers still to plant. The caller may keep the same object to answer
+    questions about this run while it is live; a state that already holds
+    attempts or a revision from another run is refused, so a fresh one is
+    required per run.
+
+    ``build_reassigned``, when given, prepares one moved node for its new agent:
+    it takes the node as it would dispatch there and returns that node plus an
+    unstarted backend. It is called only when a move installs, and for every
+    node that actually moves; without it a node can only move to a target whose
+    backend the plan itself supplied.
     """
     if semaphore is None and max_concurrency < 1:
         raise DagValidationError("max_concurrency must be >= 1")
+    if reassignment_state is not None and (
+        reassignment_state.attempt_agents
+        or reassignment_state.attempt_reasons
+        or reassignment_state.last_attempt_nodes
+        or reassignment_state.revision
+    ):
+        raise DagValidationError(
+            "The supplied reassignment state already holds attempts or a revision from another run; "
+            "pass a fresh state for each run."
+        )
     roots = (workdir, subagents_root) if subagents_root else (workdir,)
+    # One assignment record per run, whether or not the caller keeps a handle on
+    # it: every dispatch reads its node and backend from here, so a caller that
+    # never reassigns still takes the same path as one that does.
+    state = reassignment_state if reassignment_state is not None else ReassignmentState()
     # Read, validate and claim under one guard. Splitting them would let two
     # concurrent runs both read a registry without node 'x', both pass the
     # uniqueness check, and both claim it -- leaving two nodes answering to one
@@ -494,6 +710,18 @@ async def run_dag(
             if resolved is None:
                 raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
             node_backends[node.id] = resolved
+        state.effective_nodes = {node.id: node for node in spec.nodes}
+        state.backends = dict(node_backends)
+        state.submitted_auto = set(auto_instances)
+        state.auto_instances.update(auto_instances)
+        for node in spec.nodes:
+            if node.instance is None:
+                continue
+            key = (node.subagent, node.instance)
+            state.original_groups[key] = state.original_groups.get(key, frozenset()) | {node.id}
+        for key, members in state.original_groups.items():
+            if key not in state.group_current and not members & state.submitted_auto:
+                state.group_current[key] = key
 
         store = DagRunStore(
             backend, run_root, run_id or make_run_id(), nodes_root=nodes_root, registry_root=history_root
@@ -506,6 +734,10 @@ async def run_dag(
     # Built before the `try` below, not inside it: the cancellation handler reads
     # `status`, and a handler that covers the first await has to be able to.
     status: dict[str, str] = {nid: "pending" for nid in by_id}
+    # The run's only status record, handed to the assignment state by reference:
+    # a move's admission reads the scheduler's current answer, and every later
+    # write here is visible to it without a second bookkeeping path.
+    state.status = status
     output_paths: dict[str, str] = {}
     errors: dict[str, str] = {}
     continuations: dict[str, str] = {}
@@ -515,6 +747,11 @@ async def run_dag(
     node_ended_at: dict[str, int] = {}
     node_activity: dict[str, dict] = {}
     gate = semaphore if semaphore is not None else asyncio.Semaphore(max_concurrency)
+    # Where an accepted reassign waits between the desk and the scheduler. Only a
+    # caller that supplied its own state can be handed one: the tray is what
+    # makes a move apply, and a direct caller that never keeps the state must
+    # keep reading a reassign as the named failure it has always been.
+    reassignments: dict[str, ReassignPlan] | None = {} if reassignment_state is not None else None
     # Node ids whose status may still change. `status` reads "completed" from the
     # moment the backend returns, but the judge has not ruled yet and can turn
     # that into an exception, so a dependent dispatched inside that window
@@ -560,6 +797,7 @@ async def run_dag(
         session_key=session_key,
         run_id=store.run_id,
         progress_publisher=progress_publisher,
+        state=state,
     )
 
     # `store.init` above made this run's claim on its node ids durable, so every
@@ -606,6 +844,7 @@ async def run_dag(
                 # Before `_apply_replan`, so the `cancelled` it records is true.
                 await _reap_carried(carried)
                 carried = set()
+                state.release_moves()
                 # The second settle pass announces what it decides before the
                 # ready set, so of `not_executed` this finds nothing; it stays
                 # as the backstop for an exit that skips the sweep below. What
@@ -628,6 +867,7 @@ async def run_dag(
                         session_key=session_key,
                         run_id=store.run_id,
                         progress_publisher=progress_publisher,
+                        state=state,
                     )
                     replanned_into = plan.run_id
                 desk.replanned.clear()
@@ -665,11 +905,40 @@ async def run_dag(
                 if not any(st == NOT_EXECUTED and nid not in published_terminal for nid, st in status.items()):
                     break
                 await publish_terminal((NOT_EXECUTED,))
+            # A decided reassign is consumed before anything is dispatched. Only
+            # the reassign branch of the wait is taken here: a decided continue
+            # has nothing to apply, so it keeps waiting for the empty ready set
+            # it has always been handled from.
+            if reassignments is not None and _reassign_waiting(desk):
+                await _await_adjudications(
+                    desk,
+                    status,
+                    errors,
+                    continuations,
+                    timeout_s=adjudication_timeout_s,
+                    cancel=cancel,
+                    released=released,
+                    reassignments=reassignments,
+                )
+            if reassignment_state is not None:
+                await _apply_reassignments(
+                    state,
+                    prepared=reassignments or {},
+                    status=status,
+                    errors=errors,
+                    continuations=continuations,
+                    store=store,
+                    session_key=session_key,
+                    subagents_root=subagents_root,
+                    cancel=cancel,
+                    build_reassigned=build_reassigned,
+                )
             ready = [
                 nid
                 for nid, st in status.items()
                 if st == "pending"
                 and nid not in carried_ids
+                and not state.blocked(state.effective(nid, by_id[nid]))
                 and all(_satisfied(d, status, unsettled) for d in deps[nid])
             ]
             if not ready:
@@ -686,6 +955,7 @@ async def run_dag(
                         timeout_s=adjudication_timeout_s,
                         cancel=cancel,
                         released=released,
+                        reassignments=reassignments,
                     )
                     continue
                 if carried:
@@ -702,6 +972,7 @@ async def run_dag(
                     )
                     owned = {task: nids for task, nids in owned.items() if task in carried}
                     continue
+                state.release_moves()
                 break
             # Nodes sharing a stateful instance run sequentially (id order); independent
             # nodes each form a singleton group and run concurrently under the semaphore.
@@ -718,6 +989,7 @@ async def run_dag(
                         group,
                         by_id=by_id,
                         node_backends=node_backends,
+                        state=state,
                         store=store,
                         backend=backend,
                         workdir=workdir,
@@ -786,8 +1058,11 @@ async def run_dag(
             session_key,
             auto_instances,
             branch=branch,
+            state=state,
         )
         result.replanned_into = replanned_into
+        result.execution_nodes = dict(state.effective_nodes)
+        result.instance_assignments = _instance_assignments(state)
         return result
     except asyncio.CancelledError:
         # `/stop` and the shutdown sweep stop a background run by cancelling its
@@ -802,6 +1077,7 @@ async def run_dag(
         # return and the next round's await nothing else owns them. Before
         # `_mark_stopped`, so what it records as cancelled has been cancelled.
         await _reap_carried(carried)
+        state.release_moves()
         _mark_stopped(status)
         await _record_outcome(store, status, cancelled=True)
         # No manifest will carry them: a stopped run's set-aside accounts
@@ -941,6 +1217,7 @@ async def _publish_terminal(
     session_key: str | None,
     run_id: str,
     progress_publisher: ProgressPublisher | None,
+    state: ReassignmentState | None = None,
 ) -> None:
     """Announce, once each, every node the scheduler itself put in one of ``states``.
 
@@ -962,12 +1239,23 @@ async def _publish_terminal(
         node_started_at.setdefault(nid, now)
         node_ended_at[nid] = now
         outcome = {"reason": branch.reasons[nid]} if st == NOT_EXECUTED else {}
+        # A node that moved writes under the agent whose attempt it last was:
+        # a row under the submitted agent would leave the moved one behind.
+        assignment = _assignment_fields(nid, state)
         await _emit(
             progress_publisher,
             "dag_node_updated",
-            {"run_id": run_id, "node": nid, "status": st, **outcome},
+            {"run_id": run_id, "node": nid, "status": st, **outcome, **assignment},
         )
-        await _write_node_status(session_key, run_id, nid, by_id[nid].subagent, st, **outcome)
+        await _write_node_status(
+            session_key,
+            run_id,
+            nid,
+            _current_agent(nid, state, by_id[nid].subagent),
+            st,
+            **outcome,
+            assignment=assignment,
+        )
 
 
 async def _apply_replan(
@@ -982,6 +1270,7 @@ async def _apply_replan(
     session_key: str | None,
     run_id: str,
     progress_publisher: ProgressPublisher | None,
+    state: ReassignmentState | None = None,
 ) -> None:
     """Give this run's unfinished nodes their outcome, the replan being their cause.
 
@@ -1012,12 +1301,20 @@ async def _apply_replan(
         published_terminal.add(nid)
         node_started_at.setdefault(nid, now)
         node_ended_at[nid] = now
+        assignment = _assignment_fields(nid, state)
         await _emit(
             progress_publisher,
             "dag_node_updated",
-            {"run_id": run_id, "node": nid, "status": status[nid]},
+            {"run_id": run_id, "node": nid, "status": status[nid], **assignment},
         )
-        await _write_node_status(session_key, run_id, nid, by_id[nid].subagent, status[nid])
+        await _write_node_status(
+            session_key,
+            run_id,
+            nid,
+            _current_agent(nid, state, by_id[nid].subagent),
+            status[nid],
+            assignment=assignment,
+        )
 
 
 def _tally(status: dict[str, str]) -> dict:
@@ -1042,6 +1339,27 @@ def _route_available(control_reachable: "Callable[[], bool] | None") -> bool:
         return False
 
 
+def _instance_followers(node: DagNodeSpec, state: ReassignmentState, status: Mapping[str, str]) -> list[str]:
+    """The run's other unfinished nodes that share the attempt's instance handle.
+
+    A reassign moves them with the node, so the report names them before the
+    choice is made. A finished node keeps where it ran, a running one may still
+    land either way, and a minted handle names no group.
+    """
+    if node.instance is None:
+        return []
+    current = _node_pair(node)
+    followers: list[str] = []
+    for node_id in sorted(state.original_groups.get(current, frozenset())):
+        if node_id == node.id or status.get(node_id) not in ("pending", "exception", "running"):
+            continue
+        member = state.effective_nodes.get(node_id)
+        if member is not None and _node_pair(member) != current:
+            continue
+        followers.append(node_id)
+    return followers
+
+
 def _exception_report(
     *,
     run_id: str,
@@ -1053,14 +1371,27 @@ def _exception_report(
     timeout_s: float,
     route_available: bool = True,
     control_advert: "Callable[[str], str | None] | None" = None,
+    attempt_agents: Sequence[str] = (),
+    attempt_reasons: Sequence[str] = (),
+    instance_followers: Sequence[str] = (),
 ) -> str:
     """The text the main agent is woken with. Everything it needs to decide, once.
 
     The blocked list is not decoration: without it the agent is choosing between
     continuing and abandoning with no idea what abandoning costs.
+
+    ``attempt_agents`` is every attempt of this node in order, the last being the
+    attempt that just ended; ``attempt_reasons`` is the same order without that
+    one, whose reason is the report's own account of what is missing.
+    ``instance_followers`` are the run's other unfinished nodes on the node's
+    instance handle.
     """
-    lines = [
-        f"DAG run {run_id}: node '{node.id}' ({node.subagent}) did not accomplish its task.",
+    dispatched_by = attempt_agents[-1] if attempt_agents else node.subagent
+    lines = [f"DAG run {run_id}: node '{node.id}' ({dispatched_by}) did not accomplish its task."]
+    for index, agent in enumerate(attempt_agents[: max(attempt - 1, 0)], start=1):
+        recorded = attempt_reasons[index - 1] if index - 1 < len(attempt_reasons) else _NO_REASON
+        lines.append(f"attempt {index} ({agent}): {_bounded_attempt_reason(recorded)}")
+    lines += [
         f"task: {node.node_summary}",
         f"category: {verdict.category or 'other'}",
         f"what is missing: {verdict.what_is_missing or '(the judge did not say)'}",
@@ -1089,7 +1420,7 @@ def _exception_report(
         )
         return "\n".join(lines)
     lines.append(
-        f"attempt {attempt}; {remaining} continuation(s) left; "
+        f"attempt {attempt}; {remaining} continuation(s) left (continue and reassign each spend one); "
         f"deciding within {timeout_s:g}s, restarted by each decision"
     )
     # The invocation rather than the bare call: `resolve_dag_node` is hidden from the
@@ -1102,17 +1433,36 @@ def _exception_report(
         f'"message": "<what the node should try next>"}}, or the same with "decision": "abandon" '
         "to give up on this node and everything waiting on it. "
         "resolve_dag_node is not in your tool list; tool_call is how you reach it. "
-        "Ask the user first if only they can supply what is missing."
+        "Use continue when the task is right and something is missing that you or the user can "
+        "supply -- information, a credential, a hint. Use abandon when the task is no longer "
+        "wanted. Ask the user first if only they can supply what is missing."
     )
+    lines.append(
+        f'Or reassign: tool_call with name "resolve_dag_node" and arguments '
+        f'{{"run_id": "{run_id}", "node_id": "{node.id}", "decision": "reassign", '
+        f'"agent": "<roster name>", "message": "<what the new sub-agent should do>"}}. '
+        "This hands the node to another sub-agent from the roster, which is shown what the node "
+        "was asked and answered so far, but not the tools it ran or this verdict: say what went "
+        "wrong in your message. Use reassign when the task is right and this sub-agent lacks the "
+        "execution capability it needs -- a tool, access to the files, a skill, or the strength "
+        "for it -- and choose by how well the roster's descriptions and tags fit the task. An "
+        "agent that already tried this node is not excluded: a failure may have been chance."
+    )
+    if instance_followers:
+        names = ", ".join(f"'{node_id}'" for node_id in instance_followers)
+        lines.append(
+            f"Reassign also moves the other unfinished nodes on this instance -- {names}; one still "
+            "running joins only if its attempt lands unfinished. A target that takes them must be "
+            "[stateful]."
+        )
     lines.append(
         f'Or replan: tool_call with name "resolve_dag_node" and arguments '
         f'{{"run_id": "{run_id}", "node_id": "{node.id}", "decision": "replan", '
         f'"message": "<why the plan is changing>", "nodes": [<the graph to run instead>]}}. '
-        "That stops this run and starts a new one from your nodes. Use it when what is "
-        "missing is the plan rather than something you can hand this node: a step that "
-        "cannot work as wired, a step nothing in the graph performs, work on the wrong "
-        "sub-agent. Nodes this run completed are referenced, not re-declared -- name one in "
-        "depends_on and read it with {{ <id>.output }}; everything else needs a new id."
+        "That stops this run and starts a new one from your nodes. Use replan when the plan "
+        "itself is wrong rather than this attempt: a step that cannot work as wired, or a step "
+        "nothing in the graph performs. Nodes this run completed are referenced, not re-declared "
+        "-- name one in depends_on and read it with {{ <id>.output }}; everything else needs a new id."
     )
     # The invocations above carry this run's ids; this carries the field names,
     # and it is generated rather than written. A hand-written retelling is what
@@ -1176,6 +1526,7 @@ async def _apply_verdict(
     control_reachable: "Callable[[], bool] | None" = None,
     control_advert: "Callable[[str], str | None] | None" = None,
     output_limited: bool = False,
+    reassignment_state: ReassignmentState | None = None,
 ) -> str | None:
     """Turn a finished node's verdict into a status, and report a bad one.
 
@@ -1185,6 +1536,10 @@ async def _apply_verdict(
 
     A decision node's selection is recorded into ``branch`` here, before the node
     leaves ``unsettled``, so no guard naming it is ever read without it.
+
+    ``reassignment_state`` supplies the report's attempt history: who tried this
+    node before and why each attempt fell short. It is read from the move record
+    rather than rebuilt from ``errors``, which holds only the latest one.
 
     Returns what the attempt left undone when it was judged not accomplished --
     never empty, and still known on the retry route, which clears ``errors`` --
@@ -1291,6 +1646,13 @@ async def _apply_verdict(
         logger.info("DAG node {} retries on its judge's own follow-up ({} left)", node.id, remaining - 1)
         return reason
     answerable = _route_available(control_reachable)
+    attempt_agents: tuple[str, ...] = ()
+    attempt_reasons: tuple[str, ...] = ()
+    instance_followers: tuple[str, ...] = ()
+    if reassignment_state is not None:
+        attempt_agents = tuple(reassignment_state.attempt_agents.get(node.id, ()))
+        attempt_reasons = tuple(reassignment_state.attempt_reasons.get(node.id, ()))
+        instance_followers = tuple(_instance_followers(node, reassignment_state, status))
     report = _exception_report(
         run_id=store.run_id,
         node=node,
@@ -1301,6 +1663,9 @@ async def _apply_verdict(
         timeout_s=adjudication_timeout_s,
         route_available=answerable,
         control_advert=control_advert,
+        attempt_agents=attempt_agents,
+        attempt_reasons=attempt_reasons,
+        instance_followers=instance_followers,
     )
     # `origin` is part of this predicate because whoever is going to be asked is
     # reached through it: a node suspended on a report that cannot be delivered
@@ -1490,6 +1855,7 @@ async def _await_adjudications(
     timeout_s: float,
     cancel: asyncio.Event | None,
     released: asyncio.Event | None = None,
+    reassignments: dict[str, ReassignPlan] | None = None,
 ) -> None:
     """Block until every suspended node has an answer, the wait runs out, or one
     answer replans the graph.
@@ -1528,6 +1894,15 @@ async def _await_adjudications(
     graph they belong to is being replaced. They stay `exception` and
     ``_apply_replan`` gives them their outcome on the next pass of the loop.
 
+    A reassign is not a terminal answer: the node goes back to `pending` with
+    its message parked in ``continuations`` and its prepared move parked in
+    ``reassignments``, and the call returns without waiting for the round's
+    other nodes. An unanswered sibling stays `exception` with its waiter open,
+    so a later call can still answer it; closing it here would turn a valid
+    question into an artificial failure. A reassign with no prepared move --
+    or a call with nowhere to park one -- fails the node with the missing move
+    named, rather than retrying the old agent or calling the node abandoned.
+
     `status` and the desk are two independent records of what is suspended. A
     node this call was never given a desk entry for (`exception` in `status`
     but not `desk.is_open`) can never be resolved -- nothing will ever call
@@ -1557,6 +1932,7 @@ async def _await_adjudications(
     deadline: float | None = None if unbind is not None else loop.time() + timeout_s
     cancelled = False
     replanned = False
+    reassigned_nid: str | None = None
     try:
         node_pending = set(node_tasks.values())
         while node_pending:
@@ -1577,12 +1953,41 @@ async def _await_adjudications(
                 deadline = loop.time() + timeout_s
             decided = done & node_pending
             node_pending -= decided
+            if decided:
+                # A reassign hands the node back to the scheduler immediately.
+                # Waiting for the round's other nodes would hold the move behind
+                # questions it does not depend on, and on a bound run those may
+                # never be answered at all.
+                reassigned_nid = next(
+                    (
+                        nid
+                        for nid, task in sorted(node_tasks.items())
+                        if task in decided and (answer := desk.peek(nid)) is not None and answer.decision == REASSIGN
+                    ),
+                    None,
+                )
+                if reassigned_nid is not None:
+                    break
             still_bound = unbind is not None and not unbind.done()
             if decided:
                 deadline = None if still_bound else loop.time() + timeout_s
             elif deadline is not None and loop.time() >= deadline:
                 break
         if cancelled:
+            return
+        if reassigned_nid is not None:
+            answer = desk.take(reassigned_nid)
+            if answer is not None:
+                if reassignments is None or answer.reassignment is None:
+                    status[reassigned_nid] = "failed"
+                    errors[reassigned_nid] = (
+                        "The main agent chose to reassign but no prepared move reached the runner, "
+                        "so the node failed instead of moving."
+                    )
+                else:
+                    continuations[reassigned_nid] = answer.message or ""
+                    reassignments[reassigned_nid] = answer.reassignment
+                    status[reassigned_nid] = "pending"
             return
         for nid in open_nodes:
             event = waiters[nid]
@@ -1615,6 +2020,11 @@ async def _await_adjudications(
                 # guard skip this node as already resolved, since it checks this same
                 # `status` dict and only converts "running"/"exception"/"pending".
                 continue
+            elif answer.decision == REASSIGN:
+                # Only reachable when a replan ended the round in the same batch:
+                # the graph is being replaced, so this node is left for
+                # `_apply_replan` rather than charged as an abandonment.
+                continue
             else:
                 status[nid] = "failed"
                 errors[nid] = "The main agent abandoned this node."
@@ -1642,8 +2052,551 @@ async def _await_adjudications(
             replan,
             return_exceptions=True,
         )
-        for nid in open_nodes:
-            desk.close(nid)
+        # A reassign returns while siblings are still questions: their waiters
+        # must survive so the next call can answer them. The reassigned node's
+        # own waiter was consumed by `take` above.
+        if reassigned_nid is None:
+            for nid in open_nodes:
+                desk.close(nid)
+
+
+def _reassign_waiting(desk: "AdjudicationDesk | None") -> bool:
+    """Whether a decided reassign is sitting on the desk, unconsumed.
+
+    Such an answer has to reach the scheduler before any node of its source
+    group dispatches again, so the loop consumes it ahead of the ready set.
+    """
+    if desk is None:
+        return False
+    return any((answer := desk.peek(nid)) is not None and answer.decision == REASSIGN for nid in desk.open_nodes())
+
+
+def _instance_assignments(state: ReassignmentState) -> dict[tuple[str, str], tuple[str, str | None]]:
+    """Where each graph-named instance group ended the run, keyed by the pair the graph named.
+
+    A capture replays the group as one session, so every member is saved under
+    the pair the handle finished on -- including one minted after a hop dropped
+    the graph's handle. Groups the graph named no handle for are left out: a
+    minted name is not one the graph gave, so it is not a key here.
+    """
+    return {
+        original: current
+        for original, current in state.group_current.items()
+        if not state.original_groups.get(original, frozenset()) & state.submitted_auto
+    }
+
+
+def _assignment_fields(node_id: str, state: ReassignmentState | None) -> dict[str, Any]:
+    """The agent a node last actually started on, and every agent that tried it.
+
+    Empty for a node that was never reassigned: a run without a move carries
+    none of these keys, the same as before reassignment existed. The instance and
+    its auto flag come off the same frozen attempt record as the agent -- a mix
+    of graph and registry values would describe a node that never existed.
+    """
+    if state is None or node_id not in state.reassigned:
+        return {}
+    last = state.last_attempt_nodes.get(node_id)
+    if last is None:
+        # A move accepted before the node ever ran has no attempt to describe.
+        # Stamping an empty history with a null instance would read as a
+        # stateless attempt and replace the identity the graph submitted.
+        return {}
+    return {
+        "attempt_agents": list(state.attempt_agents.get(node_id, [])),
+        "subagent": last.subagent,
+        "instance": last.instance,
+        "instance_auto": node_id in state.auto_instances,
+    }
+
+
+def _current_agent(node_id: str, state: ReassignmentState | None, fallback: str) -> str:
+    """The agent a node's durable row stands under.
+
+    The last attempt's, once the node moved: the row follows the attempt, so a
+    write under the submitted agent would leave a second row behind.
+    """
+    if state is not None and node_id in state.reassigned:
+        last = state.last_attempt_nodes.get(node_id)
+        if last is not None:
+            return last.subagent
+    return fallback
+
+
+async def _apply_reassignments(
+    state: ReassignmentState,
+    *,
+    prepared: dict[str, ReassignPlan],
+    status: dict[str, str],
+    errors: dict[str, str],
+    continuations: dict[str, str],
+    store: DagRunStore,
+    session_key: str | None,
+    subagents_root: str | None,
+    cancel: asyncio.Event | None,
+    build_reassigned: "Callable[[DagNodeSpec], Awaitable[tuple[DagNodeSpec, Any]]] | None",
+) -> None:
+    """Move accepted nodes onto their target once every source attempt has settled.
+
+    Called once per scheduler pass. A prepared move is first *staged*: its
+    source group is taken off dispatch, and the scheduler keeps running
+    everything else while ``active_attempts`` still holds an attempt on that
+    pair. Only when the run's own in-flight record is clear are the movers
+    recomputed from ``status`` -- a sibling running when the move was accepted
+    joins if its attempt landed unfinished -- the target backends are built for
+    every mover, and the whole set is installed at once. Nothing here runs under
+    the concurrency gate.
+    """
+    if cancel is not None and cancel.is_set():
+        state.release_moves()
+        prepared.clear()
+        return
+    for node_id, plan in list(prepared.items()):
+        prepared.pop(node_id, None)
+        _stage_move(state, plan, status=status, errors=errors, continuations=continuations)
+    for key, move in list(state.pending_moves.items()):
+        if _move_in_flight(state, move):
+            continue
+        await _install_move(
+            state,
+            key,
+            move,
+            status=status,
+            errors=errors,
+            continuations=continuations,
+            store=store,
+            subagents_root=subagents_root,
+            cancel=cancel,
+            build_reassigned=build_reassigned,
+        )
+
+
+def _stage_move(
+    state: ReassignmentState,
+    plan: ReassignPlan,
+    *,
+    status: dict[str, str],
+    errors: dict[str, str],
+    continuations: dict[str, str],
+) -> None:
+    """Park one accepted move until its source attempts settle.
+
+    A second move of the same source group is refused rather than raced: the
+    group can only have one destination at a time, and the later node is failed
+    with the reason instead of silently vanishing.
+    """
+    key = _source_key(plan.source_agent, plan.source_instance, plan.node_id)
+    if key in state.pending_moves:
+        _fail_node(
+            status,
+            errors,
+            continuations,
+            plan.node_id,
+            f"The group of node '{plan.node_id}' already has a move in progress, so this one was not applied.",
+        )
+        return
+    if plan.source_instance is not None:
+        members = state.original_groups.get((plan.source_agent, plan.source_instance), frozenset({plan.node_id}))
+    else:
+        members = frozenset({plan.node_id})
+    state.pending_moves[key] = _StagedMove(
+        node_id=plan.node_id,
+        source_agent=plan.source_agent,
+        source_instance=plan.source_instance,
+        target_agent=plan.target_agent,
+        target_stateful=plan.target_stateful,
+        target_instance=plan.target_instance,
+        instance_auto=plan.instance_auto,
+        revision=plan.revision,
+        members=members | {plan.node_id},
+        backends=dict(plan.backends),
+    )
+    state.revision = max(state.revision, plan.revision)
+
+
+def _fail_node(
+    status: dict[str, str],
+    errors: dict[str, str],
+    continuations: dict[str, str],
+    node_id: str,
+    reason: str,
+) -> None:
+    """Fail one node on the spot, dropping the message parked for its next attempt."""
+    continuations.pop(node_id, None)
+    if status.get(node_id) in ("pending", "exception", "running"):
+        status[node_id] = "failed"
+    errors[node_id] = reason
+
+
+def _move_in_flight(state: ReassignmentState, move: _StagedMove) -> bool:
+    """Whether any node of this run is still running an attempt on the move's source pair."""
+    source = (move.source_agent, move.source_instance)
+    return any(nid in state.active_attempts and state.active_attempts[nid] == source for nid in move.members)
+
+
+def _move_movers(state: ReassignmentState, move: _StagedMove, status: dict[str, str]) -> list[str]:
+    """The members the move actually relocates now that their attempts have landed.
+
+    Finished nodes keep the agent that did the work. A member that was running
+    when the move was accepted joins when its attempt landed pending (its judge
+    asked for another attempt) or suspended (it is still a question).
+    """
+    source = (move.source_agent, move.source_instance)
+    movers: list[str] = []
+    for nid in sorted(move.members):
+        if status.get(nid) not in ("pending", "exception"):
+            continue
+        node = state.effective_nodes.get(nid)
+        if node is not None and _node_pair(node) == source:
+            movers.append(nid)
+    return movers
+
+
+async def _install_move(
+    state: ReassignmentState,
+    key: tuple[str, str],
+    move: _StagedMove,
+    *,
+    status: dict[str, str],
+    errors: dict[str, str],
+    continuations: dict[str, str],
+    store: DagRunStore,
+    subagents_root: str | None,
+    cancel: asyncio.Event | None,
+    build_reassigned: "Callable[[DagNodeSpec], Awaitable[tuple[DagNodeSpec, Any]]] | None",
+) -> None:
+    """Build every target, then install the whole move in one step.
+
+    A group is never left half-built: any refusal here fails the node the move
+    was decided for and leaves every sibling on the agent it already has.
+    """
+    movers = _move_movers(state, move, status)
+    if not movers:
+        state.pending_moves.pop(key, None)
+        state.dropped_moves.add(key)
+        return
+    original = state.original_groups.get((move.source_agent, move.source_instance), move.members)
+    if len(original) > 1 and not move.target_stateful:
+        state.pending_moves.pop(key, None)
+        state.dropped_moves.add(key)
+        _fail_node(
+            status,
+            errors,
+            continuations,
+            move.node_id,
+            f"Node '{move.node_id}' shares instance '{move.source_instance}' with "
+            f"{len(original) - 1} other node(s) in this run, so it can only move to a stateful sub-agent; "
+            f"'{move.target_agent}' is not one and the move was not applied.",
+        )
+        return
+    built: dict[str, tuple[DagNodeSpec, Any]] = {}
+    try:
+        for nid in movers:
+            node = state.effective_nodes[nid]
+            target_node = node.model_copy(update={"subagent": move.target_agent, "instance": move.target_instance})
+            if build_reassigned is not None:
+                built[nid] = await build_reassigned(target_node)
+            else:
+                backend = move.backends.get(nid)
+                if backend is None:
+                    raise DagValidationError(
+                        f"no backend was prepared for node '{nid}' on sub-agent '{move.target_agent}'"
+                    )
+                built[nid] = (target_node, backend)
+        seed = await _load_handover_seed(
+            state,
+            move,
+            movers,
+            store=store,
+            subagents_root=subagents_root,
+        )
+    except Exception as exc:  # noqa: BLE001 - an unusable target fails the move, not the run
+        state.pending_moves.pop(key, None)
+        state.dropped_moves.add(key)
+        _fail_node(
+            status,
+            errors,
+            continuations,
+            move.node_id,
+            f"Node '{move.node_id}' could not move to '{move.target_agent}': {exc}",
+        )
+        return
+    if cancel is not None and cancel.is_set():
+        state.pending_moves.pop(key, None)
+        state.dropped_moves.add(key)
+        return
+    if _move_in_flight(state, move):
+        # A source attempt started while the targets were being built; keep the
+        # move staged and let the next scheduler wake-up retry the install.
+        return
+    for nid, (node, backend) in built.items():
+        state.effective_nodes[nid] = node
+        state.backends[nid] = backend
+        state.reassigned.add(nid)
+        if move.instance_auto:
+            state.auto_instances.add(nid)
+    members = state.original_groups.get((move.source_agent, move.source_instance), move.members)
+    if move.target_instance is not None:
+        state.original_groups[(move.target_agent, move.target_instance)] = members
+    # Matched by the graph's own group, not by the pair that group sits on: a hop
+    # to a stateless target drops the handle, and the pair a later hop starts
+    # from then names no group at all. Every hop rewrites the value, so a group
+    # moved twice still reports one start and one end.
+    target = (move.target_agent, move.target_instance)
+    for original in state.group_current:
+        if move.node_id in state.original_groups.get(original, frozenset()):
+            state.group_current[original] = target
+    state.revision += 1
+    state.pending_moves.pop(key, None)
+    if seed is not None:
+        state.pending_handovers[_source_key(move.source_agent, move.source_instance, move.node_id)] = seed
+
+
+class _DestinationOccupiedError(DagValidationError):
+    """The target agent already holds a conversation under the handle the move named."""
+
+
+async def _destination_occupied(subagents_root: str | None, session_key: str | None, agent: str, handle: str) -> bool:
+    """Whether another lane already opened this pair's session.
+
+    Both records the design names: message rows in the Instance Log, or a
+    binding in the instance registry. A registry row that only links the node
+    to the handle carries no session id and is not a conversation.
+    """
+    if subagents_root:
+        try:
+            if message_rows(Path(subagents_root).parent, agent, handle):
+                return True
+        except Exception:  # noqa: BLE001 - an unreadable log is not proof of an empty one
+            logger.opt(exception=True).warning("DAG destination log could not be read for {}", agent)
+    try:
+        bound = await get_registry().lookup(session_key or "default", agent, handle)
+    except Exception:  # noqa: BLE001 - an unreadable registry is not proof of an empty binding
+        logger.opt(exception=True).warning("DAG destination binding could not be read for {}", agent)
+        return False
+    return bound is not None
+
+
+async def _plant_handover(
+    seed: _PendingHandover,
+    *,
+    node: DagNodeSpec,
+    store: DagRunStore,
+    attempt: int,
+    next_message: str,
+    session_key: str | None,
+    subagents_root: str | None,
+) -> str:
+    """Render the seed onto this attempt's prompt, under the destination handle's lock.
+
+    A graph-named handle is checked again here, at first use: a session opened
+    for that pair while the move waited must not receive this run's history.
+    A minted handle is fresh by construction and needs no check.
+    """
+    if seed.target_named and seed.target_instance is not None:
+        if await _destination_occupied(subagents_root, session_key, node.subagent, seed.target_instance):
+            raise _DestinationOccupiedError(
+                f"sub-agent '{node.subagent}' already holds a conversation under instance "
+                f"'{seed.target_instance}'; node '{node.id}' was not dispatched there. Choose another "
+                "sub-agent, or replan with a new instance name."
+            )
+    rendered = render_handover(
+        seed.turns,
+        task=seed.task,
+        to_agent=node.subagent,
+        next_message=next_message,
+    )
+    await store.write_text(store.attempt_prompt_path(node.id, attempt), rendered.text)
+    return rendered.text
+
+
+async def _announce_handover_notices(
+    seed: _PendingHandover,
+    *,
+    run_id: str,
+    node: DagNodeSpec,
+    origin: dict | None,
+    announce_exception: ExceptionAnnouncer | None,
+) -> None:
+    """Tell the main agent when the seed could not carry the whole source conversation.
+
+    An informational notice, like a stall report: nothing about the node's state
+    changed and nothing is waiting for an answer.
+    """
+    if not seed.notices or announce_exception is None or origin is None:
+        return
+    for notice in seed.notices:
+        try:
+            await announce_exception(run_id, node.id, notice, origin, awaiting_decision=False, informational=True)
+        except Exception:  # noqa: BLE001 - a notice must never fail the node
+            logger.opt(exception=True).warning("DAG handover notice for node {} was not delivered", node.id)
+
+
+async def _load_handover_seed(
+    state: ReassignmentState,
+    move: _StagedMove,
+    movers: list[str],
+    *,
+    store: DagRunStore,
+    subagents_root: str | None,
+) -> "_PendingHandover | None":
+    """Read the source conversation once every source attempt is on disk.
+
+    For a named instance the turns come from the member whose archived attempts
+    prove the log holds its latest turn; picking that member is what keeps a
+    complete conversation from being read as incomplete. When no member proves
+    it, the node the move was decided for falls back to its own archived
+    attempts, which carries the source's bounded notice. The task the budget
+    keeps whole is always that node's, whichever member proved the log.
+    """
+    session_dir = Path(subagents_root).parent if subagents_root else None
+    loaded = None
+    if move.source_instance is not None:
+        # The Instance Log proves it holds a node's latest turn only when that
+        # node's prompt is its last user row, so the member that landed last is
+        # the one that can be read as the whole conversation. Any other member
+        # falls back to its own archives, which is the incomplete transfer the
+        # notice is for; that fallback is kept for the node the move was
+        # decided for, and only when no member proves the log complete.
+        candidates = [move.node_id, *(nid for nid in sorted(move.members) if nid != move.node_id)]
+        fallback = None
+        anchor_failure: Exception | None = None
+        for anchor in candidates:
+            attempts = state.attempt_agents.get(anchor, [])
+            if not attempts:
+                continue
+            try:
+                candidate = await load_handover_turns(
+                    store,
+                    anchor,
+                    session_dir=session_dir,
+                    source_agent=move.source_agent,
+                    source_instance=move.source_instance,
+                    attempt_agents=attempts,
+                )
+            except Exception as exc:  # noqa: BLE001 - a member whose own archives are unreadable cannot prove the log
+                if anchor == move.node_id:
+                    anchor_failure = exc
+                continue
+            if not candidate.notices:
+                loaded = candidate
+                break
+            if anchor == move.node_id:
+                fallback = candidate
+        if loaded is None:
+            loaded = fallback
+        if loaded is None and anchor_failure is not None:
+            raise anchor_failure
+    if loaded is None:
+        attempts = state.attempt_agents.get(move.node_id, [])
+        if not attempts:
+            raise DagValidationError(f"node '{move.node_id}' has no recorded attempt to carry into the new session")
+        loaded = await load_handover_turns(
+            store,
+            move.node_id,
+            session_dir=None,
+            source_agent=move.source_agent,
+            source_instance=None,
+            attempt_agents=attempts,
+        )
+    # The budget always keeps the task of the node the move was decided for
+    # whole, whichever member's turn proved the log complete.
+    task = await store.read_text(store.prompt_path(move.node_id))
+    return _PendingHandover(
+        anchor_node_id=move.node_id,
+        source_agent=move.source_agent,
+        source_instance=move.source_instance,
+        target_agent=move.target_agent,
+        target_instance=move.target_instance,
+        target_named=move.target_instance is not None and not move.instance_auto,
+        movers=frozenset(movers),
+        turns=loaded.turns,
+        task=task,
+        notices=loaded.notices,
+    )
+
+
+async def _start_attempt_row(
+    state: ReassignmentState,
+    node: DagNodeSpec,
+    replaced: DagNodeSpec | None,
+    *,
+    store: DagRunStore,
+    session_key: str | None,
+    status: dict[str, str],
+    errors: dict[str, str],
+    continuations: dict[str, str],
+    progress_publisher: ProgressPublisher | None,
+    node_ended_at: dict[str, int],
+    submitted_agent: str,
+) -> bool:
+    """Give the node's durable row the agent about to run it; False when it cannot.
+
+    The row is keyed by agent, so the switch has to happen before the attempt
+    starts: a write under the new agent alone would leave the old row behind and
+    one node would be listed twice. A node that has not moved (or whose previous
+    attempt already ran on this agent) needs nothing.
+
+    A row the transaction could not write is not a status update to swallow: the
+    attempt it was about to name never happened, so the destination backend is
+    never called. The saved attempt is rolled back to the one that really ran and
+    the node fails through the ordinary failure path -- its reason is bounded
+    like any other error and its durable row stays the complete row it was.
+    """
+    if not session_key:
+        return True
+    if node.id not in state.reassigned:
+        return True
+    if replaced is not None and replaced.subagent == node.subagent:
+        return True
+    try:
+        await asyncio.wait_for(
+            get_registry().move_dag_node(
+                session_key,
+                run_id=store.run_id,
+                node_id=node.id,
+                old_agent=replaced.subagent if replaced is not None else node.subagent,
+                new_agent=node.subagent,
+                status="running",
+                instance=node.instance,
+                instance_auto=node.id in state.auto_instances,
+                attempt_agents=list(state.attempt_agents.get(node.id, [])),
+            ),
+            timeout=_REGISTRY_WRITE_TIMEOUT_S,
+        )
+    except Exception as exc:  # noqa: BLE001 - an unrecorded attempt is not dispatched
+        state.attempt_agents[node.id].pop()
+        if replaced is None:
+            state.last_attempt_nodes.pop(node.id, None)
+        else:
+            state.last_attempt_nodes[node.id] = replaced
+        _fail_node(
+            status,
+            errors,
+            continuations,
+            node.id,
+            _bounded_attempt_reason(f"node '{node.id}' could not record its attempt on '{node.subagent}': {exc}"),
+        )
+        node_ended_at[node.id] = _now_ms()
+        fields = _assignment_fields(node.id, state)
+        await _emit(
+            progress_publisher,
+            "dag_node_updated",
+            {"run_id": store.run_id, "node": node.id, "status": status[node.id], **fields},
+        )
+        await _write_node_status(
+            session_key,
+            store.run_id,
+            node.id,
+            # The attempt that failed never ran, so the row belongs to the agent
+            # that last really did -- the submitted one when none has. The frozen
+            # node names the destination, which is not it.
+            _current_agent(node.id, state, submitted_agent),
+            status[node.id],
+            assignment=fields,
+        )
+        return False
+    return True
 
 
 async def _run_group(
@@ -1651,6 +2604,7 @@ async def _run_group(
     *,
     by_id: dict[str, DagNodeSpec],
     node_backends: dict[str, Any],
+    state: ReassignmentState | None,
     store: DagRunStore,
     backend: Any,
     workdir: str,
@@ -1704,9 +2658,10 @@ async def _run_group(
             unsettled.add(nid)
         try:
             await _run_node(
-                by_id[nid],
-                node_backends[nid],
+                nid,
                 by_id=by_id,
+                node_backends=node_backends,
+                state=state,
                 store=store,
                 backend=backend,
                 workdir=workdir,
@@ -1878,10 +2833,11 @@ async def _add_node_to_instance_log(
 
 
 async def _run_node(
-    node: DagNodeSpec,
-    agent_backend: Any,
+    node_id: str,
     *,
     by_id: dict[str, DagNodeSpec],
+    node_backends: dict[str, Any],
+    state: ReassignmentState | None,
     store: DagRunStore,
     backend: Any,
     workdir: str,
@@ -1920,57 +2876,107 @@ async def _run_node(
     provider: Any = None,
     model: str | None = None,
 ) -> None:
-    """Render, dispatch to the node's backend, and record one node."""
+    """Render, dispatch to the node's backend, and record one node.
+
+    The node and its backend are read from the run's assignment record *inside*
+    the concurrency gate: a group entry that waited for a slot through a move
+    has to dispatch the pair the node is on now, and an entry whose group is
+    still being transferred returns to the scheduler instead, so the next pass
+    can regroup it. Everything after the pair is frozen -- the judge, the
+    instance log, the memory scope, the terminal record and the reason kept for
+    the move report -- reads the attempt's own node, never a later mutation.
+    The node's durable registry row moves to this pair at the same boundary,
+    before the backend is called: it is the only record of who is running the
+    node while the run is in flight.
+    """
     async with semaphore:
+        if state is not None:
+            node = state.effective(node_id, by_id[node_id])
+            agent_backend = state.backends.get(node_id, node_backends.get(node_id))
+            if state.blocked(node):
+                return
+        else:
+            node = by_id[node_id]
+            agent_backend = node_backends[node_id]
         attempt = (attempts or {}).get(node.id, 0) + 1
         if attempts is not None:
             attempts[node.id] = attempt
         follow_up = (continuations or {}).pop(node.id, None)
-        ended = await _attempt_node(
-            node,
-            agent_backend,
-            attempt=attempt,
-            follow_up=follow_up,
-            by_id=by_id,
-            store=store,
-            backend=backend,
-            workdir=workdir,
-            roots=roots,
-            sandbox_factory=sandbox_factory,
-            output_paths=output_paths,
-            status=status,
-            errors=errors,
-            prompt_written=prompt_written,
-            node_started_at=node_started_at,
-            node_ended_at=node_ended_at,
-            node_activity=node_activity,
-            branch=branch,
-            state_for=state_for,
-            mode_for=mode_for,
-            model_for=model_for,
-            capabilities=capabilities,
-            progress_publisher=progress_publisher,
-            session_key=session_key,
-            subagents_root=subagents_root,
-            continuations=continuations,
-            desk=desk,
-            judge_node=judge_node,
-            on_node_start=on_node_start,
-            announce_exception=announce_exception,
-            max_continuations=max_continuations,
-            origin=origin,
-            dependents=dependents,
-            adjudication_timeout_s=adjudication_timeout_s,
-            control_reachable=control_reachable,
-            control_advert=control_advert,
-            provider=provider,
-            model=model,
-        )
+        replaced: DagNodeSpec | None = None
+        started = True
+        if state is not None:
+            replaced = state.last_attempt_nodes.get(node.id)
+            state.last_attempt_nodes[node.id] = node
+            state.attempt_agents.setdefault(node.id, []).append(node.subagent)
+            state.active_attempts[node.id] = _node_pair(node)
+            started = await _start_attempt_row(
+                state,
+                node,
+                replaced,
+                store=store,
+                session_key=session_key,
+                status=status,
+                errors=errors,
+                continuations=continuations,
+                progress_publisher=progress_publisher,
+                node_ended_at=node_ended_at,
+                submitted_agent=by_id[node.id].subagent,
+            )
+        try:
+            ended = None
+            if started:
+                ended = await _attempt_node(
+                    node,
+                    agent_backend,
+                    attempt=attempt,
+                    follow_up=follow_up,
+                    seed=state.handover_for(node) if state is not None else None,
+                    state=state,
+                    by_id=by_id,
+                    store=store,
+                    backend=backend,
+                    workdir=workdir,
+                    roots=roots,
+                    sandbox_factory=sandbox_factory,
+                    output_paths=output_paths,
+                    status=status,
+                    errors=errors,
+                    prompt_written=prompt_written,
+                    node_started_at=node_started_at,
+                    node_ended_at=node_ended_at,
+                    node_activity=node_activity,
+                    branch=branch,
+                    state_for=state_for,
+                    mode_for=mode_for,
+                    model_for=model_for,
+                    capabilities=capabilities,
+                    progress_publisher=progress_publisher,
+                    session_key=session_key,
+                    subagents_root=subagents_root,
+                    continuations=continuations,
+                    desk=desk,
+                    judge_node=judge_node,
+                    on_node_start=on_node_start,
+                    announce_exception=announce_exception,
+                    max_continuations=max_continuations,
+                    origin=origin,
+                    dependents=dependents,
+                    adjudication_timeout_s=adjudication_timeout_s,
+                    control_reachable=control_reachable,
+                    control_advert=control_advert,
+                    provider=provider,
+                    model=model,
+                )
+        finally:
+            if state is not None:
+                state.active_attempts.pop(node.id, None)
+        if ended is not None and state is not None:
+            state.attempt_reasons.setdefault(node.id, []).append(_bounded_attempt_reason(ended.reason))
     # Scheduled after the `async with semaphore` above has already exited, so a
     # node's slot is released the moment its own work is done -- not held for
     # however long the recorder's poll budget takes.
     scope = memory_for(node.subagent) if memory_for is not None else None
-    if scope is not None:
+    if scope is not None and ended is not None:
         _schedule_node_memory(
             node, store=store, scope=scope, session_key=session_key, record_tasks=record_tasks, turn=ended.turn
         )
@@ -1996,6 +3002,18 @@ class _AttemptEnd:
     outcome: str
     reason: str | None
     turn: list[dict[str, Any]]
+
+
+def _bounded_attempt_reason(reason: str | None) -> str:
+    """One attempt's reason as the assignment record keeps it, bounded like an error."""
+    if not reason:
+        return ""
+    collapsed = " ".join(reason.split())
+    return (
+        collapsed
+        if len(collapsed) <= _MAX_ATTEMPT_REASON_CHARS
+        else collapsed[:_MAX_ATTEMPT_REASON_CHARS] + "... (truncated)"
+    )
 
 
 def _attempt_outcome(
@@ -2039,6 +3057,8 @@ async def _attempt_node(
     *,
     attempt: int,
     follow_up: str | None,
+    seed: "_PendingHandover | None" = None,
+    state: ReassignmentState | None = None,
     by_id: dict[str, DagNodeSpec],
     store: DagRunStore,
     backend: Any,
@@ -2098,14 +3118,28 @@ async def _attempt_node(
             await on_node_start(node.id)
         except Exception as exc:  # noqa: BLE001 - a bookkeeping hook must not fail a node
             logger.opt(exception=True).warning("DAG node {} start hook raised: {}", node.id, exc)
+    assignment = _assignment_fields(node.id, state)
     await _emit(
         progress_publisher,
         "dag_node_updated",
-        {"run_id": store.run_id, "node": node.id, "status": "running", "started_at": started_at_ms},
+        {
+            "run_id": store.run_id,
+            "node": node.id,
+            "status": "running",
+            "started_at": started_at_ms,
+            **assignment,
+        },
     )
-    await _write_node_status(session_key, store.run_id, node.id, node.subagent, "running")
-    await _link_node_instance(session_key, store.run_id, node.id, node.subagent, node.instance)
+    await _write_node_status(session_key, store.run_id, node.id, node.subagent, "running", assignment=assignment)
+    seed_dispatch = seed is not None and state is not None
+    if not seed_dispatch:
+        await _link_node_instance(session_key, store.run_id, node.id, node.subagent, node.instance)
     node_output: str | None = None
+    # A claimed seed whose dispatch never happened, and the destination of a
+    # refused move: neither session may receive this attempt's failure turn.
+    claimed_seed: _PendingHandover | None = None
+    dispatched = False
+    keep_turn_out = False
     try:
         rendered_prompt = await render_prompt(
             node,
@@ -2120,6 +3154,11 @@ async def _attempt_node(
             may_not_execute=branch.skippable,
         )
         prompt = rendered_prompt
+        # What the handover, when one is planted, introduces: the message this
+        # attempt would otherwise be dispatched with. A stateless retry's wrapper
+        # is not part of it -- the handover already carries the earlier answer it
+        # would restate.
+        next_message = rendered_prompt
         if follow_up is not None:
             # Recorded before the dispatch, since this attempt's judge reads the
             # record, and as the message itself, not `prompt`: the judge reads the
@@ -2132,6 +3171,7 @@ async def _attempt_node(
             # follow-up, too, since its previous answer need not repeat them.
             previous = await _previous_output(store, node.id)
             prompt = follow_up if node.instance else _stateless_retry_prompt(prompt, previous, follow_ups)
+            next_message = follow_up
         prompt_path = store.prompt_path(node.id)
         output_path = store.output_path(node.id)
         if attempt == 1:
@@ -2189,6 +3229,41 @@ async def _attempt_node(
         # cost, whereas taking it first would hold the handle while queueing for
         # a slot -- blocking every other run's nodes on that handle for longer.
         async with hold_handle(session_key or "", node.subagent, node.instance or node.id):
+            if seed_dispatch:
+                # Claimed under the destination handle's lock: exactly one
+                # dispatch in this run seeds the new session, and the collision
+                # check has to see a binding another lane made while this node
+                # waited, before any of our text reaches that session.
+                if state.claim_handover(seed):
+                    claimed_seed = seed
+                    try:
+                        prompt = await _plant_handover(
+                            seed,
+                            node=node,
+                            store=store,
+                            attempt=attempt,
+                            next_message=next_message,
+                            session_key=session_key,
+                            subagents_root=subagents_root,
+                        )
+                    except _DestinationOccupiedError:
+                        state.release_handover(seed)
+                        claimed_seed = None
+                        keep_turn_out = True
+                        raise
+                    except Exception:
+                        state.release_handover(seed)
+                        claimed_seed = None
+                        keep_turn_out = True
+                        raise
+                    await _announce_handover_notices(
+                        seed,
+                        run_id=store.run_id,
+                        node=node,
+                        origin=origin,
+                        announce_exception=announce_exception,
+                    )
+                await _link_node_instance(session_key, store.run_id, node.id, node.subagent, node.instance)
             state_kwargs = (
                 {"history": node_state.load(), "on_messages": node_state.save} if node_state is not None else {}
             )
@@ -2222,6 +3297,7 @@ async def _attempt_node(
                 try:
                     executor = sandbox_factory(Path(workdir)) if sandbox_factory is not None else None
                     async with executor if executor is not None else contextlib.nullcontext():
+                        dispatched = True
                         result = await agent_backend.run(
                             # The graph's own dispatch route: `spawn` goes
                             # through the manager and never reaches here, so
@@ -2284,6 +3360,12 @@ async def _attempt_node(
         # real failure of this attempt is recorded after it, not lost.
         errors.pop(node.id, None)
     except Exception as exc:  # noqa: BLE001 - record and continue
+        if claimed_seed is not None and not dispatched:
+            # Nothing reached the session behind the seed, so the next mover may
+            # still plant it, and this attempt's failure stays out of that log.
+            state.release_handover(claimed_seed)
+            claimed_seed = None
+            keep_turn_out = True
         logger.opt(exception=True).warning("DAG node {} failed: {}", node.id, exc)
         status[node.id] = "failed"
         errors[node.id] = str(exc)
@@ -2318,6 +3400,7 @@ async def _attempt_node(
             # looks merely empty, and the cut is the difference between "it
             # produced nothing" and "it was stopped before it could".
             output_limited=bool(getattr(did, "output_limited", False)),
+            reassignment_state=state,
         )
     elif node.routes and status[node.id] == "completed":
         # Nobody to select a route, and none to default to. The tool refuses such a
@@ -2330,10 +3413,13 @@ async def _attempt_node(
             output_paths=output_paths,
         )
     outcome, reason = _attempt_outcome(node.id, status, errors, shortfall)
-    turn = await _add_node_to_instance_log(subagents_root, node, did, session_key, errors.get(node.id), node_output)
+    turn: list[dict[str, Any]] = []
+    if not keep_turn_out:
+        turn = await _add_node_to_instance_log(subagents_root, node, did, session_key, errors.get(node.id), node_output)
     ended_at_ms = _now_ms()
     node_ended_at[node.id] = ended_at_ms
     selection = _selection_fields(node.id, branch)
+    assignment = _assignment_fields(node.id, state)
     await _emit(
         progress_publisher,
         "dag_node_updated",
@@ -2344,9 +3430,12 @@ async def _attempt_node(
             "started_at": started_at_ms,
             "ended_at": ended_at_ms,
             **selection,
+            **assignment,
         },
     )
-    await _write_node_status(session_key, store.run_id, node.id, node.subagent, status[node.id], **selection)
+    await _write_node_status(
+        session_key, store.run_id, node.id, node.subagent, status[node.id], **selection, assignment=assignment
+    )
     return _AttemptEnd(outcome, reason, turn)
 
 
@@ -2480,6 +3569,7 @@ async def _finalize(
     auto_instances: frozenset[str] = frozenset(),
     *,
     branch: BranchState,
+    state: ReassignmentState | None = None,
 ) -> DagRunResult:
     """Assemble the result, write the manifest, and update the registry.
 
@@ -2490,10 +3580,19 @@ async def _finalize(
     outer cancellation interrupted a write mid-flight -- either of which would
     otherwise leave a row stuck at a stale, non-terminal status forever. The
     write is idempotent, so re-asserting an already-correct row is a no-op.
+
+    A node that moved reports the agent, instance and history of its last
+    attempt, and its row is re-asserted under that agent: the reconciliation is
+    a write like any other, and a row under the submitted agent would leave the
+    moved one behind.
     """
     files: list[dict] = []
     manifest: dict = {}
     outcomes: dict[str, dict[str, Any]] = {}
+    # The assignment record owns the minted set once it exists: a handle minted by
+    # a move is as auto as one minted at submission, and the flag is about the
+    # handle this node ended on.
+    minted = state.auto_instances if state is not None else auto_instances
     for node in spec.nodes:
         nid = node.id
         prompt_file = store.prompt_path(nid) if nid in prompt_written else None
@@ -2507,13 +3606,22 @@ async def _finalize(
             **_selection_fields(nid, branch),
         }
         outcomes[nid] = branched
+        assignment = _assignment_fields(nid, state)
+        moved = state is not None and nid in state.reassigned
+        last = state.last_attempt_nodes.get(nid) if moved and state is not None else None
+        # A node that moved reports the agent and instance of the attempt that ran
+        # it last; one that never ran reports what the graph submitted. Its attempt
+        # history rides beside them, factual even when it is empty.
+        reported_agent = last.subagent if last is not None else node.subagent
+        reported_instance = last.instance if last is not None else node.instance
+        history = {"attempt_agents": assignment["attempt_agents"]} if "attempt_agents" in assignment else {}
         files.append(
             {
                 "node": nid,
-                "subagent": node.subagent,
+                "subagent": reported_agent,
                 "depends_on": node.depends_on,
-                "instance": node.instance,
-                "instance_auto": nid in auto_instances,
+                "instance": reported_instance,
+                "instance_auto": nid in minted,
                 "status": status[nid],
                 "started_at": node_started_at.get(nid),
                 "ended_at": node_ended_at.get(nid),
@@ -2521,20 +3629,22 @@ async def _finalize(
                 "output_file": output_file,
                 "error": error,
                 **branched,
+                **history,
             },
         )
         manifest[nid] = {
             "status": status[nid],
-            "subagent": node.subagent,
+            "subagent": reported_agent,
             "depends_on": node.depends_on,
-            "instance": node.instance,
-            "instance_auto": nid in auto_instances,
+            "instance": reported_instance,
+            "instance_auto": nid in minted,
             "started_at": node_started_at.get(nid),
             "ended_at": node_ended_at.get(nid),
             "prompt_file": prompt_file,
             "output_file": output_file,
             "error": errors.get(nid),
             **branched,
+            **history,
             # What the node did on the way, on the same terms a spawned call
             # records it: absent keys mean the transport could not say, not zero.
             **node_activity.get(nid, {}),
@@ -2550,7 +3660,13 @@ async def _finalize(
         await asyncio.gather(
             *(
                 _write_node_status(
-                    session_key, store.run_id, node.id, node.subagent, status[node.id], **outcomes[node.id]
+                    session_key,
+                    store.run_id,
+                    node.id,
+                    _current_agent(node.id, state, node.subagent),
+                    status[node.id],
+                    **outcomes[node.id],
+                    assignment=_assignment_fields(node.id, state),
                 )
                 for node in spec.nodes
             )

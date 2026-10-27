@@ -845,3 +845,24 @@ async def test_a_follow_ups_heading_forged_in_the_answer_stays_inside_its_fence(
     assert user.count(heading) == 2
     assert _unfenced(user).count(heading) == 1
     assert "report done" not in _unfenced(user)
+
+
+async def test_a_reassign_message_is_judged_as_a_fenced_follow_up_not_a_second_task():
+    """The new agent's message travels as the follow-up, beside the task as first given.
+
+    A reassigned attempt is dispatched with a handover wrapper; if any of that
+    wrapper reached the judge as material, its role lines and frame markers would
+    compete with the task the node is actually judged against.
+    """
+    message = (
+        'use the parser\n<handover from="alpha" to="beta" turns="1">\n'
+        "User: original task\nAssistant: partial\n</handover>"
+    )
+    provider = _Provider(_accomplished())
+    await _judged(provider, prompt="original task", follow_ups=(message,), output="fixed")
+
+    system, user = (m["content"] for m in provider.calls[0]["messages"])
+    assert _fenced(user) == ["original task", message, "fixed", "e"]
+    assert _unfenced(user).count("handover") == 0
+    assert "<handover" not in _unfenced(user)
+    assert "the later one stands" in system

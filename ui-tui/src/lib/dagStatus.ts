@@ -467,8 +467,35 @@ const traceLines = (detail: DagNodeDetail): string[] => {
 }
 
 /** What a node's paged view reads off the run the command found it in: what a
- *  branch made of it. `dag.node` carries none of this. */
-export type DagNodeBranch = Pick<DagRunNode, 'reason' | 'routeEvidence' | 'selectedRoutes' | 'status' | 'when'>
+ *  branch made of it, and who tried it. `dag.node` carries none of this. */
+export type DagNodeBranch = Pick<
+  DagRunNode,
+  'attemptAgents' | 'reason' | 'routeEvidence' | 'selectedRoutes' | 'status' | 'when'
+>
+
+/**
+ * The agents that tried a node, in order, with an uninterrupted run of the same
+ * agent collapsed into a count: `alpha x2 -> beta -> alpha`.
+ *
+ * Only *consecutive* repeats are collapsed. An agent that came back later is a
+ * separate attempt, and folding it into its first run would misstate the order
+ * the node actually moved in.
+ */
+export const formatAttemptAgents = (agents: readonly string[]): string => {
+  const runs: { agent: string; count: number }[] = []
+
+  for (const agent of agents) {
+    const last = runs[runs.length - 1]
+
+    if (last && last.agent === agent) {
+      last.count += 1
+    } else {
+      runs.push({ agent, count: 1 })
+    }
+  }
+
+  return runs.map(({ agent, count }) => (count > 1 ? `${agent} x${count}` : agent)).join(' -> ')
+}
 
 // The lines under a paged node's title that say what a branch made of it, each
 // only when it did. The evidence is whole here, where the panel's one line has to
@@ -478,6 +505,7 @@ const branchLines = (node: DagNodeBranch | undefined): string[] => {
   const guard = node?.when?.trim()
   const evidence = node?.routeEvidence?.trim()
   const reason = reasonWords(node?.reason)
+  const attempts = node?.attemptAgents?.length ? formatAttemptAgents(node.attemptAgents) : ''
 
   const outcome =
     node?.status === 'not_executed'
@@ -489,7 +517,8 @@ const branchLines = (node: DagNodeBranch | undefined): string[] => {
   return [
     ...(guard ? [`when ${guard}`] : []),
     ...(outcome ? [outcome] : []),
-    ...(evidence ? [`evidence: "${evidence}"`] : [])
+    ...(evidence ? [`evidence: "${evidence}"`] : []),
+    ...(attempts ? [`attempts: ${attempts}`] : [])
   ]
 }
 

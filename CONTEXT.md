@@ -3811,6 +3811,36 @@ adjudicated node and no attempt budget crosses the boundary.
 _Avoid_: "reorchestrate" -- orchestration is what the main agent does with graphs generally;
 this names one decision about one graph.
 
+**reassign** (adjudication decision; `raven/agent/subagent/dag_adjudication.py`) -- the answer
+to an exception report that changes who runs the node next instead of what it is: the main
+agent names another enabled roster agent and a message, and the next attempt of the node runs
+there. It keeps the node's id, its task, its dependencies and its dependents, and the run is
+neither stopped nor replaced; only the agent and its session change. It spends one
+continuation as `continue` does, and the attempt budget is not reset. A node on an `instance`
+takes the run's other unfinished nodes on that instance with it, and a shared instance
+requires a `[stateful]` target. The new agent's first prompt is a **Handover**. A stint round
+cannot be reassigned: its roles are the compiled role table's.
+_Avoid_: "retry on another agent" -- that names the effect, not the decision; and "replan",
+which replaces the graph rather than the agent.
+
+**Handover** (`raven/agent/subagent/dag_handover.py`) -- the text that seeds a reassigned
+node's new agent: the earlier turns of the source conversation as plain `User:` / `Assistant:`
+text inside a `<handover>` block, a fixed sentence saying the conversation continues, then the
+message that attempt would otherwise dispatch with -- the main agent's reassign message for
+the node it answered, or a moved sibling's own prompt when that sibling dispatches first.
+Drawn from the old agent's Instance Log when the node's last attempt ran on a handle and that
+log proves it holds every archived attempt of the node; otherwise from the node's own attempt
+archives, with a notice when a recorded instance history was expected but could not be used.
+For a moved instance group the turns are the instance's whole conversation, and whichever
+moved node dispatches first plants them. It carries visible text only -- no tool calls, no
+tool output and none of the old agent's private context -- and a `[failed]` row, which holds
+the verdict or the error, is left out, so the main agent states what went wrong in its
+message. Carried text is escaped so it can neither open a turn of its own nor close the block
+early; that escape is a framing guard, not a sanitizer for instructions inside the text.
+_Avoid_: "handoff" -- the **Handoff Block** (`raven/agent/subagent/direct_chat.py`) is the
+raven-minted pointer block in the main agent's next turn after Direct Chat activity, and it
+carries no transcript text.
+
 **outbox** (`raven/agent/subagent/dag_adjudication.py`) -- a foreground DAG run's tray of
 events: its nodes' exception reports and its final result, waiting for the tool call
 that is awaiting the run. One per foreground run, in memory beside the run's

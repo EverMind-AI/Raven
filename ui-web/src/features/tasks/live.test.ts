@@ -5,6 +5,7 @@ import {
   carryOutcome, countsOf, deriveStatus, startOfRunId,
 } from './live'
 
+import type { RunCompletedPayload } from './live'
 import type { TaskNode, TaskRow } from './types'
 
 const node = (over: Partial<TaskNode> & Pick<TaskNode, 'node_id' | 'status'>): TaskNode => ({
@@ -515,5 +516,170 @@ describe('applySubagentStatus', () => {
     const first = applySubagentStatus([], { task_id: 't1', agent: 'raven', label: 'x', status: 'pending' }).rows
     const second = applySubagentStatus(first, { task_id: 't1', agent: 'raven', label: 'x', status: 'pending' }).rows
     expect(second).toHaveLength(1)
+  })
+})
+
+/* A node handed to another agent mid-run. The frames of the attempt that gave
+   up can still be in flight when the next one starts, and the board names the
+   agent running the node now -- so a frame has to be placed in its attempt
+   before it may move anything. */
+describe('a reassigned node', () => {
+  const base = (): TaskRow[] => [{
+    id: 'r1', kind: 'dag', task_summary: null, status: 'running', agent: null, handle: null,
+    started_at: 1000, ended_at: null,
+    counts: countsOf([node({ node_id: 'fix', status: 'running' })]),
+    nodes: [node({ node_id: 'fix', status: 'running', agent: 'beta', instance: 'fix-minted', started_at: 20 })],
+  }]
+  const moved = (): TaskRow[] => applyNodeUpdated(base(), {
+    run_id: 'r1', node: 'fix', status: 'running', started_at: 20, subagent: 'beta',
+    instance: 'fix-minted', attempt_agents: ['alpha', 'beta'],
+  }).rows
+
+  it('moves identity, status and timing of one attempt together', () => {
+    const { rows } = applyNodeUpdated(base(), {
+      run_id: 'r1', node: 'fix', status: 'exception', started_at: 30,
+      subagent: 'gamma', instance: 'fix-gamma', instance_auto: true,
+      attempt_agents: ['alpha', 'beta', 'gamma'],
+    })
+
+    expect(rows[0]!.nodes[0]).toMatchObject({
+      agent: 'gamma', ended_at: null, instance: 'fix-gamma', instance_auto: true, started_at: 30,
+      status: 'exception', attempt_agents: ['alpha', 'beta', 'gamma'],
+    })
+  })
+
+  it('keeps every attempt of an A -> B -> A reassignment', () => {
+    const first = applyNodeUpdated(base(), {
+      run_id: 'r1', node: 'fix', status: 'running', started_at: 20, subagent: 'beta',
+      instance: 'fix-minted', attempt_agents: ['alpha', 'beta'],
+    })
+    const second = applyNodeUpdated(first.rows, {
+      run_id: 'r1', node: 'fix', status: 'running', started_at: 40, subagent: 'alpha',
+      instance: null, attempt_agents: ['alpha', 'beta', 'alpha'],
+    })
+
+    expect(second.rows[0]!.nodes[0]).toMatchObject({
+      agent: 'alpha', instance: null, started_at: 40, attempt_agents: ['alpha', 'beta', 'alpha'],
+    })
+  })
+
+  it('does not let a delayed frame from an earlier attempt overwrite the newer one', () => {
+    const rows = moved()
+    const { rows: next } = applyNodeUpdated(rows, {
+      run_id: 'r1', node: 'fix', status: 'exception', started_at: 10, ended_at: 15,
+      subagent: 'alpha', instance: 'fix-alpha', attempt_agents: ['alpha'],
+    })
+
+    expect(next[0]!.nodes[0]).toMatchObject({
+      agent: 'beta', instance: 'fix-minted', started_at: 20, status: 'running',
+      attempt_agents: ['alpha', 'beta'],
+    })
+  })
+
+  it('treats a frame that names no attempt as older than the history the node carries', () => {
+    const rows = moved()
+    const { rows: next } = applyNodeUpdated(rows, { run_id: 'r1', node: 'fix', status: 'completed' })
+
+    expect(next[0]!.nodes[0]).toMatchObject({ status: 'running', attempt_agents: ['alpha', 'beta'] })
+  })
+
+  it('clears the handle on a stateless retry', () => {
+    const rows = moved()
+    const { rows: next } = applyNodeUpdated(rows, {
+      run_id: 'r1', node: 'fix', status: 'running', started_at: 40, subagent: 'gamma',
+      instance: null, attempt_agents: ['alpha', 'beta', 'gamma'],
+    })
+
+    expect(next[0]!.nodes[0]).toMatchObject({ agent: 'gamma', instance: null })
+  })
+
+  it('takes the same attempt by the established status and timing policy', () => {
+    const rows = moved()
+    const { rows: next } = applyNodeUpdated(rows, {
+      run_id: 'r1', node: 'fix', status: 'completed', ended_at: 60,
+      subagent: 'beta', attempt_agents: ['alpha', 'beta'],
+    })
+
+    expect(next[0]!.nodes[0]).toMatchObject({ ended_at: 60, started_at: 20, status: 'completed' })
+  })
+
+  it('ignores a malformed history rather than half-adopting it', () => {
+    const rows = moved()
+    const { rows: next } = applyNodeUpdated(rows, {
+      run_id: 'r1', node: 'fix', status: 'completed', subagent: 'gamma',
+      attempt_agents: ['alpha', 7, ''] as never,
+    })
+
+    expect(next[0]!.nodes[0]).toMatchObject({ agent: 'beta', status: 'running' })
+  })
+
+  it('leaves a node that never moved with exactly the keys it had', () => {
+    const { rows } = applyNodeUpdated(base(), { run_id: 'r1', node: 'fix', status: 'completed' })
+
+    expect(rows[0]!.nodes[0]).toStrictEqual({
+      node_id: 'fix', agent: 'beta', instance: 'fix-minted', status: 'completed', depends_on: [],
+      started_at: 20, ended_at: null, error: null, tokens_in: null, tokens_out: null,
+      tool_call_count: null, tool_failure_count: null, has_output: null, prompt_template: null,
+      node_summary: null, files: [],
+    })
+  })
+})
+
+describe('applyRunCompleted on a reassigned node', () => {
+  const base = (): TaskRow[] => [{
+    id: 'r1', kind: 'dag', task_summary: null, status: 'running', agent: null, handle: null,
+    started_at: 1000, ended_at: null,
+    counts: countsOf([node({ node_id: 'fix', status: 'running' })]),
+    nodes: [node({ node_id: 'fix', status: 'running', agent: 'beta', instance: 'fix-minted', started_at: 20 })],
+  }]
+  const live = (): TaskRow[] => {
+    const { rows } = applyNodeUpdated(base(), {
+      run_id: 'r1', node: 'fix', status: 'running', started_at: 20, subagent: 'beta',
+      instance: 'fix-minted', attempt_agents: ['alpha', 'beta'],
+    })
+    return rows
+  }
+  const completed = (files: RunCompletedPayload['files']) => applyRunCompleted(live(), {
+    run_id: 'r1', dir: '/w/r1', summary: { total: 1, completed: 1 }, files,
+  })
+
+  it('folds the attempt history and the finishing agent from the manifest', () => {
+    const { rows } = completed([{
+      node: 'fix', status: 'completed', subagent: 'gamma', instance: null,
+      attempt_agents: ['alpha', 'beta', 'gamma'],
+    }])
+
+    /* The frame carries no node timings, so the attempt it introduces keeps none
+       rather than being dated by the one the node moved past. */
+    expect(rows[0]!.nodes[0]).toMatchObject({
+      agent: 'gamma', attempt_agents: ['alpha', 'beta', 'gamma'], instance: null,
+      started_at: null, status: 'completed',
+    })
+  })
+
+  it('does not let a completion naming fewer attempts rewind the node', () => {
+    const { rows } = completed([{
+      node: 'fix', status: 'exception', subagent: 'alpha', attempt_agents: ['alpha'],
+    }])
+
+    expect(rows[0]!.nodes[0]).toMatchObject({ agent: 'beta', status: 'running', attempt_agents: ['alpha', 'beta'] })
+  })
+
+  it('leaves a node that never moved with exactly the keys it had', () => {
+    const plain: TaskRow[] = [{
+      ...base()[0]!,
+      nodes: [node({ node_id: 'fix', status: 'running', agent: 'alpha', started_at: 20 })],
+    }]
+    const { rows } = applyRunCompleted(plain, {
+      run_id: 'r1', dir: '/w/r1', summary: { total: 1, completed: 1 },
+      files: [{ node: 'fix', status: 'completed' }],
+    })
+
+    expect(rows[0]!.nodes[0]).toStrictEqual({
+      node_id: 'fix', agent: 'alpha', instance: null, status: 'completed', depends_on: [],
+      started_at: 20, ended_at: null, error: null, tokens_in: null, tokens_out: null,
+      tool_call_count: null, tool_failure_count: null, has_output: null, prompt_template: null,
+      node_summary: null, files: [],
+    })
   })
 })

@@ -24,6 +24,7 @@ half way, and one unreadable call must not cost the reader the other nine.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +44,15 @@ def _same_agent(stored: Any, requested: str) -> bool:
     return isinstance(stored, str) and canonical_agent_name(stored) == canonical_agent_name(requested)
 
 
-def stitched_turns(direct: Path, dag: Path, nodes: Path, agent: str, handle: str) -> list[dict[str, Any]]:
+def stitched_turns(
+    direct: Path,
+    dag: Path,
+    nodes: Path,
+    agent: str,
+    handle: str,
+    *,
+    assignments: Mapping[tuple[str, str], Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     """Every turn the record directories hold for one instance, oldest first.
 
     The three lanes are read together because an instance's conversation is
@@ -52,11 +61,16 @@ def stitched_turns(direct: Path, dag: Path, nodes: Path, agent: str, handle: str
     started, which is the only clock the three have in common. ``nodes`` is the
     flat node root both delegation lanes now write into -- only ``direct``
     still owns a directory per call.
+
+    ``assignments`` maps ``(run id, node id)`` to that node's ``dag-node``
+    registry row, for the nodes that were reassigned. It is what lets this
+    reader resolve the current attempt the same way the RPC listings do; without
+    it the graph's submitted agent is the only name on disk.
     """
     exchanges: list[tuple[int, list[dict[str, Any]]]] = [
         *direct_exchanges(direct),
         *spawn_exchanges(nodes, agent, handle),
-        *dag_exchanges(dag, nodes, agent, handle),
+        *dag_exchanges(dag, nodes, agent, handle, assignments=assignments),
     ]
     exchanges.sort(key=lambda pair: pair[0])
     return [turn for _at, turns in exchanges for turn in turns]
@@ -188,7 +202,53 @@ def _named(value: Any) -> Path | None:
     return Path(value) if isinstance(value, str) and value else None
 
 
-def dag_exchanges(root: Path, nodes_root: Path, agent: str, handle: str) -> list[tuple[int, list[dict[str, Any]]]]:
+def _graph_node(run: Path, node_id: str) -> dict[str, Any]:
+    """The node as ``graph.json`` submitted it, or ``{}`` when the run holds none.
+
+    The original identity is where a reassigned node's archived attempts belong:
+    the manifest (and the registry row) name whichever agent ran it last.
+    """
+    graph = _read_json(run / "graph.json")
+    for node in graph.get("nodes") or []:
+        if isinstance(node, dict) and node.get("id") == node_id:
+            return node
+    return {}
+
+
+def _archived_exchange(
+    call_id: str, run: Path, node_id: str, nodes_root: Path, attempt: int, fallback_at: int
+) -> tuple[int, list[dict[str, Any]]] | None:
+    """One attempt's archived prompt and output, or ``None`` when neither is on disk.
+
+    Exact artifacts by node and attempt -- the only honest answer for an agent
+    that ran an earlier attempt of a node someone else finished. No instance is
+    invented for them: the archive is addressed the way the runner wrote it.
+    """
+    prompt = node_file_in(nodes_root, f"{node_id}.attempt-{attempt}", "prompt.md")
+    out = node_file_in(nodes_root, f"{node_id}.attempt-{attempt}", "out.md")
+    if not prompt.is_file() and not out.is_file():
+        return None
+    started = _mtime_ms(prompt) or fallback_at
+    ended = _mtime_ms(out) or started
+    turns = _exchange(call_id, prompt if prompt.is_file() else None, out if out.is_file() else None, started, ended)[1]
+    return (started, turns) if turns else None
+
+
+def _mtime_ms(path: Path) -> int:
+    try:
+        return int(path.stat().st_mtime * 1000)
+    except OSError:
+        return 0
+
+
+def dag_exchanges(
+    root: Path,
+    nodes_root: Path,
+    agent: str,
+    handle: str,
+    *,
+    assignments: Mapping[tuple[str, str], Mapping[str, Any]] | None = None,
+) -> list[tuple[int, list[dict[str, Any]]]]:
     """The DAG nodes that ran against this instance.
 
     A node names its handle in ``instance``; when it names none the cli backend
@@ -202,6 +262,14 @@ def dag_exchanges(root: Path, nodes_root: Path, agent: str, handle: str) -> list
     authoritative even where it records ``None`` -- that is a node which failed
     before it rendered, and deriving a path for it reaches whatever later task
     took the id back, answering for a node that provably wrote nothing.
+
+    ``assignments`` is the registry record of a node that was reassigned. The
+    latest flat artifact then belongs to the agent running it *now*, so the
+    graph's submitted agent must not be given it merely because the graph named
+    it. What that agent did run -- its earlier attempts -- is reachable by node
+    and attempt, and only when the graph's own handle names the instance being
+    asked about: without that, there is no record of which old instance owned
+    those attempts, and guessing one would attach them to the wrong conversation.
     """
     try:
         runs = [p for p in root.iterdir() if p.is_dir()]
@@ -212,20 +280,44 @@ def dag_exchanges(root: Path, nodes_root: Path, agent: str, handle: str) -> list
     for run in runs:
         manifest = _read_json(run / "manifest.json") or _graph_nodes(run, nodes_root)
         for node_id, node in manifest.items():
-            if not isinstance(node, dict) or not _same_agent(node.get("subagent"), agent):
+            if not isinstance(node, dict):
                 continue
-            if (node.get("instance") or node_id) != handle:
-                continue
-            started = int(node.get("started_at") or 0)
-            out.append(
-                _exchange(
-                    f"{run.name}/{node_id}",
-                    _named(node.get("prompt_file")),
-                    _named(node.get("output_file")),
-                    started,
-                    int(node.get("ended_at") or started),
+            record = (assignments or {}).get((run.name, node_id))
+            current_agent = node.get("subagent") if record is None else record.get("agent")
+            current_instance = node.get("instance") if record is None else record.get("nodeInstance")
+            if _same_agent(current_agent, agent) and (current_instance or node_id) == handle:
+                started = int(node.get("started_at") or 0)
+                out.append(
+                    _exchange(
+                        f"{run.name}/{node_id}",
+                        _named(node.get("prompt_file")),
+                        _named(node.get("output_file")),
+                        started,
+                        int(node.get("ended_at") or started),
+                    )
                 )
-            )
+                continue
+            if record is None:
+                continue
+            history = [a for a in record.get("attemptAgents") or [] if isinstance(a, str)]
+            if not history:
+                continue
+            submitted = _graph_node(run, node_id)
+            if not _same_agent(submitted.get("subagent"), agent) or (submitted.get("instance") or node_id) != handle:
+                continue
+            for attempt, attempt_agent in enumerate(history, start=1):
+                if not _same_agent(attempt_agent, agent):
+                    continue
+                archived = _archived_exchange(
+                    f"{run.name}/{node_id}#{attempt}",
+                    run,
+                    node_id,
+                    nodes_root,
+                    attempt,
+                    int(node.get("started_at") or 0),
+                )
+                if archived is not None:
+                    out.append(archived)
     return out
 
 

@@ -13,8 +13,12 @@ them out of every discovery path except those texts.
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -23,7 +27,7 @@ from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.agent.loop.wiring import WiringMixin
 from raven.agent.subagent import dag_tool as raven_agent_subagent
-from raven.agent.subagent.dag_adjudication import REPLAN, ReplanPlan
+from raven.agent.subagent.dag_adjudication import ABANDON, CONTINUE, REASSIGN, REPLAN, ReassignPlan, ReplanPlan
 from raven.agent.subagent.dag_control_tools import CancelDagTool, DagStatusTool, ResolveDagNodeTool
 from raven.agent.subagent.dag_graph import parse_dag_spec
 from raven.agent.subagent.dag_live import awaiting_decision, resolve_node
@@ -31,6 +35,7 @@ from raven.agent.subagent.dag_reader import DagReadError
 from raven.agent.subagent.dag_runner import _exception_report
 from raven.agent.subagent.dag_tool import SubAgentDagTool
 from raven.agent.subagent.dag_verdict import Verdict
+from raven.agent.subagent.delegate import DelegateTable, Worker, delegate_scope, outbound_charter
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.tool_search import TOOL_CALL_NAME, ToolCallTool, ToolSearchController
@@ -377,6 +382,69 @@ def _unfinalized_branching_run() -> dict[str, Any]:
     return {"run_id": "r3", "dir": "/tmp/runs/r3", "nodes_root": "/tmp/nodes", "finalized": False, "files": files}
 
 
+async def test_a_reassigned_node_reloads_as_the_attempt_that_ran_last(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reloaded page has no events to replay. The registry row is the durable
+    record of who is running the node, and the graph's submitted agent is not."""
+    from raven.agent.subagent import instances as instances_mod
+    from raven.agent.subagent.dag_resume import read_run_reconciled
+
+    registry = instances_mod.InstanceRegistry(path=tmp_path / "inst.json")
+    monkeypatch.setattr(instances_mod, "_registry", registry)
+    await registry.upsert_dag_node("tui:s1", "r3", "fix", "Coder", "exception")
+    await registry.move_dag_node(
+        "tui:s1",
+        run_id="r3",
+        node_id="fix",
+        old_agent="Coder",
+        new_agent="Writer",
+        status="running",
+        instance="fix-minted",
+        instance_auto=True,
+        attempt_agents=["Coder", "Writer"],
+    )
+
+    reconciled = await read_run_reconciled(
+        _DagTool(_unfinalized_branching_run()), "r3", "tui:s1", live_runs=lambda: {"r3"}
+    )
+
+    fix = {entry["node"]: entry for entry in reconciled["files"]}["fix"]
+    assert (fix["subagent"], fix["instance"]) == ("Writer", "fix-minted")
+    assert fix["instance_auto"] is True
+    assert fix["attempt_agents"] == ["Coder", "Writer"]
+    assert fix["status"] == "running"
+
+    # A gateway restart is a reader with nothing live left: the status settles,
+    # the identity the row recorded does not.
+    lost = await read_run_reconciled(_DagTool(_unfinalized_branching_run()), "r3", "tui:s1", live_runs=lambda: set())
+    stale = {entry["node"]: entry for entry in lost["files"]}["fix"]
+    assert stale["status"] == "interrupted"
+    assert (stale["subagent"], stale["instance"], stale["attempt_agents"]) == (
+        "Writer",
+        "fix-minted",
+        ["Coder", "Writer"],
+    )
+
+
+async def test_a_node_that_never_moved_reloads_with_the_keys_it_always_had(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.agent.subagent import instances as instances_mod
+    from raven.agent.subagent.dag_resume import read_run_reconciled
+
+    registry = instances_mod.InstanceRegistry(path=tmp_path / "inst.json")
+    monkeypatch.setattr(instances_mod, "_registry", registry)
+    await registry.upsert_dag_node("tui:s1", "r3", "fix", "Coder", "completed")
+
+    reconciled = await read_run_reconciled(
+        _DagTool(_unfinalized_branching_run()), "r3", "tui:s1", live_runs=lambda: {"r3"}
+    )
+
+    fix = {entry["node"]: entry for entry in reconciled["files"]}["fix"]
+    assert not {"attempt_agents", "instance_auto"} & set(fix)
+
+
 async def test_dag_status_of_a_run_still_going_says_what_a_branch_decided_but_never_the_quote(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -461,6 +529,11 @@ class _ResolvableDagTool(_DagTool):
         self.awaiting_calls: list[tuple[str, str]] = []
         self._awaiting = awaiting
         self.interrupted: tuple[str, Any, str] | None = None
+        self.reassign_plan: Any = None
+        self.reassign_refusal: str | None = None
+        self.commit_ok: bool = True
+        self.reassign_calls: list[tuple[str, str, str, str, str | None]] = []
+        self.commit_calls: list[tuple[str, Any, str]] = []
 
     def is_awaiting_decision(self, run_id: str, node_id: str) -> bool:
         self.awaiting_calls.append((run_id, node_id))
@@ -519,6 +592,20 @@ class _ResolvableDagTool(_DagTool):
     async def start_replan(self, run_id: str, plan: Any, *, bound: bool = False) -> Any:
         self.calls.append("start_replan")
         return f"replan started as {plan.run_id}"
+
+    async def prepare_reassign(
+        self, run_id: str, node_id: str, agent: str, message: str, session_key: str | None
+    ) -> Any:
+        self.calls.append("prepare_reassign")
+        self.reassign_calls.append((run_id, node_id, agent, message, session_key))
+        if self.reassign_refusal is not None:
+            return self.reassign_refusal
+        return self.reassign_plan
+
+    def commit_reassign(self, run_id: str, prepared: Any, message: str) -> bool:
+        self.calls.append("commit_reassign")
+        self.commit_calls.append((run_id, prepared, message))
+        return self.commit_ok
 
 
 class _LoopWithRun(_Loop):
@@ -590,7 +677,7 @@ async def test_resolve_rejects_an_unknown_decision():
     loop = _LoopWithRun()
     tool = ResolveDagNodeTool(loop=loop)
     out = await tool.execute(run_id="r1", node_id="a", decision="maybe", message="x")
-    assert out == "Error: decision must be 'continue', 'abandon' or 'replan', not 'maybe'."
+    assert out == "Error: decision must be 'continue', 'abandon', 'replan' or 'reassign', not 'maybe'."
     assert loop.resolved is None, "an unmet guard must never reach resolve_node"
 
 
@@ -977,7 +1064,13 @@ def test_the_resolve_tool_parks_its_taker_before_it_yields() -> None:
         ]
 
     resolve_calls = _calls(execute, "resolve_node")
-    (take,) = _calls(execute, "await_run")
+    # The reassign branch parks its own taker, and its hand-off is a commit
+    # rather than a resolve; the claim here is about the continue/abandon call,
+    # which sits above the tail's take.
+    take = min(
+        (call for call in _calls(execute, "await_run") if call.lineno > max(c.lineno for c in resolve_calls)),
+        key=lambda call: call.lineno,
+    )
     # The replan branch calls resolve_node too, to fold its plan into the same
     # decision record, but that call returns before the tail's await_run is ever
     # reached, so both calls precede the take -- this test's claim is about the
@@ -1068,7 +1161,7 @@ async def test_replan_without_a_message_is_refused() -> None:
     assert "needs a message" in out
 
 
-async def test_an_unknown_decision_names_all_three() -> None:
+async def test_an_unknown_decision_names_all_four() -> None:
     tool = _resolve_tool()
 
     out = await tool.execute(run_id="r1", node_id="a", decision="wat")
@@ -1076,12 +1169,97 @@ async def test_an_unknown_decision_names_all_three() -> None:
     assert "'continue'" in out
     assert "'abandon'" in out
     assert "'replan'" in out
+    assert "'reassign'" in out
 
 
-def test_the_decision_enum_advertises_replan() -> None:
+def test_the_decision_enum_advertises_the_four_decisions() -> None:
     params = _resolve_tool().parameters
 
-    assert params["properties"]["decision"]["enum"] == ["continue", "abandon", "replan"]
+    assert params["properties"]["decision"]["enum"] == ["continue", "abandon", "replan", "reassign"]
+
+
+def test_the_description_names_the_reassign_decision() -> None:
+    describe = _resolve_tool().description.lower()
+
+    assert "reassign" in describe, "the hidden tool's only prose advertisement has to name the fourth decision"
+
+
+def test_agent_and_message_stay_conditional_runtime_requirements() -> None:
+    """`agent` is required for reassign and `message` for continue, reassign or
+    replan, but the schema cannot say so with `required`: a model answering an
+    ordinary question would then be told to send fields the decision does not
+    read. The descriptions carry the conditions instead, and `agent` says it is
+    read only by reassign -- through `tool_call` the declared enum rejects a
+    stray value before the branch ever sees it."""
+    params = _resolve_tool().parameters
+
+    assert params["required"] == ["run_id", "node_id"]
+    assert params["properties"]["agent"]["type"] == "string"
+    agent_description = params["properties"]["agent"]["description"]
+    assert "read only when reassigning" in agent_description
+    assert "ignored" not in agent_description
+    message_description = params["properties"]["message"]["description"]
+    assert "required when continuing, reassigning or replanning" in message_description
+
+
+def test_the_agent_enum_lists_only_enabled_roster_names(no_discovered_products) -> None:
+    graph = SubAgentDagTool(
+        workspace=Path(tempfile.gettempdir()),
+        agents=[
+            ThirdPartyCliSubagentConfig(name="alpha", command="true"),
+            ThirdPartyCliSubagentConfig(name="switched_off", command="true", enabled=False),
+        ],
+    )
+    params = _resolve_tool(graph).parameters
+
+    enum = params["properties"]["agent"]["enum"]
+    assert enum == graph.registry.names(), "the check the tool runs at admission is the one the enum shows"
+    assert "alpha" in enum
+    assert "switched_off" not in enum
+
+
+def test_the_agent_enum_follows_a_hot_applied_roster(no_discovered_products) -> None:
+    graph = _graph_tool()
+    tool = _resolve_tool(graph)
+    before = tool.parameters["properties"]["agent"]["enum"]
+    assert before == graph.registry.names()
+
+    graph.set_agents([ThirdPartyCliSubagentConfig(name="beta", command="true")])
+
+    after = tool.parameters["properties"]["agent"]["enum"]
+    assert after == graph.registry.names()
+    assert after != before, "a snapshot taken at admission would still name the old roster"
+
+
+def test_the_agent_enum_never_substitutes_worker_labels(no_discovered_products) -> None:
+    """A turn's worker labels are what `subagent` takes; `agent` is a roster name."""
+    table = DelegateTable(workers={"helper": Worker("helper", "alpha", "helps")})
+    graph = SubAgentDagTool(
+        workspace=Path(tempfile.gettempdir()),
+        agents=[ThirdPartyCliSubagentConfig(name="alpha", command="true")],
+        worker_table_for=lambda: table,
+    )
+    tool = _resolve_tool(graph)
+
+    labels = graph.node_schema()["properties"]["subagent"]["enum"]
+    enum = tool.parameters["properties"]["agent"]["enum"]
+    assert labels == ["helper"], "the node schema really is serving the worker table here"
+    assert "helper" not in enum
+    assert enum == graph.registry.names()
+
+
+async def test_execute_reads_agent_only_for_reassign() -> None:
+    """The direct `execute` contract: the reassign branch is the only one that reads
+    `agent`. This is not a promise about the model-facing schema -- through
+    `tool_call` the declared enum rejects a stray value before `execute` sees it --
+    so what is pinned here is the method a host or a test calls directly."""
+    loop = _LoopWithRun()
+    tool = ResolveDagNodeTool(loop=loop)
+
+    out = await tool.execute(run_id="r1", node_id="a", decision="abandon", agent="not_a_roster_name")
+
+    assert "is abandoned" in out
+    assert loop.resolved is not None and loop.resolved[2] == "abandon"
 
 
 def test_the_nodes_parameter_reuses_the_graph_tools_node_schema() -> None:
@@ -1392,7 +1570,7 @@ async def test_resolve_with_neither_name_says_which_field_is_missing():
     loop = _LoopWithRun()
     tool = ResolveDagNodeTool(loop=loop)
     out = await tool.execute(run_id="r1", node_id="a")
-    assert out == "Error: decision is required: 'continue', 'abandon' or 'replan'."
+    assert out == "Error: decision is required: 'continue', 'abandon', 'replan' or 'reassign'."
     assert loop.resolved is None
 
 
@@ -1595,3 +1773,1685 @@ def test_the_node_shape_pointer_travels_in_a_key_the_model_is_shown() -> None:
     text = render(tool.to_schema())
     assert text is not None
     assert "$comment" not in text, "and it must not reach the rendered advertisement either"
+
+
+# --- reassigning a suspended node: admission, confirmation and transport ------
+
+
+_REASSIGN_SESSION = "web:reassign"
+
+
+class _FakeAgent:
+    """One roster agent's backend. Records dispatches and never touches a transport."""
+
+    kind = "cli"
+
+    def __init__(self, reply: str = "done") -> None:
+        self.reply = reply
+        self.calls: list[dict[str, Any]] = []
+        self.hold: asyncio.Event | None = None
+        self.hold_ids: set[str] = set()
+
+    async def run(self, task: str, **kwargs: Any) -> str:
+        self.calls.append({"task": task, "kwargs": kwargs, "charter": outbound_charter()})
+        if self.hold is not None and (not self.hold_ids or kwargs.get("task_id") in self.hold_ids):
+            await self.hold.wait()
+        return self.reply
+
+
+class _Charge:
+    def __init__(self) -> None:
+        self.calls: list[Any] = []
+
+    def __call__(self, conversation: Any) -> str | None:
+        self.calls.append(conversation)
+        return None
+
+
+class _Ask:
+    """An ask channel that answers at once, and remembers every question."""
+
+    def __init__(self, answer: bool = True) -> None:
+        self.answer = answer
+        self.calls: list[tuple[str, str]] = []
+
+    async def __call__(self, conversation: str, question: str) -> bool:
+        self.calls.append((conversation, question))
+        return self.answer
+
+
+def _short_once(node_ids: set[str]):
+    """A judge that rejects each named node's first attempt and passes later ones."""
+    remaining = set(node_ids)
+
+    async def _judge(*, node: Any, **_kwargs: Any) -> Verdict:
+        if node.id in remaining:
+            remaining.discard(node.id)
+            return Verdict(accomplished=False, category="tool_failure", what_is_missing="a parser")
+        return Verdict(accomplished=True)
+
+    return _judge
+
+
+def _local(name: str, *, stateful: bool = False) -> ThirdPartyCliSubagentConfig:
+    if stateful:
+        return ThirdPartyCliSubagentConfig(
+            name=name, command="true", resume_command="true {agent_id}", id_source="derived"
+        )
+    return ThirdPartyCliSubagentConfig(name=name, command="true")
+
+
+def _node_spec(node_id: str = "a", *, subagent: str = "alpha", **extra: Any) -> dict[str, Any]:
+    return {
+        "id": node_id,
+        "subagent": subagent,
+        "node_summary": "a step",
+        "prompt_template": "do it",
+        **extra,
+    }
+
+
+async def _noop_announce(*_args: Any, **_kwargs: Any) -> None:
+    """A delivery route for a background run, so a short node can suspend and be asked about."""
+    return None
+
+
+def _real_tool(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    agents: list[Any] | None = None,
+    backends: dict[str, _FakeAgent] | None = None,
+    judge: Any = None,
+    confirm: bool = True,
+    **kwargs: Any,
+) -> tuple[SubAgentDagTool, dict[str, _FakeAgent], _Ask, _Charge]:
+    """A real graph tool whose agents are recording fakes, never transports."""
+    ask = kwargs.pop("ask", _Ask())
+    charge = kwargs.pop("charge", _Charge())
+    kwargs.setdefault("announce_exception", _noop_announce)
+    if agents is None:
+        agents = [_local("alpha"), _local("beta")]
+    tool = SubAgentDagTool(workspace=tmp_path, agents=agents, ask=ask, charge=charge, **kwargs)
+    tool.set_context("web", "default", _REASSIGN_SESSION)
+    fakes = backends if backends is not None else {"alpha": _FakeAgent("partial"), "beta": _FakeAgent("fixed")}
+    monkeypatch.setattr(tool, "_resolve_node", lambda node: fakes[node.subagent])
+    script = judge if judge is not None else _short_once({"a"})
+    tool._judge_node = lambda: script
+    return tool, fakes, ask, charge
+
+
+async def _suspended(
+    tool: SubAgentDagTool,
+    *,
+    nodes: list[dict[str, Any]] | None = None,
+    confirm: bool = True,
+    background: bool = False,
+    node_id: str = "a",
+) -> str:
+    """Run the graph until ``node_id`` waits for a decision; return its run id."""
+    from tests.test_subagent_dag_runner import _wait_until
+
+    await tool.execute(
+        task_summary="graph under test",
+        nodes=nodes or [_node_spec()],
+        background=background,
+        confirm=confirm,
+    )
+    await _wait_until(lambda: bool(tool._desks))
+    run_id = next(iter(tool._desks))
+    await _wait_until(lambda: run_id in tool._desks and tool._desks[run_id].is_open(node_id))
+    return run_id
+
+
+@dataclass
+class _Scene:
+    tool: SubAgentDagTool
+    run_id: str
+    agent: str | None
+    message: str | None
+    expected: str
+    backends: dict[str, _FakeAgent]
+    ask: _Ask
+    charge: _Charge
+    session_key: str = _REASSIGN_SESSION
+    scope: Any = None
+    waits: bool = True
+
+    @property
+    def desk(self) -> Any:
+        return self.tool._desks[self.run_id]
+
+    @property
+    def state(self) -> Any:
+        return self.tool._run_contexts[self.run_id].state
+
+
+async def _refusal_scene(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str) -> _Scene:
+    """One refused-reassign arrangement. Raises AssertionError for an unknown case."""
+    session = _REASSIGN_SESSION
+
+    if case in {"missing_agent", "blank_agent", "missing_message", "blank_message", "unknown_target"}:
+        tool, fakes, ask, charge = _real_tool(tmp_path, monkeypatch)
+        run_id = await _suspended(tool)
+        agent = {"missing_agent": None, "blank_agent": "   ", "unknown_target": "ghost"}.get(case, "beta")
+        message = {"missing_message": None, "blank_message": "  "}.get(case, "use the parser")
+        expected = {
+            "missing_agent": "needs an `agent`",
+            "blank_agent": "needs an `agent`",
+            "missing_message": "needs a message",
+            "blank_message": "needs a message",
+            "unknown_target": "no sub-agent by that name",
+        }[case]
+        return _Scene(tool, run_id, agent, message, expected, fakes, ask, charge)
+
+    if case == "worker_label":
+        tool, fakes, ask, charge = _real_tool(tmp_path, monkeypatch)
+        run_id = await _suspended(tool)
+        table = DelegateTable(workers={"helper": Worker("helper", "alpha", "helps", "")})
+        return _Scene(
+            tool,
+            run_id,
+            "helper",
+            "use the parser",
+            "worker label",
+            fakes,
+            ask,
+            charge,
+            scope=delegate_scope(table),
+        )
+
+    if case == "disabled_target":
+        tool, fakes, ask, charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha"), ThirdPartyCliSubagentConfig(name="beta", command="true", enabled=False)],
+        )
+        run_id = await _suspended(tool)
+        return _Scene(tool, run_id, "beta", "use the parser", "turned off", fakes, ask, charge)
+
+    if case == "other_conversation":
+        tool, fakes, ask, charge = _real_tool(tmp_path, monkeypatch)
+        run_id = await _suspended(tool)
+        return _Scene(
+            tool, run_id, "beta", "use the parser", "No DAG run", fakes, ask, charge, session_key="web:elsewhere"
+        )
+
+    if case == "non_waiting":
+        tool, fakes, ask, charge = _real_tool(tmp_path, monkeypatch)
+        run_id = await _suspended(tool)
+        tool._desks[run_id].close("a")
+        return _Scene(tool, run_id, "beta", "use the parser", "no longer waiting", fakes, ask, charge, waits=False)
+
+    if case == "stint":
+        tool, fakes, ask, charge = _real_tool(tmp_path, monkeypatch)
+        run_id = await _suspended(tool)
+        tool._stints[run_id] = SimpleNamespace(stint_id="s1", round_index=1)
+        return _Scene(tool, run_id, "beta", "use the parser", "stint", fakes, ask, charge)
+
+    if case == "delegation_paused":
+        paused = {"on": False}
+        tool, fakes, ask, charge = _real_tool(tmp_path, monkeypatch, is_paused=lambda: paused["on"])
+        run_id = await _suspended(tool)
+        paused["on"] = True
+        return _Scene(tool, run_id, "beta", "use the parser", "delegation is paused", fakes, ask, charge)
+
+    if case == "same_agent_alias":
+        tool, fakes, ask, charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[],
+            backends={"Raven-General": _FakeAgent("partial")},
+            judge=_short_once({"a"}),
+        )
+        run_id = await _suspended(tool, nodes=[_node_spec(subagent="Raven-General")])
+        return _Scene(tool, run_id, "Raven", "use the parser", "choose continue", fakes, ask, charge)
+
+    if case == "path_gate":
+        (tmp_path / "notes.md").write_text("the file the node reads", encoding="utf-8")
+        tool, fakes, ask, charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[
+                _local("alpha"),
+                ThirdPartyCliSubagentConfig(name="remote", command="true", machine="worker-a"),
+            ],
+            backends={"alpha": _FakeAgent("partial"), "remote": _FakeAgent("remote")},
+        )
+        run_id = await _suspended(tool, nodes=[_node_spec(prompt_template="inspect {{ ref_path:notes.md }}")])
+        return _Scene(tool, run_id, "remote", "use the parser", "[no-local-files]", fakes, ask, charge)
+
+    if case == "shared_group_stateless_target":
+        tool, fakes, ask, charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha", stateful=True), _local("gamma")],
+            backends={"alpha": _FakeAgent("partial"), "gamma": _FakeAgent("gamma")},
+            judge=_short_once({"a"}),
+        )
+        nodes = [
+            _node_spec("a", instance="shared"),
+            _node_spec("b", instance="shared"),
+        ]
+        run_id = await _suspended(tool, nodes=nodes)
+        from tests.test_subagent_dag_runner import _wait_until
+
+        state = tool._run_contexts[run_id].state
+        await _wait_until(lambda: len(state.attempt_agents.get("b", [])) == 1)
+        return _Scene(tool, run_id, "gamma", "use the parser", "stateful", fakes, ask, charge)
+
+    if case == "occupied_instance":
+        from raven.agent.subagent import instances as instances_mod
+
+        registry = instances_mod.InstanceRegistry(path=tmp_path / "instances.json")
+        monkeypatch.setattr(instances_mod, "_registry", registry)
+        tool, fakes, ask, charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha", stateful=True), _local("beta", stateful=True)],
+            backends={"alpha": _FakeAgent("partial"), "beta": _FakeAgent("fixed")},
+        )
+        run_id = await _suspended(tool, nodes=[_node_spec(instance="shared")])
+        await registry.commit(session, "beta", "shared", "beta-session-1")
+        return _Scene(tool, run_id, "beta", "use the parser", "conversation", fakes, ask, charge)
+
+    raise AssertionError(f"unknown refusal case {case!r}")
+
+
+_REFUSAL_CASES = [
+    "missing_agent",
+    "blank_agent",
+    "missing_message",
+    "blank_message",
+    "unknown_target",
+    "worker_label",
+    "disabled_target",
+    "other_conversation",
+    "non_waiting",
+    "stint",
+    "delegation_paused",
+    "same_agent_alias",
+    "path_gate",
+    "shared_group_stateless_target",
+    "occupied_instance",
+]
+
+
+@pytest.mark.parametrize("case", _REFUSAL_CASES)
+async def test_a_refused_reassign_names_its_condition_and_records_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    from contextlib import nullcontext
+
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    async with draining_dag_runs():
+        scene = await _refusal_scene(tmp_path, monkeypatch, case)
+        desk = scene.desk
+        state = scene.state
+        source_backend = scene.backends[state.effective_nodes["a"].subagent]
+        follow_up = Path(scene.tool._nodes_root(scene.session_key)) / "a.follow_ups.json"
+        before = {
+            "source": len(source_backend.calls),
+            "ask": len(scene.ask.calls),
+            "charge": len(scene.charge.calls),
+            "attempts": {k: list(v) for k, v in state.attempt_agents.items()},
+            "revision": state.revision,
+        }
+
+        with scene.scope if scene.scope is not None else nullcontext():
+            out = await scene.tool.prepare_reassign(scene.run_id, "a", scene.agent, scene.message, scene.session_key)
+
+        assert isinstance(out, str), f"{case}: an unmet check must refuse, got {out!r}"
+        assert scene.expected in out, f"{case}: {out!r}"
+        assert "no decision was recorded" in out.lower() or "no decision was recorded" in out, case
+        assert desk.is_open("a") is scene.waits, f"{case}: the node's waiting state must not change"
+        assert desk.peek("a") is None, f"{case}: no answer may be recorded"
+        assert not follow_up.exists(), f"{case}: no follow-up may be written"
+        assert len(source_backend.calls) == before["source"], f"{case}: no backend may run"
+        assert len(scene.ask.calls) == before["ask"], f"{case}: a failed check must not ask the user"
+        assert len(scene.charge.calls) == before["charge"], f"{case}: nothing may be charged"
+        assert state.pending_moves == {} and state.pending_handovers == {}, f"{case}: nothing seeded"
+        assert state.reassigned == set(), case
+        assert state.revision == before["revision"], case
+        assert {k: list(v) for k, v in state.attempt_agents.items()} == before["attempts"], case
+        scene.tool.request_cancel(scene.run_id)
+
+
+async def test_an_accepted_reassign_prepares_the_target_and_waits_for_the_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A prepared move records nothing: the desk stays open until the hand-off."""
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    async with draining_dag_runs():
+        tool, fakes, _ask, _charge = _real_tool(tmp_path, monkeypatch)
+        run_id = await _suspended(tool)
+
+        plan = await tool.prepare_reassign(run_id, "a", "beta", "use the parser", _REASSIGN_SESSION)
+
+        assert isinstance(plan, ReassignPlan), plan
+        assert plan.node_id == "a"
+        assert plan.source_agent == "alpha"
+        assert plan.source_instance is None
+        assert plan.target_agent == "beta"
+        assert plan.target_stateful is False
+        assert plan.target_instance is None
+        assert plan.waiter is tool._desks[run_id].waiter("a")
+        assert [node.id for node in plan.nodes] == ["a"]
+        assert set(plan.backends) == {"a"}
+        assert tool._desks[run_id].peek("a") is None, "preparing is not deciding"
+        assert fakes["beta"].calls == [], "preparing a backend must not run one"
+        tool.request_cancel(run_id)
+
+
+async def test_a_stateful_target_keeps_a_graph_named_handle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    async with draining_dag_runs():
+        tool, _fakes, _ask, _charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha", stateful=True), _local("beta", stateful=True)],
+            backends={"alpha": _FakeAgent("partial"), "beta": _FakeAgent("fixed")},
+        )
+        run_id = await _suspended(tool, nodes=[_node_spec(instance="shared")])
+
+        plan = await tool.prepare_reassign(run_id, "a", "beta", "use the parser", _REASSIGN_SESSION)
+
+        assert isinstance(plan, ReassignPlan), plan
+        assert plan.target_stateful is True
+        assert plan.target_instance == "shared"
+        assert plan.instance_auto is False
+        tool.request_cancel(run_id)
+
+
+async def test_a_stateful_target_mints_a_handle_without_publishing_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.agent.subagent import instances as instances_mod
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    registry = instances_mod.InstanceRegistry(path=tmp_path / "instances.json")
+    monkeypatch.setattr(instances_mod, "_registry", registry)
+    async with draining_dag_runs():
+        tool, _fakes, _ask, _charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha"), _local("beta", stateful=True)],
+            backends={"alpha": _FakeAgent("partial"), "beta": _FakeAgent("fixed")},
+        )
+        run_id = await _suspended(tool)
+
+        plan = await tool.prepare_reassign(run_id, "a", "beta", "use the parser", _REASSIGN_SESSION)
+
+        assert isinstance(plan, ReassignPlan), plan
+        assert plan.instance_auto is True
+        assert plan.target_instance, "a stateful target gets a fresh handle"
+        assert await registry.lookup(_REASSIGN_SESSION, "beta", plan.target_instance) is None, (
+            "a proposed handle must not be bound before the move is accepted"
+        )
+        tool.request_cancel(run_id)
+
+
+async def test_a_singleton_named_instance_may_move_to_a_stateless_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    async with draining_dag_runs():
+        tool, _fakes, _ask, _charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha", stateful=True), _local("beta")],
+            backends={"alpha": _FakeAgent("partial"), "beta": _FakeAgent("fixed")},
+        )
+        run_id = await _suspended(tool, nodes=[_node_spec(instance="shared")])
+
+        plan = await tool.prepare_reassign(run_id, "a", "beta", "use the parser", _REASSIGN_SESSION)
+
+        assert isinstance(plan, ReassignPlan), plan
+        assert plan.target_stateful is False
+        assert plan.target_instance is None, "a stateless target takes no handle"
+        assert plan.instance_auto is False
+        tool.request_cancel(run_id)
+
+
+async def test_a_path_using_node_may_move_to_an_agent_that_reads_local_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    (tmp_path / "notes.md").write_text("the file the node reads", encoding="utf-8")
+    async with draining_dag_runs():
+        tool, _fakes, _ask, _charge = _real_tool(tmp_path, monkeypatch)
+        run_id = await _suspended(tool, nodes=[_node_spec(prompt_template="inspect {{ ref_path:notes.md }}")])
+
+        plan = await tool.prepare_reassign(run_id, "a", "beta", "use the parser", _REASSIGN_SESSION)
+
+        assert isinstance(plan, ReassignPlan), plan
+        tool.request_cancel(run_id)
+
+
+async def test_a_shared_group_moves_together_to_a_stateful_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.agent.subagent.dag_store import DagRunStore
+    from tests.test_subagent_dag_runner import _wait_until, draining_dag_runs
+
+    async with draining_dag_runs():
+        tool, fakes, _ask, _charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha", stateful=True), _local("beta", stateful=True)],
+            backends={"alpha": _FakeAgent("partial"), "beta": _FakeAgent("fixed")},
+            judge=_short_once({"a", "b"}),
+        )
+        run_id = await _suspended(tool, nodes=[_node_spec("a", instance="shared"), _node_spec("b", instance="shared")])
+        await _wait_until(lambda: tool._desks[run_id].is_open("b"))
+
+        plan = await tool.prepare_reassign(run_id, "a", "beta", "use the parser", _REASSIGN_SESSION)
+
+        assert isinstance(plan, ReassignPlan), plan
+        assert [node.id for node in plan.nodes] == ["a", "b"], "every node that may move is approved"
+        assert {node.instance for node in plan.nodes} == {"shared"}
+        assert plan.target_instance == "shared"
+        assert set(plan.backends) == {"a", "b"}
+        store = DagRunStore(
+            tool._backend,
+            tool._run_root(_REASSIGN_SESSION),
+            run_id,
+            nodes_root=tool._nodes_root(_REASSIGN_SESSION),
+            registry_root=tool._history_root(_REASSIGN_SESSION) or tool._run_root(_REASSIGN_SESSION),
+        )
+        assert await store.read_follow_ups("a") == []
+        tool.request_cancel(run_id)
+
+
+async def test_a_machine_target_is_noticed_without_touching_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    async with draining_dag_runs():
+        tool, fakes, _ask, _charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha"), ThirdPartyCliSubagentConfig(name="worker", command="true", machine="worker-a")],
+            backends={"alpha": _FakeAgent("partial"), "worker": _FakeAgent("remote")},
+        )
+        run_id = await _suspended(tool)
+
+        plan = await tool.prepare_reassign(run_id, "a", "worker", "use the parser", _REASSIGN_SESSION)
+
+        assert isinstance(plan, ReassignPlan), plan
+        joined = " ".join(plan.notices)
+        assert "worker-a" in joined and "files" in joined, joined
+        assert fakes["worker"].calls == [], "a notice must not require contacting the machine"
+        tool.request_cancel(run_id)
+
+
+class _PausedAsk:
+    """An ask channel the test releases by hand, so mutations can land mid-question."""
+
+    def __init__(self) -> None:
+        self.asked = asyncio.Event()
+        self.release = asyncio.Event()
+        self.answer = True
+        self.calls: list[tuple[str, str]] = []
+
+    async def __call__(self, conversation: str, question: str) -> bool:
+        self.calls.append((conversation, question))
+        self.asked.set()
+        await self.release.wait()
+        return self.answer
+
+
+async def _prepare_then_commit(tool: SubAgentDagTool, run_id: str, agent: str, message: str) -> Any:
+    """The pair the control tool performs, so a race can be observed at either half."""
+    prepared = await tool.prepare_reassign(run_id, "a", agent, message, _REASSIGN_SESSION)
+    if isinstance(prepared, str):
+        return prepared
+    return prepared if tool.commit_reassign(run_id, prepared, message) else None
+
+
+async def test_the_confirmation_lists_every_possible_mover_and_waits_for_the_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.test_subagent_dag_runner import _wait_until, draining_dag_runs
+
+    ask = _PausedAsk()
+    alpha = _FakeAgent("partial")
+    alpha.hold = asyncio.Event()
+    alpha.hold_ids = {"b"}
+    async with draining_dag_runs():
+        tool, fakes, _ask, _charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha", stateful=True), _local("beta", stateful=True)],
+            backends={"alpha": alpha, "beta": _FakeAgent("fixed")},
+            judge=_short_once({"a", "b"}),
+        )
+        run_id = await _suspended(tool, nodes=[_node_spec("a", instance="shared"), _node_spec("b", instance="shared")])
+        await _wait_until(lambda: any(call["kwargs"].get("task_id") == "b" for call in alpha.calls))
+        tool._ask = ask
+
+        pending = asyncio.create_task(tool.prepare_reassign(run_id, "a", "beta", "use the parser", _REASSIGN_SESSION))
+        await asyncio.wait_for(ask.asked.wait(), timeout=5)
+        question = ask.calls[-1][1]
+
+        assert "- a: alpha -> beta" in question
+        assert "- b: alpha -> beta" in question, "a sibling that is running now may still move"
+        assert "may move" in question, "a listed sibling is a possible mover, not a promised one"
+        assert "whose attempt has not settled yet finishes that attempt first" in question
+        assert tool._desks[run_id].peek("a") is None, "the node waits until the user answers"
+        ask.release.set()
+        plan = await asyncio.wait_for(pending, timeout=5)
+
+        assert isinstance(plan, ReassignPlan), plan
+        assert [node.id for node in plan.nodes] == ["a", "b"]
+        assert plan.target_instance == "shared"
+        alpha.hold.set()
+        tool.request_cancel(run_id)
+
+
+async def test_a_rejected_confirmation_uses_the_approved_text_and_records_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    ask = _PausedAsk()
+    ask.answer = False
+    async with draining_dag_runs():
+        tool, fakes, _ask, _charge = _real_tool(tmp_path, monkeypatch)
+        run_id = await _suspended(tool)
+        tool._ask = ask
+        state = tool._run_contexts[run_id].state
+        follow_up = Path(tool._nodes_root(_REASSIGN_SESSION)) / "a.follow_ups.json"
+
+        pending = asyncio.create_task(tool.prepare_reassign(run_id, "a", "beta", "use the parser", _REASSIGN_SESSION))
+        await asyncio.wait_for(ask.asked.wait(), timeout=5)
+        ask.release.set()
+        out = await asyncio.wait_for(pending, timeout=5)
+
+        assert out == (
+            "The user did not approve this reassign, so no decision was recorded and node 'a' is still waiting."
+        )
+        assert tool._desks[run_id].is_open("a")
+        assert tool._desks[run_id].peek("a") is None
+        assert state.pending_moves == {} and state.pending_handovers == {}
+        assert state.reassigned == set()
+        assert not follow_up.exists()
+
+        # A later attempt asks again: the earlier "no" is not an approval to reuse.
+        ask.asked.clear()
+        ask.release = asyncio.Event()
+        second = asyncio.create_task(tool.prepare_reassign(run_id, "a", "beta", "use the parser", _REASSIGN_SESSION))
+        await asyncio.wait_for(ask.asked.wait(), timeout=5)
+        assert len(ask.calls) == 2
+        ask.answer = True
+        ask.release.set()
+        plan = await asyncio.wait_for(second, timeout=5)
+        assert isinstance(plan, ReassignPlan), plan
+        assert fakes["beta"].calls == [], "planning still runs no backend"
+        tool.request_cancel(run_id)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["cancel_the_run", "answer_the_node", "hot_disable_the_target", "change_the_revision", "occupy_the_instance"],
+)
+async def test_a_change_while_the_user_is_asked_refuses_without_seeding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    from raven.agent.subagent import instances as instances_mod
+    from raven.agent.subagent.dag_adjudication import CONTINUE
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    registry = instances_mod.InstanceRegistry(path=tmp_path / "instances.json")
+    monkeypatch.setattr(instances_mod, "_registry", registry)
+    ask = _PausedAsk()
+    async with draining_dag_runs():
+        tool, fakes, _ask, _charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha", stateful=True), _local("beta", stateful=True)],
+            backends={"alpha": _FakeAgent("partial"), "beta": _FakeAgent("fixed")},
+        )
+        run_id = await _suspended(tool, nodes=[_node_spec(instance="shared")])
+        tool._ask = ask
+        state = tool._run_contexts[run_id].state
+        desk = tool._desks[run_id]
+
+        pending = asyncio.create_task(_prepare_then_commit(tool, run_id, "beta", "use the parser"))
+        await asyncio.wait_for(ask.asked.wait(), timeout=5)
+        if mutation == "cancel_the_run":
+            tool.request_cancel(run_id)
+        elif mutation == "answer_the_node":
+            assert desk.resolve("a", CONTINUE, "try again here")
+        elif mutation == "hot_disable_the_target":
+            tool._registry.apply(
+                [
+                    _local("alpha", stateful=True),
+                    ThirdPartyCliSubagentConfig(name="beta", command="true", enabled=False),
+                ]
+            )
+        elif mutation == "change_the_revision":
+            state.revision += 1
+        elif mutation == "occupy_the_instance":
+            await registry.commit(_REASSIGN_SESSION, "beta", "shared", "beta-session-1")
+        ask.release.set()
+        out = await asyncio.wait_for(pending, timeout=5)
+
+        assert not isinstance(out, ReassignPlan), f"{mutation}: must refuse, got {out!r}"
+        if isinstance(out, str):
+            assert "no decision was recorded" in out.lower(), f"{mutation}: {out!r}"
+        peeked = desk.peek("a")
+        if mutation != "answer_the_node":
+            assert peeked is None, f"{mutation}: the move must not land an answer"
+        else:
+            assert peeked is not None and peeked.decision != REASSIGN, f"{mutation}: the continue stands"
+        assert state.pending_moves == {}, f"{mutation}: nothing may be staged"
+        assert state.pending_handovers == {}, f"{mutation}: nothing may be seeded"
+        assert state.reassigned == set(), f"{mutation}: nothing may install"
+        assert not (Path(tool._nodes_root(_REASSIGN_SESSION)) / "a.follow_ups.json").exists(), (
+            f"{mutation}: a proposal that never landed records no follow-up"
+        )
+        tool.request_cancel(run_id)
+
+
+async def test_a_confirm_run_with_no_way_to_ask_refuses_the_reassign(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The permissive no-ask default authorizes a graph; it must not authorize a move."""
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    async with draining_dag_runs():
+        tool, _fakes, _ask, _charge = _real_tool(tmp_path, monkeypatch)
+        run_id = await _suspended(tool)
+        tool._ask = None
+
+        out = await tool.prepare_reassign(run_id, "a", "beta", "use the parser", _REASSIGN_SESSION)
+
+        assert isinstance(out, str), out
+        assert "no way to ask the user" in out
+        assert "no decision was recorded" in out.lower()
+        assert tool._desks[run_id].peek("a") is None
+        assert tool._run_contexts[run_id].state.pending_moves == {}
+        tool.request_cancel(run_id)
+
+
+def _transport_plan(node_ids: tuple[str, ...] = ("a",), *, instance: str | None = None) -> ReassignPlan:
+    nodes = tuple(
+        parse_dag_spec(
+            {
+                "task_summary": "move",
+                "nodes": [
+                    {"id": nid, "subagent": "alpha", "node_summary": "a step", "prompt_template": "do it"}
+                    for nid in node_ids
+                ],
+            }
+        ).nodes
+    )
+    return ReassignPlan(
+        node_id=node_ids[0],
+        source_agent="alpha",
+        source_instance=instance,
+        target_agent="beta",
+        target_stateful=instance is not None,
+        target_instance=instance,
+        instance_auto=False,
+        revision=1,
+        waiter=asyncio.Event(),
+        nodes=nodes,
+        backends={},
+        notices=(),
+    )
+
+
+async def test_a_reassign_goes_through_the_owning_tools_prepare_and_commit() -> None:
+    """The same fan-out a replan takes: the instance holding the run does the work."""
+    loop = _LoopWithSecondOwner()
+    loop._owner.reassign_plan = _transport_plan()
+    loop._owner._foreground = False
+    tool = _resolve_tool(loop)
+
+    out = await tool.execute(run_id="r1", node_id="a", decision="reassign", agent="beta", message="use it")
+
+    assert loop._owner.calls == ["prepare_reassign", "commit_reassign"]
+    assert loop._owner.reassign_calls == [("r1", "a", "beta", "use it", None)]
+    assert loop._registered.calls == [], "the registered instance holds no run to move"
+    assert loop._owner.commit_calls and loop._owner.commit_calls[0][0] == "r1"
+    assert out == "Node 'a' of run r1 will run again on beta with your message."
+
+
+async def test_a_prepare_refusal_is_returned_verbatim_and_never_commits() -> None:
+    loop = _LoopWithSecondOwner()
+    loop._owner.reassign_refusal = "Error: cannot reassign node 'a' to 'ghost'."
+    tool = _resolve_tool(loop)
+
+    out = await tool.execute(run_id="r1", node_id="a", decision="reassign", agent="ghost", message="use it")
+
+    assert out == "Error: cannot reassign node 'a' to 'ghost'."
+    assert "commit_reassign" not in loop._owner.calls
+    assert loop._registered.calls == []
+
+
+async def test_a_commit_refusal_reports_a_node_no_longer_waiting() -> None:
+    loop = _LoopWithSecondOwner()
+    loop._owner.reassign_plan = _transport_plan()
+    loop._owner.commit_ok = False
+    loop._owner._awaiting = False
+    tool = _resolve_tool(loop)
+
+    out = await tool.execute(run_id="r1", node_id="a", decision="reassign", agent="beta", message="use it")
+
+    assert "no longer waiting for a decision" in out
+    assert "reassign was not applied" in out
+    assert loop._owner.calls == ["prepare_reassign", "commit_reassign"]
+
+
+async def test_a_stale_commit_refusal_says_to_request_it_again() -> None:
+    """A state change refuses the proposal; the node itself is still waiting."""
+    loop = _LoopWithSecondOwner()
+    loop._owner.reassign_plan = _transport_plan()
+    loop._owner.commit_ok = False
+    tool = _resolve_tool(loop)
+
+    out = await tool.execute(run_id="r1", node_id="a", decision="reassign", agent="beta", message="use it")
+
+    assert "state changed" in out
+    assert "request" in out.lower()
+    assert "no longer waiting" not in out, "the node's question is still open"
+
+
+async def test_a_target_that_already_tried_the_node_is_still_eligible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failure may have been chance, so a previous agent is not excluded."""
+    from tests.test_subagent_dag_runner import _wait_until, draining_dag_runs
+
+    shortfalls = {"a": 2}
+
+    async def _judge(*, node: Any, **_kwargs: Any) -> Verdict:
+        if shortfalls.get(node.id, 0) > 0:
+            shortfalls[node.id] -= 1
+            return Verdict(accomplished=False, category="tool_failure", what_is_missing="a parser")
+        return Verdict(accomplished=True)
+
+    async with draining_dag_runs():
+        tool, fakes, _ask, _charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha"), _local("beta")],
+            backends={"alpha": _FakeAgent("partial"), "beta": _FakeAgent("closer")},
+            judge=_judge,
+        )
+        run_id = await _suspended(tool, confirm=False)
+        state = tool._run_contexts[run_id].state
+        desk = tool._desks[run_id]
+
+        first = await _prepare_then_commit(tool, run_id, "beta", "use the parser")
+        assert isinstance(first, ReassignPlan), first
+        await _wait_until(lambda: len(state.attempt_agents.get("a", [])) == 2)
+        await _wait_until(lambda: desk.is_open("a"))
+        assert state.effective_nodes["a"].subagent == "beta"
+        follow_up = Path(tool._nodes_root(_REASSIGN_SESSION)) / "a.follow_ups.json"
+        assert json.loads(follow_up.read_text(encoding="utf-8")) == ["use the parser"], (
+            "the raw reassign message lands once, as the attempt's follow-up"
+        )
+
+        back = await tool.prepare_reassign(run_id, "a", "alpha", "try the parser instead", _REASSIGN_SESSION)
+
+        assert isinstance(back, ReassignPlan), back
+        assert back.target_agent == "alpha"
+        assert len(fakes["alpha"].calls) == 1, "planning still runs no backend"
+        tool.request_cancel(run_id)
+
+
+def _judge_provider(verdict_args: dict[str, Any]) -> Any:
+    """A provider that answers the judge's tool call and records every request."""
+
+    class _Provider:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        async def chat_with_retry(self, **kwargs: Any) -> SimpleNamespace:
+            self.calls.append(kwargs)
+            call = SimpleNamespace(arguments=json.dumps(verdict_args))
+            return SimpleNamespace(tool_calls=[call], finish_reason="stop", content="")
+
+    return _Provider()
+
+
+async def test_the_production_judge_reads_the_original_prompt_and_the_raw_reassign_message(
+    tmp_path: Path,
+) -> None:
+    """The judge weighs the task as first given plus the messages sent since.
+
+    A reassigned attempt is dispatched with a handover wrapper. The judge must read
+    the recorded original task and follow-up, never the wrapper and never its
+    earlier turns replayed as a new task.
+    """
+    from raven.agent.subagent.dag_store import DagRunStore
+    from raven.agent.subagent.prompt_backend import LocalFileBackend
+
+    provider = _judge_provider({"outcome": "accomplished"})
+    tool = SubAgentDagTool(
+        workspace=tmp_path,
+        agents=[_local("alpha"), _local("beta")],
+        provider_for=lambda: provider,
+        ask=_Ask(),
+    )
+    store = DagRunStore(
+        LocalFileBackend(),
+        str(tmp_path / "runs"),
+        "r1",
+        nodes_root=str(tmp_path / "nodes"),
+        registry_root=str(tmp_path / "subagents"),
+    )
+    node = parse_dag_spec({"task_summary": "judge", "nodes": [_node_spec()]}).nodes[0]
+    wrapper = (
+        '<handover from="alpha" to="beta" turns="1">\n'
+        "User: original task\n"
+        "Assistant: partial\n"
+        "</handover>\n\nuse the parser"
+    )
+    await store.write_text(store.prompt_path(node.id), "original task")
+    await store.write_text(store.attempt_prompt_path(node.id, 2), wrapper)
+    await store.record_follow_up(node.id, "use the parser")
+
+    judge = tool._judge_node()
+    verdict = await judge(node=node, store=store, output="the answer", error="", crashed=False)
+
+    assert verdict.accomplished is True
+    system, user = (message["content"] for message in provider.calls[0]["messages"])
+    fenced = re.findall(r"\[BEGIN UNTRUSTED \S+ #\w+ [^\n]*\n(.*?)\n\[END UNTRUSTED", user, flags=re.DOTALL)
+    assert fenced == ["original task", "use the parser", "the answer"]
+    assert "<handover" not in user and "handover" not in user, "the wrapper is transport, not task material"
+    assert "the later one stands" in system, "the reassign message is weighed as part of the task"
+
+
+async def test_a_background_reassign_names_the_siblings_that_may_move_with_it() -> None:
+    loop = _LoopWithRun()
+    loop._dag_tool.reassign_plan = _transport_plan(("a", "b"), instance="shared")
+    tool = _resolve_tool(loop)
+
+    out = await tool.execute(run_id="r1", node_id="a", decision="reassign", agent="beta", message="use it")
+
+    assert out.startswith("Node 'a' of run r1 will run again on beta with your message.")
+    assert "may move with it" in out, "the tool cannot know which siblings the runner will relocate"
+    assert "'b'" in out and "shared" in out, "a group move names the sibling and their instance"
+    assert loop.resolved is None, "a reassign must not reach the replan/continue hand-off"
+
+
+async def test_a_foreground_reassign_waits_on_the_owning_tools_outbox() -> None:
+    loop = _LoopWithRun(foreground=True, events=["next report"])
+    loop._dag_tool.reassign_plan = _transport_plan()
+    tool = _resolve_tool(loop)
+
+    out = await tool.execute(run_id="r1", node_id="a", decision="reassign", agent="beta", message="use it")
+
+    assert loop._dag_tool.awaited == ["r1"]
+    assert out == "RENDERED r1 next report"
+
+
+async def test_cancelling_a_waiting_reassign_aborts_the_run() -> None:
+    loop = _LoopWithRun(foreground=True)
+    loop._dag_tool.reassign_plan = _transport_plan()
+    tool = _resolve_tool(loop)
+
+    call = asyncio.create_task(
+        tool.execute(run_id="r1", node_id="a", decision="reassign", agent="beta", message="use it")
+    )
+    await asyncio.sleep(0)
+    assert loop._dag_tool.awaited == ["r1"]
+
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+    assert loop._dag_tool.aborted == ["r1"]
+
+
+def test_the_reassign_decision_and_agent_are_on_the_model_facing_schema() -> None:
+    """The exception report copies this schema, so the decision and its target are
+    named here rather than in a hand-written retelling beside it."""
+    params = _resolve_tool().parameters
+
+    assert params["properties"]["decision"]["enum"] == ["continue", "abandon", "replan", "reassign"]
+    assert params["properties"]["agent"]["type"] == "string"
+
+
+class _GrantingAgent(_FakeAgent):
+    """A backend that can take an injected MCP grant, and records what it got."""
+
+    def __init__(self, reply: str = "fixed") -> None:
+        super().__init__(reply)
+        self.grants: list[tuple[list[str], Any]] = []
+
+    def resolve_mcp_grant(self, mcps: list[str] | None = None) -> Any:
+        grant = SimpleNamespace(note_text=lambda: "")
+        self.grants.append((list(mcps or []), grant))
+        return grant
+
+
+async def _settled_result(tool: SubAgentDagTool, run_id: str) -> Any:
+    from tests.test_subagent_dag_runner import _wait_until
+
+    await _wait_until(lambda: "a" not in tool._desks[run_id].open_nodes(), timeout=5)
+    return None
+
+
+async def _reassign_and_settle(tool: SubAgentDagTool, run_id: str, agent: str = "beta", node_id: str = "a") -> Any:
+    from tests.test_subagent_dag_runner import _wait_until
+
+    prepared = await tool.prepare_reassign(run_id, node_id, agent, "use the parser", _REASSIGN_SESSION)
+    assert isinstance(prepared, ReassignPlan), prepared
+    assert tool.commit_reassign(run_id, prepared, "use the parser")
+    await _wait_until(lambda: not tool._desks or run_id not in tool._run_contexts, timeout=10)
+    return prepared
+
+
+async def test_a_moved_node_dispatches_through_the_correct_grant_wrapper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The target's row decides the grant; the node's own list is what it resolves."""
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    beta = _GrantingAgent("fixed")
+    async with draining_dag_runs():
+        tool, _fakes, _ask, _charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha"), ThirdPartyCliSubagentConfig(name="beta", command="cat {mcp_file}")],
+            backends={"alpha": _FakeAgent("partial"), "beta": beta},
+        )
+        run_id = await _suspended(tool, nodes=[_node_spec(mcps=["db"])])
+
+        await _reassign_and_settle(tool, run_id)
+
+        assert beta.calls, "the destination attempt ran"
+        assert beta.grants and beta.grants[-1][0] == ["db"], "the grant resolved from the node's list"
+        assert beta.calls[0]["kwargs"]["mcp_grant"] is beta.grants[-1][1], (
+            "the dispatched attempt uses the grant its own prepared backend resolved"
+        )
+        tool.request_cancel(run_id)
+
+
+async def test_a_target_that_cannot_inject_mcp_servers_gets_the_list_dropped_and_a_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    gamma = _FakeAgent("fixed")
+    async with draining_dag_runs():
+        tool, _fakes, _ask, _charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha"), _local("gamma")],
+            backends={"alpha": _FakeAgent("partial"), "gamma": gamma},
+        )
+        run_id = await _suspended(tool, nodes=[_node_spec(mcps=["db"])])
+
+        prepared = await _reassign_and_settle(tool, run_id, "gamma")
+
+        assert gamma.calls, "the destination attempt ran"
+        assert "mcps" not in gamma.calls[0]["kwargs"], "a target that cannot inject must not receive the list"
+        assert any("cannot take injected mcp servers" in note for note in prepared.notices), prepared.notices
+        tool.request_cancel(run_id)
+
+
+async def test_skills_are_folded_once_from_the_authored_prompt_for_the_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The source agent's folded copy is never the target's starting point."""
+    from raven.agent.subagent.dag_skills import HEADING
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    async with draining_dag_runs():
+        tool, fakes, _ask, _charge = _real_tool(tmp_path, monkeypatch)
+        run_id = await _suspended(tool, nodes=[_node_spec(skills=[])])
+        state = tool._run_contexts[run_id].state
+
+        await _reassign_and_settle(tool, run_id)
+
+        source_prompt = fakes["alpha"].calls[0]["task"]
+        execution_prompt = state.effective_nodes["a"].prompt_template
+        assert source_prompt.count(HEADING) == 1, "baseline: submission folded the menu-less node once"
+        assert execution_prompt.count(HEADING) == 1, "the target gets one fold, not the source's copy plus another"
+        assert "This step uses no skills" in execution_prompt
+        target_prompt = fakes["beta"].calls[0]["task"]
+        assert target_prompt.count(HEADING) == 1, "the dispatched handover carries the task once"
+        tool.request_cancel(run_id)
+
+
+async def test_a_groups_skills_reach_the_member_that_opens_the_new_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the group's head may declare skills, and the head need not be the mover."""
+    from raven.agent.subagent.dag_skills import HEADING
+    from tests.test_subagent_dag_runner import _wait_until, draining_dag_runs
+
+    async with draining_dag_runs():
+        tool, fakes, _ask, _charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha", stateful=True), _local("beta", stateful=True)],
+            backends={"alpha": _FakeAgent("partial"), "beta": _FakeAgent("fixed")},
+            judge=_short_once({"b"}),
+        )
+        nodes = [
+            _node_spec("a", instance="shared", skills=[]),
+            _node_spec("b", instance="shared", depends_on=["a"]),
+        ]
+        run_id = await _suspended(tool, nodes=nodes, node_id="b")
+        await _wait_until(lambda: tool._desks[run_id].is_open("b"))
+        state = tool._run_contexts[run_id].state
+
+        await _reassign_and_settle(tool, run_id, node_id="b")
+
+        execution_prompt = state.effective_nodes["b"].prompt_template
+        assert execution_prompt.count(HEADING) == 1, "the group's declared skills follow the mover"
+        assert "This step uses no skills" in execution_prompt
+        tool.request_cancel(run_id)
+
+
+async def test_the_moved_attempt_reads_the_targets_resolvers_and_row_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.agent.subagent.registry import AgentRegistry
+    from raven.config.schema import BuiltinAgentConfig
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    built: list[tuple[str, Any]] = []
+    fakes = {"alpha": _FakeAgent("partial"), "beta": _FakeAgent("fixed")}
+
+    def _factory(row: Any, build: Any) -> Any:
+        built.append((row.name, build))
+        return fakes[row.name]
+
+    registry = AgentRegistry(build_builtin=_factory)
+    registry.apply([BuiltinAgentConfig(name="alpha"), BuiltinAgentConfig(name="beta")])
+    state_calls: list[tuple] = []
+    mode_calls: list[tuple] = []
+    model_calls: list[tuple] = []
+    memory_calls: list[str] = []
+
+    async with draining_dag_runs():
+        tool = SubAgentDagTool(
+            workspace=tmp_path,
+            registry=registry,
+            session_dir=None,
+            ask=_Ask(),
+            state_for=lambda *args: state_calls.append(args),
+            mode_for=lambda *args: mode_calls.append(args),
+            model_for=lambda *args: model_calls.append(args),
+            memory_for=lambda name: memory_calls.append(name),
+        )
+        tool.set_context("web", "default", _REASSIGN_SESSION)
+        tool._judge_node = lambda: _short_once({"a"})
+        run_id = await _suspended(tool, nodes=[_node_spec(skills=["demo"])])
+
+        prepared = await _reassign_and_settle(tool, run_id)
+
+        assert built[0][0] == "alpha", "the submitted node resolved its own row"
+        assert built[1:] and all(name == "beta" for name, _build in built[1:]), (
+            "the target row built the moved node's backend"
+        )
+        target_build = built[-1][1]
+        assert target_build is not None and target_build.skills_allow == ["demo"], (
+            "the node's skills narrowing reaches the target backend"
+        )
+        assert state_calls[-1][1] == "beta", "the destination attempt reads the target's instance state"
+        assert mode_calls[-1][1] == "beta", "and its mode"
+        assert model_calls[-1][1] == "beta", "and its model"
+        assert memory_calls and memory_calls[-1] == "beta", "and records memory under the target's identity"
+        assert prepared.target_agent == "beta"
+        tool.request_cancel(run_id)
+
+
+class _TwoToolLoop:
+    """A host whose registered graph tool is not the one running the graph."""
+
+    def __init__(self, public: Any, private: Any) -> None:
+        self.tools = _Registry(public)
+        self._tools = [public, private]
+
+    def dag_tools(self) -> list[Any]:
+        return list(self._tools)
+
+
+async def test_a_reassign_in_a_private_tool_uses_that_tools_desk_and_admission_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The registered instance shares only the on-disk index; the run lives in the private one."""
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    (tmp_path / "public").mkdir()
+    (tmp_path / "private").mkdir()
+    async with draining_dag_runs():
+        public, _pfakes, _pask, _pcharge = _real_tool(tmp_path / "public", monkeypatch)
+        private, _vfakes, _vask, _vcharge = _real_tool(tmp_path / "private", monkeypatch)
+        run_id = await _suspended(private)
+        assert run_id in private._outboxes, "the bound run's reports wait on the private tool's outbox"
+        assert run_id not in public._outboxes
+        control = ResolveDagNodeTool(loop=_TwoToolLoop(public, private))
+        control.set_context("web", "default", _REASSIGN_SESSION)
+
+        out = await asyncio.wait_for(
+            control.execute(run_id=run_id, node_id="a", decision="reassign", agent="beta", message="use it"),
+            timeout=10,
+        )
+
+        text = getattr(out, "model_text", out)
+        assert f"DAG run {run_id} finished" in text, "the bound call is handed the run's next event"
+        assert public._desks == {}, "the registered instance never held this run"
+        assert public._run_contexts == {}
+        assert run_id not in private._run_contexts, "the move ran against the instance that owned the run"
+        private.request_cancel(run_id)
+
+
+async def test_a_second_move_of_the_same_group_is_refused_while_the_first_drains(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One group has one destination at a time; the claim is released on install."""
+    from tests.test_subagent_dag_runner import _wait_until, draining_dag_runs
+
+    alpha = _FakeAgent("partial")
+    alpha.hold = asyncio.Event()
+    alpha.hold_ids = {"c"}
+    async with draining_dag_runs():
+        tool, fakes, _ask, _charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha", stateful=True), _local("beta", stateful=True), _local("gamma", stateful=True)],
+            backends={"alpha": alpha, "beta": _FakeAgent("fixed"), "gamma": _FakeAgent("gamma")},
+            judge=_short_once({"a", "b"}),
+        )
+        run_id = await _suspended(
+            tool,
+            nodes=[
+                _node_spec("a", instance="shared"),
+                _node_spec("b", instance="shared"),
+                _node_spec("c", instance="shared"),
+            ],
+        )
+        state = tool._run_contexts[run_id].state
+        from tests.test_subagent_dag_runner import _wait_until
+
+        await _wait_until(lambda: tool._desks[run_id].is_open("b"))
+        await _wait_until(lambda: any(call["kwargs"].get("task_id") == "c" for call in alpha.calls))
+
+        first = await tool.prepare_reassign(run_id, "a", "beta", "use the parser", _REASSIGN_SESSION)
+        assert isinstance(first, ReassignPlan), first
+        assert [node.id for node in first.nodes] == ["a", "b", "c"], "the running sibling may still join"
+        assert tool.commit_reassign(run_id, first, "use the parser")
+        await _wait_until(lambda: bool(state.pending_moves), timeout=5)
+
+        second = await tool.prepare_reassign(run_id, "b", "gamma", "use the parser", _REASSIGN_SESSION)
+
+        assert isinstance(second, str), second
+        assert "already has an accepted move in progress" in second
+        assert "no decision was recorded" in second.lower()
+        assert tool._desks[run_id].peek("b") is None
+
+        alpha.hold.set()
+        # The run is still waiting on b's open question; answering it lets the
+        # scheduler pass that installs the staged move run.
+        assert tool._desks[run_id].resolve("b", CONTINUE, "try again on the destination")
+        await _wait_until(
+            lambda: state.effective_nodes["a"].subagent == "beta" and state.effective_nodes["b"].subagent == "beta",
+            timeout=5,
+        )
+        await _wait_until(lambda: not tool._runs or run_id not in tool._runs, timeout=10)
+        admission = tool._run_contexts.get(run_id)
+        if admission is not None:
+            (reservation,) = admission.reservations.values()
+            assert tool._reservation_draining(state, reservation) is False, "an installed move no longer drains"
+        tool.request_cancel(run_id)
+
+
+class _MutatingGrantAgent(_GrantingAgent):
+    """A grant resolver that changes the roster while the move is being built."""
+
+    def __init__(self, reply: str, mutate: Any) -> None:
+        super().__init__(reply)
+        self._mutate = mutate
+
+    def resolve_mcp_grant(self, mcps: list[str] | None = None) -> Any:
+        self._mutate()
+        return super().resolve_mcp_grant(mcps)
+
+
+async def test_a_terminal_siblings_paths_do_not_gate_the_move(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed member stays where it ran; its prompt must not veto a safe move.
+
+    With a and b on one instance, a abandoned and b continued, the move's
+    possible set still names a -- the tool cannot tell it from a parked node --
+    but a is terminal, so its path requirement must not refuse a move the runner
+    will never apply to it.
+    """
+    from tests.test_subagent_dag_runner import _wait_until, draining_dag_runs
+
+    (tmp_path / "notes.md").write_text("the file a reads", encoding="utf-8")
+    remote = ThirdPartyCliSubagentConfig(
+        name="remote",
+        command="true",
+        resume_command="true {agent_id}",
+        id_source="derived",
+        machine="worker-a",
+    )
+    shortfalls = {"a": 1, "b": 2}
+
+    async def _judge(*, node: Any, **_kwargs: Any) -> Verdict:
+        if shortfalls.get(node.id, 0) > 0:
+            shortfalls[node.id] -= 1
+            return Verdict(accomplished=False, category="tool_failure", what_is_missing="a parser")
+        return Verdict(accomplished=True)
+
+    async with draining_dag_runs():
+        tool, fakes, _ask, _charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha", stateful=True), remote],
+            backends={"alpha": _FakeAgent("partial"), "remote": _FakeAgent("remote")},
+            judge=_judge,
+        )
+        run_id = await _suspended(
+            tool,
+            nodes=[
+                _node_spec("a", instance="shared", prompt_template="inspect {{ ref_path:notes.md }}"),
+                _node_spec("b", instance="shared"),
+            ],
+            node_id="a",
+        )
+        await _wait_until(lambda: tool._desks[run_id].is_open("b"))
+        state = tool._run_contexts[run_id].state
+        # Both questions are answered in one batch: a is abandoned, b continues
+        # and its next attempt falls short again, so a is terminal while b waits.
+        assert tool.resolve_node(run_id, "a", ABANDON, None)
+        assert tool.resolve_node(run_id, "b", CONTINUE, "try once more")
+        await _wait_until(lambda: tool._desks[run_id].peek("a") is None)
+        await _wait_until(lambda: len(state.attempt_agents.get("b", [])) == 2)
+        await _wait_until(lambda: tool._desks[run_id].is_open("b"))
+
+        prepared = await tool.prepare_reassign(run_id, "b", "remote", "use the parser", _REASSIGN_SESSION)
+
+        assert isinstance(prepared, ReassignPlan), prepared
+        assert [node.id for node in prepared.nodes] == ["b"], "a failed member is not a mover"
+        assert fakes["remote"].calls == [], "preparing a remote target touches no host"
+        tool.request_cancel(run_id)
+
+
+async def test_a_failed_install_releases_the_group_for_another_proposal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A move that cannot be built fails its node and frees the group it reserved."""
+    from tests.test_subagent_dag_runner import _wait_until, draining_dag_runs
+
+    async with draining_dag_runs():
+        tool, fakes, _ask, _charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha", stateful=True), _local("beta", stateful=True)],
+            backends={"alpha": _FakeAgent("partial"), "beta": _FakeAgent("fixed")},
+            judge=_short_once({"a", "b"}),
+        )
+        run_id = await _suspended(tool, nodes=[_node_spec("a", instance="shared"), _node_spec("b", instance="shared")])
+        await _wait_until(lambda: tool._desks[run_id].is_open("b"))
+        state = tool._run_contexts[run_id].state
+
+        first = await tool.prepare_reassign(run_id, "a", "beta", "use the parser", _REASSIGN_SESSION)
+        assert isinstance(first, ReassignPlan), first
+        assert tool.commit_reassign(run_id, first, "use the parser")
+        # The install builds its targets on the next scheduler pass; removing the
+        # destination backend now makes that build fail.
+        broken = dict(fakes)
+        broken.pop("beta")
+        monkeypatch.setattr(tool, "_resolve_node", lambda node: broken.get(node.subagent))
+        await _wait_until(lambda: bool(state.dropped_moves), timeout=5)
+
+        fakes["beta"] = _FakeAgent("fixed")
+        monkeypatch.setattr(tool, "_resolve_node", lambda node: fakes.get(node.subagent))
+        second = await tool.prepare_reassign(run_id, "b", "beta", "use the parser", _REASSIGN_SESSION)
+
+        assert isinstance(second, ReassignPlan), second
+        tool.request_cancel(run_id)
+
+
+async def test_a_cancelled_run_is_refused_before_the_user_is_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    async with draining_dag_runs():
+        tool, _fakes, ask, _charge = _real_tool(tmp_path, monkeypatch)
+        run_id = await _suspended(tool)
+        tool.request_cancel(run_id)
+        asked = len(ask.calls)
+
+        out = await tool.prepare_reassign(run_id, "a", "beta", "use the parser", _REASSIGN_SESSION)
+
+        assert isinstance(out, str), out
+        assert "cancelled" in out
+        assert "no decision was recorded" in out.lower()
+        assert len(ask.calls) == asked, "a run being stopped must not reach the user"
+        tool.request_cancel(run_id)
+
+
+async def test_a_replanned_run_is_refused_before_the_user_is_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    async with draining_dag_runs():
+        tool, _fakes, ask, _charge = _real_tool(tmp_path, monkeypatch)
+        run_id = await _suspended(tool)
+        tool._desks[run_id].replanned.set()
+        asked = len(ask.calls)
+
+        out = await tool.prepare_reassign(run_id, "a", "beta", "use the parser", _REASSIGN_SESSION)
+
+        assert isinstance(out, str), out
+        assert "replan" in out.lower()
+        assert "no decision was recorded" in out.lower()
+        assert len(ask.calls) == asked, "a graph being replaced must not reach the user"
+        tool.request_cancel(run_id)
+
+
+async def test_the_target_is_revalidated_after_the_build_without_confirmation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The post-build reread is not tied to the confirmation question."""
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    tool_ref: dict[str, Any] = {}
+
+    def _disable_beta() -> None:
+        tool_ref["tool"]._registry.apply(
+            [
+                _local("alpha"),
+                ThirdPartyCliSubagentConfig(name="beta", command="cat {mcp_file}", enabled=False),
+            ]
+        )
+
+    beta = _MutatingGrantAgent("fixed", _disable_beta)
+    async with draining_dag_runs():
+        tool, _fakes, ask, _charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha"), ThirdPartyCliSubagentConfig(name="beta", command="cat {mcp_file}")],
+            backends={"alpha": _FakeAgent("partial"), "beta": beta},
+        )
+        tool_ref["tool"] = tool
+        run_id = await _suspended(tool, confirm=False)
+        asked = len(ask.calls)
+
+        out = await tool.prepare_reassign(run_id, "a", "beta", "use the parser", _REASSIGN_SESSION)
+
+        assert isinstance(out, str), out
+        assert "changed while the reassign was being prepared" in out
+        assert "no decision was recorded" in out.lower()
+        assert len(ask.calls) == asked
+        tool.request_cancel(run_id)
+
+
+async def test_a_replaced_waiter_refuses_the_commit_and_consumes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    async with draining_dag_runs():
+        tool, _fakes, _ask, _charge = _real_tool(tmp_path, monkeypatch)
+        run_id = await _suspended(tool)
+        prepared = await tool.prepare_reassign(run_id, "a", "beta", "use the parser", _REASSIGN_SESSION)
+        assert isinstance(prepared, ReassignPlan), prepared
+        desk = tool._desks[run_id]
+        replacement = desk.open("a")
+        handed_off: list[Any] = []
+        resolve = desk.resolve
+
+        def _spy(*args: Any, **kwargs: Any) -> bool:
+            handed_off.append(args)
+            return resolve(*args, **kwargs)
+
+        desk.resolve = _spy  # type: ignore[method-assign]
+
+        assert desk.waiter("a") is replacement
+        assert tool.commit_reassign(run_id, prepared, "use the parser") is False
+
+        assert handed_off == [], "the commit must refuse before handing anything to the desk"
+        assert desk.peek("a") is None, "no answer may be recorded against the replacement"
+        assert desk.is_open("a")
+        tool.request_cancel(run_id)
+
+
+async def test_a_pending_siblings_unreadable_path_is_refused_up_front(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pending sibling is a certain mover, so its paths must gate the move."""
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    (tmp_path / "notes.md").write_text("the file a reads", encoding="utf-8")
+    remote = ThirdPartyCliSubagentConfig(
+        name="remote",
+        command="true",
+        resume_command="true {agent_id}",
+        id_source="derived",
+        machine="worker-a",
+    )
+    async with draining_dag_runs():
+        tool, fakes, _ask, _charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha", stateful=True), remote],
+            backends={"alpha": _FakeAgent("partial"), "remote": _FakeAgent("remote")},
+            judge=_short_once({"b"}),
+        )
+        run_id = await _suspended(
+            tool,
+            nodes=[
+                _node_spec("a", instance="shared", depends_on=["b"], prompt_template="inspect {{ ref_path:notes.md }}"),
+                _node_spec("b", instance="shared"),
+            ],
+            node_id="b",
+        )
+        state = tool._run_contexts[run_id].state
+        assert state.status["a"] == "pending", "a waits for its dependency, so it is a certain mover"
+
+        out = await tool.prepare_reassign(run_id, "b", "remote", "use the parser", _REASSIGN_SESSION)
+
+        assert isinstance(out, str), out
+        assert "node 'a'" in out
+        assert "no-local-files" in out or "local file paths" in out
+        assert "no decision was recorded" in out.lower()
+        assert fakes["remote"].calls == []
+        tool.request_cancel(run_id)
+
+
+async def test_a_running_siblings_unreadable_path_is_refused_up_front(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sibling still attempting may land unfinished and join the move."""
+    from tests.test_subagent_dag_runner import _wait_until, draining_dag_runs
+
+    (tmp_path / "notes.md").write_text("the file b reads", encoding="utf-8")
+    remote = ThirdPartyCliSubagentConfig(
+        name="remote",
+        command="true",
+        resume_command="true {agent_id}",
+        id_source="derived",
+        machine="worker-a",
+    )
+    alpha = _FakeAgent("partial")
+    alpha.hold = asyncio.Event()
+    alpha.hold_ids = {"b"}
+    async with draining_dag_runs():
+        tool, fakes, _ask, _charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha", stateful=True), remote],
+            backends={"alpha": alpha, "remote": _FakeAgent("remote")},
+            judge=_short_once({"a"}),
+        )
+        run_id = await _suspended(
+            tool,
+            nodes=[
+                _node_spec("a", instance="shared"),
+                _node_spec("b", instance="shared", prompt_template="inspect {{ ref_path:notes.md }}"),
+            ],
+            node_id="a",
+        )
+        state = tool._run_contexts[run_id].state
+        await _wait_until(lambda: state.status.get("b") == "running")
+
+        out = await tool.prepare_reassign(run_id, "a", "remote", "use the parser", _REASSIGN_SESSION)
+
+        assert isinstance(out, str), out
+        assert "node 'b'" in out
+        assert "no-local-files" in out or "local file paths" in out
+        assert "no decision was recorded" in out.lower()
+        alpha.hold.set()
+        tool.request_cancel(run_id)
+
+
+async def test_a_judge_held_siblings_unreadable_path_is_refused_up_front(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The backend's return reads completed, but the judge has not ruled and may
+    suspend the attempt: that sibling may still move, so its paths are gated."""
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    (tmp_path / "notes.md").write_text("the file b reads", encoding="utf-8")
+    remote = ThirdPartyCliSubagentConfig(
+        name="remote",
+        command="true",
+        resume_command="true {agent_id}",
+        id_source="derived",
+        machine="worker-a",
+    )
+    judging = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _judge(*, node: Any, **_kwargs: Any) -> Verdict:
+        if node.id == "b":
+            judging.set()
+            await release.wait()
+            return Verdict(accomplished=False, what_is_missing="still short")
+        return Verdict(accomplished=False, category="tool_failure", what_is_missing="a parser")
+
+    async with draining_dag_runs():
+        tool, _fakes, _ask, _charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha", stateful=True), remote],
+            backends={"alpha": _FakeAgent("partial"), "remote": _FakeAgent("remote")},
+            judge=_judge,
+        )
+        run_id = await _suspended(
+            tool,
+            nodes=[
+                _node_spec("a", instance="shared"),
+                _node_spec("b", instance="shared", prompt_template="inspect {{ ref_path:notes.md }}"),
+            ],
+            node_id="a",
+        )
+        state = tool._run_contexts[run_id].state
+        await asyncio.wait_for(judging.wait(), timeout=10)
+        assert state.status["b"] == "completed", "the backend returned while the judge is still out"
+        assert state.active_attempts["b"] == ("alpha", "shared")
+
+        out = await tool.prepare_reassign(run_id, "a", "remote", "use the parser", _REASSIGN_SESSION)
+
+        assert isinstance(out, str), out
+        assert "node 'b'" in out
+        assert "no-local-files" in out or "local file paths" in out
+        assert "no decision was recorded" in out.lower()
+        release.set()
+        tool.request_cancel(run_id)
+
+
+async def test_the_move_installer_gates_every_node_it_is_about_to_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The installer reads node status a second time; the build boundary applies
+    the same file-reference gate, so a target that cannot read the node's paths
+    refuses the move instead of dispatching it."""
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    (tmp_path / "notes.md").write_text("the file a reads", encoding="utf-8")
+    remote = ThirdPartyCliSubagentConfig(
+        name="remote",
+        command="true",
+        resume_command="true {agent_id}",
+        id_source="derived",
+        machine="worker-a",
+    )
+    async with draining_dag_runs():
+        tool, _fakes, _ask, _charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha", stateful=True), remote],
+            backends={"alpha": _FakeAgent("partial"), "remote": _FakeAgent("remote")},
+        )
+        run_id = await _suspended(
+            tool,
+            nodes=[
+                _node_spec("a", instance="shared", prompt_template="inspect {{ ref_path:notes.md }}"),
+                _node_spec("b"),
+            ],
+        )
+        admission = tool._run_contexts[run_id]
+        moved = admission.authored()["a"].model_copy(update={"subagent": "remote", "instance": "shared"})
+
+        with pytest.raises(DagValidationError) as refused:
+            await admission.build(moved)
+
+        assert "node 'a'" in str(refused.value)
+        assert "no-local-files" in str(refused.value) or "local file paths" in str(refused.value)
+
+        execution, _backend = await admission.build(admission.authored()["b"].model_copy(update={"subagent": "remote"}))
+        assert (execution.subagent, execution.instance) == ("remote", None), "a path-free node still builds"
+        tool.request_cancel(run_id)
+
+
+async def test_the_confirmation_does_not_list_a_terminal_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.test_subagent_dag_runner import _wait_until, draining_dag_runs
+
+    shortfalls = {"a": 1, "b": 2}
+
+    async def _judge(*, node: Any, **_kwargs: Any) -> Verdict:
+        if shortfalls.get(node.id, 0) > 0:
+            shortfalls[node.id] -= 1
+            return Verdict(accomplished=False, category="tool_failure", what_is_missing="a parser")
+        return Verdict(accomplished=True)
+
+    async with draining_dag_runs():
+        tool, _fakes, ask, _charge = _real_tool(
+            tmp_path,
+            monkeypatch,
+            agents=[_local("alpha", stateful=True), _local("beta", stateful=True)],
+            backends={"alpha": _FakeAgent("partial"), "beta": _FakeAgent("fixed")},
+            judge=_judge,
+        )
+        run_id = await _suspended(
+            tool, nodes=[_node_spec("a", instance="shared"), _node_spec("b", instance="shared")], node_id="a"
+        )
+        await _wait_until(lambda: tool._desks[run_id].is_open("b"))
+        state = tool._run_contexts[run_id].state
+        assert tool.resolve_node(run_id, "a", ABANDON, None)
+        assert tool.resolve_node(run_id, "b", CONTINUE, "try once more")
+        await _wait_until(lambda: tool._desks[run_id].peek("a") is None)
+        await _wait_until(lambda: len(state.attempt_agents.get("b", [])) == 2)
+        await _wait_until(lambda: tool._desks[run_id].is_open("b"))
+
+        prepared = await tool.prepare_reassign(run_id, "b", "beta", "use the parser", _REASSIGN_SESSION)
+
+        assert isinstance(prepared, ReassignPlan), prepared
+        assert [node.id for node in prepared.nodes] == ["b"], "a failed member is not a mover"
+        question = ask.calls[-1][1]
+        assert "- b: alpha -> beta" in question
+        assert "- a:" not in question, "a terminal member must not be named as a possible mover"
+        assert "may move" in question or "Reassign 1 node(s)" in question
+        tool.request_cancel(run_id)

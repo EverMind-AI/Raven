@@ -218,6 +218,25 @@ All notable changes to Raven are documented here.
   guessing. Playbooks carry the same three fields, and the TUI's DAG panel and
   the web tasks list show what each node's branch did.
 
+- A DAG node that cannot do its job can be **reassigned** to another agent on
+  the roster instead of being continued, abandoned or replanned:
+  `resolve_dag_node` takes `decision: "reassign"` with the target `agent` and a
+  `message`, keeps the node's id, task, dependencies and place in the graph, and
+  spends one continuation like `continue` (the attempt budget is not reset). The
+  new agent opens on a **handover** of the visible conversation so far -- the
+  node's task and the answers, without the old agent's tool calls, tool output or
+  private context -- so the message has to say what went wrong. A node on an
+  `instance` takes the instance's other unfinished nodes in that run with it,
+  which requires a `[stateful]` target when the instance was shared; a named
+  instance the new agent already holds is refused, and a `confirm: true` run asks
+  the user again. When either agent runs on a registered machine, the result says
+  the earlier attempts' files stay where they were made. Not supported on a stint
+  round, whose roles the role table fixes. The exception report now names the
+  agent that dispatched the attempt that just ended, lists every earlier attempt
+  with a bounded reason, and teaches the four decisions with a copyable
+  `reassign` invocation; the TUI's DAG panel and the web task pane show each
+  node's attempt history.
+
 - The image and video roles run on MiniMax. Settings > Model offers MiniMax's
   two API-key providers (`minimax`, `minimax_cn_api`) for both roles, and a
   section naming one takes that provider's address and key and calls
