@@ -2672,6 +2672,43 @@ def test_a_version_nobody_can_read_is_not_a_reason_to_fail_the_turn() -> None:
     assert _agent_version(_Unreadable()) == ""
 
 
+def test_a_version_survives_a_handshake_field_it_cannot_read() -> None:
+    """``protocolVersion`` is not part of reading the agent's own version.
+
+    An agent that spells it ``"1.0"`` makes the shared handshake parser raise on
+    ``int()``, so reading the version through that parser returned nothing at
+    all -- while ``agentInfo.version`` was there the whole time.
+    """
+    from raven.acp_client.acp_agent import _agent_version
+
+    connection = SimpleNamespace(initialize={"protocolVersion": "1.0", "agentInfo": {"version": "1.14.31"}})
+    assert _agent_version(connection) == "1.14.31"
+
+
+def test_the_handshake_version_reaches_the_floor_note_end_to_end() -> None:
+    """Handshake -> ``AcpEmptyTurnError.agent_version`` -> the probe's floor note, in one test.
+
+    The ACP test pinned the stub's own version and the probe test hand-attached
+    one, so a break in the middle stage -- reading the version off the handshake
+    -- was covered by neither and would have shown up only on a user's machine.
+    """
+    from raven.acp_client.acp_agent import _agent_version
+    from raven.agent.subagent import probe as probe_mod
+
+    connection = SimpleNamespace(
+        initialize={"protocolVersion": "1.0", "agentInfo": {"name": "OpenCode", "version": "1.14.31"}}
+    )
+    empty = AcpEmptyTurnError(
+        "acp agent 'OpenCode' ended its turn with no content (stopReason='end_turn'); stderr tail: <empty>",
+        agent_version=_agent_version(connection),
+    )
+    code = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp", command="opencode acp")
+    text, _ = probe_mod._ping_refusal(code, empty)
+    assert "1.14.31" in text
+    assert "1.18.0" in text
+    assert "opencode upgrade" in text
+
+
 async def test_an_empty_turn_names_a_request_raven_could_not_answer(tmp_path: Path) -> None:
     """The one cause the stderr tail cannot carry.
 
