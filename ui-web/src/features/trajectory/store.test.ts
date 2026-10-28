@@ -635,7 +635,7 @@ describe('the switches and the rows they hide', () => {
     expect(store.hiddenOf(s.entries[1]!)).toBe('redundant_reply')
     store.setPrefs({ showHidden: true })
     expect(store.get().visible).toHaveLength(4)
-    expect(JSON.parse(localStorage.getItem(store.PREFS_KEY) as string)).toEqual({ minChargedMs: 20, showHidden: true })
+    expect(JSON.parse(localStorage.getItem(store.PREFS_KEY) as string)).toEqual({ showHidden: true })
     store.setPrefs({ showHidden: false })
     expect(store.get().visible).toHaveLength(2)
   })
@@ -646,8 +646,10 @@ describe('the switches and the rows they hide', () => {
     expect(store.get().selectedId).toBe('reply')
     expect(store.get().revealed).toEqual(['reply'])
     expect(store.get().visible.map((e) => e.entry_id)).toEqual(['a', 'reply', 'b'])
-    store.setPrefs({ minChargedMs: 0 })
+    store.setPrefs({ showHidden: true })
     expect(store.get().revealed).toEqual([])
+    expect(store.get().visible.map((e) => e.entry_id)).toEqual(['a', 'reply', 'b'])
+    store.setPrefs({ showHidden: false })
     expect(store.get().visible.map((e) => e.entry_id)).toEqual(['a', 'b'])
     store.select('reply', { source: 'link' })
     expect(store.get().revealed).toEqual(['reply'])
@@ -675,33 +677,28 @@ describe('the switches and the rows they hide', () => {
     expect(store.entryOfSpan('x', '1')).toBe('x:1:out')
   })
 
-  it('reads the settings back from the browser on a fresh start, an earlier build\'s switches included', () => {
+  it('reads the switch back from the browser on a fresh start, and ignores a stored threshold', () => {
     localStorage.setItem(store.PREFS_KEY, JSON.stringify({ minChargedMs: 200, showHidden: true }))
-    expect(store.readPrefs()).toEqual({ minChargedMs: 200, showHidden: true })
-    /* A threshold off the scale lands on the nearest detent. */
-    localStorage.setItem(store.PREFS_KEY, JSON.stringify({ minChargedMs: 37, showHidden: false }))
-    expect(store.readPrefs()).toEqual({ minChargedMs: 50, showHidden: false })
+    expect(store.readPrefs()).toEqual({ showHidden: true })
     /* The two switches an earlier build kept. */
     localStorage.setItem(store.PREFS_KEY, JSON.stringify({ hideShort: false, showInternal: true }))
-    expect(store.readPrefs()).toEqual({ minChargedMs: 0, showHidden: true })
-    localStorage.setItem(store.PREFS_KEY, JSON.stringify({ hideShort: true, showInternal: false }))
-    expect(store.readPrefs()).toEqual({ minChargedMs: 20, showHidden: false })
+    expect(store.readPrefs()).toEqual({ showHidden: true })
     localStorage.setItem(store.PREFS_KEY, 'not json')
-    expect(store.readPrefs()).toEqual({ minChargedMs: 20, showHidden: false })
+    expect(store.readPrefs()).toEqual({ showHidden: false })
     localStorage.removeItem(store.PREFS_KEY)
   })
 
   it('saves a migrated setting in the current shape, which reads back without the old switches', () => {
     localStorage.setItem(store.PREFS_KEY, JSON.stringify({ hideShort: false, showInternal: true }))
     store.set({ ...store.get(), prefs: store.readPrefs() })
-    store.setPrefs({ minChargedMs: 100 })
+    store.setPrefs({ showHidden: false })
     const kept = JSON.parse(localStorage.getItem(store.PREFS_KEY) as string) as Record<string, unknown>
-    expect(kept).toEqual({ minChargedMs: 100, showHidden: true })
-    expect(Object.keys(kept).sort()).toEqual(['minChargedMs', 'showHidden'])
-    expect(store.readPrefs()).toEqual({ minChargedMs: 100, showHidden: true })
-    /* Setting an off-scale value snaps it, and the same value twice writes nothing new. */
-    store.setPrefs({ minChargedMs: 480 })
-    expect(store.get().prefs.minChargedMs).toBe(500)
+    expect(kept).toEqual({ showHidden: false })
+    expect(store.readPrefs()).toEqual({ showHidden: false })
+    /* The same value twice writes nothing new. */
+    const before = localStorage.getItem(store.PREFS_KEY)
+    store.setPrefs({ showHidden: false })
+    expect(localStorage.getItem(store.PREFS_KEY)).toBe(before)
     localStorage.removeItem(store.PREFS_KEY)
   })
 })

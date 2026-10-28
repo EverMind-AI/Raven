@@ -10,8 +10,8 @@
 
 import { entryStart } from './model'
 
-import type { DisplayRow } from './Waterfall'
 import type { Waterfall } from './model'
+import type { DisplayRow } from './Waterfall'
 
 export interface Link {
   /** The real instant the rule stands at. */

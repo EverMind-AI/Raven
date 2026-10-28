@@ -41,6 +41,13 @@ export interface WaterfallAgent {
   loose: readonly WaterfallRow[]
 }
 
+/** The agent key the collapse set and the DOM use; the host has no scope id. */
+export const agentKey = (scope: string | null): string => scope ?? ''
+
+/** A turn is opened by its position in its agent: two agents may name the same
+ *  turn span, and they are two different rows. */
+export const turnKey = (agent: number, turn: string): string => `${agent}:${turn}`
+
 export interface Waterfall {
   agents: readonly WaterfallAgent[]
 }

@@ -80,12 +80,12 @@ afterEach(() => {
 })
 
 describe('the trajectory island', () => {
-  it('draws the bar under an absent status line and the list under the bar', async () => {
+  it('draws the agent waterfall under an absent status line, with the pane beside it', async () => {
     await draw()
     const root = document.querySelector('.trajectory-root') as HTMLElement
-    expect([...root.children].map((c) => c.className)).toEqual(['trajectory-bar', 'trajectory-body'])
-    expect([...root.querySelector('.trajectory-body')!.children].map((c) => c.className)).toEqual(['trajectory-list'])
-    expect(document.querySelectorAll('.trajectory-row')).toHaveLength(1)
+    expect([...root.children].map((c) => c.className)).toEqual(['trajectory-body'])
+    expect(document.querySelectorAll('[data-row="agent"]').length).toBeGreaterThan(0)
+    expect(document.querySelectorAll('[data-row="turn"]').length).toBeGreaterThan(0)
   })
 
   it('says what the index wants said, one line each', async () => {
@@ -144,7 +144,11 @@ describe('the Scope Tabs in the island', () => {
   const tab = (at: number): HTMLElement => document.getElementById(scopes.scopeTabId(at)) as HTMLElement
   const closer = (at: number): HTMLElement => tab(at).parentElement!.querySelector('.trajectory-scope-close') as HTMLElement
   const listBox = (): HTMLElement => document.querySelector('.trajectory-list') as HTMLElement
-  const entryRow = (id: string): HTMLElement => document.querySelector(`[data-entry="${id}"]`) as HTMLElement
+  /* Turns start folded; a test that wants a row opens every closed turn first. */
+  const entryRow = (id: string): HTMLElement => {
+    for (const turn of document.querySelectorAll<HTMLElement>('[data-row="turn"]:not([data-open])')) fireEvent.click(turn)
+    return document.querySelector(`[data-entry="${id}"]`) as HTMLElement
+  }
   const active = (): Element | null => document.activeElement
   /* Focus first, then click: a pointer press focuses a button before its click. */
   const press = (el: HTMLElement): void => { act(() => { el.focus(); fireEvent.click(el) }) }
@@ -167,9 +171,9 @@ describe('the Scope Tabs in the island', () => {
   it('puts the strip over everything, and the line naming the run under it', async () => {
     recording = false
     await draw()
-    expect(shape()).toEqual(['trajectory-scope-wrap', 'trajectory-status', 'trajectory-bar', 'trajectory-body'])
+    expect(shape()).toEqual(['trajectory-scope-wrap', 'trajectory-status', 'trajectory-body'])
     act(() => { store.openScope(A) })
-    expect(shape()).toEqual(['trajectory-scope-wrap', 'trajectory-scope-info', 'trajectory-status', 'trajectory-bar', 'trajectory-body'])
+    expect(shape()).toEqual(['trajectory-scope-wrap', 'trajectory-scope-info', 'trajectory-status', 'trajectory-body'])
   })
 
   it('walks the tabs with the arrows, the focus with them', async () => {
@@ -210,7 +214,8 @@ describe('the Scope Tabs in the island', () => {
 
   it('keeps the focus on the strip across tabs whose panes differ, and hands it to the list when the reader closes the pane', async () => {
     await draw()
-    act(() => { fireEvent.click(entryRow('m0')) })
+    const row = entryRow('m0')
+    act(() => { fireEvent.click(row) })
     expect(details.get().open).toBe(true)
     act(() => { store.openScope(A) })
     press(tab(1))
@@ -234,8 +239,9 @@ describe('the Scope Tabs in the island', () => {
     act(() => { store.select('doorE', { source: 'click' }); listBox().focus() })
     act(() => { fireEvent.keyDown(listBox(), { key: 'Enter' }) })
     expect(store.get().scope).toBe(E)
-    expect(listBox()).toBeNull()
-    expect(active()).toBe(tab(2))
+    /* Every agent is on screen at once now, so opening a tab changes the
+       selection, not what the page can draw. */
+    expect(active()).toBe(listBox())
     stays()
   })
 
@@ -253,7 +259,8 @@ describe('the Scope Tabs in the island', () => {
   it('moves the focus nowhere, now or later, for a move that does nothing', async () => {
     await draw()
     act(() => { listBox().focus() })
-    act(() => { fireEvent.doubleClick(entryRow('plain')) })
+    const plain = entryRow('plain')
+    act(() => { fireEvent.doubleClick(plain) })
     expect(scopes.locate('t:no-door')).toBe(false)
     act(() => { store.closeScope('t:never-opened') })
     expect([store.get().scope, active()]).toEqual([null, listBox()])

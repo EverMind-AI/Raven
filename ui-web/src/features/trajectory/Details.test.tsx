@@ -10,7 +10,6 @@ import { _resetFreshForTests, unpitch } from '../../state/session/conversation'
 import { resetSources, setSources } from '../../state/sources'
 import { shortName } from './Details'
 import * as details from './detailStore'
-import { DBL_MS } from './geometry'
 import * as list from './store'
 import { TrajectoryApp } from './TrajectoryApp'
 
@@ -90,7 +89,14 @@ async function draw(): Promise<void> {
   })
 }
 
+/* Turns are folded until asked; a test that wants a row opens them all first. */
+const openTurns = (): void => {
+  for (const turn of document.querySelectorAll<HTMLElement>('[data-row="turn"]:not([data-open])')) fireEvent.click(turn)
+}
+
 const pick = async (id: string): Promise<void> => {
+  act(openTurns)
+  await flush()
   act(() => { fireEvent.click(q(`[data-entry="${id}"]`) as HTMLElement) })
   await flush()
 }
@@ -208,7 +214,9 @@ describe('the details pane', () => {
     expect(q('#trajectory-tab-schema .trajectory-tab-dot')).not.toBeNull()
   })
 
-  it('keeps the same tab across entries that have it and falls back to the overview otherwise', async () => {
+  /* Under a full-suite run this file's many forced renders share the CPU with
+     every other worker; the work is bounded, the wall clock is not. */
+  it('keeps the same tab across entries that have it and falls back to the overview otherwise', { timeout: 20_000 }, async () => {
     await draw()
     await pick('r0')
     await answerDetail(descriptor('r0', [block({ id: 'result' }), block({ id: 'params', renderer: 'json' })]))
@@ -524,7 +532,7 @@ describe('the way to a Scope Tab from the head', () => {
   /* A click on a row that opens a tab waits out a double click before the pane opens. */
   const pickDoor = async (id: string): Promise<void> => {
     await pick(id)
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, DBL_MS + 10)) })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 260)) })
   }
 
   it('offers to open a door\'s trajectory, and opens it', async () => {

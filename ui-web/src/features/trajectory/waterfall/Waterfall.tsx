@@ -10,21 +10,22 @@
  * session must mount a screenful, not a session.
  */
 
-import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../../i18n/t'
 import { formatDuration } from '../../../lib/duration'
 import * as lang from '../../../state/lang'
 import * as details from '../detailStore'
-import { entryEnd, entryStart, buildWaterfall } from './model'
+import { openFromEntry, scopeTitle } from '../scopes'
+import * as store from '../store'
 import { barOf, createAxis } from './axis'
 import { crossLinks } from './links'
+import { agentKey, buildWaterfall, entryEnd, entryStart, turnKey } from './model'
+import { OverviewLanes } from './OverviewLanes'
 import { turnSegments } from './segments'
-import { scopeTitle } from '../scopes'
-import * as store from '../store'
 
-import type { Waterfall, WaterfallRow, WaterfallTurn } from './model'
 import type { TimeAxis, Viewport } from './axis'
+import type { Waterfall, WaterfallRow, WaterfallTurn } from './model'
 import type { JSX } from 'react'
 
 export const ROW_HEIGHT = 28
@@ -40,9 +41,6 @@ export interface DisplayRow {
   turnRow: WaterfallTurn | null
 }
 
-/** The agent key both the collapse set and the DOM use; the host has no scope id. */
-export const agentKey = (scope: string | null): string => scope ?? ''
-
 export function displayRows(
   waterfall: Waterfall, collapsedAgents: ReadonlySet<string>, openTurns: ReadonlySet<string>,
 ): DisplayRow[] {
@@ -51,8 +49,8 @@ export function displayRows(
     rows.push({ kind: 'agent', key: `agent:${agentKey(agent.scope)}`, agent: at, turn: null, row: null, turnRow: null })
     if (collapsedAgents.has(agentKey(agent.scope))) return
     for (const turn of agent.turns) {
-      rows.push({ kind: 'turn', key: `turn:${turn.id}`, agent: at, turn: turn.id, row: null, turnRow: turn })
-      if (!openTurns.has(turn.id)) continue
+      rows.push({ kind: 'turn', key: `turn:${turnKey(at, turn.id)}`, agent: at, turn: turn.id, row: null, turnRow: turn })
+      if (!openTurns.has(turnKey(at, turn.id))) continue
       turn.rows.forEach((row, at) => rows.push({ kind: 'span', key: `span:${row.entry.entry_id}:${at}`, agent: at, turn: turn.id, row, turnRow: turn }))
     }
     for (const row of agent.loose) {
@@ -83,6 +81,11 @@ function intervalsOf(waterfall: Waterfall, now: number): Array<{ start: number; 
 
 const percent = (fraction: number): string => `${(fraction * 100).toFixed(4)}%`
 
+/** One of three fixed classes; the index's kind strings never reach a class name. */
+const spanClass = (kind: string): string =>
+  kind.startsWith('tool.') ? 'trajectory-wf-kind-tool'
+    : kind === 'user.input' ? 'trajectory-wf-kind-user' : 'trajectory-wf-kind-model'
+
 function Ticks({ axis, view }: { axis: TimeAxis; view: Viewport }): JSX.Element {
   const span = view.to - view.from
   const step = [1000, 2000, 5000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000, 1_800_000, 3_600_000]
@@ -105,6 +108,19 @@ export function Waterfall(): JSX.Element {
   const [scrollTop, setScrollTop] = useState(0)
   const [height, setHeight] = useState(0)
   const observer = useRef<ResizeObserver | null>(null)
+  const box = useRef<HTMLDivElement | null>(null)
+
+  /* Closing the pane hands the focus back to the list, as it did when the rows
+     were a list: the reader's next key press must land where they left off. */
+  const pane = useSyncExternalStore(details.subscribe, details.get)
+  const wasOpen = useRef(false)
+  useLayoutEffect(() => {
+    const closed = wasOpen.current && !pane.open
+    wasOpen.current = pane.open
+    /* A tab switch also closes the old pane; that keeps the focus on the strip. */
+    if (!closed || details.get().swapped) return
+    box.current?.focus()
+  }, [pane.open])
 
   const now = Date.now()
   const shown = store.get().shown
@@ -116,6 +132,7 @@ export function Waterfall(): JSX.Element {
   const { first, last } = windowOf(scrollTop, height, rows.length)
 
   const attach = useCallback((el: HTMLDivElement | null): void => {
+    box.current = el
     observer.current?.disconnect()
     observer.current = null
     if (!el) return
@@ -176,8 +193,9 @@ export function Waterfall(): JSX.Element {
       const parts = turnSegments(turn, now)
       painted.push(
         <div key={row.key} className="trajectory-wf-row trajectory-wf-turn" data-row="turn" style={style}
+          data-open={open.has(turnKey(row.agent, turn.id)) ? '' : undefined}
           data-from={turn.reportedFrom === null ? undefined : turn.reportedFrom}
-          onClick={() => toggleTurn(turn.id)}>
+          onClick={() => toggleTurn(turnKey(row.agent, turn.id))}>
           <span className="trajectory-wf-label" style={{ paddingLeft: 18 }}>
             {t('gui.trajectory.turn.ordinal', { n: turn.ordinal })}
             {turn.reportedFrom === null ? null : <span className="trajectory-wf-from">{t('gui.trajectory.turn.from_report', { name: turn.reportedFrom })}</span>}
@@ -204,7 +222,12 @@ export function Waterfall(): JSX.Element {
           {entry.preview ?? entry.span_name}
         </span>
         <span className="trajectory-wf-track">
-          {bar ? <i className={`trajectory-wf-spanbar trajectory-wf-kind-${entry.kind.replace(/\./g, '-')}`} style={{ left: percent(bar.left), width: percent(bar.width) }} /> : null}
+          {bar ? <i className={`trajectory-wf-spanbar ${spanClass(entry.kind)}`} style={{ left: percent(bar.left), width: percent(bar.width) }} /> : null}
+          {entry.opens_subagent_scope === null || entry.opens_subagent_scope === undefined ? null : (
+            <button className="trajectory-scope-opens" aria-label={t('gui.trajectory.scope.opens')}
+              title={t('gui.trajectory.scope.opens')}
+              onClick={(event) => { event.stopPropagation(); openFromEntry(entry) }}>{'\u2197'}</button>
+          )}
         </span>
       </div>,
     )
@@ -212,8 +235,21 @@ export function Waterfall(): JSX.Element {
 
   return (
     <div className="trajectory-wf">
+      <OverviewLanes waterfall={waterfall} axis={axis} viewport={view} />
       <Ticks axis={axis} view={view} />
-      <div className="trajectory-wf-scroll" ref={attach} onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+      <div className="trajectory-list trajectory-wf-scroll" tabIndex={-1} ref={attach}
+        onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter') return
+          const selected = store.get().selectedId
+          if (selected === null) return
+          const entry = store.get().entries[store.get().index[selected]!]
+          if (entry === undefined) return
+          if (entry.opens_subagent_scope !== null && entry.opens_subagent_scope !== undefined) {
+            event.preventDefault()
+            openFromEntry(entry)
+          }
+        }}
         role="list" aria-label={t('gui.trajectory.agents')}>
         <div className="trajectory-wf-rows" style={{ height: rows.length * ROW_HEIGHT }}>
           <div className="trajectory-wf-links">
@@ -232,3 +268,6 @@ export function Waterfall(): JSX.Element {
     </div>
   )
 }
+
+/** Rupees of MiB, as the status line words a scan. */
+export const mib = (bytes: number): string => (bytes / (1024 * 1024)).toFixed(1)

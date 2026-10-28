@@ -491,10 +491,9 @@ html[data-theme="dark"] {
 .trajectory-wf-seg-subagent { background: var(--moss) }
 .trajectory-wf-seg-failure { background: var(--chat-danger) }
 .trajectory-wf-seg-waiting { background: var(--raised) }
-.trajectory-wf-kind-llm-output, .trajectory-wf-kind-llm-input, .trajectory-wf-kind-llm-thinking {
-  background: var(--trajectory-c-llm-output-fg) }
-.trajectory-wf-kind-tool-output, .trajectory-wf-kind-tool-input { background: var(--trajectory-c-tool-output-fg) }
-.trajectory-wf-kind-user-input { background: var(--trajectory-c-user-input-fg) }
+.trajectory-wf-kind-model { background: var(--trajectory-c-llm-output-fg) }
+.trajectory-wf-kind-tool { background: var(--trajectory-c-tool-output-fg) }
+.trajectory-wf-kind-user { background: var(--trajectory-c-user-input-fg) }
 
 .trajectory-ov { padding: 6px 8px 4px 0; border-bottom: 1px solid var(--line); flex: none }
 .trajectory-ov-lane { display: grid; grid-template-columns: 188px minmax(0, 1fr); gap: 8px; align-items: center; height: 13px }
@@ -506,3 +505,5 @@ html[data-theme="dark"] {
 .trajectory-wf-links { position: absolute; top: 0; bottom: 0; left: 196px; right: 0; pointer-events: none }
 .trajectory-wf-link { position: absolute; width: 0; border-left: 1px dashed var(--faint); opacity: .55 }
 .trajectory-wf-link-report { border-left-color: var(--moss) }
+.trajectory-wf-seg { position: absolute; top: 0; height: 10px; border-radius: 3px; min-width: 2px }
+.trajectory-wf-spanbar { position: absolute; top: 0; height: 8px; border-radius: 2px; min-width: 2px }

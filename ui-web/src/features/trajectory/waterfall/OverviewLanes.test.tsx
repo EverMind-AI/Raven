@@ -6,8 +6,8 @@ import { render } from '@testing-library/react'
 import { expect, it } from 'vitest'
 
 import { createAxis } from './axis'
-import { OverviewLanes } from './OverviewLanes'
 import { buildWaterfall } from './model'
+import { OverviewLanes } from './OverviewLanes'
 
 import type { TrajectoryEntry } from '../types'
 

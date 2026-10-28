@@ -6,12 +6,12 @@
  * than one per span: at this height an overview is a shape, not a list. */
 
 import { t } from '../../../i18n/t'
-import { barOf } from './axis'
 import { scopeTitle } from '../scopes'
-import { agentKey } from './Waterfall'
+import { barOf } from './axis'
+import { agentKey } from './model'
 
-import type { Waterfall, WaterfallAgent } from './model'
 import type { TimeAxis, Viewport } from './axis'
+import type { Waterfall, WaterfallAgent } from './model'
 import type { JSX } from 'react'
 
 const percent = (fraction: number): string => `${(fraction * 100).toFixed(4)}%`
