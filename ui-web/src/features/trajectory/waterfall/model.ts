@@ -107,7 +107,7 @@ function turnOf(id: string, entries: readonly TrajectoryEntry[], now: number): W
   }
 }
 
-function agentOf(scope: string | null, entries: readonly TrajectoryEntry[], now: number): WaterfallAgent {
+function agentOf(scope: string | null, entries: readonly TrajectoryEntry[], now: number, door: TrajectoryEntry | null): WaterfallAgent {
   const turns = new Map<string, TrajectoryEntry[]>()
   const loose: TrajectoryEntry[] = []
   for (const entry of entries) {
@@ -128,7 +128,6 @@ function agentOf(scope: string | null, entries: readonly TrajectoryEntry[], now:
   const looseRows = ordered(loose.map((entry) => rowOf(entry, bySpan, now))).map((row) => ({ entry: row.entry, depth: row.depth }))
   const starts = entries.map(entryStart)
   const ends = entries.map((entry) => entryEnd(entry, now))
-  const door = scope === null ? null : (entries.find((entry) => entry.opens_subagent_scope === scope) ?? null)
   return {
     scope,
     door,
@@ -148,7 +147,14 @@ export function buildWaterfall(entries: readonly TrajectoryEntry[], now: number)
     if (bucket) bucket.push(entry)
     else groups.set(key, [entry])
   }
-  const agents = [...groups].map(([scope, rows]) => agentOf(scope, rows, now))
+  /* The door belongs to the dispatcher's group, not the worker's, so it is
+     found across every entry rather than inside the agent. */
+  const doors = new Map<string, TrajectoryEntry>()
+  for (const entry of entries) {
+    const opens = entry.opens_subagent_scope
+    if (opens !== null && opens !== undefined && !doors.has(opens)) doors.set(opens, entry)
+  }
+  const agents = [...groups].map(([scope, rows]) => agentOf(scope, rows, now, scope === null ? null : (doors.get(scope) ?? null)))
   agents.sort((a, b) => {
     if (a.scope === null) return b.scope === null ? 0 : -1
     if (b.scope === null) return 1
