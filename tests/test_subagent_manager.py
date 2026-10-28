@@ -6084,6 +6084,40 @@ async def test_a_spawn_onto_an_overridden_instance_sends_the_override_and_not_th
     assert backend.seen == [("high", None), (None, "low")]
 
 
+def test_an_agent_that_advertises_no_modes_takes_no_tier_and_no_mode_override(tmp_path, monkeypatch) -> None:
+    """The Mirasim adapter's shape, as its handshake is measured: effort as a
+    thought_level option and no session modes. The Session Tier has no rung to
+    land on, an instance mode override is refused naming the empty menu, and
+    the row's effort is what reaches the session -- as CONTEXT.md states."""
+    from raven.acp_client.capabilities import AcpEffortChoice, CapabilitySnapshot
+    from raven.agent.subagent.instances import InstanceRegistry
+
+    snapshot = CapabilitySnapshot(
+        agent="Claude Code-Mirasim",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        agent_name="mirasim-claude",
+        can_load=True,
+        effort_choices=(AcpEffortChoice("low", "Low"), AcpEffortChoice("high", "High")),
+        effort_option="effort",
+    )
+    monkeypatch.setattr("raven.agent.subagent.registry.acp_snapshot_for", lambda cfg: snapshot)
+    monkeypatch.setattr(manager_mod, "get_registry", lambda: InstanceRegistry(tmp_path / "reg.json"))
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=tmp_path,
+        agents=[ThirdPartyAcpSubagentConfig(name="Claude Code-Mirasim", command="mirasim --acp", effort="low")],
+        session_tier=lambda _key: "high",
+    )
+
+    assert mgr.resolve_mode("cli", "Claude Code-Mirasim", "h1") is None
+    with pytest.raises(ValueError, match="offers none"):
+        mgr.set_instance_mode("cli", "Claude Code-Mirasim", "h1", "high")
+    assert mgr.session_effort_for("cli", "Claude Code-Mirasim", "h1") == "low"
+
+
 def test_file_change_counts_fall_back_to_the_contents_when_the_tool_kept_no_diff() -> None:
     from types import SimpleNamespace
 
