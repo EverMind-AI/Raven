@@ -78,6 +78,15 @@ async function draw(entries: TrajectoryEntry[]): Promise<void> {
 
 const count = (selector: string): number => document.querySelectorAll(selector).length
 
+/* happy-dom drops the modifier keys out of WheelEventInit, so they are written
+   onto the event after construction; a browser sends them itself. */
+const wheel = (init: WheelEventInit & { ctrlKey?: boolean; shiftKey?: boolean }): WheelEvent => {
+  const event = new WheelEvent('wheel', init)
+  if (init.ctrlKey) Object.defineProperty(event, 'ctrlKey', { value: true })
+  if (init.shiftKey) Object.defineProperty(event, 'shiftKey', { value: true })
+  return event
+}
+
 beforeEach(() => {
   rows = []
   store._resetForTests()
@@ -244,7 +253,7 @@ describe('the page’s controls', () => {
     const box = document.querySelector('.trajectory-list') as HTMLElement
     Object.defineProperty(box, 'clientWidth', { value: 800, configurable: true })
     const before = (document.querySelector('[data-row="turn"] .trajectory-wf-seg') as HTMLElement).style.width
-    act(() => { box.dispatchEvent(new WheelEvent('wheel', { deltaY: -240, clientX: 100, bubbles: true, cancelable: true })) })
+    act(() => { box.dispatchEvent(wheel({ deltaY: -240, clientX: 100, ctrlKey: true, bubbles: true, cancelable: true })) })
     const after = (document.querySelector('[data-row="turn"] .trajectory-wf-seg') as HTMLElement).style.width
     expect(after).not.toBe(before)
     act(() => { fireEvent.doubleClick(box) })
@@ -277,4 +286,19 @@ describe('the marks', () => {
     fireEvent.click(document.querySelector('[data-row="turn"]')!)
     expect(document.querySelector('[data-entry="m1"] .trajectory-wf-ico')).not.toBeNull()
   })
+})
+
+it('leaves a plain wheel to the list, and takes only ctrl+wheel or shift+wheel', async () => {
+  await draw([E('m1', 0), E('m2', 1)])
+  const box = document.querySelector('.trajectory-list') as HTMLElement
+  Object.defineProperty(box, 'clientWidth', { value: 800, configurable: true })
+  const plain = wheel({ deltaY: -120, clientX: 100, bubbles: true, cancelable: true })
+  act(() => { box.dispatchEvent(plain) })
+  expect(plain.defaultPrevented).toBe(false)
+  const zoom = wheel({ deltaY: -120, clientX: 100, ctrlKey: true, bubbles: true, cancelable: true })
+  act(() => { box.dispatchEvent(zoom) })
+  expect(zoom.defaultPrevented).toBe(true)
+  const pan = wheel({ deltaY: -120, clientX: 100, shiftKey: true, bubbles: true, cancelable: true })
+  act(() => { box.dispatchEvent(pan) })
+  expect(pan.defaultPrevented).toBe(true)
 })
