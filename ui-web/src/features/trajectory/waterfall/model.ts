@@ -59,7 +59,7 @@ export function entryEnd(entry: TrajectoryEntry, now: number): number {
   return stamp(entry.operation_end) ?? now
 }
 
-function stamp(value: string | null): number | null {
+function stamp(value: string | null | undefined): number | null {
   if (!value) return null
   const ms = Date.parse(value)
   return Number.isFinite(ms) ? ms : null
@@ -74,7 +74,7 @@ interface Row {
 
 function rowOf(entry: TrajectoryEntry, bySpan: ReadonlyMap<string, string | null>, now: number): Row {
   let depth = 0
-  let parent = entry.parent_span_id
+  let parent: string | null = entry.parent_span_id ?? null
   const seen = new Set<string>([entry.span_id])
   while (parent !== null && depth < DEPTH_LIMIT && bySpan.has(parent) && !seen.has(parent)) {
     seen.add(parent)
@@ -90,19 +90,20 @@ function ordered(rows: Row[]): Row[] {
 
 function turnOf(id: string, entries: readonly TrajectoryEntry[], now: number): WaterfallTurn {
   const bySpan = new Map<string, string | null>()
-  for (const entry of entries) if (!bySpan.has(entry.span_id)) bySpan.set(entry.span_id, entry.parent_span_id)
+  for (const entry of entries) if (!bySpan.has(entry.span_id)) bySpan.set(entry.span_id, entry.parent_span_id ?? null)
   const rows = ordered(entries.map((entry) => rowOf(entry, bySpan, now)))
   const end = entries.find((entry) => entry.slot === 'turn.output')
   const start = rows[0]!.start
   const stop = Math.max(start, end === undefined ? Math.max(...rows.map((row) => row.end)) : entryEnd(end, now))
-  const reportedFrom = entries.find((entry) => entry.turn_start && entry.dispatched_by_subagent_scope !== null)
+  const report = entries.find((entry) => entry.turn_start && entry.dispatched_by_subagent_scope !== null)
+  const reportedFrom: string | null = report?.dispatched_by_subagent_scope ?? null
   return {
     id,
     ordinal: 0,
-    preview: rows[0]!.entry.preview,
+    preview: rows[0]!.entry.preview ?? null,
     start,
     end: stop,
-    reportedFrom: reportedFrom?.dispatched_by_subagent_scope ?? null,
+    reportedFrom,
     failure: rows.some((row) => row.entry.failure_entry),
     rows: rows.map((row) => ({ entry: row.entry, depth: row.depth })),
   }
@@ -112,19 +113,20 @@ function agentOf(scope: string | null, entries: readonly TrajectoryEntry[], now:
   const turns = new Map<string, TrajectoryEntry[]>()
   const loose: TrajectoryEntry[] = []
   for (const entry of entries) {
-    if (entry.turn_span_id === null) {
+    const turnId = entry.turn_span_id ?? null
+    if (turnId === null) {
       loose.push(entry)
       continue
     }
-    const bucket = turns.get(entry.turn_span_id)
+    const bucket = turns.get(turnId)
     if (bucket) bucket.push(entry)
-    else turns.set(entry.turn_span_id, [entry])
+    else turns.set(turnId, [entry])
   }
   const built = [...turns].map(([id, rows]) => turnOf(id, rows, now))
   built.sort((a, b) => a.start - b.start || a.id.localeCompare(b.id))
   const numbered = built.map((turn, at) => ({ ...turn, ordinal: at + 1 }))
   const bySpan = new Map<string, string | null>()
-  for (const entry of loose) if (!bySpan.has(entry.span_id)) bySpan.set(entry.span_id, entry.parent_span_id)
+  for (const entry of loose) if (!bySpan.has(entry.span_id)) bySpan.set(entry.span_id, entry.parent_span_id ?? null)
   const looseRows = ordered(loose.map((entry) => rowOf(entry, bySpan, now))).map((row) => ({ entry: row.entry, depth: row.depth }))
   const starts = entries.map(entryStart)
   const ends = entries.map((entry) => entryEnd(entry, now))
