@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+import weakref
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
@@ -992,7 +993,7 @@ def _prompt_meta(skey: Any) -> dict[str, Any]:
 
 @dataclass
 class _SessionEffortState:
-    """What this process knows about one session's effort, across backend instances.
+    """What this host knows about one session's effort, across backend instances.
 
     Held here rather than on ``AcpAgentBackend`` because a config change hot-applies
     the agent table and replaces every backend instance. A session outlives that
@@ -1007,16 +1008,26 @@ class _SessionEffortState:
     mode_pushed: str = ""
 
 
-_SESSION_EFFORT: dict[tuple[str, str], _SessionEffortState] = {}
+_SESSION_EFFORT: weakref.WeakKeyDictionary[Any, dict[str, _SessionEffortState]] = weakref.WeakKeyDictionary()
+"""Each live connection's effort records, by session id.
+
+Keyed by the connection's client, not by agent name: the pool holds one
+connection per parent binding under a name, each a process that numbers its own
+sessions, so two of them can both hold ``s1`` -- and a record shared between
+them let clearing one forget what was pushed to the other. A hot apply keeps
+the pooled connection, so its records survive the backend's replacement; a
+relaunch is a new process whose sessions start on their own defaults, and
+weakly held, the old connection's records go with it."""
 
 
-def _session_effort_state(agent: str, session_id: str) -> _SessionEffortState:
-    """The shared effort record for ``(agent, session id)``, created on first use."""
-    key = (agent, session_id)
-    state = _SESSION_EFFORT.get(key)
+def _session_effort_state(client: Any, session_id: str) -> _SessionEffortState:
+    """The effort record for ``session_id`` on ``client``'s connection, created on first use."""
+    sessions = _SESSION_EFFORT.get(client)
+    if sessions is None:
+        sessions = _SESSION_EFFORT[client] = {}
+    state = sessions.get(session_id)
     if state is None:
-        state = _SessionEffortState()
-        _SESSION_EFFORT[key] = state
+        state = sessions[session_id] = _SessionEffortState()
     return state
 
 
@@ -1068,8 +1079,8 @@ class AcpAgentBackend:
         self._model_baseline: dict[str, str] = {}
         self._model_pushed: dict[str, str] = {}
         # Reasoning effort's option id, baseline and pushed value live in
-        # `_SESSION_EFFORT`, keyed by (agent, session id), because a hot apply
-        # replaces this instance while the session it describes continues.
+        # `_SESSION_EFFORT`, held per connection, because a hot apply replaces
+        # this instance while the session it describes continues.
         # Values this agent has refused, so a refusal re-attempted on every
         # route into a session -- and on every fresh session a spawn opens --
         # is said once per value rather than once per turn.
@@ -1268,18 +1279,18 @@ class AcpAgentBackend:
         if current:
             self._model_baseline[session_id] = current
 
-    def _note_session_mode(self, session_id: str | None, result: Any) -> None:
+    def _note_session_mode(self, client: Any, session_id: str | None, result: Any) -> None:
         """Remember the mode a session opened on, for a menu that is effort."""
         if not session_id:
             return
-        state = _session_effort_state(self.name, session_id)
+        state = _session_effort_state(client, session_id)
         if state.mode_baseline:
             return
         current = read_session_current_mode(result)
         if current:
             state.mode_baseline = current
 
-    def _note_session_effort(self, session_id: str | None, result: Any) -> None:
+    def _note_session_effort(self, client: Any, session_id: str | None, result: Any) -> None:
         """Remember the effort option's id and what the session opened on.
 
         Both are read from the session response, because the option's id is the
@@ -1290,7 +1301,7 @@ class AcpAgentBackend:
         """
         if not session_id:
             return
-        state = _session_effort_state(self.name, session_id)
+        state = _session_effort_state(client, session_id)
         option, current, _choices = read_session_effort(result)
         if option and not state.option:
             state.option = option
@@ -2375,8 +2386,8 @@ class AcpAgentBackend:
                     if loaded is not None:
                         self._relearn_menus(loaded)
                         self._note_session_model(known, loaded)
-                        self._note_session_effort(known, loaded)
-                        self._note_session_mode(known, loaded)
+                        self._note_session_effort(client, known, loaded)
+                        self._note_session_mode(client, known, loaded)
                     await self._set_mode(client, known, mode, budget=budget)
                     await self._set_model(client, known, session_model, budget=budget)
                     await self._set_effort(client, known, session_effort, fallback_mode=mode, budget=budget)
@@ -2407,8 +2418,8 @@ class AcpAgentBackend:
         if not isinstance(session_id, str) or not session_id:
             raise AcpEmptyTurnError(f"acp agent {self.name!r}: session/new returned no sessionId")
         self._note_session_model(session_id, result)
-        self._note_session_effort(session_id, result)
-        self._note_session_mode(session_id, result)
+        self._note_session_effort(client, session_id, result)
+        self._note_session_mode(client, session_id, result)
         await self._set_mode(client, session_id, mode, budget=budget)
         await self._set_model(client, session_id, session_model, budget=budget)
         await self._set_effort(client, session_id, session_effort, fallback_mode=mode, budget=budget)
@@ -2514,7 +2525,7 @@ class AcpAgentBackend:
         # effort only for a model that reasons, and the session opens on the
         # agent's own default. Best-effort, like every menu relearn.
         self._relearn_menus(response)
-        self._note_session_effort(session_id, response)
+        self._note_session_effort(client, session_id, response)
 
     async def _set_effort(
         self,
@@ -2542,7 +2553,7 @@ class AcpAgentBackend:
         unless a falling-back tier mode is already what the session was put on.
         Never fatal, for the reason the model push gives.
         """
-        state = _session_effort_state(self.name, session_id)
+        state = _session_effort_state(client, session_id)
         option = state.option or str(getattr(self._snapshot, "effort_option", "") or "")
         if not option:
             snapshot = self._snapshot
@@ -2613,7 +2624,7 @@ class AcpAgentBackend:
         override -- or the mode the session opened on when there is none. Never
         fatal, like its siblings.
         """
-        state = _session_effort_state(self.name, session_id)
+        state = _session_effort_state(client, session_id)
         pushed = state.mode_pushed
         if effort:
             target = effort
