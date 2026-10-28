@@ -1086,3 +1086,40 @@ describe('Scope Tabs', () => {
     expect(wrong).toEqual([])
   })
 })
+
+/* ── the waterfall's drawn set ────────────────────────────────────── */
+
+describe('shown and selectAcross', () => {
+  const load = async (rows: TrajectoryEntry[]): Promise<void> => {
+    serve()
+    store.install()
+    unpitch()
+    store.sessionChanged('gui:a')
+    await store.refreshState()
+    const walk = store.load()
+    await flush()
+    await answer(page(rows, null))
+    await walk
+  }
+
+  it('shown carries every scope while visible stays on the tab', async () => {
+    await load([entry('main1', 0), entry('sub1', 1, { subagent_scope: 't:sub' })])
+    expect(store.get().shown.map((row) => row.entry_id)).toEqual(['main1', 'sub1'])
+    expect(store.get().visible.map((row) => row.entry_id)).toEqual(['main1'])
+  })
+
+  it('selectAcross selects another scope without switching tabs', async () => {
+    await load([entry('main1', 0), entry('sub1', 1, { subagent_scope: 't:sub' })])
+    store.selectAcross('sub1', { source: 'link' })
+    expect(store.get().selectedId).toBe('sub1')
+    expect(store.get().scope).toBe(null)
+  })
+
+  it('selectAcross reveals a hidden entry', async () => {
+    await load([entry('main1', 0), entry('hidden1', 1, { meta: { hidden: 'folded' } })])
+    expect(store.get().shownIndex['hidden1']).toBeUndefined()
+    store.selectAcross('hidden1', { source: 'link' })
+    expect(store.get().revealed).toContain('hidden1')
+    expect(store.get().shownIndex['hidden1']).toBeTypeOf('number')
+  })
+})

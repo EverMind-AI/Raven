@@ -141,6 +141,10 @@ export interface TrajectoryState {
   scopes: OpenScope[]
   /** The tabs not on screen, by scope id (`scopeKey`). */
   saved: Record<string, ScopeView>
+  /** Every entry the page may draw, across every scope, less the hidden ones unless the switch or `revealed` says otherwise. */
+  shown: TrajectoryEntry[]
+  /** `entry_id` to position in `shown`, rebuilt with it. */
+  shownIndex: Record<string, number>
   /** The rows the list draws: the tab's entries less the hidden ones, unless the switch or `revealed` says otherwise. */
   visible: TrajectoryEntry[]
   /** `entry_id` to position in `visible`, rebuilt with it. */
@@ -224,6 +228,7 @@ const spanKey = (trace: string, span: string): string => `${trace}:${span}`
    tab's visible rows and their positions, the span lookup, the turn totals,
    and what the tab strip and the bar need to know about every scope. */
 function derived(entries: TrajectoryEntry[], prefs: Prefs, revealed: string[], scope: string | null) {
+  const shown: TrajectoryEntry[] = []
   const visible: TrajectoryEntry[] = []
   const spanIndex: Record<string, string> = {}
   const turnTotals: Record<string, number> = {}
@@ -237,20 +242,22 @@ function derived(entries: TrajectoryEntry[], prefs: Prefs, revealed: string[], s
     if (entry.slot === 'turn.output' && entry.turn_span_id && typeof entry.charged_ms === 'number') {
       turnTotals[entry.turn_span_id] = entry.charged_ms
     }
+    const marked = hiddenOf(entry) !== null
+    const hidden = marked && !prefs.showHidden && !revealed.includes(entry.entry_id)
     const own = scopeOf(entry)
     if (own !== null) scopeSizes[own] = (scopeSizes[own] ?? 0) + 1
     const opens = opensOf(entry)
     if (opens !== null && !(opens in doors)) doors[opens] = entry.entry_id
+    if (!hidden) shown.push(entry)
     if (own !== scope) continue
-    const hidden = hiddenOf(entry) !== null
-    if (hidden) hiddenCount += 1
+    if (marked) hiddenCount += 1
     if (!hidden || prefs.showHidden || revealed.includes(entry.entry_id)) visible.push(entry)
     else if (entry.slot === 'turn.output' && typeof entry.turn_number === 'number' && typeof entry.charged_ms === 'number') {
       hiddenTurns[entry.turn_number] = entry.charged_ms
     }
   }
   return {
-    entries, index: indexOf(entries), visible, visibleIndex: indexOf(visible), spanIndex, turnTotals,
+    entries, index: indexOf(entries), shown, shownIndex: indexOf(shown), visible, visibleIndex: indexOf(visible), spanIndex, turnTotals,
     doors, scopeSizes, hiddenCount, hiddenTurns,
   }
 }
@@ -283,6 +290,8 @@ const initial: TrajectoryState = {
   scope: null,
   scopes: [],
   saved: {},
+  shown: [],
+  shownIndex: {},
   visible: [],
   visibleIndex: {},
   spanIndex: {},
@@ -468,6 +477,21 @@ export function select(entryId: string | null, opts: { source: SelectSource }): 
   /* A hidden row that something pointed at is shown for now, so the selection has a row to land on --
      also when it was the selection already and a switch has since hidden it. */
   const reveal = entryId !== null && !(entryId in s.visibleIndex)
+  if (s.selectedId === entryId && !reveal) return
+  const revealed = reveal ? [...s.revealed, entryId as string] : s.revealed
+  patch({
+    selectedId: entryId, selectedBy: entryId === null ? null : opts.source, selections: s.selections + 1,
+    ...(reveal ? { revealed, ...rows(s.entries, { ...s, revealed }) } : {}),
+  })
+}
+
+/** Selects an entry whichever tab it belongs to, without moving the tab: the
+ *  waterfall draws every agent at once, so a click on a worker's row must not
+ *  filter the page down to that worker. */
+export function selectAcross(entryId: string | null, opts: { source: SelectSource }): void {
+  const s = store.get()
+  if (entryId !== null && !(entryId in s.index)) return
+  const reveal = entryId !== null && !(entryId in s.shownIndex)
   if (s.selectedId === entryId && !reveal) return
   const revealed = reveal ? [...s.revealed, entryId as string] : s.revealed
   patch({
