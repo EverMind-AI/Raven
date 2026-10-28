@@ -6777,6 +6777,10 @@
       "en": "taking a skill off the list lets it be offered and installed again",
       "zh": "把技能移出清单后，它可以再次被推荐和安装"
     },
+    "gui.confirm.cfg.why.skillForge.router.hub.enabled": {
+      "en": "turning it back on resumes sending the turn's message text to the Skill Hub",
+      "zh": "重新打开会把当轮对话内容发送到 Skill Hub"
+    },
     "gui.confirm.cfg.why.subagents.*.description": {
       "en": "the dispatching model reads it every turn, so it can steer what is sent where",
       "zh": "调度模型每一轮都会读到它，因此能左右内容发往何处"

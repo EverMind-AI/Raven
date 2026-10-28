@@ -2079,6 +2079,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       "sends this provider's API key, and every conversation on it, to the address given",
     'gui.confirm.cfg.why.skillForge.autoInstall': "'auto' downloads and installs skills without asking",
     'gui.confirm.cfg.why.skillForge.blocklist': 'taking a skill off the list lets it be offered and installed again',
+    'gui.confirm.cfg.why.skillForge.router.hub.enabled':
+      "turning it back on resumes sending the turn's message text to the Skill Hub",
     'gui.confirm.cfg.why.subagents.*.description':
       'the dispatching model reads it every turn, so it can steer what is sent where',
     'gui.confirm.cfg.why.subagents.*.lendKeys':
@@ -5466,6 +5468,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.confirm.cfg.why.providers.*.apiBase': '会把该提供商的 API 密钥及其上的全部对话发往所给地址',
     'gui.confirm.cfg.why.skillForge.autoInstall': "'auto' 会在不询问你的情况下下载并安装技能",
     'gui.confirm.cfg.why.skillForge.blocklist': '把技能移出清单后，它可以再次被推荐和安装',
+    'gui.confirm.cfg.why.skillForge.router.hub.enabled': '重新打开会把当轮对话内容发送到 Skill Hub',
     'gui.confirm.cfg.why.subagents.*.description': '调度模型每一轮都会读到它，因此能左右内容发往何处',
     'gui.confirm.cfg.why.subagents.*.lendKeys': '把这些提供商的 Raven 密钥交给智能体使用；它的消耗都计在这把密钥上',
     'gui.confirm.cfg.why.tools.connectionAdd': '允许智能体改写所有者的 SSH 配置',
