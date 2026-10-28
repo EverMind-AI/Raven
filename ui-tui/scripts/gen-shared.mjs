@@ -29,7 +29,7 @@ const CATALOGUES = [
 export const VERB_ROTATION_MS = ${spec.rotationMs}
 
 export const VERBS = [
-${spec.verbs.map(v => `  '${v}'`).join(',\n')}
+${spec.verbs.map(v => `  ${JSON.stringify(v)}`).join(',\n')}
 ]
 `
   },
@@ -38,7 +38,7 @@ ${spec.verbs.map(v => `  '${v}'`).join(',\n')}
     target: '../src/content/charms.generated.ts',
     render: spec => `${header('charms.json')}
 export const LONG_RUN_CHARMS = [
-${spec.charms.map(c => `  '${c}'`).join(',\n')}
+${spec.charms.map(c => `  ${JSON.stringify(c)}`).join(',\n')}
 ]
 `
   }
