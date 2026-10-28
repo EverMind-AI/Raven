@@ -26,7 +26,7 @@ import contextlib
 import itertools
 import json
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -86,6 +86,18 @@ def echo(prompt: dict[str, Any], session: FakeSession) -> list[Step]:
     """The default script: one reply naming the turn, the model and the effort it ran on."""
     said = f"turn {len(session.turns) + 1} of {session.key} on {prompt.get('model')} effort {prompt.get('effort')}"
     return [("reasoning", "thinking it over"), ("text", f"{said}: {prompt.get('prompt')}")]
+
+
+async def _within(step: Awaitable[Any], what: str, limit: float) -> Any:
+    """``step``'s result, or an ``AssertionError`` naming ``what`` the host waited for, as ``wait_for`` raises."""
+    bound = asyncio.timeout(limit)
+    try:
+        async with bound:
+            return await step
+    except TimeoutError:
+        if not bound.expired():
+            raise
+        raise AssertionError(f"the stand-in host waited {limit:g}s for {what}") from None
 
 
 @dataclass(eq=False)
@@ -182,16 +194,17 @@ class FakeHost:
             self.address = HostAddress(port=port, token=self.token)
         return self.address
 
-    async def stop(self) -> None:
+    async def stop(self, *, limit: float = 10.0) -> None:
+        """Stop serving; each step bounded, so a step that never ends fails by name rather than hangs."""
         for session in self.sessions.values():
             if session.running is not None:
                 session.running.cancel()
         for handling in list(self._handling):
             handling.cancel()
-        await asyncio.gather(*self._handling, return_exceptions=True)
-        await self.drop()
+        await _within(asyncio.gather(*self._handling, return_exceptions=True), "its frame handlers to end", limit)
+        await _within(self.drop(), "its client connections to close", limit)
         if self._runner is not None:
-            await self._runner.cleanup()
+            await _within(self._runner.cleanup(), "its web server to shut down", limit)
         if self._failures:
             raise self._failures[0]
 
