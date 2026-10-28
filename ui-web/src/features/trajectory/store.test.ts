@@ -928,7 +928,9 @@ describe('Scope Tabs', () => {
     const g = store.gen()
     store.openScope(A)
     store.switchScope(null)
-    store.select('b0', { source: 'link' })
+    /* b0's row may still be on its way in a streamed walk, so the tab is
+       opened the way the strip opens one rather than through its row. */
+    store.openScope(B)
     store.closeScope(A)
     expect(store.gen()).toBe(g)
     await answer(page(ROWS().slice(6), null, { snapshot_revision: 200 }))
@@ -1138,5 +1140,51 @@ describe('sessionChanged', () => {
     store.sessionChanged('gui:b')
     expect(store.get().shown).toEqual([])
     expect(store.get().shownIndex).toEqual({})
+  })
+})
+
+describe('a walk over a picture already up', () => {
+  const ROWS = (): TrajectoryEntry[] => [
+    entry('one', 0), entry('two', 1), entry('three', 2), entry('four', 3),
+    entry('five', 4), entry('six', 5), entry('seven', 6), entry('eight', 7),
+  ]
+
+  async function loaded(): Promise<void> {
+    serve()
+    store.install()
+    unpitch()
+    store.sessionChanged('gui:a')
+    await store.refreshState()
+    store.setView('trajectory')
+    const walk = store.load()
+    await flush()
+    await answer(page(ROWS(), null))
+    await walk
+  }
+
+  it('streams its pages instead of waiting for the whole snapshot', async () => {
+    await loaded()
+    const walk = store.load()
+    await flush()
+    await answer(page(ROWS().slice(0, 4), 'c4', { snapshot_revision: 300 }))
+    /* The first page is on screen while the walk is still running. */
+    expect(store.get().entries).toHaveLength(4)
+    expect(store.get().listing).toBe(true)
+    await answer(page(ROWS().slice(4), null, { snapshot_revision: 300 }))
+    await walk
+    expect(store.get().entries).toHaveLength(ROWS().length)
+    expect(store.get().snapshotReady).toBe(true)
+    expect(store.get().listing).toBe(false)
+  })
+
+  it('marks where an appending page started, and clears it when a batch rewrites the list', async () => {
+    await loaded()
+    const walk = store.load()
+    await flush()
+    await answer(page(ROWS().slice(0, 4), 'c4', { snapshot_revision: 300 }))
+    expect(store.get().grownFrom).toBe(0)
+    await answer(page(ROWS().slice(4), null, { snapshot_revision: 300 }))
+    await walk
+    expect(store.get().grownFrom).toBe(-1)
   })
 })

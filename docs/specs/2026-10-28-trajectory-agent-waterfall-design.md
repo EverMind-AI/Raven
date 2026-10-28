@@ -113,6 +113,23 @@ page must not print it raw. Turns are grouped by `turn_span_id` within an agent
 and ordered by their earliest `event_time`; the displayed ordinal is that
 position. The raw numbers stay in the details pane as wire values.
 
+## Loading a large session
+
+The snapshot walk is streamed. Every page `trajectory.list` returns (200 rows by
+default, 500 at most) goes on screen as it lands, whether or not a picture is
+already up -- a refresh over a session the reader has seen before used to wait
+for the whole snapshot, and that wait is the one large files actually feel. A
+walk restarted after its cursor expired is the exception: its pages belong to a
+different snapshot, and half of one is not a picture.
+
+The tree and the axis grow with those pages rather than being rebuilt over the
+whole session each time. `store.grownFrom` is the store's word that the last
+change appended to the list (the length before the append) or rewrote it (-1);
+`WaterfallIndex` and `AxisIndex` keep what they already built and refresh only
+what a page touched. A rewrite starts them over. `incremental.test.ts` and
+`axis.test.ts` hold each grown structure equal to its one-shot build, so the
+asymptotics are a property a test states rather than a claim in a comment.
+
 ## What this costs in the store
 
 `store.ts` currently derives `visible` by discarding every entry whose

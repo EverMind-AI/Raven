@@ -140,6 +140,10 @@ export interface TrajectoryState {
   scopes: OpenScope[]
   /** The tabs not on screen, by scope id (`scopeKey`). */
   saved: Record<string, ScopeView>
+  /** The length `entries` had before the last purely-appending change, or -1
+   *  when that change rewrote the list. A surface that caches a tree over
+   *  `shown` reads this to know it may extend rather than rebuild. */
+  grownFrom: number
   /** Every entry the page may draw, across every scope, less the hidden ones unless the switch or `revealed` says otherwise. */
   shown: TrajectoryEntry[]
   /** `entry_id` to position in `shown`, rebuilt with it. */
@@ -286,6 +290,7 @@ const initial: TrajectoryState = {
   scope: null,
   scopes: [],
   saved: {},
+  grownFrom: -1,
   shown: [],
   shownIndex: {},
   visible: [],
@@ -756,15 +761,21 @@ interface Walked {
    preview, so a long conversation starts to read before its last page is in;
    nothing about the commitment moves until the walk returns. Answers null
    when the walk was overtaken. */
-async function pages(src: TrajectorySource, key: string, g: number, progressive: boolean): Promise<Walked | null> {
+async function pages(src: TrajectorySource, key: string, g: number, stream: boolean): Promise<Walked | null> {
   let cursor: string | null = null
   let entries: TrajectoryEntry[] = []
   for (;;) {
     const page: TrajectoryListResult = await src.list(key, cursor)
     if (g !== generation || store.get().sessionKey !== key) return null
+    const before = entries.length
     entries = cursor === null ? [...page.entries] : [...entries, ...page.entries]
     cursor = page.next_cursor ?? null
-    if (progressive) patch({ ...rows(entries), indexState: page.index_state })
+    /* Every page goes on screen as it lands, whether or not a picture is
+       already up: a walk over a session the reader has seen before used to
+       wait for the whole snapshot, which is the one case large files hurt.
+       A walk restarted after its cursor expired is not streamed -- its pages
+       belong to a different snapshot, and half of one is not a picture. */
+    if (stream) patch({ ...rows(entries), grownFrom: cursor === null ? -1 : before, indexState: page.index_state })
     if (cursor === null) return { entries, last: page }
   }
 }
@@ -779,23 +790,31 @@ export async function load(): Promise<void> {
   const src = source()
   const key = store.get().sessionKey
   if (!src || !key) return
-  let progressive = store.get().entries.length === 0
   let restarts = 0
+  let stream = true
+  /* The picture the reader was on when the walk began: the place they kept
+     (or scrolled to while it ran) is carried from that picture to the one the
+     walk ends on, not from whatever page happened to land last. */
+  const start = store.get()
   for (;;) {
     const g = bump()
     patch({ listing: true })
     try {
-      const got = await pages(src, key, g, progressive)
+      const got = await pages(src, key, g, stream)
       if (got === null) return
       const { entries, last } = got
       const was = store.get()
-      const next = rows(entries)
+      /* The pages already put this exact list on screen; re-deriving it would
+         only throw away the tree the reader is looking at. */
+      const whole = was.entries === entries
+      const next = whole ? null : rows(entries)
       const change: Change = {
-        before: was.entries, beforeIndex: was.index, after: entries, afterIndex: next.index, replaced: NOTHING_REPLACED,
-        drawn: drawnUnder(was.prefs, was.revealed),
+        before: start.entries, beforeIndex: start.index, after: entries, afterIndex: next?.index ?? was.index,
+        replaced: NOTHING_REPLACED, drawn: drawnUnder(was.prefs, was.revealed),
       }
       patch({
-        ...next,
+        ...(next ?? {}),
+        grownFrom: -1,
         ...carryPlace(was, was.scope, change),
         saved: carry(was.saved, change),
         epoch: last.epoch,
@@ -816,7 +835,7 @@ export async function load(): Promise<void> {
          one whole: pages of the old snapshot may already be on screen. */
       if (isCursorExpired(e) && restarts < WALK_RETRIES) {
         restarts += 1
-        progressive = false
+        stream = false
         continue
       }
       patch({ listing: false })
@@ -841,7 +860,9 @@ export function snapshotStale(): void {
    sitting out of order. */
 export function applyChanges(batch: TrajectoryChangesResult): void {
   const s = store.get()
-  if (!s.snapshotReady || batch.epoch !== s.epoch) return
+  /* A walk in progress is replacing the list page by page; a batch merged into
+     that half-old picture would belong to neither snapshot. */
+  if (!s.snapshotReady || s.listing || batch.epoch !== s.epoch) return
   let entries = removeIds(s.entries, batch.removed.map((r) => r.entry_id))
   for (const entry of batch.upserts) entries = insertSorted(entries, entry)
   const index = indexOf(entries)
@@ -858,6 +879,7 @@ export function applyChanges(batch: TrajectoryChangesResult): void {
   }
   patch({
     ...rows(entries, s),
+    grownFrom: -1,
     ...carryPlace(s, s.scope, change),
     saved: carry(s.saved, change),
     revision: Math.max(s.revision, batch.to_revision),

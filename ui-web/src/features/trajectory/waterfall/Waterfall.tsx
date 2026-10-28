@@ -21,9 +21,10 @@ import * as lang from '../../../state/lang'
 import * as details from '../detailStore'
 import { openFromEntry, scopeTitle } from '../scopes'
 import * as store from '../store'
-import { barOf, clampViewport, createAxis, tickMarks, zoomViewport } from './axis'
+import { AxisIndex, barOf, clampViewport, tickMarks, zoomViewport } from './axis'
+import { WaterfallIndex } from './incremental'
 import { crossLinks } from './links'
-import { agentKey, buildWaterfall, entryEnd, entryStart, isLive, turnKey } from './model'
+import { agentKey, entryEnd, entryStart, isLive, turnKey } from './model'
 import { OverviewLanes } from './OverviewLanes'
 import { turnSegments } from './segments'
 
@@ -68,18 +69,6 @@ function windowOf(scrollTop: number, height: number, count: number): { first: nu
   const first = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN)
   const last = Math.min(count, Math.floor(scrollTop / ROW_HEIGHT) + visible + OVERSCAN)
   return { first, last }
-}
-
-/** Every stretch any agent was doing anything, which is what the axis must not compress. */
-function intervalsOf(waterfall: Waterfall, now: number): Array<{ start: number; end: number }> {
-  const spans: Array<{ start: number; end: number }> = []
-  for (const agent of waterfall.agents) {
-    for (const turn of agent.turns) {
-      for (const row of turn.rows) spans.push({ start: entryStart(row.entry), end: entryEnd(row.entry, now) })
-    }
-    for (const row of agent.loose) spans.push({ start: entryStart(row.entry), end: entryEnd(row.entry, now) })
-  }
-  return spans
 }
 
 const percent = (fraction: number): string => `${(fraction * 100).toFixed(4)}%`
@@ -229,8 +218,47 @@ export function Waterfall(): JSX.Element {
     const timer = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(timer)
   }, [live])
-  const waterfall = useMemo(() => buildWaterfall(shown, now), [shown, now])
-  const axis = useMemo(() => createAxis(intervalsOf(waterfall, now)), [waterfall, now])
+  /* Both structures grow with the pages the walk lands: `grownFrom` is the
+     store's word that the list was appended to rather than rewritten, and the
+     indexes keep what they already built. A rewrite (the live feed, a session
+     change) starts them over. */
+  const grownFrom = store.get().grownFrom
+  const tree = useRef<{ index: WaterfallIndex; built: number; now: number } | null>(null)
+  const waterfall = useMemo(() => {
+    const prev = tree.current
+    if (prev !== null && grownFrom === prev.built && shown.length >= prev.built) {
+      if (prev.now !== now) {
+        prev.index.setNow(now)
+        prev.now = now
+      }
+      if (shown.length > prev.built) prev.index.add(shown.slice(prev.built))
+      prev.built = shown.length
+      return prev.index.waterfall()
+    }
+    const index = new WaterfallIndex(now)
+    index.add(shown)
+    tree.current = { index, built: shown.length, now }
+    return index.waterfall()
+  }, [shown, grownFrom, now])
+
+  const axes = useRef<{ index: AxisIndex; built: number; now: number } | null>(null)
+  const axis = useMemo(() => {
+    const prev = axes.current
+    /* A running row's end moves with the clock, so a tick rebuilds the axis
+       rather than appending to it. */
+    if (prev !== null && grownFrom === prev.built && shown.length >= prev.built && (!live || prev.now === now)) {
+      if (shown.length > prev.built) {
+        prev.index.add(shown.slice(prev.built).map((entry) => ({ start: entryStart(entry), end: entryEnd(entry, now) })))
+      }
+      prev.built = shown.length
+      prev.now = now
+      return prev.index.axis()
+    }
+    const index = new AxisIndex()
+    index.add(shown.map((entry) => ({ start: entryStart(entry), end: entryEnd(entry, now) })))
+    axes.current = { index, built: shown.length, now }
+    return index.axis()
+  }, [shown, grownFrom, now, live])
   /* A window belongs to the axis it was cut from; a different conversation has
      a different length, and the old window means nothing on it. */
   const view: Viewport = zoom !== null && zoom.axis === axis.length && zoom.view.to > zoom.view.from

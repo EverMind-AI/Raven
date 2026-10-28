@@ -89,11 +89,20 @@ function rowOf(entry: TrajectoryEntry, bySpan: ReadonlyMap<string, string | null
   return { entry, start: entryStart(entry), end: entryEnd(entry, now), depth }
 }
 
+/** The rows of one bucket: sorted by start, each with its depth in the
+ *  parent_span_id chain. Exported for the incremental index, which rebuilds a
+ *  bucket at a time rather than the whole tree. */
+export function buildRows(entries: readonly TrajectoryEntry[], now: number): WaterfallRow[] {
+  const bySpan = new Map<string, string | null>()
+  for (const entry of entries) if (!bySpan.has(entry.span_id)) bySpan.set(entry.span_id, entry.parent_span_id ?? null)
+  return ordered(entries.map((entry) => rowOf(entry, bySpan, now))).map((row) => ({ entry: row.entry, depth: row.depth }))
+}
+
 function ordered(rows: Row[]): Row[] {
   return rows.sort((a, b) => a.start - b.start || a.entry.entry_id.localeCompare(b.entry.entry_id))
 }
 
-function turnOf(id: string, entries: readonly TrajectoryEntry[], now: number): WaterfallTurn {
+export function buildTurn(id: string, entries: readonly TrajectoryEntry[], now: number): WaterfallTurn {
   const bySpan = new Map<string, string | null>()
   for (const entry of entries) if (!bySpan.has(entry.span_id)) bySpan.set(entry.span_id, entry.parent_span_id ?? null)
   const rows = ordered(entries.map((entry) => rowOf(entry, bySpan, now)))
@@ -127,12 +136,10 @@ function agentOf(scope: string | null, entries: readonly TrajectoryEntry[], now:
     if (bucket) bucket.push(entry)
     else turns.set(turnId, [entry])
   }
-  const built = [...turns].map(([id, rows]) => turnOf(id, rows, now))
+  const built = [...turns].map(([id, rows]) => buildTurn(id, rows, now))
   built.sort((a, b) => a.start - b.start || a.id.localeCompare(b.id))
   const numbered = built.map((turn, at) => ({ ...turn, ordinal: at + 1 }))
-  const bySpan = new Map<string, string | null>()
-  for (const entry of loose) if (!bySpan.has(entry.span_id)) bySpan.set(entry.span_id, entry.parent_span_id ?? null)
-  const looseRows = ordered(loose.map((entry) => rowOf(entry, bySpan, now))).map((row) => ({ entry: row.entry, depth: row.depth }))
+  const looseRows = buildRows(loose, now)
   const starts = entries.map(entryStart)
   const ends = entries.map((entry) => entryEnd(entry, now))
   return {
