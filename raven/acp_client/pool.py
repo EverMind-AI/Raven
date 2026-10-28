@@ -22,6 +22,7 @@ the way an operator's config edit does: a turn was running on it.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import time
@@ -305,6 +306,18 @@ class _SessionResponders:
         return True
 
 
+def _running_loop() -> asyncio.AbstractEventLoop | None:
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+
+
+def _on(connections: Any, loop: asyncio.AbstractEventLoop) -> bool:
+    """Whether any of ``connections`` belongs to ``loop`` (one made outside any loop belongs to every one)."""
+    return any(connection.loop is None or connection.loop is loop for connection in connections)
+
+
 class _Connection:
     """A client, the router whose lifetime is tied to it, and one lock per session."""
 
@@ -342,6 +355,9 @@ class _Connection:
         actually serving requests, where a stored snapshot only describes the one
         that was verified."""
         self._session_locks: dict[str, asyncio.Lock] = {}
+        self.loop = _running_loop()
+        """The loop this connection was made on. Its client's pipes are that loop's,
+        so only that loop's idle check may close it."""
         self.leased_at = time.monotonic()
         """When the pool last handed this connection out. A caller sends its
         request right after taking it, so the idle check leaves a connection
@@ -383,7 +399,7 @@ class AcpConnectionPool:
     def __init__(self) -> None:
         self._connections: dict[str, dict[str, _Connection]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
-        self._idle_task: asyncio.Task | None = None
+        self._idle_tasks: dict[asyncio.AbstractEventLoop, asyncio.Task] = {}
 
     def connections(self, name: str) -> list[_Connection]:
         """Every connection held under ``name``, live or not."""
@@ -669,17 +685,21 @@ class AcpConnectionPool:
         ``budget`` defaults to the host's live setting. Each candidate is
         judged again under its agent's lock, the one ``acquire`` holds while it
         hands a connection out, so a connection being reused is never closed
-        underneath its caller.
+        underneath its caller. Only the running loop's connections are
+        considered: another loop's are that loop's to close.
         """
         budget = self._idle_budget() if budget is None else budget
         if budget is None:
             return []
+        loop = asyncio.get_running_loop()
         closing: list[tuple[str, _Connection]] = []
-        for name in list(self._connections):
+        for name in [name for name, held in self._connections.items() if _on(held.values(), loop)]:
             async with self._lock_for(name):
                 held = self._connections.get(name, {})
                 now = time.monotonic()
                 for bkey, connection in list(held.items()):
+                    if not _on((connection,), loop):
+                        continue
                     # A connection whose agent already ended goes too: nothing
                     # would hand it out again, and holding it keeps this check running.
                     if not connection.alive or self._closable(connection, budget, now):
@@ -694,15 +714,18 @@ class AcpConnectionPool:
         return [name for name, _ in closing]
 
     def _watch_idle(self) -> None:
-        """Start the idle check if it is not running; it ends once nothing is held."""
+        """Start this loop's idle check if it is not running; it ends once the loop holds nothing."""
         loop = asyncio.get_running_loop()
-        task = self._idle_task
-        if task is not None and not task.done() and task.get_loop() is loop:
+        for other in [other for other in self._idle_tasks if other is not loop and other.is_closed()]:
+            del self._idle_tasks[other]
+        task = self._idle_tasks.get(loop)
+        if task is not None and not task.done():
             return
-        self._idle_task = loop.create_task(self._idle_loop(), name="acp-idle-close")
+        self._idle_tasks[loop] = loop.create_task(self._idle_loop(), name="acp-idle-close")
 
     async def _idle_loop(self) -> None:
-        while self._connections:
+        loop = asyncio.get_running_loop()
+        while any(_on(held.values(), loop) for held in list(self._connections.values())):
             budget = self._idle_budget()
             share = budget / _IDLE_CHECK_SHARE if budget is not None else _IDLE_CHECK_MAX_S
             await asyncio.sleep(min(max(share, _IDLE_CHECK_MIN_S), _IDLE_CHECK_MAX_S))
@@ -720,9 +743,15 @@ class AcpConnectionPool:
         request runs. Serially and unbounded, one such connection held every
         other one -- and the exit waiting behind them -- for that whole time.
         """
-        task, self._idle_task = self._idle_task, None
-        if task is not None and not task.get_loop().is_closed():
-            task.cancel()
+        tasks, self._idle_tasks = self._idle_tasks, {}
+        running = asyncio.get_running_loop()
+        for loop, task in tasks.items():
+            if loop is running:
+                task.cancel()
+            elif not loop.is_closed():
+                # Another thread's loop: its task is cancelled from that loop.
+                with contextlib.suppress(RuntimeError):
+                    loop.call_soon_threadsafe(task.cancel)
         names = list(self._connections)
         if not names:
             return
