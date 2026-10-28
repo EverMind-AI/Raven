@@ -709,59 +709,6 @@ def test_only_a_non_empty_string_counts_as_a_long_account():
     assert full_detail_of(exc) == "the long one"
 
 
-async def test_what_a_failed_turn_measured_rides_the_failure():
-    """Copied off the exception the way the long account is: the kernel knows
-    nothing about usage, it only hands on what the runner put there."""
-
-    class MeasuringRunner:
-        async def run(self, req, emit, drain) -> TurnOutcome:
-            exc = AnswerlessTurnError("The model returned no content on 3 attempt(s).")
-            exc.turn_usage = {"prompt_tokens": 7000, "completion_tokens": 0, "total_tokens": 7000, "context_used": 7000}
-            raise exc
-
-    events, sink = _collector()
-    lane = Lane(runner=MeasuringRunner(), pools=OriginPools(user=1, system=1), sink=sink, conversation_id="c")
-    await lane.submit(_req())
-    failed = next(e for e in events if isinstance(e, TurnFailed))
-    assert failed.turn_usage == {
-        "prompt_tokens": 7000,
-        "completion_tokens": 0,
-        "total_tokens": 7000,
-        "context_used": 7000,
-    }
-
-
-async def test_a_foreign_usage_property_cannot_swallow_the_failure_event():
-    class ForeignError(Exception):
-        @property
-        def turn_usage(self):
-            raise RuntimeError("cannot read turn_usage")
-
-    class Runner:
-        async def run(self, req, emit, drain):
-            raise ForeignError("original failure")
-
-    events, sink = _collector()
-    lane = Lane(runner=Runner(), pools=OriginPools(user=1, system=1), sink=sink, conversation_id="c")
-    await lane.submit(_req())
-    worker_result = await asyncio.gather(lane._worker, return_exceptions=True)
-    failed = [event for event in events if isinstance(event, TurnFailed)]
-    assert len(failed) == 1, worker_result
-    assert failed[0].turn_usage is None
-
-
-def test_only_a_non_empty_mapping_counts_as_what_a_turn_measured():
-    from raven.spine.scheduler import turn_usage_of
-
-    exc = ValueError("boom")
-    assert turn_usage_of(exc) is None
-    for value in (42, "7000", [("context_used", 7000)], {}):
-        exc.turn_usage = value
-        assert turn_usage_of(exc) is None, value
-    exc.turn_usage = {"context_used": 7000}
-    assert turn_usage_of(exc) == {"context_used": 7000}
-
-
 # --- every turn starts from the lane's home context ---------------------------
 
 _PROBE: ContextVar[str] = ContextVar("lane_test_probe", default="unset")

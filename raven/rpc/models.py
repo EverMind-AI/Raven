@@ -847,9 +847,9 @@ class ErrorEventPayload(_Strict):
     usage: TurnUsage | None = Field(
         None,
         description=(
-            "What the failed turn measured, in message.complete's shape: its last reported call, so a "
-            "client's context gauge moves on with the turn's stored record. Absent when no call of the "
-            "turn reported usage."
+            "What a failed or stopped turn measured, in message.complete's shape: its last reported call, "
+            "so a client's context gauge moves on with the turn's stored record. Absent when that call "
+            "read no window."
         ),
     )
     target: DirectTarget | None = None

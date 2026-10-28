@@ -95,30 +95,17 @@ def test_lifecycle_events_construct_and_are_frozen():
         e.explicit_reply = False
 
 
-def test_turn_failed_carries_no_outcome_usage():
+def test_turn_failed_has_no_usage():
     fields = {f.name for f in dataclasses.fields(TurnFailed)}
-    # No ``usage``: a failure has no outcome to account for, which is what
-    # TurnEnded's ``Usage`` is. ``reported`` is the in-process flag saying the
-    # runner worded ``error`` itself rather than it being whatever a crash
-    # carried; ``full_detail`` is the runner's long account of the failure;
-    # ``no_output`` says the model produced nothing at all on every attempt; and
-    # ``turn_usage`` is what the failed turn's calls measured, handed on for a
-    # client's context gauge. The lane copies those off the exception it let out.
-    assert fields == {
-        "error",
-        "cancelled",
-        "conversation_id",
-        "turn_id",
-        "reported",
-        "full_detail",
-        "no_output",
-        "turn_usage",
-    }
-    assert "usage" not in fields
+    # No usage; ``reported`` is the in-process flag saying the runner worded
+    # ``error`` itself rather than it being whatever a crash carried, and
+    # ``full_detail`` is the runner's long account of the failure, which the
+    # lane copies off the exception it let out, and ``no_output`` says the model
+    # produced nothing at all on every attempt.
+    assert fields == {"error", "cancelled", "conversation_id", "turn_id", "reported", "full_detail", "no_output"}
     assert TurnFailed(error="boom", cancelled=False).reported is False
     assert TurnFailed(error="boom", cancelled=False).full_detail is None
     assert TurnFailed(error="boom", cancelled=False).no_output is False
-    assert TurnFailed(error="boom", cancelled=False).turn_usage is None
 
 
 def test_a_failure_text_is_bounded_and_says_it_was_cut():

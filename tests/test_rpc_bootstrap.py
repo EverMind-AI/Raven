@@ -171,6 +171,37 @@ async def test_the_stack_sizes_its_turn_pools_from_the_config(monkeypatch) -> No
         await stack.teardown()
 
 
+async def test_the_spine_and_turn_cancel_share_one_map_of_what_running_turns_measured(monkeypatch) -> None:
+    """A stopped turn's cancel reports what the turn measured, read from the map
+    the spine's runner fills: two maps would leave every stop with nothing to
+    report."""
+    loop = _FakeLoop(_FakeCron())
+    import raven.rpc.methods as methods_module
+    import raven.rpc.spine as spine_module
+
+    seen: dict = {}
+    real_spine = spine_module.build_rpc_spine
+    real_register = methods_module.register_turn_methods
+
+    def spy_spine(*args, **kwargs):
+        seen["spine"] = kwargs.get("live_usages")
+        return real_spine(*args, **kwargs)
+
+    def spy_register(*args, **kwargs):
+        seen["cancel"] = kwargs.get("live_usages")
+        return real_register(*args, **kwargs)
+
+    monkeypatch.setattr(spine_module, "build_rpc_spine", spy_spine)
+    # The name the aligned registration calls, so the map is followed through it.
+    monkeypatch.setattr(methods_module, "register_turn_methods", spy_register)
+    stack = await bootstrap.build_rpc_stack(_sink, agent_loop=loop)
+    try:
+        assert isinstance(seen["spine"], dict)
+        assert seen["cancel"] is seen["spine"]
+    finally:
+        await stack.teardown()
+
+
 def test_the_turn_pools_come_from_the_gateway_section_and_zero_is_allowed(tmp_path, monkeypatch) -> None:
     path = tmp_path / "config.json"
     monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
