@@ -82,6 +82,10 @@ _STALE_AFTER_S = 300.0
 # the caller would otherwise spend finding out.
 _PROBE_TIMEOUT_S = 5.0
 
+# How long an agent about to be closed for idleness has to say it holds resident
+# work. Answered from the agent's dispatcher like the probe, so the same budget.
+_RESIDENT_ASK_TIMEOUT_S = _PROBE_TIMEOUT_S
+
 SessionSink = Callable[[str, dict[str, Any]], Awaitable[None]]
 """Receives ``(method, params)`` for one session's notifications."""
 
@@ -679,6 +683,26 @@ class AcpConnectionPool:
             return False
         return handshake_of(connection.initialize).can_load or not connection.router.seen
 
+    @staticmethod
+    async def _holds_resident_work(connection: _Connection) -> bool:
+        """Whether the agent says it holds work that runs with nobody asking.
+
+        An armed cron wake or a running plugin service lives in the agent's
+        process and puts nothing on the wire, so a connection quiet for the
+        whole budget can still be holding one, and closing it loses it. Asked
+        only of an agent that declared it answers, and only once closing it is
+        otherwise settled, so the answer is the one at the moment of closing.
+        An agent that does not answer in time is closed as before.
+        """
+        if not handshake_of(connection.initialize).reports_resident_work:
+            return False
+        try:
+            answer = await connection.client.request(protocol.RESIDENT_WORK_METHOD, {}, timeout=_RESIDENT_ASK_TIMEOUT_S)
+        except Exception as exc:  # noqa: BLE001 - an agent that cannot answer is closed as before
+            logger.debug("acp agent {!r}: no resident-work answer: {}", connection.client.name, exc)
+            return False
+        return isinstance(answer, dict) and bool(answer.get("resident"))
+
     async def close_idle(self, budget: float | None = None) -> list[str]:
         """Close every connection idle for ``budget`` seconds; the names closed.
 
@@ -702,9 +726,12 @@ class AcpConnectionPool:
                         continue
                     # A connection whose agent already ended goes too: nothing
                     # would hand it out again, and holding it keeps this check running.
-                    if not connection.alive or self._closable(connection, budget, now):
-                        held.pop(bkey, None)
-                        closing.append((name, connection))
+                    if connection.alive and not self._closable(connection, budget, now):
+                        continue
+                    if connection.alive and await self._holds_resident_work(connection):
+                        continue
+                    held.pop(bkey, None)
+                    closing.append((name, connection))
                 if not held:
                     self._connections.pop(name, None)
         for name, connection in closing:

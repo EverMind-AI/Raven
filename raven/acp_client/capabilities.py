@@ -39,6 +39,7 @@ from raven.acp_client.client import AcpClient
 from raven.acp_client.permissions import auto_approver
 from raven.acp_client.protocol import (
     MENU_UNREAD_META,
+    RESIDENT_WORK_CAPABILITY,
     SESSION_MCP_CAPABILITY,
     STEER_CAPABILITY,
     AcpConnectionError,
@@ -511,6 +512,8 @@ class _Handshake:
     can_load: bool = False
     can_delete: bool = False
     can_steer: bool = False
+    reports_resident_work: bool = False
+    """The agent answers ``_raven/residentWork``, so it can be asked before it is closed for idleness."""
     mcp_http: bool = False
     mcp_sse: bool = False
     session_mcp: bool = False
@@ -556,6 +559,7 @@ def _read_initialize(result: Any) -> _Handshake:
         # The one extension raven itself serves, announced in the schema's
         # extension carrier; a client that did not read it must not call it.
         can_steer=STEER_CAPABILITY in _dict(caps.get("_meta")),
+        reports_resident_work=RESIDENT_WORK_CAPABILITY in _dict(caps.get("_meta")),
         mcp_http=bool(mcp_caps.get("http")),
         mcp_sse=bool(mcp_caps.get("sse")),
         # The same carrier as the steer flag, and read the same way: presence,

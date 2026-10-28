@@ -18,6 +18,7 @@ from raven.utils.commands import command_quote
 
 _STUB = Path(__file__).with_name("acp_stub_server.py")
 _LOADS = {"agentCapabilities": {"loadSession": True}}
+_RESIDENT = {"agentCapabilities": {"loadSession": True, "_meta": {"raven.residentWork": True}}}
 _NO_LOAD = {"agentCapabilities": {}}
 
 
@@ -28,12 +29,20 @@ async def _no_pooled_connections():
 
 
 class _Client:
-    def __init__(self, *, idle: float = 0.0, busy: bool = False, alive: bool = True) -> None:
+    def __init__(self, *, idle: float = 0.0, busy: bool = False, alive: bool = True, resident: Any = None) -> None:
         self.name = "agent"
         self._idle_since = time.monotonic() - idle
         self.busy = busy
         self.alive = alive
         self.closed = False
+        self.resident = resident
+        self.asked: list[str] = []
+
+    async def request(self, method: str, params: dict | None = None, *, timeout: float | None = None) -> Any:
+        self.asked.append(method)
+        if isinstance(self.resident, BaseException):
+            raise self.resident
+        return {"resident": self.resident}
 
     @property
     def idle_seconds(self) -> float:
@@ -66,6 +75,61 @@ async def test_a_quiet_agent_that_can_reload_its_sessions_is_closed() -> None:
     assert await pool.close_idle(60) == ["quiet"]
     assert client.closed
     assert pool.live("quiet") == []
+
+
+async def test_an_agent_that_says_it_holds_resident_work_is_kept() -> None:
+    """An armed wake or a running service is work nobody is asking for yet: closing the agent loses it.
+
+    Asked only of an agent that declared it can answer, and only once closing
+    it is otherwise settled. No answer in time, or none declared, closes it as before.
+    """
+    holding = _Client(idle=3600, resident=True)
+    idle = _Client(idle=3600, resident=False)
+    deaf = _Client(idle=3600, resident=TimeoutError())
+    undeclared = _Client(idle=3600, resident=True)
+    busy = _Client(idle=3600, busy=True, resident=True)
+    pool = _pool_holding(
+        holding=_held(holding, _RESIDENT),
+        idle=_held(idle, _RESIDENT),
+        deaf=_held(deaf, _RESIDENT),
+        undeclared=_held(undeclared, _LOADS),
+        busy=_held(busy, _RESIDENT),
+    )
+
+    assert sorted(await pool.close_idle(60)) == ["deaf", "idle", "undeclared"]
+    assert not holding.closed and not busy.closed
+    assert holding.asked == ["_raven/residentWork"]
+    assert undeclared.asked == [] and busy.asked == []
+
+
+async def test_an_agent_holding_a_wake_is_kept_until_the_wake_has_fired(tmp_path: Path) -> None:
+    """A turn arms an in-process wake and ends; the agent is then silent until the wake fires.
+
+    The real process, through the pool: closed early, the wake would never fire.
+    """
+    mark = tmp_path / "fired"
+    pool = AcpConnectionPool()
+    command = f"{command_quote(sys.executable)} {command_quote(str(_STUB))}"
+    env = {"ACP_STUB_MODE": "resident", "ACP_STUB_WAKE_S": "1.0", "ACP_STUB_WAKE_MARK": str(mark)}
+    held = await pool.acquire(name="stub", command=command, cwd=str(tmp_path), env=env)
+    opened = await held.client.request("session/new", {"cwd": str(tmp_path), "mcpServers": []})
+    held.router.reserve(opened["sessionId"])
+    prompt = [{"type": "text", "text": "remind me in a second"}]
+    await held.client.request("session/prompt", {"sessionId": opened["sessionId"], "prompt": prompt})
+    held.leased_at -= 10
+
+    await asyncio.sleep(0.3)
+    assert await pool.close_idle(0.2) == []
+    assert held.alive
+
+    for _ in range(100):
+        if mark.exists():
+            break
+        await asyncio.sleep(0.05)
+    assert mark.exists(), "the wake fired in the agent it was armed in"
+    await asyncio.sleep(0.3)
+    assert await pool.close_idle(0.2) == ["stub"]
+    assert not held.alive
 
 
 async def test_a_connection_whose_agent_already_ended_is_dropped() -> None:
