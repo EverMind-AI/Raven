@@ -77,9 +77,9 @@ async def _no_pooled_connections():
     The pool is process state by design (two backends of one agent must share a
     connection), so without this a stub process would outlive its test and the
     next test would be handed a connection configured for a different mode.
-    The effort map is process state for the same reason -- a hot apply replaces
-    the backend while the session continues -- and stub sessions reuse ids like
-    ``s1``, so it is cleared with the pool.
+    The effort map is module state for the same reason -- a hot apply replaces
+    the backend while the session continues -- held per connection, and it is
+    cleared with the pool so no record outlives the test that made it.
     """
     _SESSION_EFFORT.clear()
     yield
@@ -372,7 +372,7 @@ async def test_an_effort_on_a_mode_menu_is_sent_through_set_mode() -> None:
 
     backend = AcpAgentBackend(name="a", command="unused", snapshot=snapshot)
     client = _Client()
-    backend._note_session_mode("s1", {"modes": {"currentModeId": "low"}})
+    backend._note_session_mode(client, "s1", {"modes": {"currentModeId": "low"}})
 
     await backend._set_effort(client, "s1", "high", fallback_mode=None, budget=1)
     await backend._set_effort(client, "s1", None, fallback_mode=None, budget=1)
@@ -434,16 +434,19 @@ async def test_effort_refusals_and_missing_baselines_do_not_escape() -> None:
             return {}
 
     backend = AcpAgentBackend(name="a", command="unused", snapshot=snapshot)
-    backend._note_session_mode(None, {})
-    backend._note_session_effort(None, {})
+    # One connection per backend: the effort record is held per connection, so
+    # the refusals are this client's answers rather than other connections'.
+    client = _Client()
+    backend._note_session_mode(client, None, {})
+    backend._note_session_effort(client, None, {})
 
-    state = _session_effort_state("a", "s1")
+    state = _session_effort_state(client, "s1")
     state.pushed = "high"
-    await backend._set_effort(_Client(), "s1", None, budget=1)
-    await backend._set_effort(
-        _Client(AcpRemoteError("session/set_config_option", -32000, "no")), "s1", "high", budget=1
-    )
-    await backend._set_effort(_Client(AcpError("broken")), "s1", "high", budget=1)
+    await backend._set_effort(client, "s1", None, budget=1)
+    client.error = AcpRemoteError("session/set_config_option", -32000, "no")
+    await backend._set_effort(client, "s1", "high", budget=1)
+    client.error = AcpError("broken")
+    await backend._set_effort(client, "s1", "high", budget=1)
 
     mode_snapshot = CapabilitySnapshot(
         agent="b",
@@ -454,13 +457,16 @@ async def test_effort_refusals_and_missing_baselines_do_not_escape() -> None:
         available_modes=(AcpMode("low", "Low"), AcpMode("high", "High")),
     )
     mode_backend = AcpAgentBackend(name="b", command="unused", snapshot=mode_snapshot)
-    await mode_backend._set_effort(_Client(), "s2", None, budget=1)
-    mode_state = _session_effort_state("b", "s2")
+    mode_client = _Client()
+    await mode_backend._set_effort(mode_client, "s2", None, budget=1)
+    mode_state = _session_effort_state(mode_client, "s2")
     mode_state.mode_pushed = "high"
-    await mode_backend._set_effort(_Client(), "s2", None, budget=1)
+    await mode_backend._set_effort(mode_client, "s2", None, budget=1)
     mode_state.mode_baseline = "low"
-    await mode_backend._set_effort(_Client(AcpRemoteError("session/set_mode", -32000, "no")), "s2", "high", budget=1)
-    await mode_backend._set_effort(_Client(AcpError("broken")), "s2", "high", budget=1)
+    mode_client.error = AcpRemoteError("session/set_mode", -32000, "no")
+    await mode_backend._set_effort(mode_client, "s2", "high", budget=1)
+    mode_client.error = AcpError("broken")
+    await mode_backend._set_effort(mode_client, "s2", "high", budget=1)
 
     assert calls  # every attempt reached the wire; none escaped as an exception
 
@@ -512,6 +518,66 @@ async def test_an_instance_mode_override_is_the_last_mode_its_session_is_put_on(
     )
 
     assert put_on == ["high"]
+
+
+@pytest.mark.parametrize("channel", ["config_option", "mode"])
+async def test_two_connections_holding_one_session_id_keep_separate_effort_records(channel: str) -> None:
+    """The pool holds one connection per parent binding under one agent name,
+    and each process numbers its own sessions, so two of them can both hold
+    ``s1``. A record keyed by agent and session id alone was shared between
+    them: clearing one emptied the other's note of what it pushed, and the
+    second session was never sent back."""
+    snapshot = CapabilitySnapshot(
+        agent="same",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        available_modes=(AcpMode("low", "Low"), AcpMode("high", "High")),
+        effort_choices=(AcpEffortChoice("high", "High"), AcpEffortChoice("default", "Default"))
+        if channel == "config_option"
+        else (),
+        effort_option="effort" if channel == "config_option" else "",
+    )
+    sent: list[tuple[str, str]] = []
+
+    class _Client:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            if method == "session/new":
+                return {
+                    "sessionId": "s1",
+                    "modes": {
+                        "currentModeId": "low",
+                        "availableModes": [{"id": "low", "name": "Low"}, {"id": "high", "name": "High"}],
+                    },
+                    "configOptions": [
+                        {
+                            "id": "effort",
+                            "category": "thought_level",
+                            "currentValue": "default",
+                            "options": [{"value": "high", "name": "High"}, {"value": "default", "name": "Default"}],
+                        }
+                    ]
+                    if channel == "config_option"
+                    else [],
+                }
+            sent.append((self.name, params.get("value") or params.get("modeId")))
+            return {}
+
+    backend = AcpAgentBackend(name="same", command="unused", snapshot=snapshot)
+    first, second = _Client("first"), _Client("second")
+    for client in (first, second):
+        await backend._open_session(
+            client, cwd="/w", skey="s", handle=client.name, budget=1, mcp_servers=[], session_effort="high"
+        )
+    for client in (first, second):
+        await backend._set_effort(client, "s1", None, budget=1)
+
+    baseline = "default" if channel == "config_option" else "low"
+    assert sent == [("first", "high"), ("second", "high"), ("first", baseline), ("second", baseline)]
 
 
 async def test_verify_reports_a_rejected_handshake_as_present_but_unusable() -> None:
