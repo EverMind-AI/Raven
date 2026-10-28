@@ -3,7 +3,7 @@
 
 import { expect, it } from 'vitest'
 
-import { IDLE_MS, barOf, createAxis, zoomViewport } from './axis'
+import { IDLE_MS, barOf, createAxis, tickMarks, zoomViewport } from './axis'
 
 it('merges overlapping intervals into one occupied run', () => {
   const axis = createAxis([{ start: 0, end: 10 }, { start: 5, end: 20 }], { idleMs: 100 })
@@ -63,4 +63,22 @@ it('barOf clips a bar to the viewport and returns null outside it', () => {
   const axis = createAxis([{ start: 0, end: 1000 }])
   expect(barOf(axis, { from: 0, to: 1000 }, 200, 400)).toEqual({ left: 0.2, width: 0.2 })
   expect(barOf(axis, { from: 500, to: 1000 }, 0, 100)).toBeNull()
+})
+
+it('marks a long, mostly idle axis with a handful of ticks, not one per second', () => {
+  const threeDays = 3 * 24 * 3600 * 1000
+  const axis = createAxis([{ start: 0, end: 20 * 60_000 }, { start: threeDays, end: threeDays + 20 * 60_000 }])
+  const marks = tickMarks(axis, { from: 0, to: axis.length })
+  expect(marks.length).toBeLessThanOrEqual(12)
+  for (const mark of marks) {
+    expect(mark.left).toBeGreaterThanOrEqual(0)
+    expect(mark.left).toBeLessThanOrEqual(1)
+  }
+})
+
+it('spreads its ticks across the visible window when zoomed in', () => {
+  const axis = createAxis([{ start: 0, end: 40_000 }])
+  const marks = tickMarks(axis, { from: 0, to: axis.length / 2 })
+  expect(marks.length).toBeGreaterThan(1)
+  expect(marks[0]!.left).toBe(0)
 })

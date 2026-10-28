@@ -68,3 +68,16 @@ it('emits nothing when the worker has no rows of its own', () => {
   const w = buildWaterfall([E('spawn', 10, { kind: 'tool.output', opens_subagent_scope: 't:sub' })], NOW)
   expect(crossLinks(displayRows(w, new Set(), new Set()), w)).toEqual([])
 })
+
+it('anchors a folded spawn at the turn row of its own agent, not a namesake', () => {
+  /* Two agents whose turns share the span id 'turn' — the key must carry the
+     agent, or the rule starts at the wrong group. */
+  const w = buildWaterfall([
+    E('spawn', 10, { kind: 'tool.output', opens_subagent_scope: 't:sub' }),
+    E('s1', 12, { subagent_scope: 't:sub', turn_span_id: 'turn' }),
+  ], NOW)
+  const rows = displayRows(w, new Set(), new Set())
+  const dispatch = crossLinks(rows, w).filter((link) => link.kind === 'dispatch')
+  expect(dispatch).toHaveLength(1)
+  expect(rows[dispatch[0]!.fromRow]!.agent).toBe(0)
+})

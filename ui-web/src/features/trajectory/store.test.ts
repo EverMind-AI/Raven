@@ -1120,3 +1120,23 @@ describe('shown and selectAcross', () => {
     expect(store.get().shownIndex['hidden1']).toBeTypeOf('number')
   })
 })
+
+/* ── a conversation change leaves nothing of the last one behind ──── */
+
+describe('sessionChanged', () => {
+  it('empties the waterfall’s drawn set with the rest of the picture', async () => {
+    serve()
+    store.install()
+    unpitch()
+    store.sessionChanged('gui:a')
+    await store.refreshState()
+    const walk = store.load()
+    await flush()
+    await answer(page([entry('a', 0), entry('b', 1)], null))
+    await walk
+    expect(store.get().shown).toHaveLength(2)
+    store.sessionChanged('gui:b')
+    expect(store.get().shown).toEqual([])
+    expect(store.get().shownIndex).toEqual({})
+  })
+})

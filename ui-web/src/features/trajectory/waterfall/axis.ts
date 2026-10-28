@@ -150,3 +150,19 @@ export function barOf(axis: TimeAxis, viewport: Viewport, start: number, end: nu
   const right = (Math.min(b, viewport.to) - viewport.from) / span
   return { left, width: Math.max(0, right - left) }
 }
+
+/** The ruler's marks: a handful of positions across the viewport, labelled with
+ *  the real elapsed time at that point. Positions come from the viewport (so a
+ *  compressed gap never multiplies them) and labels from `unproject` (so a tick
+ *  over a gap still says how far into the session it is). */
+export function tickMarks(axis: TimeAxis, viewport: Viewport, count = 8): Array<{ left: number; time: number }> {
+  const span = viewport.to - viewport.from
+  if (!(span > 0)) return []
+  const marks: Array<{ left: number; time: number }> = []
+  for (let index = 0; index <= count; index++) {
+    const left = index / count
+    const at = viewport.from + span * left
+    marks.push({ left, time: axis.unproject(at) - axis.start })
+  }
+  return marks
+}

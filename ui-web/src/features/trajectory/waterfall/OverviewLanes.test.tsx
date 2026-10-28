@@ -47,3 +47,13 @@ it('places a stretch as a fraction of the viewport', () => {
   expect(left).toBeGreaterThan(0)
   expect(left + width).toBeLessThanOrEqual(100.0001)
 })
+
+it('draws an agent whose work is all outside any turn', () => {
+  const now = Date.parse('2026-10-28T10:05:00.000Z')
+  const waterfall = buildWaterfall([
+    E('bg', 0, { turn_span_id: null }),
+  ], now)
+  const axis = createAxis([{ start: now - 600_000, end: now }])
+  const { container } = render(<OverviewLanes waterfall={waterfall} axis={axis} viewport={{ from: 0, to: axis.length }} />)
+  expect(container.querySelectorAll('[data-lane] i').length).toBe(1)
+})
