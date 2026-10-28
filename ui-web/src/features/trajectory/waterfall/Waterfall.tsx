@@ -125,11 +125,26 @@ const spanClass = (kind: string): string =>
 
 function Ticks({ axis, view }: { axis: TimeAxis; view: Viewport }): JSX.Element {
   const { from, to } = view
-  const ticks = useMemo(() => tickMarks(axis, { from, to }), [axis, from, to])
+  /* How many labels the ruler can hold: one per ~150px, so they never collide
+     when the details pane narrows the column. */
+  const [width, setWidth] = useState(0)
+  const strip = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const el = strip.current
+    if (!el) return
+    const measure = (): void => setWidth(el.clientWidth)
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  const count = Math.max(3, Math.min(8, Math.floor((width > 0 ? width : 1200) / 150)))
+  const ticks = useMemo(() => tickMarks(axis, { from, to }, count), [axis, from, to, count])
   const span = to - from
   const gaps = span > 0 ? axis.gaps : []
   return (
-    <div className="trajectory-ruler" aria-hidden="true">
+    <div className="trajectory-ruler" aria-hidden="true" ref={strip}>
       {ticks.map((tick) => (
         <b key={tick.left} style={{ left: percent(tick.left) }}>{formatDuration(tick.time)}</b>
       ))}
