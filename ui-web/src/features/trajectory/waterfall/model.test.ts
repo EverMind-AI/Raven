@@ -1,4 +1,3 @@
-// @vitest-environment happy-dom
 /* Agents, their turns, and the rows inside them: the shape the waterfall
  * draws is the shape this module returns, so every rule about who owns a row
  * is a property stated here rather than a rule found in a component. */
