@@ -2943,6 +2943,144 @@ async def test_refreshing_a_preset_leaves_the_agent_table_alone(
     assert applied == []
 
 
+async def test_an_orphaned_menu_read_still_recomposes_the_agent_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """The read is shared and shielded, so it outlives every asker that timed out
+    or disconnected -- and the store still gets the menu it measured. The table
+    sync has to live in the read itself, or `subagents.list` and the composed
+    table disagree until the next apply."""
+    from types import SimpleNamespace
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {"name": "Helped", "kind": "acp", "command": "helper --acp", "enabled": True},
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+
+    release = asyncio.Event()
+
+    async def fake_record(cfg):
+        await release.wait()
+        return _menu_snapshot()
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    monkeypatch.setattr(menu_reads, "_MENU_REFRESH_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(menu_reads, "acp_snapshot_for", lambda cfg: None)
+    monkeypatch.setattr(
+        menu_reads,
+        "agent_meta",
+        lambda cfg, snapshot=None: SimpleNamespace(model_choices=(), effort_choices=()),
+    )
+    applied: list[list] = []
+
+    class _Loop:
+        def apply_agents(self, configs: list) -> None:
+            applied.append(configs)
+
+    for _ in range(2):
+        out = await subagents_refresh_models(
+            {"name": "Helped", "source": "config", "force": True}, agent_loop_factory=lambda: _Loop()
+        )
+        assert out["ok"] is False, "the asker is told the read did not answer within its budget"
+
+    key = ("config", "Helped")
+    task = menu_reads._MENU_TASKS[key]
+    assert applied == [], "both askers left without the read finishing"
+
+    release.set()
+    await task
+
+    assert applied, "the read that finished with no asker still syncs the table"
+    assert key in menu_reads._MENU_READ_AT
+
+
+async def test_a_menu_read_that_measured_the_same_capabilities_leaves_the_agent_table_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """The picker asks for this read every time it opens, and recomposing the
+    table replaces every backend instance. A read that reports exactly what the
+    row already held has nothing to sync -- rebuilding for it is what used to
+    drop a live session's model record."""
+    from dataclasses import replace
+
+    from raven.acp_client.capabilities import (
+        AcpEffortChoice,
+        AcpModelChoice,
+        CapabilitySnapshot,
+        SnapshotStore,
+        snapshot_fingerprint,
+    )
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {"name": "Helped", "kind": "acp", "command": "helper --acp", "enabled": True},
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+
+    cfg = menu_reads._find("Helped", "config")
+    recorded = CapabilitySnapshot(
+        agent="Helped",
+        fingerprint=snapshot_fingerprint(cfg),
+        status="ready",
+        detail="connected",
+        measured_at_ms=1,
+        model_choices=(AcpModelChoice(value="m1", name="One", group="Group"),),
+        effort_choices=(AcpEffortChoice(value="low", name="Low"),),
+        effort_option="effort",
+    )
+    SnapshotStore().record(recorded)
+
+    async def same_record(cfg):
+        return replace(recorded, measured_at_ms=2)
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", same_record)
+    applied: list[list] = []
+
+    class _Loop:
+        def apply_agents(self, configs: list) -> None:
+            applied.append(configs)
+
+    out = await subagents_refresh_models(
+        {"name": "Helped", "source": "config", "force": True}, agent_loop_factory=lambda: _Loop()
+    )
+    assert out["ok"] is True
+    assert applied == [], "the same capabilities, so there is nothing to recompose"
+
+    async def moved_record(cfg):
+        return replace(
+            recorded,
+            measured_at_ms=3,
+            model_choices=(AcpModelChoice(value="m2", name="Two", group="Group"),),
+        )
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", moved_record)
+    await subagents_refresh_models(
+        {"name": "Helped", "source": "config", "force": True}, agent_loop_factory=lambda: _Loop()
+    )
+    assert len(applied) == 1, "a menu that moved still reaches the composed table"
+
+
 async def test_the_menu_refresh_wrapper_carries_the_live_loop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
 ) -> None:

@@ -28,7 +28,7 @@ from unittest.mock import patch
 import pytest
 from loguru import logger
 
-from raven.acp_client.acp_agent import _SESSION_EFFORT, AcpAgentBackend, AcpEmptyTurnError, _session_effort_state
+from raven.acp_client.acp_agent import _SESSION_STATE, AcpAgentBackend, AcpEmptyTurnError, _session_state
 from raven.acp_client.acp_dialects import ToolCall
 from raven.acp_client.capabilities import (
     AcpEffortChoice,
@@ -83,7 +83,7 @@ async def _no_pooled_connections():
     the backend while the session continues -- held per connection, and it is
     cleared with the pool so no record outlives the test that made it.
     """
-    _SESSION_EFFORT.clear()
+    _SESSION_STATE.clear()
     yield
     await close_pool()
 
@@ -442,7 +442,7 @@ async def test_effort_refusals_and_missing_baselines_do_not_escape() -> None:
     backend._note_session_mode(client, None, {})
     backend._note_session_effort(client, None, {})
 
-    state = _session_effort_state(client, "s1")
+    state = _session_state(client, "s1")
     state.pushed = "high"
     await backend._set_effort(client, "s1", None, budget=1)
     client.error = AcpRemoteError("session/set_config_option", -32000, "no")
@@ -461,7 +461,7 @@ async def test_effort_refusals_and_missing_baselines_do_not_escape() -> None:
     mode_backend = AcpAgentBackend(name="b", command="unused", snapshot=mode_snapshot)
     mode_client = _Client()
     await mode_backend._set_effort(mode_client, "s2", None, budget=1)
-    mode_state = _session_effort_state(mode_client, "s2")
+    mode_state = _session_state(mode_client, "s2")
     mode_state.mode_pushed = "high"
     await mode_backend._set_effort(mode_client, "s2", None, budget=1)
     mode_state.mode_baseline = "low"
@@ -1625,12 +1625,58 @@ def test_a_session_response_names_its_effort_option_per_session_and_leaves_the_r
     renamed["configOptions"][-1].update(id="reasoning", currentValue="max")
     backend._note_session_effort(client, "s1", renamed)
 
-    state = _session_effort_state(client, "s1")
+    state = _session_state(client, "s1")
     assert (state.option, state.baseline) == ("reasoning", "default"), "the id follows; the baseline is the first"
 
 
 class _NamedClient:
     """A connection's client stand-in for the effort record, which is held per connection."""
+
+
+async def test_two_connections_holding_one_session_id_keep_separate_model_records() -> None:
+    """Sessions are numbered per agent process, so two pooled connections can
+    both hold ``s1``. A record shared between them let clearing on the second
+    send the first's baseline to a connection that never moved it."""
+    backend = AcpAgentBackend(name="x", command="unused")
+
+    class _Client:
+        def __init__(self) -> None:
+            self.frames: list[dict[str, Any]] = []
+
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            self.frames.append(params)
+            return {"configOptions": [{"id": "model", "category": "model", "currentValue": "prov/A", "options": []}]}
+
+    opened = {"configOptions": [{"id": "model", "category": "model", "currentValue": "prov/A", "options": []}]}
+    first, second = _Client(), _Client()
+    backend._note_session_model(first, "s1", opened)
+    backend._note_session_model(second, "s1", opened)
+
+    await backend._set_model(first, "s1", "prov/B", budget=1)
+    await backend._set_model(second, "s1", None, budget=1)
+
+    assert len(first.frames) == 1
+    assert second.frames == [], "this connection never moved the session, so it has nothing to restore"
+
+
+def test_restoring_a_measurement_leaves_a_newer_one_alone(tmp_path: Path) -> None:
+    """A refused write puts the previous capability row back. Stamped, like
+    ``revise``: a Test or a refresh that recorded in the meantime is newer
+    evidence and the rollback must not overwrite it."""
+    cfg = stub_config("restore")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    older = _snapshot("restore", cfg, can_resume=True)
+    newer = replace(older, measured_at_ms=2)
+    store.record(newer)
+
+    store.restore("restore", older, only_if_stamp=1)
+    assert store.load([cfg])["restore"].measured_at_ms == 2, "a newer measurement stands"
+
+    store.restore("restore", older, only_if_stamp=2)
+    assert store.load([cfg])["restore"].measured_at_ms == 1
+
+    store.restore("restore", None, only_if_stamp=1)
+    assert store.load([cfg]) == {}, "a measurement taken where none existed is dropped"
 
 
 async def test_a_model_switch_with_its_own_effort_menu_leaves_the_agent_table_alone() -> None:
@@ -1660,8 +1706,8 @@ async def test_a_model_switch_with_its_own_effort_menu_leaves_the_agent_table_al
 
     assert rebuilds == []
     assert backend._snapshot is stored
-    assert backend._model_pushed == {"s1": "prov/B"}
-    assert _session_effort_state(client, "s1").option == "effort", "the session still learns its option"
+    assert _session_state(client, "s1").model_pushed == "prov/B"
+    assert _session_state(client, "s1").option == "effort", "the session still learns its option"
 
 
 async def test_clearing_a_model_after_a_switch_whose_effort_menu_differs_restores_the_session(
@@ -8173,6 +8219,149 @@ async def test_clearing_a_model_puts_the_session_back_on_the_agents_own(tmp_path
 
     connection = await get_pool().acquire(
         name="clearmodel", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    frames = [ln for ln in connection.client.stderr_tail(4000).splitlines() if "set_config_option" in ln]
+    assert any("model=stub:model-b" in ln for ln in frames), "the switch"
+    # The stub opens every session on model-a, so that is the baseline to restore.
+    assert frames[-1].endswith("model=stub:model-a"), f"the restore, got {frames!r}"
+
+
+async def test_clearing_a_model_survives_a_backend_replacement(tmp_path: Path) -> None:
+    """A hot apply replaces every backend instance, and the picker's own menu
+    refresh triggers one. The model record has to outlive the replacement, as
+    the effort record already does -- otherwise the clear finds nothing pushed
+    and sends no restore, while every surface reports the agent's own."""
+    cfg = stub_config("rebuild")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+
+    def build() -> AcpAgentBackend:
+        return AcpAgentBackend(
+            name="rebuild",
+            command=cfg.command,
+            env=dict(cfg.env),
+            snapshot=_snapshot("rebuild", cfg, can_resume=True, can_load=True),
+            registry=registry,
+        )
+
+    first = build()
+    await first.run(
+        "ping",
+        task_id="t1",
+        workspace=tmp_path,
+        executor=None,
+        session_key="s",
+        instance="h1",
+        session_model="stub:model-b",
+    )
+    # What registry.apply does on a config change: a fresh backend over the same
+    # pooled connection, resuming the same session.
+    second = build()
+    await second.run("ping", task_id="t2", workspace=tmp_path, executor=None, session_key="s", instance="h1")
+
+    connection = await get_pool().acquire(
+        name="rebuild", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    frames = [ln for ln in connection.client.stderr_tail(4000).splitlines() if "set_config_option" in ln]
+    # The stub opens every session on model-a, so that is the baseline to restore.
+    assert frames[-1].endswith("model=stub:model-a"), f"the restore, got {frames!r}"
+
+
+async def test_a_picker_refresh_that_recomposes_the_table_keeps_the_model_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The order the UI produces: open a session, move its instance model, let the
+    picker's own refresh recompose the agent table, then clear.
+
+    The refresh is the hot-apply path the picker triggers, and a recompose
+    replaces every backend instance. The model record has to outlive that
+    replacement, or the clear finds nothing pushed and sends no restore while
+    every surface reports the agent's own."""
+    from raven.agent.subagent.registry import AgentRegistry
+    from raven.rpc.methods import subagents as subagents_mod
+
+    cfg = stub_config("pickerrefresh")
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {
+                            "name": cfg.name,
+                            "kind": "acp",
+                            "command": cfg.command,
+                            "env": dict(cfg.env),
+                            "readyTimeoutMs": cfg.ready_timeout_ms,
+                            "enabled": True,
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr(subagents_mod, "get_config_path", lambda: path)
+    instances = InstanceRegistry(path=tmp_path / "instances.json")
+    monkeypatch.setattr("raven.acp_client.acp_agent.get_registry", lambda: instances)
+
+    def snapshot_for(measured_cfg, *, measured_at_ms, can_steer, models):
+        return CapabilitySnapshot(
+            agent=measured_cfg.name,
+            fingerprint=snapshot_fingerprint(measured_cfg),
+            status="ready",
+            detail="",
+            measured_at_ms=measured_at_ms,
+            can_load=True,
+            can_steer=can_steer,
+            model_choices=tuple(AcpModelChoice(value=value, name=value, group="") for value in models),
+        )
+
+    # The first backend needs a resumable snapshot to commit the session it
+    # opens; the store starts empty in a real picker flow, which would make the
+    # later lookup miss for a reason that is not this finding.
+    SnapshotStore().record(snapshot_for(cfg, measured_at_ms=0, can_steer=False, models=("stub:model-a",)))
+
+    async def fake_record(measured_cfg):
+        # A capability the stored row does not have, so the read does recompose
+        # the table rather than taking the no-change path.
+        snapshot = snapshot_for(measured_cfg, measured_at_ms=1, can_steer=True, models=("stub:model-a",))
+        SnapshotStore().record(snapshot)
+        return snapshot
+
+    monkeypatch.setattr(subagents_mod, "record_capabilities", fake_record)
+
+    registry = AgentRegistry()
+    registry.apply([cfg])
+    first = registry.backend(cfg.name)
+    assert first is not None
+
+    # One handle, so the later turn resumes the SAME remote session.
+    await first.run(
+        "ping",
+        task_id="t1",
+        workspace=tmp_path,
+        executor=None,
+        session_key="s",
+        instance="h1",
+        session_model="stub:model-b",
+    )
+
+    class _Loop:
+        def apply_agents(self, configs: list) -> None:
+            registry.apply(configs)
+
+    out = await subagents_mod.subagents_refresh_models(
+        {"name": cfg.name, "source": "config", "force": True}, agent_loop_factory=lambda: _Loop()
+    )
+    assert out["ok"] is True
+    second = registry.backend(cfg.name)
+    assert second is not first, "the picker's refresh is the path that replaces the backend"
+
+    await second.run("ping", task_id="t2", workspace=tmp_path, executor=None, session_key="s", instance="h1")
+
+    connection = await get_pool().acquire(
+        name=cfg.name, command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
     )
     frames = [ln for ln in connection.client.stderr_tail(4000).splitlines() if "set_config_option" in ln]
     assert any("model=stub:model-b" in ln for ln in frames), "the switch"

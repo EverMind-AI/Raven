@@ -569,6 +569,37 @@ class SnapshotStore:
         except OSError as exc:  # noqa: BLE001 - see record()
             logger.warning("acp capability snapshot delete failed: {}", exc)
 
+    def restore(self, agent: str, previous: "CapabilitySnapshot | None", *, only_if_stamp: int) -> None:
+        """Put ``previous`` back for ``agent``, or drop its row, unless a newer measurement landed.
+
+        For a caller whose measurement was taken for a change that then
+        refused: the row keeps the value it had, so the store has to describe
+        that value again, or the next read draws the menu of a model the row is
+        not on. ``previous`` of ``None`` means nothing was recorded before this
+        call, so the row is removed rather than replaced.
+
+        ``only_if_stamp`` is the measurement being undone. A Test or a refresh
+        that recorded in the meantime is newer evidence about the same agent
+        and is left to stand, the same rule :meth:`revise` applies. Best
+        effort, like its siblings: a store that cannot be written is a cache
+        that stays as it was, never an error for the caller.
+        """
+
+        def merge(current: str | None) -> tuple[str | None, None]:
+            rows = self._parse(current)
+            stored = next((r for r in rows if r.get("agent") == agent), None)
+            if stored is None or int(stored.get("measuredAtMs") or 0) != only_if_stamp:
+                return None, None
+            rows = [r for r in rows if r.get("agent") != agent]
+            if previous is not None:
+                rows.append(previous.to_row())
+            return self._dump(rows), None
+
+        try:
+            atomic_update(self._path, merge)
+        except OSError as exc:  # noqa: BLE001 - see record()
+            logger.warning("acp capability snapshot restore failed: {}", exc)
+
 
 @dataclass
 class _Handshake:
