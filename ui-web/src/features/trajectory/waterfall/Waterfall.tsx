@@ -31,7 +31,7 @@ import type { TimeAxis, Viewport } from './axis'
 import type { Waterfall, WaterfallAgent, WaterfallRow, WaterfallTurn } from './model'
 import type { JSX, KeyboardEvent as ReactKeyboardEvent } from 'react'
 
-export const ROW_HEIGHT = 34
+export const ROW_HEIGHT = 30
 const OVERSCAN = 8
 const DEFAULT_ROWS = 20
 
@@ -406,7 +406,7 @@ export function Waterfall(): JSX.Element {
             <span className="trajectory-wf-tile" data-tone={row.agent % 4}>
               {agent.scope === null
                 ? <AgentMark own />
-                : presetOf(agent) === null ? <span className="trajectory-wf-glyph"><Icon icon={BotIcon} size={14} /></span> : <AgentMark preset={presetOf(agent)} />}
+                : presetOf(agent) === null ? <span className="trajectory-wf-glyph"><Icon icon={BotIcon} size={13} /></span> : <AgentMark preset={presetOf(agent)} />}
             </span>
             <span className="trajectory-wf-name">{agent.scope === null ? t('gui.trajectory.scope.main') : scopeTitle(agent.door)}</span>
             <span className="trajectory-wf-sub">{agentModel(agent)}</span>
@@ -456,7 +456,7 @@ export function Waterfall(): JSX.Element {
       <div key={row.key} className="trajectory-wf-row trajectory-wf-span" data-row="span" data-entry={entry.entry_id}
         style={style} onClick={() => pick(row.row!)}>
         <span className="trajectory-wf-label" style={{ paddingLeft: 44 + row.row!.depth * 20, ['--indent' as string]: `${44 + row.row!.depth * 20}px` }}>
-          <span className="trajectory-wf-ico"><Icon icon={kindIcon(entry.kind)} size={14} /></span>
+          <span className="trajectory-wf-ico"><Icon icon={kindIcon(entry.kind)} size={13} /></span>
           <span className="trajectory-wf-name">{entry.preview ?? entry.span_name}</span>
           <span className="trajectory-wf-sub">{entry.span_name}</span>
           {entry.entry_id === slowestId ? <span className="trajectory-wf-slow">{t('gui.trajectory.slowest')}</span> : null}
