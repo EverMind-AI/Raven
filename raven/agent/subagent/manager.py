@@ -1384,6 +1384,8 @@ class SubagentManager:
         session_key: str | None,
         agent: str | None,
         instance: str | None,
+        *,
+        tier: bool = True,
     ) -> str | None:
         """The mode one dispatch runs under: the instance's override, else the session's tier.
 
@@ -1404,12 +1406,16 @@ class SubagentManager:
         falls back to a fresh task or node id, which nobody could have set a mode
         against and which is not this conversation's name. The same gate its
         ``instance_state`` sibling takes, for the same reason.
+
+        ``tier=False`` answers the instance's override alone, ``None`` when it
+        has none: what :meth:`session_effort_for` ranks the row's effort
+        against. It asks here so the override is still read in one place.
         """
         if instance:
             override = self.instance_mode(session_key, agent or "", instance)
             if override:
                 return override
-        return self._tier_for(session_key, agent or "")
+        return self._tier_for(session_key, agent or "") if tier else None
 
     def _tier_for(self, session_key: str | None, agent: str) -> str | None:
         """The session's standing tier as this agent can take it, or ``None``.
@@ -1498,10 +1504,10 @@ class SubagentManager:
     def row_default_effort(self, agent: str) -> str | None:
         """The row's own reasoning effort, or ``None`` for the agent's default.
 
-        Unlike ``model`` there is no instance override yet: the effort is the
-        row's operator setting, through the agent's ``thought_level`` option,
-        and every lane resolves it here so a spawn, a direct chat and a DAG node
-        cannot disagree.
+        The row's operator setting, through the agent's ``thought_level`` option
+        or, on an agent whose mode menu is its effort menu, through its modes.
+        :meth:`session_effort_for` is what every lane resolves through, so a
+        spawn, a direct chat and a DAG node cannot disagree.
         """
         row = self.registry.get(agent or "")
         if row is None or row.kind != "acp":
@@ -1511,11 +1517,25 @@ class SubagentManager:
     def session_effort_for(self, session_key: str | None, agent: str | None, instance: str | None) -> str | None:
         """The reasoning effort one acp dispatch runs on, or ``None`` for the agent's own.
 
-        The effort counterpart to :meth:`session_model_for`. ``session_key`` and
-        ``instance`` are accepted for that method's reason and for the day an
-        instance override exists; today the row's setting is the whole answer.
+        The effort counterpart to :meth:`session_model_for`, and ranked the way
+        it and :meth:`resolve_mode` rank theirs: a person's standing override on
+        a named instance outranks the row. There is no effort override of its
+        own, but on an agent whose mode menu is its effort menu (Pi, Grok, Kimi,
+        DSH) an instance's mode override IS its effort, and the two would go out
+        on one channel with the row's value sent last. So the row's effort is
+        withheld there, and the override ``resolve_mode`` returned is the mode
+        the session stays on. Where effort is a ``thought_level`` option of its
+        own, the two channels are separate and both are sent.
+
+        ``instance``, not the dispatch's handle, for the reason ``resolve_mode``
+        takes it that way: a call naming no instance has no override to find.
         """
-        return self.row_default_effort(agent or "")
+        agent = agent or ""
+        if self.resolve_mode(session_key, agent, instance, tier=False):
+            row = self.registry.get(agent)
+            if row is not None and row.caps.effort_via_modes:
+                return None
+        return self.row_default_effort(agent)
 
     def set_instance_model(
         self,

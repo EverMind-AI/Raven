@@ -2595,7 +2595,10 @@ class AcpAgentBackend:
         ``session/set_config_option`` with the agent's own option id. An agent
         whose mode menu *is* its effort menu (Pi, Grok, Kimi, DSH) is set through
         ``session/set_mode``; the row's effort then wins over the run-intensity
-        tier sent just before it, which is what a per-row setting means.
+        tier sent just before it, which is what a per-row setting means. It does
+        not win over a person's mode override on the instance: the manager
+        resolves the effort away for that case (``session_effort_for``), so
+        ``effort`` arrives here empty and the override is the mode that stands.
 
         Cleared means sending the value the session opened on again -- the
         config option has no unset, and the mode menu has no "agent default" --
@@ -2669,8 +2672,9 @@ class AcpAgentBackend:
         """The row's effort for an agent whose mode menu is its effort menu.
 
         Sent after :meth:`_set_mode`, so a per-row effort wins over the session
-        tier; a clear restores the tier that was already sent, or the mode the
-        session opened on when there is no tier. Never fatal, like its siblings.
+        tier; a clear restores the mode already sent -- the tier, or an instance's
+        override -- or the mode the session opened on when there is none. Never
+        fatal, like its siblings.
         """
         state = _session_effort_state(self.name, session_id)
         pushed = state.mode_pushed

@@ -1173,11 +1173,11 @@ export interface SubagentRow {
    */
   model_source?: 'raven' | 'agent' | 'fixed';
   /**
-   * The reasoning effort this row sends, or null to use the agent's own. A value from effort_choices; set through the agent's thought_level config option, separately from model.
+   * The reasoning effort this row sends, or null to use the agent's own. A value from effort_choices; set through the agent's thought_level config option, separately from model, or as a session mode on an agent whose modes are its effort menu.
    */
   effort?: string | null;
   /**
-   * The reasoning efforts this row's agent advertised in its thought_level option, empty when it advertised none. An agent that packs effort into model ids instead has no such menu.
+   * The reasoning efforts this row's agent offers on the row's own model: its thought_level option, or its mode menu when every mode is a reasoning level. Empty when it offers neither. An agent that packs effort into model ids instead has no such menu.
    */
   effort_choices?: {
     /**
@@ -4331,7 +4331,7 @@ export interface SubagentsUpdateParams {
    */
   clear_model?: boolean;
   /**
-   * A reasoning effort from the row's effort_choices, sent through the agent's thought_level option on every turn. An agent with no such option refuses it.
+   * A reasoning effort from the row's effort_choices, sent on every turn through the agent's thought_level option, or as a session mode on an agent whose modes are its effort menu, where an instance's own mode override takes its place. Refused when the row's menu does not offer it.
    */
   effort?: string;
   /**
