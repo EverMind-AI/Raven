@@ -305,6 +305,11 @@ export function Waterfall(): JSX.Element {
   const links = useMemo(() => crossLinks(rows, waterfall), [rows, waterfall])
   const { first, last } = windowOf(scrollTop, height, rows.length)
 
+  /* What the reveal effect has already handled: one (selection, door) pair.
+     Without this the effect would re-open a turn the reader just folded, since
+     everything it depends on changes on that click. */
+  const revealed = useRef<{ id: string | null; tick: number }>({ id: null, tick: -1 })
+
   /* A selection made elsewhere -- a link in the pane, a tab's locate button --
      opens the turn that holds the row and brings the row into view, so a jump
      lands somewhere the reader can see. */
@@ -312,6 +317,7 @@ export function Waterfall(): JSX.Element {
   const selections = store.get().selections
   useEffect(() => {
     if (selectedId === null) return
+    if (revealed.current.id === selectedId && revealed.current.tick === selections) return
     let owner: { agent: number; turn: string } | null = null
     for (const [index, agent] of waterfall.agents.entries()) {
       for (const turn of agent.turns) {
@@ -338,6 +344,7 @@ export function Waterfall(): JSX.Element {
     if (at < 0 || scroller === null) return
     const top = at * ROW_HEIGHT
     if (top < scroller.scrollTop || top + ROW_HEIGHT > scroller.scrollTop + scroller.clientHeight) scroller.scrollTop = top
+    revealed.current = { id: selectedId, tick: selections }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, selections, rows, open, collapsed])
 
