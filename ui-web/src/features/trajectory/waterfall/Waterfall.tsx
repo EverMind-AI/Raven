@@ -19,7 +19,7 @@ import { t } from '../../../i18n/t'
 import { formatDuration } from '../../../lib/duration'
 import * as lang from '../../../state/lang'
 import * as details from '../detailStore'
-import { openFromEntry, scopeTitle } from '../scopes'
+import { scopeTitle } from '../scopes'
 import * as store from '../store'
 import { AxisIndex, barOf, clampViewport, tickMarks, zoomViewport } from './axis'
 import { WaterfallIndex } from './incremental'
@@ -28,6 +28,7 @@ import { agentKey, entryEnd, entryStart, isLive, turnKey } from './model'
 import { OverviewLanes } from './OverviewLanes'
 import { turnSegments } from './segments'
 
+import type { TrajectoryEntry } from '../types'
 import type { TimeAxis, Viewport } from './axis'
 import type { Waterfall, WaterfallAgent, WaterfallRow, WaterfallTurn } from './model'
 import type { JSX, KeyboardEvent as ReactKeyboardEvent } from 'react'
@@ -384,7 +385,7 @@ export function Waterfall(): JSX.Element {
     if (entry === undefined) return
     event.preventDefault()
     if (entry.opens_subagent_scope !== null && entry.opens_subagent_scope !== undefined) {
-      openFromEntry(entry)
+      locate(entry)
       return
     }
     for (const [index, agent] of waterfall.agents.entries()) {
@@ -395,6 +396,16 @@ export function Waterfall(): JSX.Element {
         }
       }
     }
+  }
+
+  /* The door's arrow brings the worker's own rows into view: the same jump the
+     tab strip used to make, without a strip that no longer changes the page. */
+  const locate = (entry: TrajectoryEntry): void => {
+    const scope = entry.opens_subagent_scope
+    if (scope === null || scope === undefined) return
+    const agent = waterfall.agents.find((candidate) => candidate.scope === scope)
+    const first = agent?.turns[0]?.rows[0] ?? agent?.loose[0]
+    if (first !== undefined) store.selectAcross(first.entry.entry_id, { source: 'link' })
   }
 
   const pick = (row: WaterfallRow): void => {
@@ -516,7 +527,7 @@ export function Waterfall(): JSX.Element {
           {entry.opens_subagent_scope === null || entry.opens_subagent_scope === undefined ? null : (
             <button className="trajectory-scope-opens" aria-label={t('gui.trajectory.scope.opens')}
               title={t('gui.trajectory.scope.opens')}
-              onClick={(event) => { event.stopPropagation(); openFromEntry(entry) }}>{'\u2197'}</button>
+              onClick={(event) => { event.stopPropagation(); locate(entry) }}>{'\u2197'}</button>
           )}
         </span>
       </div>,

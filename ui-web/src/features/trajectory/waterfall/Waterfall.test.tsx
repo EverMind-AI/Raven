@@ -317,3 +317,14 @@ it('scrolls the list for a wheel anywhere over the island, not just on the list'
   box.dispatchEvent(overList)
   expect(overList.defaultPrevented).toBe(false)
 })
+
+it('sends the door’s arrow to the worker’s own first row', async () => {
+  await draw([
+    E('door', 0, { kind: 'tool.output', opens_subagent_scope: 't:sub', meta: { agent: 'coder' } }),
+    E('s1', 1, { subagent_scope: 't:sub', turn_span_id: 'S1' }),
+  ])
+  fireEvent.click(document.querySelector('[data-row="turn"]')!)
+  const arrow = document.querySelector('[data-entry="door"] .trajectory-scope-opens') as HTMLElement
+  act(() => { fireEvent.click(arrow) })
+  expect(store.get().selectedId).toBe('s1')
+})

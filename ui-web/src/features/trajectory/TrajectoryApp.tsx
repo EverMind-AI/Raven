@@ -17,7 +17,6 @@ import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
 import { Details, Grip } from './Details'
 import * as details from './detailStore'
-import { ScopeInfo, ScopeTabs } from './ScopeTabs'
 import * as store from './store'
 import { Waterfall, mib } from './waterfall/Waterfall'
 import './styles.css'
@@ -79,8 +78,6 @@ export function TrajectoryApp(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
     <div className="trajectory-root">
-      <ScopeTabs />
-      <ScopeInfo />
       <Status />
       <Body />
     </div>
