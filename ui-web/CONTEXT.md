@@ -363,7 +363,7 @@ The kind narrows each provider's column, never the provider list.
 **Gateway provider**:
 A provider that resells other vendors' models under `vendor/model` ids --
 `ProviderSpec.is_gateway` in `raven/providers/registry.py`, `gateway` on a
-`model.options` row. Twenty-two of the fifty-six.
+`model.options` row. Twenty-three of the fifty-seven.
 _Avoid_: "gateway" alone, which in this document is the page's one data entry
 point above.
 

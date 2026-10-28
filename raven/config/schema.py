@@ -661,6 +661,7 @@ class ProvidersConfig(Base):
     aionly: ProviderConfig = Field(default_factory=ProviderConfig)
     radeon_cloud: ProviderConfig = Field(default_factory=ProviderConfig)
     opper: ProviderConfig = Field(default_factory=ProviderConfig)
+    runcrate: ProviderConfig = Field(default_factory=ProviderConfig)
     # Self-hosted servers, reached by address like the three above.
     gpustack: ProviderConfig = Field(default_factory=ProviderConfig)
     ovms: ProviderConfig = Field(default_factory=ProviderConfig)  # OpenVINO Model Server

@@ -23,7 +23,7 @@ const BRANDED = [
   'huggingface', 'poe', 'xiaomi_mimo', 'baichuan', 'baidu_cloud', 'stepfun',
   'longcat', 'modelscope', 'qiniu', 'bigmodel',
   'ai302', 'burncloud', 'ppio', 'sophnet', 'tokenhub', 'radeon_cloud',
-  'opper',
+  'opper', 'runcrate',
 ]
 
 /* Every provider carries a mark now, so no provider is left to pin here. The
