@@ -495,3 +495,10 @@ html[data-theme="dark"] {
   background: var(--trajectory-c-llm-output-fg) }
 .trajectory-wf-kind-tool-output, .trajectory-wf-kind-tool-input { background: var(--trajectory-c-tool-output-fg) }
 .trajectory-wf-kind-user-input { background: var(--trajectory-c-user-input-fg) }
+
+.trajectory-ov { padding: 6px 8px 4px 0; border-bottom: 1px solid var(--line); flex: none }
+.trajectory-ov-lane { display: grid; grid-template-columns: 188px minmax(0, 1fr); gap: 8px; align-items: center; height: 13px }
+.trajectory-ov-name { font: 9.5px/1 var(--mono); color: var(--faint); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.trajectory-ov-track { position: relative; height: 6px }
+.trajectory-ov-track i { position: absolute; top: 0; height: 6px; min-width: 2px; border-radius: 2px;
+  background: var(--trajectory-c-llm-output-bg) }
