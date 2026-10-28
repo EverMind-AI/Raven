@@ -726,3 +726,10 @@ html[data-theme="dark"] {
    label, and `overflow: hidden` was cutting it to the row's height and
    leaving a gap between every two rows. The name truncates on its own. */
 .trajectory-wf-label { overflow: visible }
+
+/* One size up: a 22px plate with a 15px drawing (68%), which still clears the
+   30px row. */
+.trajectory-wf-tile, .trajectory-wf-ico { width: 22px; height: 22px }
+.trajectory-wf-ico { border-radius: 7px }
+.trajectory-wf-ico svg, .trajectory-wf-glyph svg { width: 15px; height: 15px }
+.trajectory-wf-tile img { width: 17px; height: 17px }

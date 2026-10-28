@@ -407,7 +407,7 @@ export function Waterfall(): JSX.Element {
             <span className="trajectory-wf-tile" data-tone={row.agent % 4}>
               {agent.scope === null
                 ? <AgentMark own />
-                : presetOf(agent) === null ? <span className="trajectory-wf-glyph"><Icon icon={BotIcon} size={13} /></span> : <AgentMark preset={presetOf(agent)} />}
+                : presetOf(agent) === null ? <span className="trajectory-wf-glyph"><Icon icon={BotIcon} size={15} /></span> : <AgentMark preset={presetOf(agent)} />}
             </span>
             <span className="trajectory-wf-name">{agent.scope === null ? t('gui.trajectory.scope.main') : scopeTitle(agent.door)}</span>
             <span className="trajectory-wf-sub">{agentModel(agent)}</span>
@@ -461,7 +461,7 @@ export function Waterfall(): JSX.Element {
           {Array.from({ length: row.row!.depth + 1 }, (_, step) => (
             <span key={`guide-${step}`} className="trajectory-wf-guide" style={{ left: 30 + step * 20 }} />
           ))}
-          <span className="trajectory-wf-ico"><Icon icon={kindIcon(entry.kind)} size={13} /></span>
+          <span className="trajectory-wf-ico"><Icon icon={kindIcon(entry.kind)} size={15} /></span>
           <span className="trajectory-wf-name">{entry.preview ?? entry.span_name}</span>
           <span className="trajectory-wf-sub">{entry.span_name}</span>
           {entry.entry_id === slowestId ? <span className="trajectory-wf-slow">{t('gui.trajectory.slowest')}</span> : null}
