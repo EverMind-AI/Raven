@@ -12657,6 +12657,38 @@
       "en": "Agents",
       "zh": "智能体"
     },
+    "gui.trajectory.stat.duration": {
+      "en": "DURATION",
+      "zh": "时长"
+    },
+    "gui.trajectory.stat.agents": {
+      "en": "AGENTS",
+      "zh": "智能体"
+    },
+    "gui.trajectory.stat.turns": {
+      "en": "TURNS",
+      "zh": "轮次"
+    },
+    "gui.trajectory.stat.llm": {
+      "en": "LLM CALLS",
+      "zh": "模型调用"
+    },
+    "gui.trajectory.stat.tool": {
+      "en": "TOOL CALLS",
+      "zh": "工具调用"
+    },
+    "gui.trajectory.stat.errors": {
+      "en": "ERRORS",
+      "zh": "错误"
+    },
+    "gui.trajectory.span": {
+      "en": "SPAN",
+      "zh": "阶段"
+    },
+    "gui.trajectory.slowest": {
+      "en": "slowest",
+      "zh": "最慢"
+    },
     "gui.trajectory.agent.turns": {
       "en": "{n} turns",
       "zh": "{n} 轮"
