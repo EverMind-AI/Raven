@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
 from collections.abc import AsyncIterator
 from typing import Any
@@ -630,10 +632,13 @@ async def test_a_single_call_that_fails_on_the_host_raises_the_same_class_here(s
 
 
 @pytest.mark.skipif(not hasattr(asyncio, "start_unix_server"), reason="the bare host listens on a Unix socket")
-async def test_a_stream_the_host_ends_oddly_or_drops_is_a_failure_here(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
-) -> None:
-    """A host speaking out of turn, played by a bare socket server."""
+async def test_a_stream_the_host_ends_oddly_or_drops_is_a_failure_here(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A host speaking out of turn, played by a bare socket server.
+
+    The socket goes in a short directory of its own, as the relay server puts
+    its own: a socket path is capped (104 bytes on macOS), and a test's
+    ``tmp_path`` there is already longer.
+    """
     replies = iter([{"what": 1}, None])
 
     async def host(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -643,8 +648,9 @@ async def test_a_stream_the_host_ends_oddly_or_drops_is_a_failure_here(
             await relay_wire.write_frame(writer, reply)
         writer.close()
 
-    path = tmp_path / "odd.sock"
-    server = await asyncio.start_unix_server(host, path=str(path))
+    folder = tempfile.mkdtemp(prefix="raven-relay-")
+    path = os.path.join(folder, "odd.sock")
+    server = await asyncio.start_unix_server(host, path=path)
     monkeypatch.setenv(relay.RELAY_ENV, f"unix:{path}")
     monkeypatch.setenv(relay.RELAY_TOKEN_ENV, "t")
     relay._reset_for_tests()
@@ -658,6 +664,7 @@ async def test_a_stream_the_host_ends_oddly_or_drops_is_a_failure_here(
                 pass
     finally:
         server.close()
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 async def test_a_stream_without_a_reachable_host_runs_here(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
