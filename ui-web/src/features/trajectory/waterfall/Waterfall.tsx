@@ -12,6 +12,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 
+import { AgentMark, agentMarkPath } from '../../../components/AgentMark'
 import { t } from '../../../i18n/t'
 import { formatDuration } from '../../../lib/duration'
 import * as lang from '../../../state/lang'
@@ -89,6 +90,29 @@ function agentModel(agent: WaterfallAgent): string | null {
       if (typeof model === 'string' && model !== '') return model
     }
   }
+  return null
+}
+
+/** The preset whose brand mark a door's `meta.agent` names, if any. ACP runs
+ *  spell the agent as the vendor does ('claude-code', 'Codex'), so the word is
+ *  normalised once and then held to the marks the page already ships. */
+const AGENT_ALIASES: Record<string, string> = {
+  claude: 'claude_code', claude_code: 'claude_code', claudecode: 'claude_code',
+  codex: 'codex', hermes: 'hermes', hermes_agent: 'hermes', openclaw: 'openclaw',
+  opencode: 'opencode', pi: 'pi', qwen: 'qwen_code', qwen_code: 'qwen_code',
+  kimi: 'kimi_code', kimi_code: 'kimi_code', grok: 'grok', copilot: 'github_copilot',
+  github_copilot: 'github_copilot', qoder: 'qoder', codebuddy: 'codebuddy',
+  antigravity: 'mirasim_antigravity', dsh: 'mirasim_dsh', zcode: 'mirasim_zcode',
+  mirothinker: 'mirothinker',
+}
+
+function presetOf(agent: WaterfallAgent): string | null {
+  const meta = agent.door?.meta ?? {}
+  const raw = typeof meta.agent === 'string' ? meta.agent : typeof meta.instance === 'string' ? meta.instance : ''
+  const word = raw.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
+  if (word === '') return null
+  const direct = AGENT_ALIASES[word] ?? AGENT_ALIASES[word.split('_')[0] ?? '']
+  if (direct !== undefined && agentMarkPath(direct) !== null) return direct
   return null
 }
 
@@ -376,7 +400,11 @@ export function Waterfall(): JSX.Element {
           onClick={() => toggleAgent(agentKey(agent.scope))}>
           <span className="trajectory-wf-label" style={{ paddingLeft: 4 }}>
             <span className="trajectory-wf-chev">{collapsed.has(agentKey(agent.scope)) ? '\u25b8' : '\u25be'}</span>
-            <span className="trajectory-wf-tile" data-tone={row.agent % 4} />
+            <span className="trajectory-wf-tile" data-tone={row.agent % 4}>
+              {agent.scope === null
+                ? <AgentMark own />
+                : presetOf(agent) === null ? <span className="trajectory-wf-glyph">{'\u2726'}</span> : <AgentMark preset={presetOf(agent)} />}
+            </span>
             <span className="trajectory-wf-name">{agent.scope === null ? t('gui.trajectory.scope.main') : scopeTitle(agent.door)}</span>
             <span className="trajectory-wf-sub">{agentModel(agent)}</span>
           </span>
