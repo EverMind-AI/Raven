@@ -1733,7 +1733,9 @@ async def subagents_refresh_models(params: dict, *, agent_loop_factory: "AgentLo
         task.add_done_callback(lambda done, key=key: _forget_menu_task(key, done))
 
     try:
-        snapshot = await asyncio.wait_for(task, timeout=_MENU_REFRESH_TIMEOUT_S)
+        # Shielded: the read is shared, so one asker's budget running out, or its
+        # connection closing, must not cancel it under every asker joined to it.
+        snapshot = await asyncio.wait_for(asyncio.shield(task), timeout=_MENU_REFRESH_TIMEOUT_S)
     except TimeoutError:
         return {
             "ok": False,
