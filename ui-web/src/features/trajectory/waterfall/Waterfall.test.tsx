@@ -244,8 +244,10 @@ describe('the page’s controls', () => {
     act(() => { box.focus() })
     act(() => { fireEvent.keyDown(box, { key: 'ArrowDown' }) })
     expect(store.get().selectedId).not.toBeNull()
-    act(() => { fireEvent.keyDown(box, { key: 'Enter' }) })
+    /* Selecting a row brings its turn open; Enter then folds it back. */
     expect(document.querySelector('[data-row="turn"][data-open]')).not.toBeNull()
+    act(() => { fireEvent.keyDown(box, { key: 'Enter' }) })
+    expect(document.querySelector('[data-row="turn"][data-open]')).toBeNull()
   })
 
   it('zooms toward the pointer on the wheel and returns on a double click', async () => {
@@ -327,4 +329,15 @@ it('sends the door’s arrow to the worker’s own first row', async () => {
   const arrow = document.querySelector('[data-entry="door"] .trajectory-scope-opens') as HTMLElement
   act(() => { fireEvent.click(arrow) })
   expect(store.get().selectedId).toBe('s1')
+})
+
+it('leaves a turn folded when the reader folds it, even with the selection inside', async () => {
+  await draw([E('m1', 0), E('m2', 1)])
+  fireEvent.click(document.querySelector('[data-row="turn"]')!)
+  const span = document.querySelector('[data-entry="m2"]') as HTMLElement
+  act(() => { fireEvent.click(span) })
+  expect(store.get().selectedId).toBe('m2')
+  expect(document.querySelectorAll('[data-row="span"]')).toHaveLength(2)
+  act(() => { fireEvent.click(document.querySelector('[data-row="turn"]')!) })
+  expect(document.querySelectorAll('[data-row="span"]')).toHaveLength(0)
 })
