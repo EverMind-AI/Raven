@@ -7,6 +7,7 @@ import { t } from '../../../i18n/t'
 import { openPicker } from '../../model/source'
 import { statedTags } from '../../model/types'
 import { Card, Row, Rov, Seg, Stepper } from '../Fields'
+import { dig } from '../source'
 import * as store from '../store'
 
 import type { Kind, Offer } from '../../model/types'
@@ -72,9 +73,6 @@ export const roleName = (r: Role): string => t(NAME[r.id])
 const MEDIA_PROVIDER = 'openrouter'
 const CTX_MIN = 1024
 const ITER_RANGE: [number, number] = [1, 200]
-
-const dig = (raw: Record<string, unknown>, path: string): unknown =>
-  path.split('.').reduce<unknown>((o, k) => (o && typeof o === 'object' ? (o as Record<string, unknown>)[k] : undefined), raw)
 
 export const disabledTools = (raw: Record<string, unknown>): string[] => (dig(raw, 'tools.disabledTools') as string[] | undefined) || []
 

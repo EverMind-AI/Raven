@@ -144,9 +144,10 @@ export type EverosCloudInfo = ResultOf<'settings.everosCloud'>
 export type OauthStart = ResultOf<'model.oauth_login'>
 
 /* Everything the dialog draws from, in one read. `raw` is the config
-   settings.get returned (camelCased keys, one level per dot). The skill and
-   MCP rows are `ext.list`'s own, untouched, because the two pages read fields
-   the inventory's row shapes drop (`always`, `auth`, `credentialed`). */
+   settings.get returned, as the file writes it (one level per dot; a
+   top-level block may be camelCase or snake_case). The skill and MCP rows are
+   `ext.list`'s own, untouched, because the two pages read fields the
+   inventory's row shapes drop (`always`, `auth`, `credentialed`). */
 export interface SettingsSnapshot {
   raw: Record<string, unknown>
   configPath: string

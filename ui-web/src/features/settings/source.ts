@@ -36,9 +36,10 @@ import type { ParamsOf, ResultOf } from '../../rpc/generated'
 import type { BannerSource } from '../../state/banner'
 import type { AuthField, ProviderOp, SettingsSnapshot, SettingsSource, SkillDetail } from './types'
 
-/* The config settings.get returned. Keys arrive camelCased
-   (agents.defaults.reasoningEffort), one level per dot. Handed to the island
-   inside its snapshot, which is the only reader. */
+/* The config settings.get returned, as the file writes it: a top-level block
+   may sit in either spelling (`skillForge` or `skill_forge`), and `dig` below
+   resolves both. One level per dot. Handed to the island inside its snapshot,
+   which is the only reader. */
 let RAW: Record<string, unknown> = {}
 
 let configPathLive = '~/.raven/config.json'
@@ -406,8 +407,21 @@ export const FETCH_KEYLESS = new Set(['jina', 'keenable'])
 /* Keenable searches without a key; every other search vendor needs one. */
 export const SEARCH_KEYLESS = new Set(['keenable'])
 
-const dig = (raw: Record<string, unknown>, path: string): unknown =>
-  path.split('.').reduce<unknown>((o, k) => (o && typeof o === 'object' ? (o as Record<string, unknown>)[k] : undefined), raw)
+/* The snake twin pydantic's alias generator accepts for a camelCase name. */
+const toSnake = (name: string): string => name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)
+
+/* Reads a dotted path. The first segment resolves both top-level spellings the
+   loader accepts: a config file may carry `skillForge` or `skill_forge`, the
+   loader drops a null block and reads the first non-null spelling, and the
+   writer keeps the one already there -- so a read takes the camel spelling
+   unless it is null, then the snake one. Below the top level the path matches
+   the key exactly. */
+export const dig = (raw: Record<string, unknown>, path: string): unknown => {
+  const [head, ...rest] = path.split('.')
+  let node: unknown = raw[head!] ?? raw[toSnake(head!)]
+  for (const key of rest) node = node && typeof node === 'object' ? (node as Record<string, unknown>)[key] : undefined
+  return node
+}
 export const str = (raw: Record<string, unknown>, path: string): string => {
   const v = dig(raw, path)
   return typeof v === 'string' ? v : ''

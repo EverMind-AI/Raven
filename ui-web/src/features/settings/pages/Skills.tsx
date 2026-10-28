@@ -6,14 +6,23 @@ import { md } from '../../../lib/prose'
 import * as confirm from '../../../state/confirm'
 import { Card, Crumb, Empty, GLYPH, Grow, IconBtn, Row, Search, Switch, Tag } from '../Fields'
 import { SkillDetailWait } from '../Skeletons'
+import { dig } from '../source'
 import * as store from '../store'
 
 import type { SkillDetail, SkillRow } from '../types'
 import type { JSX } from 'react'
 
+interface ForgeBlock {
+  blocklist?: string[]
+  router?: { hub?: { endpoint?: unknown; enabled?: unknown } }
+}
+
+/* The block as the file spells it: `dig` reads `skillForge` or `skill_forge`. */
+const forge = (raw: Record<string, unknown>): ForgeBlock | undefined => dig(raw, 'skillForge') as ForgeBlock | undefined
+
 export function blocklist(raw: Record<string, unknown>): string[] {
-  const forge = raw.skillForge as { blocklist?: string[] } | undefined
-  return (forge && forge.blocklist) || []
+  const block = forge(raw)
+  return (block && block.blocklist) || []
 }
 
 /* Hub-installed skills live under the workspace whichever route put them
@@ -29,8 +38,7 @@ const HUB_SWITCH = 'skillForge.router.hub.enabled'
 /* The switch's state is the effective source, not the raw flag: an endpoint
    is required, and an explicit enabled:false keeps a stored URL switched off. */
 function hubOn(raw: Record<string, unknown>): boolean {
-  const forge = raw.skillForge as { router?: { hub?: { endpoint?: unknown; enabled?: unknown } } } | undefined
-  const hub = forge?.router?.hub
+  const hub = forge(raw)?.router?.hub
   return !!hub && typeof hub.endpoint === 'string' && !!hub.endpoint && hub.enabled !== false
 }
 

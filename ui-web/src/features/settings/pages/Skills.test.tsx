@@ -8,7 +8,7 @@ import { resetSources, setSources } from '../../../state/sources'
 import { install, modelSource, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
 import { askInChat } from '../../composer/startTaskWith'
 import * as store from '../store'
-import { stripFrontmatter } from './Skills'
+import { blocklist, stripFrontmatter } from './Skills'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -75,6 +75,53 @@ describe('skills page', () => {
     install(off)
     await mount('skills')
     expect(screen.getByRole('switch', { name: 'gui.settings.skills.hub_title' }).getAttribute('aria-checked')).toBe('false')
+  })
+
+  it('reads the Skill Hub switch from a snake_case skill_forge block', async () => {
+    /* settings.get returns the file as written, and both spellings load, so
+       the harness's camel block has to go or it answers for the snake one. */
+    const on = snap()
+    delete on.raw.skillForge
+    on.raw.skill_forge = { router: { hub: { endpoint: 'https://hub.internal.test' } } }
+    const { calls } = install(on)
+    await mount('skills')
+    const hub = screen.getByRole('switch', { name: 'gui.settings.skills.hub_title' })
+    expect(hub.getAttribute('aria-checked')).toBe('true')
+    /* Read as off, the switch sends true on every click and the page can never
+       turn the source off. */
+    await act(async () => { fireEvent.click(hub) })
+    expect(calls).toEqual([['set', { key: 'skillForge.router.hub.enabled', value: false }]])
+    cleanup()
+    store._resetForTests()
+
+    const off = snap()
+    delete off.raw.skillForge
+    off.raw.skill_forge = { router: { hub: { endpoint: 'https://hub.internal.test', enabled: false } } }
+    install(off)
+    await mount('skills')
+    expect(screen.getByRole('switch', { name: 'gui.settings.skills.hub_title' }).getAttribute('aria-checked')).toBe('false')
+  })
+
+  it('reads the blocklist from a snake_case skill_forge block', async () => {
+    /* A null camel block is dropped by the loader, so the snake one is what
+       runs; the page has to read the first non-null spelling, not truthiness. */
+    expect(blocklist({ skillForge: null, skill_forge: { blocklist: ['git-flow'] } })).toEqual(['git-flow'])
+    const data = snap()
+    delete data.raw.skillForge
+    data.raw.skill_forge = { blocklist: ['git-flow', 'notes'] }
+    expect(blocklist(data.raw)).toEqual(['git-flow', 'notes'])
+    const { calls } = install(data)
+    await mount('skills')
+    const cards = [...document.querySelectorAll('.settings-card .settings-t')].map((el) => el.textContent)
+    expect(cards).toEqual([
+      'gui.settings.skills.hub_card',
+      'gui.settings.skills.builtin · gui.settings.skills.on_of {"on":0,"total":1}',
+      'gui.settings.skills.workspace · gui.settings.skills.on_of {"on":1,"total":2}',
+    ])
+    expect(screen.getByRole('switch', { name: 'git-flow' }).getAttribute('aria-checked')).toBe('false')
+    /* The write carries the list the page read, not [] beside the real one. */
+    await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'git-flow' })) })
+    expect(calls).toEqual([['set', { key: 'skillForge.blocklist', value: ['notes'] }]])
   })
 
   it('the detail inspects the skill, renders its body, lists its files and opens one on the host', async () => {

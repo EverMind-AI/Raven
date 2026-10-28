@@ -99,6 +99,28 @@ describe('model roles', () => {
     ])
   })
 
+  it('reads a keyed role from whichever spelling the config file carries', async () => {
+    const camel = snap()
+    ;(camel.raw.skillForge as Record<string, unknown>).llmGateModel = 'claude-haiku-4-5'
+    ;(camel.raw.skillForge as Record<string, unknown>).llmGateProvider = 'anthropic'
+    expect(roleValue(role('gate'), camel)).toEqual({ model: 'claude-haiku-4-5', provider: 'anthropic' })
+
+    /* settings.get returns the file as written, so the harness's camel block
+       has to go or it answers for the snake one. */
+    const snake = snap()
+    delete snake.raw.skillForge
+    snake.raw.skill_forge = { llmGateModel: 'claude-haiku-4-5', llmGateProvider: 'anthropic' }
+    expect(roleValue(role('gate'), snake)).toEqual({ model: 'claude-haiku-4-5', provider: 'anthropic' })
+
+    const titled = snap()
+    titled.raw.session_title = { model: 'claude-sonnet-4-5', provider: 'anthropic' }
+    expect(roleValue(role('title'), titled)).toEqual({ model: 'claude-sonnet-4-5', provider: 'anthropic' })
+
+    install(snake)
+    await mount('model')
+    expect(pill('gui.settings.roles.gate').textContent).toContain('claude-haiku-4-5')
+  })
+
   it('the chat role writes through pickModel and reloads', async () => {
     const { calls } = install()
     await mount('model')
