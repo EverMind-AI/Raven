@@ -793,6 +793,14 @@ class SilenceGate:
         if self._hold_all:
             self._held.append(delta)
             return
+        if delta.isspace() and all(
+            reading.block is None and not reading.tag and reading.body in ("", SILENT_MARKER)
+            for reading in self._readings
+        ):
+            # Whitespace before the marker or after the whole of it moves no reading, and a long hold
+            # is only ever that, so a run of blank deltas is kept without reading it a character at a time.
+            self._held.append(delta)
+            return
         start = 0
         for index, char in enumerate(delta):
             steps = [(reading, reading.read(char)) for reading in self._readings]

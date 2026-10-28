@@ -4157,6 +4157,35 @@ async def test_a_long_hold_costs_each_delta_only_its_own_length():
 
 
 @pytest.mark.asyncio
+async def test_a_run_of_blank_deltas_around_the_marker_is_held_without_reading_each_one(monkeypatch):
+    """Whitespace before the marker, or after the whole of it, moves no reading, so a run of blank
+    deltas is held at the cost of keeping it: the gate reads the marker's characters and none of the
+    blank lines around them. Read one by one, the run cost each blank line a full pass of the think-tag
+    reader, and a coverage-traced run of the test above took longer than its bound."""
+    from raven.agent.loop import recovery
+
+    read = recovery._Reading.read
+    chars: list[str] = []
+
+    def counted(self, char):
+        chars.append(char)
+        return read(self, char)
+
+    monkeypatch.setattr(recovery._Reading, "read", counted)
+    seen, deliver = _collecting()
+    gate = SilenceGate(deliver, hold_all=False)
+
+    for _ in range(1_000):
+        await gate("\n")
+    await gate("[SILENT]")
+    for _ in range(1_000):
+        await gate(" \n")
+
+    assert seen == [], "blank lines and a marker are all still held"
+    assert "".join(chars) == "[SILENT]"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "deltas,shown",
     [
