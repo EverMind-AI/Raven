@@ -1294,7 +1294,12 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
             else:
                 if isinstance(switched, dict):
                     option, _effort_now, efforts = read_session_effort(switched)
-                    if efforts:
+                    # A response that lists the options the model now has, with
+                    # no thought_level among them, says the model takes no
+                    # effort; keeping the default model's menu would offer rungs
+                    # every turn on this one drops. An empty or absent list says
+                    # nothing either way.
+                    if efforts or switched.get("configOptions"):
                         selected_effort = (option, efforts)
 
         handshake.available_models = _read_session_models(session)

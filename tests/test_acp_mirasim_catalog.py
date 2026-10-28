@@ -146,6 +146,26 @@ def test_no_effort_option_where_mirasim_names_no_default_effort() -> None:
     assert read_catalog("claude", agent_entry(ROWS, "claude"), catalog_doc(effort=[])).effort_option(None) is None
 
 
+def test_the_effort_menu_offers_only_the_rungs_its_model_takes() -> None:
+    """A turn drops a rung its model lacks, so a menu offering one offers a
+    choice that does nothing; the menu is read per model, as the turn is."""
+    catalog = read_catalog("claude", agent_entry(ROWS, "claude"), catalog_doc())
+    assert catalog.effort_option(None, "glm-5.3-flash") is None
+    assert catalog.config_options("glm-5.3-flash", "max") == [catalog.model_option("glm-5.3-flash")]
+
+    narrow = catalog.effort_option("max", "profile:abc")
+    validate_def("SessionConfigOption", narrow)
+    assert [(choice["value"], choice["name"]) for choice in narrow["options"]] == [("low", "Low"), ("high", "High")]
+    assert narrow["currentValue"] == "high", "a rung the model lacks is not reported as current"
+
+    unlisted = catalog.effort_option(None, "a-model-mirasim-added-later")
+    assert [choice["value"] for choice in unlisted["options"]] == ["low", "high", "max"]
+    no_default = read_catalog(
+        "claude", agent_entry(ROWS, "claude"), catalog_doc(effortByModel={"profile:abc": RUNGS[:1]})
+    )
+    assert no_default.effort_option(None, "profile:abc") is None, "no rung of its own to mark as current"
+
+
 def test_a_model_takes_its_own_rungs_and_an_unlisted_one_the_agents() -> None:
     catalog = read_catalog("claude", agent_entry(ROWS, "claude"), catalog_doc())
     assert catalog.rungs_for("profile:abc") == ("low", "high")

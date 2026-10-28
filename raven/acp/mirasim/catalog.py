@@ -175,20 +175,27 @@ class AgentCatalog:
             "options": [{"group": group, "name": name, "options": opts} for (group, name), opts in groups.items()],
         }
 
-    def effort_option(self, current: str | None) -> dict[str, Any] | None:
-        """The ``thought_level`` config option with ``current`` selected, or ``None`` without rungs.
+    def effort_option(self, current: str | None, model: str | None = None) -> dict[str, Any] | None:
+        """The ``thought_level`` config option for ``model``, ``current`` selected, or ``None`` without rungs.
 
         Effort used to be advertised as session modes, which put the reasoning
         effort on the same channel as a session mode and made Raven's run-tier
         indistinguishable from it. It is a config option here for the reason
         OpenCode 1.19.4 gives: the model list is models, effort is its own
         ``thought_level`` option, and a client picks one of each.
+
+        Only the rungs ``model`` takes (:meth:`rungs_for`; the default model's
+        when none is chosen), because a turn drops any other without a word: a
+        menu listing one offers a choice that does nothing.
         """
-        ids = [rung for rung, _ in self.efforts]
+        takes = self.rungs_for(model)
+        offered = [(rung, name) for rung, name in self.efforts if rung in takes]
+        ids = [rung for rung, _ in offered]
         if not ids or self.default_effort not in ids:
-            # No rungs, or no default to mark as current (ZCode CLI). A menu
-            # with a guessed current would say the session is on a rung Mirasim
-            # never named, which is worse than no menu.
+            # No rungs, or no default to mark as current (ZCode CLI, or a model
+            # whose rungs leave the default out). A menu with a guessed current
+            # would say the session is on a rung Mirasim never named, which is
+            # worse than no menu.
             return None
         return {
             "id": EFFORT_OPTION,
@@ -196,12 +203,12 @@ class AgentCatalog:
             "category": "thought_level",
             "type": "select",
             "currentValue": current if current in ids else self.default_effort,
-            "options": [{"value": rung, "name": name} for rung, name in self.efforts],
+            "options": [{"value": rung, "name": name} for rung, name in offered],
         }
 
     def config_options(self, current: str | None, effort: str | None = None) -> list[dict[str, Any]]:
         model = self.model_option(current)
-        effort_option = self.effort_option(effort)
+        effort_option = self.effort_option(effort, current)
         return [option for option in (model, effort_option) if option is not None]
 
     def _group_of(self, entry: ModelEntry) -> tuple[str, str]:
