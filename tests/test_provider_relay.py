@@ -28,6 +28,7 @@ from raven.contracts.llm_provider import (
 )
 from raven.providers import call_record, prompt_cache, relay, relay_provider, relay_server, relay_wire, usage_record
 from raven.providers.base import LLMProvider
+from raven.providers.binding import ModelBinding, active_binding, use_binding
 from raven.providers.first_byte import FirstByteTimeoutError, StreamIdleTimeoutError
 from raven.providers.litellm_shape import LiteLLMShape
 
@@ -165,11 +166,17 @@ class _Wire(LLMProvider):
     def get_default_model(self) -> str:
         return "m"
 
+    def _note_binding(self) -> None:
+        bound = active_binding()
+        self.script.setdefault("bindings", []).append(None if bound is None else (bound.model, bound.context_window))
+
     async def chat(self, **kwargs: Any) -> LLMResponse:
+        self._note_binding()
         self.script.setdefault("calls", []).append(("chat", kwargs, usage_record._owned.get()))
         return LLMResponse(content=f"answered {kwargs['messages'][-1]['content']}", usage={"prompt_tokens": 1})
 
     async def chat_stream(self, **kwargs: Any) -> AsyncIterator[ChatDelta]:
+        self._note_binding()
         self.script.setdefault("calls", []).append(("stream", kwargs, usage_record._owned.get()))
         try:
             for piece in self.script.get("pieces", ["a", "b"]):
@@ -220,6 +227,43 @@ async def test_a_turn_streams_through_the_host(served) -> None:
     assert kind == "stream" and kwargs["model"] == "custom/m"
     assert kwargs["max_tokens"] is _Wire._SENTINEL
     assert owned, "the host's call must be marked recorded by its caller, the agent"
+
+
+async def test_a_relayed_call_is_sized_under_the_agents_turn(served) -> None:
+    """The output ceiling is the running turn's: the host sees the agent's window, as the agent's own call would.
+
+    ``send_max_tokens`` reads the window from the active binding, so a relayed
+    stream sized under the host's context would carry a different number than
+    the one the agent's loop reserved.
+    """
+    script, _ = served
+    provider = relay_provider.RelayProvider(default_model="custom/m", provider_name="custom", api_base="http://x/v1")
+    turn = ModelBinding(provider=provider, model="custom/m", configured_window=32768)
+
+    with use_binding(turn):
+        [d async for d in provider.chat_stream(messages=[{"role": "user", "content": "q"}], model="custom/m")]
+        await provider.chat(messages=[{"role": "user", "content": "q"}], model="custom/m")
+    [d async for d in provider.chat_stream(messages=[{"role": "user", "content": "q"}], model="custom/m")]
+
+    assert script["bindings"] == [("custom/m", 32768), ("custom/m", 32768), None]
+
+
+async def test_the_host_answers_in_a_context_of_its_own(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A relay started inside a host turn: none of that turn reaches an agent's call."""
+    script: dict[str, Any] = {"specs": []}
+    host_turn = ModelBinding(provider=_Wire({}, script), model="host-model", configured_window=1_000_000)
+    with use_binding(host_turn):
+        server = relay_server.RelayServer(build=lambda spec: _Wire(spec, script))
+        await server.start()
+    try:
+        for key, value in server.env().items():
+            monkeypatch.setenv(key, value)
+        relay._reset_for_tests()
+        provider = relay_provider.RelayProvider(default_model="custom/m", provider_name="custom")
+        [d async for d in provider.chat_stream(messages=[{"role": "user", "content": "q"}], model="custom/m")]
+    finally:
+        await server.close()
+    assert script["bindings"] == [None]
 
 
 async def test_a_single_call_answers_through_the_host(served) -> None:

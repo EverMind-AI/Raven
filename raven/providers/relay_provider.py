@@ -12,6 +12,7 @@ from typing import Any
 from raven.contracts.llm_provider import ChatDelta, GenerationSettings, LLMResponse
 from raven.providers import relay_wire
 from raven.providers.base import LLMProvider
+from raven.providers.binding import active_binding
 from raven.providers.litellm_shape import LiteLLMShape
 from raven.providers.relay import (
     RelayFaultError,
@@ -84,7 +85,14 @@ class RelayProvider(LiteLLMShape):
         return local
 
     def _call(self, **args: Any) -> dict[str, Any]:
-        return {"spec": self.spec(), "args": relay_wire.encode(args, sentinel=self._SENTINEL)}
+        # The running turn's window travels with the call: the host sizes the
+        # output ceiling under it, as this process would have.
+        bound = active_binding()
+        return {
+            "spec": self.spec(),
+            "args": relay_wire.encode(args, sentinel=self._SENTINEL),
+            "window": bound.context_window if bound is not None else None,
+        }
 
     async def chat(
         self,
