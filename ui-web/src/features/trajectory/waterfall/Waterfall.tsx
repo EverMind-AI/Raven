@@ -181,6 +181,12 @@ export function Waterfall(): JSX.Element {
     const el = box.current
     if (!el) return
     const onWheel = (event: WheelEvent): void => {
+      /* A plain wheel is the list's to scroll. Only a deliberate gesture --
+         pinch / ctrl+wheel to zoom, shift+wheel to pan -- is taken, or the page
+         would have no vertical scroll at all. */
+      const zooming = event.ctrlKey || event.metaKey
+      const panning = event.shiftKey && !zooming
+      if (!zooming && !panning) return
       event.preventDefault()
       const rect = el.getBoundingClientRect()
       const at = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0.5
@@ -188,7 +194,7 @@ export function Waterfall(): JSX.Element {
       const span = current.to - current.from
       /* Keep the ref current as we go: a trackpad delivers several wheel events
          per frame, and each must build on the one before it. */
-      if (event.shiftKey) {
+      if (panning) {
         const shift = (span * event.deltaY) / Math.max(1, rect.width)
         const view = clampViewport({ from: current.from + shift, to: current.to + shift }, fullRef.current)
         viewRef.current = view
