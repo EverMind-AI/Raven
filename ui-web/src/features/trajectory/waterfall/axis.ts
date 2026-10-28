@@ -91,7 +91,7 @@ export function createAxis(intervals: readonly Interval[], options: { idleMs?: n
 
   /* Lower bound so a shared boundary keeps the earlier piece, which is what
      makes an instant at the end of a run project to the end of that run. */
-  const find = (value: number, key: 'start' | 'end'): Piece => {
+  const find = (value: number, key: 'start' | 'end' | 'from' | 'to'): Piece => {
     let low = 0
     let high = pieces.length - 1
     while (low < high) {
