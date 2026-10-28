@@ -29,7 +29,7 @@ import type { TimeAxis, Viewport } from './axis'
 import type { Waterfall, WaterfallAgent, WaterfallRow, WaterfallTurn } from './model'
 import type { JSX, KeyboardEvent as ReactKeyboardEvent } from 'react'
 
-export const ROW_HEIGHT = 32
+export const ROW_HEIGHT = 48
 const OVERSCAN = 8
 const DEFAULT_ROWS = 20
 
@@ -398,7 +398,7 @@ export function Waterfall(): JSX.Element {
       painted.push(
         <div key={row.key} className="trajectory-wf-row trajectory-wf-agent" data-row="agent" style={style}
           onClick={() => toggleAgent(agentKey(agent.scope))}>
-          <span className="trajectory-wf-label" style={{ paddingLeft: 4 }}>
+          <span className="trajectory-wf-label" style={{ paddingLeft: 12, ['--indent' as string]: '12px' }}>
             <span className="trajectory-wf-chev">{collapsed.has(agentKey(agent.scope)) ? '\u25b8' : '\u25be'}</span>
             <span className="trajectory-wf-tile" data-tone={row.agent % 4}>
               {agent.scope === null
@@ -425,7 +425,7 @@ export function Waterfall(): JSX.Element {
           data-open={openTurn ? '' : undefined}
           data-from={turn.reportedFrom === null ? undefined : turn.reportedFrom}
           onClick={() => toggleTurn(turnKey(row.agent, turn.id))}>
-          <span className="trajectory-wf-label" style={{ paddingLeft: 22 }}>
+          <span className="trajectory-wf-label" style={{ paddingLeft: 26, ['--indent' as string]: '26px' }}>
             <span className="trajectory-wf-chev">{openTurn ? '\u25be' : '\u25b8'}</span>
             <span className="trajectory-wf-name">{t('gui.trajectory.turn.ordinal', { n: turn.ordinal })}</span>
             {turn.preview === null ? null : <span className="trajectory-wf-sub">{turn.preview}</span>}
@@ -452,7 +452,7 @@ export function Waterfall(): JSX.Element {
     painted.push(
       <div key={row.key} className="trajectory-wf-row trajectory-wf-span" data-row="span" data-entry={entry.entry_id}
         style={style} onClick={() => pick(row.row!)}>
-        <span className="trajectory-wf-label" style={{ paddingLeft: 38 + row.row!.depth * 14 }}>
+        <span className="trajectory-wf-label" style={{ paddingLeft: 44 + row.row!.depth * 20, ['--indent' as string]: `${44 + row.row!.depth * 20}px` }}>
           <span className="trajectory-wf-ico">{icoOf(entry.kind)}</span>
           <span className="trajectory-wf-name">{entry.preview ?? entry.span_name}</span>
           <span className="trajectory-wf-sub">{entry.span_name}</span>

@@ -116,7 +116,8 @@ describe('displayRows', () => {
     const many = Array.from({ length: 500 }, (_, i) => E(`r${i}`, i, { turn_span_id: `T${i}` }))
     const flat = displayRows(buildWaterfall(many, Date.parse('2026-10-28T10:01:00.000Z')), new Set(), new Set())
     expect(flat.length).toBe(1 + 500)
-    expect(flat.length * ROW_HEIGHT).toBeLessThan(20000)
+    /* The model stays linear; the mounted bound is the acceptance test's. */
+    expect(flat.length * ROW_HEIGHT).toBeLessThan(30_000)
   })
 
   it('hides a turn’s spans until the turn is open, and an agent’s rows until it is closed', () => {
