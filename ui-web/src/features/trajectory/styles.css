@@ -733,3 +733,7 @@ html[data-theme="dark"] {
 .trajectory-wf-ico { border-radius: 7px }
 .trajectory-wf-ico svg, .trajectory-wf-glyph svg { width: 15px; height: 15px }
 .trajectory-wf-tile img { width: 17px; height: 17px }
+
+/* The overview is a strip: a handful of lanes, never taller than a few rows. */
+.trajectory-ov { max-height: 160px; overflow: hidden }
+.trajectory-ov-more .trajectory-ov-name { color: #b4b4b4 }

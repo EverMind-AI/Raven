@@ -57,3 +57,14 @@ it('draws an agent whose work is all outside any turn', () => {
   const { container } = render(<OverviewLanes waterfall={waterfall} axis={axis} viewport={{ from: 0, to: axis.length }} />)
   expect(container.querySelectorAll('[data-lane] i').length).toBe(1)
 })
+
+it('keeps the strip to a handful of lanes and counts the rest', () => {
+  const now = Date.parse('2026-10-28T10:05:00.000Z')
+  const many = Array.from({ length: 30 }, (_, index) => E(`s${index}`, index, { subagent_scope: `t:s${index}`, turn_span_id: `S${index}` }))
+  const waterfall = buildWaterfall([E('m', 0), ...many], now)
+  const axis = createAxis([{ start: now - 60_000, end: now }])
+  const { container } = render(<OverviewLanes waterfall={waterfall} axis={axis} viewport={{ from: 0, to: axis.length }} />)
+  expect(container.querySelectorAll('[data-lane]').length).toBe(6)
+  expect(container.querySelector('[data-lane-more]')).not.toBeNull()
+  expect(container.textContent).toContain('25')
+})
