@@ -1584,12 +1584,14 @@ describe('a thought box while the model is still thinking', () => {
   })
 })
 
-/** A fold shuts over a sub-agent that is still working, like any other.
+/** A fold holding a delegated run opens, so the delegation stays in sight.
  *
- * The run goes on for minutes after the turn that dispatched it has answered;
- * it is followed on the task rows, not by holding the turn's fold open. What
- * is asserted here is that a spawn in flight buys the fold nothing: not at the
- * turn's end, and not when the next turn shuts the folds before it.
+ * The run itself goes on for minutes after the turn that dispatched it has
+ * answered, and its status is followed on the task rows -- a run still working
+ * is not what holds the fold open. The call kind is: a spawn or dag row inside
+ * the fold is the only place the delegation is named, so that turn's fold
+ * arrives open at its end and on replay, and a later turn does not shut it.
+ * It stays a default -- the reader's own toggle takes it over.
  */
 describe('a fold holding a delegated run', () => {
   const RUNNING = {
