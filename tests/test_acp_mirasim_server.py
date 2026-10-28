@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import time
+from collections.abc import Awaitable
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,14 @@ PNG = base64.b64decode(
 class Harness:
     """One adapter over a stand-in host, and what it has said so far."""
 
+    limit = 10.0
+    """Seconds one request, or the adapter's shutdown, may take before the test fails naming it.
+
+    The bound ``asked`` and ``FakeHost.wait_for`` already keep. Without it a turn
+    that never ended hung the whole run rather than failing its own test
+    (measured on Windows, ``test_a_turn_stopped_from_the_app_ends_cancelled``);
+    the slowest test here takes about 1.4 s on Linux."""
+
     def __init__(self, tmp_path: Path, host: FakeHost) -> None:
         self.tmp_path = tmp_path
         self.host = host
@@ -47,14 +56,27 @@ class Harness:
 
     async def close(self) -> None:
         for agent in self.agents:
-            await agent.shutdown()
-            await agent.close()
+            await self._within(agent.shutdown(), f"the {agent.agent!r} adapter's shutdown did not finish")
+            await self._within(agent.close(), f"the {agent.agent!r} adapter did not close")
 
     async def call(self, method: str, **params: Any) -> dict[str, Any]:
         self.ids += 1
-        response = await self.agent.handle({"jsonrpc": "2.0", "id": self.ids, "method": method, "params": params})
+        frame = {"jsonrpc": "2.0", "id": self.ids, "method": method, "params": params}
+        on = f" on {params['sessionId']}" if "sessionId" in params else ""
+        response = await self._within(self.agent.handle(frame), f"{method}{on} got no answer from the adapter")
         assert response is not None
         return response
+
+    async def _within(self, step: Awaitable[Any], what: str) -> Any:
+        """``step``'s result, or a failure saying ``what`` once ``limit`` has passed."""
+        bound = asyncio.timeout(self.limit)
+        try:
+            async with bound:
+                return await step
+        except TimeoutError:
+            if not bound.expired():
+                raise
+            pytest.fail(f"{what} within {self.limit:g}s")
 
     async def ok(self, method: str, **params: Any) -> Any:
         response = await self.call(method, **params)
@@ -817,6 +839,34 @@ async def test_a_turn_stopped_from_the_app_ends_cancelled(harness: Harness) -> N
     session.stopped = True
     session.wake.set()
     assert await turn == {"stopReason": "cancelled"}
+
+
+async def test_a_request_the_adapter_never_answers_fails_the_test_by_name(harness: Harness) -> None:
+    """The harness bounds every request, so a turn that never ends fails the test
+    that awaited it, naming the request, instead of hanging the whole run -- the
+    way the test above hung on Windows."""
+    harness.limit = 0.2
+    harness.host.respond = script(("hold",))
+    sid = await harness.new()
+    async with asyncio.timeout(5):
+        with pytest.raises(pytest.fail.Exception, match=rf"session/prompt on {sid} got no answer .* within 0.2s"):
+            await harness.ok("session/prompt", sessionId=sid, prompt=text("go"))
+
+
+async def test_a_shutdown_that_never_ends_fails_the_test_by_name(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness.limit = 0.2
+    real = harness.agent.shutdown
+
+    async def wedged() -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(harness.agent, "shutdown", wedged)
+    async with asyncio.timeout(5):
+        with pytest.raises(pytest.fail.Exception, match=r"the 'claude' adapter's shutdown did not finish within 0.2s"):
+            await harness.close()
+    monkeypatch.setattr(harness.agent, "shutdown", real)
 
 
 async def test_a_cancel_the_host_never_confirms_is_answered_within_its_budget(
