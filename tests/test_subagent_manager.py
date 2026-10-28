@@ -6055,6 +6055,30 @@ def test_a_session_tier_does_not_hold_back_the_row_effort(tmp_path, monkeypatch)
     assert mgr.session_effort_for("cli", "Pi", "h1") == "low"
 
 
+async def test_a_direct_chat_carries_the_clamped_session_tier(tmp_path, monkeypatch) -> None:
+    """The chat lane resolves its mode through the same `resolve_mode` a spawn
+    does, and the tier is clamped to the rungs the agent offers before it is
+    sent. Only the spawn lane had a tier test, so a chat lane that stopped
+    falling back to the tier would have dispatched at the agent's own default
+    with nothing failing."""
+    from raven.agent.subagent.instances import InstanceRegistry
+
+    monkeypatch.setattr("raven.agent.subagent.registry.acp_snapshot_for", _mode_effort_snapshot)
+    monkeypatch.setattr(manager_mod, "get_registry", lambda: InstanceRegistry(tmp_path / "reg.json"))
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=tmp_path,
+        agents=[ThirdPartyAcpSubagentConfig(name="Pi", command="pi --acp", effort="low")],
+        session_tier=lambda _key: "max",
+    )
+    backend = _DispatchRecordingBackend()
+    mgr.registry._backends["Pi"] = backend
+
+    await mgr.chat(session_key="cli", agent="Pi", handle="h1", text="go")
+
+    assert [mode for mode, _ in backend.seen] == ["high"], "max clamps to the highest rung Pi offers"
+
+
 async def test_a_direct_chat_sends_the_instance_override_and_not_the_row_effort(tmp_path, monkeypatch) -> None:
     mgr = _effort_row_manager(tmp_path, monkeypatch, _mode_effort_snapshot)
     backend = _DispatchRecordingBackend()
