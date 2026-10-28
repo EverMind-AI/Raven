@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 from loguru import logger
 from pydantic import ValidationError
 
-from raven.agent.subagent.backends import acp_snapshot_for, agent_meta
+from raven.agent.subagent.backends import acp_menus, acp_snapshot_for, agent_meta
 from raven.agent.subagent.backends.env import refresh_login_shell_env
 from raven.agent.subagent.presets import (
     BUNDLED_SHIM_PRESETS,
@@ -1765,13 +1765,11 @@ async def subagents_refresh_models(params: dict, *, agent_loop_factory: "AgentLo
     if measured:
         # Read the two menus off the snapshot the read just returned rather than
         # through `agent_meta`, which also derives policy a refresh must not
-        # re-evaluate (and which test doubles for the handshake do not carry).
-        efforts = tuple(getattr(snapshot, "effort_choices", ()) or ())
-        if not efforts:
-            mode_efforts = getattr(snapshot, "mode_efforts", None)
-            efforts = mode_efforts() if callable(mode_efforts) else ()
-        models = _wire_choices(getattr(snapshot, "model_choices", ()))
-        effort_choices = _wire_efforts(efforts)
+        # re-evaluate (and which test doubles for the handshake do not carry);
+        # `acp_menus` is the derivation `agent_meta` itself uses.
+        menus = acp_menus(snapshot)
+        models = _wire_choices(menus.models)
+        effort_choices = _wire_efforts(menus.efforts)
     else:
         models = recorded["models"]
         effort_choices = recorded["effort_choices"]
