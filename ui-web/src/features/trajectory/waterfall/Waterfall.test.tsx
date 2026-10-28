@@ -250,3 +250,4 @@ describe('the page’s controls', () => {
     expect((document.querySelector('[data-row="turn"] .trajectory-wf-seg') as HTMLElement).style.width).toBe(before)
   })
 })
+

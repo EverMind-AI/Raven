@@ -518,3 +518,87 @@ html[data-theme="dark"] {
   border-left: 1px dashed var(--line); border-right: 1px dashed var(--line) }
 
 .trajectory-wf-dur { margin-left: 8px; font: 9.5px/1 var(--mono); color: var(--faint); flex: none }
+
+
+/* ── the reference's light trace card ─────────────────────────────────
+   White ground, hairlines, uppercase micro-labels, and one pale bar per
+   row with its duration just after. Colour is used only for meaning:
+   the model/tool families, the now line, the slowest badge and errors. */
+
+.trajectory-wf { background: var(--paper); --wf-gutter: max(240px, 30%); }
+.trajectory-wf-stats { display: flex; align-items: stretch; gap: 0; padding: 10px 16px;
+  border-bottom: 1px solid #ededed; flex: none }
+.trajectory-wf-stat { display: flex; flex-direction: column; gap: 5px; padding: 0 24px;
+  border-left: 1px solid #f0f0f0; min-width: 96px }
+.trajectory-wf-stat:first-child { padding-left: 0; border-left: 0 }
+.trajectory-wf-statk { font: 10px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: #9a9a9a }
+.trajectory-wf-statv { font: 600 19px/1 var(--mono); color: #1a1a1a; font-variant-numeric: tabular-nums }
+.trajectory-wf-statv[data-bad] { color: #c0392b }
+.trajectory-wf-tools { margin-left: auto; display: flex; align-items: center; gap: 6px }
+.trajectory-wf-tool { font: 10px/1 var(--mono); color: #6b6b6b; background: var(--paper);
+  border: 1px solid #e8e8e8; border-radius: 8px; padding: 5px 9px; cursor: pointer }
+.trajectory-wf-tool[aria-pressed='true'] { color: #1a1a1a; background: #f2f2f2 }
+.trajectory-wf-tool:disabled { opacity: .45; cursor: default }
+
+.trajectory-wf-head { display: grid; grid-template-columns: var(--wf-gutter) minmax(0, 1fr);
+  border-bottom: 1px solid #ededed; background: var(--paper); flex: none }
+.trajectory-wf-spanhead { font: 10px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase;
+  color: #9a9a9a; padding: 11px 0 11px 14px }
+.trajectory-ruler { position: relative; height: 34px; margin-left: 0; border-bottom: 0;
+  font: 11px/34px var(--mono); color: #9a9a9a; background: var(--paper) }
+.trajectory-ruler b { position: absolute; top: 0; transform: translateX(-50%); font-weight: 400 }
+.trajectory-ruler b:first-child { transform: none }
+
+.trajectory-wf-scroll { background: var(--paper) }
+.trajectory-wf-row { grid-template-columns: var(--wf-gutter) minmax(0, 1fr); gap: 0 }
+.trajectory-wf-row:hover { background: #fafafa }
+.trajectory-wf-label { font: 12px/1.25 var(--sans); color: #1a1a1a; gap: 6px }
+.trajectory-wf-agent .trajectory-wf-label { font-weight: 600 }
+.trajectory-wf-name { font: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.trajectory-wf-sub { font: 11px/1.25 var(--sans); color: #9a9a9a; flex: none; max-width: 45%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.trajectory-wf-chev { flex: none; width: 10px; color: #b4b4b4; font-size: 9px; line-height: 1 }
+.trajectory-wf-tile { flex: none; width: 18px; height: 18px; border-radius: 6px; background: #f4f4f4;
+  position: relative }
+.trajectory-wf-tile::after { content: ''; position: absolute; inset: 5px; border-radius: 50%;
+  background: #e0a33b }
+.trajectory-wf-tile[data-tone='1']::after { background: #7c9cf5 }
+.trajectory-wf-tile[data-tone='2']::after { background: #61b98a }
+.trajectory-wf-tile[data-tone='3']::after { background: #b48ce0 }
+.trajectory-wf-ico { flex: none; width: 16px; text-align: center; color: #8a8a8a; font-size: 11px }
+.trajectory-wf-dot { display: none }
+.trajectory-wf-from { font: 9.5px/1 var(--mono); color: #3f6b2c; background: #f1f7ee; border: 1px solid #d9e7d2;
+  border-radius: 4px; padding: 2px 5px; flex: none }
+.trajectory-wf-slow { flex: none; font: 9px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase;
+  color: #c2713a; background: #fcefe3; border-radius: 4px; padding: 3px 5px }
+.trajectory-wf-dur { display: none }
+
+.trajectory-wf-track { position: relative; height: 32px }
+.trajectory-wf-track i { top: 50%; transform: translateY(-50%); height: 14px; border-radius: 4px; min-width: 3px }
+.trajectory-wf-agentbar { background: #f2f2f2 }
+.trajectory-wf-spanbar.trajectory-wf-kind-model, .trajectory-wf-seg-model { background: #e9e8fb }
+.trajectory-wf-spanbar.trajectory-wf-kind-tool, .trajectory-wf-seg-tool { background: #e2eef9 }
+.trajectory-wf-spanbar.trajectory-wf-kind-user { background: #eef0f2 }
+.trajectory-wf-seg-subagent { background: #e7f1e7 }
+.trajectory-wf-seg-failure { background: #fae3e1 }
+.trajectory-wf-seg-waiting { background: #f4f4f4 }
+.trajectory-wf-turn .trajectory-wf-track i { height: 14px }
+.trajectory-wf-cap { position: absolute; top: 50%; transform: translateY(-50%);
+  font: 11px/1 var(--mono); color: #6b6b6b; white-space: nowrap; font-variant-numeric: tabular-nums }
+.trajectory-wf-agent .trajectory-wf-cap { color: #9a9a9a }
+
+.trajectory-wf-links { left: var(--wf-gutter) }
+.trajectory-wf-grid { position: absolute; top: 0; bottom: 0; width: 1px; background: #f4f4f4 }
+.trajectory-wf-now { position: absolute; top: 0; bottom: 0; width: 1.5px; background: #3b82f6 }
+.trajectory-wf-now::before { content: ''; position: absolute; top: -3px; left: -3px; width: 7px; height: 7px;
+  border-radius: 50%; background: #3b82f6 }
+.trajectory-wf-link { border-left-color: #cbcbcb }
+.trajectory-wf-link-report { border-left-color: #86b57a }
+.trajectory-wf-links { pointer-events: none }
+
+.trajectory-ov { padding: 8px 16px 6px; border-bottom: 1px solid #f0f0f0 }
+.trajectory-ov-lane { grid-template-columns: 180px minmax(0, 1fr); gap: 16px; height: 16px }
+.trajectory-ov-name { font: 10px/1 var(--sans); color: #9a9a9a }
+.trajectory-ov-track i { background: #ececf7; border-radius: 3px }
+.trajectory-ruler-idle { font: 9px/1 var(--mono); color: #b4b4b4; border-left: 1px dashed #e6e6e6;
+  border-right: 1px dashed #e6e6e6 }
