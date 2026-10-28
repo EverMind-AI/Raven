@@ -2603,7 +2603,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.setup.ready': 'On',
     'gui.settings.setup.unset': 'Not set up',
     'gui.settings.setup.search_keyless_hint': 'You can search without a key - adding one gets you higher rate limits.',
-    'gui.settings.setup.fetch_keyless_hint': 'You can read pages without a key - adding one gets you higher rate limits.',
+    'gui.settings.setup.fetch_keyless_hint':
+      'You can read pages without a key - adding one gets you higher rate limits.',
     'gui.settings.plugins.counter': 'Connected {on} / {total}',
     'gui.settings.plugins.none': 'No MCP server configured',
     'gui.settings.plugins.none_sub': 'An MCP server hands Raven tools and data from outside.',
