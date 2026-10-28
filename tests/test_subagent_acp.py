@@ -306,6 +306,28 @@ def test_a_mode_menu_of_effort_levels_is_offered_as_reasoning_effort() -> None:
     assert agent_meta(cfg, snapshot=permission_modes).effort_choices == ()
 
 
+def test_one_derivation_names_a_snapshots_menus_and_the_channel_its_effort_takes() -> None:
+    """A refresh, the roster and the dispatch resolver all read a row's menus
+    through ``acp_menus``. The channel is part of the answer: a mode menu that is
+    the effort menu shares its channel with an instance's mode override, and the
+    resolver has to know that to rank the two."""
+    from raven.agent.subagent.backends import acp_menus
+
+    levels = (AcpMode("low", "Low"), AcpMode("high", "High"))
+    base: dict[str, Any] = {"agent": "a", "fingerprint": "fp", "status": "ready", "detail": "", "measured_at_ms": 1}
+    thought = CapabilitySnapshot(
+        **base, available_modes=levels, effort_choices=(AcpEffortChoice("max", "Max"),), effort_option="effort"
+    )
+    modes = CapabilitySnapshot(**base, available_modes=levels)
+
+    assert [c.value for c in acp_menus(thought).efforts] == ["max"] and not acp_menus(thought).effort_via_modes
+    assert [c.value for c in acp_menus(modes).efforts] == ["low", "high"] and acp_menus(modes).effort_via_modes
+    assert acp_menus(None) == ((), (), False)
+    cfg = stub_config("a")
+    assert agent_meta(cfg, snapshot=modes).effort_via_modes is True
+    assert agent_meta(cfg, snapshot=thought).effort_via_modes is False
+
+
 def test_a_thought_level_menu_wins_over_effort_like_modes() -> None:
     snapshot = CapabilitySnapshot(
         agent="a",
