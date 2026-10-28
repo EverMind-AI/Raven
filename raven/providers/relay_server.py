@@ -52,12 +52,12 @@ ProviderBuilder = Callable[[dict[str, Any]], LLMProvider]
 
 
 def build_litellm_provider(spec: dict[str, Any]) -> LLMProvider:
-    """The provider an agent would have built for itself from ``spec``."""
+    """The provider an agent would have built for itself from ``spec``, its key kept out of the host's environment."""
     from raven.providers.litellm_provider import LiteLLMProvider
 
     spec = dict(spec)
     generation = relay_wire.decode(spec.pop("generation", None))
-    provider = LiteLLMProvider(**spec)
+    provider = LiteLLMProvider(**spec, export_env=False)
     if generation is not None:
         provider.generation = generation
     return provider
