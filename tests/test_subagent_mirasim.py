@@ -99,6 +99,19 @@ async def test_verify_records_a_resumable_agent_with_mirasims_menus(tmp_path: Pa
 
 
 @pytest.mark.slow
+async def test_a_row_on_a_model_without_rungs_records_no_effort_menu(tmp_path: Path, host: FakeHost) -> None:
+    """The row's effort menu is its own model's: glm-5.3-flash takes no rung,
+    so the row offers none rather than the default model's three, every one of
+    which its turns would drop."""
+    flash = await verify_agent(adapter_config(tmp_path, host).model_copy(update={"model": "glm-5.3-flash"}))
+    assert flash.status == "ready", flash.detail
+    assert (flash.effort_option, flash.effort_choices) == ("", ())
+
+    own = await verify_agent(adapter_config(tmp_path, host).model_copy(update={"model": "own:sonnet"}))
+    assert [choice.value for choice in own.effort_choices] == ["low", "high", "max"]
+
+
+@pytest.mark.slow
 async def test_an_instance_continues_its_conversation_in_a_new_adapter_process(tmp_path: Path, host: FakeHost) -> None:
     cfg = adapter_config(tmp_path, host)
     snapshot = await verify_agent(cfg)
