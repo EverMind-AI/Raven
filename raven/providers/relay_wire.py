@@ -93,6 +93,15 @@ def _length(header: bytes) -> int:
     return size
 
 
+def greeting(token: str) -> bytes:
+    """What a client sends before its frame: the token alone, on a line.
+
+    A host reads exactly this many bytes, under a deadline, before it reads a
+    frame, so a peer without the token never gets a frame read or buffered.
+    """
+    return token.encode("utf-8") + b"\n"
+
+
 async def write_frame(writer: asyncio.StreamWriter, message: dict[str, Any]) -> None:
     writer.write(_pack(message))
     await writer.drain()

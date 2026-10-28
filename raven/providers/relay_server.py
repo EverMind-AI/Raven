@@ -6,7 +6,10 @@ fresh ``0700`` directory, or loopback TCP where the system has no Unix sockets
 (Windows) -- and answering only requests carrying the token it handed out in the
 launch environment.
 
-Each request is one connection: open, one frame in, the answer out, close. A
+Each request is one connection: open, the token, one frame in, the answer out,
+close. The token comes first, on its own and under a deadline, so a peer
+without it -- any local account, on loopback TCP -- is dropped before a frame
+is read or buffered. A
 stream answers with a frame per delta and a closing frame, and a connection the
 agent closes early is how a cancelled turn reaches the call: the host stops it.
 
@@ -47,6 +50,9 @@ from raven.providers.relay import RELAY_ENV, RELAY_TOKEN_ENV, RelayFaultError, r
 #: Distinct constructions kept built. An agent normally has one or two (its
 #: model, a fallback); the bound is for a host that serves many agents.
 _PROVIDER_CACHE_SIZE = 32
+
+#: How long a new connection has to present the token before it is dropped.
+_ADMIT_TIMEOUT_S = 5.0
 
 ProviderBuilder = Callable[[dict[str, Any]], LLMProvider]
 
@@ -153,13 +159,26 @@ class RelayServer:
             self._providers.popitem(last=False)
         return provider
 
+    async def _admit(self, reader: asyncio.StreamReader) -> bool | None:
+        """Whether the peer presented this relay's token: ``None`` when it said nothing in time."""
+        expected = relay_wire.greeting(self._token)
+        try:
+            async with asyncio.timeout(_ADMIT_TIMEOUT_S):
+                presented = await reader.readexactly(len(expected))
+        except (TimeoutError, asyncio.IncompleteReadError, ConnectionError):
+            return None
+        return hmac.compare_digest(presented, expected)
+
     async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
+            admitted = await self._admit(reader)
+            if admitted is None:
+                return
+            if not admitted:
+                await relay_wire.write_frame(writer, {"fault": "this relay does not serve that token"})
+                return
             request = await relay_wire.read_frame(reader)
             if request is None:
-                return
-            if not hmac.compare_digest(str(request.get("token") or ""), self._token):
-                await relay_wire.write_frame(writer, {"fault": "this relay does not serve that token"})
                 return
             op = request.get("op")
             if op == "stream":

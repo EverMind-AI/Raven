@@ -142,7 +142,7 @@ def request_frame(op: str, **fields: Any) -> dict[str, Any]:
     found = target()
     if found is None:
         raise RelayUnavailableError("no relay was offered to this process")
-    return {"token": found[1], "op": op, **fields}
+    return {"op": op, **fields}
 
 
 def _unreachable_kind(kind: str) -> RelayUnavailableError | None:
@@ -171,6 +171,7 @@ def _connect_sync(timeout: float) -> socket.socket:
             sock.connect(where)
         else:
             sock = socket.create_connection(where, timeout=_CONNECT_TIMEOUT_S)
+        sock.sendall(relay_wire.greeting(found[1]))
     except OSError as exc:
         raise RelayUnavailableError(str(exc), connecting=True) from exc
     sock.settimeout(timeout)
@@ -191,9 +192,12 @@ async def connect() -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         else:
             host, port = where  # type: ignore[misc]
             opening = asyncio.open_connection(host, port, limit=limit)
-        return await asyncio.wait_for(opening, timeout=_CONNECT_TIMEOUT_S)
+        reader, writer = await asyncio.wait_for(opening, timeout=_CONNECT_TIMEOUT_S)
     except (OSError, asyncio.TimeoutError) as exc:
         raise RelayUnavailableError(str(exc), connecting=True) from exc
+    # The token goes first, alone: the host reads no frame from a peer without it.
+    writer.write(relay_wire.greeting(found[1]))
+    return reader, writer
 
 
 def read_answer(reply: dict[str, Any] | None, *, sentinel: object | None = None) -> Any:
