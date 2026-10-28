@@ -78,6 +78,13 @@ listening."""
 STEER_METHOD = "_raven/session/steer"
 STEER_CAPABILITY = "raven.steer"
 
+# And what a raven agent holds that runs with nobody asking -- an armed cron job
+# of its own partition, a running plugin service. The pool asks it before it
+# closes the agent for idleness: the wire says nothing about either, and
+# closing the process would lose both. Declared the same way, by presence.
+RESIDENT_WORK_METHOD = "_raven/residentWork"
+RESIDENT_WORK_CAPABILITY = "raven.residentWork"
+
 # The other one, and a promise rather than a feature flag: a raven that declares
 # this says that ``mcpServers`` on ``session/new`` / ``session/load`` /
 # ``session/resume`` is really connected, and that the tools behind it are

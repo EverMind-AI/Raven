@@ -105,6 +105,10 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                       table to the prompt response, the field ACP reserves for
                       it. Proves the host keeps it on the run record verbatim.
 - ``silent``       - reads and never answers, for the timeout path.
+- ``resident``     - declares ``raven.residentWork``; a prompt arms an in-process
+                     wake (``ACP_STUB_WAKE_S`` later it writes
+                     ``ACP_STUB_WAKE_MARK``) and ends, and ``_raven/residentWork``
+                     answers resident until the wake has fired.
 - ``wedged``       - answers the first ``initialize`` and swallows everything
                      after it, pipes open, process alive: the shape where only
                      a probe round trip can tell nobody is home.
@@ -122,6 +126,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 
 MODE = os.environ.get("ACP_STUB_MODE", "ok")
@@ -205,6 +210,24 @@ CAPABILITIES = {
 # not call what was not declared.
 if os.environ.get("ACP_STUB_NO_STEER"):
     del CAPABILITIES["agentCapabilities"]["_meta"]
+if MODE == "resident":
+    CAPABILITIES["agentCapabilities"]["_meta"]["raven.residentWork"] = True
+
+_WAKES: list = []
+
+
+def arm_wake() -> None:
+    """Fire once, ``ACP_STUB_WAKE_S`` from now, in this process: the armed cron job of a real agent."""
+
+    def fire() -> None:
+        with open(os.environ["ACP_STUB_WAKE_MARK"], "w", encoding="utf-8") as mark:
+            mark.write("fired")
+        _WAKES.remove(timer)
+
+    timer = threading.Timer(float(os.environ.get("ACP_STUB_WAKE_S", "1.0")), fire)
+    timer.daemon = True
+    _WAKES.append(timer)
+    timer.start()
 
 
 def send(frame: dict) -> None:
@@ -344,6 +367,10 @@ def handle_prompt(request_id, params) -> None:
     session_id = params.get("sessionId") or "stub-session-1"
     if _PROMPTS <= int(os.environ.get("ACP_STUB_EMPTY_PROMPTS", "0")):
         # The first N prompts end with nothing said, whatever the mode.
+        ok(request_id, {"stopReason": "end_turn"})
+        return
+    if MODE == "resident":
+        arm_wake()
         ok(request_id, {"stopReason": "end_turn"})
         return
     if MODE == "dies_mid_turn":
@@ -966,6 +993,8 @@ def main() -> None:
             handle_prompt(request_id, params)
         elif method == "_raven/session/steer":
             handle_steer(request_id, params)
+        elif method == "_raven/residentWork" and MODE == "resident":
+            ok(request_id, {"resident": bool(_WAKES)})
         elif request_id is not None:
             err(request_id, -32601, f"unknown method {method}")
 

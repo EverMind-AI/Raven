@@ -3368,11 +3368,24 @@ or `transcript.jsonl`, not this.
 
 **Idle close** (`AcpConnectionPool.close_idle`, `subagents.runtime.idleCloseS`):
 The pool ending a pooled ACP agent's process once the connection has been quiet for the
-configured budget: no request of the host's unanswered (a held wake is one), none of the
-agent's being answered, no frame from the agent and no lease for the whole budget. Only an
-agent that advertises `loadSession`, or one that never opened a session, is closed, so a
-stateful instance's next turn reopens its session in a fresh process with `session/load`.
-_Avoid_: calling it a timeout - nothing in flight is cut short.
+configured budget: no request of the host's unanswered (a held wake is one), none of the agent's
+being answered, no frame from the agent and no lease for the whole budget. Only an agent that
+advertises `loadSession`, or one that never opened a session, is closed, so a stateful
+instance's next turn reopens its session in a fresh process with `session/load`. An agent that
+declares `raven.residentWork` is asked first and kept while it holds Resident work. Each event
+loop closes only the connections made on it, whose pipes are its own.
+_Avoid_: calling it a timeout - nothing in flight is cut short, nor anything held for later.
+
+**Resident work** (`_raven/residentWork`, `CronService.armed_jobs`, `running_plugin_services`):
+What a Raven agent holds that runs with nobody asking: an enabled cron job of its own partition
+while its scheduler runs, and a running plugin Service. Neither puts anything on the wire, and
+closing the process loses both: no other partition claims the job, and the Service lives only as
+long as the process. The agent declares `raven.residentWork` in `agentCapabilities._meta` and
+answers `_raven/residentWork` as things stand at the moment of asking, so a one-shot wake that
+has fired no longer counts. The host decides on it, so it is a protocol extension the host asks,
+not Response Meta.
+_Avoid_: a held wake (`raven.holdTurn`) for it - that keeps a prompt open and the agent busy;
+resident work is what an agent holds between prompts.
 
 **LLM relay** (`raven/providers/relay.py`, `relay_provider.py`, `relay_server.py`, `subagents.runtime.llmRelay`):
 The host making a Raven agent's LiteLLM calls for it. The host offers a local socket and a token

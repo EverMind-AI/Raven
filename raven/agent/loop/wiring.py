@@ -1702,6 +1702,11 @@ class WiringMixin:
     _plugin_services_started = False
     _started_services: tuple = ()
 
+    @property
+    def running_plugin_services(self) -> tuple:
+        """The contributed services started and not yet stopped: work this host runs with nobody asking."""
+        return self._started_services
+
     async def start_plugin_services(self) -> None:
         """Start every contributed background service, once.
 
