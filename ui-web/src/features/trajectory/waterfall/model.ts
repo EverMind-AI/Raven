@@ -13,9 +13,6 @@
  * agent as `loose` rather than being forced into a neighbouring turn.
  */
 
-import { t } from '../../../i18n/t'
-import { scopeTitle } from '../scopes'
-
 import type { TrajectoryEntry } from '../types'
 
 export interface WaterfallRow {
@@ -36,7 +33,8 @@ export interface WaterfallTurn {
 
 export interface WaterfallAgent {
   scope: string | null
-  name: string
+  /** The row that opened this worker's scope; the caller names the agent from it. */
+  door: TrajectoryEntry | null
   start: number
   end: number
   turns: readonly WaterfallTurn[]
@@ -133,7 +131,7 @@ function agentOf(scope: string | null, entries: readonly TrajectoryEntry[], now:
   const door = scope === null ? null : (entries.find((entry) => entry.opens_subagent_scope === scope) ?? null)
   return {
     scope,
-    name: scope === null ? t('gui.trajectory.scope.main') : scopeTitle(door),
+    door,
     start: Math.min(...starts),
     end: Math.max(...ends),
     turns: numbered,
