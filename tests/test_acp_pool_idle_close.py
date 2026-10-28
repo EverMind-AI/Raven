@@ -137,7 +137,7 @@ async def test_the_idle_check_starts_with_a_connection_and_ends_with_the_last(mo
     client = _Client(idle=0)
     pool = _pool_holding(soon=_held(client, _LOADS, leased_ago=0))
     pool._watch_idle()
-    task = pool._idle_task
+    task = pool._idle_tasks.get(asyncio.get_running_loop())
     assert task is not None
 
     await asyncio.wait_for(task, timeout=5)
@@ -230,6 +230,30 @@ def test_a_runtime_edit_that_is_not_a_mapping_is_rejected_not_removed(
     assert live_mod.subagent_runtime(reader).idle_close_s == 600
 
 
+async def test_an_idle_check_on_another_loop_leaves_this_loops_connections(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The RPC server runs a CLI command's own ``asyncio.run`` on a worker thread, beside its own loop.
+
+    A connection's pipes belong to the loop that launched it, so only that
+    loop's check may close it.
+    """
+    monkeypatch.setattr(pool_mod, "_IDLE_CHECK_MIN_S", 0.01)
+    monkeypatch.setattr(AcpConnectionPool, "_idle_budget", staticmethod(lambda: 0.04))
+    here = _Client(idle=3600)
+    pool = _pool_holding(here=_held(here, _LOADS))
+
+    async def beside() -> list[str]:
+        closed = await pool.close_idle(0.04)
+        pool._watch_idle()
+        await asyncio.sleep(0.2)
+        return closed
+
+    assert await asyncio.to_thread(asyncio.run, beside()) == []
+    assert not here.closed and "here" in pool._connections
+
+    assert await pool.close_idle(0.04) == ["here"]
+    assert here.closed
+
+
 async def test_a_failed_idle_check_does_not_end_the_next_one(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pool_mod, "_IDLE_CHECK_MIN_S", 0.01)
     monkeypatch.setattr(AcpConnectionPool, "_idle_budget", staticmethod(lambda: 0.04))
@@ -246,5 +270,5 @@ async def test_a_failed_idle_check_does_not_end_the_next_one(monkeypatch: pytest
 
     monkeypatch.setattr(pool, "close_idle", flaky)
     pool._watch_idle()
-    await asyncio.wait_for(pool._idle_task, timeout=5)
+    await asyncio.wait_for(pool._idle_tasks[asyncio.get_running_loop()], timeout=5)
     assert len(calls) >= 2 and client.closed
