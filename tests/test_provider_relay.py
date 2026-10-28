@@ -496,6 +496,40 @@ def test_the_default_builder_makes_the_direct_provider_with_the_agents_settings(
     assert built.generation == generation and built.default_model == "custom/m"
 
 
+@pytest.mark.parametrize(
+    ("provider_name", "model", "names"),
+    [
+        ("openrouter", "openrouter/openai/gpt-4o-mini", ("OPENROUTER_API_KEY",)),
+        ("zai", "zai/glm-4.6", ("ZAI_API_KEY", "ZHIPUAI_API_KEY")),
+    ],
+)
+def test_building_an_agents_provider_leaves_the_hosts_environment_alone(
+    monkeypatch: pytest.MonkeyPatch, provider_name: str, model: str, names: tuple[str, ...]
+) -> None:
+    """The host's own key stays its own, and nothing it starts inherits the agent's.
+
+    Every call passes the key explicitly, so the provider built for an agent
+    needs nothing in the environment; the agent's own process still exports it.
+    """
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    # The agent's side, which exports the key in its own process as before.
+    spec = relay_provider.RelayProvider(default_model=model, provider_name=provider_name, api_key="agent-key").spec()
+    monkeypatch.setenv(names[0], "host-key")
+    for name in names[1:]:
+        monkeypatch.delenv(name, raising=False)
+    built = relay_server.build_litellm_provider(spec)
+
+    assert built.api_key == "agent-key"
+    assert os.environ[names[0]] == "host-key"
+    assert all(name not in os.environ for name in names[1:])
+    assert relay_server.RelayServer()._build is relay_server.build_litellm_provider
+
+    monkeypatch.delenv(names[0])
+    LiteLLMProvider(default_model=model, provider_name=provider_name, api_key="agent-key")
+    assert os.environ[names[0]] == "agent-key"
+
+
 async def test_frames_that_are_not_frames_are_refused() -> None:
     with pytest.raises(relay_wire.FrameError):
         relay_wire._unpack(b"\xff")

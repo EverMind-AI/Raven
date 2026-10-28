@@ -73,6 +73,7 @@ class LiteLLMShape(LLMProvider):
         tls_verify: bool = True,
         *,
         unparsed_reasoning: bool | None = None,
+        export_env: bool = True,
     ):
         addressed_spec = find_by_name(provider_name) or find_by_model(default_model)
         if api_base and addressed_spec and addressed_spec.strip_api_base_trailing_slash:
@@ -113,7 +114,11 @@ class LiteLLMShape(LLMProvider):
         if self._gateway and self._gateway.name == "openrouter":
             self.extra_headers = {**_OPENROUTER_ATTRIBUTION, **self.extra_headers}
 
-        if api_key:
+        # A provider built in one process for another (the LLM relay's host)
+        # leaves the environment alone: every call passes the key explicitly,
+        # and the variables would carry one agent's key into the host's own
+        # providers and into every process the host starts after.
+        if api_key and export_env:
             self._setup_env(api_key, api_base, default_model)
 
     def _setup_env(self, api_key: str, api_base: str | None, model: str) -> None:
