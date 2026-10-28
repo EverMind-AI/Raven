@@ -1561,6 +1561,31 @@ async def test_the_unstreamed_resend_leaves_the_model_switch_to_the_loop(workspa
 
 
 @pytest.mark.asyncio
+async def test_an_unstreamed_resend_that_fails_shows_the_reader_none_of_its_error(workspace, monkeypatch):
+    """A failed call's content is the account of the failure, not a reply: nothing of it is replayed
+    through the reader's sinks, and the turn goes on as an error does."""
+    _served(monkeypatch, [_empty_finish()])
+    _recorded_sleeps(monkeypatch)
+    agent = _litellm_agent(workspace, limits=RecoveryLimits(llm_error_retry_delays=()))
+    failure = "Error calling LLM (auth): the key was refused"
+
+    async def chat_with_retry(*_args, **_kwargs):
+        return LLMResponse(
+            content=failure,
+            finish_reason="error",
+            error_classification=ErrorClassification("auth", retryable=False, should_fallback=False),
+        )
+
+    monkeypatch.setattr(agent.provider, "chat_with_retry", chat_with_retry)
+    sink = _Sink()
+
+    _final, _used, _messages, outcome = await agent._run_agent_loop(_seed(), on_token_delta=sink.delta)
+
+    assert outcome.status == "error" and outcome.error
+    assert sink.text == []
+
+
+@pytest.mark.asyncio
 async def test_an_unstreamed_resend_on_a_streamed_turn_is_streamed_once_and_not_sent_again(workspace, monkeypatch):
     """``run_turn`` sends a closing Text only when nothing streamed, so the words the unstreamed resend
     answered with go out once, as a delta, and no Text follows them."""
