@@ -168,6 +168,13 @@ class RpcTurnRunner(AgentTurnRunner):
     ``error`` event, a stopped one on the error ``turn.cancel`` sends while it
     unwinds. Keyed by turn rather than by lane, because a queued turn shares
     its lane with the turn that is running.
+
+    It sits beside ``usages``, the per-lane copy an answered turn's
+    ``message.complete`` reads. Both hold the loop's usage sink, whose window
+    reading moves only on a call that read one -- the terms the turn's stored
+    reading moves on -- so either end reports the reading its record keeps.
+    ``reported_usage`` adds one rule for an error: a turn that read no window
+    sends no usage.
     """
 
     def __init__(

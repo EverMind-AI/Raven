@@ -56,7 +56,6 @@ from raven.agent.loop._shared import (
     _file_removed_payload,
     _file_written_payload,
     _first_line,
-    _reads_no_window,
     _runtime_origin,
     _stamp_context_used,
     _stamp_reasoning_ms,
@@ -1635,9 +1634,13 @@ class TurnPathMixin:
                     window.last_context_used = context_used
                     if window_reading is not None:
                         window_reading["context_used"] = context_used
-            if usage_sink is not None and response.usage and _reads_no_window(response):
-                # No reading, so the gauge stays on the call before it; the
-                # cost below is the turn's, a flow, and moves on regardless.
+            if usage_sink is not None and response.usage and context_used <= 0 and usage_sink.get("context_used"):
+                # No reading -- a block of zeros, or an account ``_call_window``
+                # does not take as one -- so the gauge stays on the call before
+                # it, as the reading the turn files does (``window_reading``
+                # above moves on the same terms). The cost is the turn's, a
+                # flow, and moves on regardless. With no reading to keep, the
+                # branch below fills the sink: an answered turn sends it whole.
                 usage_sink["cost_usd"] = spend.cost_usd
                 usage_sink["cost_missing_calls"] = spend.cost_missing_calls
             elif usage_sink is not None and response.usage:

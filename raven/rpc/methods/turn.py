@@ -778,8 +778,9 @@ def _cancel_payload(turn_id: str, usage: dict[str, Any] | None = None) -> dict[s
 def _stopped_usage(live_usages: dict[str, dict[str, Any]] | None, turn_id: str) -> dict[str, Any] | None:
     """The usage sink of the turn about to be stopped, while it is still there.
 
-    Read before the cancel: the turn's end takes its entry back, and the record
-    it leaves is filed from the same sink.
+    Read before the cancel: the turn's end takes its entry back. What it holds
+    is the reading the stopped turn files, because the loop moves this sink's
+    reading on the same terms as the one it stores.
     """
     return (live_usages or {}).get(turn_id) if turn_id else None
 

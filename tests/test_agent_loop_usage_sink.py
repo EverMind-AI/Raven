@@ -34,6 +34,8 @@ from raven.contracts.tool import Tool
 from raven.providers import rates, usage_record
 from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse
 from raven.providers.binding import ModelBinding, use_binding
+from raven.rpc.models import TurnUsage
+from raven.rpc.spine import reported_usage
 from raven.session.manager import SessionManager
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
@@ -1221,3 +1223,42 @@ async def test_a_streamed_call_that_failed_in_transport_reads_no_window(workspac
     assert sink["context_used"] == 6200
     assert (usage["context_used"], usage["context_estimated"]) == (6200, False)
 
+
+@pytest.mark.asyncio
+async def test_a_last_call_that_read_no_window_leaves_the_live_reading_where_the_record_is(workspace, monkeypatch):
+    """A usage block of zeros is no reading, so the record keeps the call
+    before it. The live meter has to keep it too: emptied, the failure's error
+    carries no usage at all and the ring stays a turn behind the record."""
+    agent = _failing_agent(
+        workspace, RecoveryLimits(enabled=False), [_LISTS_THE_WORKSPACE, _says_nothing(_measured(0, 0))]
+    )
+    sink: dict = {}
+
+    with pytest.raises(AnswerlessTurnError):
+        await _turn(agent, sink, session_key="tui:c1", streamed=True)
+
+    failure = _stored_replies(workspace, "tui:c1")[-1]
+    usage = await _resumed_usage(workspace, monkeypatch, "tui:c1")
+
+    assert sink["context_used"] == 6200
+    assert (reported_usage(sink) or {}).get("context_used") == 6200
+    assert failure["context_used"] == 6200
+    assert (usage["context_used"], usage["context_estimated"]) == (6200, False)
+
+
+@pytest.mark.asyncio
+async def test_a_turn_whose_calls_read_no_window_still_reports_a_whole_usage(workspace):
+    """With no earlier reading to keep, a call that reads none still fills the
+    sink: an answered turn's ``message.complete`` sends it as it is, and the
+    counts are what make it a ``TurnUsage``."""
+    agent = _failing_agent(
+        workspace,
+        RecoveryLimits(enabled=False),
+        [LLMResponse(content="done", finish_reason="stop", usage=_measured(0, 0))],
+    )
+    sink: dict = {}
+
+    await _turn(agent, sink, session_key="tui:c1", streamed=True)
+
+    assert TurnUsage.model_validate(sink).context_used == 0
+    assert reported_usage(sink) is None
