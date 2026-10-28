@@ -467,6 +467,55 @@ async def test_effort_refusals_and_missing_baselines_do_not_escape() -> None:
     assert calls  # every attempt reached the wire; none escaped as an exception
 
 
+async def test_an_instance_mode_override_is_the_last_mode_its_session_is_put_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lane end to end on a mode menu that is the effort menu: the manager
+    resolves both values, the real ``_open_session`` sends them, and the row's
+    effort must not land after the person's instance override on the one
+    channel the two share."""
+    modes = (AcpMode("low", "Low"), AcpMode("medium", "Medium"), AcpMode("high", "High"))
+    snapshot = CapabilitySnapshot(
+        agent="pi", fingerprint="fp", status="ready", detail="", measured_at_ms=1, available_modes=modes
+    )
+    monkeypatch.setattr("raven.agent.subagent.registry.acp_snapshot_for", lambda cfg: snapshot)
+    monkeypatch.setattr(
+        "raven.agent.subagent.manager.get_registry", lambda: InstanceRegistry(path=tmp_path / "manager.json")
+    )
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=tmp_path,
+        agents=[ThirdPartyAcpSubagentConfig(name="pi", command="pi --acp", effort="low")],
+    )
+    mgr.set_instance_mode("s", "pi", "h1", "high")
+    put_on: list[str] = []
+
+    class _Client:
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            if method == "session/new":
+                menu = [{"id": m.id, "name": m.name} for m in modes]
+                return {"sessionId": "s1", "modes": {"currentModeId": "medium", "availableModes": menu}}
+            if method == "session/set_mode":
+                put_on.append(params["modeId"])
+            return {}
+
+    backend = AcpAgentBackend(
+        name="pi", command="unused", snapshot=snapshot, registry=InstanceRegistry(path=tmp_path / "i.json")
+    )
+    await backend._open_session(
+        _Client(),
+        cwd=str(tmp_path),
+        skey="s",
+        handle="h1",
+        budget=1,
+        mcp_servers=[],
+        mode=mgr.resolve_mode("s", "pi", "h1"),
+        session_effort=mgr.session_effort_for("s", "pi", "h1"),
+    )
+
+    assert put_on == ["high"]
+
+
 async def test_verify_reports_a_rejected_handshake_as_present_but_unusable() -> None:
     """Not ``missing``: the agent answered, so it is installed.
 

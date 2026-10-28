@@ -7822,6 +7822,72 @@ async def test_a_runner_with_no_effort_source_dispatches_without_one() -> None:
     assert execu.calls[0]["session_effort"] is None
 
 
+async def test_a_node_on_an_overridden_instance_runs_the_override_and_not_the_row_effort(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Wired to the manager's own resolvers, as the host wires them: on an agent
+    whose mode menu is its effort menu, a node naming an instance with a mode
+    override runs that mode, and only a node naming none gets the row's effort."""
+    from raven.acp_client.capabilities import AcpMode, CapabilitySnapshot
+    from raven.agent.subagent.instances import InstanceRegistry
+    from raven.agent.subagent.manager import SubagentManager
+
+    class _Provider:
+        def get_default_model(self) -> str:
+            return "m"
+
+    snapshot = CapabilitySnapshot(
+        agent="x",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        can_load=True,
+        available_modes=(AcpMode("low", "Low"), AcpMode("high", "High")),
+    )
+    monkeypatch.setattr("raven.agent.subagent.registry.acp_snapshot_for", lambda cfg: snapshot)
+    monkeypatch.setattr("raven.agent.subagent.manager.get_registry", lambda: InstanceRegistry(tmp_path / "reg.json"))
+    mgr = SubagentManager(
+        provider=_Provider(),
+        workspace=tmp_path,
+        agents=[ThirdPartyAcpSubagentConfig(name="x", command="x --acp", effort="low")],
+    )
+    mgr.set_instance_mode("cli:direct", "x", "researcher", "high")
+    execu = _FakeExec()
+    spec = parse_dag_spec(
+        {
+            "task_summary": "run the graph under test",
+            "nodes": [
+                {
+                    "id": "a",
+                    "subagent": "x",
+                    "node_summary": "the overridden instance",
+                    "prompt_template": "hello",
+                    "instance": "researcher",
+                },
+                {"id": "b", "subagent": "x", "node_summary": "no instance named", "prompt_template": "hello"},
+            ],
+        }
+    )
+
+    await run_dag(
+        spec,
+        resolve=_by_name({"x": execu}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+        session_key="cli:direct",
+        mode_for=mgr.resolve_mode,
+        effort_for=mgr.session_effort_for,
+    )
+
+    by_id = {call["task_id"]: call for call in execu.calls}
+    assert (by_id["a"]["mode"], by_id["a"]["session_effort"]) == ("high", None)
+    assert (by_id["b"]["mode"], by_id["b"]["session_effort"]) == (None, "low")
+
+
 async def test_an_unstarted_background_run_retires_every_per_run_entry(tmp_path: Path) -> None:
     """[leak] A task cancelled before its first tick never enters _run, whose
     finally is the normal retirement site. The done-callback must retire the

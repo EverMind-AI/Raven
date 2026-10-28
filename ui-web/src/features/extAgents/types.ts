@@ -20,8 +20,9 @@ export interface ExtAgentModelChoice {
   group: string
 }
 
-/* One reasoning effort an acp agent advertised in its thought_level option:
-   the value `session/set_config_option` takes back, and what to show for it. */
+/* One reasoning effort an acp agent offers, from its thought_level option or
+   from a mode menu that is its effort menu: the value the agent takes back,
+   and what to show for it. */
 export interface ExtAgentEffortChoice {
   value: string
   name: string
@@ -103,8 +104,9 @@ export interface ExtAgentRow {
   model_source?: ExtAgentModelSource
   /* The reasoning effort this row sends, or null for the agent's own. */
   effort?: string | null
-  /* The efforts the agent advertised in its thought_level option; empty for
-     an agent with no such menu, which is also every agent before 1.19.4. */
+  /* The efforts the agent offers on this row's own model, from its
+     thought_level option or from a mode menu made only of reasoning levels;
+     empty for an agent with neither. */
   effort_choices?: ExtAgentEffortChoice[]
 }
 
