@@ -29,7 +29,7 @@ import type { TimeAxis, Viewport } from './axis'
 import type { Waterfall, WaterfallAgent, WaterfallRow, WaterfallTurn } from './model'
 import type { JSX, KeyboardEvent as ReactKeyboardEvent } from 'react'
 
-export const ROW_HEIGHT = 48
+export const ROW_HEIGHT = 40
 const OVERSCAN = 8
 const DEFAULT_ROWS = 20
 

@@ -674,3 +674,14 @@ html[data-theme="dark"] {
 .trajectory-wf-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis }
 .trajectory-wf-turn .trajectory-wf-name { flex: none }
 .trajectory-wf-sub { flex: none }
+
+/* The rows breathe less than the first reference pass: 40px rows against 15px
+   labels, with the icon plate and the bars scaled to match. */
+.trajectory-wf { --wf-row: 40px }
+.trajectory-wf-row, .trajectory-wf-track { height: 40px }
+.trajectory-wf-track i, .trajectory-wf-turn .trajectory-wf-track i { height: 16px; border-radius: 5px }
+.trajectory-wf-tile, .trajectory-wf-ico { width: 24px; height: 24px }
+.trajectory-wf-ico { border-radius: 7px }
+.trajectory-wf-tile img { width: 16px; height: 16px }
+.trajectory-wf-span .trajectory-wf-label::before { top: -10px; bottom: -10px }
+.trajectory-ov-lane { height: 20px }
