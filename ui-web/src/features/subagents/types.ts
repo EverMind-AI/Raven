@@ -127,6 +127,9 @@ export interface SubagentsSource {
   /* One turn addressed to this instance instead of to the conversation. Optional
      like the rest: a server without direct chat has no lane to send it down. */
   instanceSend?(agent: string, handle: string, text: string): Promise<void>
+  /* Stop the turn this instance is answering. Optional like the rest: a server
+     without direct chat has no lane to cancel. */
+  instanceCancel?(agent: string, handle: string): Promise<void>
   /* Start a fresh instance of one sub-agent. Optional like the rest: a server
      without direct chat has none to start. Only an enabled, stateful agent can
      be instantiated -- a stateless one answers each turn from nothing, so a
