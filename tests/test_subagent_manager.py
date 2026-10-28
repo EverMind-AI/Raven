@@ -935,8 +935,8 @@ async def test_the_builtin_loop_does_not_tally_a_refused_call_in_the_announcemen
     the announcement, read through the real `_announce_result`. Whether a tool
     error is worth reporting is the sub-agent's decision now, not something the
     system appends, so the announcement carries neither the count nor the name
-    -- while the activity still records the refusal for the run's record and
-    the tasks list.
+    -- while the activity still records the refusal in the run's own record
+    (`meta.json`'s `tool_failures`), which the tasks list no longer reports.
     """
     provider = _DeleteRetryProvider()
     manager = SubagentManager(provider=provider, workspace=tmp_path)
@@ -4553,8 +4553,9 @@ async def test_an_announcement_does_not_tally_the_runs_failed_calls(tmp_path: Pa
     The tally was `[raven] 2 of this run's 3 tool calls failed` plus the failing
     call names in a fence of their own. Whether a tool error is worth telling
     the user is the sub-agent's decision, so the announcement carries neither
-    the count nor the names -- the activity still records them for the run's
-    record and the tasks list.
+    the count nor the names -- the activity still records them in the run's
+    own record (`meta.json`'s `tool_failures`), which the tasks list no longer
+    reports.
     """
     manager, announced = _manager_capturing_announcements(workspace=tmp_path)
     manager._resolve_backend = lambda agent: _StubBackendWithFailedCalls(
