@@ -10,9 +10,11 @@
  * session must mount a screenful, not a session.
  */
 
+import { BotIcon, Message01Icon, SparklesIcon, UserGroupIcon, Wrench01Icon } from '@hugeicons/core-free-icons'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 
 import { AgentMark, agentMarkPath } from '../../../components/AgentMark'
+import { Icon } from '../../../components/Icon'
 import { t } from '../../../i18n/t'
 import { formatDuration } from '../../../lib/duration'
 import * as lang from '../../../state/lang'
@@ -29,7 +31,7 @@ import type { TimeAxis, Viewport } from './axis'
 import type { Waterfall, WaterfallAgent, WaterfallRow, WaterfallTurn } from './model'
 import type { JSX, KeyboardEvent as ReactKeyboardEvent } from 'react'
 
-export const ROW_HEIGHT = 40
+export const ROW_HEIGHT = 34
 const OVERSCAN = 8
 const DEFAULT_ROWS = 20
 
@@ -116,13 +118,14 @@ function presetOf(agent: WaterfallAgent): string | null {
   return null
 }
 
-/** A glyph per family, the way the reference labels its tools. */
-function icoOf(kind: string): string {
-  if (kind.startsWith('llm.')) return '\u2726'
-  if (kind.startsWith('tool.')) return '\u2699'
-  if (kind === 'user.input') return '\u25a4'
-  if (kind.startsWith('subagent')) return '\u27d0'
-  return '\u00b7'
+/** The line icon a row wears: the reference draws a real icon in its box, not a
+ *  text glyph, so it fills the box instead of sitting small inside it. */
+function kindIcon(kind: string): typeof SparklesIcon {
+  if (kind.startsWith('llm.')) return SparklesIcon
+  if (kind.startsWith('tool.')) return Wrench01Icon
+  if (kind === 'user.input') return Message01Icon
+  if (kind.startsWith('subagent')) return UserGroupIcon
+  return BotIcon
 }
 
 /** One of three fixed classes; the index's kind strings never reach a class name. */
@@ -403,7 +406,7 @@ export function Waterfall(): JSX.Element {
             <span className="trajectory-wf-tile" data-tone={row.agent % 4}>
               {agent.scope === null
                 ? <AgentMark own />
-                : presetOf(agent) === null ? <span className="trajectory-wf-glyph">{'\u2726'}</span> : <AgentMark preset={presetOf(agent)} />}
+                : presetOf(agent) === null ? <span className="trajectory-wf-glyph"><Icon icon={BotIcon} size={14} /></span> : <AgentMark preset={presetOf(agent)} />}
             </span>
             <span className="trajectory-wf-name">{agent.scope === null ? t('gui.trajectory.scope.main') : scopeTitle(agent.door)}</span>
             <span className="trajectory-wf-sub">{agentModel(agent)}</span>
@@ -453,7 +456,7 @@ export function Waterfall(): JSX.Element {
       <div key={row.key} className="trajectory-wf-row trajectory-wf-span" data-row="span" data-entry={entry.entry_id}
         style={style} onClick={() => pick(row.row!)}>
         <span className="trajectory-wf-label" style={{ paddingLeft: 44 + row.row!.depth * 20, ['--indent' as string]: `${44 + row.row!.depth * 20}px` }}>
-          <span className="trajectory-wf-ico">{icoOf(entry.kind)}</span>
+          <span className="trajectory-wf-ico"><Icon icon={kindIcon(entry.kind)} size={14} /></span>
           <span className="trajectory-wf-name">{entry.preview ?? entry.span_name}</span>
           <span className="trajectory-wf-sub">{entry.span_name}</span>
           {entry.entry_id === slowestId ? <span className="trajectory-wf-slow">{t('gui.trajectory.slowest')}</span> : null}
