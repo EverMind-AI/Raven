@@ -251,3 +251,29 @@ describe('the page’s controls', () => {
   })
 })
 
+
+describe('the marks', () => {
+  it('wears the host’s own mark on the main agent and the vendor’s on a named worker', async () => {
+    await draw([
+      E('door', 0, { kind: 'tool.output', opens_subagent_scope: 't:sub', meta: { agent: 'claude-code', label: 'Review' } }),
+      E('s1', 1, { subagent_scope: 't:sub', turn_span_id: 'S1' }),
+    ])
+    const marks = [...document.querySelectorAll('[data-row="agent"] img')].map((img) => img.getAttribute('src'))
+    expect(marks).toContain('assets/agents/raven.svg')
+    expect(marks).toContain('assets/agents/claudecode-color.svg')
+  })
+
+  it('falls back to its own glyph for a worker the page ships no mark for', async () => {
+    await draw([
+      E('door', 0, { kind: 'tool.output', opens_subagent_scope: 't:sub', meta: { agent: 'a hand-written agent' } }),
+      E('s1', 1, { subagent_scope: 't:sub', turn_span_id: 'S1' }),
+    ])
+    expect(document.querySelector('[data-row="agent"] .trajectory-wf-glyph')).not.toBeNull()
+  })
+
+  it('puts a span’s icon in its own boxed cell', async () => {
+    await draw([E('m1', 0), E('m2', 1)])
+    fireEvent.click(document.querySelector('[data-row="turn"]')!)
+    expect(document.querySelector('[data-entry="m1"] .trajectory-wf-ico')).not.toBeNull()
+  })
+})

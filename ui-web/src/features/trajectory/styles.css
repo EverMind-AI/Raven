@@ -558,17 +558,19 @@ html[data-theme="dark"] {
 .trajectory-wf-sub { font: 11px/1.25 var(--sans); color: #9a9a9a; flex: none; max-width: 45%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .trajectory-wf-chev { flex: none; width: 10px; color: #b4b4b4; font-size: 9px; line-height: 1 }
-.trajectory-wf-tile { flex: none; width: 18px; height: 18px; border-radius: 6px; background: #f4f4f4;
-  position: relative }
-.trajectory-wf-tile::after { content: ''; position: absolute; inset: 5px; border-radius: 50%;
-  background: #e0a33b }
-.trajectory-wf-tile[data-tone='1']::after { background: #7c9cf5 }
-.trajectory-wf-tile[data-tone='2']::after { background: #61b98a }
-.trajectory-wf-tile[data-tone='3']::after { background: #b48ce0 }
-.trajectory-wf-ico { flex: none; width: 16px; text-align: center; color: #8a8a8a; font-size: 11px }
+.trajectory-wf-tile { flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid;
+  place-items: center; border: 1px solid #ececec; background: #fbfbfb; overflow: hidden }
+.trajectory-wf-tile[data-tone='1'] { background: #f7f9fe; border-color: #e6ecf9 }
+.trajectory-wf-tile[data-tone='2'] { background: #f7fbf8; border-color: #e4f0e7 }
+.trajectory-wf-tile[data-tone='3'] { background: #faf8fd; border-color: #eee8f7 }
+.trajectory-wf-tile img { width: 14px; height: 14px; display: block }
+.trajectory-wf-glyph { font-size: 10px; color: #b48ce0 }
+.trajectory-wf-ico { flex: none; width: 18px; height: 18px; border: 1px solid #ececec; border-radius: 5px;
+  display: grid; place-items: center; background: var(--paper); color: #8a8a8a; font-size: 10px }
 .trajectory-wf-dot { display: none }
 .trajectory-wf-from { font: 9.5px/1 var(--mono); color: #3f6b2c; background: #f1f7ee; border: 1px solid #d9e7d2;
-  border-radius: 4px; padding: 2px 5px; flex: none }
+  border-radius: 4px; padding: 2px 5px; flex: none; max-width: 190px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap }
 .trajectory-wf-slow { flex: none; font: 9px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase;
   color: #c2713a; background: #fcefe3; border-radius: 4px; padding: 3px 5px }
 .trajectory-wf-dur { display: none }
