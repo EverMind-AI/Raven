@@ -10,7 +10,7 @@
  * session must mount a screenful, not a session.
  */
 
-import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../../i18n/t'
 import { formatDuration } from '../../../lib/duration'
@@ -122,8 +122,44 @@ export function Waterfall(): JSX.Element {
     box.current?.focus()
   }, [pane.open])
 
-  const now = Date.now()
+  /* A selection made elsewhere -- a link in the pane, a tab's locate button --
+     opens the turn that holds the row and brings the row into view, so a jump
+     lands somewhere the reader can see. */
+  const selectedId = store.get().selectedId
+  const selections = store.get().selections
+  useEffect(() => {
+    if (selectedId === null) return
+    let owner: { agent: number; turn: string } | null = null
+    for (const [index, agent] of waterfall.agents.entries()) {
+      for (const turn of agent.turns) {
+        if (turn.rows.some((row) => row.entry.entry_id === selectedId)) owner = { agent: index, turn: turn.id }
+      }
+    }
+    if (owner === null) return
+    const key = turnKey(owner.agent, owner.turn)
+    if (!open.has(key)) {
+      setOpen((previous) => new Set(previous).add(key))
+      return
+    }
+    const at = rows.findIndex((row) => row.kind === 'span' && row.row?.entry.entry_id === selectedId)
+    const box2 = box.current
+    if (at < 0 || box2 === null) return
+    const top = at * ROW_HEIGHT
+    if (top < box2.scrollTop || top + ROW_HEIGHT > box2.scrollTop + box2.clientHeight) box2.scrollTop = top
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, selections])
+
+  /* The clock the bars are cut at. It ticks only while something is still
+     running: a fresh `Date.now()` every render would rebuild the whole model
+     on every scroll frame, which is what a 500-turn session cannot afford. */
   const shown = store.get().shown
+  const [now, setNow] = useState(() => Date.now())
+  const live = shown.some((entry) => entry.operation_end === null || entry.operation_end === undefined)
+  useEffect(() => {
+    if (!live) return
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [live])
   const waterfall = useMemo(() => buildWaterfall(shown, now), [shown, now])
   const axis = useMemo(() => createAxis(intervalsOf(waterfall, now)), [waterfall, now])
   const view: Viewport = { from: 0, to: axis.length }
