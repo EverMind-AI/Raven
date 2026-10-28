@@ -584,7 +584,13 @@ def _costing_agent(
     )
 
 
-async def _turn(agent: AgentLoop, sink: dict, session_key: str = "s1") -> None:
+async def _turn(agent: AgentLoop, sink: dict, session_key: str = "s1", *, streamed: bool = False) -> None:
+    """One user turn. ``streamed`` drives it the way the RPC runner does every
+    turn a gauge is shown for: through the streaming exit."""
+
+    async def _watch(_text: str) -> None:
+        return None
+
     await agent._process_message(
         TurnRequest(
             origin=Origin.USER,
@@ -593,6 +599,7 @@ async def _turn(agent: AgentLoop, sink: dict, session_key: str = "s1") -> None:
         ),
         session_key=session_key,
         usage_sink=sink,
+        on_token_delta=_watch if streamed else None,
     )
 
 
@@ -1176,3 +1183,41 @@ async def test_a_call_that_failed_in_transport_reads_no_window(workspace, monkey
     # The cost is the turn's, a flow, and the failed call was still billed.
     assert sink["cost_usd"] == pytest.approx(0.002)
     assert (usage["context_used"], usage["context_estimated"]) == (6200, False)
+
+
+# What the incident's upstream returned: an empty reply to a prompt of thousands
+# of tokens, billed as one. Through the streaming exit it reaches the transport
+# verdict on its accounting alone.
+_A_CALL_THE_UPSTREAM_NEVER_READ = LLMResponse(
+    content="", finish_reason="stop", usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answered", [False, True], ids=["failed", "answered"])
+async def test_a_streamed_call_that_failed_in_transport_reads_no_window(workspace, monkeypatch, answered):
+    """The pairing production makes: a streamed turn with a usage sink. The
+    streaming exit returns the call the upstream failed with the verdict the
+    other exit gives it, and its one-token account must not become the window
+    on the live meter, the kept row or the failure marker."""
+    first = _ANSWERS_THROUGH_THE_MESSAGE_TOOL if answered else _LISTS_THE_WORKSPACE
+    agent = _failing_agent(
+        workspace, RecoveryLimits(enabled=False, llm_error_retry_delays=()), [first, _A_CALL_THE_UPSTREAM_NEVER_READ]
+    )
+
+    async def _delivered(_content: str, _media: list[str]) -> None:
+        return None
+
+    agent.tools.get("message").set_send_callback(_delivered)
+    sink: dict = {}
+    if answered:
+        await _turn(agent, sink, session_key="tui:c1", streamed=True)
+    else:
+        with pytest.raises(AnswerlessTurnError):
+            await _turn(agent, sink, session_key="tui:c1", streamed=True)
+
+    usage = await _resumed_usage(workspace, monkeypatch, "tui:c1")
+
+    assert sink["context_used"] == 6200
+    assert (usage["context_used"], usage["context_estimated"]) == (6200, False)
+
