@@ -12653,6 +12653,18 @@
       "en": "Main",
       "zh": "主会话"
     },
+    "gui.trajectory.agents": {
+      "en": "Agents",
+      "zh": "智能体"
+    },
+    "gui.trajectory.turn.ordinal": {
+      "en": "Turn {n}",
+      "zh": "第 {n} 轮"
+    },
+    "gui.trajectory.turn.from_report": {
+      "en": "From {name}",
+      "zh": "来自 {name}"
+    },
     "gui.trajectory.scope.untitled": {
       "en": "Sub-agent",
       "zh": "子智能体"

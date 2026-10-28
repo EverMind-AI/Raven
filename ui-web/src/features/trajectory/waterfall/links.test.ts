@@ -29,7 +29,7 @@ it('a dispatch runs from the spawning row down to the worker’s agent row', () 
     E('spawn', 10, { kind: 'tool.output', opens_subagent_scope: 't:sub' }),
     E('s1', 12, { subagent_scope: 't:sub', turn_span_id: 'S1' }),
   ], NOW)
-  const rows = displayRows(w, new Set(), new Set(['T1']))
+  const rows = displayRows(w, new Set(), new Set(['0:T1']))
   const links = crossLinks(rows, w)
   const dispatch = links.filter((link) => link.kind === 'dispatch')
   expect(dispatch).toHaveLength(1)

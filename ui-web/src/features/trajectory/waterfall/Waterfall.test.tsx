@@ -12,8 +12,8 @@ import { _resetFreshForTests, unpitch } from '../../../state/session/conversatio
 import { resetSources, setSources } from '../../../state/sources'
 import * as details from '../detailStore'
 import * as store from '../store'
-import { ROW_HEIGHT, Waterfall, displayRows } from './Waterfall'
 import { buildWaterfall } from './model'
+import { ROW_HEIGHT, Waterfall, displayRows } from './Waterfall'
 
 import type { TrajectoryEntry, TrajectoryIndexState, TrajectoryListResult, TrajectorySource } from '../types'
 
@@ -122,7 +122,7 @@ describe('displayRows', () => {
   it('hides a turn’s spans until the turn is open, and an agent’s rows until it is closed', () => {
     const w = buildWaterfall([E('a', 0), E('b', 1)], Date.parse('2026-10-28T10:01:00.000Z'))
     expect(displayRows(w, new Set(), new Set()).map((row) => row.kind)).toEqual(['agent', 'turn'])
-    expect(displayRows(w, new Set(), new Set(['T1'])).map((row) => row.kind)).toEqual(['agent', 'turn', 'span', 'span'])
+    expect(displayRows(w, new Set(), new Set(['0:T1'])).map((row) => row.kind)).toEqual(['agent', 'turn', 'span', 'span'])
     expect(displayRows(w, new Set(['']), new Set(['T1'])).map((row) => row.kind)).toEqual(['agent'])
   })
 })

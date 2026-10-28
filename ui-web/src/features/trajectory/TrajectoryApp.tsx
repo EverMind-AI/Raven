@@ -17,10 +17,9 @@ import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
 import { Details, Grip } from './Details'
 import * as details from './detailStore'
-import { DurationBar } from './DurationBar'
-import { EntryList, mib } from './EntryList'
 import { ScopeInfo, ScopeTabs } from './ScopeTabs'
 import * as store from './store'
+import { Waterfall, mib } from './waterfall/Waterfall'
 import './styles.css'
 
 import type { JSX } from 'react'
@@ -69,7 +68,7 @@ function Body(): JSX.Element {
   const narrow = details.narrow(d)
   return (
     <div className="trajectory-body" ref={attach} data-details={d.open ? '' : undefined} data-narrow={narrow ? '' : undefined}>
-      <EntryList />
+      <Waterfall />
       {d.open && !narrow ? <Grip /> : null}
       <Details />
     </div>
@@ -83,7 +82,6 @@ export function TrajectoryApp(): JSX.Element {
       <ScopeTabs />
       <ScopeInfo />
       <Status />
-      <DurationBar />
       <Body />
     </div>
   )

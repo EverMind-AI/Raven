@@ -39,7 +39,6 @@ import { has, servesTrajectory } from '../../rpc/capabilities'
 import { isFresh, onFresh } from '../../state/session/conversation'
 import { sources } from '../../state/sources'
 import { makeStore } from '../../state/store'
-import { snapThreshold } from './geometry'
 import { indexOf, insertSorted, removeIds } from './order'
 import { isAbsent, isCursorExpired, isDisabled } from './source'
 
@@ -163,14 +162,13 @@ export interface TrajectoryState {
   hiddenTurns: Record<number, number>
 }
 
-/** What the reader can set: the bar's duration threshold (0 filters nothing), and showing the entries the list hides. */
+/** What the reader can set: showing the entries the page hides. */
 export interface Prefs {
-  minChargedMs: number
   showHidden: boolean
 }
 
 export const PREFS_KEY = 'raven.gui.trajectory.prefs'
-const DEFAULT_PREFS: Prefs = { minChargedMs: 20, showHidden: false }
+const DEFAULT_PREFS: Prefs = { showHidden: false }
 
 /** The switches as the browser last kept them; the defaults where it kept nothing readable. */
 export function readPrefs(): Prefs {
@@ -181,15 +179,13 @@ function loadPrefs(): Prefs {
   try {
     const raw: unknown = typeof localStorage === 'undefined' ? null : JSON.parse(localStorage.getItem(PREFS_KEY) || 'null')
     if (raw && typeof raw === 'object') {
-      /* The switches an earlier build kept (`hideShort`, `showInternal`) are read into the current two. */
-      const value = raw as Partial<Prefs> & { hideShort?: unknown; showInternal?: unknown }
-      const minChargedMs = typeof value.minChargedMs === 'number'
-        ? snapThreshold(value.minChargedMs)
-        : typeof value.hideShort === 'boolean' ? (value.hideShort ? 20 : 0) : DEFAULT_PREFS.minChargedMs
+      /* An earlier build kept three spellings of this one switch; the newest wins,
+         and a stored duration threshold is simply ignored. */
+      const value = raw as { showHidden?: unknown; showInternal?: unknown }
       const showHidden = typeof value.showHidden === 'boolean'
         ? value.showHidden
         : typeof value.showInternal === 'boolean' ? value.showInternal : DEFAULT_PREFS.showHidden
-      return { minChargedMs, showHidden }
+      return { showHidden }
     }
   } catch {
     /* Storage may be unavailable or hold something else; the defaults stand. */
@@ -389,8 +385,8 @@ function leaveView(): void {
 /** Change a setting: kept in the browser for the next visit, and the rows reconsidered now. */
 export function setPrefs(next: Partial<Prefs>): void {
   const s = store.get()
-  const prefs = { ...s.prefs, ...next, minChargedMs: snapThreshold(next.minChargedMs ?? s.prefs.minChargedMs) }
-  if (prefs.minChargedMs === s.prefs.minChargedMs && prefs.showHidden === s.prefs.showHidden) return
+  const prefs = { ...s.prefs, ...next }
+  if (prefs.showHidden === s.prefs.showHidden) return
   savePrefs(prefs)
   patch({ prefs, revealed: [], ...derived(s.entries, prefs, [], s.scope) })
 }

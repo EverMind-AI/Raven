@@ -6,8 +6,8 @@ import { expect, it } from 'vitest'
 
 import { segmentOf, turnSegments } from './segments'
 
-import type { WaterfallRow, WaterfallTurn } from './model'
 import type { TrajectoryEntry } from '../types'
+import type { WaterfallRow, WaterfallTurn } from './model'
 
 const E = (over: Partial<TrajectoryEntry>): TrajectoryEntry => ({
   entry_id: 'e',
