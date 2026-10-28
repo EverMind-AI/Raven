@@ -1018,9 +1018,14 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
     previous_menu = None
     moved_at = 0
     re_measured_the_move = False
+    moved_the_row = bool(model_moved and target.get("kind") == "acp" and target.get("model") != model_before)
     committed = False
     try:
-        if model_moved and target.get("kind") == "acp" and target.get("model") != model_before:
+        if moved_the_row:
+            # The never-measured branch above measured the model this row is
+            # leaving, so its answer cannot speak for the one it moves to. Only a
+            # read of the settled target may satisfy the effort check.
+            measured_for_effort = False
             previous_menu = acp_snapshot_for(_as_configs([row_before])[0])
             try:
                 moved = await record_capabilities(_as_configs([target])[0])
@@ -1045,6 +1050,12 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
                 # had before it, and OpenCode's effort rungs are model-specific.
                 try:
                     snapshot = await record_capabilities(cfg_for_meta)
+                    if moved_the_row:
+                        # This read is taken on the settled target, so a refusal
+                        # below has to put the pre-move record back as well.
+                        measured_for_effort = True
+                        re_measured_the_move = True
+                        moved_at = int(getattr(snapshot, "measured_at_ms", 0) or 0)
                 except Exception as exc:  # noqa: BLE001 - judged on what is recorded, as the model pick is
                     logger.debug("subagents: {!r} effort menu not measured for a pick: {}", name, exc)
             choices = [c.value for c in agent_meta(cfg_for_meta, snapshot=snapshot).effort_choices]
