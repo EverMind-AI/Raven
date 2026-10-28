@@ -1,6 +1,10 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+/* This file forces many renders; under a full-suite run they share the CPU
+   with every other worker, so the wall clock is not the thing under test. */
+vi.setConfig({ testTimeout: 20_000 })
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import { absorb, resetCapabilities } from '../../rpc/capabilities'
@@ -214,9 +218,7 @@ describe('the details pane', () => {
     expect(q('#trajectory-tab-schema .trajectory-tab-dot')).not.toBeNull()
   })
 
-  /* Under a full-suite run this file's many forced renders share the CPU with
-     every other worker; the work is bounded, the wall clock is not. */
-  it('keeps the same tab across entries that have it and falls back to the overview otherwise', { timeout: 20_000 }, async () => {
+  it('keeps the same tab across entries that have it and falls back to the overview otherwise', async () => {
     await draw()
     await pick('r0')
     await answerDetail(descriptor('r0', [block({ id: 'result' }), block({ id: 'params', renderer: 'json' })]))

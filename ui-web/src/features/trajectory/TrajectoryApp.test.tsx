@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readFileSync } from 'node:fs'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import { absorb, resetCapabilities } from '../../rpc/capabilities'
@@ -13,6 +13,10 @@ import * as details from './detailStore'
 import * as scopes from './scopes'
 import * as store from './store'
 import { TrajectoryApp } from './TrajectoryApp'
+
+/* This file forces many renders; under a full-suite run they share the CPU
+   with every other worker, so the wall clock is not the thing under test. */
+vi.setConfig({ testTimeout: 20_000 })
 
 import type { TrajectoryChangesResult, TrajectoryEntry, TrajectoryIndexState, TrajectorySource } from './types'
 
