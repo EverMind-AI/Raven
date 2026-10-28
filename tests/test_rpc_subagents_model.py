@@ -342,6 +342,47 @@ async def test_a_model_and_effort_in_one_call_check_the_effort_on_the_new_model(
     )
 
 
+async def test_a_same_call_effort_is_judged_on_the_new_model_when_the_move_read_fails(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The never-measured branch measures the model the row is leaving, so its
+    answer cannot stand for the model the same call moves to. When the move's
+    own read fails, the effort check has to read the new model again rather than
+    trust the old menu -- and the refusal puts the old record back."""
+    raw = json.loads(config_path.read_text())
+    raw["subagents"]["agents"][0]["model"] = "vendor/reasoner"
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    _gate_answers(monkeypatch)
+
+    measured: list[str | None] = []
+    calls = {"n": 0}
+
+    async def fake_record(cfg):
+        calls["n"] += 1
+        measured.append(getattr(cfg, "model", None))
+        if calls["n"] == 2:
+            raise RuntimeError("the new model's handshake did not answer")
+        snapshot = _measured_snapshot(cfg, _MENUS.get(cfg.model or "", ()))
+        SnapshotStore().record(snapshot)
+        return snapshot
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+
+    with pytest.raises(ConfigValidationError, match="offers none"):
+        await subagents_update({"name": "Hermes Agent", "model": "vendor/flash", "effort": "high"})
+
+    assert measured == ["vendor/reasoner", "vendor/flash", "vendor/flash"], (
+        "the old model's read is not reused for the new one"
+    )
+    entry = next(entry for entry in _stored(config_path) if entry["name"] == "Hermes Agent")
+    assert entry["model"] == "vendor/reasoner", "the refused call writes nothing"
+    rows = (await subagents_list({"probe": False}))["rows"]
+    row = next(entry for entry in rows if entry["name"] == "Hermes Agent")
+    assert [choice["value"] for choice in row["effort_choices"]] == ["low", "high", "max"], (
+        "the store again describes the model the row kept"
+    )
+
+
 async def test_a_refused_move_drops_a_menu_the_row_never_adopted(
     config_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

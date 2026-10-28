@@ -3005,6 +3005,102 @@ async def test_an_orphaned_menu_read_still_recomposes_the_agent_table(
     assert key in menu_reads._MENU_READ_AT
 
 
+async def test_an_orphaned_menu_read_syncs_a_moved_menu_and_leaves_an_unchanged_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """The shielded read finishes with no asker left, so the sync cannot live in
+    one of them: the store gets the measured row either way, and the table has
+    to follow or `subagents.list` and the picker disagree until the next apply.
+
+    The second half is a read that measured what the row already held: an orphan
+    sync that always recomposed would replace every backend for nothing."""
+    from dataclasses import replace
+
+    from raven.acp_client.capabilities import (
+        AcpModelChoice,
+        CapabilitySnapshot,
+        SnapshotStore,
+        snapshot_fingerprint,
+    )
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {"name": "Helped", "kind": "acp", "command": "helper --acp", "enabled": True},
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+    monkeypatch.setattr(menu_reads, "_MENU_REFRESH_TIMEOUT_S", 0.01)
+
+    cfg = menu_reads._find("Helped", "config")
+
+    def snapshot_for(measured_at_ms: int, models: tuple[str, ...]) -> CapabilitySnapshot:
+        return CapabilitySnapshot(
+            agent="Helped",
+            fingerprint=snapshot_fingerprint(cfg),
+            status="ready",
+            detail="",
+            measured_at_ms=measured_at_ms,
+            can_load=True,
+            model_choices=tuple(AcpModelChoice(value=value, name=value, group="") for value in models),
+        )
+
+    SnapshotStore().record(snapshot_for(1, ("m1",)))
+
+    release = asyncio.Event()
+    measured = {"snapshot": snapshot_for(2, ("m1", "m2"))}
+
+    async def fake_record(cfg):
+        await release.wait()
+        SnapshotStore().record(measured["snapshot"])
+        return measured["snapshot"]
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    applied: list[list] = []
+
+    class _Loop:
+        def apply_agents(self, configs: list) -> None:
+            applied.append(configs)
+
+    key = ("config", "Helped")
+    for _ in range(2):
+        out = await subagents_refresh_models(
+            {"name": "Helped", "source": "config", "force": True}, agent_loop_factory=lambda: _Loop()
+        )
+        assert out["ok"] is False, "the asker is told the read did not answer within its budget"
+    task = menu_reads._MENU_TASKS[key]
+    assert applied == [], "both askers left without the read finishing"
+
+    release.set()
+    await task
+
+    assert len(applied) == 1, "the read that finished with no asker still syncs a menu that moved"
+    stored = SnapshotStore().load([cfg], allow_stale=True)["Helped"]
+    assert stored.model_choices == measured["snapshot"].model_choices
+
+    # The same shape, with a read that measured what the row now holds.
+    release.clear()
+    measured["snapshot"] = replace(measured["snapshot"], measured_at_ms=3)
+    for _ in range(2):
+        out = await subagents_refresh_models(
+            {"name": "Helped", "source": "config", "force": True}, agent_loop_factory=lambda: _Loop()
+        )
+        assert out["ok"] is False
+    task = menu_reads._MENU_TASKS[key]
+    release.set()
+    await task
+
+    assert len(applied) == 1, "an orphaned read that measured nothing new leaves the table alone"
+
+
 async def test_a_menu_read_that_measured_the_same_capabilities_leaves_the_agent_table_alone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
 ) -> None:
