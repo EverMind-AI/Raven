@@ -882,16 +882,16 @@ with it, which is the model's explanation, and is never resent: one switch to a 
 the turn fails; the fallback's answer opens a step of its own, and the refused words, shown live,
 are not stored. A refusal is read off the finish or the OpenAI-shaped `refusal` field, which litellm
 moves into `provider_specific_fields`; litellm's stream wrapper drops a chunk that carries only a
-refusal, so a refusal an OpenAI-compatible model streams never reaches Raven and reads as an empty
-reply. A stream that died after the reader had seen its text -- an error, a stall
-or a terminal error delta -- is CONTINUEd: `stream_llm_call` hands the words back as a reply
-finished `stream_cut` (`hand_back_partial`, which only the loop's answering call passes: a
-sub-agent's dropped stream still fails its run, and an exhausted turn's wrap-up still falls back
-to its static line) instead of failing, unless `llm_retry_after_output` asks for the whole call
-again. A cut is read before any marker, so a fragment that happens to spell one is continued rather
-than taken for silence, and a stream that had already received a refusal finish keeps it, so the
-refusal is handled as one rather than continued. The model is asked to go on, and the parts are
-joined, up to `MAX_CONTINUATIONS` times,
+refusal, so a refusal an OpenAI-compatible model streams reaches Raven as an empty reply, and is
+read as a refusal on the unstreamed resend below. A stream that died after the reader had seen its
+text -- an error, a stall or a terminal error delta -- is CONTINUEd: `stream_llm_call` hands the
+words back as a reply finished `stream_cut` (`hand_back_partial`, which only the loop's answering
+call passes: a sub-agent's dropped stream still fails its run, and an exhausted turn's wrap-up still
+falls back to its static line) instead of failing, unless `llm_retry_after_output` asks for the
+whole call again. A cut is read before any marker, so a fragment that happens to spell one is
+continued rather than taken for silence, and a stream that had already received a refusal finish
+keeps it, so the refusal is handled as one rather than continued. The model is asked to go on, and
+the parts are joined, up to `MAX_CONTINUATIONS` times,
 after which the partial is delivered with `PARTIAL_STREAM_NOTE` as an `interrupted` turn. A
 continuation that comes back empty leaves what streamed as the answer, and so does one that is a
 marker on its own, unless the cut left a think block open, when it is read only joined to what came
@@ -923,8 +923,12 @@ ceiling, through `send_max_tokens` pinned for the model it goes to, whatever the
 and near the window to the room its prompt leaves), the effort untouched, then fails. Nothing right
 after tools is NUDGEd once, then treated as nothing.
 An empty reply is RETRYed: the same request resent unchanged, up to `empty_content_max_retries`
-times, after a jittered backoff -- cut short by two zero-output replies of one model and finish
-(`deterministic_empty`), or by a reply whose reported cost reaches
+times, after a jittered backoff. On a streamed turn the first resend of a plain empty reply (not one
+right after tools) asks the same model without streaming, since a stream can come back empty where
+the plain call does not -- a dropped refusal, a gateway whose streams fail; it is one of those
+resends, its answer is read as any reply and shown through the same sinks and gates a stream's
+deltas pass, and later resends stream again. The resends are cut short by two zero-output replies
+of one model and finish (`deterministic_empty`), or by a reply whose reported cost reaches
 `empty_retry_cost_threshold_usd` (`resend_budget`, one resend). Once those are spent, a fallback
 model is tried -- each once, with no resend, prefill or step-down on it, and the switch held for the
 rest of the turn -- and then FAIL: status `error`, worded after Hermes per kind, with `no_output`

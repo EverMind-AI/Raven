@@ -1068,6 +1068,12 @@ class TurnPathMixin:
         # The silence gate of the call a cut answer is being continued from: what it held is not
         # shown at the cut, because the reply the turn ends on may still be a marker.
         carried_gate: SilenceGate | None = None
+        # The first resend of an empty streamed reply asks without streaming (``unstreamed_next``),
+        # once a turn (``unstreamed_spent``): a stream can come back empty where the same call made
+        # plainly would not -- a stream wrapper that drops a chunk whose only payload is a refusal, a
+        # gateway whose streams fail while its plain calls work.
+        unstreamed_next = False
+        unstreamed_spent = False
         # Sticky across a turn's step-downs: once the descent reaches a rung, the
         # next one must not read the turn's own effort again and hand back the
         # value that already came up thinking and nothing else.
@@ -1495,13 +1501,16 @@ class TurnPathMixin:
                 usage_record.bind(self.strategies),
                 usage_context.bind(session_key) if session_key else contextlib.nullcontext(),
             ):
+                unstreamed, unstreamed_next = unstreamed_next, False
                 response = await self.harness.action.decide(
                     ActionRequest(
                         provider=self.provider,
                         messages=call_messages,
                         tools=call_tools,
                         model=call_model,
-                        fallback_models=list(fallbacks_left),
+                        # An unstreamed resend is still the streamed turn's call: the provider's
+                        # own chain is not walked, and a model switch stays the loop's to make.
+                        fallback_models=[] if unstreamed else list(fallbacks_left),
                         # The one streaming call that asks for a cut answer back: a
                         # continuation (``ReplyKind.NETWORK_CUT``) follows it. The
                         # wrap-up and the watch-work judgement call the same method
@@ -1515,13 +1524,21 @@ class TurnPathMixin:
                         # already is, so the spliced value is None on exactly the
                         # turns the raw sink was, and a reasoning sink alone still
                         # streams.
-                        on_token_delta=draft or gate or downstream,
-                        on_reasoning_delta=on_reasoning_delta,
+                        on_token_delta=None if unstreamed else (draft or gate or downstream),
+                        on_reasoning_delta=None if unstreamed else on_reasoning_delta,
                         generation_overrides=gen_overrides,
                     )
                 )
                 # Read inside the bind: the count belongs to it and ends with it.
                 recorded_at_seam = usage_record.recorded_inbound()
+            if unstreamed and response.finish_reason != "error":
+                # What the stream would have shown, shown once the whole reply is in and through the
+                # same sinks: the thought first, then the words, which pass the gates a streamed
+                # delta passes, so a marker is still held and a reply still reaches the reader once.
+                if on_reasoning_delta is not None and response.reasoning_content:
+                    await on_reasoning_delta(response.reasoning_content)
+                if (sink := draft or gate or downstream) is not None and response.content:
+                    await sink(response.content)
             if response.finish_reason != "error" and (note := getattr(self.context_engine, "note_request", None)):
                 # What went out and was answered, for a history strategy that
                 # summarises by replaying it (its prefix is what is cached).
@@ -2307,6 +2324,8 @@ class TurnPathMixin:
                         delay,
                     )
                     pending_gen_overrides = call_overrides
+                    if streamed_call and kind is ReplyKind.EMPTY and not unstreamed_spent:
+                        unstreamed_next = unstreamed_spent = True
                     await _announce_wait("empty_reply")
                     iteration -= 1
                     await asyncio.sleep(delay)

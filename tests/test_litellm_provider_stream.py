@@ -890,8 +890,8 @@ def _refusing_openai_upstream(request: Any) -> Any:
     )
 
 
-def _through_litellm(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Send the provider's calls through litellm's own OpenAI route, onto the refusing upstream."""
+def _through_litellm(monkeypatch: pytest.MonkeyPatch, upstream: Any = _refusing_openai_upstream) -> None:
+    """Send the provider's calls through litellm's own OpenAI route, onto ``upstream`` (the refusing one)."""
     import httpx
     import litellm
     from openai import AsyncOpenAI
@@ -899,7 +899,7 @@ def _through_litellm(monkeypatch: pytest.MonkeyPatch) -> None:
     client = AsyncOpenAI(
         api_key="test-key",
         base_url="http://upstream.invalid/v1",
-        http_client=httpx.AsyncClient(transport=httpx.MockTransport(_refusing_openai_upstream)),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(upstream)),
     )
 
     async def acompletion(**kwargs: Any) -> Any:
@@ -937,9 +937,11 @@ def test_a_refusal_filed_with_a_chunks_provider_fields_is_read() -> None:
 async def test_a_streamed_openai_refusal_never_reaches_the_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     """litellm's stream wrapper drops a chunk whose only payload is a refusal: its
     test for an empty chunk does not count the field. What reaches the provider is
-    the opening chunk, whose refusal is still empty, and a bare ``stop``, which reads
-    as an empty reply. Pinned so a litellm that starts passing the words on fails
-    here, and this becomes the test that they are read."""
+    the opening chunk, whose refusal is still empty, and a bare ``stop``, which the
+    stream reads as an empty reply. The loop reads the refusal on its first resend,
+    which goes out unstreamed (the end-to-end test below). Pinned as litellm's
+    behaviour, so a litellm that starts passing the words on fails here, and this
+    becomes the test that the stream reads them."""
     from raven.providers.streaming import stream_llm_call
 
     _through_litellm(monkeypatch)
@@ -951,3 +953,87 @@ async def test_a_streamed_openai_refusal_never_reaches_the_provider(monkeypatch:
 
     assert [(d.content, d.finish_reason) for d in deltas if d.content or d.finish_reason] == [(None, "stop")]
     assert (response.content, response.finish_reason) == ("", "stop")
+
+
+# ---------- through the loop: the first resend of an empty streamed reply ----------
+
+_ANSWER = "Here it is."
+
+
+def _refuses_then_a_fallback_answers(seen: list[tuple[str, bool]]) -> Any:
+    """``gpt-4o`` refuses as ``_refusing_openai_upstream`` does; any other model streams ``_ANSWER``.
+
+    Every call is written down as (model, streamed), so a test reads which calls streamed.
+    """
+    import json
+
+    import httpx
+
+    def upstream(request: Any) -> Any:
+        body = json.loads(request.content)
+        seen.append((body["model"], bool(body.get("stream"))))
+        if body["model"] == "gpt-4o":
+            return _refusing_openai_upstream(request)
+        head = {"id": "chatcmpl-a", "object": "chat.completion.chunk", "created": 1, "model": body["model"]}
+        events = [
+            "data: "
+            + json.dumps({**head, "choices": [{"index": 0, "delta": delta, "finish_reason": finish, "logprobs": None}]})
+            + "\n\n"
+            for delta, finish in [({"role": "assistant", "content": _ANSWER}, None), ({}, "stop")]
+        ]
+        return httpx.Response(
+            200, content=("".join(events) + "data: [DONE]\n\n").encode(), headers={"content-type": "text/event-stream"}
+        )
+
+    return upstream
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallbacks", [["openai/gpt-4o-mini"], []], ids=["a_fallback_left", "none_left"])
+async def test_a_streamed_refusal_is_resent_once_unstreamed_and_read_as_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, fallbacks: list[str]
+) -> None:
+    """litellm drops the refusal from the stream, so the loop sees an empty stop. Its first resend goes
+    out unstreamed, where the refusal is read: the turn takes the refusal's one switch to a fallback
+    model, or fails with the model's explanation, instead of resending an empty stream three times."""
+    import asyncio
+
+    from raven.agent.loop import AgentLoop, turn_path
+    from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
+    from raven.agent.loop.recovery import REFUSAL_EXPLANATION, REFUSAL_FAILURE
+
+    class _NoWait:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(asyncio, name)
+
+        async def sleep(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+    monkeypatch.setattr(turn_path, "asyncio", _NoWait())
+    seen: list[tuple[str, bool]] = []
+    _through_litellm(monkeypatch, _refuses_then_a_fallback_answers(seen))
+    loop = AgentLoop(
+        provider=_make_provider(),
+        workspace=tmp_path,
+        model="openai/gpt-4o",
+        policy=TurnPolicy(max_iterations=5),
+        host=HostWiring(),
+        tools=ToolWiring(restrict_to_workspace=True),
+    )
+    shown: list[str] = []
+
+    async def sink(delta: str) -> None:
+        shown.append(delta)
+
+    final, _used, _messages, outcome = await loop._run_agent_loop(
+        [{"role": "user", "content": "hi"}], on_token_delta=sink, fallback_models=fallbacks
+    )
+
+    if fallbacks:
+        assert seen == [("gpt-4o", True), ("gpt-4o", False), ("gpt-4o-mini", True)]
+        assert final == _ANSWER and outcome.status == "completed"
+        assert shown == [_REFUSAL, _ANSWER], "the refusal as a stream would have shown it, then the answer"
+    else:
+        assert seen == [("gpt-4o", True), ("gpt-4o", False)]
+        assert outcome.status == "error"
+        assert outcome.error == REFUSAL_FAILURE + REFUSAL_EXPLANATION.format(text=_REFUSAL)

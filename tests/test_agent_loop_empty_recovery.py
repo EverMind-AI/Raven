@@ -1502,6 +1502,155 @@ class _Sink:
             self._timeline.append(("notice", detail))
 
 
+def _streamed(calls: list[dict]) -> list[bool]:
+    """Which of the adapter's calls asked for a stream."""
+    return [bool(call.get("stream")) for call in calls]
+
+
+@pytest.mark.asyncio
+async def test_the_first_resend_of_an_empty_streamed_reply_goes_out_unstreamed(workspace, monkeypatch):
+    """A stream can come back empty where the plain call would not -- a refusal the stream wrapper
+    dropped, a gateway whose streams fail -- so the first resend asks without streaming. What it
+    answers reaches the reader once, in the step a streamed resend would have opened: the thought
+    through the reasoning sink, then the words through the delta sink."""
+    calls = _served(monkeypatch, [_empty_finish(), _reply("the answer", reasoning="hmm")])
+    _recorded_sleeps(monkeypatch)
+    timeline: list[tuple[str, object]] = []
+
+    async def delta(text: str) -> None:
+        timeline.append(("delta", text))
+
+    async def thought(text: str) -> None:
+        timeline.append(("thought", text))
+
+    async def step(_index: int) -> None:
+        timeline.append(("step", None))
+
+    final, _used, messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=delta, on_reasoning_delta=thought, on_episode_start=step
+    )
+
+    assert _streamed(calls) == [True, False]
+    assert final == "the answer" and outcome.status == "completed"
+    assert timeline == [("step", None), ("step", None), ("thought", "hmm"), ("delta", "the answer")]
+    assert messages[-1]["content"] == "the answer"
+
+
+@pytest.mark.asyncio
+async def test_the_unstreamed_resend_leaves_the_model_switch_to_the_loop(workspace, monkeypatch):
+    """The provider's own chain walks the fallbacks on an error; the streamed turn's switch is the loop's,
+    which knows the model it is on. The unstreamed resend hands the provider no chain to walk."""
+    _served(monkeypatch, [_empty_finish(), _reply("the answer")])
+    _recorded_sleeps(monkeypatch)
+    agent = _litellm_agent(workspace)
+    chains: list[list[str] | None] = []
+    real = agent.provider.chat_with_retry
+
+    async def chat_with_retry(*args, **kwargs):
+        chains.append(kwargs.get("fallback_models"))
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(agent.provider, "chat_with_retry", chat_with_retry)
+
+    final, _used, _messages, _outcome = await agent._run_agent_loop(
+        _seed(), on_token_delta=_Sink().delta, fallback_models=["fb"]
+    )
+
+    assert final == "the answer"
+    assert chains == [[]]
+
+
+@pytest.mark.asyncio
+async def test_an_unstreamed_resend_on_a_streamed_turn_is_streamed_once_and_not_sent_again(workspace, monkeypatch):
+    """``run_turn`` sends a closing Text only when nothing streamed, so the words the unstreamed resend
+    answered with go out once, as a delta, and no Text follows them."""
+    from raven.spine.events import StreamDelta, Text
+
+    _served(monkeypatch, [_empty_finish(), _reply("the answer")])
+    _recorded_sleeps(monkeypatch)
+    agent = _litellm_agent(workspace)
+
+    async def _noop(**_kw) -> None:
+        return None
+
+    agent._start_executor = _noop
+    agent._connect_mcp = _noop
+    events: list = []
+
+    async def emit(event) -> None:
+        events.append(event)
+
+    await agent.run_turn(_turn("anything?"), emit, lambda: [])
+
+    assert [e.delta for e in events if isinstance(e, StreamDelta)] == ["the answer"]
+    assert not any(isinstance(e, Text) for e in events)
+
+
+@pytest.mark.asyncio
+async def test_a_marker_on_the_unstreamed_resend_ends_a_persons_turn_silent(workspace, monkeypatch):
+    _served(monkeypatch, [_empty_finish(), _reply("[SILENT]")])
+    _recorded_sleeps(monkeypatch)
+    sink = _Sink()
+
+    final, _used, messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=sink.delta, origin=Origin.USER
+    )
+
+    assert final == "[SILENT]" and outcome.silent is True
+    assert messages[-1].get("_silent") is True
+    assert sink.text == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "script,streamed,final",
+    [
+        pytest.param(
+            lambda: [_empty_finish(), _reply(""), _empty_finish(), _finished_stream("the answer")],
+            [True, False, True, True],
+            "the answer",
+            id="later_resends_stream_again",
+        ),
+        pytest.param(
+            lambda: [_empty_finish(), _tool_reply(), _finished_stream("done")],
+            [True, False, True],
+            "done",
+            id="a_tool_call_on_the_unstreamed_resend_runs",
+        ),
+        pytest.param(
+            lambda: [_a_streamed_thought(), _finished_stream("the answer")],
+            [True, True],
+            "the answer",
+            id="a_thinking_only_reply_is_not_resent_unstreamed",
+        ),
+        pytest.param(
+            # The first empty after tools is nudged; the second, its nudge spent, is resent as it was.
+            lambda: [_tool_stream(), _empty_finish(), _tool_stream(), _empty_finish(), _finished_stream("done")],
+            [True, True, True, True, True],
+            "done",
+            id="an_empty_reply_after_tools_is_resent_streamed",
+        ),
+    ],
+)
+async def test_only_the_first_resend_of_an_empty_reply_goes_out_unstreamed(
+    workspace, monkeypatch, script, streamed, final
+):
+    calls = _served(monkeypatch, script())
+    _recorded_sleeps(monkeypatch)
+
+    out, _used, _messages, _outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=_Sink().delta
+    )
+
+    assert _streamed(calls) == streamed
+    assert out == final
+
+
+def _a_streamed_thought() -> _Stream:
+    """A streamed reply that only thought: stepped down or prefilled, never resent as an empty one."""
+    return _finished_stream("<think>hmm</think>")
+
+
 @pytest.mark.asyncio
 async def test_a_resend_says_when_it_waits(workspace, monkeypatch):
     """One notice per backoff, each ahead of its wait: the status is for the seconds it names."""

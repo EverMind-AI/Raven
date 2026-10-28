@@ -286,9 +286,10 @@ All notable changes to Raven are documented here.
   `agents.defaults.emptyRetryCostThresholdUsd`, default 0.25 USD); one that
   only thought is asked again and then at a lower reasoning effort; one cut
   at the output limit is continued with more room; a refusal is never resent
-  but goes to a fallback model or fails with the model's explanation (except
-  one an OpenAI-compatible model streams, which litellm drops before Raven
-  sees it, so it is read as an empty reply); and a turn left with nothing
+  but goes to a fallback model or fails with the model's explanation (one an
+  OpenAI-compatible model streams, which litellm drops from the stream, comes
+  back as an empty reply, and the first resend of an empty streamed reply asks
+  without streaming, where the refusal is read); and a turn left with nothing
   fails in words that name what happened. A streamed answer whose connection
   dies is continued where it stopped, then delivered marked as partial if it
   stays cut. A compaction summary asks for reasoning effort `low` instead of
