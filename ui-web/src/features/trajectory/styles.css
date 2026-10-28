@@ -713,12 +713,16 @@ html[data-theme="dark"] {
 .trajectory-wf-ico { border-radius: 6px }
 .trajectory-wf-ico svg, .trajectory-wf-glyph svg { width: 13px; height: 13px }
 .trajectory-wf-tile img { width: 15px; height: 15px }
-.trajectory-wf-span .trajectory-wf-label::before {
-  top: calc(var(--wf-row) / -2); bottom: calc(var(--wf-row) / -2); width: 1px; background: #eef0f3 }
+.trajectory-wf-span .trajectory-wf-label::before { content: none }
 .trajectory-ov-lane { height: 16px }
 
-/* The guide runs the whole group: a turn's row draws it at the same column as
-   its spans, so one unbroken line follows the agent's children from the first
-   turn to the last span. */
-.trajectory-wf-turn .trajectory-wf-label::before { content: ''; position: absolute;
-  left: 30px; top: calc(var(--wf-row) / -2); bottom: calc(var(--wf-row) / -2); width: 1px; background: #eef0f3 }
+/* The guide is a trunk plus one branch per depth: every row draws its own
+   column and its ancestors', each half a row above and below, so the columns
+   join into unbroken lines down the whole agent group. */
+.trajectory-wf-guide { position: absolute; top: calc(var(--wf-row) / -2); bottom: calc(var(--wf-row) / -2);
+  width: 1px; background: #dfe4e9 }
+
+/* The label clips its text, but not its guide: the guide is a child of the
+   label, and `overflow: hidden` was cutting it to the row's height and
+   leaving a gap between every two rows. The name truncates on its own. */
+.trajectory-wf-label { overflow: visible }
