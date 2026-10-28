@@ -737,3 +737,19 @@ html[data-theme="dark"] {
 /* The overview is a strip: a handful of lanes, never taller than a few rows. */
 .trajectory-ov { max-height: 160px; overflow: hidden }
 .trajectory-ov-more .trajectory-ov-name { color: #b4b4b4 }
+
+/* The header is allowed to shrink: its six cells at their old size set a
+   min-content width wider than the column, which pushed the details pane off
+   the screen. Cells give way, and the island itself may be narrower than its
+   content's natural size. */
+.trajectory-wf { min-width: 0 }
+.trajectory-wf-stats { min-width: 0; overflow: hidden }
+.trajectory-wf-stat { min-width: 0; padding: 0 20px; flex: 0 1 auto }
+.trajectory-wf-statv { white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.trajectory-wf-tools { flex: none }
+.trajectory-wf { --wf-gutter: clamp(180px, 34%, 420px) }
+
+/* The header's cells never shrink into each other: the strip scrolls instead. */
+.trajectory-wf-stats { overflow-x: auto; overflow-y: hidden }
+.trajectory-wf-stat { flex: 0 0 auto }
+.trajectory-wf-statk, .trajectory-wf-statv { white-space: nowrap }
