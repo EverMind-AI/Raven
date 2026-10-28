@@ -2798,6 +2798,60 @@ async def test_a_mode_derived_effort_menu_travels_with_the_refreshed_models(
     assert out["effort_choices"] == [{"value": "high", "name": "High"}]
 
 
+async def test_an_asker_that_times_out_leaves_the_shared_read_to_the_others(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """Concurrent asks share one read, so the first asker's own budget running
+    out must not cancel it for the rest: the asker that joined later would get
+    no answer at all and its row would stay busy until a reload."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fake_record(cfg):
+        started.set()
+        await release.wait()
+        return _menu_snapshot()
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    monkeypatch.setattr(menu_reads, "_MENU_REFRESH_TIMEOUT_S", 0.05)
+    first = asyncio.ensure_future(subagents_refresh_models({"name": "OpenCode", "source": "preset", "force": True}))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    monkeypatch.setattr(menu_reads, "_MENU_REFRESH_TIMEOUT_S", 5.0)
+    second = asyncio.ensure_future(subagents_refresh_models({"name": "OpenCode", "source": "preset", "force": True}))
+    await asyncio.sleep(0)
+
+    assert (await asyncio.wait_for(first, timeout=5))["ok"] is False
+    release.set()
+    out = await asyncio.wait_for(second, timeout=5)
+    assert out["ok"] is True and out["models"][0]["value"] == "m1"
+
+
+async def test_an_asker_that_goes_away_leaves_the_shared_read_to_the_others(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """The same for an asker whose connection closed: its request is cancelled,
+    and that cancellation is its own, not the read's."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fake_record(cfg):
+        started.set()
+        await release.wait()
+        return _menu_snapshot()
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    first = asyncio.ensure_future(subagents_refresh_models({"name": "OpenCode", "source": "preset", "force": True}))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    second = asyncio.ensure_future(subagents_refresh_models({"name": "OpenCode", "source": "preset", "force": True}))
+    await asyncio.sleep(0)
+    first.cancel()
+    await asyncio.gather(first, return_exceptions=True)
+
+    release.set()
+    out = await asyncio.wait_for(second, timeout=5)
+    assert out["ok"] is True and out["models"][0]["value"] == "m1"
+
+
 @pytest.mark.parametrize("shape", ["thought_level", "mode_menu", "ravens_own_tiers", "no_menu"])
 async def test_a_refreshed_menu_and_the_recorded_one_are_derived_alike(
     shape: str, config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
