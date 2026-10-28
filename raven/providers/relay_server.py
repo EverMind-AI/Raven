@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import contextlib
+import contextvars
 import hashlib
 import hmac
 import json
@@ -45,6 +46,7 @@ from loguru import logger
 
 from raven.providers import relay_wire, usage_record
 from raven.providers.base import LLMProvider
+from raven.providers.binding import ModelBinding, use_binding
 from raven.providers.relay import RELAY_ENV, RELAY_TOKEN_ENV, RelayFaultError, run_relayed
 
 #: Distinct constructions kept built. An agent normally has one or two (its
@@ -82,6 +84,7 @@ class RelayServer:
         self._dir: Path | None = None
         self._providers: OrderedDict[str, LLMProvider] = OrderedDict()
         self._building: dict[str, asyncio.Future[LLMProvider]] = {}
+        self._handlers: set[asyncio.Task[None]] = set()
         self.loop: asyncio.AbstractEventLoop | None = None
         """The loop that answers this server's connections, and the only one that may close it."""
 
@@ -96,7 +99,7 @@ class RelayServer:
     async def start(self) -> None:
         self.loop = asyncio.get_running_loop()
         if self._tcp:
-            self._server = await asyncio.start_server(self._serve, host="127.0.0.1", port=0)
+            self._server = await asyncio.start_server(self._accept, host="127.0.0.1", port=0)
             host, port = self._server.sockets[0].getsockname()[:2]
             self._address = f"tcp:{host}:{port}"
         else:
@@ -104,7 +107,7 @@ class RelayServer:
             # from reaching the socket at all; the token is the second lock.
             self._dir = Path(tempfile.mkdtemp(prefix="raven-llm-relay-"))
             path = self._dir / "relay.sock"
-            self._server = await asyncio.start_unix_server(self._serve, path=str(path))
+            self._server = await asyncio.start_unix_server(self._accept, path=str(path))
             self._address = f"unix:{path}"
             atexit.register(shutil.rmtree, self._dir, True)
         logger.debug("llm relay: serving at {}", self._address)
@@ -158,6 +161,33 @@ class RelayServer:
         while len(self._providers) > _PROVIDER_CACHE_SIZE:
             self._providers.popitem(last=False)
         return provider
+
+    def _accept(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        """Serve one connection in a context of its own.
+
+        A handler would otherwise run in a copy of the context :meth:`start` ran
+        in, which may be inside a host turn: that turn's model binding would size
+        an agent's call, and its other state would follow the call too.
+        """
+        task = asyncio.get_running_loop().create_task(self._serve(reader, writer), context=contextvars.Context())
+        self._handlers.add(task)
+        task.add_done_callback(self._handlers.discard)
+
+    @staticmethod
+    def _turn(
+        request: dict[str, Any], provider: LLMProvider, args: dict[str, Any]
+    ) -> contextlib.AbstractContextManager:
+        """The agent's turn as far as sizing a call goes: its window, under the model the call names.
+
+        ``send_max_tokens`` reads the window from the active binding on both sides,
+        so the request body carries the ceiling the agent's loop reserved. No
+        window means the agent called outside a turn, and so does the host.
+        """
+        window = request.get("window")
+        if not isinstance(window, int) or isinstance(window, bool) or window <= 0:
+            return contextlib.nullcontext()
+        model = str(args.get("model") or provider.get_default_model())
+        return use_binding(ModelBinding(provider=provider, model=model, configured_window=window))
 
     async def _admit(self, reader: asyncio.StreamReader) -> bool | None:
         """Whether the peer presented this relay's token: ``None`` when it said nothing in time."""
@@ -234,7 +264,7 @@ class RelayServer:
         args = relay_wire.decode(request.get("args") or {}, sentinel=provider._SENTINEL)
 
         async def pump() -> None:
-            with usage_record.recorded_by_caller():
+            with usage_record.recorded_by_caller(), self._turn(request, provider, args):
                 async for delta in provider.chat_stream(**args):
                     await relay_wire.write_frame(writer, {"delta": relay_wire.encode(delta)})
             await relay_wire.write_frame(writer, {"done": True})
@@ -248,7 +278,7 @@ class RelayServer:
         args = relay_wire.decode(request.get("args") or {}, sentinel=provider._SENTINEL)
 
         async def answer() -> None:
-            with usage_record.recorded_by_caller():
+            with usage_record.recorded_by_caller(), self._turn(request, provider, args):
                 response = await provider.chat(**args)
             await relay_wire.write_frame(writer, {"result": relay_wire.encode(response)})
 
