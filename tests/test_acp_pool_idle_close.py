@@ -206,6 +206,30 @@ def test_a_rejected_edit_keeps_the_last_valid_settings(monkeypatch: pytest.Monke
     assert kept.idle_close_s == 30 and kept.fork_template is False
 
 
+@pytest.mark.parametrize("edit", [{"runtime": False}, {"runtime": "off"}, {"runtime": []}, False])
+def test_a_runtime_edit_that_is_not_a_mapping_is_rejected_not_removed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, edit: Any
+) -> None:
+    """Only a section that left the file, or a null, brings the defaults back; any other value is a bad edit."""
+    from raven.config import live as live_mod
+
+    config = tmp_path / "config.json"
+    reader = live_mod.LiveConfig(config)
+    config.write_text(
+        json.dumps({"subagents": {"runtime": {"idleCloseS": 30, "llmRelay": False, "forkTemplate": False}}}),
+        encoding="utf-8",
+    )
+    assert live_mod.subagent_runtime(reader).idle_close_s == 30
+    config.write_text(json.dumps({"subagents": edit}), encoding="utf-8")
+    kept = live_mod.subagent_runtime(reader)
+    assert (kept.idle_close_s, kept.llm_relay, kept.fork_template) == (30, False, False)
+
+    config.write_text(json.dumps({"subagents": {"runtime": None}}), encoding="utf-8")
+    assert live_mod.subagent_runtime(reader).idle_close_s == 600
+    config.write_text(json.dumps({}), encoding="utf-8")
+    assert live_mod.subagent_runtime(reader).idle_close_s == 600
+
+
 async def test_a_failed_idle_check_does_not_end_the_next_one(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pool_mod, "_IDLE_CHECK_MIN_S", 0.01)
     monkeypatch.setattr(AcpConnectionPool, "_idle_budget", staticmethod(lambda: 0.04))

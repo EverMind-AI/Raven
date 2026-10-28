@@ -580,10 +580,14 @@ def subagent_runtime(live: LiveConfig) -> SubagentRuntimeConfig:
     """
     from raven.config.schema import SubagentRuntimeConfig
 
-    section = live.get("subagents.runtime")
-    present = isinstance(section, dict)
+    parent = live.raw().get("subagents")
+    # Only a section that left the file, or a null (the schema's own "unset"),
+    # brings the defaults back. Anything else in its place -- ``false``, a
+    # string, a non-mapping ``subagents`` -- is an edit that failed.
+    section = parent.get("runtime") if isinstance(parent, dict) else parent
+    present = section is not None
     value = None
-    if present:
+    if isinstance(section, dict):
         try:
             value = SubagentRuntimeConfig.model_validate(section)
         except ValueError:
