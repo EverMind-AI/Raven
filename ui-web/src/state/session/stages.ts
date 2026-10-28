@@ -29,11 +29,11 @@ import { advanceTurn, currentTurn as wsCurrentTurn } from '../../features/worksp
 import { t } from '../../i18n/t'
 import { current as sessionCurrent } from '../../lib/session'
 import { hasToolOk } from '../../rpc/capabilities'
-import { set as setCtx } from '../ctxChip'
 import { session as sheetSession } from '../sheetRack'
 import { ds, sources } from '../sources'
 import { show as toast } from '../toast'
 import { ask, noteRow, unask } from './conversation'
+import { applyUsage } from './ctxReport'
 import { namingEnded, settleNaming } from './naming'
 import { rereadChips, viewRuntime } from './registry'
 import {
@@ -294,6 +294,12 @@ export const STAGES: readonly Stage[] = [
        notice, and dropping it keeps the queue held for the turn that is
        starting. Any silent mark that turn set is dropped with it. */
     if (rt.heldTurn !== null && p.turn_id === rt.heldTurn) { rt.silent = false; return }
+    /* A turn that ended without an answer, failed or stopped, still measured
+       its calls, and the record it filed carries the last reading, so the ring
+       moves on with it rather than staying on the turn before -- otherwise a
+       reload reads a number the ring never showed. Ahead of the stop's own
+       early exits: a stopped turn's reading rides only this event. */
+    applyUsage(p.usage)
     /* A cancelled turn is the one "error" a person asked for; the event still
        matters when the cancel came from ANOTHER client on the same session. */
     if (p.reason === 'cancelled_by_client') {
@@ -305,11 +311,6 @@ export const STAGES: readonly Stage[] = [
       return
     }
     rt.holding = false
-    /* A failed turn still measured its calls, and the record it filed carries
-       the last reading, so the ring moves on with it rather than staying on
-       the turn before -- otherwise a reload reads a number the ring never
-       showed. */
-    if (p.usage?.context_used !== undefined) setCtx(p.usage.context_used, p.usage.context_max ?? 0)
     /* The turn ends the way a stop ends it (softStop): the prose that streamed
        before the failure is promoted and its steps sealed, so the note lands
        under a finished turn rather than beside an open one; the runtime is

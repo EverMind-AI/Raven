@@ -38,13 +38,13 @@ import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/s
 import { hasNamingFlag, hasTurnDuration } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
 import { ask as confirmAsk } from '../confirm'
-import { set as setCtx } from '../ctxChip'
 import { adopt as adoptBases, staged as stagedBases } from '../mentions'
 import { ds, sources } from '../sources'
 import { load as loadTier } from '../tier'
 import { show as toast } from '../toast'
 import { clearStaged as clearStagedWorkdir, staged as stagedWorkdir } from '../workdir'
 import { ask, noteRow, noteSay, pitch, splitAtts } from './conversation'
+import { applyUsage } from './ctxReport'
 import { generation } from './generation'
 import { beginNaming, namingDeclined } from './naming'
 import { get, isActiveRuntime, isDraft as registryIsDraft, mint, subscribe, viewRuntime } from './registry'
@@ -262,7 +262,7 @@ export function finishTurn(payload: unknown, rt: SessionRuntime = viewRuntime())
   turn.dispatch({ type: 'idle' })
   const inTok = usage.input_tokens || usage.prompt_tokens || 0
   /* The window fill is the turn's prompt, not the running total. */
-  setCtx(usage.context_used || inTok, usage.context_max as number)
+  applyUsage(usage, inTok)
   const s = sess(sessionCurrent())
   /* A silent turn delivered nothing: it writes no preview, does not move its
      row up the rail (the server's list skips it for its time too) and raises no
