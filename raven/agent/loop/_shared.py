@@ -196,13 +196,31 @@ def _window_reading(usage: dict[str, Any] | None) -> int:
     return used
 
 
+def _reads_no_window(response: Any) -> bool:
+    """Whether a call's usage says nothing about how full the window is.
+
+    A response the provider flagged as an upstream transport failure
+    (``upstream_transport_failure``) carries the upstream's account of a call
+    that failed, and that account can be the very evidence that flagged it -- a
+    prompt billed at a size the request cannot have been. The call may never
+    have been read, so its usage is no reading of the window.
+    """
+    classification = getattr(response, "error_classification", None)
+    return getattr(classification, "category", None) == "upstream_transport_failure"
+
+
+def _call_window(response: Any) -> int:
+    """How full a model call left the window, or 0 when it gives no reading."""
+    return 0 if _reads_no_window(response) else _window_reading(getattr(response, "usage", None))
+
+
 def _stamp_context_used(messages: list[dict[str, Any]], response: Any) -> None:
     """Put a model call's window reading on the assistant entry that stands for it.
 
     Absent when the provider reported no usage, and absent means unknown: a
     resume reads the newest entry that has one.
     """
-    used = _window_reading(getattr(response, "usage", None))
+    used = _call_window(response)
     if used > 0 and messages:
         messages[-1][_CONTEXT_USED_KEY] = used
 

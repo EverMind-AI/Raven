@@ -1127,3 +1127,52 @@ async def test_a_failed_turn_that_measured_nothing_files_no_reading(workspace):
         await _turn(agent, {}, session_key="tui:c1")
 
     assert "context_used" not in _stored_replies(workspace, "tui:c1")[-1]
+
+
+def _fails_in_transport(usage: dict) -> LLMResponse:
+    return LLMResponse(
+        content="The upstream reported a failed call instead of an answer.",
+        finish_reason="error",
+        usage=usage,
+        error_classification=ErrorClassification("upstream_transport_failure", retryable=False),
+    )
+
+
+_LISTS_THE_WORKSPACE = LLMResponse(
+    content="",
+    tool_calls=[ToolCallRequest(id="c1", name="list_dir", arguments={"path": "."})],
+    usage=_measured(6000, 200),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answered", [False, True], ids=["failed", "answered"])
+async def test_a_call_that_failed_in_transport_reads_no_window(workspace, monkeypatch, answered):
+    """The upstream's account of a call it failed is no reading of the window:
+    it may be the very accounting that flagged the call, billed at a size the
+    request cannot have been. Neither the live meter nor the stored record takes
+    it, so both stay on the call before."""
+    first = _ANSWERS_THROUGH_THE_MESSAGE_TOOL if answered else _LISTS_THE_WORKSPACE
+    agent = _failing_agent(
+        workspace,
+        RecoveryLimits(llm_error_retry_delays=()),
+        [first, _fails_in_transport(_measured(5, 0, cost_usd=0.002))],
+    )
+
+    async def _delivered(_content: str, _media: list[str]) -> None:
+        return None
+
+    agent.tools.get("message").set_send_callback(_delivered)
+    sink: dict = {}
+    if answered:
+        await _turn(agent, sink, session_key="tui:c1")
+    else:
+        with pytest.raises(AnswerlessTurnError):
+            await _turn(agent, sink, session_key="tui:c1")
+
+    usage = await _resumed_usage(workspace, monkeypatch, "tui:c1")
+
+    assert sink["context_used"] == 6200
+    # The cost is the turn's, a flow, and the failed call was still billed.
+    assert sink["cost_usd"] == pytest.approx(0.002)
+    assert (usage["context_used"], usage["context_estimated"]) == (6200, False)

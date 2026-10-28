@@ -49,18 +49,19 @@ from raven.agent.loop._shared import (
     Session,
     TurnSynthesisPolicy,
     _appended_by_hook,
+    _call_window,
     _display_label,
     _file_change_payload,
     _file_composed_reply,
     _file_removed_payload,
     _file_written_payload,
     _first_line,
+    _reads_no_window,
     _runtime_origin,
     _stamp_context_used,
     _stamp_reasoning_ms,
     _stamp_replied_via_tool,
     _strip_inline_images,
-    _window_reading,
     append_hook_note,
     asyncio,
     autofill_resolver,
@@ -371,7 +372,7 @@ def _stamp_context_used_on_kept(messages: list[dict[str, Any]], response: Any) -
     reading, or ends on the marker ``_save_broken_turn`` files, which carries
     it.
     """
-    used = _window_reading(getattr(response, "usage", None))
+    used = _call_window(response)
     if used <= 0:
         return
     for message in reversed(messages):
@@ -1627,13 +1628,19 @@ class TurnPathMixin:
                 # keeps it for a resume (``_stamp_context_used``). They differ
                 # in their thresholds, not in what they measure -- and what
                 # they measure is how full the window is, which is not what
-                # the prompt was billed as (see ``_window_reading``).
-                context_used = _window_reading(response.usage)
+                # the prompt was billed as (see ``_window_reading``), and a
+                # call can give none (see ``_call_window``).
+                context_used = _call_window(response)
                 if context_used > 0:
                     window.last_context_used = context_used
                     if window_reading is not None:
                         window_reading["context_used"] = context_used
-            if usage_sink is not None and response.usage:
+            if usage_sink is not None and response.usage and _reads_no_window(response):
+                # No reading, so the gauge stays on the call before it; the
+                # cost below is the turn's, a flow, and moves on regardless.
+                usage_sink["cost_usd"] = spend.cost_usd
+                usage_sink["cost_missing_calls"] = spend.cost_missing_calls
+            elif usage_sink is not None and response.usage:
                 # An explicitly configured window always wins over the live
                 # table -- that is what setting it means. Otherwise the live
                 # window from the model's provider table (e.g. OpenRouter,
