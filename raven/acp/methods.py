@@ -284,11 +284,27 @@ class AcpMethods:
             return await self._session_cancel(params)
         if method == protocol.STEER_METHOD:
             return await self._session_steer(params)
+        if method == protocol.RESIDENT_WORK_METHOD:
+            return self._resident_work()
         if method in UNIMPLEMENTED_METHODS:
             raise AcpMethodError(protocol.METHOD_NOT_FOUND, f"{method} is not implemented")
         raise AcpMethodError(protocol.METHOD_NOT_FOUND, f"unknown method {method}")
 
     # -- handlers ---------------------------------------------------------
+
+    def _resident_work(self) -> dict[str, Any]:
+        """What this agent holds that runs with nobody asking (``_raven/residentWork``).
+
+        An armed cron job of this agent's partition fires only from this
+        process, and a plugin service lives only as long as it does, so a client
+        about to close the agent for idleness asks first. Read at the moment of
+        asking: a one-shot wake that has fired no longer counts.
+        """
+        loop = self._agent_loop
+        cron = getattr(loop, "cron_service", None)
+        jobs = len(cron.armed_jobs()) if cron is not None else 0
+        services = len(getattr(loop, "running_plugin_services", ()) or ())
+        return {"resident": bool(jobs or services), "cronJobs": jobs, "services": services}
 
     def _initialize(self, params: dict[str, Any]) -> dict[str, Any]:
         """Answer the handshake and keep what the client declared.

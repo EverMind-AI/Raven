@@ -703,6 +703,16 @@ class CronService:
         jobs = store.jobs if include_disabled else [j for j in store.jobs if j.enabled]
         return sorted(jobs, key=lambda j: j.state.next_run_at_ms or float("inf"))
 
+    def armed_jobs(self) -> list[CronJob]:
+        """The enabled jobs this runner will fire, while it runs; none once it is stopped.
+
+        What keeps the process holding this service from being idle: closing it
+        leaves these to no runner, since another partition never claims them.
+        """
+        if not self._running:
+            return []
+        return [job for job in self.list_jobs() if self._owns_channel(job.payload.channel)]
+
     def list_missed_foreign_oneshots(self, grace_ms: int = _MISSED_GRACE_MS) -> list[CronJob]:
         """Read-only: one-shot 'at' jobs owned by another partition whose
         fire time is more than ``grace_ms`` in the past — their owning

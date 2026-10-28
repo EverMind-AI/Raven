@@ -2569,8 +2569,9 @@ class SubagentRuntimeConfig(Base):
     either way before its process is closed. ``None`` or ``0`` keeps every agent
     until the host exits. Only an agent that can reopen its sessions
     (``loadSession``) is closed, so a later turn resumes the conversation in a
-    fresh process; an agent holding a wake is still answering a prompt and is
-    never idle."""
+    fresh process. An agent that holds work nobody is asking for yet -- an armed
+    cron job of its own, a running plugin service -- says so when asked
+    (``_raven/residentWork``) and is kept."""
 
     llm_relay: bool = True
     """Serve a Raven agent's LiteLLM calls from this process instead of loading

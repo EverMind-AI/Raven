@@ -82,7 +82,7 @@ applies to the next launch.
 
 | Key | Default | What it does |
 | --- | --- | --- |
-| `idleCloseS` | `600` | Closes an agent's process once it has been idle this many seconds: no request in flight either way and nothing said. Only an agent that can reload its sessions is closed, so the next turn resumes the conversation in a fresh process. `0` or `null` keeps agents until the host exits. |
+| `idleCloseS` | `600` | Closes an agent's process once it has been idle this many seconds: no request in flight either way and nothing said. An agent that still holds an armed reminder or a running plugin service is kept. Only an agent that can reload its sessions is closed, so the next turn resumes the conversation in a fresh process. `0` or `null` keeps agents until the host exits. |
 | `llmRelay` | `true` | The host makes a native agent's LiteLLM calls, so the agent never loads LiteLLM. The agent still builds each request, retries and records usage itself. |
 | `forkTemplate` | `true` | On Linux, native agents are forked from one process that has already loaded Raven, and share those pages instead of each loading its own copy. Other systems launch agents as before. |
 
