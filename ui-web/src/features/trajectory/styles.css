@@ -458,3 +458,40 @@ html[data-theme="dark"] {
 .trajectory-skel { display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }
 .trajectory-skel-line { height: 10px; border-radius: 5px; background: var(--raised); }
 .trajectory-skel-short { width: 40%; }
+
+/* ── the agent waterfall ──────────────────────────────────────────────
+   Rows are absolutely placed by scroll offset; the label column is the same
+   width on every row so one axis serves the ruler, an agent's lifetime, a
+   turn's composite bar and a span's own extent. */
+
+.trajectory-wf { display: flex; flex-direction: column; min-height: 0; flex: 1 }
+.trajectory-ruler { position: relative; height: 22px; margin-left: 196px; border-bottom: 1px solid var(--line); flex: none;
+  font: 10px/22px var(--mono); color: var(--faint) }
+.trajectory-ruler b { position: absolute; transform: translateX(-50%); font-weight: 400 }
+.trajectory-wf-scroll { overflow: auto; flex: 1; min-height: 0 }
+.trajectory-wf-rows { position: relative }
+.trajectory-wf-row { position: absolute; left: 0; right: 0; display: grid;
+  grid-template-columns: 188px minmax(0, 1fr); gap: 8px; align-items: center; cursor: default }
+.trajectory-wf-row:hover { background: var(--hover) }
+.trajectory-wf-label { display: flex; align-items: center; gap: 6px; min-width: 0;
+  font: 11px/1 var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.trajectory-wf-agent .trajectory-wf-label { font-weight: 600; color: var(--text) }
+.trajectory-wf-dot { width: 7px; height: 7px; border-radius: 2px; background: var(--trajectory-c-llm-output-fg); flex: none }
+.trajectory-wf-from { font: 9px/1 var(--mono); color: var(--moss); border: 1px solid var(--line);
+  border-radius: 4px; padding: 2px 4px; margin-left: 6px; overflow: hidden; text-overflow: ellipsis }
+.trajectory-wf-track { position: relative; height: 12px }
+.trajectory-wf-track i { position: absolute; top: 0; height: 12px; border-radius: 3px; min-width: 2px }
+.trajectory-wf-agentbar { background: var(--raised) }
+.trajectory-wf-span .trajectory-wf-track { height: 8px }
+.trajectory-wf-span .trajectory-wf-track i { height: 8px; border-radius: 2px }
+.trajectory-wf-turn .trajectory-wf-track { height: 10px }
+.trajectory-wf-turn .trajectory-wf-track i { height: 10px }
+.trajectory-wf-seg-model { background: var(--trajectory-c-llm-output-fg) }
+.trajectory-wf-seg-tool { background: var(--trajectory-c-tool-output-fg) }
+.trajectory-wf-seg-subagent { background: var(--moss) }
+.trajectory-wf-seg-failure { background: var(--chat-danger) }
+.trajectory-wf-seg-waiting { background: var(--raised) }
+.trajectory-wf-kind-llm-output, .trajectory-wf-kind-llm-input, .trajectory-wf-kind-llm-thinking {
+  background: var(--trajectory-c-llm-output-fg) }
+.trajectory-wf-kind-tool-output, .trajectory-wf-kind-tool-input { background: var(--trajectory-c-tool-output-fg) }
+.trajectory-wf-kind-user-input { background: var(--trajectory-c-user-input-fg) }
