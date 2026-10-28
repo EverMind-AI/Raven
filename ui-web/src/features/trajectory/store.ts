@@ -730,6 +730,8 @@ export function sessionChanged(key: string | null = sessionCurrent()): void {
     scope: null,
     scopes: [],
     saved: {},
+    shown: [],
+    shownIndex: {},
     visible: [],
     visibleIndex: {},
     spanIndex: {},

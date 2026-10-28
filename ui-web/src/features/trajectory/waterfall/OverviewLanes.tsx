@@ -20,6 +20,13 @@ const percent = (fraction: number): string => `${(fraction * 100).toFixed(4)}%`
 function runs(agent: WaterfallAgent): Array<{ start: number; end: number }> {
   const spans: Array<{ start: number; end: number }> = []
   for (const turn of agent.turns) spans.push({ start: turn.start, end: turn.end })
+  for (const row of agent.loose) {
+    const start = row.entry.operation_start
+    const end = row.entry.operation_end
+    if (start !== null && start !== undefined && end !== null && end !== undefined) {
+      spans.push({ start: Date.parse(start), end: Date.parse(end) })
+    }
+  }
   spans.sort((a, b) => a.start - b.start)
   const merged: Array<{ start: number; end: number }> = []
   for (const span of spans) {

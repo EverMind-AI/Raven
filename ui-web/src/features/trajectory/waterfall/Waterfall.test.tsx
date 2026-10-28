@@ -154,8 +154,99 @@ describe('the page', () => {
     expect(details.get().open).toBe(true)
   })
 
-  it('marks a turn a worker’s report started', async () => {
-    await draw([E('m1', 0, { turn_start: true, dispatched_by_subagent_scope: 't:sub' })])
-    expect(document.querySelector('[data-from]')).not.toBeNull()
+  it('shows how long a turn and a span took', async () => {
+    await draw([E('m1', 0, { operation_start: '2026-10-28T10:00:00.000Z', operation_end: '2026-10-28T10:00:02.500Z' })])
+    expect(document.querySelector('[data-row="turn"]')!.textContent).toContain('3s')
+    fireEvent.click(document.querySelector('[data-row="turn"]')!)
+    expect(document.querySelector('[data-entry="m1"]')!.textContent).toContain('3s')
+  })
+
+  it('marks a turn a worker’s report started, naming the worker', async () => {
+    await draw([
+      E('door', 0, { kind: 'tool.output', opens_subagent_scope: 't:sub', meta: { agent: 'coder', label: 'Fix the parser' } }),
+      E('m1', 5, { turn_span_id: 'T2', turn_start: true, dispatched_by_subagent_scope: 't:sub' }),
+      E('s1', 6, { subagent_scope: 't:sub', turn_span_id: 'S1' }),
+    ])
+    const badge = document.querySelector('[data-from]')!
+    expect(badge.getAttribute('data-from')).toBe('t:sub')
+    expect(badge.textContent).toContain('coder')
+    expect(badge.textContent).not.toContain('t:sub')
+  })
+
+  it('does not clip a span row to its turn: a worker that outlives the turn keeps its own extent', async () => {
+    const base = Date.parse('2026-10-28T10:00:00.000Z')
+    const span = (seconds: number): string => new Date(base + seconds * 1000).toISOString()
+    await draw([
+      E('m1', 0, { operation_start: span(0), operation_end: span(20.8) }),
+      E('spawn', 15, { kind: 'tool.output', operation_start: span(15.7), operation_end: span(149.2) }),
+      E('end', 20, { kind: 'turn.end', slot: 'turn.output', operation_start: span(20.7), operation_end: span(20.8) }),
+    ])
+    fireEvent.click(document.querySelector('[data-row="turn"]')!)
+    const turnBar = document.querySelector('[data-row="turn"] .trajectory-wf-seg') as HTMLElement
+    const spanBar = document.querySelector('[data-entry="spawn"] .trajectory-wf-spanbar') as HTMLElement
+    expect(Number.parseFloat(spanBar.style.width)).toBeGreaterThan(Number.parseFloat(turnBar.style.width))
+  })
+
+  it('opens the turn that holds a row selected from elsewhere, so the row exists', async () => {
+    await draw([E('m1', 0), E('m2', 1)])
+    expect(count('[data-row="span"]')).toBe(0)
+    act(() => { store.selectAcross('m2', { source: 'link' }) })
+    expect(count('[data-row="span"]')).toBeGreaterThan(0)
+    expect(document.querySelector('[data-entry="m2"]')).not.toBeNull()
+  })
+})
+
+it('brings a row selected from elsewhere into view, opening its turn and its agent', async () => {
+  const many = Array.from({ length: 60 }, (_, index) => E(`r${index}`, index, { turn_span_id: `T${index}` }))
+  await draw(many)
+  const box = document.querySelector('.trajectory-list') as HTMLElement
+  Object.defineProperty(box, 'clientHeight', { value: 100, configurable: true })
+  act(() => { store.selectAcross('r50', { source: 'link' }) })
+  /* The scroller moves to where the row will be; the browser's own scroll event
+     is what mounts it in a real page. */
+  expect(box.scrollTop).toBeGreaterThan(0)
+})
+
+describe('the page’s controls', () => {
+  it('reveals the entries the index hides when the switch is turned on', async () => {
+    await draw([E('shown', 0), E('folded', 1, { meta: { hidden: 'redundant_reply' } })])
+    expect(document.querySelector('[data-entry="folded"]')).toBeNull()
+    fireEvent.click(document.querySelector('[data-testid="show-hidden"]')!)
+    fireEvent.click(document.querySelector('[data-row="turn"]')!)
+    expect(document.querySelector('[data-entry="folded"]')).not.toBeNull()
+  })
+
+  it('labels an idle break where it compresses one', async () => {
+    const base = Date.parse('2026-10-28T10:00:00.000Z')
+    const at2 = (seconds: number): string => new Date(base + seconds * 1000).toISOString()
+    await draw([
+      E('a', 0, { operation_start: at2(0), operation_end: at2(20) }),
+      E('b', 1, { turn_span_id: 'T2', operation_start: at2(900), operation_end: at2(920) }),
+    ])
+    const idle = document.querySelector('.trajectory-ruler-idle')
+    expect(idle).not.toBeNull()
+    expect(idle!.textContent).toMatch(/\d/)
+  })
+
+  it('moves the selection with the arrow keys and opens a turn with Enter', async () => {
+    await draw([E('m1', 0), E('m2', 1, { turn_span_id: 'T2' })])
+    const box = document.querySelector('.trajectory-list') as HTMLElement
+    act(() => { box.focus() })
+    act(() => { fireEvent.keyDown(box, { key: 'ArrowDown' }) })
+    expect(store.get().selectedId).not.toBeNull()
+    act(() => { fireEvent.keyDown(box, { key: 'Enter' }) })
+    expect(document.querySelector('[data-row="turn"][data-open]')).not.toBeNull()
+  })
+
+  it('zooms toward the pointer on the wheel and returns on a double click', async () => {
+    await draw([E('m1', 0), E('m2', 1, { operation_start: new Date(Date.parse('2026-10-28T10:00:00.000Z') + 60_000).toISOString(), operation_end: new Date(Date.parse('2026-10-28T10:00:00.000Z') + 61_000).toISOString() })])
+    const box = document.querySelector('.trajectory-list') as HTMLElement
+    Object.defineProperty(box, 'clientWidth', { value: 800, configurable: true })
+    const before = (document.querySelector('[data-row="turn"] .trajectory-wf-seg') as HTMLElement).style.width
+    act(() => { box.dispatchEvent(new WheelEvent('wheel', { deltaY: -240, clientX: 100, bubbles: true, cancelable: true })) })
+    const after = (document.querySelector('[data-row="turn"] .trajectory-wf-seg') as HTMLElement).style.width
+    expect(after).not.toBe(before)
+    act(() => { fireEvent.doubleClick(box) })
+    expect((document.querySelector('[data-row="turn"] .trajectory-wf-seg') as HTMLElement).style.width).toBe(before)
   })
 })

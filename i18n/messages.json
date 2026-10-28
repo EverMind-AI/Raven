@@ -12657,6 +12657,14 @@
       "en": "Agents",
       "zh": "智能体"
     },
+    "gui.trajectory.agent.turns": {
+      "en": "{n} turns",
+      "zh": "{n} 轮"
+    },
+    "gui.trajectory.axis.idle": {
+      "en": "{duration} idle",
+      "zh": "空闲 {duration}"
+    },
     "gui.trajectory.turn.ordinal": {
       "en": "Turn {n}",
       "zh": "第 {n} 轮"

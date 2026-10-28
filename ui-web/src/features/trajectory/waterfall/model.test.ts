@@ -4,7 +4,7 @@
 
 import { expect, it } from 'vitest'
 
-import { buildWaterfall } from './model'
+import { buildWaterfall, isLive } from './model'
 
 import type { TrajectoryEntry } from '../types'
 
@@ -42,6 +42,8 @@ const E = (over: Partial<TrajectoryEntry>): TrajectoryEntry => ({
 })
 
 const NOW = Date.parse('2026-10-28T10:30:00.000Z')
+const T0 = Date.parse('2026-10-28T10:00:00.000Z')
+const at = (seconds: number): string => new Date(T0 + seconds * 1000).toISOString()
 
 it('turns are numbered per agent, not by the wire turn_number', () => {
   const w = buildWaterfall([
@@ -93,4 +95,20 @@ it('a turn names the agent whose report started it', () => {
     E({ entry_id: 'm1', span_id: 'a', turn_span_id: 'T2', turn_start: true, dispatched_by_subagent_scope: 't:sub', operation_start: '2026-10-28T10:05:00.000Z', operation_end: '2026-10-28T10:05:10.000Z' }),
   ], NOW)
   expect(w.agents[0]!.turns[0]!.reportedFrom).toBe('t:sub')
+})
+
+it('treats a span that never wrote an end as running only while it is recent', () => {
+  const recent = E({ operation_start: new Date(NOW - 30_000).toISOString(), operation_end: null })
+  const stale = E({ operation_start: new Date(NOW - 6 * 60 * 60_000).toISOString(), operation_end: null })
+  expect(isLive(recent, NOW)).toBe(true)
+  expect(isLive(stale, NOW)).toBe(false)
+  expect(isLive(E({ operation_end: new Date(NOW).toISOString() }), NOW)).toBe(false)
+})
+
+it('a turn previews the row that opened it, not whichever row started first', () => {
+  const w = buildWaterfall([
+    E({ entry_id: 'early', span_id: 'a', turn_span_id: 'T1', preview: 'early', operation_start: at(0), operation_end: at(5) }),
+    E({ entry_id: 'open', span_id: 'b', turn_span_id: 'T1', turn_start: true, preview: 'the question', operation_start: at(1), operation_end: at(2) }),
+  ], NOW)
+  expect(w.agents[0]!.turns[0]!.preview).toBe('the question')
 })

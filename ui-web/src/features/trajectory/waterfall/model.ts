@@ -105,7 +105,7 @@ function turnOf(id: string, entries: readonly TrajectoryEntry[], now: number): W
   return {
     id,
     ordinal: 0,
-    preview: rows[0]!.entry.preview ?? null,
+    preview: (rows.find((row) => row.entry.turn_start) ?? rows[0]!).entry.preview ?? null,
     start,
     end: stop,
     reportedFrom,
@@ -168,4 +168,14 @@ export function buildWaterfall(entries: readonly TrajectoryEntry[], now: number)
     return a.start - b.start || a.scope.localeCompare(b.scope)
   })
   return { agents }
+}
+
+/** Whether a row is still running: no end recorded, and recent enough that the
+ *  session can plausibly still be writing it. A historical span that never
+ *  wrote an end must not keep the page's clock ticking forever. */
+export const LIVE_WINDOW_MS = 30 * 60_000
+
+export function isLive(entry: TrajectoryEntry, now: number): boolean {
+  if (entry.operation_end !== null && entry.operation_end !== undefined) return false
+  return now - entryStart(entry) <= LIVE_WINDOW_MS
 }

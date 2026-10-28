@@ -18,15 +18,15 @@ import * as lang from '../../../state/lang'
 import * as details from '../detailStore'
 import { openFromEntry, scopeTitle } from '../scopes'
 import * as store from '../store'
-import { barOf, createAxis } from './axis'
+import { barOf, clampViewport, createAxis, tickMarks, zoomViewport } from './axis'
 import { crossLinks } from './links'
-import { agentKey, buildWaterfall, entryEnd, entryStart, turnKey } from './model'
+import { agentKey, buildWaterfall, entryEnd, entryStart, isLive, turnKey } from './model'
 import { OverviewLanes } from './OverviewLanes'
 import { turnSegments } from './segments'
 
 import type { TimeAxis, Viewport } from './axis'
 import type { Waterfall, WaterfallRow, WaterfallTurn } from './model'
-import type { JSX } from 'react'
+import type { JSX, KeyboardEvent as ReactKeyboardEvent } from 'react'
 
 export const ROW_HEIGHT = 28
 const OVERSCAN = 8
@@ -51,7 +51,7 @@ export function displayRows(
     for (const turn of agent.turns) {
       rows.push({ kind: 'turn', key: `turn:${turnKey(at, turn.id)}`, agent: at, turn: turn.id, row: null, turnRow: turn })
       if (!openTurns.has(turnKey(at, turn.id))) continue
-      turn.rows.forEach((row, at) => rows.push({ kind: 'span', key: `span:${row.entry.entry_id}:${at}`, agent: at, turn: turn.id, row, turnRow: turn }))
+      turn.rows.forEach((row, index) => rows.push({ kind: 'span', key: `span:${row.entry.entry_id}:${index}`, agent: at, turn: turn.id, row, turnRow: turn }))
     }
     for (const row of agent.loose) {
       rows.push({ kind: 'span', key: `loose:${row.entry.entry_id}`, agent: at, turn: null, row, turnRow: null })
@@ -87,17 +87,30 @@ const spanClass = (kind: string): string =>
     : kind === 'user.input' ? 'trajectory-wf-kind-user' : 'trajectory-wf-kind-model'
 
 function Ticks({ axis, view }: { axis: TimeAxis; view: Viewport }): JSX.Element {
-  const span = view.to - view.from
-  const step = [1000, 2000, 5000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000, 1_800_000, 3_600_000]
-    .find((candidate) => (candidate / span) * 100 >= 0.08) ?? 3_600_000
-  const ticks: JSX.Element[] = []
-  const first = Math.ceil(axis.unproject(view.from) / step) * step
-  for (let time = first; time <= axis.unproject(view.to); time += step) {
-    const at = (axis.project(time) - view.from) / span
-    if (at < 0 || at > 1) continue
-    ticks.push(<b key={time} style={{ left: percent(at) }}>{formatDuration(time - axis.start)}</b>)
-  }
-  return <div className="trajectory-ruler" aria-hidden="true">{ticks}</div>
+  const { from, to } = view
+  const ticks = useMemo(() => tickMarks(axis, { from, to }), [axis, from, to])
+  const span = to - from
+  const gaps = span > 0 ? axis.gaps : []
+  return (
+    <div className="trajectory-ruler" aria-hidden="true">
+      {ticks.map((tick) => (
+        <b key={tick.left} style={{ left: percent(tick.left) }}>{formatDuration(tick.time)}</b>
+      ))}
+      {gaps.map((gap, index) => {
+        const left = (gap.from - view.from) / span
+        const right = (gap.to - view.from) / span
+        const from = Math.max(0, left)
+        const to = Math.min(1, right)
+        if (to <= from) return null
+        return (
+          <span key={index} className="trajectory-ruler-idle"
+            style={{ left: percent(from), width: percent(to - from) }}>
+            {t('gui.trajectory.axis.idle', { duration: formatDuration(gap.end - gap.start) })}
+          </span>
+        )
+      })}
+    </div>
+  )
 }
 
 export function Waterfall(): JSX.Element {
@@ -107,6 +120,7 @@ export function Waterfall(): JSX.Element {
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set())
   const [scrollTop, setScrollTop] = useState(0)
   const [height, setHeight] = useState(0)
+  const [zoom, setZoom] = useState<{ axis: number; view: Viewport } | null>(null)
   const observer = useRef<ResizeObserver | null>(null)
   const box = useRef<HTMLDivElement | null>(null)
 
@@ -122,6 +136,62 @@ export function Waterfall(): JSX.Element {
     box.current?.focus()
   }, [pane.open])
 
+
+  /* The wheel zooms about the pointer and Shift+wheel pans; a native listener,
+     because React's own is passive and could not keep the page from scrolling. */
+  const viewRef = useRef<Viewport>({ from: 0, to: 0 })
+  const fullRef = useRef(0)
+  useEffect(() => {
+    const el = box.current
+    if (!el) return
+    const onWheel = (event: WheelEvent): void => {
+      event.preventDefault()
+      const rect = el.getBoundingClientRect()
+      const at = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0.5
+      const current = viewRef.current
+      const span = current.to - current.from
+      if (event.shiftKey) {
+        const shift = (span * event.deltaY) / Math.max(1, rect.width)
+        setZoom({ axis: fullRef.current, view: clampViewport({ from: current.from + shift, to: current.to + shift }, fullRef.current) })
+        return
+      }
+      const anchor = current.from + span * Math.min(1, Math.max(0, at))
+      const factor = Math.max(0.5, Math.min(2, Math.exp(-event.deltaY * 0.0015)))
+      setZoom({ axis: fullRef.current, view: zoomViewport(current, factor, anchor, fullRef.current) })
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+     
+  }, [])
+
+  /* The clock the bars are cut at. It ticks only while something is still
+     running: a fresh `Date.now()` every render would rebuild the whole model
+     on every scroll frame, which is what a 500-turn session cannot afford. */
+  const shown = store.get().shown
+  const prefs = store.get().prefs
+  const [now, setNow] = useState(() => Date.now())
+  const live = shown.some((entry) => isLive(entry, now))
+  useEffect(() => {
+    if (!live) return
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [live])
+  const waterfall = useMemo(() => buildWaterfall(shown, now), [shown, now])
+  const axis = useMemo(() => createAxis(intervalsOf(waterfall, now)), [waterfall, now])
+  /* A window belongs to the axis it was cut from; a different conversation has
+     a different length, and the old window means nothing on it. */
+  const view: Viewport = zoom !== null && zoom.axis === axis.length && zoom.view.to > zoom.view.from
+    ? zoom.view
+    : { from: 0, to: axis.length }
+  viewRef.current = view
+  fullRef.current = axis.length
+  /* A different conversation has a different axis; the old window means nothing. */
+   
+  useEffect(() => { setZoom(null) }, [axis.length])
+  const rows = useMemo(() => displayRows(waterfall, collapsed, open), [waterfall, collapsed, open])
+  const links = useMemo(() => crossLinks(rows, waterfall), [rows, waterfall])
+  const { first, last } = windowOf(scrollTop, height, rows.length)
+
   /* A selection made elsewhere -- a link in the pane, a tab's locate button --
      opens the turn that holds the row and brings the row into view, so a jump
      lands somewhere the reader can see. */
@@ -136,36 +206,27 @@ export function Waterfall(): JSX.Element {
       }
     }
     if (owner === null) return
+    const group = agentKey(waterfall.agents[owner.agent]!.scope)
+    if (collapsed.has(group)) {
+      setCollapsed((previous) => {
+        const next = new Set(previous)
+        next.delete(group)
+        return next
+      })
+      return
+    }
     const key = turnKey(owner.agent, owner.turn)
     if (!open.has(key)) {
       setOpen((previous) => new Set(previous).add(key))
       return
     }
     const at = rows.findIndex((row) => row.kind === 'span' && row.row?.entry.entry_id === selectedId)
-    const box2 = box.current
-    if (at < 0 || box2 === null) return
+    const scroller = box.current
+    if (at < 0 || scroller === null) return
     const top = at * ROW_HEIGHT
-    if (top < box2.scrollTop || top + ROW_HEIGHT > box2.scrollTop + box2.clientHeight) box2.scrollTop = top
+    if (top < scroller.scrollTop || top + ROW_HEIGHT > scroller.scrollTop + scroller.clientHeight) scroller.scrollTop = top
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, selections])
-
-  /* The clock the bars are cut at. It ticks only while something is still
-     running: a fresh `Date.now()` every render would rebuild the whole model
-     on every scroll frame, which is what a 500-turn session cannot afford. */
-  const shown = store.get().shown
-  const [now, setNow] = useState(() => Date.now())
-  const live = shown.some((entry) => entry.operation_end === null || entry.operation_end === undefined)
-  useEffect(() => {
-    if (!live) return
-    const timer = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(timer)
-  }, [live])
-  const waterfall = useMemo(() => buildWaterfall(shown, now), [shown, now])
-  const axis = useMemo(() => createAxis(intervalsOf(waterfall, now)), [waterfall, now])
-  const view: Viewport = { from: 0, to: axis.length }
-  const rows = useMemo(() => displayRows(waterfall, collapsed, open), [waterfall, collapsed, open])
-  const links = useMemo(() => crossLinks(rows, waterfall), [rows, waterfall])
-  const { first, last } = windowOf(scrollTop, height, rows.length)
+  }, [selectedId, selections, rows, open, collapsed])
 
   const attach = useCallback((el: HTMLDivElement | null): void => {
     box.current = el
@@ -198,9 +259,56 @@ export function Waterfall(): JSX.Element {
     })
   }
 
+  /* Every entry in the order the page draws them, for the arrow keys. */
+  const order = useMemo(
+    () => waterfall.agents.flatMap((agent) => [
+      ...agent.turns.flatMap((turn) => turn.rows.map((row) => row.entry.entry_id)),
+      ...agent.loose.map((row) => row.entry.entry_id),
+    ]),
+    [waterfall],
+  )
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End') {
+      event.preventDefault()
+      const selected = store.get().selectedId
+      const at = selected === null ? -1 : order.indexOf(selected)
+      const next = event.key === 'Home' ? 0
+        : event.key === 'End' ? order.length - 1
+          : event.key === 'ArrowDown' ? Math.min(order.length - 1, at + 1) : Math.max(0, at - 1)
+      const id = order[next]
+      if (id !== undefined) store.selectAcross(id, { source: 'keyboard' })
+      return
+    }
+    if (event.key !== 'Enter') return
+    const selected = store.get().selectedId
+    if (selected === null) return
+    const entry = store.get().entries[store.get().index[selected]!]
+    if (entry === undefined) return
+    event.preventDefault()
+    if (entry.opens_subagent_scope !== null && entry.opens_subagent_scope !== undefined) {
+      openFromEntry(entry)
+      return
+    }
+    for (const [index, agent] of waterfall.agents.entries()) {
+      for (const turn of agent.turns) {
+        if (turn.rows.some((row) => row.entry.entry_id === selected)) {
+          toggleTurn(turnKey(index, turn.id))
+          return
+        }
+      }
+    }
+  }
+
   const pick = (row: WaterfallRow): void => {
     store.selectAcross(row.entry.entry_id, { source: 'click' })
     details.openDetails()
+  }
+
+  /* A scope id is `trace:span`; the badge must say who the worker is. */
+  const nameOfScope = new Map<string, string>()
+  for (const agent of waterfall.agents) {
+    if (agent.scope !== null) nameOfScope.set(agent.scope, scopeTitle(agent.door))
   }
 
   const painted: JSX.Element[] = []
@@ -216,6 +324,9 @@ export function Waterfall(): JSX.Element {
           <span className="trajectory-wf-label" style={{ paddingLeft: 4 }}>
             <span className="trajectory-wf-dot" />
             {agent.scope === null ? t('gui.trajectory.scope.main') : scopeTitle(agent.door)}
+            <span className="trajectory-wf-dur">
+              {t('gui.trajectory.agent.turns', { n: agent.turns.length })} · {formatDuration(agent.end - agent.start)}
+            </span>
           </span>
           <span className="trajectory-wf-track">
             {bar ? <i className="trajectory-wf-agentbar" style={{ left: percent(bar.left), width: percent(bar.width) }} /> : null}
@@ -234,7 +345,8 @@ export function Waterfall(): JSX.Element {
           onClick={() => toggleTurn(turnKey(row.agent, turn.id))}>
           <span className="trajectory-wf-label" style={{ paddingLeft: 18 }}>
             {t('gui.trajectory.turn.ordinal', { n: turn.ordinal })}
-            {turn.reportedFrom === null ? null : <span className="trajectory-wf-from">{t('gui.trajectory.turn.from_report', { name: turn.reportedFrom })}</span>}
+            <span className="trajectory-wf-dur">{formatDuration(turn.end - turn.start)}</span>
+            {turn.reportedFrom === null ? null : <span className="trajectory-wf-from">{t('gui.trajectory.turn.from_report', { name: nameOfScope.get(turn.reportedFrom) ?? turn.reportedFrom })}</span>}
           </span>
           <span className="trajectory-wf-track">
             {parts.map((part, index) => {
@@ -247,15 +359,14 @@ export function Waterfall(): JSX.Element {
       continue
     }
     const entry = row.row!.entry
-    const span = row.turn === null ? null : row.turnRow!
     const start = entryStart(entry)
-    const end = span === null ? entryEnd(entry, now) : Math.min(entryEnd(entry, now), span.end)
-    const bar = barOf(axis, view, start, end)
+    const bar = barOf(axis, view, start, entryEnd(entry, now))
     painted.push(
       <div key={row.key} className="trajectory-wf-row trajectory-wf-span" data-row="span" data-entry={entry.entry_id}
         style={style} onClick={() => pick(row.row!)}>
         <span className="trajectory-wf-label" style={{ paddingLeft: 34 + row.row!.depth * 12 }}>
           {entry.preview ?? entry.span_name}
+          <span className="trajectory-wf-dur">{formatDuration(entryEnd(entry, now) - entryStart(entry))}</span>
         </span>
         <span className="trajectory-wf-track">
           {bar ? <i className={`trajectory-wf-spanbar ${spanClass(entry.kind)}`} style={{ left: percent(bar.left), width: percent(bar.width) }} /> : null}
@@ -271,21 +382,21 @@ export function Waterfall(): JSX.Element {
 
   return (
     <div className="trajectory-wf">
+      <div className="trajectory-wf-tools">
+        <button className="trajectory-wf-tool" data-testid="show-hidden" aria-pressed={prefs.showHidden}
+          title={t('gui.trajectory.bar.show_hidden', { n: store.get().hiddenCount })}
+          onClick={() => store.setPrefs({ showHidden: !prefs.showHidden })}>
+          {t('gui.trajectory.bar.show_hidden', { n: store.get().hiddenCount })}
+        </button>
+        <button className="trajectory-wf-tool" aria-label={t('gui.trajectory.bar.reset')} disabled={zoom === null}
+          onClick={() => setZoom(null)}>{'\u2922'}</button>
+      </div>
       <OverviewLanes waterfall={waterfall} axis={axis} viewport={view} />
       <Ticks axis={axis} view={view} />
       <div className="trajectory-list trajectory-wf-scroll" tabIndex={-1} ref={attach}
         onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
-        onKeyDown={(event) => {
-          if (event.key !== 'Enter') return
-          const selected = store.get().selectedId
-          if (selected === null) return
-          const entry = store.get().entries[store.get().index[selected]!]
-          if (entry === undefined) return
-          if (entry.opens_subagent_scope !== null && entry.opens_subagent_scope !== undefined) {
-            event.preventDefault()
-            openFromEntry(entry)
-          }
-        }}
+        onKeyDown={onKeyDown}
+        onDoubleClick={() => setZoom(null)}
         role="list" aria-label={t('gui.trajectory.agents')}>
         <div className="trajectory-wf-rows" style={{ height: rows.length * ROW_HEIGHT }}>
           <div className="trajectory-wf-links">

@@ -507,3 +507,14 @@ html[data-theme="dark"] {
 .trajectory-wf-link-report { border-left-color: var(--moss) }
 .trajectory-wf-seg { position: absolute; top: 0; height: 10px; border-radius: 3px; min-width: 2px }
 .trajectory-wf-spanbar { position: absolute; top: 0; height: 8px; border-radius: 2px; min-width: 2px }
+
+.trajectory-wf-tools { display: flex; align-items: center; gap: 8px; padding: 6px 12px 2px; flex: none }
+.trajectory-wf-tool { font: 10px/1 var(--mono); color: var(--muted); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; cursor: pointer }
+.trajectory-wf-tool[aria-pressed='true'] { color: var(--text); background: var(--raised) }
+.trajectory-wf-tool:disabled { opacity: .5; cursor: default }
+.trajectory-ruler-idle { position: absolute; top: 0; height: 22px; display: flex; align-items: center;
+  justify-content: center; font: 9px/1 var(--mono); color: var(--faint); overflow: hidden;
+  border-left: 1px dashed var(--line); border-right: 1px dashed var(--line) }
+
+.trajectory-wf-dur { margin-left: 8px; font: 9.5px/1 var(--mono); color: var(--faint); flex: none }

@@ -26,7 +26,14 @@ export function crossLinks(rows: readonly DisplayRow[], waterfall: Waterfall): L
   rows.forEach((row, index) => {
     if (row.kind === 'span' && row.row !== null) at.set(`entry:${row.row.entry.entry_id}`, index)
     if (row.kind === 'agent') at.set(`agent:${row.agent}`, index)
-    if (row.kind === 'turn' && row.turn !== null) at.set(`turn:${row.turn}`, index)
+    /* Keyed by the agent as well: two agents may name the same turn span. */
+    if (row.kind === 'turn' && row.turn !== null) at.set(`turn:${row.agent}:${row.turn}`, index)
+  })
+  /* Which agent holds each entry, so a folded door's turn can be keyed to it. */
+  const owner = new Map<string, number>()
+  waterfall.agents.forEach((agent, index) => {
+    for (const turn of agent.turns) for (const row of turn.rows) owner.set(row.entry.entry_id, index)
+    for (const row of agent.loose) owner.set(row.entry.entry_id, index)
   })
   const links: Link[] = []
   waterfall.agents.forEach((agent, index) => {
@@ -38,7 +45,7 @@ export function crossLinks(rows: readonly DisplayRow[], waterfall: Waterfall): L
     /* A folded turn hides the spawning row; the rule then starts at the turn
        that holds it, so the worker still says where it came from. */
     const fromRow = at.get(`entry:${door.entry_id}`)
-      ?? (door.turn_span_id === null || door.turn_span_id === undefined ? undefined : at.get(`turn:${door.turn_span_id}`))
+      ?? (door.turn_span_id === null || door.turn_span_id === undefined ? undefined : at.get(`turn:${owner.get(door.entry_id) ?? index}:${door.turn_span_id}`))
     if (fromRow !== undefined) links.push({ at: entryStart(door), fromRow, toRow, kind: 'dispatch' })
   })
   rows.forEach((row, index) => {
