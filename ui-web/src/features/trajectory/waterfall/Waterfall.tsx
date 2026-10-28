@@ -18,6 +18,7 @@ import * as lang from '../../../state/lang'
 import * as details from '../detailStore'
 import { entryEnd, entryStart, buildWaterfall } from './model'
 import { barOf, createAxis } from './axis'
+import { crossLinks } from './links'
 import { turnSegments } from './segments'
 import { scopeTitle } from '../scopes'
 import * as store from '../store'
@@ -111,6 +112,7 @@ export function Waterfall(): JSX.Element {
   const axis = useMemo(() => createAxis(intervalsOf(waterfall, now)), [waterfall, now])
   const view: Viewport = { from: 0, to: axis.length }
   const rows = useMemo(() => displayRows(waterfall, collapsed, open), [waterfall, collapsed, open])
+  const links = useMemo(() => crossLinks(rows, waterfall), [rows, waterfall])
   const { first, last } = windowOf(scrollTop, height, rows.length)
 
   const attach = useCallback((el: HTMLDivElement | null): void => {
@@ -213,7 +215,19 @@ export function Waterfall(): JSX.Element {
       <Ticks axis={axis} view={view} />
       <div className="trajectory-wf-scroll" ref={attach} onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
         role="list" aria-label={t('gui.trajectory.agents')}>
-        <div className="trajectory-wf-rows" style={{ height: rows.length * ROW_HEIGHT }}>{painted}</div>
+        <div className="trajectory-wf-rows" style={{ height: rows.length * ROW_HEIGHT }}>
+          <div className="trajectory-wf-links">
+            {links.map((link, index) => {
+              const bar = barOf(axis, view, link.at, link.at)
+              if (bar === null) return null
+              const top = Math.min(link.fromRow, link.toRow) * ROW_HEIGHT
+              const height = (Math.abs(link.toRow - link.fromRow) + 1) * ROW_HEIGHT
+              return <span key={index} className={`trajectory-wf-link trajectory-wf-link-${link.kind}`}
+                style={{ left: percent(bar.left), top, height }} />
+            })}
+          </div>
+          {painted}
+        </div>
       </div>
     </div>
   )

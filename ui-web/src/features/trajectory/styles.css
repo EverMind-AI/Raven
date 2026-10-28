@@ -502,3 +502,7 @@ html[data-theme="dark"] {
 .trajectory-ov-track { position: relative; height: 6px }
 .trajectory-ov-track i { position: absolute; top: 0; height: 6px; min-width: 2px; border-radius: 2px;
   background: var(--trajectory-c-llm-output-bg) }
+
+.trajectory-wf-links { position: absolute; top: 0; bottom: 0; left: 196px; right: 0; pointer-events: none }
+.trajectory-wf-link { position: absolute; width: 0; border-left: 1px dashed var(--faint); opacity: .55 }
+.trajectory-wf-link-report { border-left-color: var(--moss) }
