@@ -619,7 +619,7 @@ describe('a reassigned node', () => {
     expect(rows[0]!.nodes[0]).toStrictEqual({
       node_id: 'fix', agent: 'beta', instance: 'fix-minted', status: 'completed', depends_on: [],
       started_at: 20, ended_at: null, error: null, tokens_in: null, tokens_out: null,
-      tool_call_count: null, tool_failure_count: null, has_output: null, prompt_template: null,
+      tool_call_count: null, has_output: null, prompt_template: null,
       node_summary: null, files: [],
     })
   })
@@ -678,7 +678,7 @@ describe('applyRunCompleted on a reassigned node', () => {
     expect(rows[0]!.nodes[0]).toStrictEqual({
       node_id: 'fix', agent: 'alpha', instance: null, status: 'completed', depends_on: [],
       started_at: 20, ended_at: null, error: null, tokens_in: null, tokens_out: null,
-      tool_call_count: null, tool_failure_count: null, has_output: null, prompt_template: null,
+      tool_call_count: null, has_output: null, prompt_template: null,
       node_summary: null, files: [],
     })
   })
