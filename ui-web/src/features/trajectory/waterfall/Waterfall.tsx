@@ -159,6 +159,7 @@ export function Waterfall(): JSX.Element {
   const [zoom, setZoom] = useState<{ axis: number; view: Viewport } | null>(null)
   const observer = useRef<ResizeObserver | null>(null)
   const box = useRef<HTMLDivElement | null>(null)
+  const island = useRef<HTMLDivElement | null>(null)
 
   /* Closing the pane hands the focus back to the list, as it did when the rows
      were a list: the reader's next key press must land where they left off. */
@@ -178,17 +179,26 @@ export function Waterfall(): JSX.Element {
   const viewRef = useRef<Viewport>({ from: 0, to: 0 })
   const fullRef = useRef(0)
   useEffect(() => {
-    const el = box.current
-    if (!el) return
+    const el = island.current
+    const scroller = box.current
+    if (!el || !scroller) return
     const onWheel = (event: WheelEvent): void => {
       /* A plain wheel is the list's to scroll. Only a deliberate gesture --
          pinch / ctrl+wheel to zoom, shift+wheel to pan -- is taken, or the page
          would have no vertical scroll at all. */
       const zooming = event.ctrlKey || event.metaKey
       const panning = event.shiftKey && !zooming
-      if (!zooming && !panning) return
+      if (!zooming && !panning) {
+        /* Over the list the browser scrolls it; anywhere else on the island
+           (the header, the overview, the ruler) the wheel is forwarded, so the
+           page scrolls wherever the pointer happens to be. */
+        if (scroller.contains(event.target as Node)) return
+        event.preventDefault()
+        scroller.scrollTop += event.deltaY
+        return
+      }
       event.preventDefault()
-      const rect = el.getBoundingClientRect()
+      const rect = scroller.getBoundingClientRect()
       const at = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0.5
       const current = viewRef.current
       const span = current.to - current.from
@@ -514,7 +524,7 @@ export function Waterfall(): JSX.Element {
   }
 
   return (
-    <div className="trajectory-wf">
+    <div className="trajectory-wf" ref={island}>
       <div className="trajectory-wf-stats">
         {stats.map(([label, value]) => (
           <div key={label} className="trajectory-wf-stat">

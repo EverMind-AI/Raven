@@ -302,3 +302,18 @@ it('leaves a plain wheel to the list, and takes only ctrl+wheel or shift+wheel',
   act(() => { box.dispatchEvent(pan) })
   expect(pan.defaultPrevented).toBe(true)
 })
+
+it('scrolls the list for a wheel anywhere over the island, not just on the list', async () => {
+  await draw([E('m1', 0), E('m2', 1), E('m3', 2, { turn_span_id: 'T2' })])
+  const box = document.querySelector('.trajectory-list') as HTMLElement
+  const ruler = document.querySelector('.trajectory-ruler') as HTMLElement
+  Object.defineProperty(box, 'clientHeight', { value: 40, configurable: true })
+  Object.defineProperty(box, 'scrollHeight', { value: 400, configurable: true })
+  const overHeader = wheel({ deltaY: 120, bubbles: true, cancelable: true })
+  ruler.dispatchEvent(overHeader)
+  expect(overHeader.defaultPrevented).toBe(true)
+  expect(box.scrollTop).toBe(120)
+  const overList = wheel({ deltaY: 120, bubbles: true, cancelable: true })
+  box.dispatchEvent(overList)
+  expect(overList.defaultPrevented).toBe(false)
+})
