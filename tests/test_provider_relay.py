@@ -278,6 +278,42 @@ async def test_a_request_without_the_token_is_refused(served, monkeypatch: pytes
         await provider.chat(messages=[{"role": "user", "content": "q"}])
 
 
+async def _open(server: relay_server.RelayServer) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    from raven.providers.relay import _split
+
+    kind, where = _split(server.env()[relay.RELAY_ENV])
+    if kind == "unix":
+        return await asyncio.open_unix_connection(where)
+    return await asyncio.open_connection(*where)
+
+
+async def test_a_peer_without_the_token_is_dropped_before_the_host_reads_a_frame(
+    served, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On loopback TCP any local account can connect: silence is dropped, and nothing past the token's length is read.
+
+    The second peer announces a frame far larger than it sends; a host that read
+    frames before tokens would sit waiting to buffer it.
+    """
+    _, server = served
+    monkeypatch.setattr(relay_server, "_ADMIT_TIMEOUT_S", 0.2)
+
+    reader, writer = await _open(server)
+    try:
+        assert await asyncio.wait_for(reader.read(), timeout=5) == b""
+    finally:
+        writer.close()
+
+    reader, writer = await _open(server)
+    try:
+        writer.write((256 * 1024 * 1024).to_bytes(4, "big") + b"x" * 4096)
+        await writer.drain()
+        reply = await asyncio.wait_for(relay_wire.read_frame(reader), timeout=5)
+        assert reply is not None and "token" in reply["fault"]
+    finally:
+        writer.close()
+
+
 async def test_an_unreachable_host_leaves_the_call_to_this_process(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     monkeypatch.setenv(relay.RELAY_ENV, f"unix:{tmp_path / 'gone.sock'}")
     monkeypatch.setenv(relay.RELAY_TOKEN_ENV, "t")
@@ -612,17 +648,12 @@ async def test_the_host_builds_one_provider_per_construction_and_keeps_the_lates
 
 
 async def _raw(server: relay_server.RelayServer, frame: dict | None) -> dict | None:
-    from raven.providers.relay import _split
-
-    kind, where = _split(server.env()[relay.RELAY_ENV])
-    if kind == "unix":
-        reader, writer = await asyncio.open_unix_connection(where)
-    else:
-        reader, writer = await asyncio.open_connection(*where)
+    reader, writer = await _open(server)
     try:
         if frame is None:
             return None
-        await relay_wire.write_frame(writer, {"token": server.env()[relay.RELAY_TOKEN_ENV], **frame})
+        writer.write(relay_wire.greeting(server.env()[relay.RELAY_TOKEN_ENV]))
+        await relay_wire.write_frame(writer, frame)
         return await relay_wire.read_frame(reader)
     finally:
         writer.close()
@@ -676,6 +707,7 @@ async def test_a_stream_the_host_ends_oddly_or_drops_is_a_failure_here(monkeypat
     replies = iter([{"what": 1}, None])
 
     async def host(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        assert await reader.readline() == relay_wire.greeting("t")
         await relay_wire.read_frame(reader)
         reply = next(replies, None)
         if reply is not None:
