@@ -246,8 +246,14 @@ the stable schema.
 **Session Tier** (`medium`/`high`/`max`; `TIER_LADDER` in `config/schema.py`):
 What the shipped built-in Session Mode catalogue moves in place of an iteration cap or an
 overlay: a session's current mode id (`session_policy(key).mode`, falling through to the
-catalogue's default) is offered to every sub-agent that session dispatches, as the effort
-level to run it at. `clamp_tier` (`agent/subagent/mode_tiers.py`) is the clamp that lands
+catalogue's default) is offered to every sub-agent that session dispatches whose handshake
+advertised a mode menu, as the effort level to run it at. An agent that advertises no modes
+is offered no tier and runs on its own default (`TierDecline.NO_SHARED_RUNG`), and its
+instances take no mode override: `subagents.instance.set_mode` refuses, naming the empty
+menu. The Mirasim adapter is such an agent: it advertises its effort rungs as a
+`thought_level` config option rather than as session modes, so once its capability snapshot
+is measured the tier does not reach a Mirasim agent, and a Mirasim turn runs on the
+**Row Effort**, else on Mirasim's own default. `clamp_tier` (`agent/subagent/mode_tiers.py`) is the clamp that lands
 it on one sub-agent: the nearest rung at or below on that agent's own probed menu, or
 `None` -- leave the agent on its own default -- in three cases. A tier outside the ladder
 (another vocabulary, "nearest" undefined); a menu sharing no rung with it at all; and a menu
