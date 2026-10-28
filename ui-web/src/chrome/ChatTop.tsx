@@ -38,7 +38,7 @@
  */
 
 import { MoreVerticalIcon } from '@hugeicons/core-free-icons'
-import { useSyncExternalStore } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
 
 import { Icon } from '../components/Icon'
 import { RavenMark } from '../components/RavenMark'
@@ -199,6 +199,15 @@ export function ChatTop(): JSX.Element {
      trajectory's box takes its place; the attribute is rendered only while the
      trajectory is up, so the served markup is the markup it always was. */
   const parked = useSyncExternalStore(trajectory.subscribe, trajectory.get).view === 'trajectory'
+  /* The column's mode is the page's, not this region's: the composer and the
+     desk are the conversation's furniture and are hidden while a trace is up,
+     so the attribute goes on the document where their stylesheets can see it. */
+  useEffect(() => {
+    const root = document.documentElement
+    if (parked) root.setAttribute('data-traj', '')
+    else root.removeAttribute('data-traj')
+    return () => root.removeAttribute('data-traj')
+  }, [parked])
   return (
     <>
       <div

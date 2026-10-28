@@ -7095,3 +7095,10 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .wchip svg { flex: none; width: 13px; height: 13px; color: var(--faint); }
 .tkout { margin-top: 9px; font-size: 12px; line-height: 1.7; color: var(--muted);
   background: var(--surface); border-radius: 8px; padding: 9px 10px; }
+
+/* The trajectory view owns the column: the composer dock and the desk are the
+   conversation's furniture, not the trace's, so while a trace is up the page
+   shows the trace and the rail alone. ChatTop sets the attribute with the
+   view; nothing else reads it. */
+html[data-traj] .chat > .dock { display: none }
+html[data-traj] #deskHost { display: none }
