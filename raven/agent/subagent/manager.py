@@ -1352,13 +1352,24 @@ class SubagentManager:
         """Which mode this instance's turns run in, or ``None`` for the agent's own."""
         return self._instance_modes.get((session_key or "", canonical_agent_name(agent), handle))
 
+    def _instance_mode_override(self, session_key: str | None, agent: str | None, instance: str | None) -> str | None:
+        """This named instance's mode override, or ``None`` when it has none.
+
+        Not the mode a dispatch runs under: the session tier can still step in on
+        a miss, and :meth:`resolve_mode` is where that fallback lives. This
+        answers the override alone because :meth:`session_effort_for` needs to
+        know whether a person named a mode here -- a tier standing in for a
+        missing override would read as their choice.
+        """
+        if not instance:
+            return None
+        return self.instance_mode(session_key, agent or "", instance)
+
     def resolve_mode(
         self,
         session_key: str | None,
         agent: str | None,
         instance: str | None,
-        *,
-        tier: bool = True,
     ) -> str | None:
         """The mode one dispatch runs under: the instance's override, else the session's tier.
 
@@ -1380,15 +1391,13 @@ class SubagentManager:
         against and which is not this conversation's name. The same gate its
         ``instance_state`` sibling takes, for the same reason.
 
-        ``tier=False`` answers the instance's override alone, ``None`` when it
-        has none: what :meth:`session_effort_for` ranks the row's effort
-        against. It asks here so the override is still read in one place.
+        The override itself is read in one place, :meth:`_instance_mode_override`;
+        this method adds the tier its miss falls back to.
         """
-        if instance:
-            override = self.instance_mode(session_key, agent or "", instance)
-            if override:
-                return override
-        return self._tier_for(session_key, agent or "") if tier else None
+        override = self._instance_mode_override(session_key, agent, instance)
+        if override:
+            return override
+        return self._tier_for(session_key, agent or "")
 
     def _tier_for(self, session_key: str | None, agent: str) -> str | None:
         """The session's standing tier as this agent can take it, or ``None``.
@@ -1496,15 +1505,15 @@ class SubagentManager:
         own, but on an agent whose mode menu is its effort menu (Pi, Grok, Kimi,
         DSH) an instance's mode override IS its effort, and the two would go out
         on one channel with the row's value sent last. So the row's effort is
-        withheld there, and the override ``resolve_mode`` returned is the mode
-        the session stays on. Where effort is a ``thought_level`` option of its
-        own, the two channels are separate and both are sent.
+        withheld there, and the override ``_instance_mode_override`` returned is
+        the mode the session stays on. Where effort is a ``thought_level`` option
+        of its own, the two channels are separate and both are sent.
 
         ``instance``, not the dispatch's handle, for the reason ``resolve_mode``
         takes it that way: a call naming no instance has no override to find.
         """
         agent = agent or ""
-        if self.resolve_mode(session_key, agent, instance, tier=False):
+        if self._instance_mode_override(session_key, agent, instance):
             row = self.registry.get(agent)
             if row is not None and row.caps.effort_via_modes:
                 return None
