@@ -8685,6 +8685,14 @@
       "en": "Help me find a skill on Skill Hub and install it. My requirements are as follows:",
       "zh": "帮我在 Skill Hub 找一个技能并安装，我的要求如下："
     },
+    "gui.settings.skills.hub_card": {
+      "en": "Skill Hub",
+      "zh": "Skill Hub"
+    },
+    "gui.settings.skills.hub_title": {
+      "en": "Use 110k+ skills from EverMind Skill Hub",
+      "zh": "使用 EverMind Skill Hub 的 11 万+ 技能"
+    },
     "gui.settings.skills.builtin": {
       "en": "Built-in",
       "zh": "内置"

@@ -547,6 +547,13 @@ SECTIONS: tuple[Section, ...] = (
             ),
             Setting("skillForge.enabled", "Mount the extra local skill directories", "bool", _E.RELOAD),
             Setting(
+                "skillForge.router.hub.enabled",
+                "Search the shared Skill Hub during conversations",
+                "bool",
+                _E.RELOAD,
+                writer="settings",
+            ),
+            Setting(
                 "skillForge.autoInstall",
                 "Installing a Skill Hub skill the router picked",
                 "enum",

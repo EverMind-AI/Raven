@@ -1276,6 +1276,49 @@ async def test_settings_set_blocklist_preserves_invalid_sections(cfg, spelling, 
     assert cfg.read_bytes() == before
 
 
+async def test_settings_set_hub_switch_on_seeds_the_endpoint(cfg):
+    from raven.config.raven import load_raven_config
+
+    result = await rpc_console.settings_set({"key": "skillForge.router.hub.enabled", "value": True})
+
+    assert result == {"applied": True, "previous": False}
+    assert _read(cfg)["skillForge"]["router"]["hub"] == {
+        "enabled": True,
+        "endpoint": "https://skillhub.evermind.ai",
+    }
+    assert load_raven_config(config_path=cfg).skill_forge.router.hub.enabled is True
+
+
+async def test_settings_set_hub_switch_off_keeps_the_url(cfg):
+    cfg.write_text(
+        json.dumps({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test"}}}}),
+        encoding="utf-8",
+    )
+
+    result = await rpc_console.settings_set({"key": "skillForge.router.hub.enabled", "value": False})
+
+    assert result == {"applied": True, "previous": True}
+    assert _read(cfg)["skillForge"]["router"]["hub"] == {
+        "endpoint": "https://hub.internal.test",
+        "enabled": False,
+    }
+
+
+async def test_settings_set_hub_switch_rejects_a_non_bool(cfg):
+    with pytest.raises(ConfigValidationError):
+        await rpc_console.settings_set({"key": "skillForge.router.hub.enabled", "value": "on"})
+
+
+async def test_settings_set_hub_switch_refuses_a_broken_block(cfg):
+    cfg.write_text(json.dumps({"skillForge": []}), encoding="utf-8")
+    before = cfg.read_bytes()
+
+    with pytest.raises(ConfigValidationError, match="object or null"):
+        await rpc_console.settings_set({"key": "skillForge.router.hub.enabled", "value": True})
+
+    assert cfg.read_bytes() == before
+
+
 @pytest.mark.parametrize("snake_active", [False, True])
 @pytest.mark.parametrize(
     "camel,snake,field,previous,value",

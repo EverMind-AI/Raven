@@ -67,6 +67,9 @@ function seed(ext: ExtFixture): Record<string, Json> {
     tools: { disabledTools: ext.disabledTools },
     plugins: { disabled: ext.disabledPlugins },
     permissions: { mode: 'ask' },
+    /* An onboarded install: the settings page draws the Skill Hub switch on
+       and the row's off state is reachable by clicking it. */
+    skillForge: { router: { hub: { endpoint: 'https://skillhub.evermind.ai' } } },
   }
 }
 

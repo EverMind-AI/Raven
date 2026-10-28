@@ -2578,6 +2578,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.skills.add': 'Add',
     'gui.settings.skills.add_prompt':
       'Help me find a skill on Skill Hub and install it. My requirements are as follows:',
+    'gui.settings.skills.hub_card': 'Skill Hub',
+    'gui.settings.skills.hub_title': 'Use 110k+ skills from EverMind Skill Hub',
     'gui.settings.skills.builtin': 'Built-in',
     'gui.settings.skills.workspace': 'Workspace',
     'gui.settings.skills.on_of': '{on} of {total} on',
@@ -5942,6 +5944,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.skills.search': '搜索技能',
     'gui.settings.skills.add': '新增',
     'gui.settings.skills.add_prompt': '帮我在 Skill Hub 找一个技能并安装，我的要求如下：',
+    'gui.settings.skills.hub_card': 'Skill Hub',
+    'gui.settings.skills.hub_title': '使用 EverMind Skill Hub 的 11 万+ 技能',
     'gui.settings.skills.builtin': '内置',
     'gui.settings.skills.workspace': '工作区',
     'gui.settings.skills.on_of': '开 {on} / {total}',

@@ -15,6 +15,7 @@ import pytest
 from raven.config.update import (
     allow_exec_pattern,
     initialize_a2a_server,
+    initialize_skill_hub_endpoint,
     remove_exec_pattern,
     reset_cron_config,
     set_a2a_server_enabled,
@@ -24,6 +25,7 @@ from raven.config.update import (
     set_sandbox_backend,
     set_sentinel_nudge_quota,
     set_skill_blocked,
+    set_skill_hub_enabled,
     update_cron_config,
 )
 
@@ -620,6 +622,194 @@ def test_skill_unblock_removes_from_an_existing_snake_blocklist(cfg_path: Path) 
     )
     assert set_skill_blocked("alpha", False, config_path=cfg_path) == ["beta"]
     assert _read(cfg_path)["skill_forge"]["blocklist"] == ["beta"]
+
+
+# ---------------------------------------------------------------------------
+# initialize_skill_hub_endpoint
+# ---------------------------------------------------------------------------
+
+_HUB_ENDPOINT = "https://skillhub.evermind.ai"
+
+
+def test_skill_hub_endpoint_seeded_into_empty_config(cfg_path: Path) -> None:
+    assert initialize_skill_hub_endpoint(config_path=cfg_path) == _HUB_ENDPOINT
+    assert _read(cfg_path) == {"skillForge": {"router": {"hub": {"endpoint": _HUB_ENDPOINT}}}}
+
+
+def test_skill_hub_endpoint_leaves_the_api_key_to_the_user(cfg_path: Path) -> None:
+    initialize_skill_hub_endpoint(config_path=cfg_path)
+    hub = _read(cfg_path)["skillForge"]["router"]["hub"]
+    assert "apiKey" not in hub
+    assert "api_key" not in hub
+
+
+@pytest.mark.parametrize("existing", [_HUB_ENDPOINT, "https://hub.internal.test", None])
+def test_skill_hub_endpoint_never_overwrites_an_existing_value(cfg_path: Path, existing: str | None) -> None:
+    """An endpoint the config already names wins -- including an explicit null,
+    which is how a user keeps the Hub off across a repeat onboard."""
+    cfg_path.write_text(
+        json.dumps({"skillForge": {"router": {"hub": {"endpoint": existing, "apiKey": "k"}}}}),
+        encoding="utf-8",
+    )
+    before = cfg_path.read_bytes()
+    assert initialize_skill_hub_endpoint(config_path=cfg_path) is None
+    assert cfg_path.read_bytes() == before
+
+
+def test_skill_hub_endpoint_respects_existing_snake_casing(cfg_path: Path) -> None:
+    cfg_path.write_text(
+        json.dumps({"skill_forge": {"router": {"hub": {"apiKey": "k"}}}}),
+        encoding="utf-8",
+    )
+    assert initialize_skill_hub_endpoint(config_path=cfg_path) == _HUB_ENDPOINT
+    data = _read(cfg_path)
+    # a second block under the other spelling is what makes the file unloadable
+    assert "skillForge" not in data
+    assert data["skill_forge"]["router"]["hub"] == {"apiKey": "k", "endpoint": _HUB_ENDPOINT}
+
+
+def test_skill_hub_endpoint_on_a_snake_config_leaves_it_loadable(cfg_path: Path) -> None:
+    from raven.config.raven import load_raven_config
+
+    cfg_path.write_text(
+        json.dumps({"skill_forge": {"router": {"hub": {"apiKey": "k"}}}}),
+        encoding="utf-8",
+    )
+    initialize_skill_hub_endpoint(config_path=cfg_path)
+    cfg = load_raven_config(cfg_path)
+    assert cfg.skill_forge.router.hub.endpoint == _HUB_ENDPOINT
+    assert cfg.skill_forge.router.hub.api_key == "k"
+
+
+@pytest.mark.parametrize("spelling", ["skillForge", "skill_forge"])
+def test_skill_hub_endpoint_preserves_other_skill_settings(cfg_path: Path, spelling: str) -> None:
+    cfg_path.write_text(
+        json.dumps({spelling: {"blocklist": ["alpha"], "router": {"topK": 4}}}),
+        encoding="utf-8",
+    )
+    initialize_skill_hub_endpoint(config_path=cfg_path)
+    section = _read(cfg_path)[spelling]
+    assert section["blocklist"] == ["alpha"]
+    assert section["router"] == {"topK": 4, "hub": {"endpoint": _HUB_ENDPOINT}}
+
+
+@pytest.mark.parametrize("spelling", ["skillForge", "skill_forge"])
+@pytest.mark.parametrize("invalid", [[], 0, 1, "invalid", False])
+def test_skill_hub_endpoint_preserves_an_invalid_section(cfg_path, spelling, invalid) -> None:
+    cfg_path.write_text(json.dumps({spelling: invalid}), encoding="utf-8")
+    before = cfg_path.read_bytes()
+    with pytest.raises(ValueError, match="object or null"):
+        initialize_skill_hub_endpoint(config_path=cfg_path)
+    assert cfg_path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"skillForge": {"router": []}},
+        {"skillForge": {"router": 0}},
+        {"skillForge": {"router": "invalid"}},
+        {"skillForge": {"router": None}},
+        {"skillForge": {"router": {"hub": []}}},
+        {"skillForge": {"router": {"hub": 0}}},
+        {"skillForge": {"router": {"hub": "invalid"}}},
+        {"skillForge": {"router": {"hub": None}}},
+    ],
+)
+def test_skill_hub_endpoint_preserves_an_invalid_nested_block(cfg_path: Path, raw) -> None:
+    """A null nested block is a schema violation, unlike a null top-level one
+    (which the loader drops), so it is refused rather than repaired."""
+    cfg_path.write_text(json.dumps(raw), encoding="utf-8")
+    before = cfg_path.read_bytes()
+    with pytest.raises(ValueError, match="must be an object"):
+        initialize_skill_hub_endpoint(config_path=cfg_path)
+    assert cfg_path.read_bytes() == before
+
+
+# ---------------------------------------------------------------------------
+# set_skill_hub_enabled -- the settings-page switch
+# ---------------------------------------------------------------------------
+
+
+def test_skill_hub_switch_on_seeds_the_endpoint(cfg_path: Path) -> None:
+    assert set_skill_hub_enabled(True, config_path=cfg_path) is False
+    assert _read(cfg_path)["skillForge"]["router"]["hub"] == {
+        "enabled": True,
+        "endpoint": _HUB_ENDPOINT,
+    }
+
+
+def test_skill_hub_switch_on_keeps_a_custom_endpoint(cfg_path: Path) -> None:
+    cfg_path.write_text(
+        json.dumps({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test"}}}}),
+        encoding="utf-8",
+    )
+    assert set_skill_hub_enabled(True, config_path=cfg_path) is True
+    assert _read(cfg_path)["skillForge"]["router"]["hub"] == {
+        "endpoint": "https://hub.internal.test",
+        "enabled": True,
+    }
+
+
+def test_skill_hub_switch_on_replaces_an_explicit_off(cfg_path: Path) -> None:
+    cfg_path.write_text(
+        json.dumps({"skillForge": {"router": {"hub": {"endpoint": None, "enabled": False}}}}),
+        encoding="utf-8",
+    )
+    assert set_skill_hub_enabled(True, config_path=cfg_path) is False
+    assert _read(cfg_path)["skillForge"]["router"]["hub"] == {
+        "enabled": True,
+        "endpoint": _HUB_ENDPOINT,
+    }
+
+
+def test_skill_hub_switch_off_keeps_the_endpoint(cfg_path: Path) -> None:
+    from raven.config.raven import load_raven_config
+
+    cfg_path.write_text(
+        json.dumps({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test"}}}}),
+        encoding="utf-8",
+    )
+    assert set_skill_hub_enabled(False, config_path=cfg_path) is True
+    assert _read(cfg_path)["skillForge"]["router"]["hub"] == {
+        "endpoint": "https://hub.internal.test",
+        "enabled": False,
+    }
+    assert load_raven_config(cfg_path).skill_forge.router.hub.enabled is False
+
+
+def test_skill_hub_switch_off_seeds_nothing(cfg_path: Path) -> None:
+    assert set_skill_hub_enabled(False, config_path=cfg_path) is False
+    assert _read(cfg_path) == {"skillForge": {"router": {"hub": {"enabled": False}}}}
+
+
+def test_the_switch_off_survives_a_repeat_onboard(cfg_path: Path) -> None:
+    set_skill_hub_enabled(False, config_path=cfg_path)
+    initialize_skill_hub_endpoint(config_path=cfg_path)
+    hub = _read(cfg_path)["skillForge"]["router"]["hub"]
+    assert hub == {"enabled": False, "endpoint": _HUB_ENDPOINT}
+
+
+def test_skill_hub_switch_respects_existing_snake_casing(cfg_path: Path) -> None:
+    cfg_path.write_text(
+        json.dumps({"skill_forge": {"router": {"hub": {"endpoint": "https://hub.internal.test"}}}}),
+        encoding="utf-8",
+    )
+    set_skill_hub_enabled(False, config_path=cfg_path)
+    data = _read(cfg_path)
+    assert "skillForge" not in data
+    assert data["skill_forge"]["router"]["hub"] == {
+        "endpoint": "https://hub.internal.test",
+        "enabled": False,
+    }
+
+
+def test_skill_hub_switch_refuses_an_invalid_section(cfg_path: Path) -> None:
+    cfg_path.write_text(json.dumps({"skillForge": []}), encoding="utf-8")
+    before = cfg_path.read_bytes()
+    with pytest.raises(ValueError, match="object or null"):
+        set_skill_hub_enabled(True, config_path=cfg_path)
+    assert cfg_path.read_bytes() == before
 
 
 class TestTheWidthGateIsEverosOnly:

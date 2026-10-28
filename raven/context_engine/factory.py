@@ -295,7 +295,7 @@ def _build_router(
 
     # ── Source 3: Hub (conditional on remote endpoint) ──────────────
     hub_cfg = skill_forge_router_config.hub
-    if hub_cfg.endpoint:
+    if hub_cfg.endpoint and hub_cfg.enabled:
         from raven.skill_hub import SkillHubClient
 
         # Reuse the host-built client (shared with the read_skill / use_skill

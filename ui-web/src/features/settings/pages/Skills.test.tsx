@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as confirm from '../../../state/confirm'
 import * as settingsDialog from '../../../state/settings'
 import { resetSources, setSources } from '../../../state/sources'
-import { install, modelSource, mount, source as settingsSource } from '../../../test/settingsHarness'
+import { install, modelSource, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
 import { askInChat } from '../../composer/startTaskWith'
 import * as store from '../store'
 import { stripFrontmatter } from './Skills'
@@ -31,7 +31,11 @@ describe('skills page', () => {
     install()
     await mount('skills')
     const cards = [...document.querySelectorAll('.settings-card .settings-t')].map((el) => el.textContent)
-    expect(cards).toEqual(['gui.settings.skills.builtin · 1', 'gui.settings.skills.workspace · gui.settings.skills.on_of {"on":1,"total":2}'])
+    expect(cards).toEqual([
+      'gui.settings.skills.hub_card',
+      'gui.settings.skills.builtin · 1',
+      'gui.settings.skills.workspace · gui.settings.skills.on_of {"on":1,"total":2}',
+    ])
     await act(async () => { fireEvent.change(document.getElementById('skq')!, { target: { value: 'database' } }) })
     expect(screen.queryByText('git-flow')).toBeNull()
     expect(screen.getByText('sql-style')).toBeTruthy()
@@ -46,6 +50,31 @@ describe('skills page', () => {
       ['set', { key: 'skillForge.blocklist', value: ['sql-style', 'git-flow'] }],
       ['set', { key: 'skillForge.blocklist', value: [] }],
     ])
+  })
+
+  it('the Skill Hub switch writes the enabled flag and starts off without an endpoint', async () => {
+    const { calls } = install()
+    await mount('skills')
+    const hub = screen.getByRole('switch', { name: 'gui.settings.skills.hub_title' })
+    expect(hub.getAttribute('aria-checked')).toBe('false')
+    await act(async () => { fireEvent.click(hub) })
+    expect(calls).toEqual([['set', { key: 'skillForge.router.hub.enabled', value: true }]])
+  })
+
+  it('an endpoint turns the Skill Hub switch on; an explicit off keeps it off', async () => {
+    const on = snap()
+    on.raw.skillForge = { blocklist: [], router: { hub: { endpoint: 'https://hub.internal.test' } } }
+    install(on)
+    await mount('skills')
+    expect(screen.getByRole('switch', { name: 'gui.settings.skills.hub_title' }).getAttribute('aria-checked')).toBe('true')
+    cleanup()
+    store._resetForTests()
+
+    const off = snap()
+    off.raw.skillForge = { blocklist: [], router: { hub: { endpoint: 'https://hub.internal.test', enabled: false } } }
+    install(off)
+    await mount('skills')
+    expect(screen.getByRole('switch', { name: 'gui.settings.skills.hub_title' }).getAttribute('aria-checked')).toBe('false')
   })
 
   it('the detail inspects the skill, renders its body, lists its files and opens one on the host', async () => {

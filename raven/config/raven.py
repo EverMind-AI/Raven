@@ -1663,10 +1663,18 @@ class HubSourceConfig(_Base):
     skill's body / downloading its zip is driven by the ``read_skill`` /
     ``use_skill`` tools, which reuse this same config."""
 
+    enabled: bool = True
+    """Whether the conversational Hub source is consulted. ``endpoint`` must
+    also be set -- ``None`` keeps the source off whatever this says, so a
+    config written before this field existed keeps its meaning. Turning this
+    off keeps the endpoint, so a custom URL survives the switch."""
+
     endpoint: str | None = None
     """Skill Hub base URL, e.g. ``"https://mss.evermind.ai"``. ``None``
-    disables the Hub source — SkillForgeRouter degrades to Local + Mass +
-    Everos."""
+    disables the Hub source — SkillForgeRouter then runs on Local, plus the
+    memory backend when one is wired. Onboarding seeds this to the shared
+    catalog URL; ``apiKey`` is never seeded, because it is the user's own
+    Bearer token."""
 
     api_key: str | None = None
     """Bearer token sent as ``Authorization: Bearer <api_key>``."""

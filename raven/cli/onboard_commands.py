@@ -329,23 +329,22 @@ def _handle_existing_config(*, reset: bool, yes: bool, non_interactive: bool) ->
 def _bootstrap_empty_config() -> None:
     """Make sure ``~/.raven/config.json`` + workspace dir exist before we patch.
 
-    We seed the user-facing extension defaults (memory / plugins / skillForge),
-    including ``memory.backend = "everos"`` (the schema default). EverOS
-    degrades gracefully when its models aren't configured yet (empty recall + a
-    warning, never a crash), so an enabled-but-modelless install is safe. The
-    wizard's Step 4 — and its skip / non-interactive guard — resolve the backend
-    back to ``None`` when the user opts out or never configures the one required
-    model (``_memory_enabled`` gates on the llm role being present, not just the
-    backend name; embedding and rerank only cost recall quality).
+    The base config stays sparse: ``save_config`` dumps with
+    ``exclude_defaults``, so the memory / plugins / skillForge blocks are not
+    materialized and their readers answer from the declarations. The one
+    deliberate exception is the Skill Hub endpoint -- its schema default is
+    ``None`` so programmatic loads stay Hub-disabled, which makes onboarding
+    (the user's opt-in) the place that writes it by default; the settings
+    switch can change it later.
 
-    Seeding runs on EVERY onboard, not just a brand-new config: the writer is
-    ``setdefault``-based (non-clobbering), so it backfills these blocks into a
-    pre-existing config that predates them without touching any value the user
-    already set. The base ``Config()`` is only written when the file is absent —
-    overwriting an existing file there would clobber it.
+    Runs on every onboard: an existing endpoint, explicit null included, wins,
+    and every value the user already carries is left untouched. The base
+    ``Config()`` is only written when the file is absent — overwriting an
+    existing file there would clobber it.
     """
     from raven.config.loader import get_config_path, load_config, save_config
     from raven.config.paths import get_workspace_path
+    from raven.config.update import initialize_skill_hub_endpoint
     from raven.utils.workspace import sync_workspace_templates
 
     path = get_config_path()
@@ -353,6 +352,7 @@ def _bootstrap_empty_config() -> None:
         # Creates the file; save_config dumps with exclude_defaults, so a
         # fresh config is sparse -- it records what the user set, nothing else.
         save_config(load_config())
+    initialize_skill_hub_endpoint(config_path=path)
     workspace = get_workspace_path()
     workspace.mkdir(parents=True, exist_ok=True)
     sync_workspace_templates(workspace, notify=lambda m: console.print(f"  [dim]{m}[/dim]"))

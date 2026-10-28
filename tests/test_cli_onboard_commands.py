@@ -3442,24 +3442,28 @@ def test_fresh_bootstrap_defaults_memory_backend_everos(
     assert load_raven_config().memory.backend == "everos"
 
 
-def test_fresh_bootstrap_stays_sparse(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Bootstrap records nothing the user did not set: a default that lands on
-    disk stops following its declaration, so the extension blocks are not
-    materialized -- their readers answer from the declared defaults."""
+def test_fresh_bootstrap_seeds_only_the_skill_hub_endpoint(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bootstrap records nothing the user did not set, with one exception: the
+    Skill Hub endpoint has no schema default (programmatic loads stay
+    Hub-off), so onboarding is where a fresh install opts in."""
     onboard_commands._bootstrap_empty_config()
     data = json.loads(tmp_env.read_text())
-    for block in ("memory", "plugins", "skillForge"):
-        assert block not in data, f"fresh config must not seed {block}"
+    assert "memory" not in data
+    assert "plugins" not in data
+    assert data["skillForge"] == {"router": {"hub": {"endpoint": "https://skillhub.evermind.ai"}}}
     from raven.config.raven import load_raven_config
 
     rc = load_raven_config()
     assert rc.memory.backend == "everos"  # from the declaration, not the file
+    assert rc.skill_forge.router.hub.endpoint == "https://skillhub.evermind.ai"
 
 
 def test_bootstrap_leaves_a_preexisting_config_alone(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A config that predates the extension blocks is not backfilled: what the
     user set stays byte-for-byte, and the keys they never set answer from the
-    declarations instead of being materialized."""
+    declarations instead of being materialized. The Skill Hub endpoint is the
+    one documented exception -- onboarding is the opt-in for a schema default
+    that has to stay ``None``."""
     tmp_env.write_text(
         json.dumps(
             {
@@ -3477,11 +3481,33 @@ def test_bootstrap_leaves_a_preexisting_config_alone(tmp_env: Path, monkeypatch:
     assert data["memory"]["backend"] == "everos"
     assert data["memory"]["memoryTopK"] == 20
     assert "userId" not in data["memory"]  # not backfilled
-    assert "plugins" not in data and "skillForge" not in data
+    assert "plugins" not in data
+    assert data["skillForge"] == {"router": {"hub": {"endpoint": "https://skillhub.evermind.ai"}}}
     from raven.config.raven import load_raven_config
 
     rc = load_raven_config()
     assert rc.memory.memory_top_k == 20  # the user's value
+
+
+def test_bootstrap_keeps_a_configured_hub_endpoint(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_env.write_text(
+        json.dumps({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test", "apiKey": "k"}}}})
+    )
+
+    onboard_commands._bootstrap_empty_config()
+
+    hub = json.loads(tmp_env.read_text())["skillForge"]["router"]["hub"]
+    assert hub == {"endpoint": "https://hub.internal.test", "apiKey": "k"}
+
+
+def test_bootstrap_honours_an_explicit_null_hub_endpoint(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A null endpoint is the way a user keeps the Hub off across a repeat
+    onboard; seeding must not read it as "unset" and turn it back on."""
+    tmp_env.write_text(json.dumps({"skillForge": {"router": {"hub": {"endpoint": None}}}}))
+
+    onboard_commands._bootstrap_empty_config()
+
+    assert json.loads(tmp_env.read_text())["skillForge"]["router"]["hub"]["endpoint"] is None
 
 
 def _onboard_once() -> Any:

@@ -2021,7 +2021,7 @@ class WiringMixin:
         configured. Downloads land under ``<workspace>/skills/hub`` so a
         use_skill'd bundle is discoverable by the on-disk skill registry."""
         hub_cfg = getattr(skill_forge_router_config, "hub", None)
-        if hub_cfg is None or not getattr(hub_cfg, "endpoint", None):
+        if hub_cfg is None or not getattr(hub_cfg, "endpoint", None) or not getattr(hub_cfg, "enabled", True):
             return None
         from raven.skill_hub import SkillHubClient
 

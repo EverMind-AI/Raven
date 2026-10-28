@@ -702,6 +702,17 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
             disable_channel(name)
         return {"applied": True, "previous": not value}
 
+    if key == "skillForge.router.hub.enabled":
+        if not isinstance(value, bool):
+            raise ConfigValidationError("enabled must be a boolean")
+        from raven.config.update import set_skill_hub_enabled
+
+        try:
+            previous = set_skill_hub_enabled(value)
+        except ValueError as exc:
+            raise ConfigValidationError(str(exc)) from exc
+        return {"applied": True, "previous": previous}
+
     if key in ("plugins.disabled", "tools.disabledTools", "skillForge.blocklist"):
         if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
             raise ConfigValidationError(f"{key} must be a list of strings")

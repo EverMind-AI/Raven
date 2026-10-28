@@ -9,6 +9,7 @@ routing, so the tool the digest names is the only route to its instructions.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import tempfile
 from pathlib import Path
@@ -17,6 +18,8 @@ import pytest
 
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import TurnPolicy
+from raven.agent.loop.wiring import WiringMixin
+from raven.config.raven import HubSourceConfig, SkillForgeRouterConfig
 from raven.providers.base import LLMProvider, LLMResponse
 
 
@@ -51,6 +54,20 @@ def test_both_skill_tools_register_without_a_hub(loop) -> None:
     assert getattr(loop.context.skills, "registry", None) is not None
     assert loop.tools.has("read_skill"), "gating read_skill on a Hub client hides the local body route"
     assert loop.tools.has("use_skill")
+
+
+def test_the_hub_client_follows_the_switch(tmp_path: Path) -> None:
+    """An endpoint is not consent: the settings switch can keep the URL and
+    turn the remote source off, and one builder feeds both the router and the
+    tools."""
+    on = SkillForgeRouterConfig(hub=HubSourceConfig(endpoint="http://hub.test"))
+    off = SkillForgeRouterConfig(hub=HubSourceConfig(endpoint="http://hub.test", enabled=False))
+
+    client = WiringMixin._build_skill_hub_client(tmp_path, on)
+    assert client is not None
+    asyncio.run(client.aclose())
+
+    assert WiringMixin._build_skill_hub_client(tmp_path, off) is None
 
 
 def test_the_digest_names_a_tool_this_loop_registered(loop) -> None:
