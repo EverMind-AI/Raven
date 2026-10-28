@@ -685,3 +685,21 @@ html[data-theme="dark"] {
 .trajectory-wf-tile img { width: 16px; height: 16px }
 .trajectory-wf-span .trajectory-wf-label::before { top: -10px; bottom: -10px }
 .trajectory-ov-lane { height: 20px }
+
+/* The icon fills its box: a 15px drawing in a 24px cell, the reference's
+   proportion, rather than a text glyph's own small em box. */
+.trajectory-wf-ico { font-size: 0; justify-items: center }
+.trajectory-wf-ico svg { width: 15px; height: 15px; display: block }
+.trajectory-wf-glyph { display: grid; place-items: center; font-size: 0 }
+.trajectory-wf-tile img { width: 18px; height: 18px }
+
+/* One notch tighter again: 34px rows, and the icon plate and bars follow so
+   the row keeps its proportions rather than looking cramped. */
+.trajectory-wf { --wf-row: 34px }
+.trajectory-wf-row, .trajectory-wf-track { height: 34px }
+.trajectory-wf-track i, .trajectory-wf-turn .trajectory-wf-track i { height: 14px; border-radius: 4px }
+.trajectory-wf-tile, .trajectory-wf-ico { width: 22px; height: 22px }
+.trajectory-wf-ico svg, .trajectory-wf-glyph svg { width: 14px; height: 14px }
+.trajectory-wf-tile img { width: 16px; height: 16px }
+.trajectory-wf-span .trajectory-wf-label::before { top: -8px; bottom: -8px }
+.trajectory-ov-lane { height: 18px }
