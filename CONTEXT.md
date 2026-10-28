@@ -3375,15 +3375,19 @@ stateful instance's next turn reopens its session in a fresh process with `sessi
 _Avoid_: calling it a timeout - nothing in flight is cut short.
 
 **LLM relay** (`raven/providers/relay.py`, `relay_provider.py`, `relay_server.py`, `subagents.runtime.llmRelay`):
-The host making a Raven agent's LiteLLM calls for it. The host offers a local socket and a
-token in the launch environment (`RAVEN_LLM_RELAY`), and an agent that reads them builds a
+The host making a Raven agent's LiteLLM calls for it. The host offers a local socket and a token
+in the launch environment (`RAVEN_LLM_RELAY`), and an agent that reads them builds a
 `RelayProvider` where it would have built a `LiteLLMProvider`: the same construction and the
-same answers (both stand on `LiteLLMShape`), with only the single `chat` / `chat_stream`
-attempt and the `relayed` catalogue lookups crossing to the host. Retry, classification, usage
-records and traces stay in the agent; the host's calls run under `recorded_by_caller` so a call
-is billed once. The relay is served by the event loop that started it: a later loop starts
-another, and a loop running beside it in another thread is offered the same socket. An agent
-that cannot reach the host loads LiteLLM and works as before.
+same answers (both stand on `LiteLLMShape`), with only the single `chat` / `chat_stream` attempt
+and the `relayed` catalogue lookups crossing to the host. Retry, classification, usage records
+and traces stay in the agent; the host's calls run under `recorded_by_caller` so a call is
+billed once. The relay is served by the event loop that started it: a later loop starts another,
+and a loop running beside it in another thread is offered the same socket. A connection presents
+the token first, alone and under a deadline, so a peer without it is dropped before a frame is
+read. The host builds an agent's provider without writing the agent's key into its own
+environment, and makes each call in a context of its own under the window of the agent's turn,
+so the output ceiling on the wire is the one the agent's loop reserved. An agent that cannot
+reach the host loads LiteLLM and works as before.
 
 **Fork template** (`raven/acp_client/fork_template.py`, `raven/cli/_fork_template.py`, `subagents.runtime.forkTemplate`):
 On Linux, one process per host that has imported what Raven agents import, frozen out of the
