@@ -350,6 +350,15 @@ async def test_a_model_without_rungs_is_sent_no_effort_and_a_rung_it_lacks_is_dr
     assert sent["model"] == "glm-5.3-flash" and "effort" not in sent
 
 
+async def test_a_model_switch_answers_with_the_effort_menu_that_model_takes(harness: Harness) -> None:
+    sid = await harness.new()
+    flash = await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="glm-5.3-flash")
+    assert [option["category"] for option in flash["configOptions"]] == ["model"]
+    sonnet = await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="own:sonnet")
+    effort = next(option for option in sonnet["configOptions"] if option["category"] == "thought_level")
+    assert [choice["value"] for choice in effort["options"]] == ["low", "high", "max"]
+
+
 async def test_each_route_choice_puts_the_conversation_on_its_route(harness: Harness) -> None:
     sid = await harness.new()
     for value, route, model in (
