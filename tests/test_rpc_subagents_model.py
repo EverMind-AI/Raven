@@ -13,9 +13,16 @@ from types import SimpleNamespace
 
 import pytest
 
+from raven.acp_client.capabilities import (
+    AcpEffortChoice,
+    AcpModelChoice,
+    CapabilitySnapshot,
+    SnapshotStore,
+    snapshot_fingerprint,
+)
 from raven.config.agent_names import GENERIC_AGENT
 from raven.rpc.errors import ConfigFieldReadonlyError, ConfigValidationError
-from raven.rpc.methods.subagents import subagents_list, subagents_update
+from raven.rpc.methods.subagents import _as_configs, subagents_list, subagents_update
 
 
 @pytest.fixture
@@ -231,6 +238,128 @@ async def test_update_clears_an_effort_without_needing_a_menu(
     assert out == {"updated": True, "name": "Hermes Agent"}
     entry = next(e for e in _stored(config_path) if e["name"] == "Hermes Agent")
     assert entry["effort"] is None
+
+
+_MENUS: dict[str, tuple[str, ...]] = {
+    "vendor/reasoner": ("low", "high", "max"),
+    "vendor/flash": (),
+}
+
+
+def _measured_snapshot(cfg: object, efforts: tuple[str, ...]) -> CapabilitySnapshot:
+    """A handshake measured on the model ``cfg`` is on, and the menu it reported."""
+    return CapabilitySnapshot(
+        agent=getattr(cfg, "name", ""),
+        fingerprint=snapshot_fingerprint(cfg),
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        model_choices=(
+            AcpModelChoice(value="vendor/reasoner", name="Reasoner", group="vendor"),
+            AcpModelChoice(value="vendor/flash", name="Flash", group="vendor"),
+        ),
+        effort_choices=tuple(AcpEffortChoice(value=value, name=value.title()) for value in efforts),
+        effort_option="effort" if efforts else "",
+    )
+
+
+def _measures_per_model(monkeypatch: pytest.MonkeyPatch) -> list[str | None]:
+    """A ``record_capabilities`` stand-in that records the menu of ``cfg.model``.
+
+    Written to the real store, so the row the handler reads back is the one this
+    measurement left: that read is what the picker draws.
+    """
+    measured: list[str | None] = []
+
+    async def fake_record(cfg):
+        measured.append(getattr(cfg, "model", None))
+        snapshot = _measured_snapshot(cfg, _MENUS.get(cfg.model or "", ()))
+        SnapshotStore().record(snapshot)
+        return snapshot
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    return measured
+
+
+async def test_a_model_only_update_re_measures_the_effort_menu_on_the_new_model(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The row's effort menu is measured on the model the row is on.
+
+    A model-only update moved the row without re-measuring anything: the model
+    is not a launch field, so nothing marked the snapshot stale. The picker then
+    offered rungs the new model does not take, `update {effort}` accepted them,
+    and it refused rungs the new model does take.
+    """
+    _gate_answers(monkeypatch)
+    row = next(entry for entry in _stored(config_path) if entry["name"] == "Hermes Agent")
+    SnapshotStore().record(_measured_snapshot(_as_configs([row])[0], _MENUS["vendor/reasoner"]))
+    measured = _measures_per_model(monkeypatch)
+
+    await subagents_update({"name": "Hermes Agent", "model": "vendor/flash"})
+
+    assert measured[-1] == "vendor/flash", "the move is measured on the model it moves to"
+    rows = (await subagents_list({"probe": False}))["rows"]
+    row = next(entry for entry in rows if entry["name"] == "Hermes Agent")
+    assert row["model"] == "vendor/flash"
+    assert row["effort_choices"] == [], "flash takes no rung, and the row must not say it does"
+    with pytest.raises(ConfigValidationError, match="offers none"):
+        await subagents_update({"name": "Hermes Agent", "effort": "high"})
+
+    await subagents_update({"name": "Hermes Agent", "model": "vendor/reasoner"})
+    rows = (await subagents_list({"probe": False}))["rows"]
+    row = next(entry for entry in rows if entry["name"] == "Hermes Agent")
+    assert [choice["value"] for choice in row["effort_choices"]] == ["low", "high", "max"]
+    out = await subagents_update({"name": "Hermes Agent", "effort": "high"})
+    assert out == {"updated": True, "name": "Hermes Agent"}
+
+
+async def test_a_model_and_effort_in_one_call_check_the_effort_on_the_new_model(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same move carrying an effort must not be judged on the old menu.
+
+    On a never-measured row the model branch measures before ``target["model"]``
+    is assigned, and the effort branch then trusts that measurement. The pick is
+    checked against the model the row is leaving.
+    """
+    raw = json.loads(config_path.read_text())
+    raw["subagents"]["agents"][0]["model"] = "vendor/reasoner"
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    _gate_answers(monkeypatch)
+    measured = _measures_per_model(monkeypatch)
+
+    with pytest.raises(ConfigValidationError, match="offers none"):
+        await subagents_update({"name": "Hermes Agent", "model": "vendor/flash", "effort": "high"})
+
+    assert measured == ["vendor/reasoner", "vendor/flash"], "the move measured the new model and stopped there"
+    entry = next(entry for entry in _stored(config_path) if entry["name"] == "Hermes Agent")
+    assert entry["model"] == "vendor/reasoner", "the refused call writes nothing"
+    rows = (await subagents_list({"probe": False}))["rows"]
+    row = next(entry for entry in rows if entry["name"] == "Hermes Agent")
+    assert [choice["value"] for choice in row["effort_choices"]] == ["low", "high", "max"], (
+        "the store again describes the model the row kept"
+    )
+
+
+async def test_a_refused_move_drops_a_menu_the_row_never_adopted(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row measured for the first time by this call has no earlier record to
+    restore, so a refusal must leave none behind either: the row keeps its
+    model, and the store holds no menu for a model it never moved to."""
+    raw = json.loads(config_path.read_text())
+    raw["subagents"]["agents"][0]["model"] = "vendor/reasoner"
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    measured = _measures_per_model(monkeypatch)
+
+    with pytest.raises(ConfigValidationError, match="offers none"):
+        await subagents_update({"name": "Hermes Agent", "clear_model": True, "effort": "high"})
+
+    assert measured == [None], "the clear is measured on the agent's own model"
+    entry = next(entry for entry in _stored(config_path) if entry["name"] == "Hermes Agent")
+    assert entry["model"] == "vendor/reasoner"
+    assert SnapshotStore().load([_as_configs([entry])[0]], allow_stale=True) == {}
 
 
 def _with_providers(config_path: Path, providers: dict) -> None:

@@ -1110,24 +1110,27 @@ def _prompt_meta(skey: Any) -> dict[str, Any]:
 
 
 @dataclass
-class _SessionEffortState:
-    """What this host knows about one session's effort, across backend instances.
+class _SessionState:
+    """What this host knows about one session, across backend instances.
 
     Held here rather than on ``AcpAgentBackend`` because a config change hot-applies
     the agent table and replaces every backend instance. A session outlives that
-    replacement, and so must the baseline it opened on and the override this host
-    pushed -- otherwise clearing a row's effort finds an empty ``pushed`` and never
-    sends the session back, leaving a live direct chat on the old value."""
+    replacement, and so must what this host recorded about it: the model, effort
+    and mode it opened on, and the overrides pushed to it -- otherwise clearing a
+    row's value finds an empty ``pushed`` and never sends the session back, leaving
+    a live direct chat on the old value while every surface reports the agent's own."""
 
     option: str = ""
     baseline: str = ""
     pushed: str = ""
     mode_baseline: str = ""
     mode_pushed: str = ""
+    model_baseline: str = ""
+    model_pushed: str = ""
 
 
-_SESSION_EFFORT: weakref.WeakKeyDictionary[Any, dict[str, _SessionEffortState]] = weakref.WeakKeyDictionary()
-"""Each live connection's effort records, by session id.
+_SESSION_STATE: weakref.WeakKeyDictionary[Any, dict[str, _SessionState]] = weakref.WeakKeyDictionary()
+"""Each live connection's session records, by session id.
 
 Keyed by the connection's client, not by agent name: the pool holds one
 connection per parent binding under a name, each a process that numbers its own
@@ -1138,14 +1141,14 @@ relaunch is a new process whose sessions start on their own defaults, and
 weakly held, the old connection's records go with it."""
 
 
-def _session_effort_state(client: Any, session_id: str) -> _SessionEffortState:
-    """The effort record for ``session_id`` on ``client``'s connection, created on first use."""
-    sessions = _SESSION_EFFORT.get(client)
+def _session_state(client: Any, session_id: str) -> _SessionState:
+    """The record for ``session_id`` on ``client``'s connection, created on first use."""
+    sessions = _SESSION_STATE.get(client)
     if sessions is None:
-        sessions = _SESSION_EFFORT[client] = {}
+        sessions = _SESSION_STATE[client] = {}
     state = sessions.get(session_id)
     if state is None:
-        state = sessions[session_id] = _SessionEffortState()
+        state = sessions[session_id] = _SessionState()
     return state
 
 
@@ -1189,16 +1192,13 @@ class AcpAgentBackend:
         self.timeout = timeout
         self.max_output_chars = max_output_chars
         self._snapshot = snapshot
-        # What each live session's model was before this host touched it, and
-        # what this host last set it to. Both keyed by session id, and both exist
-        # only so that clearing an override can be honoured: the agent takes a
-        # value, never an "unset", so the only way back to its own choice is to
-        # send that choice again -- and nothing else remembers what it was.
-        self._model_baseline: dict[str, str] = {}
-        self._model_pushed: dict[str, str] = {}
-        # Reasoning effort's option id, baseline and pushed value live in
-        # `_SESSION_EFFORT`, held per connection, because a hot apply replaces
-        # this instance while the session it describes continues.
+        # What each live session's model, effort and mode were before this host
+        # touched them, and what this host last set them to, live in
+        # `_SESSION_STATE`, held per connection: a hot apply replaces this
+        # instance while the session it describes continues. It has to survive
+        # because the agent takes a value and never an "unset", so the only way
+        # back to its own choice is to send that choice again -- and nothing
+        # else remembers what it was.
         # Values this agent has refused, so a refusal re-attempted on every
         # route into a session -- and on every fresh session a spawn opens --
         # is said once per value rather than once per turn.
@@ -1383,7 +1383,7 @@ class AcpAgentBackend:
         """
         self._caps_listener = listener
 
-    def _note_session_model(self, session_id: str | None, result: Any) -> None:
+    def _note_session_model(self, client: Any, session_id: str | None, result: Any) -> None:
         """Remember what a session was on before this host moved it.
 
         Recorded once per session and never overwritten: on a resumed route the
@@ -1391,17 +1391,20 @@ class AcpAgentBackend:
         second reading would adopt that as the baseline and clearing would then
         restore the override it was meant to undo.
         """
-        if not session_id or session_id in self._model_baseline:
+        if not session_id:
+            return
+        state = _session_state(client, session_id)
+        if state.model_baseline:
             return
         current = read_session_current_model(result)
         if current:
-            self._model_baseline[session_id] = current
+            state.model_baseline = current
 
     def _note_session_mode(self, client: Any, session_id: str | None, result: Any) -> None:
         """Remember the mode a session opened on, for a menu that is effort."""
         if not session_id:
             return
-        state = _session_effort_state(client, session_id)
+        state = _session_state(client, session_id)
         if state.mode_baseline:
             return
         current = read_session_current_mode(result)
@@ -1421,7 +1424,7 @@ class AcpAgentBackend:
         """
         if not session_id:
             return
-        state = _session_effort_state(client, session_id)
+        state = _session_state(client, session_id)
         option, current, _choices = read_session_effort(result)
         if option:
             state.option = option
@@ -2086,6 +2089,7 @@ class AcpAgentBackend:
                 await self._book_usage(
                     collector,
                     result.get("usage") if isinstance(result, dict) else None,
+                    client=client,
                     initialize=connection.initialize,
                     session_id=session_id,
                     resumed=resumed,
@@ -2285,6 +2289,7 @@ class AcpAgentBackend:
         collector: _TurnCollector,
         answered: Any,
         *,
+        client: Any,
         initialize: Any,
         session_id: str,
         resumed: bool,
@@ -2307,7 +2312,8 @@ class AcpAgentBackend:
         counts = _ledger_counts(collector.turn_counts(answered))
         if counts is None and cost is None:
             return
-        model = self._model_pushed.get(session_id) or self._model_baseline.get(session_id) or ""
+        state = _session_state(client, session_id)
+        model = state.model_pushed or state.model_baseline or ""
         await activity.note_ledger_usage(
             {**(counts or {}), "cost_usd": cost},
             model=model,
@@ -2450,7 +2456,7 @@ class AcpAgentBackend:
                         loaded = None
                     if loaded is not None:
                         self._relearn_menus(loaded)
-                        self._note_session_model(known, loaded)
+                        self._note_session_model(client, known, loaded)
                         self._note_session_effort(client, known, loaded)
                         self._note_session_mode(client, known, loaded)
                     await self._set_mode(client, known, mode, budget=budget)
@@ -2482,7 +2488,7 @@ class AcpAgentBackend:
         session_id = (result or {}).get("sessionId") if isinstance(result, dict) else None
         if not isinstance(session_id, str) or not session_id:
             raise AcpEmptyTurnError(f"acp agent {self.name!r}: session/new returned no sessionId")
-        self._note_session_model(session_id, result)
+        self._note_session_model(client, session_id, result)
         self._note_session_effort(client, session_id, result)
         self._note_session_mode(client, session_id, result)
         await self._set_mode(client, session_id, mode, budget=budget)
@@ -2526,14 +2532,15 @@ class AcpAgentBackend:
         refusal would otherwise be a warning per turn for as long as the row
         keeps the pick.
         """
-        pushed = self._model_pushed.get(session_id)
+        state = _session_state(client, session_id)
+        pushed = state.model_pushed
         if model:
             target = model
-        elif pushed is None:
+        elif not pushed:
             # Nothing asked for and nothing of this host's to undo.
             return
         else:
-            target = self._model_baseline.get(session_id, "")
+            target = state.model_baseline
             if not target:
                 # Moved, and the agent never said what it was on beforehand. Said
                 # out loud rather than left as a silent no-op, because the reader
@@ -2545,7 +2552,7 @@ class AcpAgentBackend:
                     session_id,
                     pushed,
                 )
-                self._model_pushed.pop(session_id, None)
+                state.model_pushed = ""
                 return
         try:
             response = await client.request(
@@ -2581,9 +2588,9 @@ class AcpAgentBackend:
         # note that it DID -- without which every later turn with no override
         # returns early and the session is never brought back at all.
         if model:
-            self._model_pushed[session_id] = target
+            state.model_pushed = target
         else:
-            self._model_pushed.pop(session_id, None)
+            state.model_pushed = ""
         # The response carries the config options the model now has. Its
         # thought_level entry names the option the effort push below goes
         # through, so it is noted for this session. Its menu is not relearned
@@ -2620,7 +2627,7 @@ class AcpAgentBackend:
         unless a falling-back tier mode is already what the session was put on.
         Never fatal, for the reason the model push gives.
         """
-        state = _session_effort_state(client, session_id)
+        state = _session_state(client, session_id)
         option = state.option or str(getattr(self._snapshot, "effort_option", "") or "")
         if not option:
             snapshot = self._snapshot
@@ -2691,7 +2698,7 @@ class AcpAgentBackend:
         override -- or the mode the session opened on when there is none. Never
         fatal, like its siblings.
         """
-        state = _session_effort_state(client, session_id)
+        state = _session_state(client, session_id)
         pushed = state.mode_pushed
         if effort:
             target = effort

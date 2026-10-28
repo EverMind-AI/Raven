@@ -291,9 +291,10 @@ shared channel a person's standing mode override on a named instance outranks th
 Effort in turn, and the row's value is withheld for that instance; on a `thought_level`
 agent the two are separate channels and both are sent. The menu it is picked from is the
 one the probe measured on the row's own model (`verify_agent` puts the row's model on its
-throwaway session first); the menu a live session reports after a model switch belongs to
-that session and never rewrites the row's. A cleared Row Effort sends the session back to
-what it would otherwise be on, from a record held per connection (`_SESSION_EFFORT`).
+throwaway session first), and moving a row to another model re-measures it there
+(`subagents.update`); the menu a live session reports after a model switch belongs to that
+session and never rewrites the row's. A cleared Row Effort sends the session back to
+what it would otherwise be on, from a record held per connection (`_SESSION_STATE`).
 
 **Subagent** (`agent/subagent/`):
 A background agent task spawned by `SubagentManager`. Runs with its own tool set; its result
