@@ -61,9 +61,9 @@ function merge(intervals: readonly Interval[]): Interval[] {
   return merged
 }
 
-export function createAxis(intervals: readonly Interval[], options: { idleMs?: number; gapWidth?: number } = {}): TimeAxis {
+/** The pieces and the closures over them, from runs that are already merged. */
+function axisOf(runs: readonly Interval[], options: { idleMs?: number; gapWidth?: number }): TimeAxis {
   const idleMs = options.idleMs ?? IDLE_MS
-  const runs = merge(intervals)
   if (!runs.length) {
     return { start: 0, end: 0, length: 1, gaps: [], project: () => 0, unproject: () => 0 }
   }
@@ -121,6 +121,67 @@ export function createAxis(intervals: readonly Interval[], options: { idleMs?: n
       if (target > piece.to) return piece.end
       return piece.start + ((target - piece.from) / (piece.to - piece.from)) * (piece.end - piece.start)
     },
+  }
+}
+
+export function createAxis(intervals: readonly Interval[], options: { idleMs?: number; gapWidth?: number } = {}): TimeAxis {
+  return axisOf(merge(intervals), options)
+}
+
+/** The same axis, fed a page at a time: intervals are inserted into the merged
+ *  runs instead of re-sorting the whole session on every page. */
+export class AxisIndex {
+  private runs: Interval[] = []
+  private cached: TimeAxis | null = null
+  private readonly options: { idleMs?: number; gapWidth?: number }
+
+  constructor(options: { idleMs?: number; gapWidth?: number } = {}) {
+    this.options = options
+  }
+
+  add(intervals: readonly Interval[]): void {
+    for (const interval of intervals) {
+      if (!Number.isFinite(interval.start) || !Number.isFinite(interval.end) || interval.end <= interval.start) continue
+      this.insert({ start: interval.start, end: interval.end })
+    }
+  }
+
+  axis(): TimeAxis {
+    if (this.cached === null) this.cached = axisOf(this.runs, this.options)
+    return this.cached
+  }
+
+  private insert(next: Interval): void {
+    let low = 0
+    let high = this.runs.length
+    while (low < high) {
+      const middle = (low + high) >>> 1
+      if (this.runs[middle]!.start < next.start) low = middle + 1
+      else high = middle
+    }
+    this.cached = null
+    const before = this.runs[low - 1]
+    if (before !== undefined && next.start <= before.end) {
+      before.end = Math.max(before.end, next.end)
+      this.absorb(low, before)
+      return
+    }
+    const after = this.runs[low]
+    if (after !== undefined && next.end >= after.start) {
+      after.start = Math.min(after.start, next.start)
+      after.end = Math.max(after.end, next.end)
+      this.absorb(low + 1, after)
+      return
+    }
+    this.runs.splice(low, 0, next)
+  }
+
+  /** Folds every run the given one now touches into it. */
+  private absorb(at: number, into: Interval): void {
+    while (this.runs[at] !== undefined && this.runs[at]!.start <= into.end) {
+      into.end = Math.max(into.end, this.runs[at]!.end)
+      this.runs.splice(at, 1)
+    }
   }
 }
 

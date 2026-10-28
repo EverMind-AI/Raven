@@ -3,7 +3,7 @@
 
 import { expect, it } from 'vitest'
 
-import { IDLE_MS, barOf, createAxis, tickMarks, zoomViewport } from './axis'
+import { AxisIndex, IDLE_MS, barOf, createAxis, tickMarks, zoomViewport } from './axis'
 
 it('merges overlapping intervals into one occupied run', () => {
   const axis = createAxis([{ start: 0, end: 10 }, { start: 5, end: 20 }], { idleMs: 100 })
@@ -81,4 +81,33 @@ it('spreads its ticks across the visible window when zoomed in', () => {
   const marks = tickMarks(axis, { from: 0, to: axis.length / 2 })
   expect(marks.length).toBeGreaterThan(1)
   expect(marks[0]!.left).toBe(0)
+})
+
+it('an axis fed a page at a time equals the one built from the whole list', () => {
+  const spans = [
+    { start: 0, end: 1000 },
+    { start: 1000 + IDLE_MS * 5, end: 1000 + IDLE_MS * 5 + 800 },
+    { start: 400, end: 900 },
+    { start: 1000 + IDLE_MS * 2, end: 1000 + IDLE_MS * 2 + 100 },
+  ]
+  const whole = createAxis(spans)
+  const index = new AxisIndex()
+  index.add([spans[0]!, spans[2]!])
+  index.add([spans[1]!])
+  index.add([spans[3]!])
+  const grown = index.axis()
+  expect(grown.length).toBe(whole.length)
+  expect(grown.gaps).toEqual(whole.gaps)
+  for (const time of [0, 500, 1200, 1000 + IDLE_MS * 3]) {
+    expect(grown.project(time)).toBeCloseTo(whole.project(time), 6)
+  }
+})
+
+it('an insert that bridges two runs merges them into one', () => {
+  const index = new AxisIndex()
+  index.add([{ start: 0, end: 1000 }, { start: 2000, end: 3000 }])
+  index.add([{ start: 900, end: 2100 }])
+  const axis = index.axis()
+  expect(axis.gaps).toHaveLength(0)
+  expect(axis.length).toBe(3000)
 })
