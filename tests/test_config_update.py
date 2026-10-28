@@ -732,7 +732,8 @@ def test_skill_hub_endpoint_preserves_an_invalid_nested_block(cfg_path: Path, ra
 
 
 def test_skill_hub_switch_on_seeds_the_endpoint(cfg_path: Path) -> None:
-    assert set_skill_hub_enabled(True, config_path=cfg_path) is False
+    change = set_skill_hub_enabled(True, config_path=cfg_path)
+    assert change.previous is False and change.seeded_endpoint is True
     assert _read(cfg_path)["skillForge"]["router"]["hub"] == {
         "enabled": True,
         "endpoint": _HUB_ENDPOINT,
@@ -744,7 +745,8 @@ def test_skill_hub_switch_on_keeps_a_custom_endpoint(cfg_path: Path) -> None:
         json.dumps({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test"}}}}),
         encoding="utf-8",
     )
-    assert set_skill_hub_enabled(True, config_path=cfg_path) is True
+    change = set_skill_hub_enabled(True, config_path=cfg_path)
+    assert change.previous is True and change.seeded_endpoint is False
     assert _read(cfg_path)["skillForge"]["router"]["hub"] == {
         "endpoint": "https://hub.internal.test",
         "enabled": True,
@@ -756,7 +758,8 @@ def test_skill_hub_switch_on_replaces_an_explicit_off(cfg_path: Path) -> None:
         json.dumps({"skillForge": {"router": {"hub": {"endpoint": None, "enabled": False}}}}),
         encoding="utf-8",
     )
-    assert set_skill_hub_enabled(True, config_path=cfg_path) is False
+    change = set_skill_hub_enabled(True, config_path=cfg_path)
+    assert change.previous is False and change.seeded_endpoint is True
     assert _read(cfg_path)["skillForge"]["router"]["hub"] == {
         "enabled": True,
         "endpoint": _HUB_ENDPOINT,
@@ -770,7 +773,8 @@ def test_skill_hub_switch_off_keeps_the_endpoint(cfg_path: Path) -> None:
         json.dumps({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test"}}}}),
         encoding="utf-8",
     )
-    assert set_skill_hub_enabled(False, config_path=cfg_path) is True
+    change = set_skill_hub_enabled(False, config_path=cfg_path)
+    assert change.previous is True and change.seeded_endpoint is False
     assert _read(cfg_path)["skillForge"]["router"]["hub"] == {
         "endpoint": "https://hub.internal.test",
         "enabled": False,
@@ -779,7 +783,8 @@ def test_skill_hub_switch_off_keeps_the_endpoint(cfg_path: Path) -> None:
 
 
 def test_skill_hub_switch_off_seeds_nothing(cfg_path: Path) -> None:
-    assert set_skill_hub_enabled(False, config_path=cfg_path) is False
+    change = set_skill_hub_enabled(False, config_path=cfg_path)
+    assert change.previous is False and change.seeded_endpoint is False
     assert _read(cfg_path) == {"skillForge": {"router": {"hub": {"enabled": False}}}}
 
 
@@ -810,6 +815,23 @@ def test_skill_hub_switch_refuses_an_invalid_section(cfg_path: Path) -> None:
     with pytest.raises(ValueError, match="object or null"):
         set_skill_hub_enabled(True, config_path=cfg_path)
     assert cfg_path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("written", "previous"),
+    [(False, False), (0, False), ("false", False), (True, True), (1, True), ("true", True)],
+)
+def test_skill_hub_switch_previous_reads_like_the_loader(cfg_path: Path, written, previous: bool) -> None:
+    """The reply and the live reader agree with the schema on a hand-written
+    value, rather than with Python truthiness."""
+    cfg_path.write_text(
+        json.dumps({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test", "enabled": written}}}}),
+        encoding="utf-8",
+    )
+
+    change = set_skill_hub_enabled(False, config_path=cfg_path)
+
+    assert change.previous is previous
 
 
 class TestTheWidthGateIsEverosOnly:

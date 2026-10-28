@@ -1667,7 +1667,9 @@ class HubSourceConfig(_Base):
     """Whether the conversational Hub source is consulted. ``endpoint`` must
     also be set -- ``None`` keeps the source off whatever this says, so a
     config written before this field existed keeps its meaning. Turning this
-    off keeps the endpoint, so a custom URL survives the switch."""
+    off keeps the endpoint, so a custom URL survives the switch. While on, a
+    qualifying turn's message text is sent to the endpoint as the catalog
+    query."""
 
     endpoint: str | None = None
     """Skill Hub base URL, e.g. ``"https://mss.evermind.ai"``. ``None``

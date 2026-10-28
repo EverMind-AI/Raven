@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import secrets
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from loguru import logger
 from pydantic.alias_generators import to_camel
 
 from raven.config.keys import key_as_written
+from raven.config.live import hub_source_on
 from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import CronConfig
 from raven.utils.atomic_io import atomic_update
@@ -309,9 +311,10 @@ def initialize_skill_hub_endpoint(*, config_path: Path | None = None) -> str | N
     across a repeat onboard).
 
     The schema default is ``None`` on purpose, so a programmatic or
-    non-onboarded load stays Hub-disabled until a config opts in. Onboarding
-    is that opt-in; the settings switch (:func:`set_skill_hub_enabled`) is the
-    other writer. ``apiKey`` is left absent for the user's own Bearer token.
+    non-onboarded load stays Hub-disabled until a config opts in. Both
+    onboarding wizards (the CLI bootstrap and the web wizard's finish) are that
+    opt-in; the settings switch (:func:`set_skill_hub_enabled`) is the other
+    writer. ``apiKey`` is left absent for the user's own Bearer token.
     """
     path = config_path or get_config_path()
 
@@ -329,30 +332,53 @@ def initialize_skill_hub_endpoint(*, config_path: Path | None = None) -> str | N
     return endpoint
 
 
-def set_skill_hub_enabled(enabled: bool, *, config_path: Path | None = None) -> bool:
-    """Turn the conversational Skill Hub source on or off; returns the previous
-    effective state.
+@dataclass(frozen=True)
+class SkillHubSwitch:
+    """What a switch write changed.
+
+    ``previous`` is the effective state before the write, as the runtime reads
+    it. ``seeded_endpoint`` is the one case a running loop cannot pick up: it
+    was built without an endpoint, so no Hub client exists to turn back on
+    until the next reload.
+    """
+
+    previous: bool
+    seeded_endpoint: bool
+
+
+def set_skill_hub_enabled(enabled: bool, *, config_path: Path | None = None) -> SkillHubSwitch:
+    """Turn the conversational Skill Hub source on or off.
 
     On writes the shared endpoint when the block has none — an existing URL,
     custom ones included, is kept, so the switch never discards an operator's
     endpoint. Off records ``enabled: false`` and leaves the URL in place, so
     turning it back on restores the same one.
+
+    Both directions are read live by the running loop when the endpoint is
+    already there; only a write that had to seed the endpoint needs a reload,
+    and the RPC says so.
     """
     path = config_path or get_config_path()
 
-    def _apply(_text: str | None) -> tuple[str, bool]:
+    def _apply(_text: str | None) -> tuple[str, SkillHubSwitch]:
         data = read_raw_or_raise(path)
         hub = _skill_hub_block(data)
         endpoint = hub.get("endpoint")
-        previous = isinstance(endpoint, str) and bool(endpoint) and hub.get("enabled", True) is not False
+        previous = hub_source_on(hub)
+        seeded = enabled and not (isinstance(endpoint, str) and endpoint)
         hub["enabled"] = enabled
-        if enabled and not (isinstance(endpoint, str) and endpoint):
+        if seeded:
             hub["endpoint"] = _DEFAULT_SKILL_HUB_ENDPOINT
-        return json.dumps(data, indent=2, ensure_ascii=False), previous
+        return json.dumps(data, indent=2, ensure_ascii=False), SkillHubSwitch(previous, seeded)
 
-    previous = atomic_update(path, _apply)
-    logger.info("config/update: skill hub source switched {} (was {})", "on" if enabled else "off", previous)
-    return previous
+    change = atomic_update(path, _apply)
+    logger.info(
+        "config/update: skill hub source switched {} (was {}){}",
+        "on" if enabled else "off",
+        change.previous,
+        " and seeded the endpoint" if change.seeded_endpoint else "",
+    )
+    return change
 
 
 def set_language(
@@ -957,6 +983,7 @@ __all__ = [
     "set_skill_blocked",
     "set_playbook_disabled",
     "initialize_skill_hub_endpoint",
+    "SkillHubSwitch",
     "set_skill_hub_enabled",
     "initialize_a2a_server",
     "set_a2a_server_enabled",

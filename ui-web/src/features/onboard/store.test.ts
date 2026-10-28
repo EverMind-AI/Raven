@@ -17,6 +17,7 @@ const body = (done: boolean, found: FoundAgent[] = []): AgentsBody => ({
 
 const source = (scan: ImportScan): OnboardSource => ({
   providerConfigured: async () => true,
+  seedSkillHub: async () => {},
   scan: async () => scan,
   startImport: async () => ({ started: true, total: 0, detail: '' }),
 })
@@ -248,6 +249,7 @@ describe('the tier', () => {
     setSources({
       onboard: {
         providerConfigured: async () => true,
+        seedSkillHub: async () => {},
         scan: async () => READY,
         startImport: async (platforms, tier) => { runs.push([platforms, tier]); return { started: true, total: 1, detail: '' } },
       },
@@ -267,5 +269,26 @@ describe('the tier', () => {
     await store.finish()
 
     expect(runs).toEqual([[['hermes'], 'memory_files']])
+  })
+})
+
+describe('the Hub opt-in', () => {
+  beforeEach(() => store._showStepsForTests(store.STEPS))
+
+  it('seeds the Skill Hub endpoint when the wizard finishes, not on an intermediate next', async () => {
+    const seed = vi.fn(async () => {})
+    setSources({ onboard: { ...source(READY), seedSkillHub: seed } })
+    store.setBodies({ model: body(true) as StepBody, search: body(true) as StepBody, agents: body(true), memory: body(true) })
+    store.open()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    store.set({ step: 'model' })
+    await store.finish()
+    expect(seed).not.toHaveBeenCalled()
+
+    store.set({ step: store.visibleSteps().at(-1)! })
+    await store.finish()
+    expect(seed).toHaveBeenCalledTimes(1)
   })
 })

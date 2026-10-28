@@ -552,6 +552,8 @@ SECTIONS: tuple[Section, ...] = (
                 "bool",
                 _E.RELOAD,
                 writer="settings",
+                sensitive=("turning it back on resumes sending the turn's message text to the Skill Hub"),
+                note="switching it off applies at once; turning it on may wait for a reload",
             ),
             Setting(
                 "skillForge.autoInstall",

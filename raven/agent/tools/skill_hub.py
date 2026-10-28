@@ -127,9 +127,11 @@ class ReadSkillTool(Tool):
         min_safety: float = 0.7,
         blocklist: "Iterable[str] | None" = None,
         blocklist_reader: "Callable[[], frozenset[str]] | None" = None,
+        enabled_reader: "Callable[[], bool] | None" = None,
     ) -> None:
         self._client = client
         self._registry = registry
+        self._enabled_reader = enabled_reader
         self._policy = SkillPolicy.create(min_safety=min_safety, blocklist=blocklist, blocklist_reader=blocklist_reader)
 
     @property
@@ -171,6 +173,8 @@ class ReadSkillTool(Tool):
             return "Error: 'skill_id' is required — a skill's qualified id like 'local/<name>' or 'hub/<slug>'."
         source, native = split_qualified_id(skill_id)
 
+        if source == "hub" and self._enabled_reader is not None and not self._enabled_reader():
+            return "Error: Skill Hub retrieval is turned off in Settings."
         if is_blocked(self._policy.blocked_now(), native):
             return f"Error: skill {native!r} is on the operator blocklist (skillForge.blocklist) and cannot be read."
 
@@ -243,11 +247,13 @@ class UseSkillTool(Tool):
         min_safety: float = 0.7,
         blocklist: "Iterable[str] | None" = None,
         blocklist_reader: "Callable[[], frozenset[str]] | None" = None,
+        enabled_reader: "Callable[[], bool] | None" = None,
         auto_install: str = "auto",
         install_audit_path: "Path | None" = None,
     ) -> None:
         self._client = client
         self._registry = registry
+        self._enabled_reader = enabled_reader
         self._policy = SkillPolicy.create(
             min_safety=min_safety,
             blocklist=blocklist,
@@ -293,6 +299,8 @@ class UseSkillTool(Tool):
             return "Error: 'skill_id' is required — a skill's qualified id like 'hub/<slug>'."
         source, native = split_qualified_id(skill_id)
 
+        if source == "hub" and self._enabled_reader is not None and not self._enabled_reader():
+            return "Error: Skill Hub retrieval is turned off in Settings."
         if is_blocked(self._policy.blocked_now(), native):
             return f"Error: skill {native!r} is on the operator blocklist (skillForge.blocklist) and cannot be used."
 

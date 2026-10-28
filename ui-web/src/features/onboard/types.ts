@@ -37,6 +37,9 @@ export interface OnboardSource {
   /* Whether a provider is configured, re-read when the wizard closes so the
      page's first-run redirects stop once the reader has set one up. */
   providerConfigured(): Promise<boolean>
+  /* The wizard's opt-in for conversational Skill Hub retrieval: seeds the
+     shared endpoint the way the CLI onboarding does. */
+  seedSkillHub(): Promise<void>
   scan(): Promise<ImportScan>
   startImport(platforms: string[], tier: ImportTier): Promise<ImportStarted>
 }

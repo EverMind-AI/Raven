@@ -77,6 +77,24 @@ describe('skills page', () => {
     expect(screen.getByRole('switch', { name: 'gui.settings.skills.hub_title' }).getAttribute('aria-checked')).toBe('false')
   })
 
+  it('reads a hand-written enabled the way the loader does', async () => {
+    const cases: Array<[unknown, string]> = [[0, 'false'], ['false', 'false'], ['off', 'false'], [1, 'true'], ['true', 'true']]
+    for (const [written, checked] of cases) {
+      const snapshot = snap()
+      snapshot.raw.skillForge = {
+        blocklist: [],
+        router: { hub: { endpoint: 'https://hub.internal.test', enabled: written } },
+      }
+      install(snapshot)
+      await mount('skills')
+      expect(
+        screen.getByRole('switch', { name: 'gui.settings.skills.hub_title' }).getAttribute('aria-checked'),
+      ).toBe(checked)
+      cleanup()
+      store._resetForTests()
+    }
+  })
+
   it('reads the Skill Hub switch from a snake_case skill_forge block', async () => {
     /* settings.get returns the file as written, and both spellings load, so
        the harness's camel block has to go or it answers for the snake one. */

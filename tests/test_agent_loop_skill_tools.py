@@ -56,18 +56,20 @@ def test_both_skill_tools_register_without_a_hub(loop) -> None:
     assert loop.tools.has("use_skill")
 
 
-def test_the_hub_client_follows_the_switch(tmp_path: Path) -> None:
-    """An endpoint is not consent: the settings switch can keep the URL and
-    turn the remote source off, and one builder feeds both the router and the
-    tools."""
-    on = SkillForgeRouterConfig(hub=HubSourceConfig(endpoint="http://hub.test"))
+def test_the_hub_client_is_built_while_switched_off(tmp_path: Path) -> None:
+    """The client is built whenever an endpoint exists, even with the switch
+    off, so turning the source back on needs no loop rebuild. The tools ask
+    the live config before each Hub call; only the endpoint needs a reload."""
     off = SkillForgeRouterConfig(hub=HubSourceConfig(endpoint="http://hub.test", enabled=False))
 
-    client = WiringMixin._build_skill_hub_client(tmp_path, on)
+    client = WiringMixin._build_skill_hub_client(tmp_path, off)
     assert client is not None
     asyncio.run(client.aclose())
 
-    assert WiringMixin._build_skill_hub_client(tmp_path, off) is None
+    assert (
+        WiringMixin._build_skill_hub_client(tmp_path, SkillForgeRouterConfig(hub=HubSourceConfig(endpoint=None)))
+        is None
+    )
 
 
 def test_the_digest_names_a_tool_this_loop_registered(loop) -> None:

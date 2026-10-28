@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, Callable
 from loguru import logger
 
 from raven.agent.context import ContextBuilder
-from raven.config.live import LiveConfig, curator_pin, skill_gate_pin
+from raven.config.live import LiveConfig, curator_pin, skill_gate_pin, skill_hub_enabled
 from raven.context_engine import history as history_strategies
 from raven.context_engine.assembler import ContextAssembler
 from raven.context_engine.scent import ScentMenu
@@ -117,17 +117,19 @@ def build_context_engine(
     if skill_forge_router_config is None:
         skill_forge_router_config = _SkillForgeRouterConfig()
 
+    # One reader for the pins and the Hub switch: the file is re-parsed only
+    # when its bytes change, so the subsystems asking per call cost one read
+    # between them.
+    live = LiveConfig()
+
     router = _build_router(
         builder=builder,
         backend=backend,
         memory_config=memory_config,
         skill_forge_router_config=skill_forge_router_config,
         skill_hub_client=skill_hub_client,
+        hub_enabled_reader=lambda: skill_hub_enabled(live),
     )
-
-    # One reader for both pins: the file is re-parsed only when its bytes
-    # change, so two subsystems asking per call cost one read between them.
-    live = LiveConfig()
 
     discovery = str(getattr(skill_forge_config, "discovery", "pull") or "pull")
     if discovery == "push":
@@ -259,6 +261,7 @@ def _build_router(
     memory_config: "MemoryConfig",
     skill_forge_router_config: "SkillForgeRouterConfig",
     skill_hub_client: "SkillHubClient | None" = None,
+    hub_enabled_reader: "Callable[[], bool] | None" = None,
 ) -> "SkillForgeRouter":
     """Assemble the 1-to-3 source SkillForgeRouter for segment 5."""
     from raven.memory_engine import (
@@ -294,8 +297,11 @@ def _build_router(
         sources.append(backend_source)
 
     # ── Source 3: Hub (conditional on remote endpoint) ──────────────
+    # Added while the switch is off too: the source is asked per search and
+    # gates itself on the live config, so turning the switch back on does not
+    # need the loop rebuilt. The endpoint is what cannot be added live.
     hub_cfg = skill_forge_router_config.hub
-    if hub_cfg.endpoint and hub_cfg.enabled:
+    if hub_cfg.endpoint:
         from raven.skill_hub import SkillHubClient
 
         # Reuse the host-built client (shared with the read_skill / use_skill
@@ -311,6 +317,7 @@ def _build_router(
             client,
             weight=float(weights.get("hub", 0.85)),
             min_safety=hub_cfg.min_safety,
+            enabled_reader=hub_enabled_reader,
         )
         sources.append(hub_source)
 

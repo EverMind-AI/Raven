@@ -672,6 +672,47 @@ def skill_blocklist(live: LiveConfig) -> frozenset[str]:
     return normalize_blocklist(names)
 
 
+def hub_source_on(hub: Any) -> bool:
+    """Whether a raw ``hub`` block leaves the conversational source on.
+
+    Validated through the schema, so a hand-written ``0`` / ``"false"`` reads
+    the way the loader reads it instead of by Python truthiness, and an
+    endpoint is required -- ``enabled`` alone cannot turn the source on. A
+    block the loader would refuse answers off, which is the safe direction for
+    a switch that stops text leaving the machine.
+    """
+    from raven.config.raven import HubSourceConfig
+
+    if not isinstance(hub, dict):
+        return False
+    try:
+        cfg = HubSourceConfig.model_validate(hub)
+    except Exception:  # noqa: BLE001 - a block the loader refuses is not consent
+        return False
+    return bool(cfg.endpoint) and cfg.enabled
+
+
+def skill_hub_enabled(live: LiveConfig) -> bool:
+    """Whether the conversational Skill Hub source may run, read on every ask.
+
+    Both top-level spellings are accepted, the same way the page and the writer
+    resolve them; a file carrying both non-null spellings is refused by the
+    loader, so it is off here too. Read live rather than captured at loop start
+    so switching the source off stops the next query, not the next process.
+    """
+    raw = live.raw()
+    camel = raw.get("skillForge")
+    snake = raw.get("skill_forge")
+    if camel is not None and snake is not None:
+        return False
+    block = camel if camel is not None else snake
+    if not isinstance(block, dict):
+        return False
+    router = block.get("router")
+    hub = router.get("hub") if isinstance(router, dict) else None
+    return hub_source_on(hub)
+
+
 _LAST_VALID_PERMISSIONS: "weakref.WeakKeyDictionary[LiveConfig, Any]" = weakref.WeakKeyDictionary()
 
 

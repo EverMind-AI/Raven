@@ -35,11 +35,29 @@ const skillDir = (path: unknown): string => String(path || '').replace(/[\\/]SKI
 
 const HUB_SWITCH = 'skillForge.router.hub.enabled'
 
+const TRUE_BOOLS = new Set(['true', '1', 'on', 'yes'])
+const FALSE_BOOLS = new Set(['false', '0', 'off', 'no'])
+
+/* The boolean the loader gives `enabled`: pydantic reads 0, "false", "off"
+   and friends as off, so Python truthiness on the raw JSON would disagree
+   with the runtime. A value the schema would refuse is not consent. */
+function enabledBySchema(value: unknown): boolean {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+  if (typeof value === 'string') {
+    const word = value.trim().toLowerCase()
+    if (TRUE_BOOLS.has(word)) return true
+    if (FALSE_BOOLS.has(word)) return false
+  }
+  return false
+}
+
 /* The switch's state is the effective source, not the raw flag: an endpoint
-   is required, and an explicit enabled:false keeps a stored URL switched off. */
+   is required, and an explicit off keeps a stored URL switched off. */
 function hubOn(raw: Record<string, unknown>): boolean {
   const hub = forge(raw)?.router?.hub
-  return !!hub && typeof hub.endpoint === 'string' && !!hub.endpoint && hub.enabled !== false
+  if (!hub || typeof hub.endpoint !== 'string' || !hub.endpoint) return false
+  return hub.enabled === undefined ? true : enabledBySchema(hub.enabled)
 }
 
 function HubCard({ raw }: { raw: Record<string, unknown> }): JSX.Element {

@@ -242,3 +242,32 @@ class TestHubSource:
         src = HubSkillSource(_client(handler))
         hits = await src.search("q", [], k=10)
         assert all(h.content == "" for h in hits)
+
+    async def test_a_switched_off_source_makes_no_request(self) -> None:
+        calls: list[httpx.Request] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            calls.append(req)
+            return httpx.Response(200, json=_envelope({"items": [_item("id1", "A")]}))
+
+        src = HubSkillSource(_client(handler), enabled_reader=lambda: False)
+
+        assert await src.search("q", [], k=10) == []
+        assert calls == []
+
+    async def test_the_switch_is_read_per_search(self) -> None:
+        """The source is built once per loop; the switch is not. Off must stop
+        the same instance's next query."""
+        calls: list[httpx.Request] = []
+        on = {"value": True}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            calls.append(req)
+            return httpx.Response(200, json=_envelope({"items": [_item("id1", "A")]}))
+
+        src = HubSkillSource(_client(handler), enabled_reader=lambda: on["value"])
+        assert [h.name for h in await src.search("q", [], k=10)] == ["A"]
+
+        on["value"] = False
+        assert await src.search("q", [], k=10) == []
+        assert len(calls) == 1

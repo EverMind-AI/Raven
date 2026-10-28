@@ -80,6 +80,7 @@ function install(scan: ImportScan = SCAN_NONE): Harness {
   }
   h.source = {
     providerConfigured: async () => h.configured,
+    seedSkillHub: async () => {},
     scan: async () => scan,
     startImport: async (platforms, tier) => {
       h.runs.push([platforms, tier])

@@ -708,10 +708,30 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
         from raven.config.update import set_skill_hub_enabled
 
         try:
-            previous = set_skill_hub_enabled(value)
+            change = set_skill_hub_enabled(value)
         except ValueError as exc:
             raise ConfigValidationError(str(exc)) from exc
-        return {"applied": True, "previous": previous}
+        reply: dict[str, Any] = {"applied": True, "previous": change.previous}
+        if change.seeded_endpoint:
+            # The running loop was built without an endpoint, so it has no Hub
+            # client to switch back on. Off is live in both directions; this is
+            # the one write that needs a reload, and the page shows the warning.
+            reply["warning"] = "Saved. Turning the Skill Hub source on takes effect after Raven reloads."
+        return reply
+
+    if key == "skillForge.router.hub.init":
+        # The web wizard's finish. It seeds the endpoint the way the CLI
+        # onboarding does -- never re-enabling a config that turned the source
+        # off -- because the wizard is the page's only opt-in moment.
+        if value is not True:
+            raise ConfigValidationError("init takes true")
+        from raven.config.update import initialize_skill_hub_endpoint
+
+        try:
+            initialize_skill_hub_endpoint()
+        except ValueError as exc:
+            raise ConfigValidationError(str(exc)) from exc
+        return {"applied": True, "previous": None}
 
     if key in ("plugins.disabled", "tools.disabledTools", "skillForge.blocklist"):
         if not isinstance(value, list) or not all(isinstance(x, str) for x in value):

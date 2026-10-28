@@ -112,7 +112,6 @@ def _build_engine(
     *,
     backend=None,
     hub_endpoint: str | None = None,
-    hub_enabled: bool = True,
     memory_config: MemoryConfig | None = None,
     model: str = "stub",
     skill_forge_config: SkillForgeConfig | None = None,
@@ -132,7 +131,7 @@ def _build_engine(
         backend=backend,
         memory_config=memory_config or MemoryConfig(),
         skill_forge_router_config=SkillForgeRouterConfig(
-            hub=HubSourceConfig(endpoint=hub_endpoint, enabled=hub_enabled),
+            hub=HubSourceConfig(endpoint=hub_endpoint),
             **({} if rrf_k is None else {"rrf_k": rrf_k}),
         ),
         # Most assertions in this file exercise the push pipeline's wiring;
@@ -227,12 +226,23 @@ class TestSkillForgeRouterAssembly:
         types, _ = _router_sources(_build_engine(tmp_path, backend=_FakeBackend(), hub_endpoint="http://hub.test"))
         assert HubSkillSource in types
 
-    def test_hub_source_omitted_when_switched_off(self, tmp_path: Path) -> None:
-        """The switch keeps the endpoint, so the endpoint alone is not consent."""
-        types, _ = _router_sources(
-            _build_engine(tmp_path, backend=_FakeBackend(), hub_endpoint="http://hub.test", hub_enabled=False)
+    def test_hub_source_built_while_switched_off(self, tmp_path: Path, monkeypatch) -> None:
+        """The source exists while the switch is off -- so turning it back on
+        needs no loop rebuild -- and the live reader is what gates the call."""
+        _point_live_config(
+            tmp_path,
+            monkeypatch,
+            {"skillForge": {"router": {"hub": {"endpoint": "http://hub.test", "enabled": False}}}},
         )
-        assert HubSkillSource not in types
+
+        types, sources = _router_sources(
+            _build_engine(tmp_path, backend=_FakeBackend(), hub_endpoint="http://hub.test")
+        )
+
+        assert HubSkillSource in types
+        hub = next(source for source in sources if isinstance(source, HubSkillSource))
+        assert hub._enabled_reader is not None
+        assert hub._enabled_reader() is False
 
     def test_rrf_k_forwarded_from_config(self, tmp_path: Path) -> None:
         engine = _build_engine(tmp_path, backend=_FakeBackend(), rrf_k=25)

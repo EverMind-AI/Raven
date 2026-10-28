@@ -1420,6 +1420,7 @@ class WiringMixin:
         )
         if skill_registry is not None or self._skill_hub_client is not None:
             from raven.agent.tools.skill_hub import FindSkillTool, ReadSkillTool, UseSkillTool
+            from raven.config.live import skill_hub_enabled
 
             self.tools.register(
                 ReadSkillTool(
@@ -1428,6 +1429,7 @@ class WiringMixin:
                     min_safety=self._skill_min_safety,
                     blocklist=self._skill_blocklist,
                     blocklist_reader=self._skill_blocklist_reader,
+                    enabled_reader=lambda: skill_hub_enabled(self._live_config),
                 ),
             )
             # Pull-mode discovery: search on the model's own terms through the
@@ -1448,6 +1450,7 @@ class WiringMixin:
                     min_safety=self._skill_min_safety,
                     blocklist=self._skill_blocklist,
                     blocklist_reader=self._skill_blocklist_reader,
+                    enabled_reader=lambda: skill_hub_enabled(self._live_config),
                     auto_install=self._skill_auto_install,
                     install_audit_path=(
                         self.workspace / "skills" / "hub" / "installs.jsonl"
@@ -2017,11 +2020,16 @@ class WiringMixin:
         workspace: Path,
         skill_forge_router_config: "SkillForgeRouterConfig | None",
     ) -> "SkillHubClient | None":
-        """Construct the shared Skill Hub client, or ``None`` when no Hub is
-        configured. Downloads land under ``<workspace>/skills/hub`` so a
-        use_skill'd bundle is discoverable by the on-disk skill registry."""
+        """Construct the shared Skill Hub client, or ``None`` when no Hub
+        endpoint is configured. Downloads land under ``<workspace>/skills/hub``
+        so a use_skill'd bundle is discoverable by the on-disk skill registry.
+
+        Built while the switch is off too: the tools ask the live config
+        before each Hub call, so turning the source back on does not need the
+        loop rebuilt. Only the endpoint is fixed at construction.
+        """
         hub_cfg = getattr(skill_forge_router_config, "hub", None)
-        if hub_cfg is None or not getattr(hub_cfg, "endpoint", None) or not getattr(hub_cfg, "enabled", True):
+        if hub_cfg is None or not getattr(hub_cfg, "endpoint", None):
             return None
         from raven.skill_hub import SkillHubClient
 

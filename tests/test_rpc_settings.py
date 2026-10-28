@@ -1281,12 +1281,33 @@ async def test_settings_set_hub_switch_on_seeds_the_endpoint(cfg):
 
     result = await rpc_console.settings_set({"key": "skillForge.router.hub.enabled", "value": True})
 
-    assert result == {"applied": True, "previous": False}
+    # Only this write needs a reload: the running loop was built without an
+    # endpoint, so it has no Hub client to switch back on. Off is live.
+    assert result == {
+        "applied": True,
+        "previous": False,
+        "warning": "Saved. Turning the Skill Hub source on takes effect after Raven reloads.",
+    }
     assert _read(cfg)["skillForge"]["router"]["hub"] == {
         "enabled": True,
         "endpoint": "https://skillhub.evermind.ai",
     }
     assert load_raven_config(config_path=cfg).skill_forge.router.hub.enabled is True
+
+
+async def test_settings_set_hub_switch_on_with_an_endpoint_needs_no_reload(cfg):
+    cfg.write_text(
+        json.dumps({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test"}}}}),
+        encoding="utf-8",
+    )
+
+    result = await rpc_console.settings_set({"key": "skillForge.router.hub.enabled", "value": True})
+
+    assert result == {"applied": True, "previous": True}
+    assert _read(cfg)["skillForge"]["router"]["hub"] == {
+        "endpoint": "https://hub.internal.test",
+        "enabled": True,
+    }
 
 
 async def test_settings_set_hub_switch_off_keeps_the_url(cfg):
@@ -1302,6 +1323,47 @@ async def test_settings_set_hub_switch_off_keeps_the_url(cfg):
         "endpoint": "https://hub.internal.test",
         "enabled": False,
     }
+
+
+async def test_settings_set_hub_init_seeds_without_re_enabling(cfg):
+    """The web wizard's finish. It must match the CLI onboarding: seed the
+    endpoint, keep an explicit off, and keep a custom endpoint."""
+    cfg.write_text(
+        json.dumps({"skillForge": {"router": {"hub": {"enabled": False}}}}),
+        encoding="utf-8",
+    )
+
+    result = await rpc_console.settings_set({"key": "skillForge.router.hub.init", "value": True})
+
+    assert result == {"applied": True, "previous": None}
+    assert _read(cfg)["skillForge"]["router"]["hub"] == {
+        "enabled": False,
+        "endpoint": "https://skillhub.evermind.ai",
+    }
+
+    await rpc_console.settings_set({"key": "skillForge.router.hub.init", "value": True})
+    assert _read(cfg)["skillForge"]["router"]["hub"] == {
+        "enabled": False,
+        "endpoint": "https://skillhub.evermind.ai",
+    }
+
+
+async def test_settings_set_hub_init_keeps_a_custom_endpoint(cfg):
+    cfg.write_text(
+        json.dumps({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test"}}}}),
+        encoding="utf-8",
+    )
+
+    await rpc_console.settings_set({"key": "skillForge.router.hub.init", "value": True})
+
+    assert _read(cfg)["skillForge"]["router"]["hub"] == {"endpoint": "https://hub.internal.test"}
+
+
+async def test_settings_set_hub_init_rejects_other_values(cfg):
+    before = cfg.read_bytes()
+    with pytest.raises(ConfigValidationError):
+        await rpc_console.settings_set({"key": "skillForge.router.hub.init", "value": False})
+    assert cfg.read_bytes() == before
 
 
 async def test_settings_set_hub_switch_rejects_a_non_bool(cfg):

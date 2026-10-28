@@ -3510,6 +3510,20 @@ def test_bootstrap_honours_an_explicit_null_hub_endpoint(tmp_env: Path, monkeypa
     assert json.loads(tmp_env.read_text())["skillForge"]["router"]["hub"]["endpoint"] is None
 
 
+def test_bootstrap_does_not_re_enable_a_switched_off_hub(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The seed is an endpoint write, not consent: a config that switched the
+    source off stays off after a repeat onboard."""
+    tmp_env.write_text(json.dumps({"skillForge": {"router": {"hub": {"enabled": False}}}}))
+
+    onboard_commands._bootstrap_empty_config()
+
+    hub = json.loads(tmp_env.read_text())["skillForge"]["router"]["hub"]
+    assert hub == {"enabled": False, "endpoint": "https://skillhub.evermind.ai"}
+    from raven.config.raven import load_raven_config
+
+    assert load_raven_config().skill_forge.router.hub.enabled is False
+
+
 def _onboard_once() -> Any:
     return runner.invoke(
         app,
