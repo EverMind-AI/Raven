@@ -1591,25 +1591,123 @@ def test_a_session_response_rewrites_a_model_menu_the_probe_captured_long_ago(tm
     assert store.load([cfg])["a"].model_choices == _GROUPED_CHOICES
 
 
-def test_a_session_response_rewrites_the_effort_menu_and_names_its_option(tmp_path: Path) -> None:
-    """The thought_level menu moves with the agent too, and its option id is
-    part of the measurement: it is the configId a later turn sends the value
-    through, so a version that renames it must not leave the old one in place."""
+def test_a_session_response_names_its_effort_option_per_session_and_leaves_the_row_menu_alone(
+    tmp_path: Path,
+) -> None:
+    """The thought_level menu a session reports belongs to the model that session
+    is on -- OpenCode 1.19.4 offers one only for a model that reasons -- so it is
+    a fact about the session, not about the row. The row's menu is the probe's,
+    measured on the row's own model; taking a session's menu over it rebuilt the
+    whole agent table on every model switch whose menu differed.
+
+    The option id is still read off every response, per session: it is the
+    configId a later turn sends the value through, so a version that renames it
+    must not leave the old one in place."""
     cfg = stub_config("a")
     store = SnapshotStore(path=tmp_path / "caps.json")
-    stored = _with_model_choices(cfg, AcpModelChoice(value="old/retired", name="retired", group="Old"))
-    store.record(stored)
-
-    updated = relearn_session_menus(
-        stored,
-        _menu_reply(efforts=[{"value": "low", "name": "Low"}, {"value": "max", "name": "Max"}]),
-        store=store,
+    stored = replace(
+        _with_model_choices(cfg, AcpModelChoice(value="old/retired", name="retired", group="Old")),
+        effort_choices=(AcpEffortChoice("low", "Low"), AcpEffortChoice("high", "High")),
+        effort_option="effort",
     )
+    store.record(stored)
+    reply = _menu_reply(efforts=[{"value": "low", "name": "Low"}, {"value": "max", "name": "Max"}])
 
-    assert updated is not None
-    assert updated.effort_option == "effort"
-    assert [(c.value, c.name) for c in updated.effort_choices] == [("low", "Low"), ("max", "Max")]
-    assert store.load([cfg])["a"].effort_choices == updated.effort_choices
+    assert relearn_session_menus(stored, reply, store=store) is None
+    assert store.load([cfg])["a"].effort_choices == stored.effort_choices
+
+    backend = AcpAgentBackend(name="a", command="unused", snapshot=stored)
+    client = _NamedClient()
+    backend._note_session_effort(client, "s1", reply)
+    renamed = _menu_reply(efforts=[{"value": "max", "name": "Max"}])
+    renamed["configOptions"][-1].update(id="reasoning", currentValue="max")
+    backend._note_session_effort(client, "s1", renamed)
+
+    state = _session_effort_state(client, "s1")
+    assert (state.option, state.baseline) == ("reasoning", "default"), "the id follows; the baseline is the first"
+
+
+class _NamedClient:
+    """A connection's client stand-in for the effort record, which is held per connection."""
+
+
+async def test_a_model_switch_with_its_own_effort_menu_leaves_the_agent_table_alone() -> None:
+    """Base never read a menu off the model switch. Reading the effort menu
+    there revised the agent-wide snapshot whenever the new model's menu
+    differed, and the revision rebuilt every backend in the table. The model
+    menu the switch answers with is not taken either: the next session's own
+    response is where a moved model menu is relearned."""
+    cfg = stub_config("switcher")
+    stored = replace(
+        _snapshot("switcher", cfg, can_resume=False),
+        effort_choices=(AcpEffortChoice("low", "Low"), AcpEffortChoice("high", "High")),
+        effort_option="effort",
+    )
+    backend = AcpAgentBackend(name="switcher", command="unused", snapshot=stored)
+    rebuilds: list[int] = []
+    backend.bind_caps_listener(lambda: rebuilds.append(1))
+
+    class _Client:
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            return _menu_reply(
+                models=_GROUPED_MODELS, efforts=[{"value": "low", "name": "Low"}, {"value": "max", "name": "Max"}]
+            )
+
+    client = _Client()
+    await backend._set_model(client, "s1", "prov/B", budget=1)
+
+    assert rebuilds == []
+    assert backend._snapshot is stored
+    assert backend._model_pushed == {"s1": "prov/B"}
+    assert _session_effort_state(client, "s1").option == "effort", "the session still learns its option"
+
+
+async def test_clearing_a_model_after_a_switch_whose_effort_menu_differs_restores_the_session(
+    tmp_path: Path,
+) -> None:
+    """The reviewer's chain, in order: open on prov/A, switch to prov/C whose
+    effort menu differs, then clear. The rebuild used to hand the next turn a
+    fresh backend with no note of the switch, and the clear sent nothing."""
+    cfg = stub_config("chain")
+    stored = replace(
+        _snapshot("chain", cfg, can_resume=False),
+        effort_choices=(AcpEffortChoice("low", "Low"), AcpEffortChoice("high", "High")),
+        effort_option="effort",
+    )
+    table = {"backend": AcpAgentBackend(name="chain", command="unused", snapshot=stored)}
+
+    def rebuild() -> None:
+        table["backend"] = AcpAgentBackend(name="chain", command="unused", snapshot=stored)
+
+    table["backend"].bind_caps_listener(rebuild)
+
+    def options(model: str, efforts: list[str]) -> list[dict]:
+        return [
+            {"id": "model", "category": "model", "currentValue": model, "options": []},
+            {
+                "id": "effort",
+                "category": "thought_level",
+                "currentValue": "low",
+                "options": [{"value": e, "name": e.title()} for e in efforts],
+            },
+        ]
+
+    sent: list[str] = []
+
+    class _Client:
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            if method == "session/new":
+                return {"sessionId": "s1", "configOptions": options("prov/A", ["low", "high"])}
+            sent.append(params["value"])
+            return {"configOptions": options(params["value"], ["low", "max"])}
+
+    client = _Client()
+    sid, _ = await table["backend"]._open_session(
+        client, cwd=str(tmp_path), skey="s", handle="h1", budget=1, mcp_servers=[], session_model="prov/C"
+    )
+    await table["backend"]._set_model(client, sid, None, budget=1)
+
+    assert sent == ["prov/C", "prov/A"]
 
 
 def test_a_relearned_record_measured_under_an_old_launch_config_stays_stale(tmp_path: Path) -> None:

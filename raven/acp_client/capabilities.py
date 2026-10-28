@@ -878,6 +878,13 @@ def relearn_session_menus(
     erasing the models takes the picker off the row, both worse than a stale
     entry. A model menu the agent flagged as unread is not taken either, for
     the reason ``_read_session_menu_unread`` gives.
+
+    The reasoning-effort menu is deliberately not among them. It belongs to the
+    model the session is on -- OpenCode 1.19.4 offers one only for a model that
+    reasons -- so a session's menu is a fact about that session, and the row's
+    is the probe's, measured on the row's own model. Taking a session's over it
+    made the agent-wide record swing with every model switch, each swing a
+    rebuild of the whole agent table.
     """
     if snapshot is None:
         return None
@@ -889,12 +896,6 @@ def relearn_session_menus(
     if choices and choices != snapshot.model_choices:
         changes["model_choices"] = choices
         changes["model_menu_measured"] = True
-    effort_option, _effort_now, efforts = read_session_effort(result)
-    if efforts and (efforts != snapshot.effort_choices or effort_option != snapshot.effort_option):
-        # The option id travels with the choices: it is what a later turn sends
-        # the value through, and an agent may rename it between versions.
-        changes["effort_choices"] = efforts
-        changes["effort_option"] = effort_option
     if not changes:
         return None
     revised = (store or SnapshotStore()).revise(snapshot, **changes)

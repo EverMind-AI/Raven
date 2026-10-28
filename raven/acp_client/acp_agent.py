@@ -1413,15 +1413,17 @@ class AcpAgentBackend:
 
         Both are read from the session response, because the option's id is the
         agent's to name (``effort`` on OpenCode 1.19.4) and a resumed response
-        may omit it. Recorded once per session for the reason
-        :meth:`_note_session_model` gives: a second reading would adopt a value
-        this host pushed as the baseline.
+        may omit it. The id is taken from every response that names one: a model
+        switch answers with the options the new model has, and that is the id a
+        later push goes through. The baseline is recorded once per session, for
+        the reason :meth:`_note_session_model` gives: a second reading would
+        adopt a value this host pushed as the baseline.
         """
         if not session_id:
             return
         state = _session_effort_state(client, session_id)
         option, current, _choices = read_session_effort(result)
-        if option and not state.option:
+        if option:
             state.option = option
         if current and not state.baseline:
             state.baseline = current
@@ -2583,11 +2585,13 @@ class AcpAgentBackend:
         else:
             self._model_pushed.pop(session_id, None)
         # The response carries the config options the model now has. Its
-        # thought_level entry is what the effort push below needs, and it can
-        # differ from the one the session opened on: OpenCode 1.19.4 offers
-        # effort only for a model that reasons, and the session opens on the
-        # agent's own default. Best-effort, like every menu relearn.
-        self._relearn_menus(response)
+        # thought_level entry names the option the effort push below goes
+        # through, so it is noted for this session. Its menu is not relearned
+        # as the agent's: it is this model's -- OpenCode 1.19.4 offers effort
+        # only for a model that reasons -- and taking it as the row's would
+        # rebuild the agent table on every switch whose menu differs, forgetting
+        # in each rebuilt backend that this session's model was moved. The row's
+        # menu is the probe's, measured on the row's own model.
         self._note_session_effort(client, session_id, response)
 
     async def _set_effort(
