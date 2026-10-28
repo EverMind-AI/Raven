@@ -171,6 +171,12 @@ class ResolvingProvider(LLMProvider):
         and only the adapter knows which efforts its wire sends as one request."""
         return self._pick(model).reasoning_wire_keys(model, reasoning_effort)
 
+    def reasoning_efforts(self, model: str | None = None) -> tuple[str, ...]:
+        """Forwarded for ``reasoning_wire_keys``'s reason: a session's picker
+        sees this router, and only the vendor adapter knows which rungs its
+        wire takes -- six behind ``anthropic_messages``, four elsewhere."""
+        return self._pick(model).reasoning_efforts(model)
+
     def request_generation(self, **asked: Any) -> dict[str, Any]:
         """Forwarded for ``wire_model_id``'s reason: the record of what a request
         asked for has to come from the adapter that will send it, or the reasoning

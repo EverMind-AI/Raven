@@ -928,6 +928,19 @@ class AnthropicMessagesProvider(LLMProvider):
         record.update(keys)
         return record
 
+    def reasoning_efforts(self, model: str | None = None) -> tuple[str, ...]:
+        """See ``LLMProvider.reasoning_efforts``; this wire takes two rungs more.
+
+        ``_ADAPTIVE_EFFORTS`` is the one table of what this wire can send, so
+        the words are its keys: the four every wire takes, and ``xhigh`` and
+        ``max`` over them -- ``output_config.effort`` on a Claude that thinks
+        adaptively, ``reasoning.effort`` on the OpenRouter shape. One answer
+        for every model on the wire: a model that refuses a rung says so in a
+        400, and ``rewrite_on_400`` turns the label into a budget there, so
+        the words are not where a model's ceiling is guessed at.
+        """
+        return tuple(_ADAPTIVE_EFFORTS)
+
     def reasoning_wire_keys(self, model: str | None, reasoning_effort: str | None) -> dict[str, Any]:
         """See ``LLMProvider.reasoning_wire_keys``; this wire translates the label.
 

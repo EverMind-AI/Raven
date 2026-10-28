@@ -368,6 +368,12 @@ class EndpointRotorProvider(LLMProvider):
         every inner was built from."""
         return self._inners[0].reasoning_wire_keys(model, reasoning_effort)
 
+    def reasoning_efforts(self, model: str | None = None) -> tuple[str, ...]:
+        """Delegates to the first endpoint's inner, like ``reasoning_wire_keys``:
+        the rungs a wire takes are a property of the section every inner was
+        built from."""
+        return self._inners[0].reasoning_efforts(model)
+
     def supports_assistant_prefill(self, model: str | None = None) -> bool:
         """Delegates to the first endpoint's inner, like ``supports_prompt_caching``:
         the vendor rule is a property of the section every inner was built from."""

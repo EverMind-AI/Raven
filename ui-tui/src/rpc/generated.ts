@@ -214,6 +214,10 @@ export interface SessionInitInfo {
    */
   running?: boolean;
   /**
+   * The reasoning effort this session's own model calls run at: its own pick (session.set_effort), else its mode's, else agents.defaults.reasoningEffort; null when the provider's own default stands.
+   */
+  reasoning_effort?: string | null;
+  /**
    * True for an Imported Conversation, which nothing can change; absent on every other session.
    */
   read_only?: boolean;
@@ -4752,6 +4756,40 @@ export interface SessionSetModeResult {
     name?: string;
     description?: string;
   }[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionSetEffortParams".
+ */
+export interface SessionSetEffortParams {
+  session_key: string;
+  /**
+   * One of the words in options, which are the words this session's model takes; a word its provider does not take is refused, naming the ones it does. Omit it to report without changing.
+   */
+  effort?: string;
+  /**
+   * Drop the session's own pick and follow the default again. Wins over effort when both are given.
+   */
+  clear?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionSetEffortResult".
+ */
+export interface SessionSetEffortResult {
+  session_key: string;
+  /**
+   * The session's own pick, or null while it follows the default.
+   */
+  effort?: string | null;
+  /**
+   * What the session runs at with no pick of its own: its mode's effort where the catalogue sets one, else agents.defaults.reasoningEffort, else null for the provider's own default.
+   */
+  default?: string | null;
+  /**
+   * The words effort accepts on this session's model, least first: the four every provider takes (minimal, low, medium, high), plus xhigh and max where the provider takes them (the Anthropic Messages adapter). A draft gets the default model's.
+   */
+  options?: string[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

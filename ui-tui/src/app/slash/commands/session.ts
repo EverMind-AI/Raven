@@ -14,6 +14,7 @@ import type {
   SessionUsageResponse,
   VoiceToggleResponse
 } from '../../../gatewayTypes.js'
+import type { SessionSetEffortResult } from '../../../rpc/generated.js'
 import type { PanelSection } from '../../../types.js'
 import type { SlashCommand } from '../types.js'
 
@@ -26,9 +27,11 @@ import {
 } from '../../../domain/messages.js'
 import { formatVoiceRecordKey, parseVoiceRecordKey } from '../../../lib/platform.js'
 import { fmtK } from '../../../lib/text.js'
+import { getDirectChat } from '../../directChatStore.js'
 import { DEFAULT_INDICATOR_STYLE, INDICATOR_STYLES, type IndicatorStyle } from '../../interfaces.js'
 import { patchOverlayState } from '../../overlayStore.js'
 import { patchUiState } from '../../uiStore.js'
+import { RESET_WORDS } from './core.js'
 
 // A model switch is per conversation; `--default` also changes what new ones start on. The picker passes `<model> --provider
 // <slug>`; a bare `/model <name>` carries no provider. Parse both into the
@@ -624,6 +627,68 @@ export const sessionCommands: SlashCommand[] = [
             }
 
             ctx.transcript.sys(`reasoning: ${r.value}`)
+          })
+        )
+        .catch(ctx.guardedErr)
+    }
+  },
+
+  {
+    help: 'show or set how much the model thinks for this conversation [minimal|low|medium|high|xhigh|max|default]',
+    name: 'effort',
+    usage:
+      '/effort [minimal|low|medium|high|xhigh|max|default]   -- xhigh and max where the model\'s provider takes them (Anthropic); default/reset/clear follow the global setting again',
+    run: (arg, ctx) => {
+      if (!ctx.sid) {
+        return ctx.transcript.sys('no active session')
+      }
+
+      // Refused inside a direct chat rather than redirected: the pick is the
+      // main conversation's, and the instance on screen has no reasoning
+      // effort of its own to set from here (`/mode` has one per instance;
+      // this does not). Sent anyway, it moved the main conversation's record
+      // while the reply, in the instance's pane, said "this conversation".
+      const { active } = getDirectChat()
+
+      if (active) {
+        return ctx.transcript.sys(
+          `/effort is the main conversation's and does not reach ${active.agent}/${active.handle} -- Esc returns to Raven`
+        )
+      }
+
+      // The session's own reasoning effort, kept on its record by the server:
+      // a bare `/effort` reports, a word sets it from the next turn on, and
+      // the reset words (`/mode`'s) drop it so the conversation follows the
+      // global setting (or its mode's) again. The words are the model's
+      // provider's (six on the Anthropic Messages wire, four elsewhere) and
+      // the server's to refuse -- its refusal names the ones it takes -- so
+      // none are checked here; the usage line lists them all for the reader.
+      const want = arg.trim().toLowerCase()
+      const params: Record<string, unknown> = { session_key: ctx.sid }
+
+      if (RESET_WORDS.has(want)) {
+        params.clear = true
+      } else if (want) {
+        params.effort = want
+      }
+
+      ctx.gateway
+        .rpc<SessionSetEffortResult>('session.set_effort', params, { quiet: true })
+        .then(
+          ctx.guarded<SessionSetEffortResult>(r => {
+            const fallback = r.default ?? null
+            const fallbackLabel = fallback ?? "the provider's own"
+            ctx.transcript.sys(
+              r.effort
+                ? `reasoning effort: ${r.effort} (this conversation; default is ${fallbackLabel})`
+                : `reasoning effort: default (${fallbackLabel})`
+            )
+            // The status bar shows what the next turn runs at, as session.info
+            // reports it: the pick, else the default.
+            patchUiState(state => ({
+              ...state,
+              info: state.info ? { ...state.info, reasoning_effort: r.effort ?? fallback ?? '' } : state.info
+            }))
           })
         )
         .catch(ctx.guardedErr)

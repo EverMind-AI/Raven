@@ -57,6 +57,43 @@ Use the UI's conversation picker for interactive sessions. A sub-agent
 `instance` continues that child's conversation; it is not the host session id
 or a DAG node id. See [DAG Orchestration](orchestration.md).
 
+## Set the reasoning effort
+
+The reasoning effort is how much the model thinks before each answer. The
+words are `minimal`, `low`, `medium` and `high`; a conversation whose model is
+served by the Anthropic Messages adapter may also pick `xhigh` and `max`, the
+two rungs that wire takes over `high`. Each provider maps the words to its own
+request (Anthropic's adaptive effort and thinking budgets, the
+`reasoning_effort` field of OpenAI-style APIs), and a model with no thinking to
+move ignores them. Left unset, the provider's own default applies.
+
+Two places set it:
+
+- **For every conversation**: in the WebUI, open Settings, then *Parameters* on
+  the *Chat* row, then *Reasoning effort*; or set
+  `agents.defaults.reasoningEffort` in `~/.raven/config.json`. The first rung,
+  *Provider default*, clears the key. This setting takes the four words every
+  provider accepts, because it reaches every model call Raven makes, on
+  whichever provider a conversation switched to and in every sub-agent.
+- **For one conversation**: the *Reasoning effort* row of the model picker in
+  the WebUI (open it from the model chip beside the composer), or `/effort
+  <word>` in the TUI. `/effort` alone reports the effort in force, and
+  `/effort default` returns the conversation to the global setting. The row
+  offers the words the conversation's model takes, and `/effort` refuses a
+  word the model's provider does not take, naming the ones it does. Inside a
+  direct chat with a sub-agent instance the command is refused: the pick is
+  the main conversation's, and an instance has none of its own.
+
+A pick made for one conversation outranks the global setting and the
+conversation's mode. It is kept on the conversation's own record, so it survives
+a gateway restart and comes back when the conversation is resumed, and it lands
+on the next turn. It moves Raven's own model calls only; sub-agents keep the
+configured default. If the conversation is later switched to a model whose
+provider does not take the picked word (`max` picked on a Claude, then a
+switch to a model that takes the four), the next turn runs at the highest word
+that provider takes, and the picker shows the pick beside the words it can move
+to.
+
 ## Add capability deliberately
 
 Use a skill for reusable instructions, MCP for external tools, and a plugin for

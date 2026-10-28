@@ -131,6 +131,7 @@ async function harness(
       'src/state/ctxChip': { set: (used: number) => calls.push(['setCtx', used]) },
       'src/state/banner': { draw: () => {} },
       'src/state/tier': { load: () => calls.push(['loadTier']) },
+      'src/state/effort': { load: (sid?: string | null, gen?: number) => calls.push(['loadEffort', sid, gen]) },
       'src/state/perm': { setFromConfig: () => {} },
       'src/features/workspace/record': { wsOnHistory: () => {} },
       'src/features/transcript/source': {
@@ -733,6 +734,41 @@ describe('the live session switch', () => {
     h.startDraft()
 
     expect(h.calls.filter((c) => c[0] === 'loadTier')).toHaveLength(2)
+  })
+
+  it('reads the effort of the conversation being opened, under its switch, before the current session moves over', async () => {
+    /* The effort source builds its request from the key it is given. A read of
+       "the current conversation" here would be of the one being LEFT -- the
+       current session is switched over only after these reads -- and its reply
+       painted the new view: open B from A and the picker's effort row showed
+       A's, and a pick of that very rung on B was taken as already in force. */
+    const h = await harness({ rows: [{ id: 'a' }, { id: 'b' }] })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    h.openLiveSession({ id: 'b', title: 'Beta' })
+    await h.settle('b')
+
+    const reads = h.calls.filter((c) => c[0] === 'loadEffort')
+    expect(reads.map((c) => c[1])).toEqual(['a', 'b'])
+    expect(reads.every((c) => typeof c[2] === 'number')).toBe(true)
+    const marks = h.calls
+      .map((c) => (c[0] === 'loadEffort' || c[0] === 'sessionSet' ? `${String(c[0])}:${String(c[1])}` : null))
+      .filter((m): m is string => m !== null)
+    expect(marks.indexOf('loadEffort:b')).toBeLessThan(marks.indexOf('sessionSet:b'))
+  })
+
+  it('reads the default effort back when a conversation is left for a new task', async () => {
+    const h = await harness({ rows: [{ id: 'a' }] })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    h.startDraft()
+
+    const reads = h.calls.filter((c) => c[0] === 'loadEffort')
+    expect(reads).toHaveLength(2)
+    expect(reads[1]![1]).toBeNull()
+    expect(typeof reads[1]![2]).toBe('number')
   })
 
   it('holds a staged permission mode to the tier\'s rules: reset on both paths, re-read per open', async () => {

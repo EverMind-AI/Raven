@@ -36,8 +36,10 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
+from raven.agent import session_effort
 from raven.config.loader import drain_migration_notices, load_config, raven_home
 from raven.config.raven import load_raven_config
+from raven.config.schema import REASONING_EFFORTS
 from raven.providers.rates import resolve_context_window
 from raven.providers.usage import reported_cost, token_count
 from raven.rpc.errors import (
@@ -274,6 +276,9 @@ async def _default_session_info(
         # through turn.send's bookkeeping, and it is as much in flight as a
         # typed one.
         "running": bool(session_key) and turn_module.is_session_answering(session_key),
+        # What this session's own calls think at, for the status bar beside the
+        # model: its own pick, else what it would run at without one.
+        "reasoning_effort": _effort_in_force(agent_loop, config, session_key),
     }
 
     # Nudge the status bar to run `raven upgrade` when the cached latest release
@@ -535,6 +540,65 @@ async def session_create(
         "session_id": session_id,
         "info": info,
     }
+
+
+def _mode_effort(agent_loop: object, session_key: str | None) -> str | None:
+    """The session's mode's own effort, where the catalogue sets one (``raven-code`` does)."""
+    policy = getattr(agent_loop, "session_policy", None)
+    held = policy(session_key or "") if callable(policy) and session_key else None
+    mode_effort = getattr(held, "reasoning_effort", None)
+    return mode_effort if isinstance(mode_effort, str) and mode_effort else None
+
+
+def _configured_effort(config: Any) -> str | None:
+    """``agents.defaults.reasoningEffort`` as the file has it now, or None for an unset key.
+
+    Read fresh rather than off the loop, the way ``default_reasoning_effort``
+    reads the file, so a settings edit shows here without a restart.
+    """
+    configured = getattr(getattr(getattr(config, "agents", None), "defaults", None), "reasoning_effort", None)
+    return configured if isinstance(configured, str) and configured else None
+
+
+def _default_effort(agent_loop: object, config: Any, session_key: str | None) -> str | None:
+    """What a session runs at with no pick of its own: the one rule, with no pick.
+
+    ``session_effort.in_force`` ranks it, the same rule the turn runs at, so
+    what this reports and what the next turn sends cannot drift apart: None is
+    the provider's own default on both sides.
+    """
+    return session_effort.in_force(None, _mode_effort(agent_loop, session_key), _configured_effort(config))
+
+
+def _effort_in_force(agent_loop: object, config: Any, session_key: str | None) -> str | None:
+    """The effort this session's own calls run at: its pick over the default, by the one rule."""
+    picked = session_effort.read(manager_for(agent_loop, config), session_key) if session_key else None
+    return session_effort.in_force(picked, _mode_effort(agent_loop, session_key), _configured_effort(config))
+
+
+def _effort_words(agent_loop: object, config: Any, session_key: str | None) -> tuple[str, ...]:
+    """The reasoning efforts this session's model takes, least first.
+
+    Asked of the provider that serves the session's model
+    (``LLMProvider.reasoning_efforts``): the four every wire takes, and
+    ``xhigh`` and ``max`` where the wire takes them (``anthropic_messages``).
+    A draft asks with no key and gets the default model's, which is what its
+    first turn runs on. With no loop to ask, or one that cannot answer -- a
+    double, a vendor the config has no credentials for yet -- the four stand:
+    every wire takes them, so nothing offered here is a word the turn would
+    be refused on.
+    """
+    model = _session_model(agent_loop, config, session_key)
+    bind = getattr(agent_loop, "binding_for_session", None)
+    try:
+        provider = (
+            bind(session_key).provider if session_key and callable(bind) else getattr(agent_loop, "provider", None)
+        )
+        ask = getattr(provider, "reasoning_efforts", None)
+        words = tuple(ask(model)) if callable(ask) else ()
+    except Exception:  # noqa: BLE001 - a provider that cannot say offers what every wire takes
+        words = ()
+    return tuple(word for word in words if isinstance(word, str) and word) or REASONING_EFFORTS
 
 
 def _read_knowledge(agent_loop: object, config: object, session_key: str | None) -> tuple[str, ...]:
@@ -1578,6 +1642,69 @@ async def session_set_mode(
     return {"mode": tier, "availableModes": menu}
 
 
+async def session_set_effort(
+    params: dict,
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict:
+    """``session.set_effort`` -- report, set or clear this session's reasoning effort.
+
+    The effort this session's own model calls run at, as a person picked it
+    for this conversation: the shape ``session.set_mode`` has -- three calls
+    told apart by which fields are present -- over a different knob. A tier
+    moves what raven asks of its sub-agents; this moves how much raven's own
+    model thinks before each answer, and reaches no sub-agent.
+
+    Kept on the session's record (``raven.agent.session_effort``) rather than
+    on the loop's in-memory policy, so it outlives the gateway and a resumed
+    conversation runs at what it was left at. A set lands on the next turn.
+
+    Every answer carries ``default`` -- what the session runs at without a
+    pick of its own -- so a control can say what "default" means on this
+    install, and ``options``, so it need not spell the words itself. The
+    words are the provider's of the session's model (:func:`_effort_words`),
+    not one list for every vendor: a conversation on the Anthropic Messages
+    wire is offered ``xhigh`` and ``max`` over the four, one elsewhere is
+    not, and a word the wire does not take is refused naming the ones it
+    does. The pick is reported as recorded even where the model has moved to
+    a wire without that word; the turn runs it at the highest rung the new
+    wire takes (``session_effort.fit``).
+    """
+    session_key = str(params.get("session_key") or "")
+    raw = params.get("effort")
+    wanted = str(raw) if isinstance(raw, str) and raw else None
+    loop = _safe_invoke_factory(agent_loop_factory)
+    config = load_config()
+    mgr = manager_for(loop, config)
+    words = _effort_words(loop, config, session_key or None)
+
+    def _reply(effort: str | None) -> dict:
+        return {
+            "session_key": session_key,
+            "effort": effort,
+            "default": _default_effort(loop, config, session_key or None),
+            "options": list(words),
+        }
+
+    if wanted is None and not params.get("clear"):
+        # A draft asks too, with no key: the default and the words are what
+        # its first turn will run at, and the row is drawn before it is sent.
+        return _reply(session_effort.read(mgr, session_key) if session_key else None)
+    if not session_key:
+        raise ConfigValidationError("session_key is required to set or clear a reasoning effort")
+    effort = None if params.get("clear") else wanted
+    if effort is not None and effort not in words:
+        raise ConfigValidationError(
+            f"no reasoning effort {effort!r} on {_session_model(loop, config, session_key)}; "
+            f"its provider takes {', '.join(words)}"
+        )
+    previous = session_effort.read(mgr, session_key)
+    session_effort.write(mgr, session_key, effort)
+    if previous != effort:
+        logger.info("session {} reasoning effort {} -> {}", session_key, previous or "<default>", effort or "<default>")
+    return _reply(effort)
+
+
 async def session_set_harness(
     params: dict,
     *,
@@ -1675,6 +1802,9 @@ def register_session_methods(
     async def _set_harness(params: dict) -> dict:
         return await session_set_harness(params, agent_loop_factory=agent_loop_factory)
 
+    async def _set_effort(params: dict) -> dict:
+        return await session_set_effort(params, agent_loop_factory=agent_loop_factory)
+
     dispatcher.register("session.create", _create)
     dispatcher.register("session.close", _close)
     dispatcher.register("session.resume", _resume)
@@ -1691,6 +1821,7 @@ def register_session_methods(
     dispatcher.register("session.branch", _branch)
     dispatcher.register("session.export", _export)
     dispatcher.register("session.set_mode", _set_mode)
+    dispatcher.register("session.set_effort", _set_effort)
     dispatcher.register("session.set_harness", _set_harness)
 
     async def _set_knowledge(params: dict) -> dict:

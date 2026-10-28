@@ -149,6 +149,12 @@ export interface SettingsFixture {
 export function createSettings(env: FixtureEnv, ext: ExtFixture): SettingsFixture {
   const config = seed(ext)
   let tier = 'high'
+  /* The effort the library's conversation runs at: null is the default rung.
+     The words are the model's, and the library's conversation runs on a
+     Claude over the Anthropic Messages wire (sessions.ts), which takes the
+     two rungs over high. */
+  let effort: string | null = null
+  const EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
   return {
     fixtures: {
@@ -226,6 +232,15 @@ export function createSettings(env: FixtureEnv, ext: ExtFixture): SettingsFixtur
         const mode = (p as { mode?: string }).mode
         if (mode) tier = mode
         return { mode: tier, availableModes: tierMenu() }
+      },
+      /* The conversation's reasoning effort: the pick, what it runs at
+         without one, and the words. One value for the whole library, as the
+         tier is; the default is the fixture's configured one. */
+      'session.set_effort': (p) => {
+        const q = p as { session_key?: string; effort?: string; clear?: boolean }
+        if (q.clear) effort = null
+        else if (q.effort) effort = q.effort
+        return { session_key: q.session_key ?? '', effort, default: 'medium', options: [...EFFORTS] }
       },
       /* An upgrade with no gateway to replace: nothing was started, and the
          card reads the status rather than waiting on a restart that will not

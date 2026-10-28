@@ -34,6 +34,10 @@ interface Options {
  */
 async function live({ session = null, answers = null }: Options = {}) {
   const calls: Call[] = []
+  /* How often the effort row was re-read: its own count, not a `calls`
+     entry, because the cases below assert the exact traffic of a write and
+     the re-read is a read of another store, not traffic. */
+  const effortLoadCalls: { sid: string | null | undefined; gen: number | undefined }[] = []
   const pending: Deferred[] = []
   const selections: Deferred[] = []
   /* A view switch re-reads the default model and the permission mode, and
@@ -74,6 +78,11 @@ async function live({ session = null, answers = null }: Options = {}) {
       'src/state/banner': { draw: () => {} },
       'src/state/toast': { show: (text: string) => calls.push(['toast', text]) },
       'src/state/tier': { load: () => {} },
+      /* The effort store's read is recorded, not run: what the staged write's
+         re-read is keyed to is the whole of what one case below pins, and a
+         session write's re-read is what another counts. Kept off `calls`,
+         whose exact shape other cases pin. */
+      'src/state/effort': { load: (sid?: string | null, gen?: number) => { effortLoadCalls.push({ sid, gen }) } },
       'src/state/perm': { setFromConfig: (m: string) => calls.push(['setPermMode', m]) },
       'src/state/session/residency': { park: () => {} },
       'src/features/settings/store': {
@@ -110,6 +119,8 @@ async function live({ session = null, answers = null }: Options = {}) {
     startDraft: () => registry.switchToDraft(),
     applyStagedModel: (sessionId: string, gen: number) =>
       runtime.applyStagedModel(registry.viewRuntime(), sessionId, gen),
+    applyStagedEffort: (sessionId: string, gen: number) =>
+      runtime.applyStagedEffort(registry.viewRuntime(), sessionId, gen),
   }
   /* Everything the two sources read off the page. `modelSet` is the island's
      verb, faked above; the chip painter is the page's. */
@@ -142,6 +153,10 @@ async function live({ session = null, answers = null }: Options = {}) {
       return generation()
     },
     gen: () => generation(),
+    effortRead: (sid?: string | null, gen?: number) => model.effortSource.read(sid, gen),
+    effortSet: (effort: string | null) => model.effortSource.set(effort),
+    /* Every read the effort store was asked for, as [conversation, ticket]. */
+    effortReads: () => effortLoadCalls,
     inFlight: () => pending.map((p) => p.method),
     param: (i: number) => pending[i]!.params,
     settle: (i: number, answer: unknown) => {
@@ -159,6 +174,7 @@ async function live({ session = null, answers = null }: Options = {}) {
       return tick()
     },
     modelsSet: () => calls.filter((c) => c[0] === 'modelSet').map((c) => c[1]),
+    effortLoads: () => effortLoadCalls.length,
   }
 }
 
@@ -249,6 +265,32 @@ describe('the live model refresh', () => {
   })
 })
 
+describe('the live effort read', () => {
+  it('asks about the conversation it was given, and drops an answer whose switch was overtaken', async () => {
+    /* A switch asks for the conversation being opened before the page's
+       current session moves over, so the key is the caller's to name; and an
+       answer about a view the reader has left is dropped, as the provider
+       refresh drops its own. */
+    const h = await live()
+    h.bump()
+    const read = h.effortRead('b', h.gen())
+    expect(h.inFlight()).toEqual(['session.set_effort'])
+    expect(h.param(0)).toEqual({ session_key: 'b' })
+    h.bump()
+    await h.settle(0, { session_key: 'b', effort: 'high', default: null, options: ['low', 'high'] })
+    expect(await read).toBeNull()
+  })
+
+  it('answers a read whose switch still stands, and reads the draft with no key', async () => {
+    const h = await live()
+    const read = h.effortRead('a', h.gen())
+    await h.settle(0, { session_key: 'a', effort: 'low', default: null, options: ['low', 'high'] })
+    expect(await read).toEqual({ session_key: 'a', effort: 'low', default: null, options: ['low', 'high'] })
+    void h.effortRead(null)
+    expect(h.param(1)).toEqual({ session_key: '' })
+  })
+})
+
 describe('the live model persist', () => {
   it('a default write carries the visible session and repaints a chip that follows the default', async () => {
     const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: true, applies_to_session: true } } })
@@ -279,6 +321,20 @@ describe('the live model persist', () => {
   it('an applied session write resolves and says nothing', async () => {
     const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: true, previous: 'm1', scope: 'session' } } })
     await expect(h.settings.persistModel('m2', 'minimax', 'session')).resolves.toBeUndefined()
+  })
+
+  it('an applied session write re-reads the effort row, whose words are the model\'s', async () => {
+    /* Six rungs on the Anthropic Messages wire, four elsewhere: a switched
+       conversation must not keep offering the old wire's words. */
+    const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: true, previous: 'm1', scope: 'session' } } })
+    await h.settings.persistModel('m2', 'minimax', 'session')
+    expect(h.effortLoads()).toBe(1)
+  })
+
+  it('a refused session write re-reads nothing: the model did not move', async () => {
+    const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: false, previous: null, scope: 'session' } } })
+    await h.settings.persistModel('m2', 'minimax', 'session').catch(() => {})
+    expect(h.effortLoads()).toBe(0)
   })
 
   it('a default write moves a visible draft chip, which follows the default like an unswitched session', async () => {
@@ -565,6 +621,95 @@ describe('the staged draft-write recovery', () => {
     await applied
     expect(h.calls.filter((c) => c[0] === 'toast' || c[0] === 'modelSet')).toEqual([])
     expect(h.inFlight()).toEqual(['config.set'])
+  })
+})
+
+describe('the staged effort write', () => {
+  /* The real applyStagedEffort over the real switch counter, with the
+     `session.set_effort` write deferred. The re-read that follows the write is
+     about the session the promotion minted, and it has to carry the ticket the
+     promotion began under: a ticket taken after the await is whichever view the
+     reader has opened since, and under that one the effort source would paint
+     this session's rung over that view's own read. */
+  const reply = { session_key: 'a', effort: 'high', default: null, options: ['low', 'high'] }
+
+  it('re-reads the minted session under the promotion\'s ticket, not the one current after the write', async () => {
+    const h = await live({ session: 'a' })
+    h.overrides.staged.effort = 'high'
+    const began = h.gen()
+    const applied = h.overrides.applyStagedEffort('a', began)
+    expect(h.inFlight()).toEqual(['session.set_effort'])
+    expect(h.param(0)).toEqual({ session_key: 'a', effort: 'high' })
+    /* The reader opens another view while the write is in flight; that view
+       reads its own effort at once, under its own ticket. */
+    h.bump()
+    await h.settle(0, reply)
+    await applied
+    expect(h.effortReads()).toEqual([{ sid: null, gen: h.gen() }, { sid: 'a', gen: began }])
+    /* And that ticket is spent, so the read it starts is one the source drops. */
+    expect(began).not.toBe(h.gen())
+    const read = h.effortRead('a', began)
+    await h.settle(1, reply)
+    expect(await read).toBeNull()
+  })
+
+  it('re-reads under a ticket that still stands when the reader stayed', async () => {
+    const h = await live({ session: 'a' })
+    h.overrides.staged.effort = 'high'
+    const began = h.gen()
+    const applied = h.overrides.applyStagedEffort('a', began)
+    await h.settle(0, reply)
+    await applied
+    expect(h.effortReads()).toEqual([{ sid: 'a', gen: began }])
+    expect(began).toBe(h.gen())
+  })
+})
+
+describe('a draft\'s effort pick', () => {
+  /* A draft has no session to write to, so the pick is staged and the default
+     read back for the reply. Staged before the read, so a send during the round
+     trip carries it -- and put back when the read fails, because the caller then
+     says the pick was not made and repaints the old rung, and a value left
+     staged would run the first turn at a pick the reader was told did not take. */
+  const draft = { session_key: '', effort: null, default: 'low', options: ['low', 'high'] }
+
+  it('stages the pick before the draft read, and puts it back when that read fails', async () => {
+    const h = await live()
+    const failed = h.effortSet('high').catch((e: unknown) => e)
+    expect(h.overrides.staged.effort).toBe('high')
+    expect(h.inFlight()).toEqual(['session.set_effort'])
+    expect(h.param(0)).toEqual({ session_key: '' })
+    await h.fail(0, new Error('socket closed'))
+    expect(await failed).toEqual(new Error('socket closed'))
+    expect(h.overrides.staged.effort).toBeNull()
+  })
+
+  it('keeps the pick staged when the read lands, and answers it over the default', async () => {
+    const h = await live()
+    const set = h.effortSet('high')
+    await h.settle(0, draft)
+    expect(await set).toEqual({ ...draft, effort: 'high' })
+    expect(h.overrides.staged.effort).toBe('high')
+  })
+
+  it('puts back the last pick whose read landed, not the one a failing read overtook', async () => {
+    /* `high` landed; `medium` and then `low` go out and both fail. Neither
+       stood, so what is staged afterwards is `high` -- not `medium`, which is
+       merely what was staged when `low` was picked. */
+    const h = await live()
+    const first = h.effortSet('high')
+    await h.settle(0, draft)
+    await first
+    const second = h.effortSet('medium').catch((e: unknown) => e)
+    const third = h.effortSet('low').catch((e: unknown) => e)
+    expect(h.overrides.staged.effort).toBe('low')
+    await h.fail(1, new Error('socket closed'))
+    await second
+    /* The earlier failure finds a later pick staged and leaves it alone. */
+    expect(h.overrides.staged.effort).toBe('low')
+    await h.fail(2, new Error('socket closed'))
+    await third
+    expect(h.overrides.staged.effort).toBe('high')
   })
 })
 

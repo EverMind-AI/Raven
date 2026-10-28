@@ -154,6 +154,10 @@ export const SLASH_TEXT: Record<Locale, Record<string, SlashText>> = {
       name: '推理强度',
       help: '查看或设置推理强度（对运行中的 agent 生效）'
     },
+    effort: {
+      name: '思考深度',
+      help: '查看或设置本会话的思考深度 [minimal|low|medium|high|xhigh|max|default]'
+    },
     fast: {
       name: '快速模式',
       help: '开关快速模式 [normal|fast|status|on|off|toggle]'
@@ -259,6 +263,10 @@ export const SLASH_TEXT: Record<Locale, Record<string, SlashText>> = {
     export: {
       name: 'export',
       help: 'export the transcript to Markdown'
+    },
+    effort: {
+      name: 'effort',
+      help: 'show or set how much the model thinks for this conversation [minimal|low|medium|high|xhigh|max|default]'
     },
     lang: {
       name: 'lang',
@@ -1888,11 +1896,24 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.pb.required': 'required',
     'gui.pb.no_default': '—',
     'gui.tier.title': 'Mode',
-    'gui.tier.scope': 'Reasoning depth, sub-agent mode and the rest follow this setting. This conversation only.',
+    'gui.tier.scope': 'The tier the sub-agents this conversation dispatches run at. This conversation only.',
     'gui.tier.failed': 'Could not switch to {name}',
     'gui.tier.mode': 'Mode',
     'gui.tier.mode_scope':
       "This is a deployment's own mode, not a built-in tier, so it is not passed on to sub-agents.",
+    'gui.effort.title': 'Reasoning effort',
+    'gui.effort.default': 'Default',
+    'gui.effort.minimal': 'Minimal',
+    'gui.effort.low': 'Low',
+    'gui.effort.medium': 'Medium',
+    'gui.effort.high': 'High',
+    'gui.effort.xhigh': 'Extra high',
+    'gui.effort.max': 'Max',
+    'gui.effort.scope':
+      'How much the model thinks before each answer, for this conversation only. Sub-agents are not affected.',
+    'gui.effort.now': 'Default follows the global setting, which is {name} right now.',
+    'gui.effort.provider': "the provider's own default",
+    'gui.effort.failed': 'Could not set the reasoning effort to {name}',
     'gui.imodel.title': 'Model',
     'gui.imodel.agent': "Agent's own",
     'gui.imodel.agent_tip': 'Answering with whatever this agent chose. Click to give this instance its own model.',
@@ -2550,6 +2571,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.roles.video': 'Video',
     'gui.settings.roles.video_use': 'Used by video_generate; without it the tool is not registered',
     'gui.settings.roles.effort': 'Reasoning effort',
+    'gui.settings.roles.effort_default': 'Provider default',
     'gui.settings.roles.effort_minimal': 'Minimal',
     'gui.settings.roles.effort_low': 'Low',
     'gui.settings.roles.effort_medium': 'Medium',
@@ -5303,10 +5325,22 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.pb.required': '必填',
     'gui.pb.no_default': '—',
     'gui.tier.title': '模式',
-    'gui.tier.scope': '模型思考深度、子智能体运行强度等都跟着这一档走。只作用于本会话。',
+    'gui.tier.scope': '派出的子智能体按这一档运行。只作用于本会话。',
     'gui.tier.failed': '切换到 {name} 没有成功',
     'gui.tier.mode': '模式',
     'gui.tier.mode_scope': '这是部署自带的模式，不是内置档位，因此不会下发给子智能体。',
+    'gui.effort.title': '思考深度',
+    'gui.effort.default': '默认',
+    'gui.effort.minimal': '最少',
+    'gui.effort.low': '低',
+    'gui.effort.medium': '中',
+    'gui.effort.high': '高',
+    'gui.effort.xhigh': '超高',
+    'gui.effort.max': '最高',
+    'gui.effort.scope': '模型每次回答前思考多少，只作用于本会话，不影响子智能体。',
+    'gui.effort.now': '「默认」跟随设置页里的全局值，当前是「{name}」。',
+    'gui.effort.provider': '厂商默认',
+    'gui.effort.failed': '思考深度切到「{name}」没有成功',
     'gui.imodel.title': '模型',
     'gui.imodel.agent': '跟随子智能体',
     'gui.imodel.agent_tip': '用的是子智能体自己选的模型。点击可为这个实例单独指定模型。',
@@ -5910,6 +5944,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.roles.video': '视频',
     'gui.settings.roles.video_use': 'video_generate 工具使用；不配则该工具不注册',
     'gui.settings.roles.effort': '思考深度',
+    'gui.settings.roles.effort_default': '厂商默认',
     'gui.settings.roles.effort_minimal': '最少',
     'gui.settings.roles.effort_low': '低',
     'gui.settings.roles.effort_medium': '中',

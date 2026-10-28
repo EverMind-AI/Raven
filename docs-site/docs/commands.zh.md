@@ -45,6 +45,7 @@
 | 任务 | 阅读 |
 | --- | --- |
 | 选择对话或单次工作流 | [使用 Raven](using-raven.md) |
+| 设置模型的思考深度（全局或单个对话） | [使用 Raven](using-raven.md#set-the-reasoning-effort) |
 | 配置随 Raven 发布或外部 Agent | [Agent 集成](agent-integrations.md) |
 | 继续或引导专用任务 | [与子 Agent 协作](agent-collaboration.md) |
 | 与 Agent 共享浏览器工作 | [浏览器协作](browser-collaboration.md) |

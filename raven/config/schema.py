@@ -19,6 +19,7 @@ from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from raven.config.agent_names import THIRD_PARTY_PRESET_NAMES
+from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
 from raven.contracts.path_policy import WORKSPACE_DEFAULT_SENTINEL
 from raven.sandbox.config import SandboxConfig
 
@@ -786,6 +787,28 @@ class GatewayPageConfig(Base):
 TIER_LADDER: tuple[str, ...] = ("medium", "high", "max")
 """The built-in tiers, cheapest first. The order is what makes a clamp possible,
 so it is a constant here rather than something read back off the catalogue."""
+
+REASONING_EFFORTS: tuple[str, ...] = ("minimal", "low", "medium", "high")
+"""The reasoning efforts every wire takes, least first: the words
+``agents.defaults.reasoningEffort`` accepts, and what a provider answers from
+``LLMProvider.reasoning_efforts`` unless its wire takes more. The global key
+stays at these four on purpose: it reaches every model call this install
+makes -- on whichever vendor a session switched to, and in every sub-agent
+(``RAVEN_PARENT_REASONING_EFFORT``) -- so a word only one wire takes would be
+refused everywhere else, with no per-session way out of the default. A
+session's own pick (``session.set_effort``) is checked against its model's
+provider instead, which is where ``xhigh`` and ``max`` live. Each provider
+maps a word to its own wire -- the adaptive efforts and thinking budgets in
+``providers/anthropic_messages_provider.py``, ``reasoning_effort`` on the
+OpenAI-shaped ones -- and a model with no thinking to move ignores it."""
+
+REASONING_EFFORT_RUNGS: tuple[str, ...] = tuple(reversed(REASONING_EFFORT_LADDER))
+"""Every reasoning effort this raven knows, least first: the four above and
+the two rungs the Anthropic Messages wire takes over them (``xhigh``, ``max``).
+What a provider may offer from ``reasoning_efforts``, what a session record
+may carry (``agent/session_effort.py``), and the one order a word is ranked
+by -- the empty-retry descent's ladder (``contracts/llm_provider.py``), read
+upward, so a pick and a retry never disagree about which rung is higher."""
 
 ROUTE_REQUIREMENTS: tuple[str, ...] = ("image_generation", "image_search")
 """What a route may declare its target's own pipeline spends.

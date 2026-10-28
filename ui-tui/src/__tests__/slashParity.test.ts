@@ -18,6 +18,7 @@ const MUTATING_COMMANDS = [
   'busy',
   'clear',
   'compress',
+  'effort',
   'fast',
   'model',
   'new',
