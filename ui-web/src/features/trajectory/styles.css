@@ -703,3 +703,22 @@ html[data-theme="dark"] {
 .trajectory-wf-tile img { width: 16px; height: 16px }
 .trajectory-wf-span .trajectory-wf-label::before { top: -8px; bottom: -8px }
 .trajectory-ov-lane { height: 18px }
+
+/* 30px rows, and the tree's guide becomes one continuous line: each row draws
+   half a row above and half below, so consecutive siblings meet exactly. */
+.trajectory-wf { --wf-row: 30px }
+.trajectory-wf-row, .trajectory-wf-track { height: 30px }
+.trajectory-wf-track i, .trajectory-wf-turn .trajectory-wf-track i { height: 12px; border-radius: 4px }
+.trajectory-wf-tile, .trajectory-wf-ico { width: 20px; height: 20px }
+.trajectory-wf-ico { border-radius: 6px }
+.trajectory-wf-ico svg, .trajectory-wf-glyph svg { width: 13px; height: 13px }
+.trajectory-wf-tile img { width: 15px; height: 15px }
+.trajectory-wf-span .trajectory-wf-label::before {
+  top: calc(var(--wf-row) / -2); bottom: calc(var(--wf-row) / -2); width: 1px; background: #eef0f3 }
+.trajectory-ov-lane { height: 16px }
+
+/* The guide runs the whole group: a turn's row draws it at the same column as
+   its spans, so one unbroken line follows the agent's children from the first
+   turn to the last span. */
+.trajectory-wf-turn .trajectory-wf-label::before { content: ''; position: absolute;
+  left: 30px; top: calc(var(--wf-row) / -2); bottom: calc(var(--wf-row) / -2); width: 1px; background: #eef0f3 }
