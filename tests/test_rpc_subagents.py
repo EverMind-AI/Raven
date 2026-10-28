@@ -2798,6 +2798,43 @@ async def test_a_mode_derived_effort_menu_travels_with_the_refreshed_models(
     assert out["effort_choices"] == [{"value": "high", "name": "High"}]
 
 
+@pytest.mark.parametrize("shape", ["thought_level", "mode_menu", "ravens_own_tiers", "no_menu"])
+async def test_a_refreshed_menu_and_the_recorded_one_are_derived_alike(
+    shape: str, config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """A refresh reads the menus off the snapshot it just measured; its failure
+    path, ``subagents.list`` and the update validator read them through
+    ``agent_meta``. Both go through one derivation, so the picker a refresh
+    redraws and the list that follows it cannot disagree."""
+    from raven.acp_client.capabilities import AcpEffortChoice, AcpMode, AcpModelChoice, CapabilitySnapshot
+
+    levels = (AcpMode("low", "Low"), AcpMode("high", "High"))
+    snapshot = CapabilitySnapshot(
+        agent="OpenCode",
+        fingerprint="fp",
+        status="ready",
+        detail="connected",
+        measured_at_ms=1,
+        agent_name="raven" if shape == "ravens_own_tiers" else "opencode",
+        model_choices=() if shape == "no_menu" else (AcpModelChoice("m1", "One", "G"),),
+        available_modes=() if shape == "no_menu" else levels,
+        effort_choices=(AcpEffortChoice("max", "Max"),) if shape == "thought_level" else (),
+        effort_option="effort" if shape == "thought_level" else "",
+    )
+
+    async def fake_record(cfg):
+        return snapshot
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    monkeypatch.setattr(menu_reads, "acp_snapshot_for", lambda cfg: snapshot)
+
+    out = await subagents_refresh_models({"name": "OpenCode", "source": "preset"})
+
+    assert out["ok"] is True
+    recorded = menu_reads._recorded_menu(menu_reads._find("OpenCode", "preset"))
+    assert {"models": out["models"], "effort_choices": out["effort_choices"]} == recorded
+
+
 async def test_refreshing_a_configured_agents_menu_recomposes_the_agent_table(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
 ) -> None:
