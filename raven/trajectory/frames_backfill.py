@@ -84,7 +84,8 @@ def backfill(
 
     Returns ``runs`` (external runs with a journal still on disk), ``written``
     (runs this pass added spans for), ``steps`` (spans added), ``already``
-    (runs whose steps were all on record) and ``repaired`` (steps on record
+    (runs whose steps were all on record, from an earlier pass or written by
+    the run itself while it ran) and ``repaired`` (steps on record
     that ended after their run and were closed at its end), so a dry run
     reports the same numbers a real one would write.
     """
@@ -110,6 +111,8 @@ def backfill(
 
     written = steps = 0
     for span, attrs in runs:
+        if attrs.get(observability.STEPS_KEY) is not None:
+            continue
         session_id = attrs.get(FRAMES_KEY + "session_id")
         prompt, events = frames_replay.events(
             attrs[FRAMES_KEY + "path"],

@@ -3558,6 +3558,7 @@ async def test_the_run_writes_what_its_agent_said_and_ran_as_steps_inside_it(
     run = next(s for s in written if s.get("name") == "subagent.external")
     steps = [s for s in written if s.get("parentSpanId") == run["spanId"]]
     assert [s["name"] for s in steps] == ["llm.call"] * 4 + ["tool.call", "llm.call"]
+    assert run["attributes"]["subagent.external.steps"] == len(steps)
     said = [
         s["attributes"].get("llm.input_preview") or s["attributes"].get("llm.output_preview")
         for s in steps
@@ -3569,6 +3570,24 @@ async def test_the_run_writes_what_its_agent_said_and_ran_as_steps_inside_it(
     for step in steps:
         start, end = (datetime.fromisoformat(step[key]) for key in ("startTime", "endTime"))
         assert opened <= start <= end <= closed, (step["name"], step["startTime"], run["startTime"])
+
+
+async def test_a_backfill_after_a_live_run_writes_no_second_copy_of_its_steps(trace_dir, tmp_path: Path) -> None:
+    """The run's journal is on disk as well, so the backfill could read the
+    same steps out of it again under ids of its own, and every step would be
+    drawn twice. A run that wrote its steps live is left alone."""
+    from raven.trajectory import frames_backfill
+
+    backend = build_third_party_backend(stub_config("a", mode="two_messages"))
+    await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    before = _spans_written(trace_dir)
+    run = next(s for s in before if s.get("name") == "subagent.external")
+    assert Path(run["attributes"]["subagent.external.frames.path"]).exists(), "else the backfill has nothing to read"
+
+    result = frames_backfill.backfill(trace_dir)
+
+    assert (result["runs"], result["written"], result["already"]) == (1, 0, 1)
+    assert _spans_written(trace_dir) == before
 
 
 async def test_the_span_measures_the_reply_it_handed_back(trace_dir, tmp_path: Path) -> None:
