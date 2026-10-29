@@ -17,16 +17,55 @@ def _journal(path: Path) -> None:
     lines = []
 
     def frame(direction: str, body: dict) -> None:
-        lines.append(json.dumps({"_type": "acp_frame", "timestamp": "2026-10-27T09:00:01", "dir": direction, "frame": body}))
+        lines.append(
+            json.dumps({"_type": "acp_frame", "timestamp": "2026-10-27T09:00:01", "dir": direction, "frame": body})
+        )
 
-    frame("out", {"method": "session/prompt", "params": {"sessionId": "s", "prompt": [{"type": "text", "text": "do it"}]}})
-    frame("in", {"method": "session/update", "params": {"sessionId": "s", "update": {
-        "sessionUpdate": "agent_message_chunk", "content": [{"type": "text", "text": "on it"}]}}})
-    frame("in", {"method": "session/update", "params": {"sessionId": "s", "update": {
-        "sessionUpdate": "tool_call", "toolCallId": "c1", "title": "read_file", "kind": "read",
-        "status": "in_progress", "rawInput": {"path": "a.py"}}}})
-    frame("in", {"method": "session/update", "params": {"sessionId": "s", "update": {
-        "sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "completed", "rawOutput": "ok"}}})
+    frame(
+        "out", {"method": "session/prompt", "params": {"sessionId": "s", "prompt": [{"type": "text", "text": "do it"}]}}
+    )
+    frame(
+        "in",
+        {
+            "method": "session/update",
+            "params": {
+                "sessionId": "s",
+                "update": {"sessionUpdate": "agent_message_chunk", "content": [{"type": "text", "text": "on it"}]},
+            },
+        },
+    )
+    frame(
+        "in",
+        {
+            "method": "session/update",
+            "params": {
+                "sessionId": "s",
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "c1",
+                    "title": "read_file",
+                    "kind": "read",
+                    "status": "in_progress",
+                    "rawInput": {"path": "a.py"},
+                },
+            },
+        },
+    )
+    frame(
+        "in",
+        {
+            "method": "session/update",
+            "params": {
+                "sessionId": "s",
+                "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "c1",
+                    "status": "completed",
+                    "rawOutput": "ok",
+                },
+            },
+        },
+    )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -34,19 +73,34 @@ def _spans(state: Path, journal: Path) -> None:
     start = (datetime.now() - timedelta(minutes=5)).isoformat()
 
     def span(span_id: str, name: str, parent: str | None, attrs: dict) -> dict:
-        return {"schemaVersion": "audit.span.v1", "traceId": "t", "spanId": span_id, "parentSpanId": parent,
-                "name": name, "startTime": start, "endTime": start,
-                "status": {"code": "OK", "message": ""}, "attributes": attrs, "events": []}
+        return {
+            "schemaVersion": "audit.span.v1",
+            "traceId": "t",
+            "spanId": span_id,
+            "parentSpanId": parent,
+            "name": name,
+            "startTime": start,
+            "endTime": start,
+            "status": {"code": "OK", "message": ""},
+            "attributes": attrs,
+            "events": [],
+        }
 
     spans = [
         span("run", "subagent.run", None, {"session.key": "tui:x", "channel": "tui"}),
-        span("ext", "subagent.external", "run", {
-            "session.key": "tui:x", "channel": "tui",
-            "subagent.external.frames.path": str(journal),
-            "subagent.external.frames.session_id": "s",
-            "subagent.external.frames.start": 0,
-            "subagent.external.frames.end": journal.stat().st_size if journal.exists() else 0,
-        }),
+        span(
+            "ext",
+            "subagent.external",
+            "run",
+            {
+                "session.key": "tui:x",
+                "channel": "tui",
+                "subagent.external.frames.path": str(journal),
+                "subagent.external.frames.session_id": "s",
+                "subagent.external.frames.start": 0,
+                "subagent.external.frames.end": journal.stat().st_size if journal.exists() else 0,
+            },
+        ),
     ]
     (state / "logs" / "audit-spans.log").write_text("\n".join(json.dumps(s) for s in spans) + "\n", encoding="utf-8")
 
@@ -70,7 +124,8 @@ def test_backfill_writes_the_runs_steps_once(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(tracing_spans, "emit", emit)
     monkeypatch.setattr(
-        tracing_spans, "persist_artifact",
+        tracing_spans,
+        "persist_artifact",
         lambda kind, meta, payload, label=None: {"path": str(artifacts / f"{label}.json"), "sha1": "x", "bytes": 1},
     )
 
@@ -118,29 +173,63 @@ def _timed_journal(path: Path) -> None:
     def update(body: dict) -> dict:
         return {"method": "session/update", "params": {"sessionId": "s", "update": body}}
 
-    frame("2026-10-27T09:00:01+00:00", "out", {"method": "session/prompt", "params": {
-        "sessionId": "s", "prompt": [{"type": "text", "text": "do it"}]}})
-    frame("2026-10-27T09:00:05+00:00", "in", update({
-        "sessionUpdate": "agent_message_chunk", "content": [{"type": "text", "text": "on it"}]}))
-    frame("2026-10-27T09:00:10+00:00", "in", update({
-        "sessionUpdate": "tool_call", "toolCallId": "c1", "title": "read_file", "kind": "read",
-        "status": "in_progress", "rawInput": {"path": "a.py"}}))
-    frame("2026-10-27T09:00:12+00:00", "in", update({
-        "sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "completed", "rawOutput": "ok"}))
-    frame("2026-10-27T09:00:20+00:00", "in", update({
-        "sessionUpdate": "agent_message_chunk", "content": [{"type": "text", "text": "done"}]}))
+    frame(
+        "2026-10-27T09:00:01+00:00",
+        "out",
+        {"method": "session/prompt", "params": {"sessionId": "s", "prompt": [{"type": "text", "text": "do it"}]}},
+    )
+    frame(
+        "2026-10-27T09:00:05+00:00",
+        "in",
+        update({"sessionUpdate": "agent_message_chunk", "content": [{"type": "text", "text": "on it"}]}),
+    )
+    frame(
+        "2026-10-27T09:00:10+00:00",
+        "in",
+        update(
+            {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "c1",
+                "title": "read_file",
+                "kind": "read",
+                "status": "in_progress",
+                "rawInput": {"path": "a.py"},
+            }
+        ),
+    )
+    frame(
+        "2026-10-27T09:00:12+00:00",
+        "in",
+        update({"sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "completed", "rawOutput": "ok"}),
+    )
+    frame(
+        "2026-10-27T09:00:20+00:00",
+        "in",
+        update({"sessionUpdate": "agent_message_chunk", "content": [{"type": "text", "text": "done"}]}),
+    )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _timed_run(state: Path, journal: Path) -> None:
-    ext = {"schemaVersion": "audit.span.v1", "traceId": "t", "spanId": "ext", "parentSpanId": "run",
-           "name": "subagent.external", "startTime": RUN_START, "endTime": RUN_END,
-           "status": {"code": "OK", "message": ""}, "events": [], "attributes": {
-               "session.key": "tui:x", "channel": "tui",
-               "subagent.external.frames.path": str(journal),
-               "subagent.external.frames.session_id": "s",
-               "subagent.external.frames.start": 0,
-               "subagent.external.frames.end": journal.stat().st_size}}
+    ext = {
+        "schemaVersion": "audit.span.v1",
+        "traceId": "t",
+        "spanId": "ext",
+        "parentSpanId": "run",
+        "name": "subagent.external",
+        "startTime": RUN_START,
+        "endTime": RUN_END,
+        "status": {"code": "OK", "message": ""},
+        "events": [],
+        "attributes": {
+            "session.key": "tui:x",
+            "channel": "tui",
+            "subagent.external.frames.path": str(journal),
+            "subagent.external.frames.session_id": "s",
+            "subagent.external.frames.start": 0,
+            "subagent.external.frames.end": journal.stat().st_size,
+        },
+    }
     (state / "logs" / "audit-spans.log").write_text(json.dumps(ext) + "\n", encoding="utf-8")
 
 
@@ -160,7 +249,8 @@ def _recording(state: Path, monkeypatch) -> list[dict]:
 
     monkeypatch.setattr(tracing_spans, "emit", emit)
     monkeypatch.setattr(
-        tracing_spans, "persist_artifact",
+        tracing_spans,
+        "persist_artifact",
         lambda kind, meta, payload, label=None: {"path": str(artifacts / f"{label}.json"), "sha1": "x", "bytes": 1},
     )
     return captured
@@ -208,15 +298,51 @@ def test_a_result_stamped_after_the_run_closed_does_not_stretch_its_step(tmp_pat
     state = _state(tmp_path)
     journal = tmp_path / "journal.jsonl"
     lines = [
-        {"_type": "acp_frame", "timestamp": "2026-10-27T09:00:01+00:00", "dir": "out", "frame": {
-            "method": "session/prompt", "params": {"sessionId": "s", "prompt": [{"type": "text", "text": "do it"}]}}},
-        {"_type": "acp_frame", "timestamp": "2026-10-27T09:00:10+00:00", "dir": "in", "frame": {
-            "method": "session/update", "params": {"sessionId": "s", "update": {
-                "sessionUpdate": "tool_call", "toolCallId": "c1", "title": "read_file", "kind": "read",
-                "status": "in_progress", "rawInput": {"path": "a.py"}}}}},
-        {"_type": "acp_frame", "timestamp": "2026-10-27T09:00:55+00:00", "dir": "in", "frame": {
-            "method": "session/update", "params": {"sessionId": "s", "update": {
-                "sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "completed", "rawOutput": "ok"}}}},
+        {
+            "_type": "acp_frame",
+            "timestamp": "2026-10-27T09:00:01+00:00",
+            "dir": "out",
+            "frame": {
+                "method": "session/prompt",
+                "params": {"sessionId": "s", "prompt": [{"type": "text", "text": "do it"}]},
+            },
+        },
+        {
+            "_type": "acp_frame",
+            "timestamp": "2026-10-27T09:00:10+00:00",
+            "dir": "in",
+            "frame": {
+                "method": "session/update",
+                "params": {
+                    "sessionId": "s",
+                    "update": {
+                        "sessionUpdate": "tool_call",
+                        "toolCallId": "c1",
+                        "title": "read_file",
+                        "kind": "read",
+                        "status": "in_progress",
+                        "rawInput": {"path": "a.py"},
+                    },
+                },
+            },
+        },
+        {
+            "_type": "acp_frame",
+            "timestamp": "2026-10-27T09:00:55+00:00",
+            "dir": "in",
+            "frame": {
+                "method": "session/update",
+                "params": {
+                    "sessionId": "s",
+                    "update": {
+                        "sessionUpdate": "tool_call_update",
+                        "toolCallId": "c1",
+                        "status": "completed",
+                        "rawOutput": "ok",
+                    },
+                },
+            },
+        },
     ]
     journal.write_text("\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8")
     _timed_run(state, journal)

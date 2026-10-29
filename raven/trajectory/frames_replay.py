@@ -125,8 +125,13 @@ def events(
         elif kind == "tool_call_update" and update.get("status") in ("completed", "failed"):
             outcome = dialect.result(update)
             events.append(
-                {"t": "result", "id": str(update.get("toolCallId") or ""), "ok": outcome.ok,
-                 "text": outcome.text, "at": at}
+                {
+                    "t": "result",
+                    "id": str(update.get("toolCallId") or ""),
+                    "ok": outcome.ok,
+                    "text": outcome.text,
+                    "at": at,
+                }
             )
     flush_say()
     flush_thought()
@@ -156,8 +161,9 @@ def replay(
             finished.append(turn_rows.user(event["text"], at=event.get("at")))
         elif kind == "call":
             call = event["call"]
-            finished.append(turn_rows.call(id=event["id"], name=call.name,
-                                           arguments_json=call.arguments_json(), at=event.get("at")))
+            finished.append(
+                turn_rows.call(id=event["id"], name=call.name, arguments_json=call.arguments_json(), at=event.get("at"))
+            )
         elif kind == "result":
             finished.append(turn_rows.result(id=event["id"], text=event["text"], ok=event["ok"], at=event.get("at")))
     return turn_rows.rows(finished)

@@ -823,9 +823,14 @@ def _d_llm_reasoning(view: EntryView, attrs: dict[str, Any], loaded: _Loader) ->
     if not isinstance(tokens, int) or tokens <= 0:
         tokens = attrs.get("llm.usage.reasoning_tokens")
     if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens > 0:
-        return AVAILABLE, {
-            "text": f"The provider reported {tokens} reasoning tokens for this call but returned no reasoning text.",
-        }, (), None
+        return (
+            AVAILABLE,
+            {
+                "text": f"The provider reported {tokens} reasoning tokens for this call but returned no reasoning text.",
+            },
+            (),
+            None,
+        )
     return NOT_RECORDED, None, (), None
 
 

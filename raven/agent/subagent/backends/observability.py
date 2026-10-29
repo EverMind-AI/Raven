@@ -155,8 +155,16 @@ def _artifact(span: Any, key: str, payload: Any) -> dict[str, Any]:
     return tracing_spans.artifact_attributes(key, art)
 
 
-def _step_span(span: Any, identity: dict[str, Any], name: str, span_type: str,
-               start: datetime, end: datetime, attributes: dict[str, Any], span_id: str) -> None:
+def _step_span(
+    span: Any,
+    identity: dict[str, Any],
+    name: str,
+    span_type: str,
+    start: datetime,
+    end: datetime,
+    attributes: dict[str, Any],
+    span_id: str,
+) -> None:
     tracing_spans.emit(
         tracing_spans.build_span(
             name,
@@ -225,16 +233,18 @@ def record_steps(
 
         if prompt:
             first = next((at for at in ats if at is not None), close)
-            steps.append((
-                "llm.call",
-                "llm",
-                floor,
-                first,
-                {
-                    **_artifact(span, "llm.input", {"messages": [{"role": "user", "content": prompt}]}),
-                    "llm.input_preview": prompt[:_PREVIEW_CHARS],
-                },
-            ))
+            steps.append(
+                (
+                    "llm.call",
+                    "llm",
+                    floor,
+                    first,
+                    {
+                        **_artifact(span, "llm.input", {"messages": [{"role": "user", "content": prompt}]}),
+                        "llm.input_preview": prompt[:_PREVIEW_CHARS],
+                    },
+                )
+            )
         for index, event in enumerate(events):
             if len(steps) >= _STEP_LIMIT:
                 break
@@ -243,40 +253,46 @@ def record_steps(
             end = span_end(index)
             if kind == "say":
                 text = str(event.get("text") or "")
-                steps.append((
-                    "llm.call",
-                    "llm",
-                    at,
-                    end,
-                    {
-                        **_artifact(span, "llm.output", {"content": text}),
-                        "llm.output_preview": text[:_PREVIEW_CHARS],
-                    },
-                ))
+                steps.append(
+                    (
+                        "llm.call",
+                        "llm",
+                        at,
+                        end,
+                        {
+                            **_artifact(span, "llm.output", {"content": text}),
+                            "llm.output_preview": text[:_PREVIEW_CHARS],
+                        },
+                    )
+                )
             elif kind == "thought":
                 text = str(event.get("text") or "")
-                steps.append((
-                    "llm.call",
-                    "llm",
-                    at,
-                    end,
-                    {
-                        **_artifact(span, "llm.output", {"content": "", "reasoning_content": text}),
-                        "llm.output_preview": text[:_PREVIEW_CHARS],
-                    },
-                ))
+                steps.append(
+                    (
+                        "llm.call",
+                        "llm",
+                        at,
+                        end,
+                        {
+                            **_artifact(span, "llm.output", {"content": "", "reasoning_content": text}),
+                            "llm.output_preview": text[:_PREVIEW_CHARS],
+                        },
+                    )
+                )
             elif kind == "user":
                 text = str(event.get("text") or "")
-                steps.append((
-                    "llm.call",
-                    "llm",
-                    at,
-                    end,
-                    {
-                        **_artifact(span, "llm.input", {"messages": [{"role": "user", "content": text}]}),
-                        "llm.input_preview": text[:_PREVIEW_CHARS],
-                    },
-                ))
+                steps.append(
+                    (
+                        "llm.call",
+                        "llm",
+                        at,
+                        end,
+                        {
+                            **_artifact(span, "llm.input", {"messages": [{"role": "user", "content": text}]}),
+                            "llm.input_preview": text[:_PREVIEW_CHARS],
+                        },
+                    )
+                )
             elif kind == "call":
                 call = event.get("call")
                 name = str(getattr(call, "name", None) or "tool")

@@ -14,17 +14,62 @@ def _journal(tmp_path: Path) -> Path:
             json.dumps({"_type": "acp_frame", "timestamp": "2026-10-27T09:00:00", "dir": direction, "frame": body})
         )
 
-    frame("out", {"method": "session/prompt", "params": {"sessionId": "s", "prompt": [{"type": "text", "text": "do it"}]}})
+    frame(
+        "out", {"method": "session/prompt", "params": {"sessionId": "s", "prompt": [{"type": "text", "text": "do it"}]}}
+    )
     for chunk in ("I will ", "read it"):
-        frame("in", {"method": "session/update", "params": {"sessionId": "s", "update": {
-            "sessionUpdate": "agent_message_chunk", "content": [{"type": "text", "text": chunk}]}}})
-    frame("in", {"method": "session/update", "params": {"sessionId": "s", "update": {
-        "sessionUpdate": "tool_call", "toolCallId": "c1", "title": "read_file", "kind": "read",
-        "status": "in_progress", "rawInput": {"path": "a.py"}}}})
-    frame("in", {"method": "session/update", "params": {"sessionId": "s", "update": {
-        "sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "completed", "rawOutput": "contents"}}})
-    frame("in", {"method": "session/update", "params": {"sessionId": "other", "update": {
-        "sessionUpdate": "agent_message_chunk", "content": [{"type": "text", "text": "not ours"}]}}})
+        frame(
+            "in",
+            {
+                "method": "session/update",
+                "params": {
+                    "sessionId": "s",
+                    "update": {"sessionUpdate": "agent_message_chunk", "content": [{"type": "text", "text": chunk}]},
+                },
+            },
+        )
+    frame(
+        "in",
+        {
+            "method": "session/update",
+            "params": {
+                "sessionId": "s",
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "c1",
+                    "title": "read_file",
+                    "kind": "read",
+                    "status": "in_progress",
+                    "rawInput": {"path": "a.py"},
+                },
+            },
+        },
+    )
+    frame(
+        "in",
+        {
+            "method": "session/update",
+            "params": {
+                "sessionId": "s",
+                "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "c1",
+                    "status": "completed",
+                    "rawOutput": "contents",
+                },
+            },
+        },
+    )
+    frame(
+        "in",
+        {
+            "method": "session/update",
+            "params": {
+                "sessionId": "other",
+                "update": {"sessionUpdate": "agent_message_chunk", "content": [{"type": "text", "text": "not ours"}]},
+            },
+        },
+    )
     path = tmp_path / "journal.jsonl"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
@@ -60,10 +105,27 @@ def test_items_split_the_run_by_what_each_row_is(tmp_path: Path):
 
 def test_a_message_that_thought_first_keeps_its_thinking_row(tmp_path: Path):
     path = tmp_path / "j.jsonl"
-    path.write_text(json.dumps({"_type": "acp_frame", "timestamp": "2026-10-27T09:00:00", "dir": "in", "frame": {
-        "method": "session/update", "params": {"sessionId": "s", "update": {
-            "sessionUpdate": "agent_message_chunk", "content": [{"type": "text", "text": "answer"}]}}}}) + "\n",
-        encoding="utf-8")
+    path.write_text(
+        json.dumps(
+            {
+                "_type": "acp_frame",
+                "timestamp": "2026-10-27T09:00:00",
+                "dir": "in",
+                "frame": {
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": "s",
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": [{"type": "text", "text": "answer"}],
+                        },
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     rows = frames_replay.items([{"role": "assistant", "content": "answer", "reasoning_content": "hmm"}])
     assert [r["key"] for r in rows] == ["llm.thinking", "llm.output"]
 

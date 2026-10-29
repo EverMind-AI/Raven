@@ -1932,27 +1932,54 @@ def test_the_files_directory_pages_by_cursor_and_a_span_without_files_has_none(s
 def _frames(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     frames = [
-        {"_type": "acp_frame", "timestamp": "2026-09-01T10:00:01+00:00", "dir": "out", "frame": {
-            "method": "session/prompt", "params": {"sessionId": "s", "prompt": [{"type": "text", "text": "do it"}]}}},
-        {"_type": "acp_frame", "timestamp": "2026-09-01T10:00:02+00:00", "dir": "in", "frame": {
-            "method": "session/update", "params": {"sessionId": "s", "update": {
-                "sessionUpdate": "agent_message_chunk", "content": [{"type": "text", "text": "on it"}]}}}},
+        {
+            "_type": "acp_frame",
+            "timestamp": "2026-09-01T10:00:01+00:00",
+            "dir": "out",
+            "frame": {
+                "method": "session/prompt",
+                "params": {"sessionId": "s", "prompt": [{"type": "text", "text": "do it"}]},
+            },
+        },
+        {
+            "_type": "acp_frame",
+            "timestamp": "2026-09-01T10:00:02+00:00",
+            "dir": "in",
+            "frame": {
+                "method": "session/update",
+                "params": {
+                    "sessionId": "s",
+                    "update": {"sessionUpdate": "agent_message_chunk", "content": [{"type": "text", "text": "on it"}]},
+                },
+            },
+        },
     ]
     path.write_text("\n".join(json.dumps(frame) for frame in frames) + "\n", encoding="utf-8")
     return path
 
 
 def _external_run(state: Path, journal: Path) -> tidx.SessionIndex:
-    _append(state, [
-        _turn(state, "t", "turn", start=0, end=30),
-        _span("t", "ext", "subagent.external", parent="turn", start=1, end=5, attrs={
-            "subagent.external.agent": "claude-code",
-            "subagent.external.frames.path": str(journal),
-            "subagent.external.frames.session_id": "s",
-            "subagent.external.frames.start": 0,
-            "subagent.external.frames.end": journal.stat().st_size,
-        }),
-    ])
+    _append(
+        state,
+        [
+            _turn(state, "t", "turn", start=0, end=30),
+            _span(
+                "t",
+                "ext",
+                "subagent.external",
+                parent="turn",
+                start=1,
+                end=5,
+                attrs={
+                    "subagent.external.agent": "claude-code",
+                    "subagent.external.frames.path": str(journal),
+                    "subagent.external.frames.session_id": "s",
+                    "subagent.external.frames.start": 0,
+                    "subagent.external.frames.end": journal.stat().st_size,
+                },
+            ),
+        ],
+    )
     return _ready(state)
 
 
