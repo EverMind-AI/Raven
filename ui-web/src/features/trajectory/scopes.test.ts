@@ -121,21 +121,3 @@ describe('entering a tab', () => {
     expect(details.get().preferred).toEqual({})
   })
 })
-
-describe('closing and locating', () => {
-  it('closes a tab', () => {
-    scopes.enter(RUN)
-    scopes.close(RUN)
-    expect([list.get().scope, list.get().scopes]).toEqual([null, []])
-  })
-
-  it('goes back to the main session on the door, and says so when there is no door left', () => {
-    scopes.enter(RUN)
-    expect(scopes.locate(RUN)).toBe(true)
-    const s = list.get()
-    expect([s.scope, s.selectedId, s.selectedBy]).toEqual([null, 'doorRun', 'link'])
-    expect(details.get().open).toBe(true)
-    expect(scopes.locate('t:no-door')).toBe(false)
-    expect(list.get().selectedId).toBe('doorRun')
-  })
-})

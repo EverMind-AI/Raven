@@ -7,9 +7,9 @@
  * the few in styles/page.css that park the scroller, size `#trajHost` and
  * paint its glass, which are the chat column's and not this island's.
  *
- * Colours are pairs of custom properties per kind, `-bg` for the row's tag and
- * `-fg` for its text -- the duration bar reads the same `-fg` later, so a tool
- * call is one purple in the row and in the bar. Input and output of one
+ * Colours are pairs of custom properties per kind, `-bg` for a kind's tag and
+ * `-fg` for its text -- the waterfall's bars read the same `-fg`, so a tool
+ * call is one purple in its tag and in its bar. Input and output of one
  * actor share a hue at two strengths; thinking stands apart in amber; every
  * kind the palette does not know is one neutral grey. Both themes are set
  * here, on the same attribute state/look.ts writes; the system theme writes
@@ -62,88 +62,16 @@ html[data-theme="dark"] {
 }
 .trajectory-status-bad { color: var(--clay); }
 
-/* ── the Scope Tabs ─────────────────────────────────────────────── */
+/* ── the scroller and the kind tags ─────────────────────────────── */
 
-/* The strip over the view: the main session's tab, then one per sub-agent
-   run the reader opened, each with its own close button beside it. It
-   scrolls sideways rather than wrap, with an arrow at either end once it
-   overflows, the way the details pane's block strip does. */
-.trajectory-scope-wrap { flex: none; display: flex; align-items: stretch; border-bottom: 1px solid var(--line-soft); }
-.trajectory-scope-tabs {
-  flex: 1; min-width: 0; display: flex; gap: 2px; padding: 4px 12px 0; overflow-x: auto; overflow-y: hidden; white-space: nowrap;
-  scrollbar-width: none;
-}
-.trajectory-scope-arrow {
-  flex: none; width: 22px; color: var(--muted); font-size: 16px; line-height: 1; display: grid; place-items: center;
-}
-.trajectory-scope-arrow:hover { color: var(--text); background: var(--hover); }
-.trajectory-scope-arrow:disabled { color: var(--faint); background: none; }
-.trajectory-scope-item { flex: none; display: flex; align-items: stretch; border-radius: 6px 6px 0 0; }
-.trajectory-scope-item:hover { background: var(--hover); }
-.trajectory-scope-tab {
-  flex: none; max-width: 240px; padding: 6px 10px 7px; font-size: 12px; color: var(--muted);
-  border-bottom: 2px solid transparent; border-radius: 6px 6px 0 0; display: inline-flex; align-items: center; gap: 6px;
-}
-.trajectory-scope-tab:hover { color: var(--text); background: var(--hover); }
-.trajectory-scope-item .trajectory-scope-tab:hover { background: transparent; }
-.trajectory-scope-tab-on, .trajectory-scope-tab-on:hover { color: var(--text); border-bottom-color: var(--amber); background: transparent; }
-.trajectory-scope-tab:focus-visible, .trajectory-scope-close:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
-.trajectory-scope-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.trajectory-scope-close {
-  flex: none; width: 22px; margin-left: -6px; color: var(--faint); font-size: 14px; line-height: 1;
-  display: grid; place-items: center; border-radius: 4px;
-}
-.trajectory-scope-close:hover { color: var(--text); background: var(--hover); }
-.trajectory-scope-mark { flex: none; width: 6px; height: 6px; border-radius: 50%; }
-.trajectory-scope-mark-running { background: var(--amber); }
-.trajectory-scope-mark-error { background: var(--clay); }
-.trajectory-scope-mark-cancelled { background: var(--muted); }
-
-/* The line under the strip that says which run the tab on screen is. */
-.trajectory-scope-info {
-  flex: none; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px;
-  padding: 6px 20px 4px; font-size: 11.5px; color: var(--muted);
-}
-.trajectory-scope-agent { color: var(--text); font-weight: 600; }
-.trajectory-scope-task { min-width: 0; max-width: 100%; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.trajectory-scope-state, .trajectory-scope-dur, .trajectory-scope-turn { white-space: nowrap; }
-.trajectory-scope-locate { font-size: 11.5px; white-space: nowrap; }
-
-/* ── the list ───────────────────────────────────────────────────── */
-
-/* The scroller. Its rows are positioned inside `.trajectory-rows`, which is
-   as tall as every row would be, so the scrollbar speaks for the whole list
-   while only the rows in view exist. */
+/* What the waterfall's rows scroll in, and where the focus goes when a move
+   takes away the element that had it. */
 .trajectory-list {
   flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
   position: relative; outline: 0; scrollbar-gutter: stable;
-  --trajectory-cols: 72px 14px 176px minmax(0, 1fr);
 }
-.trajectory-list[data-narrow] { --trajectory-cols: 48px 14px 120px minmax(0, 1fr); }
-.trajectory-rows { position: relative; width: 100%; }
 
-/* Fixed 32px rows, one grid each: turn, failure mark, kind, content. */
-.trajectory-row {
-  position: absolute; left: 0; right: 0; height: 32px;
-  display: grid; grid-template-columns: var(--trajectory-cols); align-items: center; gap: 8px;
-  padding: 0 20px 0 16px; box-sizing: border-box; cursor: default;
-  font-size: 12.5px; color: var(--text); border-bottom: 1px solid var(--line-soft);
-}
-.trajectory-row:hover { background: var(--hover); }
-.trajectory-row-on, .trajectory-row-on:hover { background: var(--selected, var(--raised)); }
-
-.trajectory-turn {
-  font-family: var(--mono); font-size: 11px; color: var(--faint);
-  font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden;
-}
-.trajectory-turn-sub::after { content: '\2022'; margin-left: 4px; color: var(--sky); }
-
-.trajectory-fail { width: 14px; height: 14px; display: grid; place-items: center; }
-.trajectory-fail-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--chat-danger, var(--clay)); }
-
-/* The kind tag: right-aligned so the column's ragged edge is on the left,
-   away from the content it introduces. */
-.trajectory-kind { display: flex; justify-content: flex-end; min-width: 0; }
+/* A kind named in the details pane and the overview, on its own colours. */
 .trajectory-tag {
   display: inline-block; max-width: 100%; padding: 1px 8px; border-radius: 999px;
   font-size: 11px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -158,97 +86,8 @@ html[data-theme="dark"] {
 .trajectory-k-tool-output { background: var(--trajectory-c-tool-output-bg); color: var(--trajectory-c-tool-output-fg); }
 .trajectory-k-other { background: var(--trajectory-c-other-bg); color: var(--trajectory-c-other-fg); }
 
-.trajectory-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.trajectory-text-none { color: var(--faint); font-style: italic; }
-/* A row whose record is not there to read says so, in the failure colour. */
-.trajectory-text-missing { color: var(--chat-danger, var(--clay)); }
-/* A hidden row shown because something pointed at it: a dashed edge on the left. */
-.trajectory-row-revealed { box-shadow: inset 3px 0 0 var(--line); color: var(--muted); }
-/* A row that opens a sub-agent's tab has one more column: how the run stands,
-   for how long, and that it opens. On a narrow list the state and the
-   duration stack in the row's height and the row gives up some of its gaps
-   and right margin, so the column stays whole and the preview keeps room. */
-.trajectory-row-door { grid-template-columns: var(--trajectory-cols-door, var(--trajectory-cols) auto); }
-.trajectory-list[data-narrow] .trajectory-row-door { column-gap: 6px; padding-right: 10px; }
-.trajectory-scope-door { display: inline-flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
-.trajectory-scope-door-state, .trajectory-scope-door-dur { font-variant-numeric: tabular-nums; }
-.trajectory-list[data-narrow] .trajectory-scope-door {
-  display: inline-grid; grid-template-columns: auto auto; gap: 0 4px; align-items: center; align-content: center;
-  font-size: 10.5px; line-height: 12px;
-}
-.trajectory-list[data-narrow] .trajectory-scope-door-state { grid-column: 1; grid-row: 1; }
-.trajectory-list[data-narrow] .trajectory-scope-door-dur { grid-column: 1; grid-row: 2; }
-.trajectory-list[data-narrow] .trajectory-scope-opens { grid-column: 2; grid-row: 1 / span 2; }
+/* The way from a dispatching row to the agent it started. */
 .trajectory-scope-opens { display: inline-grid; place-items: center; color: var(--faint); }
-.trajectory-row-door:hover .trajectory-scope-opens { color: var(--text); }
-/* A turn a sub-agent's report started: the dot the dispatched turns carry, here an element so it can say so. */
-.trajectory-scope-from { margin-left: 4px; color: var(--sky); cursor: default; }
-
-.trajectory-empty {
-  flex: 1; display: grid; place-items: center; padding: 24px;
-  font-size: 12.5px; color: var(--muted); text-align: center;
-}
-
-/* ── the duration bar ───────────────────────────────────────────── */
-
-/* One row the height of a list row, between the title and the list: the
-   canvas takes the width and the tools sit after it; what the bar has to say
-   it says on hover. The lines above and below are the pane dividers. */
-.trajectory-bar {
-  flex: none; height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 8px 0 0;
-  border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); position: relative; outline: 0;
-}
-.trajectory-canvas { flex: 1; min-width: 0; height: 32px; display: block; cursor: crosshair; touch-action: none; }
-.trajectory-bar[data-fit] .trajectory-canvas { cursor: pointer; }
-.trajectory-bar[data-drag] .trajectory-canvas { cursor: grabbing; }
-.trajectory-bar-tools { flex: none; display: flex; gap: 2px; }
-.trajectory-bar-switch[aria-pressed="true"] { color: var(--text); background: var(--selected, var(--raised)); }
-/* The duration filter's popover: under the tools, right-aligned, one line of words and the slider. */
-.trajectory-threshold {
-  position: absolute; z-index: var(--z-pop); top: calc(100% + 4px); right: 8px; width: 240px; padding: 10px 12px;
-  display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--line); border-radius: 10px;
-  background: var(--ink); box-shadow: var(--elev);
-}
-.trajectory-threshold-text { font-size: 12px; color: var(--text); }
-.trajectory-threshold-range { width: 100%; accent-color: var(--accent, var(--text)); }
-.trajectory-threshold-btn[aria-expanded="true"] { outline: 1px solid var(--line); }
-.trajectory-bar-tool {
-  width: 22px; height: 22px; border-radius: 6px; color: var(--muted); font-size: 13px; line-height: 1;
-  display: grid; place-items: center;
-}
-.trajectory-bar-tool:hover { color: var(--text); background: var(--hover); }
-.trajectory-bar-tool:disabled { color: var(--faint); background: none; }
-.trajectory-bar-tool:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
-
-/* The three-line card over the block under the pointer. */
-.trajectory-hover {
-  position: fixed; z-index: var(--z-tip); max-width: 360px; width: 320px; padding: 7px 10px; border-radius: 8px;
-  background: var(--text); color: var(--ink); font-size: 11.5px; line-height: 1.5; pointer-events: none;
-  box-shadow: var(--elev);
-}
-.trajectory-hover-line { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.trajectory-hover-brief { width: auto; max-width: 420px; padding: 5px 10px; }
-.trajectory-hover-mono { font-family: var(--mono); font-size: 11px; }
-.trajectory-hover-muted { opacity: .8; }
-.trajectory-hover-fail { color: var(--chat-danger, var(--clay)); }
-
-/* The dense block's pick list. */
-.trajectory-bucket {
-  position: fixed; z-index: var(--z-pop); width: 320px; max-height: 280px; display: flex; flex-direction: column;
-  border: 1px solid var(--line); border-radius: 10px; background: var(--ink); box-shadow: var(--elev); overflow: hidden;
-}
-.trajectory-bucket-head {
-  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px;
-  font-size: 11.5px; color: var(--muted); border-bottom: 1px solid var(--line-soft);
-}
-.trajectory-bucket-list { flex: 1; min-height: 0; overflow-y: auto; padding: 4px; }
-.trajectory-bucket-item {
-  width: 100%; display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; text-align: left;
-  font-size: 12px; color: var(--text);
-}
-.trajectory-bucket-item:hover, .trajectory-bucket-item:focus-visible { background: var(--hover); outline: 0; }
-.trajectory-bucket-item[aria-selected="true"] { background: var(--selected, var(--raised)); }
-.trajectory-bucket-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── the list and the pane ──────────────────────────────────────── */
 
@@ -256,7 +95,7 @@ html[data-theme="dark"] {
    area is narrow, where the pane covers the body and the list stays beneath
    for the way back. */
 .trajectory-body { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; }
-.trajectory-body > .trajectory-list, .trajectory-body > .trajectory-empty { flex: 1; min-width: 0; }
+.trajectory-body > .trajectory-list { flex: 1; min-width: 0; }
 .trajectory-details {
   flex: none; display: flex; flex-direction: column; min-width: 0; min-height: 0;
   border-left: 1px solid var(--line);
@@ -483,7 +322,6 @@ html[data-theme="dark"] {
 .trajectory-wf-label { display: flex; align-items: center; gap: 6px; min-width: 0;
   font: 11px/1 var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
 .trajectory-wf-agent .trajectory-wf-label { font-weight: 600; color: var(--text) }
-.trajectory-wf-dot { width: 7px; height: 7px; border-radius: 2px; background: var(--trajectory-c-llm-output-fg); flex: none }
 .trajectory-wf-from { font: 9px/1 var(--mono); color: var(--moss); border: 1px solid var(--line);
   border-radius: 4px; padding: 2px 4px; margin-left: 6px; overflow: hidden; text-overflow: ellipsis }
 .trajectory-wf-track { position: relative; height: 12px; overflow: hidden }
@@ -521,13 +359,10 @@ html[data-theme="dark"] {
   justify-content: center; font: 9px/1 var(--mono); color: var(--faint); overflow: hidden;
   border-left: 1px dashed var(--line); border-right: 1px dashed var(--line) }
 
-.trajectory-wf-dur { margin-left: 8px; font: 9.5px/1 var(--mono); color: var(--faint); flex: none }
-
-
 /* ── the reference's light trace card ─────────────────────────────────
    White ground, hairlines, uppercase micro-labels, and one pale bar per
    row with its duration just after. Colour is used only for meaning:
-   the model/tool families, the now line, the slowest badge and errors. */
+   the model/tool families, the slowest badge and errors. */
 
 .trajectory-wf { background: var(--paper); --wf-gutter: max(240px, 30%); }
 .trajectory-wf-stats { display: flex; align-items: stretch; gap: 0; padding: 10px 16px;
@@ -545,8 +380,6 @@ html[data-theme="dark"] {
 
 .trajectory-wf-head { display: grid; grid-template-columns: var(--wf-gutter) minmax(0, 1fr);
   border-bottom: 1px solid #ededed; background: var(--paper); flex: none }
-.trajectory-wf-spanhead { font: 10px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase;
-  color: #9a9a9a; padding: 11px 0 11px 14px }
 .trajectory-ruler { position: relative; height: 34px; margin-left: 0; border-bottom: 0;
   font: 11px/34px var(--mono); color: #9a9a9a; background: var(--paper) }
 .trajectory-ruler b { position: absolute; top: 0; transform: translateX(-50%); font-weight: 400 }
@@ -570,13 +403,11 @@ html[data-theme="dark"] {
 .trajectory-wf-glyph { font-size: 10px; color: #b48ce0 }
 .trajectory-wf-ico { flex: none; width: 18px; height: 18px; border: 1px solid #ececec; border-radius: 5px;
   display: grid; place-items: center; background: var(--paper); color: #8a8a8a; font-size: 10px }
-.trajectory-wf-dot { display: none }
 .trajectory-wf-from { font: 9.5px/1 var(--mono); color: #3f6b2c; background: #f1f7ee; border: 1px solid #d9e7d2;
   border-radius: 4px; padding: 2px 5px; flex: none; max-width: 190px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap }
 .trajectory-wf-slow { flex: none; font: 9px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase;
   color: #c2713a; background: #fcefe3; border-radius: 4px; padding: 3px 5px }
-.trajectory-wf-dur { display: none }
 
 .trajectory-wf-track { position: relative; height: 32px }
 .trajectory-wf-track i { top: 50%; transform: translateY(-50%); height: 14px; border-radius: 4px; min-width: 3px }
@@ -588,9 +419,6 @@ html[data-theme="dark"] {
 .trajectory-wf-seg-failure { background: #fae3e1 }
 .trajectory-wf-seg-waiting { background: #f4f4f4 }
 .trajectory-wf-turn .trajectory-wf-track i { height: 14px }
-.trajectory-wf-cap { position: absolute; top: 50%; transform: translateY(-50%);
-  font: 11px/1 var(--mono); color: #6b6b6b; white-space: nowrap; font-variant-numeric: tabular-nums }
-.trajectory-wf-agent .trajectory-wf-cap { color: #9a9a9a }
 
 .trajectory-wf-links { left: var(--wf-gutter) }
 .trajectory-wf-grid { position: absolute; top: 0; bottom: 0; width: 1px; background: #f4f4f4 }
@@ -618,8 +446,6 @@ html[data-theme="dark"] {
 .trajectory-wf-tool { font: 500 11px/1 var(--sans); padding: 6px 11px; border-radius: 9px }
 
 .trajectory-wf-head { border-bottom: 1px solid #ededed }
-.trajectory-wf-spanhead { font: 500 11px/1 var(--sans); letter-spacing: .1em; color: #9aa0a6;
-  padding: 18px 0 18px 20px }
 .trajectory-ruler { height: 56px; font: 400 14px/56px var(--sans); color: #8a8f98;
   font-variant-numeric: tabular-nums }
 
@@ -642,8 +468,6 @@ html[data-theme="dark"] {
 .trajectory-wf-track i { height: 18px; border-radius: 6px; min-width: 4px }
 .trajectory-wf-turn .trajectory-wf-track i { height: 18px }
 .trajectory-wf-agentbar { background: #f4f5f6 }
-.trajectory-wf-cap { font: 400 15px/1 var(--sans); color: #6b7280; font-variant-numeric: tabular-nums }
-.trajectory-wf-agent .trajectory-wf-cap { color: #9aa0a6 }
 
 /* The tree's guide: one hairline at the row's own indent, behind the icons. */
 .trajectory-wf-span .trajectory-wf-label::before { content: ''; position: absolute;
@@ -743,7 +567,6 @@ html[data-theme="dark"] {
 .trajectory-wf-stats { min-width: 0; overflow: hidden }
 .trajectory-wf-stat { min-width: 0; padding: 0 20px; flex: 0 1 auto }
 .trajectory-wf-statv { white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
-.trajectory-wf-tools { flex: none }
 .trajectory-wf { --wf-gutter: clamp(180px, 34%, 420px) }
 
 /* The header's cells never shrink into each other: the strip scrolls instead. */
@@ -863,8 +686,6 @@ html[data-traj] .trajectory-ruler { background: transparent }
 html[data-traj] .trajectory-details { background: var(--traj-pane); border-left-color: var(--traj-line) }
 html[data-traj] .trajectory-details-over { background: var(--traj-solid) }
 html[data-traj] .trajectory-wf-row:hover { background: var(--traj-hover) }
-html[data-traj] .trajectory-row-on,
-html[data-traj] .trajectory-row-on:hover { background: var(--traj-on) }
 html[data-traj] .trajectory-wf-guide,
 html[data-traj] .trajectory-ruler-tick,
 html[data-traj] .trajectory-wf-grid { background: var(--traj-rule) }

@@ -508,7 +508,7 @@ export function Waterfall(): JSX.Element {
      everything it depends on changes on that click. */
   const revealed = useRef<{ id: string | null; tick: number; phase: 'none' | 'opening' | 'done' }>({ id: null, tick: -1, phase: 'none' })
 
-  /* A selection made elsewhere -- a link in the pane, a tab's locate button --
+  /* A selection made elsewhere -- a link in the pane, a dispatching row's door --
      opens the turn that holds the row and brings the row into view, so a jump
      lands somewhere the reader can see. */
   const selectedId = store.get().selectedId

@@ -71,7 +71,6 @@
   --traj-pane:   rgba(255, 255, 255, .40);
   --traj-line:   rgba(31, 35, 40, .09);
   --traj-hover:  rgba(255, 255, 255, .52);
-  --traj-on:     rgba(255, 255, 255, .72);
   --traj-rule:   rgba(31, 35, 40, .12);
   --traj-solid:  #fbfaf8;
   --text-3:   #8a8a88;   /* a group label: quieter than muted, louder than faint */
@@ -294,7 +293,6 @@
     --traj-pane:   rgba(38, 38, 38, .42);
     --traj-line:   rgba(255, 255, 255, .08);
     --traj-hover:  rgba(255, 255, 255, .05);
-    --traj-on:     rgba(255, 255, 255, .09);
     --traj-rule:   rgba(255, 255, 255, .10);
     --traj-solid:  #1c1c1c;
     --text-3:   #9b9b9b;
@@ -367,7 +365,7 @@
   --traj-glass: rgba(34, 34, 34, .58); --traj-edge: rgba(255, 255, 255, .07);
   --traj-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 24px 60px -38px #000;
   --traj-pane: rgba(38, 38, 38, .42); --traj-line: rgba(255, 255, 255, .08);
-  --traj-hover: rgba(255, 255, 255, .05); --traj-on: rgba(255, 255, 255, .09);
+  --traj-hover: rgba(255, 255, 255, .05);
   --traj-rule: rgba(255, 255, 255, .10); --traj-solid: #1c1c1c;
   --rail-ink: #f7f7f7; --rail-ink-on: #ffffff; --rail-quiet: #999999;
   --rail-hover: #474747; --rail-on: #474747; --rail-tip: #1a1a1a; --rail-tip-ink: #ffffff;
@@ -400,7 +398,7 @@
   --traj-glass: rgba(255, 255, 255, .70); --traj-edge: rgba(255, 255, 255, .72);
   --traj-shadow: inset 0 1px 0 rgba(255, 255, 255, .55), 0 24px 60px -38px rgba(31, 35, 40, .38);
   --traj-pane: rgba(255, 255, 255, .40); --traj-line: rgba(31, 35, 40, .09);
-  --traj-hover: rgba(255, 255, 255, .52); --traj-on: rgba(255, 255, 255, .72);
+  --traj-hover: rgba(255, 255, 255, .52);
   --traj-rule: rgba(31, 35, 40, .12); --traj-solid: #fbfaf8;
   --wash:
     radial-gradient(60% 55% at 85% 0%, rgba(195, 212, 237, .62) 0%, rgba(195, 212, 237, 0) 70%),
