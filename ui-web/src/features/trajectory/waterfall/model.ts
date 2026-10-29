@@ -32,7 +32,14 @@ export interface WaterfallTurn {
 }
 
 export interface WaterfallAgent {
+  /** The agent's identity: one per instance, so two runs of the same worker are
+   *  one lane rather than two. `agent:<instance>` when the door names one, else
+   *  `scope:<scope id>`; `main` for the host. */
+  key: string
+  /** The first scope this agent ran in; null for the host. */
   scope: string | null
+  /** Every scope the agent ran in, in the order they started. */
+  scopes: readonly (string | null)[]
   /** The row that opened this worker's scope; the caller names the agent from it. */
   door: TrajectoryEntry | null
   start: number
@@ -123,7 +130,7 @@ export function buildTurn(id: string, entries: readonly TrajectoryEntry[], now: 
   }
 }
 
-function agentOf(scope: string | null, entries: readonly TrajectoryEntry[], now: number, door: TrajectoryEntry | null): WaterfallAgent {
+function scopeOf(scope: string | null, entries: readonly TrajectoryEntry[], now: number, door: TrajectoryEntry | null): WaterfallAgent {
   const turns = new Map<string, TrajectoryEntry[]>()
   const loose: TrajectoryEntry[] = []
   for (const entry of entries) {
@@ -143,13 +150,62 @@ function agentOf(scope: string | null, entries: readonly TrajectoryEntry[], now:
   const starts = entries.map(entryStart)
   const ends = entries.map((entry) => entryEnd(entry, now))
   return {
+    key: scope === null ? 'main' : `scope:${scope}`,
     scope,
+    scopes: [scope],
     door,
     start: Math.min(...starts),
     end: Math.max(...ends),
     turns: numbered,
     loose: looseRows,
   }
+}
+
+/* What a worker is called as an agent. The instance when the door names one --
+   the same instance run twice is one agent, not two. ACP runs record their
+   instance on the external span rather than on the run the door is, so the
+   agent's own name is the next best identity: every run of `Claude Code-Mirasim`
+   is that agent even when the instance id never reaches this page. Only a door
+   with neither keeps a lane of its own. */
+export function agentIdentity(scope: string | null, door: TrajectoryEntry | null): string {
+  if (scope === null) return 'main'
+  const instance = door?.meta?.instance
+  if (typeof instance === 'string' && instance.trim() !== '') return `agent:${instance.trim()}`
+  const agent = door?.meta?.agent
+  if (typeof agent === 'string' && agent.trim() !== '') return `agent:${agent.trim()}`
+  return `scope:${scope}`
+}
+
+/** One agent per identity, its runs' turns in one sequence, numbered once. */
+export function foldAgents(parts: readonly WaterfallAgent[]): WaterfallAgent[] {
+  const groups = new Map<string, WaterfallAgent[]>()
+  for (const part of parts) {
+    const key = agentIdentity(part.scope, part.door)
+    const list = groups.get(key)
+    if (list) list.push(part)
+    else groups.set(key, [part])
+  }
+  const agents: WaterfallAgent[] = []
+  for (const [key, group] of groups) {
+    group.sort((a, b) => a.start - b.start || (a.scope ?? '').localeCompare(b.scope ?? ''))
+    const turns = group.flatMap((part) => part.turns).sort((a, b) => a.start - b.start || a.id.localeCompare(b.id))
+    agents.push({
+      key,
+      scope: group[0]!.scope,
+      scopes: group.map((part) => part.scope),
+      door: group.find((part) => part.door !== null)?.door ?? null,
+      start: Math.min(...group.map((part) => part.start)),
+      end: Math.max(...group.map((part) => part.end)),
+      turns: turns.map((turn, at) => ({ ...turn, ordinal: at + 1 })),
+      loose: group.flatMap((part) => part.loose).sort((a, b) => entryStart(a.entry) - entryStart(b.entry)),
+    })
+  }
+  agents.sort((a, b) => {
+    if (a.scope === null) return b.scope === null ? 0 : -1
+    if (b.scope === null) return 1
+    return a.start - b.start || a.key.localeCompare(b.key)
+  })
+  return agents
 }
 
 export function buildWaterfall(entries: readonly TrajectoryEntry[], now: number): Waterfall {
@@ -168,13 +224,7 @@ export function buildWaterfall(entries: readonly TrajectoryEntry[], now: number)
     const opens = entry.opens_subagent_scope
     if (opens !== null && opens !== undefined && !doors.has(opens)) doors.set(opens, entry)
   }
-  const agents = [...groups].map(([scope, rows]) => agentOf(scope, rows, now, scope === null ? null : (doors.get(scope) ?? null)))
-  agents.sort((a, b) => {
-    if (a.scope === null) return b.scope === null ? 0 : -1
-    if (b.scope === null) return 1
-    return a.start - b.start || a.scope.localeCompare(b.scope)
-  })
-  return { agents }
+  return { agents: foldAgents([...groups].map(([scope, rows]) => scopeOf(scope, rows, now, scope === null ? null : (doors.get(scope) ?? null)))) }
 }
 
 /** Whether a row is still running: no end recorded, and recent enough that the

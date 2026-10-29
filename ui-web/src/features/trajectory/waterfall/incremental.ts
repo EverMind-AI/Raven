@@ -10,7 +10,7 @@
  * two equal -- so nothing downstream knows which one it is looking at.
  */
 
-import { buildRows, buildTurn, entryEnd, entryStart } from './model'
+import { buildRows, buildTurn, entryEnd, entryStart, foldAgents } from './model'
 
 import type { TrajectoryEntry } from '../types'
 import type { Waterfall, WaterfallAgent, WaterfallRow, WaterfallTurn } from './model'
@@ -107,7 +107,9 @@ export class WaterfallIndex {
       built.push({
         start: bucket.start,
         agent: {
+          key: scope === null ? 'main' : `scope:${scope}`,
           scope,
+          scopes: [scope],
           door: scope === null ? null : (this.doors.get(scope) ?? null),
           start: bucket.start,
           end: bucket.end,
@@ -116,11 +118,7 @@ export class WaterfallIndex {
         },
       })
     }
-    built.sort((a, b) => {
-      if (a.agent.scope === null) return b.agent.scope === null ? 0 : -1
-      if (b.agent.scope === null) return 1
-      return a.start - b.start || (a.agent.scope ?? '').localeCompare(b.agent.scope ?? '')
-    })
-    return { agents: built.map((entry) => entry.agent) }
+    /* Runs of the same instance are one agent; the fold is the model's rule. */
+    return { agents: foldAgents(built.sort((a, b) => a.start - b.start).map((entry) => entry.agent)) }
   }
 }

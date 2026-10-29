@@ -59,3 +59,22 @@ it('re-cuts a running row when the clock moves, and only that row’s turn', () 
   expect(JSON.stringify(index.waterfall())).not.toBe(first)
   expect(index.waterfall().agents[0]!.turns[0]!.end).toBe(T0 + 90_000)
 })
+
+it('folds two pages of runs of one instance into the same agent', () => {
+  const door = (id: string, scope: string, at2: number): TrajectoryEntry => E(id, {
+    kind: 'tool.output', opens_subagent_scope: scope, meta: { instance: 'raven-design-1' },
+    operation_start: at(at2), operation_end: at(at2 + 1),
+  })
+  const work = (id: string, scope: string, at2: number): TrajectoryEntry => E(id, {
+    subagent_scope: scope, turn_span_id: `${scope}-turn`, operation_start: at(at2), operation_end: at(at2 + 1),
+  })
+  const first = [door('d1', 't:a', 0), work('a1', 't:a', 1)]
+  const second = [door('d2', 't:b', 4), work('b1', 't:b', 5)]
+  const index = new WaterfallIndex(NOW)
+  index.add(first)
+  index.add(second)
+  const grown = index.waterfall()
+  expect(grown).toEqual(buildWaterfall([...first, ...second], NOW))
+  expect(grown.agents[1]!.scopes).toEqual(['t:a', 't:b'])
+  expect(grown.agents[1]!.turns.map((turn) => turn.ordinal)).toEqual([1, 2])
+})
