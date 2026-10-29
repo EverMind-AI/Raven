@@ -697,6 +697,27 @@ def test_a_section_that_opted_out_accepts_the_same_certificate(
     assert result["status"] == "valid"
 
 
+def test_an_opted_out_section_still_tells_an_unchecked_key_from_a_verified_one(
+    cfg_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The decoy control rides the same opt-out as the probe it checks.
+
+    This gateway answers any key, so its catalogue says nothing about the one
+    configured. A control refused at the handshake would never see that, and
+    the key would read as verified.
+    """
+    keep_loopback_off_proxies(monkeypatch)
+    _restore_probe(monkeypatch)
+    ca = private_ca(tmp_path / "pki")
+    with https_endpoint(ca.server, OpenAIModels) as origin:
+        set_provider_fields(
+            "custom", {"api_key": "k", "api_base": f"{origin}/v1", "tls_verify": False}, config_path=cfg_path
+        )
+        result = probe_provider("custom", config_path=cfg_path, timeout_s=5, check_credential=True)
+
+    assert result["status"] == "key_unchecked"
+
+
 def test_an_undressed_section_still_verifies(cfg_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A section that names no `tls_verify` verifies, as every section always has.
 

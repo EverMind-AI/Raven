@@ -772,3 +772,40 @@ def test_a_generation_object_predating_the_field_falls_back_to_the_call_budget()
     assert first_byte_budget(old) == 0.0, "no bound configured is not a bound at the total"
     assert stream_first_byte_budget(old) == 180.0, "the idle cap is what bounded the first chunk before"
     assert httpx_timeout(old) is None, "nothing to narrow, so the plain float goes as it always did"
+
+
+_GATEWAY = "https://gateway.example/v1"
+
+
+@pytest.mark.parametrize(
+    "section",
+    [
+        pytest.param({"apiKey": "k", "apiBase": _GATEWAY}, id="litellm-flat"),
+        pytest.param({"endpoints": [{"label": "only", "apiKey": "k", "apiBase": _GATEWAY}]}, id="litellm-one-endpoint"),
+        pytest.param(
+            {"endpoints": [{"label": "a", "apiKey": "k", "apiBase": _GATEWAY}, {"label": "b", "apiKey": "k"}]},
+            id="litellm-rotor",
+        ),
+        pytest.param({"apiKey": "k", "apiBase": _GATEWAY, "protocol": "responses"}, id="responses"),
+        pytest.param({"apiKey": "k", "apiBase": _GATEWAY, "protocol": "anthropic"}, id="anthropic-messages"),
+    ],
+)
+@pytest.mark.parametrize("opted_out", [True, False], ids=["tls-verify-off", "tls-verify-default"])
+def test_make_provider_hands_the_sections_tls_verify_to_every_client_it_builds(
+    monkeypatch: pytest.MonkeyPatch, section: dict, opted_out: bool
+) -> None:
+    """The model calls read `tls_verify` off the client the factory built, never off the config."""
+    from raven.config.schema import Config
+
+    if opted_out:
+        section = {**section, "tlsVerify": False}
+    config = Config.model_validate(
+        {"providers": {"custom": section}, "agents": {"defaults": {"model": "my-model", "provider": "custom"}}}
+    )
+    monkeypatch.setattr("raven.providers.factory.check_provider_credentials", lambda _config, _model=None: None)
+
+    provider = _helpers.make_provider(config)
+    clients = getattr(provider, "_inners", [provider])
+
+    assert clients
+    assert [client.tls_verify for client in clients] == [not opted_out] * len(clients)

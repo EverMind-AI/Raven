@@ -6,8 +6,8 @@ covers:
   built on an httpx client constructed with `verify=False`, on chat() and
   chat_stream(), one client across calls; the default keeps the `client` kwarg
   absent, so LiteLLM builds and verifies as before
-- the anthropic-messages provider builds its httpx clients with `verify=False`
-  only when the section asked
+- the anthropic-messages and openai-responses providers build their httpx
+  clients with `verify=False` only when the section asked
 - end to end, against a gateway signed by a root no store holds: an opted-out
   section reaches it on both of LiteLLM's client families (the OpenAI SDK and
   LiteLLM's own HTTP handler), chat and stream, sending the request once; a
@@ -350,6 +350,29 @@ async def test_a_section_that_did_not_opt_out_still_refuses_the_gateway(
 
     assert reply.finish_reason == "error"
     assert handler.requests == []
+
+
+@pytest.mark.parametrize("tls_verify", [False, True])
+async def test_the_responses_client_verifies_as_the_section_asked(
+    monkeypatch: pytest.MonkeyPatch, tls_verify: bool
+) -> None:
+    from raven.providers.openai_responses_provider import OpenAIResponsesProvider
+
+    built: list[dict[str, Any]] = []
+    real = httpx.AsyncClient
+
+    def spy(**kwargs: Any):
+        built.append(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", spy)
+    provider = OpenAIResponsesProvider(
+        api_key="test-key", api_base="https://127.0.0.1:8001/v1", default_model="gpt-5", tls_verify=tls_verify
+    )
+    provider.generation = GenerationSettings(timeout=600.0, stream_idle_timeout=180.0, first_byte_timeout=120.0)
+
+    await provider.chat(messages=[{"role": "user", "content": "hi"}], model="gpt-5")
+    assert built and built[-1].get("verify") is tls_verify
 
 
 @pytest.mark.parametrize("streamed", [False, True], ids=["chat", "stream"])
