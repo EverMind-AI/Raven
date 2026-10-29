@@ -742,6 +742,132 @@ def test_set_without_allowfrom_skips_gate(tmp_config: Path) -> None:
     assert _read(tmp_config)["channels"]["telegram"]["allowFrom"] == ["*"]
 
 
+def test_set_enabled_on_open_channel_requires_confirm(
+    tmp_config: Path, tty_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``set --enabled`` on a closed channel storing ``allow_from='*'`` asks
+    exactly as ``enable`` does; declining leaves the channel off."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "*"], input="y\n")
+    assert seed.exit_code == 0, seed.stdout
+    off = runner.invoke(app, ["channels", "disable", "telegram"])
+    assert off.exit_code == 0, off.stdout
+    calls: list[dict] = []
+
+    def fake_confirm(prompt, *args, **kwargs):
+        calls.append({"prompt": prompt, "default": kwargs.get("default", args[0] if args else None)})
+        return False
+
+    monkeypatch.setattr("raven.cli.channel_commands.typer.confirm", fake_confirm)
+    r = runner.invoke(app, ["channels", "set", "telegram", "--enabled"])
+    assert calls, "typer.confirm must run when set --enabled would turn on an open channel"
+    assert calls[0]["default"] is False
+    assert r.exit_code != 0
+    assert _read(tmp_config)["channels"]["telegram"]["enabled"] is False
+
+
+@pytest.mark.parametrize("enabled_args", [["--enabled"], ["--enabled", "true"]])
+def test_set_enabled_on_open_channel_nontty_refuses(tmp_config: Path, enabled_args: list[str]) -> None:
+    """Every spelling that resolves the write to enabled=True is refused on a
+    non-TTY when the stored allow list is open."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "*"])
+    assert seed.exit_code == 0, seed.stdout
+    runner.invoke(app, ["channels", "disable", "telegram"])
+    r = runner.invoke(app, ["channels", "set", "telegram", *enabled_args])
+    assert r.exit_code != 0
+    assert "Refusing to enable" in r.stdout
+    assert _read(tmp_config)["channels"]["telegram"]["enabled"] is False
+
+
+def test_set_enabled_on_restricted_channel_skips_gate(tmp_config: Path) -> None:
+    """Enabling a channel whose allow list is restricted needs no confirmation."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "alice"])
+    assert seed.exit_code == 0, seed.stdout
+    runner.invoke(app, ["channels", "disable", "telegram"])
+    r = runner.invoke(app, ["channels", "set", "telegram", "--enabled"])
+    assert r.exit_code == 0, r.stdout
+    assert "anyone" not in r.stdout
+    section = _read(tmp_config)["channels"]["telegram"]
+    assert section["enabled"] is True
+    assert section["allowFrom"] == ["alice"]
+
+
+def test_set_enabled_with_explicit_wildcard_nontty_warns(tmp_config: Path) -> None:
+    """Pairing --enabled with an explicit wildcard is the same acceptance
+    ``enable`` takes: warn, then write."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "alice"])
+    assert seed.exit_code == 0, seed.stdout
+    runner.invoke(app, ["channels", "disable", "telegram"])
+    r = runner.invoke(app, ["channels", "set", "telegram", "--enabled", "--allow-from", "*"])
+    assert r.exit_code == 0, r.stdout
+    assert "anyone" in r.stdout
+    section = _read(tmp_config)["channels"]["telegram"]
+    assert section["enabled"] is True
+    assert section["allowFrom"] == ["*"]
+
+
+@pytest.mark.parametrize("spelling", ["*", '["*"]', '["alice", "*"]', "*, alice"])
+def test_set_wildcard_spellings_trigger_gate(tmp_config: Path, spelling: str) -> None:
+    """Every allow_from spelling the writer accepts reaches the wildcard gate."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "alice"])
+    assert seed.exit_code == 0, seed.stdout
+    r = runner.invoke(app, ["channels", "set", "telegram", "--allow-from", spelling])
+    assert r.exit_code == 0, r.stdout
+    assert "anyone" in r.stdout
+    assert "*" in _read(tmp_config)["channels"]["telegram"]["allowFrom"]
+
+
+def test_set_json_wildcard_requires_confirm(tmp_config: Path, tty_mock, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The JSON array spelling must reach the interactive confirm too."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "alice"])
+    assert seed.exit_code == 0, seed.stdout
+    prompts: list[str] = []
+
+    def fake_confirm(prompt, *args, **kwargs):
+        prompts.append(prompt)
+        return False
+
+    monkeypatch.setattr("raven.cli.channel_commands.typer.confirm", fake_confirm)
+    r = runner.invoke(app, ["channels", "set", "telegram", "--allow-from", '["*"]'])
+    assert prompts
+    assert r.exit_code != 0
+    assert _read(tmp_config)["channels"]["telegram"]["allowFrom"] == ["alice"]
+
+
+def test_enable_json_wildcard_nontty_warns(tmp_config: Path) -> None:
+    """The same spelling gap is closed on this PR's twin, ``enable``."""
+    r = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", '["*"]'])
+    assert r.exit_code == 0, r.stdout
+    assert "anyone" in r.stdout
+    assert _read(tmp_config)["channels"]["telegram"]["allowFrom"] == ["*"]
+
+
+def test_set_open_allowfrom_prompt_is_verb_neutral(tmp_config: Path, tty_mock, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The shared prompt must not call a ``set`` an enable."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "alice"])
+    assert seed.exit_code == 0, seed.stdout
+    prompts: list[str] = []
+
+    def fake_confirm(prompt, *args, **kwargs):
+        prompts.append(prompt)
+        return False
+
+    monkeypatch.setattr("raven.cli.channel_commands.typer.confirm", fake_confirm)
+    runner.invoke(app, ["channels", "set", "telegram", "--allow-from", "*"])
+    assert prompts
+    assert "Enable" not in prompts[0]
+    assert "telegram" in prompts[0]
+
+
+def test_reset_warns_when_defaults_open_the_channel(tmp_config: Path) -> None:
+    """``reset --yes`` restores the open default; the unattended path must say so."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "alice"])
+    assert seed.exit_code == 0, seed.stdout
+    r = runner.invoke(app, ["channels", "reset", "telegram", "--yes"])
+    assert r.exit_code == 0, r.stdout
+    assert "anyone" in r.stdout
+    assert _read(tmp_config)["channels"]["telegram"]["allowFrom"] == ["*"]
+
+
 def test_enable_missing_token_exits_nonzero(tmp_config: Path) -> None:
     """Bare ``enable telegram`` (required --token unset) must error on the first
     line and exit non-zero; the schema table stays as follow-up detail."""
