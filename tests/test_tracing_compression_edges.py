@@ -8,6 +8,7 @@ degrade to "missing" instead of raising.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from raven.tracing import artifact_v2, message_pack
@@ -175,3 +176,136 @@ def test_turn_input_degrades_on_bad_json(tmp_path: Path) -> None:
     )
 
     assert selection._turn_input(turn, state) is None
+
+
+def test_stream_slice_and_slice_fallbacks(tmp_path: Path, monkeypatch) -> None:
+    store = TraceStore(tmp_path / "store")
+    sha1 = _publish(store)
+    message_pack.pack_messages(store.artifacts_dir)
+    pack = next(message_pack.packs_dir(store.artifacts_dir).glob("*.pack.zst"))
+    assert message_pack._stream_slice(pack, 0, 5) is not None
+    assert message_pack._stream_slice(pack, 10**9, 1) is None
+    assert message_pack._stream_slice(tmp_path / "missing", 0, 1) is None
+
+    monkeypatch.setattr(message_pack, "_cached_pack", lambda path: None)
+    assert message_pack.read_message(store.artifacts_dir, sha1) is not None
+
+
+def test_slice_refuses_an_out_of_range_entry(tmp_path: Path) -> None:
+    store = TraceStore(tmp_path)
+    sha1 = _publish(store)
+    message_pack.pack_messages(store.artifacts_dir)
+    index_file = message_pack.index_path(store.artifacts_dir)
+    data = json.loads(index_file.read_text(encoding="utf-8"))
+    data["messages"][sha1] = [data["messages"][sha1][0], 10**9, 10]
+    index_file.write_text(json.dumps(data), encoding="utf-8")
+
+    assert message_pack.read_message(store.artifacts_dir, sha1) is None
+
+
+def test_address_and_path_validation() -> None:
+    assert message_pack.read_message("/tmp/none", "not-a-sha") is None
+    assert message_pack.sha1_from_path("x.txt") is None
+    assert message_pack.sha1_from_path("_messages/zz/" + "a" * 40 + ".json") is None
+
+
+def test_relative_message_paths_are_resolved(tmp_path: Path, monkeypatch) -> None:
+    store = TraceStore(tmp_path / "store")
+    sha1 = _publish(store)
+    message_pack.pack_messages(store.artifacts_dir)
+    path = artifact_v2.message_path(store.artifacts_dir, sha1)
+    monkeypatch.chdir(tmp_path)
+    relative = path.relative_to(tmp_path)
+
+    assert message_pack.read_path(relative) is not None
+    assert message_pack.size_path(relative) is not None
+    assert message_pack.path_mtime(relative) is not None
+
+
+def test_path_mtime_of_an_address_that_was_not_packed(tmp_path: Path) -> None:
+    store = TraceStore(tmp_path)
+    sha1 = "b" * 40
+    assert message_pack.path_mtime(artifact_v2.message_path(store.artifacts_dir, sha1)) is None
+
+
+def test_walk_skips_hidden_files(tmp_path: Path) -> None:
+    store = TraceStore(tmp_path)
+    _publish(store)
+    (store.messages_dir / ".hidden").write_text("x", encoding="utf-8")
+
+    result = message_pack.pack_messages(store.artifacts_dir)
+
+    assert result.packed == 1
+
+
+def test_orphan_sweep_ignores_an_entry_it_cannot_remove(tmp_path: Path) -> None:
+    store = TraceStore(tmp_path)
+    _publish(store)
+    message_pack.pack_messages(store.artifacts_dir)
+    orphan = message_pack.packs_dir(store.artifacts_dir) / ("0" * 32 + ".pack.zst")
+    orphan.mkdir()
+    _publish(store, "second")
+
+    result = message_pack.pack_messages(store.artifacts_dir)
+
+    assert result.packed == 1
+    assert orphan.is_dir()
+
+
+def test_import_artifact_reports_a_file_it_cannot_read(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "src.bin"
+    source.write_bytes(b"raw")
+    monkeypatch.setattr(bundle, "_stored_bytes", lambda path: None)
+    missing: list[str] = []
+
+    result = bundle._import_artifact(str(source), tmp_path / "out", {}, missing, {}, tmp_path / "artifacts", [])
+
+    assert result is None
+    assert missing == [str(source)]
+
+
+def test_copy_resolved_rejects_invalid_json_again(tmp_path: Path) -> None:
+    source = tmp_path / "src.json"
+    source.write_text("[1, 2", encoding="utf-8")
+
+    assert bundle._copy_resolved(source, tmp_path / "out.json", tmp_path / "artifacts", []) is False
+
+
+def _turn(tmp_path: Path, artifact: Path) -> selection.TurnSummary:
+    return selection.TurnSummary(
+        trace_id="t",
+        span_id="s",
+        number=1,
+        start="2026-10-01T10:00:00+00:00",
+        end=None,
+        input_preview="",
+        in_progress=False,
+        input_artifact=str(artifact),
+        main_line=True,
+    )
+
+
+def test_turn_input_degrades_when_the_file_vanishes(tmp_path: Path, monkeypatch) -> None:
+    state = tmp_path / "state"
+    artifact = state / "logs" / "audit-artifacts" / "turn.input" / "2026-10-01" / "a.json"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text('{"content": "hi"}', encoding="utf-8")
+    original = Path.open
+
+    def failing(self, *args, **kwargs):
+        if self == artifact:
+            raise OSError("gone")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", failing)
+
+    assert selection._turn_input(_turn(tmp_path, artifact), state) is None
+
+
+def test_turn_input_degrades_on_an_oversized_plain_artifact(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    artifact = state / "logs" / "audit-artifacts" / "turn.input" / "2026-10-01" / "big.json"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("x" * (selection._INPUT_READ_LIMIT + 1), encoding="utf-8")
+
+    assert selection._turn_input(_turn(tmp_path, artifact), state) is None
