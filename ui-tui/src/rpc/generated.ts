@@ -3367,6 +3367,67 @@ export interface MachineRow {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RobotObservation".
+ */
+export interface RobotObservation {
+  status: 'reachable' | 'not_connected' | 'unknown' | 'error';
+  checked_at: string;
+  checked_epoch: number;
+  http_status: number | null;
+  detail: string;
+  observed: {
+    [k: string]: JsonValue;
+  };
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RobotRow".
+ */
+export interface RobotRow {
+  domain: 'personal';
+  name: string;
+  type: 'sparkbot' | 'http_device' | 'robot_dog' | 'agv' | 'mobile_manipulator' | 'other';
+  connection_mode: 'metadata' | 'http_status';
+  model: string;
+  location: string;
+  note: string;
+  status_url: string;
+  expected_project: string;
+  id: string;
+  revision: number;
+  status: 'reachable' | 'not_connected' | 'unknown' | 'error';
+  observation: {
+    status: 'reachable' | 'not_connected' | 'unknown' | 'error';
+    checked_at: string;
+    checked_epoch: number;
+    http_status: number | null;
+    detail: string;
+    observed: {
+      [k: string]: JsonValue;
+    };
+  } | null;
+  stale: boolean;
+  deleted_at: string | null;
+  updated_at: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RobotDraft".
+ */
+export interface RobotDraft {
+  domain: 'personal';
+  confirm_personal: boolean;
+  name: string;
+  type: 'sparkbot' | 'http_device' | 'robot_dog' | 'agv' | 'mobile_manipulator' | 'other';
+  connection_mode?: 'metadata' | 'http_status';
+  model?: string;
+  location?: string;
+  note?: string;
+  status_url?: string;
+  expected_project?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SessionListParams".
  */
 export interface SessionListParams {
@@ -8531,6 +8592,79 @@ export interface ImportedUploadResult {
    * When it was imported, ISO 8601 in UTC.
    */
   imported_at: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RobotsListParams".
+ */
+export interface RobotsListParams {
+  trash?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RobotsListResult".
+ */
+export interface RobotsListResult {
+  devices: RobotRow[];
+  status_ttl_seconds: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RobotsSaveParams".
+ */
+export interface RobotsSaveParams {
+  device: RobotDraft;
+  id?: string | null;
+  revision?: number | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RobotsSaveResult".
+ */
+export interface RobotsSaveResult {
+  device: RobotRow;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RobotsRemoveParams".
+ */
+export interface RobotsRemoveParams {
+  id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RobotsRemoveResult".
+ */
+export interface RobotsRemoveResult {
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RobotsRestoreParams".
+ */
+export interface RobotsRestoreParams {
+  id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RobotsRestoreResult".
+ */
+export interface RobotsRestoreResult {
+  device: RobotRow;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RobotsCheckParams".
+ */
+export interface RobotsCheckParams {
+  id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RobotsCheckResult".
+ */
+export interface RobotsCheckResult {
+  device: RobotRow;
 }
 
 // ---- Schema-name aliases for structurally-deduplicated types ----

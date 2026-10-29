@@ -18,7 +18,7 @@ import { gateway } from '../../rpc/gateway'
 import { MIN_FAMILY, familyOf, isOwnRow } from './catalogue'
 
 import type { ResultOf } from '../../rpc/generated'
-import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource, MachineRow, MachinesSource, Remedy } from './types'
+import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource, MachineRow, MachinesSource, Remedy, RobotsSource } from './types'
 
 /** One agent as `subagents.list` sends it. */
 export type ExtAgentRowWire = ResultOf<'subagents.list'>['rows'][number]
@@ -542,4 +542,12 @@ export const machinesSource: MachinesSource = {
     const got = await gateway().call('machines.local_keys', {})
     return Array.isArray(got.keys) ? got.keys.map(String) : []
   },
+}
+
+export const robotsSource: RobotsSource = {
+  list: async (trash) => (await gateway().call('robots.list', { trash })).devices,
+  save: async (device, id, revision) => (await gateway().call('robots.save', { device, ...(id ? { id, revision } : {}) })).device,
+  remove: async (id) => { await gateway().call('robots.remove', { id }) },
+  restore: async (id) => (await gateway().call('robots.restore', { id })).device,
+  check: async (id) => (await gateway().call('robots.check', { id })).device,
 }

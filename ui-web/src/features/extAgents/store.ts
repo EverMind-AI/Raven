@@ -49,10 +49,8 @@ export const disconnects = (p: Pending): boolean => p.op === 'toggle' && p.args.
 
 export interface ExtAgentsState {
   rows: ExtAgentRow[]
-  /* Which of the page's two modules is drawn: the agents, or the machines
-     they may run on. Both live here because they share the cards, the
-     sheets and the drawer; the hub's header switches between them. */
-  module: 'agents' | 'machines'
+  /* The agents, their execution servers, or non-executable robot registrations. */
+  module: 'agents' | 'machines' | 'robots'
   /* The one flag only the page can answer: which card is open. It is about what
      is drawn, so it does not belong to whichever source is answering. */
   sheet: string | null
@@ -287,6 +285,13 @@ export function openMachines(): void {
   void machines.load()
 }
 hub.onOpen('machines', openMachines)
+
+export function openRobots(): void {
+  set({ module: 'robots' })
+  hub.visited('robots')
+  page.show('extAgentsPage')
+}
+hub.onOpen('robots', openRobots)
 
 export function close(): void {
   page.show(null)
