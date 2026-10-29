@@ -855,19 +855,21 @@ The `after_send` hook chain still runs, with
 queued for the next reply, and the personalizer learns nothing; text a hook composes there is
 delivered as the reply, the closing row is filed as that text rather than the marker, and the turn
 is then not silent. A turn the message tool has already answered (`MessageTool.sent_in_turn`: a send
-to the turn's own chat that went out) is not a Silent Turn whatever it ends on -- its answer reached
+that went out, which the tool hands to the turn's own reader whatever chat the call names) is not a
+Silent Turn whatever it ends on -- its answer reached
 the reader, so no
 `SILENT_TURN` notice goes out; a marker it ends on is still filed `silent: true`, so a reload
 draws the muted line after the delivered reply where the live view drew none. The turn's last
 assistant row with text or tool calls -- the marker's row when it ends on one, else, after an empty
 closing reply, which is not stored, its last tool call, not necessarily the send; never a notice the
-runtime files after the turn -- carries that live verdict as `replied_via_tool`, and the two
+runtime files after the turn -- carries that live verdict, or that a tool delivered files the reader
+now holds, as `replied_via_tool`, and the two
 surfaces that read a stored turn -- the ACP replay, which draws it, and the session list, which
 orders sessions by it -- read the flag from
 one place (`session/turn_shape.py`) rather than guess it from the calls they can see, where a send
-that failed or went to another chat would look like an answer. A Silent Turn the runtime opened,
-which those two surfaces take back whole, files no unanswered-question notice after its marker, so
-none is left behind as an orphan; a person's Silent Turn, which they keep, still files it.
+that failed would look like an answer. A Silent Turn the runtime opened, which those two surfaces
+take back whole, files no unanswered-question notice after its marker, so none is left behind as an
+orphan; a person's Silent Turn, which they keep, still files it.
 Distinct from a `no_output` failure. A Silent Turn is the model saying nothing on purpose, so it
 succeeds; `no_output` is what a turn is failed with when its last reply was empty -- no text, no
 tool call, no reasoning -- once every retry was spent, or, with recovery switched off, when its

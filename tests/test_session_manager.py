@@ -1024,18 +1024,22 @@ def test_a_silent_runtime_turn_is_taken_back_after_a_turn_the_message_tool_answe
 
 
 def test_a_silent_runtime_turn_whose_message_call_answered_nobody_is_taken_back(tmp_path: Path):
-    """A message call is not an answer by being made. The live turn counted it only when it sent to
-    the turn's own chat and filed that verdict on the closing row; without it, a call that failed or
-    went to another chat leaves a Silent Turn, taken back whole."""
+    """A message call is not an answer by being made. The live turn counted it only when the send went
+    out and filed that verdict on the closing row; without it, a call that failed leaves a Silent Turn,
+    taken back whole."""
     mgr = SessionManager(tmp_path)
-    calls = [{"id": "m1", "type": "function", "function": {"name": "message", "arguments": '{"chat_id": "c2"}'}}]
+    calls = [{"id": "m1", "type": "function", "function": {"name": "message", "arguments": '{"content": "x"}'}}]
     session = mgr.get_or_create("cron:job02")
     session.add_message("user", "anything new?", timestamp="2026-06-10T10:00:00")
     session.add_message("assistant", "still compiling", timestamp="2026-06-10T10:00:05")
     session.add_message("user", "[Scheduled Task] check the build", timestamp="2026-06-10T11:00:00", origin="cron")
     session.add_message("assistant", "", timestamp="2026-06-10T11:00:02", tool_calls=calls)
     session.add_message(
-        "tool", "Message sent to cron:c2", timestamp="2026-06-10T11:00:03", tool_call_id="m1", name="message"
+        "tool",
+        "Error sending message: the channel is down",
+        timestamp="2026-06-10T11:00:03",
+        tool_call_id="m1",
+        name="message",
     )
     session.add_message("assistant", "[SILENT]", timestamp="2026-06-10T11:00:09", silent=True)
     mgr.save(session)
