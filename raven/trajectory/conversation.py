@@ -134,6 +134,18 @@ def _kind(name: str) -> str:
     return _KIND_BY_DOMAIN.get(name.split(".", 1)[0], "other")
 
 
+def _read_packed_message(target: Path, limit: int) -> tuple[str | None, str | None]:
+    """A message whose file was moved into a pack; the cap matches a file read."""
+    from raven.tracing import message_pack
+
+    data = message_pack.read_path(target, limit + 1)
+    if data is None:
+        return None, "artifact missing"
+    if len(data) > limit:
+        return data[:limit].decode("utf-8", errors="replace"), f"content over {limit // 1024} KiB — truncated"
+    return data.decode("utf-8", errors="replace"), None
+
+
 def _read_artifact(state: Path, path: str, limit: int = _ARTIFACT_LIMIT) -> tuple[str | None, str | None]:
     """(text, degraded reason); (None, reason) means unreadable.
 
@@ -151,6 +163,8 @@ def _read_artifact(state: Path, path: str, limit: int = _ARTIFACT_LIMIT) -> tupl
             return None, "artifact path outside the trace store"
         if target.exists() and not target.is_file():
             return None, "artifact is not a regular file"
+        if not target.exists():
+            return _read_packed_message(target, limit)
         with target.open("rb") as handle:
             head = handle.read(4)
             handle.seek(0)

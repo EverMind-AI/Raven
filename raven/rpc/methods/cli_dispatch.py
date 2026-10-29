@@ -103,6 +103,7 @@ _DISPATCH_BLACKLIST: set[tuple[str, ...]] = {
     # every other order.
     ("tracing", "compact"),  # full-store hash walk can outrun the RPC timeout — terminal-only
     ("tracing", "compress"),  # same walk (and, with --logs, a whole archive rewrite)
+    ("tracing", "pack-messages"),  # same walk over the message store
     # ``agent`` (no -m) — handled specially in _is_dispatch_compatible
 }
 
@@ -120,20 +121,20 @@ def _is_agent_repl(argv: list[str]) -> bool:
 
 
 def _is_tracing_maintenance(argv: list[str]) -> bool:
-    """Return True for a ``tracing compact`` or ``tracing compress`` invocation.
+    """Return True for a ``tracing compact``, ``compress`` or ``pack-messages`` invocation.
 
-    Both are positional arguments of the ``tracing`` leaf command, so Click
+    All three are positional arguments of the ``tracing`` leaf command, so Click
     accepts them after any option: ``tracing --dry-run compact`` and
     ``tracing --port 1 compress`` both run. The ``_DISPATCH_BLACKLIST`` prefix
     match compares fixed positions and therefore only sees the action at
     ``argv[1]``, so it alone would let those forms reach dispatch.
 
-    ``raven tracing compact`` / ``tracing compress`` -> terminal-only
-    ``raven tracing`` / ``tracing stop`` -> OK
+    ``raven tracing compact`` / ``tracing compress`` / ``tracing pack-messages``
+    -> terminal-only; ``raven tracing`` / ``tracing stop`` -> OK
     """
     if not argv or argv[0] != "tracing":
         return False
-    return any(action in argv[1:] for action in ("compact", "compress"))
+    return any(action in argv[1:] for action in ("compact", "compress", "pack-messages"))
 
 
 # Default timeout if caller did not override.

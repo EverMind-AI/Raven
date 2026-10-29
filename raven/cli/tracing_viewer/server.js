@@ -1061,9 +1061,69 @@ function isSafeArtifactPath(filePath) {
 // compares the two, so a rule changed there changes here in the same commit.
 const ARTIFACT_FORMAT_V2 = 'audit.artifact.v2';
 const MESSAGES_DIR = path.join(ARTIFACTS_DIR, '_messages');
+const MESSAGE_PACKS_DIR = path.join(ARTIFACTS_DIR, '_message_packs');
+const MESSAGE_PACK_INDEX = path.join(MESSAGE_PACKS_DIR, 'index.json');
+const MESSAGE_PACK_FORMAT = 'raven.message-pack-index.v1';
 const MSG_REF_KEY = '$msg';
 const TEXT_FIELDS = ['systemPrompt', 'prompt'];
 const SHA1_RE = /^[0-9a-f]{40}$/;
+
+// Mirror of raven/tracing/message_pack.py: message files can be moved into
+// per-chunk zstd packs, addressed by an sha1 -> (pack, plaintext offset,
+// length) index. The index is cached until its size or mtime changes, and a
+// few decompressed packs are kept because one conversation page rereads the
+// same pack for every message on it.
+let packIndexCache = { stamp: null, index: null };
+const packCache = new Map();
+
+function messagePackIndex() {
+  let stat;
+  try {
+    stat = fs.statSync(MESSAGE_PACK_INDEX);
+  } catch {
+    return null;
+  }
+  const stamp = `${stat.mtimeMs}:${stat.size}`;
+  if (packIndexCache.index && packIndexCache.stamp === stamp) return packIndexCache.index;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(MESSAGE_PACK_INDEX, 'utf8'));
+    if (!parsed || parsed.format !== MESSAGE_PACK_FORMAT || typeof parsed.messages !== 'object') return null;
+    packIndexCache = { stamp, index: parsed };
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function readPackedMessage(sha1) {
+  const index = messagePackIndex();
+  const entry = index && index.messages ? index.messages[sha1] : null;
+  if (!Array.isArray(entry) || entry.length !== 3) return null;
+  const packPath = path.join(MESSAGE_PACKS_DIR, entry[0]);
+  let plain = packCache.get(packPath);
+  if (!plain) {
+    try {
+      plain = readStored(packPath);
+    } catch {
+      return null;
+    }
+    if (plain.length <= 64 * 1024 * 1024) {
+      if (packCache.size >= 4) packCache.delete(packCache.keys().next().value);
+      packCache.set(packPath, plain);
+    }
+  }
+  return plain.subarray(entry[1], entry[1] + entry[2]);
+}
+
+function messageSha1FromPath(filePath) {
+  const name = path.basename(filePath);
+  if (!name.endsWith('.json')) return null;
+  const sha1 = name.slice(0, -'.json'.length);
+  if (!SHA1_RE.test(sha1)) return null;
+  if (path.basename(path.dirname(filePath)) !== sha1.slice(0, 2)) return null;
+  if (path.basename(path.dirname(path.dirname(filePath))) !== '_messages') return null;
+  return sha1;
+}
 
 function refSha1(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -1097,7 +1157,14 @@ function resolvePayload(payload) {
       try {
         value = JSON.parse(readStoredText(file));
       } catch {
-        value = { role: 'unknown', content: `[message blob missing: ${sha1}]` };
+        const packed = readPackedMessage(sha1);
+        try {
+          value = packed
+            ? JSON.parse(packed.toString('utf8'))
+            : { role: 'unknown', content: `[message blob missing: ${sha1}]` };
+        } catch {
+          value = { role: 'unknown', content: `[message blob missing: ${sha1}]` };
+        }
       }
       cache.set(sha1, value);
     }
@@ -1128,8 +1195,15 @@ function resolvePayload(payload) {
 
 function readArtifact(filePath) {
   if (!filePath || !isSafeArtifactPath(filePath)) return null;
-  if (!fs.existsSync(filePath)) return null;
-  const content = readStoredText(filePath);
+  let content = null;
+  if (fs.existsSync(filePath)) {
+    content = readStoredText(filePath);
+  } else {
+    const sha1 = messageSha1FromPath(filePath);
+    const packed = sha1 === null ? null : readPackedMessage(sha1);
+    if (packed) content = packed.toString('utf8');
+  }
+  if (content === null) return null;
   let parsed = null;
   try {
     parsed = resolvePayload(JSON.parse(content));

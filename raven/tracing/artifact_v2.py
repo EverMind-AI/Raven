@@ -7,7 +7,8 @@ the viewer's. The canonical serialization, the envelope key, the reference
 validation and the per-field resolution rules all live here and nowhere else.
 
 The wire shape itself is stdlib; the default reader decodes the store's zstd
-frames through :mod:`raven.tracing.codec`, imported lazily so this module
+frames through :mod:`raven.tracing.codec`, and falls back to a packed slice
+through :mod:`raven.tracing.message_pack`, both imported lazily so this module
 stays cheap to import.
 """
 
@@ -119,6 +120,13 @@ def _read_stored_text(path: Path) -> str:
     return plain.decode("utf-8")
 
 
+def _packed_text(artifacts_dir: Path | str, sha1: str) -> str | None:
+    from . import message_pack
+
+    packed = message_pack.read_message(artifacts_dir, sha1)
+    return None if packed is None else packed.decode("utf-8")
+
+
 def resolve_payload(
     payload: Any,
     artifacts_dir: Path | str,
@@ -142,9 +150,18 @@ def resolve_payload(
 
     def load(sha1: str) -> Any:
         if sha1 not in cache:
+            text: str | None = None
             try:
                 path = message_path(artifacts_dir, sha1)
                 text = _read_stored_text(path) if read is None else read(path)
+            except (OSError, ValueError):
+                text = None
+            if text is None and read is None:
+                # A packed address has no file; the other encoding of the same
+                # store is a pack slice. A caller-supplied read owns its own
+                # fallback, because it may bound or confine the read.
+                text = _packed_text(artifacts_dir, sha1)
+            try:
                 if text is None:
                     raise OSError(f"blob {sha1} could not be read")
                 cache[sha1] = json.loads(text)

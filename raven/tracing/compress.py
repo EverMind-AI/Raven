@@ -26,6 +26,7 @@ from typing import Iterator
 
 from . import artifact_v2
 from .codec import compress_bytes, is_compressed
+from .message_pack import PACKS_DIR_NAME
 from .store import BLOBS_DIR_NAME
 
 
@@ -97,12 +98,13 @@ def compress(artifacts_dir: Path, *, dry_run: bool = False) -> CompressResult:
         return result
     blobs_dir = artifacts_dir / BLOBS_DIR_NAME
     messages_dir = artifact_v2.messages_dir(artifacts_dir)
+    packs_dir = artifacts_dir / PACKS_DIR_NAME
 
     # One walk to learn which artifact paths share each blob inode; the links
     # must be moved after the blob's own name is swapped.
     links: dict[int, list[Path]] = {}
     for path in _files(artifacts_dir):
-        if path.is_relative_to(blobs_dir) or path.is_relative_to(messages_dir):
+        if path.is_relative_to(blobs_dir) or path.is_relative_to(messages_dir) or path.is_relative_to(packs_dir):
             continue
         try:
             inode = path.stat().st_ino

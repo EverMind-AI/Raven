@@ -349,11 +349,14 @@ def read_store_file(path: Path, root: Path) -> tuple[bytes, float] | None:
     """
     try:
         target = Path(path).resolve()
-        if not target.is_relative_to(root):
-            return None
-        fd = os.open(target, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
     except (OSError, ValueError):
         return None
+    if not target.is_relative_to(root):
+        return None
+    try:
+        fd = os.open(target, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
+    except OSError:
+        return _read_packed_store_file(target, root)
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
@@ -370,6 +373,23 @@ def read_store_file(path: Path, root: Path) -> tuple[bytes, float] | None:
     finally:
         if fd != -1:
             os.close(fd)
+
+
+def _read_packed_store_file(target: Path, root: Path) -> tuple[bytes, float] | None:
+    """A message whose file moved into a pack, confined to the same root."""
+    from raven.tracing import message_pack
+
+    artifacts_dir = target.parent.parent.parent
+    try:
+        if not message_pack.packs_dir(artifacts_dir).resolve().is_relative_to(Path(root).resolve()):
+            return None
+    except (OSError, ValueError):
+        return None
+    data = message_pack.read_path(target)
+    mtime = message_pack.path_mtime(target)
+    if data is None or mtime is None:
+        return None
+    return data, mtime
 
 
 def _read_session(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any]]] | None:

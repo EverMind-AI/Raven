@@ -455,3 +455,20 @@ def test_tracing_compress_logs_dry_run_reports_and_writes_nothing(tmp_path, monk
     assert r.exit_code == 0
     assert "logs 1: compressed 1" in r.output
     assert archive.read_text(encoding="utf-8") == '{"spanId": "s"}\n'
+
+
+def test_tracing_pack_messages_packs_the_message_store(tmp_path, monkeypatch):
+    from raven.tracing import artifact_v2
+
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    message = {"role": "user", "content": "hi"}
+    sha1 = artifact_v2.message_sha1(message)
+    path = artifact_v2.message_path(tmp_path / "logs" / "audit-artifacts", sha1)
+    path.parent.mkdir(parents=True)
+    path.write_text(artifact_v2.message_text(message), encoding="utf-8")
+
+    r = runner.invoke(app, ["tracing", "pack-messages"])
+
+    assert r.exit_code == 0
+    assert "packed 1" in r.output
+    assert not path.exists()

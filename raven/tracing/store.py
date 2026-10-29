@@ -335,7 +335,7 @@ class TraceStore:
                 sha1 = artifact_v2.message_sha1(item)
                 blob = artifact_v2.message_path(self.artifacts_dir, sha1)
                 payload = compress_bytes(text.encode("utf-8"))
-                if not blob.exists():
+                if not blob.exists() and not self._is_packed(sha1):
                     self._publish_blob(blob, payload, sha1)
                 if blob.exists() and not self._blob_is_intact(blob, sha1):
                     self._repair_blob(blob, payload, sha1)
@@ -343,6 +343,12 @@ class TraceStore:
             except OSError:
                 refs.append(item)
         return refs
+
+    def _is_packed(self, sha1: str) -> bool:
+        """Whether the message store's pack index already holds this address."""
+        from . import message_pack
+
+        return message_pack.message_size(self.artifacts_dir, sha1) is not None
 
     @staticmethod
     def artifact_attributes(prefix: str, artifact: dict[str, Any] | None) -> dict[str, Any]:

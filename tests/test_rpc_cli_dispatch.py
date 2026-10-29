@@ -258,12 +258,12 @@ def test_channels_login_normal_channels_dispatch():
 
 
 def test_blacklist_full_coverage():
-    """10-entry blacklist (5 original + tui + onboard + upgrade + 2 tracing maintenance).
+    """11-entry blacklist (5 original + tui + onboard + upgrade + 3 tracing maintenance).
 
     `tui` blocks recursive Ink+Node spawn; `onboard` blocks prompt_toolkit
     wizard stdin hijack; `upgrade` blocks replacing the active Raven process;
-    the `tracing` maintenance actions block a full-store walk that can outrun
-    the RPC timeout with no cancellation of the backing thread. All are
+    the three `tracing` maintenance actions block a full-store walk that can
+    outrun the RPC timeout with no cancellation of the backing thread. All are
     necessary because reflection will otherwise let them through.
     """
     from raven.rpc.methods.cli_dispatch import _DISPATCH_BLACKLIST
@@ -279,9 +279,10 @@ def test_blacklist_full_coverage():
         ("upgrade",),
         ("tracing", "compact"),
         ("tracing", "compress"),
+        ("tracing", "pack-messages"),
     }
     assert _DISPATCH_BLACKLIST == expected_entries, (
-        f"blacklist drift; expected 10 prefix tuples (+ agent REPL special-case), got {_DISPATCH_BLACKLIST}"
+        f"blacklist drift; expected 11 prefix tuples (+ agent REPL special-case), got {_DISPATCH_BLACKLIST}"
     )
     # Hard-reject probe (prefix match)
     assert _is_dispatch_compatible(["tui"]) is False
@@ -293,6 +294,7 @@ def test_blacklist_full_coverage():
     assert _is_dispatch_compatible(["tracing", "compact"]) is False
     assert _is_dispatch_compatible(["tracing", "compact", "--dry-run"]) is False  # prefix
     assert _is_dispatch_compatible(["tracing", "compress"]) is False
+    assert _is_dispatch_compatible(["tracing", "pack-messages"]) is False
     # Bare `tracing` and its other action stay dispatchable -- only the
     # maintenance actions are terminal-only.
     assert _is_dispatch_compatible(["tracing"]) is True
@@ -338,6 +340,27 @@ def test_tracing_compress_is_rejected_whatever_the_option_order():
         ["tracing", "-p", "1", "compress"],
     ):
         assert _is_dispatch_compatible(argv) is False, argv
+
+
+def test_tracing_pack_messages_is_rejected_whatever_the_option_order():
+    """``pack-messages`` walks the whole message store and deletes files.
+
+    Like the other maintenance actions it is positional, so Click accepts it
+    after any option and the fixed-position blacklist prefix would miss it.
+    """
+    for argv in (
+        ["tracing", "pack-messages"],
+        ["tracing", "pack-messages", "--dry-run"],
+        ["tracing", "--dry-run", "pack-messages"],
+        ["tracing", "--port", "1", "pack-messages"],
+        ["tracing", "-p", "1", "pack-messages"],
+    ):
+        assert _is_dispatch_compatible(argv) is False, argv
+
+
+# ---------------------------------------------------------------------------
+# Reflection-based dispatch compat (_DISPATCH_WHITELIST deleted)
+# ---------------------------------------------------------------------------
 
 
 def test_dispatch_compatible_via_reflection_newly_active():

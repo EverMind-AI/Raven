@@ -337,6 +337,28 @@ def _run_compress(*, dry_run: bool, logs: bool = False) -> None:
         _print_skipped(log_result.errors)
 
 
+def _run_pack_messages(*, dry_run: bool) -> None:
+    from raven.tracing.message_pack import pack_messages
+    from raven.tracing.store import TraceStore
+
+    artifacts_dir = TraceStore(tracing_config.state_dir()).artifacts_dir
+    if dry_run:
+        console.print("[dim]dry run - nothing is written[/dim]")
+    if not artifacts_dir.is_dir():
+        console.print(f"[yellow]No artifacts at {escape(str(artifacts_dir))}.[/yellow]")
+        return
+    result = pack_messages(artifacts_dir, dry_run=dry_run)
+    console.print(
+        f"messages {result.scanned}: packed {result.packed}, already {result.already}, "
+        f"packs {result.packs}, removed files {result.removed}"
+    )
+    console.print(
+        f"{result.bytes_before / (1024 * 1024):.1f} MB -> {result.bytes_after / (1024 * 1024):.1f} MB, "
+        f"saved {result.saved / (1024 * 1024):.1f} MB"
+    )
+    _print_skipped(result.errors)
+
+
 def _print_skipped(errors: list[str]) -> None:
     for message in errors[:10]:
         console.print(f"[yellow]skipped:[/yellow] {escape(message)}")
@@ -360,7 +382,8 @@ def register(app: typer.Typer) -> None:
             help=(
                 "Optional action: 'stop' shuts down the background viewer; "
                 "'compact' folds duplicate artifacts; 'compress' rewrites payloads as zstd "
-                "(--logs adds the rotated span and event logs; both terminal only, not available from the TUI)."
+                "(--logs adds the rotated span and event logs); 'pack-messages' moves message blobs "
+                "into packs. All but 'stop' are terminal only, not available from the TUI."
             ),
         ),
         port: int = typer.Option(None, "--port", "-p", help="Port to bind (default: config or 4318)."),
@@ -368,7 +391,9 @@ def register(app: typer.Typer) -> None:
             False, "--foreground", "-f", help="Run the viewer in the foreground (blocks; Ctrl-C to stop)."
         ),
         dry_run: bool = typer.Option(
-            False, "--dry-run", help="With 'compact' or 'compress': report what would change without writing."
+            False,
+            "--dry-run",
+            help="With 'compact', 'compress' or 'pack-messages': report what would change without writing.",
         ),
         logs: bool = typer.Option(False, "--logs", help="With 'compress': also compress rotated span and event logs."),
     ) -> None:
@@ -379,11 +404,17 @@ def register(app: typer.Typer) -> None:
         if action == "compress":
             _run_compress(dry_run=dry_run, logs=logs)
             return
+        if action == "pack-messages":
+            _run_pack_messages(dry_run=dry_run)
+            return
         if action == "stop":
             _stop_viewer()
             return
         if action is not None:
-            console.print(f"[red]Unknown action '{escape(action)}'.[/red] Supported actions: stop, compact, compress")
+            console.print(
+                f"[red]Unknown action '{escape(action)}'.[/red] "
+                "Supported actions: stop, compact, compress, pack-messages"
+            )
             raise typer.Exit(2)
         bind_port = port if port is not None else tracing_config.port()
         if foreground:

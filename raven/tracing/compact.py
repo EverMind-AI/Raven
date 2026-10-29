@@ -53,6 +53,7 @@ import zstandard
 
 from raven.tracing import artifact_v2
 from raven.tracing.codec import ZSTD_MAGIC
+from raven.tracing.message_pack import PACKS_DIR_NAME
 from raven.tracing.store import BLOBS_DIR_NAME
 
 # Directories under ``audit-artifacts/`` that are content-addressed stores, not
@@ -69,7 +70,7 @@ _TMP_SUFFIX = ".compact.tmp"
 _MAX_ERRORS = 500
 
 
-_CONTENT_STORES = frozenset({BLOBS_DIR_NAME, artifact_v2.MESSAGES_DIR_NAME})
+_CONTENT_STORES = frozenset({BLOBS_DIR_NAME, artifact_v2.MESSAGES_DIR_NAME, PACKS_DIR_NAME})
 
 
 @dataclass

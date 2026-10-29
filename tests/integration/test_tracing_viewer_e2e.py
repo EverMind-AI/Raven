@@ -162,6 +162,38 @@ def test_reads_a_compressed_archive(tmp_path):
         assert _session_ids(_get(port, "/api/data")) == {"live-session", "archived-session"}
 
 
+def test_artifact_endpoint_resolves_a_packed_message(tmp_path):
+    from raven.tracing import artifact_v2
+    from raven.tracing.message_pack import pack_messages
+
+    logs = tmp_path / "logs"
+    artifacts = logs / "audit-artifacts"
+    message = {"role": "user", "content": "packed"}
+    sha1 = artifact_v2.message_sha1(message)
+    path = artifact_v2.message_path(artifacts, sha1)
+    path.parent.mkdir(parents=True)
+    path.write_text(artifact_v2.message_text(message), encoding="utf-8")
+    shell = artifacts / "llm.input" / "2026-08-01" / "a.json"
+    shell.parent.mkdir(parents=True)
+    shell.write_text(
+        json.dumps(
+            {
+                "artifactFormat": artifact_v2.ARTIFACT_FORMAT,
+                "messages": [artifact_v2.make_ref(sha1)],
+                "prompt": artifact_v2.make_ref(sha1),
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert pack_messages(artifacts).packed == 1
+
+    with _viewer(tmp_path) as port:
+        found = _get(port, "/api/artifact?path=" + urllib.parse.quote(str(shell), safe=""))
+
+    assert found["parsed"]["messages"] == [message]
+    assert found["parsed"]["prompt"] == "packed"
+
+
 def test_ignores_a_log_planted_outside_the_active_and_archive_paths(tmp_path):
     logs = tmp_path / "logs"
     _write_spans(logs / "audit-spans.log", [_span("live-session", "span-live")])

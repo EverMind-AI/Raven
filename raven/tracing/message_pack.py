@@ -1,0 +1,428 @@
+"""Message blobs packed into a few large zstd frames.
+
+The content-addressed message store writes one small file per distinct message.
+Most messages are a few kilobytes, so a file system spends a block on each and
+the store is mostly block slack: on a developer machine 40 thousand messages
+held 224 MB while their payloads were a fraction of that. Packing concatenates
+message texts into multi-megabyte frames and keeps an ``sha1 -> (pack, offset,
+length)`` index beside them. A reader that finds no file for an address reads
+its slice instead.
+
+Packing is a migration, not a writer change: :func:`pack_messages` appends the
+files to packs, writes the index naming their slices, and only then deletes the
+files. A store that has never been packed reads exactly as before, a
+half-packed one resolves each address from whichever of the two holds it, and a
+crash at any point leaves every address readable.
+
+An index entry stores plaintext offsets, so a reader can slice a pack without
+knowing how the frame compressed it. The index and a few decompressed packs are
+cached per process: a conversation page rereads the same pack for every message
+it shows.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import threading
+import uuid
+from collections import OrderedDict
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Iterator
+
+import zstandard
+
+from .codec import compress_bytes, read_plaintext
+
+PACKS_DIR_NAME = "_message_packs"
+MESSAGES_DIR_NAME = "_messages"
+#: The message directory's name is a literal rather than an import of
+#: ``artifact_v2``: that module resolves packed addresses back through this
+#: one, so importing it here would close an import cycle. The pack test pins
+#: the two constants equal.
+INDEX_NAME = "index.json"
+PACK_FORMAT = "raven.message-pack.v1"
+INDEX_FORMAT = "raven.message-pack-index.v1"
+PACK_TARGET_BYTES = 8 * 1024 * 1024
+
+#: Decompressed packs kept by one process. Sized for a few conversation pages;
+#: a pack larger than the whole budget is streamed on every read instead.
+CACHE_BYTES = 32 * 1024 * 1024
+
+_SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def packs_dir(artifacts_dir: Path | str) -> Path:
+    return Path(artifacts_dir) / PACKS_DIR_NAME
+
+
+def index_path(artifacts_dir: Path | str) -> Path:
+    return packs_dir(artifacts_dir) / INDEX_NAME
+
+
+@dataclass(frozen=True)
+class _Index:
+    messages: dict[str, tuple[str, int, int]]
+    packs: dict[str, int]
+
+
+_INDEX_CACHE: dict[Path, tuple[tuple[int, int], _Index]] = {}
+_INDEX_LOCK = threading.Lock()
+_PACK_CACHE: "OrderedDict[Path, bytes]" = OrderedDict()
+_PACK_CACHE_BYTES = 0
+_PACK_LOCK = threading.Lock()
+
+
+def _evict_index(path: Path) -> None:
+    with _INDEX_LOCK:
+        _INDEX_CACHE.pop(path, None)
+
+
+def load_index(artifacts_dir: Path | str) -> _Index | None:
+    """The artifact store's pack index, cached until the file changes."""
+    target = index_path(artifacts_dir)
+    try:
+        stat_result = target.stat()
+    except OSError:
+        return None
+    stamp = (stat_result.st_mtime_ns, stat_result.st_size)
+    with _INDEX_LOCK:
+        cached = _INDEX_CACHE.get(target)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+    try:
+        raw = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict) or raw.get("format") != INDEX_FORMAT:
+        return None
+    messages_raw = raw.get("messages")
+    packs_raw = raw.get("packs")
+    if not isinstance(messages_raw, dict) or not isinstance(packs_raw, dict):
+        return None
+    messages: dict[str, tuple[str, int, int]] = {}
+    for sha1, entry in messages_raw.items():
+        if not isinstance(sha1, str) or not _SHA1_RE.match(sha1):
+            continue
+        if (
+            isinstance(entry, list)
+            and len(entry) == 3
+            and isinstance(entry[0], str)
+            and all(isinstance(value, int) and not isinstance(value, bool) for value in entry[1:])
+        ):
+            messages[sha1] = (entry[0], entry[1], entry[2])
+    packs: dict[str, int] = {}
+    for name, info in packs_raw.items():
+        if not isinstance(name, str) or not isinstance(info, dict):
+            continue
+        size = info.get("bytes", 0)
+        if isinstance(size, int) and not isinstance(size, bool):
+            packs[name] = size
+    index = _Index(messages=messages, packs=packs)
+    with _INDEX_LOCK:
+        _INDEX_CACHE[target] = (stamp, index)
+    return index
+
+
+def _cached_pack(path: Path) -> bytes | None:
+    global _PACK_CACHE_BYTES
+    with _PACK_LOCK:
+        cached = _PACK_CACHE.get(path)
+        if cached is not None:
+            _PACK_CACHE.move_to_end(path)
+            return cached
+    try:
+        data = path.read_bytes()
+        plain = read_plaintext(data)
+    except OSError:
+        return None
+    if plain is None:
+        return None
+    with _PACK_LOCK:
+        if len(plain) <= CACHE_BYTES:
+            _PACK_CACHE[path] = plain
+            _PACK_CACHE_BYTES += len(plain)
+            while _PACK_CACHE_BYTES > CACHE_BYTES and len(_PACK_CACHE) > 1:
+                _, dropped = _PACK_CACHE.popitem(last=False)
+                _PACK_CACHE_BYTES -= len(dropped)
+    return plain
+
+
+def _stream_slice(path: Path, offset: int, length: int) -> bytes | None:
+    try:
+        with (
+            path.open("rb") as handle,
+            zstandard.ZstdDecompressor().stream_reader(handle, read_across_frames=False) as reader,
+        ):
+            remaining = offset
+            while remaining > 0:
+                chunk = reader.read(min(remaining, 1 << 20))
+                if not chunk:
+                    return None
+                remaining -= len(chunk)
+            return reader.read(length)
+    except (OSError, zstandard.ZstdError):
+        return None
+
+
+def _slice(artifacts_dir: Path, sha1: str, limit: int | None) -> bytes | None:
+    index = load_index(artifacts_dir)
+    if index is None:
+        return None
+    located = index.messages.get(sha1)
+    if located is None:
+        return None
+    name, offset, length = located
+    want = length if limit is None else min(length, limit)
+    pack = packs_dir(artifacts_dir) / name
+    plain = _cached_pack(pack)
+    if plain is None:
+        data = _stream_slice(pack, offset, want)
+        if data is None or len(data) != want:
+            return None
+        return data
+    if offset < 0 or offset + length > len(plain):
+        return None
+    return plain[offset : offset + want]
+
+
+def read_message(artifacts_dir: Path | str, sha1: str, limit: int | None = None) -> bytes | None:
+    """One packed message's plaintext, or None when the index does not hold it."""
+    if not _SHA1_RE.match(sha1):
+        return None
+    return _slice(Path(artifacts_dir), sha1, limit)
+
+
+def message_size(artifacts_dir: Path | str, sha1: str) -> int | None:
+    index = load_index(artifacts_dir)
+    if index is None:
+        return None
+    located = index.messages.get(sha1)
+    return located[2] if located is not None else None
+
+
+def sha1_from_path(path: Path | str) -> str | None:
+    """The address a message-blob path names, or None when it is not one."""
+    path = Path(path)
+    if not path.name.endswith(".json"):
+        return None
+    sha1 = path.name[: -len(".json")]
+    if not _SHA1_RE.match(sha1):
+        return None
+    if path.parent.name != sha1[:2] or path.parent.parent.name != MESSAGES_DIR_NAME:
+        return None
+    return sha1
+
+
+def _artifacts_from_path(path: Path) -> Path | None:
+    if sha1_from_path(path) is None:
+        return None
+    return path.parent.parent.parent
+
+
+def read_path(path: Path | str, limit: int | None = None) -> bytes | None:
+    """The packed slice a message-file path would have held, or None."""
+    target = Path(path)
+    if not target.is_absolute():
+        target = target.resolve()
+    artifacts_dir = _artifacts_from_path(target)
+    sha1 = sha1_from_path(target)
+    if artifacts_dir is None or sha1 is None:
+        return None
+    return _slice(artifacts_dir, sha1, limit)
+
+
+def size_path(path: Path | str) -> int | None:
+    target = Path(path)
+    if not target.is_absolute():
+        target = target.resolve()
+    artifacts_dir = _artifacts_from_path(target)
+    sha1 = sha1_from_path(target)
+    if artifacts_dir is None or sha1 is None:
+        return None
+    return message_size(artifacts_dir, sha1)
+
+
+def path_mtime(path: Path | str) -> float | None:
+    """When the slice's pack was written, for callers that need an mtime."""
+    target = Path(path)
+    if not target.is_absolute():
+        target = target.resolve()
+    artifacts_dir = _artifacts_from_path(target)
+    if artifacts_dir is None:
+        return None
+    index = load_index(artifacts_dir)
+    sha1 = sha1_from_path(target)
+    if index is None or sha1 is None:
+        return None
+    located = index.messages.get(sha1)
+    if located is None:
+        return None
+    try:
+        return (packs_dir(artifacts_dir) / located[0]).stat().st_mtime
+    except OSError:
+        return None
+
+
+def _walk(root: Path) -> Iterator[Path]:
+    for directory, _, names in os.walk(root):
+        for name in names:
+            if name.startswith("."):
+                continue
+            path = Path(directory) / name
+            if path.is_file():
+                yield path
+
+
+def _atomic_write_index(artifacts_dir: Path, index: _Index) -> None:
+    payload = {
+        "format": INDEX_FORMAT,
+        "packs": {name: {"bytes": size} for name, size in index.packs.items()},
+        "messages": {sha1: list(entry) for sha1, entry in index.messages.items()},
+    }
+    target = index_path(artifacts_dir)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.parent / f".{target.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    try:
+        tmp.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+        os.replace(tmp, target)
+    finally:
+        tmp.unlink(missing_ok=True)
+    _evict_index(target)
+
+
+@dataclass
+class PackResult:
+    """What one packing pass saw, did, and saved."""
+
+    scanned: int = 0
+    packed: int = 0
+    already: int = 0
+    packs: int = 0
+    removed: int = 0
+    bytes_before: int = 0
+    bytes_after: int = 0
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def saved(self) -> int:
+        return max(self.bytes_before - self.bytes_after, 0)
+
+
+def pack_messages(
+    artifacts_dir: Path | str, *, dry_run: bool = False, target_bytes: int = PACK_TARGET_BYTES
+) -> PackResult:
+    """Move unpacked message files into packs; see the module doc.
+
+    Idempotent: an address already in the index is counted and left alone (its
+    file is removed if a previous run left one behind). A dry run compresses in
+    memory to report the real saving and writes or deletes nothing.
+    """
+    artifacts_dir = Path(artifacts_dir)
+    messages_dir = artifacts_dir / MESSAGES_DIR_NAME
+    result = PackResult()
+    if not messages_dir.is_dir():
+        return result
+    existing = load_index(artifacts_dir)
+    known = dict(existing.messages) if existing is not None else {}
+    packs = dict(existing.packs) if existing is not None else {}
+    added: dict[str, tuple[str, int, int]] = {}
+    pending: list[tuple[str, bytes]] = []
+    pending_bytes = 0
+    candidates: list[tuple[Path, str]] = []
+
+    def flush() -> None:
+        nonlocal pending, pending_bytes
+        if not pending:
+            return
+        payload = b"".join(data for _, data in pending)
+        packed = compress_bytes(payload)
+        name = f"{uuid.uuid4().hex}.pack.zst"
+        offset = 0
+        for sha1, data in pending:
+            added[sha1] = (name, offset, len(data))
+            offset += len(data)
+        result.bytes_after += len(packed)
+        result.packs += 1
+        if not dry_run:
+            target = packs_dir(artifacts_dir) / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.parent / f".{name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+            try:
+                tmp.write_bytes(packed)
+                os.replace(tmp, target)
+            finally:
+                tmp.unlink(missing_ok=True)
+        packs[name] = len(payload)
+        pending = []
+        pending_bytes = 0
+
+    for path in sorted(_walk(messages_dir)):
+        sha1 = path.name[: -len(".json")] if path.name.endswith(".json") else ""
+        if not _SHA1_RE.match(sha1) or path.name != f"{sha1}.json":
+            continue
+        result.scanned += 1
+        candidates.append((path, sha1))
+        if sha1 in known:
+            result.already += 1
+            continue
+        try:
+            data = read_plaintext(path.read_bytes())
+        except OSError as exc:
+            result.errors.append(f"{path}: {exc}")
+            continue
+        if data is None:
+            result.errors.append(f"{path}: corrupt compressed message")
+            continue
+        pending.append((sha1, data))
+        pending_bytes += len(data)
+        result.packed += 1
+        result.bytes_before += len(data)
+        if pending_bytes >= target_bytes:
+            flush()
+    flush()
+
+    if added and not dry_run:
+        try:
+            _atomic_write_index(artifacts_dir, _Index(messages={**known, **added}, packs=packs))
+        except OSError as exc:
+            result.errors.append(f"{index_path(artifacts_dir)}: {exc}")
+            return result
+        for path, sha1 in candidates:
+            if sha1 not in known and sha1 not in added:
+                continue
+            try:
+                path.unlink()
+                result.removed += 1
+            except OSError as exc:
+                result.errors.append(f"{path}: {exc}")
+        for orphan in packs_dir(artifacts_dir).glob("*.pack.zst"):
+            if orphan.name not in packs:
+                try:
+                    orphan.unlink()
+                except OSError:
+                    pass
+    return result
+
+
+__all__ = [
+    "CACHE_BYTES",
+    "INDEX_FORMAT",
+    "MESSAGES_DIR_NAME",
+    "PACKS_DIR_NAME",
+    "PACK_FORMAT",
+    "PACK_TARGET_BYTES",
+    "PackResult",
+    "index_path",
+    "load_index",
+    "message_size",
+    "pack_messages",
+    "packs_dir",
+    "path_mtime",
+    "read_message",
+    "read_path",
+    "sha1_from_path",
+    "size_path",
+]
