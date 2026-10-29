@@ -320,6 +320,48 @@ async def test_minimize_rejects_unreplayable_bundles(tmp_path) -> None:
         minimize_bundle(tmp_path / "nowhere", tmp_path / "cassette3", secrets=[])
 
 
+async def test_minimize_drops_what_an_external_agent_did_in_its_own_run(tmp_path) -> None:
+    """An external agent's steps are recorded one-sided -- a message without
+    the request that produced it, a call whose result never came back -- and
+    replay never asks for them, so they neither block minimizing nor survive
+    into the cassette. Everything under the run goes, however deep."""
+    bundle = _make_bundle(tmp_path)
+    spans = (bundle / "spans.jsonl").read_text(encoding="utf-8")
+    run = {**_span("subagent.external", "ext-0", {}), "parentSpanId": "tool-0"}
+    said = {
+        **_span(
+            "llm.call",
+            "step-0",
+            {"llm.output.artifact_path": _write_artifact(bundle, "step-0.json", _llm_output("hm"))},
+        ),
+        "parentSpanId": "ext-0",
+    }
+    ran = {
+        **_span(
+            "tool.call",
+            "step-1",
+            {"tool.input.artifact_path": _write_artifact(bundle, "step-1.json", {"name": "read", "params": "{}"})},
+        ),
+        "parentSpanId": "ext-0",
+    }
+    nested = {
+        **_span(
+            "llm.call", "step-2", {"llm.output.artifact_path": _write_artifact(bundle, "step-2.json", _llm_output())}
+        ),
+        "parentSpanId": "step-1",
+    }
+    (bundle / "spans.jsonl").write_text(
+        spans + "".join(json.dumps(s) + "\n" for s in (run, said, ran, nested)), encoding="utf-8"
+    )
+
+    report = minimize_bundle(bundle, tmp_path / "cassette", secrets=[])
+
+    kept = [json.loads(x) for x in (tmp_path / "cassette" / "spans.jsonl").read_text().splitlines()]
+    assert {s["spanId"] for s in kept} == {"turn-0", "llm-0", "tool-0"}
+    assert (report.llm_calls, report.tool_calls) == (1, 1)
+    assert not any((tmp_path / "cassette" / "artifacts" / f"step-{n}.json").exists() for n in range(3))
+
+
 # ── session slice ──────────────────────────────────────────────────────
 
 
