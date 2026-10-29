@@ -375,6 +375,30 @@ async def test_the_responses_client_verifies_as_the_section_asked(
     assert built and built[-1].get("verify") is tls_verify
 
 
+@pytest.mark.parametrize("tls_verify", [False, True])
+async def test_the_azure_client_verifies_as_the_section_asked(
+    monkeypatch: pytest.MonkeyPatch, tls_verify: bool
+) -> None:
+    """`azure` is another provider the factory builds, and its call client reads the same field."""
+    from raven.providers.azure_openai_provider import AzureOpenAIProvider
+
+    built: list[dict[str, Any]] = []
+    real = httpx.AsyncClient
+
+    def spy(**kwargs: Any):
+        built.append(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", spy)
+    provider = AzureOpenAIProvider(
+        api_key="test-key", api_base="https://127.0.0.1:8001", default_model="gpt-4o", tls_verify=tls_verify
+    )
+    provider.generation = GenerationSettings(timeout=600.0, stream_idle_timeout=180.0, first_byte_timeout=120.0)
+
+    await provider.chat(messages=[{"role": "user", "content": "hi"}], model="gpt-4o")
+    assert built and built[-1].get("verify") is tls_verify
+
+
 @pytest.mark.parametrize("streamed", [False, True], ids=["chat", "stream"])
 async def test_an_opted_out_call_that_failed_for_another_reason_is_not_sent_again(
     monkeypatch: pytest.MonkeyPatch, streamed: bool

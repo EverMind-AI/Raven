@@ -809,3 +809,28 @@ def test_make_provider_hands_the_sections_tls_verify_to_every_client_it_builds(
 
     assert clients
     assert [client.tls_verify for client in clients] == [not opted_out] * len(clients)
+
+
+@pytest.mark.parametrize("opted_out", [True, False], ids=["tls-verify-off", "tls-verify-default"])
+def test_make_provider_hands_the_sections_tls_verify_to_the_azure_client(
+    monkeypatch: pytest.MonkeyPatch, opted_out: bool
+) -> None:
+    """`azure` builds its own client, so the factory has to hand the field to it too."""
+    from raven.config.schema import Config
+    from raven.providers.azure_openai_provider import AzureOpenAIProvider
+
+    section: dict = {"apiKey": "k", "apiBase": _GATEWAY}
+    if opted_out:
+        section = {**section, "tlsVerify": False}
+    config = Config.model_validate(
+        {
+            "providers": {"azure_openai": section},
+            "agents": {"defaults": {"model": "azure/gpt-4o", "provider": "azure_openai"}},
+        }
+    )
+    monkeypatch.setattr("raven.providers.factory.check_provider_credentials", lambda _config, _model=None: None)
+
+    provider = _helpers.make_provider(config)
+
+    assert isinstance(provider, AzureOpenAIProvider)
+    assert provider.tls_verify is not opted_out

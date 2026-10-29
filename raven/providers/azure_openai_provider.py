@@ -43,6 +43,7 @@ class AzureOpenAIProvider(LLMProvider):
         default_model: str = "gpt-5.6-sol",
         deployment: str = "",
         api_version: str = "2024-10-21",
+        tls_verify: bool = True,
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
@@ -50,6 +51,7 @@ class AzureOpenAIProvider(LLMProvider):
         # config written before the field existed says it.
         self.deployment = deployment
         self.api_version = api_version
+        self.tls_verify = tls_verify
 
         if not api_key:
             raise ValueError("Azure OpenAI api_key is required")
@@ -182,7 +184,7 @@ class AzureOpenAIProvider(LLMProvider):
         )
 
         try:
-            async with httpx.AsyncClient(timeout=self.generation.timeout, verify=True) as client:
+            async with httpx.AsyncClient(timeout=self.generation.timeout, verify=self.tls_verify) as client:
                 response = await asyncio.wait_for(
                     client.post(url, headers=headers, json=payload), self.generation.timeout
                 )

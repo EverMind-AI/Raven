@@ -126,6 +126,7 @@ def make_provider(config: Config, model: str | None = None):
             default_model=model,
             deployment=getattr(p, "deployment", "") or "",
             api_version=getattr(p, "api_version", "") or "2024-10-21",
+            tls_verify=getattr(p, "tls_verify", True),
         )
     elif protocol in ("responses", "anthropic"):
         from raven.providers.anthropic_messages_provider import AnthropicMessagesProvider
