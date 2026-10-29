@@ -499,6 +499,77 @@ def test_the_drivers_directory_is_found_without_importing_litellm() -> None:
     assert out.stdout.split() == ["True", "False"]
 
 
+def test_an_agent_recovers_from_a_cache_refusal_through_a_host_in_another_process() -> None:
+    """A downgrade learned in the agent must not be undone by the host that builds its resend.
+
+    Two processes, as in production: each has its own set of suppressed models,
+    which an in-process relay would share. The agent's first call is a plain
+    chat, the order in which only the host can make the resend carry marks again.
+    """
+    host = textwrap.dedent(
+        """
+        import asyncio, json, sys
+        import litellm
+        from raven.providers import litellm_provider
+        from raven.providers.relay_server import RelayServer
+
+        wire = []
+
+        async def refuse_marks(**kwargs):
+            wire.append("marked" if "cache_control" in str(kwargs["messages"]) else "unmarked")
+            if wire[-1] == "marked":
+                raise litellm.BadRequestError(message="400 cache_control is not permitted", model="m", llm_provider="x")
+            return litellm.ModelResponse(
+                choices=[{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            )
+
+        litellm_provider.acompletion = refuse_marks
+
+        async def main():
+            server = RelayServer()
+            await server.start()
+            print(json.dumps(server.env()), flush=True)
+            await asyncio.get_running_loop().run_in_executor(None, sys.stdin.read)
+            await server.close()
+            print(json.dumps(wire), flush=True)
+
+        asyncio.run(main())
+        """
+    )
+    agent = textwrap.dedent(
+        """
+        import asyncio, json
+        from raven.providers import relay
+        from raven.providers.relay_provider import RelayProvider
+
+        async def main():
+            model = "openrouter/anthropic/claude-3-haiku"
+            provider = RelayProvider(default_model=model, provider_name="openrouter", api_key="k")
+            messages = [{"role": "system", "content": "You are a careful assistant. " * 200}, {"role": "user", "content": "q"}]
+            answer = await provider.chat_with_retry(messages=messages, model=model)
+            print(json.dumps({"relayed": relay.active(), "finish": answer.finish_reason, "content": answer.content}))
+
+        asyncio.run(main())
+        """
+    )
+    server = subprocess.Popen([sys.executable, "-c", host], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    try:
+        assert server.stdout is not None and server.stdin is not None
+        env = json.loads(server.stdout.readline())
+        out = subprocess.run(
+            [sys.executable, "-c", agent], capture_output=True, text=True, timeout=180, env={**os.environ, **env}
+        )
+        server.stdin.close()
+        wire = json.loads(server.stdout.readline())
+    finally:
+        server.kill()
+        server.wait(timeout=30)
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert json.loads(out.stdout.strip().splitlines()[-1]) == {"relayed": True, "finish": "stop", "content": "ok"}
+    assert wire == ["marked", "unmarked"]
+
+
 def test_a_relayed_process_never_loads_litellm(tmp_path) -> None:
     """The point of the relay, end to end: a turn's call and its catalogue lookups, no LiteLLM import."""
     host = textwrap.dedent(

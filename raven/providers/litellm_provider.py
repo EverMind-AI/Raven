@@ -469,6 +469,11 @@ class LiteLLMProvider(LiteLLMShape):
             # live exception here (status_code + type) before it's lost to a
             # string — the retry/fallback layer reads this verdict.
             classification = self.classify_error(e)
+            # Learned here as well as in the retry layer, as ``chat_stream`` does:
+            # the retry layer may sit in another process (an agent behind the LLM
+            # relay), and its stripped resend is built by this provider.
+            if classification.refuses_prompt_cache:
+                prompt_cache.suppress(original_model)
             head = self._provider_name or (self._gateway.name if self._gateway else None)
             return LLMResponse(
                 content=format_llm_error(e, classification, provider=head),
