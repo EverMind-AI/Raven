@@ -1,12 +1,10 @@
 /* The trajectory island: what `#trajHost` shows while the trajectory view is
- * up. The Scope Tab strip on top once there is a sub-agent tab to offer, with
- * the line that names the sub-agent tab on screen, then a status line for
- * what the index wants said, the duration bar under it, and the list with the
- * details pane beside it under all of them.
+ * up. A status line for what the index wants said, then the agent waterfall
+ * with the details pane beside it.
  *
  * The root subscribes to the language itself, like every island, and to the
- * store for the few facts the status line reads; the list and the pane have
- * their own subscriptions so a scroll in one does not redraw the other. The
+ * store for the few facts the status line reads; the waterfall and the pane
+ * have their own subscriptions so a scroll in one does not redraw the other. The
  * root also measures its own width for the pane: how wide the pane may be,
  * and whether the area is too narrow for two columns at all.
  */

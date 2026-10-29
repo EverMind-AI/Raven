@@ -26,12 +26,13 @@
  *   - a batch of changes is one `set`. The feed may carry hundreds of upserts,
  *     and the list repaints once per batch rather than once per row.
  *
- * The rows the list and the bar draw are one Scope Tab's: the main session's,
- * or one sub-agent run's that the reader opened. `entries`, `index` and
- * `spanIndex` still hold every row, since links and the feed cross tabs. A tab
- * is another filter over the same picture, so moving between tabs leaves the
- * generation alone, and `select` on a row of another tab moves to that tab. A
- * tab coming back brings its own selection back under the `migrate` door.
+ * The page draws every agent's rows at once (`shown`); the store also keeps a
+ * current Sub-agent Scope -- the main session, or one sub-agent run -- and its
+ * rows (`visible`). `entries`, `index` and `spanIndex` hold every row, since
+ * links and the feed cross scopes. A scope is another filter over the same
+ * picture, so moving between scopes leaves the generation alone, and `select`
+ * on a row of another scope moves to that scope. A scope coming back brings
+ * its own selection back under the `migrate` door.
  */
 
 import { current as sessionCurrent } from '../../lib/session'
@@ -55,7 +56,7 @@ export interface Anchor {
   offset: number
 }
 
-/** What a Scope Tab keeps while another is on screen. */
+/** What a scope keeps while another is the current one. */
 export interface ScopeView {
   selectedId: string | null
   follow: boolean
@@ -107,7 +108,7 @@ export interface TrajectoryState {
   /** Within reach of the tail, so new rows pull the viewport down. */
   follow: boolean
   anchor: Anchor | null
-  /** The Scope Tab on screen: a Sub-agent Scope's id, or null for the main session. */
+  /** The current scope: a Sub-agent Scope's id, or null for the main session. */
   scope: string | null
   /** The sub-agent tabs the reader opened, in the order they were opened. */
   scopes: OpenScope[]
@@ -369,7 +370,7 @@ export function setPlace(follow: boolean, anchor: Anchor | null): void {
   patch({ follow, anchor })
 }
 
-/* ── the Scope Tabs ───────────────────────────────────────────────────── */
+/* ── the scopes ───────────────────────────────────────────────────────── */
 
 const freshView = (): ScopeView => ({ selectedId: null, follow: true, anchor: null })
 

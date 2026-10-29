@@ -516,7 +516,7 @@ describe('the pin', () => {
   })
 })
 
-describe('the way to a Scope Tab from the head', () => {
+describe('the way to a Sub-agent Scope from the head', () => {
   const A = 't:runA'
   const ROWS: TrajectoryEntry[] = [
     { ...entry('door', 0, 'subagent.run'), span_name: 'subagent.run', opens_subagent_scope: A, meta: { agent: 'coder', label: 'Fix the parser' } },

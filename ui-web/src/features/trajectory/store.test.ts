@@ -617,9 +617,9 @@ describe('the rows the list draws', () => {
   })
 })
 
-/* ── the Scope Tabs ───────────────────────────────────────────────── */
+/* ── the scopes ─────────────────────────────────────────────────────── */
 
-describe('Scope Tabs', () => {
+describe('scopes', () => {
   const A = 't:runA'
   const B = 't:runB'
   const G = 't:dag'
@@ -763,9 +763,9 @@ describe('Scope Tabs', () => {
     expect([s.scope, s.selectedId, s.selectedBy]).toEqual([A, 'a1', 'link'])
     expect(s.selections).toBe(before + 1)
     expect(s.saved['']?.selectedId).toBe('m1')
-    store.select('b0', { source: 'bar' })
+    store.select('b0', { source: 'click' })
     s = store.get()
-    expect([s.scope, s.selectedId, s.selectedBy]).toEqual([B, 'b0', 'bar'])
+    expect([s.scope, s.selectedId, s.selectedBy]).toEqual([B, 'b0', 'click'])
     expect(open()).toEqual([A, B])
     store.select('m0', { source: 'keyboard' })
     s = store.get()
@@ -780,7 +780,7 @@ describe('Scope Tabs', () => {
 
   it('selects within the tab as it always did, whichever the door', async () => {
     await loaded()
-    const sources = ['click', 'keyboard', 'bar', 'link', 'migrate'] as const
+    const sources = ['click', 'keyboard', 'link', 'migrate'] as const
     const wrong: string[] = []
     sources.forEach((source, k) => {
       const id = k % 2 ? 'm0' : 'm1'
@@ -817,8 +817,8 @@ describe('Scope Tabs', () => {
     const g = store.gen()
     store.openScope(A)
     store.switchScope(null)
-    /* b0's row may still be on its way in a streamed walk, so the tab is
-       opened the way the strip opens one rather than through its row. */
+    /* b0's row may still be on its way in a streamed walk, so the scope is
+       opened by its id rather than through its row. */
     store.openScope(B)
     store.closeScope(A)
     expect(store.gen()).toBe(g)

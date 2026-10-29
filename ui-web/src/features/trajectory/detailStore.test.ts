@@ -1116,9 +1116,9 @@ describe('the pinned tab', () => {
   })
 })
 
-/* ── the pane per Scope Tab ───────────────────────────────────────── */
+/* ── the pane per scope ───────────────────────────────────────────── */
 
-describe('the pane per Scope Tab', () => {
+describe('the pane per scope', () => {
   const A = 't:runA'
   const X = 't:runX'
   const scoped = (id: string, at: number, scope: string, over: Partial<TrajectoryEntry> = {}): TrajectoryEntry =>

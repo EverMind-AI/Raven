@@ -176,7 +176,7 @@ export interface DetailsState {
   pins: Record<string, Tab | null>
   /** The entry the pane just arrived at, whose tab the pin is still to decide. */
   arrival: string | null
-  /** Whether the pane was open in each Scope Tab not on screen, by `list.scopeKey`. */
+  /** Whether the pane was open in each scope but the current one, by `list.scopeKey`. */
   openByScope: Record<string, boolean>
   /** The blocks to open first on an entry's next arrival when no pin applies, best first; spent on that arrival. */
   preferred: Record<string, string[]>
@@ -1315,9 +1315,9 @@ function follow(): void {
     bump()
     patch({ paused: !now.permitted })
   }
-  /* Another Scope Tab: the pane is as that tab left it, unless the move
-     brought a selection of its own (a link, a tab opening on its entry),
-     which opens it the way a click would. Coming back to a tab is not an
+  /* Another scope: the pane is as that scope left it, unless the move
+     brought a selection of its own (a link, a scope entered on its entry),
+     which opens it the way a click would. Coming back to a scope is not an
      arrival -- its entry stays on the block the reader left it on. */
   if (now.scope !== was.scope) {
     bump()
