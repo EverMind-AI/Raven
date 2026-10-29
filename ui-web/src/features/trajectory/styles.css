@@ -771,3 +771,8 @@ html[data-theme="dark"] {
   border: 1px solid #f0d7d2; background: #fdf5f4; border-radius: 10px; color: #8a3a2e;
   font: 12px/1.5 var(--sans) }
 .trajectory-crash-text { flex: 1; min-width: 0; word-break: break-word }
+
+/* The last label ends at the ruler's right edge instead of hanging half of
+   itself past it -- into the details pane -- on a long session. */
+.trajectory-ruler { overflow: hidden }
+.trajectory-ruler b:last-of-type { transform: translateX(-100%) }
