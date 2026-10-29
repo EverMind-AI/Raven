@@ -45,3 +45,5 @@ def test_the_zh_update_instruction_renders_the_board_and_handles(zh):
     assert "g_1 [active] 修复登录白屏" in text
     assert "spawn:locate_login_bug -- 定位白屏原因" in text
     assert "{board}" not in text and "{dispatches}" not in text
+    assert text.index("[BEGIN BOARD RECORD]") < text.index("修复登录白屏") < text.index("[END BOARD RECORD]")
+    assert text.index("[BEGIN DISPATCHES]") < text.index("定位白屏原因") < text.index("[END DISPATCHES]")
