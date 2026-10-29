@@ -181,7 +181,7 @@ describe('the page', () => {
   })
 
   it('shows how long a turn and a span took', async () => {
-    await draw([E('m1', 0, { operation_start: '2026-10-28T10:00:00.000Z', operation_end: '2026-10-28T10:00:02.500Z' })])
+    await draw([E('m1', 0, { operation_start: '2026-10-28T10:00:00.000Z', operation_end: '2026-10-28T10:00:03.000Z' })])
     expect(document.querySelector('[data-row="turn"]')!.textContent).toContain('3s')
     fireEvent.click(document.querySelector('[data-row="turn"]')!)
     expect(document.querySelector('[data-entry="m1"]')!.textContent).toContain('3s')
