@@ -865,7 +865,9 @@ runtime files after the turn -- carries that live verdict as `replied_via_tool`,
 surfaces that read a stored turn -- the ACP replay, which draws it, and the session list, which
 orders sessions by it -- read the flag from
 one place (`session/turn_shape.py`) rather than guess it from the calls they can see, where a send
-that failed or went to another chat would look like an answer.
+that failed or went to another chat would look like an answer. A Silent Turn the runtime opened,
+which those two surfaces take back whole, files no unanswered-question notice after its marker, so
+none is left behind as an orphan; a person's Silent Turn, which they keep, still files it.
 Distinct from a `no_output` failure. A Silent Turn is the model saying nothing on purpose, so it
 succeeds; `no_output` is what a turn is failed with when its last reply was empty -- no text, no
 tool call, no reasoning -- once every retry was spent, or, with recovery switched off, when its
