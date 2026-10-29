@@ -34,7 +34,7 @@ from typing import Iterator
 
 import zstandard
 
-from .codec import compress_bytes, read_plaintext
+from .codec import MAX_PLAINTEXT_BYTES, compress_bytes, read_plaintext
 
 PACKS_DIR_NAME = "_message_packs"
 MESSAGES_DIR_NAME = "_messages"
@@ -176,6 +176,9 @@ def _slice(artifacts_dir: Path, sha1: str, limit: int | None) -> bytes | None:
         return None
     name, offset, length = located
     want = length if limit is None else min(length, limit)
+    # The index can be imported with the store; an offset and length pair that
+    # asks for gigabytes is refused rather than allocated.
+    want = min(want, MAX_PLAINTEXT_BYTES)
     pack = packs_dir(artifacts_dir) / name
     plain = _cached_pack(pack)
     if plain is None:

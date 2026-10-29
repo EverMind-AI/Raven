@@ -68,6 +68,18 @@ def test_pack_moves_files_into_a_pack_and_every_reader_resolves(tmp_path: Path) 
     assert found[0] == texts[sha1s[0]]
 
 
+def test_a_shell_stops_resolving_after_its_total_budget(tmp_path: Path) -> None:
+    refs = _publish(tmp_path)
+    artifacts = tmp_path / "logs" / "audit-artifacts"
+    first = len(artifact_v2.message_text(MESSAGES[0]).encode())
+    shell = {"artifactFormat": artifact_v2.ARTIFACT_FORMAT, "messages": refs}
+
+    resolved = artifact_v2.resolve_payload(shell, artifacts, max_total_bytes=first + 1)
+
+    assert resolved["messages"][0] == MESSAGES[0]
+    assert "missing" in resolved["messages"][1]["content"]
+
+
 def test_a_small_target_splits_messages_across_packs(tmp_path: Path) -> None:
     refs = _publish(tmp_path)
     artifacts = tmp_path / "logs" / "audit-artifacts"

@@ -13,9 +13,11 @@ import json
 import os
 from pathlib import Path
 
+import pytest
 import zstandard
 
 from raven.tracing import artifact_v2
+from raven.tracing import codec as trace_codec
 from raven.tracing.codec import is_compressed, plaintext_size
 from raven.tracing.compact import compact
 from raven.tracing.compress import compress, compress_logs
@@ -202,6 +204,18 @@ def test_a_corrupt_frame_is_reported_not_raised(tmp_path: Path) -> None:
 
     assert text is None
     assert reason is not None and "corrupt" in reason
+
+
+def test_decompression_is_bounded(tmp_path: Path) -> None:
+    frame = zstandard.ZstdCompressor().compress(b"x" * 4096)
+    assert trace_codec.read_plaintext(frame) == b"x" * 4096
+    assert trace_codec.read_plaintext(frame, 1024) is None
+
+    path = tmp_path / "bomb"
+    path.write_bytes(frame)
+    assert trace_codec.read_plaintext_file(path, 1024) is None
+    with pytest.raises(OSError):
+        trace_codec.open_plaintext(path, 1024)
 
 
 def test_compact_records_a_corrupt_frame(tmp_path: Path) -> None:

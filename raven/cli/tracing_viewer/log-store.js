@@ -4,6 +4,7 @@ const path = require('path');
 const zlib = require('zlib');
 
 const DEFAULT_MAX_BYTES = 50 * 1024 * 1024;
+const MAX_STORED_BYTES = 256 * 1024 * 1024;
 const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
 
 function readStored(filePath) {
@@ -17,8 +18,14 @@ function readStored(filePath) {
       return Buffer.alloc(0);
     }
     try {
-      return zlib.zstdDecompressSync(data);
-    } catch {
+      return zlib.zstdDecompressSync(data, { maxOutputLength: MAX_STORED_BYTES });
+    } catch (err) {
+      if (err && err.code === 'ERR_BUFFER_TOO_LARGE') {
+        // A compressed file can be imported with a store; a frame that expands
+        // past the read limit is treated as unreadable rather than allocated.
+        console.warn('tracing viewer: a compressed file expands past the read limit; treating it as empty');
+        return Buffer.alloc(0);
+      }
       return data;
     }
   }
