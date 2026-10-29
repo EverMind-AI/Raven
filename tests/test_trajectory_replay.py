@@ -945,6 +945,89 @@ async def test_end_to_end_record_save_replay_with_real_tracer(tmp_path, monkeypa
         _spans._store = None
 
 
+class _DelegatingTool(_MarkerTool):
+    """The marker tool, run the way ``spawn`` runs an external agent: the
+    agent's own steps land under its run, written by the real recorder."""
+
+    async def execute(self, note: str) -> str:
+        from datetime import datetime
+
+        from raven.acp_client.acp_dialects.base import ToolCall
+        from raven.agent.subagent.backends import observability as obs
+
+        read = ToolCall(id="c1", name="read", argument="a.py", title="", raw_input={"path": "a.py"})
+        with obs.external_agent_span(agent="codex", transport="acp", task_id="t1", instance="codex-1") as run:
+            at = datetime.now().isoformat()
+            obs.record_steps(
+                run,
+                prompt=note,
+                events=[
+                    {"t": "say", "text": "reading it", "at": at},
+                    {"t": "call", "id": "c1", "call": read, "at": at},
+                    {"t": "result", "id": "c1", "ok": True, "text": "contents", "at": at},
+                ],
+                elapsed_ms=1,
+            )
+        return await super().execute(note)
+
+
+async def test_end_to_end_replay_skips_an_external_agents_own_steps(tmp_path, monkeypatch) -> None:
+    """The tool that ran an external agent is answered from the recording, so
+    the agent never runs again and nothing it did is asked for: its recorded
+    model and tool steps must not stand in the queue of the loop's own calls."""
+    from raven.agent.loop import AgentLoop
+    from raven.spine.message import ChatType, Source
+    from raven.spine.turn import Origin, TurnRequest
+    from raven.tracing import spans as _spans
+    from raven.trajectory import store as tstore
+    from raven.trajectory.bundle import collect_bundle
+
+    traces = tmp_path / "traces"
+    marker = tmp_path / "marker"
+    monkeypatch.setenv("RAVEN_TRACING", "1")
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(traces))
+    monkeypatch.setattr("raven.trajectory.bundle._default_workspace", lambda: tmp_path / "ws")
+    _spans._store = None
+    try:
+        loop = AgentLoop(
+            provider=_ScriptedProvider(),
+            workspace=tmp_path / "ws",
+            model="stub",
+            policy=TurnPolicy(max_iterations=5),
+            tools=ToolWiring(restrict_to_workspace=True),
+        )
+        loop.context.skills.stop_file_watcher()
+        loop.tools.register(_DelegatingTool(marker))
+        result = await loop._process_message(
+            TurnRequest(
+                origin=Origin.USER,
+                source=Source(channel="cli", chat_id="e2e-external", sender_id="user", chat_type=ChatType.DM),
+                text="go",
+            ),
+            session_key="cli:e2e-external",
+        )
+        assert result is not None and result[0] == "all done"
+
+        attempt_id = next(iter(tstore.iter_spans(traces)))["traceId"]
+        bundle = collect_bundle(attempt_id, state_dir=traces)
+        recorded = [json.loads(line) for line in (bundle / "spans.jsonl").read_text(encoding="utf-8").splitlines()]
+        runs = {s["spanId"] for s in recorded if s.get("name") == "subagent.external"}
+        steps = [s for s in recorded if s.get("parentSpanId") in runs]
+        assert sorted(s["name"] for s in steps) == ["llm.call", "llm.call", "tool.call"], (
+            "the bundle must carry the agent's steps, or this proves nothing"
+        )
+
+        report = await run_replay(bundle, mode="strict")
+
+        assert report.complete, [d.render() for d in report.divergences]
+        assert report.divergences == []
+        assert report.replies == ["all done"]
+        assert (report.llm_calls_replayed, report.llm_calls_recorded) == (2, 2)
+        assert (report.tool_calls_replayed, report.tool_calls_recorded) == (1, 1)
+    finally:
+        _spans._store = None
+
+
 async def test_end_to_end_replay_after_harness_change_diverges(tmp_path, monkeypatch) -> None:
     """Same round trip, but the replayed turn input differs from the recording
     (standing in for changed harness behavior): strict mode halts at model

@@ -98,7 +98,7 @@ def backfill(
             existing.add(span_id)
             if _STEP_ID.match(span_id):
                 steps_on_record[span_id] = span
-        if span.get("name") != "subagent.external":
+        if span.get("name") != observability.SPAN_NAME:
             continue
         ended = _stamp(span, "endTime")
         if isinstance(span_id, str) and ended is not None:
