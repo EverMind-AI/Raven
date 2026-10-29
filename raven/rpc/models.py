@@ -1461,6 +1461,88 @@ class TasksListResult(_Strict):
     tasks: list[TaskRow]
 
 
+TaskGroupStatus = Literal["active", "waiting", "blocked", "parked", "completed"]
+
+
+class TaskLinkRef(_Strict):
+    """A Task a Progress Step started, addressed the way ``tasks.list`` addresses it."""
+
+    kind: TaskKind
+    id: str
+    summary: str
+
+
+class ProgressStep(_Strict):
+    """One turn's advance on one Task Group, keyed by its turn's opening timestamp."""
+
+    id: str
+    turn_at: str
+    turn_id: str | None = None
+    text: str
+    tasks: list[TaskLinkRef]
+
+
+class TaskGroup(_Strict):
+    """One matter a conversation is pushing, with its Progress Steps in time order."""
+
+    id: str
+    title: str
+    status: TaskGroupStatus
+    created_at: int
+    updated_at: int
+    steps: list[ProgressStep]
+
+
+class PendingDispatch(_Strict):
+    """A dispatch whose turn's board update never landed; the next update places it."""
+
+    handle: str
+    summary: str
+    turn_at: str
+    turn_id: str | None = None
+
+
+class TaskBoard(_Strict):
+    """One host conversation's Task Board."""
+
+    version: int
+    groups: list[TaskGroup]
+    unassigned: list[PendingDispatch]
+
+
+class TasksBoardParams(_Strict):
+    session_key: str
+
+
+class TasksBoardResult(_Strict):
+    board: TaskBoard
+    lineage: dict[str, str]
+
+
+class TasksSetGroupStatusParams(_Strict):
+    session_key: str
+    group_id: str
+    status: Literal["completed", "active"]
+
+
+class TasksSetGroupStatusResult(_Strict):
+    board: TaskBoard
+    lineage: dict[str, str]
+
+
+class TasksBoardUpdatedPayload(_Strict):
+    session_key: str
+    board: TaskBoard
+    lineage: dict[str, str]
+
+
+class TasksBoardUpdatedEvent(_Strict):
+    """A conversation's Task Board after a write; a reconnecting client reads ``tasks.board``."""
+
+    type: Literal["tasks.board_updated"]
+    payload: TasksBoardUpdatedPayload
+
+
 class CronMissedItem(_Strict):
     name: str
     scheduled_at: str
@@ -1605,6 +1687,7 @@ TurnEvent = Annotated[
         MediaEvent,
         SessionTitledEvent,
         SessionNamingEndedEvent,
+        TasksBoardUpdatedEvent,
     ],
     Field(discriminator="type"),
 ]
@@ -7182,6 +7265,8 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "dag.get": (DagGetParams, DagGetResult),
     "dag.node": (DagNodeParams, DagNodeResult),
     "tasks.list": (TasksListParams, TasksListResult),
+    "tasks.board": (TasksBoardParams, TasksBoardResult),
+    "tasks.set_group_status": (TasksSetGroupStatusParams, TasksSetGroupStatusResult),
 }
 
 __all__ = [

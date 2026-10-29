@@ -713,6 +713,25 @@ Registry, without the live graph tool; the row's status is derived from its node
 _Avoid_: "task" for a spine `TurnRequest`, an asyncio task, or the `task` text handed to a
 sub-agent -- those are a Turn, a coroutine, and a prompt.
 
+**Task Board** (`raven/agent/task_board/`, `<session_dir>/task_board.json`):
+one host session's set of Task Groups, kept by the host model in one extra call after every
+turn and read back through the `task_board` tool. Only the Raven host keeps one; a sub-agent
+or product agent never does (`docs/specs/2026-10-29-task-board-design.md`).
+_Avoid_: "task list" (that is `tasks.list`), "todo" (Raven-Code's Checklist).
+
+**Task Group**:
+one matter a conversation is pushing, spanning any number of turns -- a bug fix, a release
+note. Carries a title, a status (`active`, `waiting`, `blocked`, `parked`, `completed`) and
+its Progress Steps; a `completed` group is finished or dropped, and nothing further moves it.
+_Avoid_: "task" for this -- a Task is one delegated unit, and hangs under a step.
+
+**Progress Step**:
+one turn's advance on one Task Group, in a sentence or two, keyed by the timestamp of the
+message that opened the turn, with the Tasks that turn dispatched for it. A turn that
+advanced three groups writes three steps.
+_Avoid_: "subtask" (it records progress, it is not a unit of work), "step" alone (the node
+record's steps are another thing).
+
 **Instance Title** / **Run Title** (`InstanceRow.title` / `InstanceRow.runTitle`):
 what one instance was asked, and what the graph it belongs to was asked. Computed by
 `subagents.instances` rather than stored, the way `resumable` is and for the same reason:

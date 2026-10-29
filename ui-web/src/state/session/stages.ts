@@ -349,6 +349,10 @@ export const STAGES: readonly Stage[] = [
     sources.tasks?.onSubagentStatus?.(p)
   }),
 
+  /* The host's task board after a write: the tasks tab's to draw, reached
+     through the seam like every other tasks consumer. */
+  arm('tasks.board_updated', (_rt, p) => { sources.tasks?.onBoardUpdated?.(p) }),
+
   /* A result was submitted, not yet visible: the turn it opens is still queued
      behind its parent, so the row does NOT belong here. It arrives with the
      turn's own opening (turn.started, carrying the same identity) -- until then
@@ -447,6 +451,7 @@ function stageOf(ev: TurnEvent): Stage | undefined {
     case 'dag.run_replanned':
     case 'dag.node_stalled':
     case 'media':
+    case 'tasks.board_updated':
       return BY_TYPE.get(ev.type)
     default:
       return assertNever(ev)

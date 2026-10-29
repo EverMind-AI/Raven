@@ -323,6 +323,11 @@ class LoopOutcome:
     silent: bool = False
     checkpoint_id: str | None = None
     edited_files: list[str] = field(default_factory=list)
+    # What the turn's last model call carried into the strategies: the host's
+    # post-turn task board call sends the same pair, so it shares that call's
+    # cached prefix. None when the turn made no model call at all.
+    last_tools: list[dict] | None = None
+    last_model: str | None = None
 
 
 def _filter_qualified_ids(

@@ -386,6 +386,10 @@ async def build_rpc_stack(
         # emitter, same routing; without it the announce's reply arrives as an
         # assistant turn nobody visibly asked.
         agent_loop.subagents.set_delivery_sink(emitter.emit)
+        # The host's task board announces each write on the same emitter, so the
+        # page's tasks tab follows the post-turn update without polling.
+        if (task_board := getattr(agent_loop, "task_board", None)) is not None:
+            task_board.set_sink(emitter.emit)
 
         # Backfill the acp capability snapshots at startup: an acp row's
         # statefulness comes from its snapshot, and before this the only writers

@@ -19,8 +19,9 @@ import { ds } from '../../state/sources'
 import { show as toast } from '../../state/toast'
 import { openDeskTab, openDeskTask } from '../desk/store'
 import { draw as sessionDraw } from '../rail/store'
-import { history as drawHistory } from './mount'
+import { history as drawHistory, shownLane } from './mount'
 import { actLabel as storeActLabel } from './store'
+import { goTo as goToTurn, turnsOf } from './TurnNav'
 
 import type { SessRow } from '../rail/types'
 import type { HistoryMessage } from './types'
@@ -156,4 +157,26 @@ export function branch(): void {
       toast(t('gui.sess.branched_n', { n: r.message_count || 0 }))
     })
     .catch((e) => toast(t('gui.op.branch_failed', { detail: (e as Error).message || e })))
+}
+
+/* How far a task board step's time may sit from a turn's opening question and
+   still name it. A turn read back from history carries the timestamp the step
+   was keyed by, so it matches exactly; one asked on this page carries the
+   browser's clock, which is seconds off the server's. */
+const TURN_NEAR_MS = 5 * 60 * 1000
+
+/** Scroll the transcript to the turn a task board step names by its opening
+ *  message's timestamp; whether a turn near enough was on the stage. */
+export function revealTurnAt(turnAt: string): boolean {
+  const target = new Date(turnAt).getTime()
+  const lane = shownLane()
+  if (!lane || Number.isNaN(target)) return false
+  let best = null as ReturnType<typeof turnsOf>[number] | null
+  for (const seg of turnsOf(lane.segs)) {
+    if (!seg.at) continue
+    if (!best || Math.abs(seg.at - target) < Math.abs(best.at - target)) best = seg
+  }
+  if (!best || Math.abs(best.at - target) > TURN_NEAR_MS) return false
+  goToTurn(best)
+  return true
 }

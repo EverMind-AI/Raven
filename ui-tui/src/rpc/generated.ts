@@ -86,7 +86,15 @@ export type TurnEvent =
   | CronMissedEvent
   | MediaEvent
   | SessionTitledEvent
-  | SessionNamingEndedEvent;
+  | SessionNamingEndedEvent
+  | TasksBoardUpdatedEvent;
+/**
+ * Where a Task Group stands. completed: finished, or dropped by the user -- nothing further moves it.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TaskGroupStatus".
+ */
+export type TaskGroupStatus = 'active' | 'waiting' | 'blocked' | 'parked' | 'completed';
 /**
  * Which delegation path made a task: a spawn call, or a run_subagent_dag run (a playbook run is one).
  *
@@ -2322,6 +2330,91 @@ export interface MediaEvent {
      */
     items: MediaItem[];
   };
+}
+/**
+ * A conversation's Task Board after a write -- the post-turn update or the reader's own action. Not replayed: a client that reconnects reads tasks.board.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksBoardUpdatedEvent".
+ */
+export interface TasksBoardUpdatedEvent {
+  type: 'tasks.board_updated';
+  payload: TasksBoardUpdatedPayload;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksBoardUpdatedPayload".
+ */
+export interface TasksBoardUpdatedPayload {
+  session_key: string;
+  board: TaskBoard;
+  /**
+   * Each run that continued a placed run without a tool call of its own (a replan's successor, a later stint round), mapped to the placed run it descends from.
+   */
+  lineage: {
+    [k: string]: string;
+  };
+}
+/**
+ * One host conversation's Task Board: its Task Groups and any dispatch still waiting for a place.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TaskBoard".
+ */
+export interface TaskBoard {
+  version: number;
+  groups: TaskGroup[];
+  unassigned: PendingDispatch[];
+}
+/**
+ * One matter a conversation is pushing, spanning any number of turns, with its Progress Steps in time order.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TaskGroup".
+ */
+export interface TaskGroup {
+  id: string;
+  title: string;
+  status: TaskGroupStatus;
+  created_at: number;
+  updated_at: number;
+  steps: ProgressStep[];
+}
+/**
+ * One turn's advance on one Task Group. turn_at is the timestamp the session log stores on the message that opened the turn.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ProgressStep".
+ */
+export interface ProgressStep {
+  id: string;
+  turn_at: string;
+  turn_id?: string | null;
+  text: string;
+  tasks: TaskLinkRef[];
+}
+/**
+ * A Task a Progress Step started, in the address tasks.list rows use (spawn: node id, dag: run id), with the summary the dispatching call gave.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TaskLinkRef".
+ */
+export interface TaskLinkRef {
+  kind: TaskKind;
+  id: string;
+  summary: string;
+}
+/**
+ * A dispatch whose turn's board update never landed; the next update has to place it.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PendingDispatch".
+ */
+export interface PendingDispatch {
+  handle: string;
+  summary: string;
+  turn_at: string;
+  turn_id?: string | null;
 }
 /**
  * One base as the list view needs it.
@@ -7979,6 +8072,51 @@ export interface TasksListParams {
  */
 export interface TasksListResult {
   tasks: TaskRow[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksBoardParams".
+ */
+export interface TasksBoardParams {
+  /**
+   * Whose board to read.
+   */
+  session_key: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksBoardResult".
+ */
+export interface TasksBoardResult {
+  board: TaskBoard;
+  /**
+   * Each run that continued a placed run without a tool call of its own (a replan's successor, a later stint round), mapped to the placed run it descends from.
+   */
+  lineage: {
+    [k: string]: string;
+  };
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksSetGroupStatusParams".
+ */
+export interface TasksSetGroupStatusParams {
+  session_key: string;
+  group_id: string;
+  status: 'completed' | 'active';
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksSetGroupStatusResult".
+ */
+export interface TasksSetGroupStatusResult {
+  board: TaskBoard;
+  /**
+   * Each run that continued a placed run without a tool call of its own (a replan's successor, a later stint round), mapped to the placed run it descends from.
+   */
+  lineage: {
+    [k: string]: string;
+  };
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

@@ -1004,6 +1004,8 @@ class TurnPathMixin:
         iteration = 0
         final_content = None
         tools_used: list[str] = []
+        last_tool_defs: list[dict] | None = None
+        last_model: str | None = None
         effective_model = model or self.model
 
         # Track whether the turn was a normal exit or a max-iter interruption.
@@ -1467,6 +1469,7 @@ class TurnPathMixin:
             call_overrides = pending_gen_overrides
             pending_gen_overrides = None
             call_reasoning_effort = gen_overrides.get("reasoning_effort")
+            last_tool_defs, last_model = tool_defs, active_model
             call_messages, call_tools, call_model = await first_call.stage(
                 "the before_llm_call strategies",
                 self.strategies.before_llm_call(
@@ -2737,7 +2740,13 @@ class TurnPathMixin:
         # pipeline can gate on completion.
 
         outcome = LoopOutcome(
-            status=status, error=error_detail, error_full=error_full, no_output=no_output, silent=silent
+            status=status,
+            error=error_detail,
+            error_full=error_full,
+            no_output=no_output,
+            silent=silent,
+            last_tools=last_tool_defs,
+            last_model=last_model,
         )
         checkpoint = self._turn_checkpoint()
         if checkpoint is not None:
@@ -3293,6 +3302,7 @@ class TurnPathMixin:
             pending.update(rerun=bool(retries_left) and bool(reasons) and not spent, reasons=reasons)
             return pending["rerun"]
 
+        turn_window: list[dict] = []
         try:
             # The tier this turn dispatches sub-agents at, frozen here for the
             # same reason the iteration cap is read once: a switch arriving mid-turn
@@ -3301,7 +3311,7 @@ class TurnPathMixin:
             # file the user attached is handing it over, one that names any other
             # .pptx is not, and only the turn knows which is which.
             with turn_tier(self.session_tier(key)), turn_attachments(req.media), spend.collecting():
-                final_content, _, _, outcome = await _attempt(initial_messages, attempt_no)
+                final_content, _, turn_window, outcome = await _attempt(initial_messages, attempt_no)
                 # The conditional rerun. A dead turn has no answer to damage -- "empty
                 # implies wrong" is a scoring rule, so the count of right answers among
                 # dead turns starts at zero and a second attempt can only raise it. It
@@ -3327,7 +3337,7 @@ class TurnPathMixin:
                         # attempt this is: the loop serves every agent, and the
                         # budget allows more reruns than the one.
                         await on_progress("That attempt produced no answer; running the turn again.")
-                    final_content, _, _, outcome = await _attempt(
+                    final_content, _, turn_window, outcome = await _attempt(
                         _seed_for_the_rerun(live["log"].messages()), attempt_no
                     )
                 # Session-level because this turn may persist no assistant row at
@@ -3532,6 +3542,14 @@ class TurnPathMixin:
             _t4.add_done_callback(self._consolidation_tasks.discard)
         # ── End Step 4 ──────────────────────────────────────────────────────
 
+        # ── Step 5: the host's task board (background, after the reply) ──────
+        # Scheduled, never awaited: the reply is already the caller's, and the
+        # board settles a few seconds after it.
+        if self.task_board is not None:
+            self._schedule_task_board(
+                key, turn_window, outcome, live["log"].messages(), turn_received_at, req.turn_id, fallback_models
+            )
+
         if origin is Origin.USER:
             self._maybe_annotate_tail(session, _turn_start())
 
@@ -3560,6 +3578,66 @@ class TurnPathMixin:
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info("Response to {}:{}: {}", channel, sender_id, preview)
         return (final_content, [])
+
+    def _schedule_task_board(
+        self,
+        key: str,
+        window: list[dict],
+        outcome: LoopOutcome | None,
+        turn_messages: list[dict],
+        turn_at: str,
+        turn_id: str | None,
+        fallback_models: list[str] | None,
+    ) -> None:
+        """Start the host's post-turn task board call for the turn that just ended.
+
+        It sends the tools array and model the turn's last call carried, through
+        the same strategies, so the request shares that call's cached prefix up
+        to the reply; only the instruction after it is new.
+        """
+        from raven.agent.task_board.dispatches import turn_dispatches
+        from raven.agent.task_board.runner import run_post_turn, should_run
+
+        board = self.task_board
+        dispatches = turn_dispatches(turn_messages)
+        if board is None or outcome is None or outcome.last_tools is None or not window:
+            return
+        if not should_run(outcome.status, dispatches):
+            return
+        tools, model = outcome.last_tools, outcome.last_model or self.model
+        # Forced by name, so a turn whose array lacked the tool -- withheld by a
+        # deploy's disabledTools -- would only buy a refused request.
+        if not any((t.get("function") or {}).get("name") == "task_board" for t in tools):
+            return
+        effort = self._task_board_config.reasoning_effort
+        choice = {"type": "function", "function": {"name": "task_board"}}
+
+        async def call(rows: list[dict]) -> LLMResponse:
+            with _llm_purpose("task_board"), usage_context.bind(key):
+                call_messages, call_tools, call_model = await self.strategies.before_llm_call(rows, tools, model)
+                return await self.provider.chat_with_retry(
+                    messages=merge_mid_turn(call_messages),
+                    tools=call_tools,
+                    model=call_model,
+                    fallback_models=fallback_models,
+                    tool_choice=choice,
+                    reasoning_effort=effort,
+                )
+
+        task = asyncio.create_task(
+            run_post_turn(
+                board,
+                session_key=key,
+                call=call,
+                window=list(window),
+                dispatches=dispatches,
+                turn_at=turn_at,
+                turn_id=turn_id,
+                now_ms=board.now_ms,
+            )
+        )
+        self._consolidation_tasks.add(task)
+        task.add_done_callback(self._consolidation_tasks.discard)
 
     def _save_broken_turn(
         self,

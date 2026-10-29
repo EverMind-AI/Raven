@@ -179,6 +179,24 @@ class CompactionConfig(Base):
     preserve_recent_tokens: int | None = None
 
 
+class TaskBoardConfig(Base):
+    """The host's Task Board: one extra call after every turn that keeps it.
+
+    ``reasoning_effort`` is that call's own; ``minimal`` is refused because the
+    Codex lane rejects it outright.
+    """
+
+    enabled: bool = True
+    reasoning_effort: str = "low"
+
+    @field_validator("reasoning_effort")
+    @classmethod
+    def _not_minimal(cls, value: str) -> str:
+        if value == "minimal":
+            raise ValueError("taskBoard.reasoningEffort cannot be 'minimal'")
+        return value
+
+
 class AgentDefaults(Base):
     """Default agent configuration."""
 
@@ -204,6 +222,7 @@ class AgentDefaults(Base):
     context_window_tokens: int | None = None
     # In-turn transcript compaction knobs; factory-off (see CompactionConfig).
     compaction: CompactionConfig = Field(default_factory=CompactionConfig)
+    task_board: TaskBoardConfig = Field(default_factory=TaskBoardConfig)
     temperature: float = 0.1
     # Per-call wall-clock cap (seconds) for every LLM request (main loop and
     # sub-agents). Bounds a stalled backend that trickles bytes without ever

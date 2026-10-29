@@ -29,13 +29,15 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 from contextlib import suppress
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
+from raven.agent.task_board.board import drop_turns
+from raven.agent.task_board.dispatches import dag_run_id_of, spawn_task_id_of
+from raven.agent.task_board.store import copy_board, load_board, reset_board, save_board
 from raven.config.loader import drain_migration_notices, load_config, raven_home
 from raven.config.raven import load_raven_config
 from raven.providers.rates import resolve_context_window
@@ -73,6 +75,11 @@ AgentLoopFactory = Callable[[], "AgentLoop | None"]
 # walks site-packages dist-info on every call. system._raven_version()
 # already guards PackageNotFoundError for source-checkout environments.
 _RAVEN_VERSION = _raven_version()
+
+
+def _task_board(agent_loop: Any) -> Any:
+    """The host's task board service, when the loop up is one that keeps a board."""
+    return getattr(agent_loop, "task_board", None) if agent_loop is not None else None
 
 
 def _safe_invoke_factory(
@@ -295,21 +302,6 @@ async def _default_session_info(
     return info
 
 
-# Matches both shapes run_subagent_dag's result text can start with:
-# "DAG run <id> finished: ..." once it completes in the foreground, or
-# "DAG run <id> started in the background ..." when it hands back early.
-# Derived here rather than stored, so every session already on disk gains the
-# link, and read here rather than in the client, which would be parsing a
-# sentence it does not author.
-_DAG_RUN_ID_RE = re.compile(r"\bDAG run (\d{8}T\d+Z-[0-9a-f]+)")
-
-# The spawn counterpart: "Subagent [...] started (id: <task_id>)." names the run
-# the call dispatched. Same authorship argument as the DAG id above -- the
-# manager writes this sentence, so the server parses it; the task id is the
-# suffix of the run's record directory, which subagent.list reports.
-_SPAWN_TASK_ID_RE = re.compile(r"\bstarted \(id: ([0-9a-f]{8})\)")
-
-
 def _delivered_file(item: dict[str, Any], on_disk: bool) -> dict[str, Any]:
     """One delivered file as the transcript draws it: whether it is still there, and how to fetch it.
 
@@ -437,15 +429,17 @@ def _map_to_wire(
                     },
                 }
         if m.get("name") == "run_subagent_dag" and isinstance(content, str):
-            if match := _DAG_RUN_ID_RE.search(content):
-                entry["dag_run_id"] = match.group(1)
+            # Derived here rather than stored, so every session already on disk gains
+            # the link; the receipt reader is shared with the task board.
+            if run_id := dag_run_id_of(content):
+                entry["dag_run_id"] = run_id
         if m.get("name") == "spawn" and isinstance(content, str):
             # The label between the brackets is model-authored text and can
             # itself contain a "started (id: ...)" shape; the manager's own
             # suffix is the last one in the sentence it wrote, so the last
             # match is the task id.
-            if matches := _SPAWN_TASK_ID_RE.findall(content):
-                entry["spawn_task_id"] = matches[-1]
+            if task_id := spawn_task_id_of(content):
+                entry["spawn_task_id"] = task_id
         reasoning = m.get("reasoning_content")
         if isinstance(reasoning, str) and reasoning.strip():
             entry["reasoning_content"] = reasoning
@@ -1200,6 +1194,10 @@ async def session_clear(
             mgr.save(session)
         except Exception:
             logger.warning("session.clear: failed to persist cleared {}", session_key)
+    if (board := _task_board(agent_loop)) is not None:
+        await board.reset(session_key)
+    else:
+        reset_board(mgr.session_dir(session_key))
     return {"session_id": session_key, "cleared": True}
 
 
@@ -1227,12 +1225,23 @@ async def session_undo(
     config = load_config()
     mgr = manager_for(agent_loop, config)
     session = mgr.get_or_create(session_key)
+    stamps_before = {str(m.get("timestamp")) for m in session.messages if m.get("timestamp")}
     removed = session.undo_last_turn(n)
     if removed and mgr.exists(session_key):
         try:
             mgr.save(session)
         except Exception:
             logger.warning("session.undo: failed to persist undo for {}", session_key)
+    if removed:
+        # A step is keyed by its turn's opening timestamp. Only the turns this
+        # undo removed go: consolidation has moved older messages out of the
+        # session, and their steps are not undone with this one.
+        undone = stamps_before - {str(m.get("timestamp")) for m in session.messages if m.get("timestamp")}
+        if (board := _task_board(agent_loop)) is not None:
+            await board.drop_turns(session_key, undone)
+        else:
+            directory = mgr.session_dir(session_key)
+            save_board(directory, drop_turns(load_board(directory), undone))
     return {"removed": removed}
 
 
@@ -1479,6 +1488,8 @@ async def session_branch(
     config = load_config()
     mgr = manager_for(agent_loop, config)
     child = mgr.fork(session_key, title=(name or None))
+    if child is not None:
+        copy_board(mgr.session_dir(session_key), mgr.session_dir(child.key))
     if child is not None and agent_loop is not None:
         # A fork continues its parent's conversation, so it continues on the
         # parent's model; without this it would silently drop to the default.
