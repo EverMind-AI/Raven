@@ -133,7 +133,7 @@ describe('displayRows', () => {
     const w = buildWaterfall([E('a', 0), E('b', 1)], Date.parse('2026-10-28T10:01:00.000Z'))
     expect(displayRows(w, new Set(), new Set()).map((row) => row.kind)).toEqual(['agent', 'turn'])
     expect(displayRows(w, new Set(), new Set(['0:T1'])).map((row) => row.kind)).toEqual(['agent', 'turn', 'span', 'span'])
-    expect(displayRows(w, new Set(['']), new Set(['T1'])).map((row) => row.kind)).toEqual(['agent'])
+    expect(displayRows(w, new Set(['main']), new Set(['T1'])).map((row) => row.kind)).toEqual(['agent'])
   })
 })
 

@@ -8,7 +8,6 @@
 import { t } from '../../../i18n/t'
 import { scopeTitle } from '../scopes'
 import { barOf } from './axis'
-import { agentKey } from './model'
 
 import type { TimeAxis, Viewport } from './axis'
 import type { Waterfall, WaterfallAgent } from './model'
@@ -51,7 +50,7 @@ export function OverviewLanes({ waterfall, axis, viewport }: {
   return (
     <div className="trajectory-ov">
       {waterfall.agents.slice(0, MAX_LANES).map((agent) => (
-        <div key={agentKey(agent.scope)} className="trajectory-ov-lane" data-lane={agentKey(agent.scope)}>
+        <div key={agent.key} className="trajectory-ov-lane" data-lane={agent.key}>
           <span className="trajectory-ov-name">{nameOf(agent)}</span>
           <span className="trajectory-ov-track">
             {runs(agent).map((run, at) => {

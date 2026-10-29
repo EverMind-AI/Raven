@@ -37,7 +37,7 @@ export function crossLinks(rows: readonly DisplayRow[], waterfall: Waterfall): L
   })
   const links: Link[] = []
   waterfall.agents.forEach((agent, index) => {
-    if (agent.scope === null) return
+    if (agent.key === 'main') return
     const toRow = at.get(`agent:${index}`)
     if (toRow === undefined) return
     const door = agent.door
@@ -50,7 +50,7 @@ export function crossLinks(rows: readonly DisplayRow[], waterfall: Waterfall): L
   })
   rows.forEach((row, index) => {
     if (row.kind !== 'turn' || row.turnRow === null || row.turnRow.reportedFrom === null) return
-    const child = waterfall.agents.findIndex((agent) => agent.scope === row.turnRow!.reportedFrom)
+    const child = waterfall.agents.findIndex((agent) => agent.scopes.includes(row.turnRow!.reportedFrom))
     if (child < 0) return
     const childAgent = waterfall.agents[child]!
     const fromRow = at.get(`agent:${child}`)

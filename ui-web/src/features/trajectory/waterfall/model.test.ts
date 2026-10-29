@@ -112,3 +112,38 @@ it('a turn previews the row that opened it, not whichever row started first', ()
   ], NOW)
   expect(w.agents[0]!.turns[0]!.preview).toBe('the question')
 })
+
+it('treats two runs of one instance as one agent, with one turn sequence', () => {
+  const w = buildWaterfall([
+    E({ entry_id: 'd1', span_id: 'd1', kind: 'tool.output', opens_subagent_scope: 't:a', meta: { instance: 'raven-design-1' }, operation_start: at(0), operation_end: at(1) }),
+    E({ entry_id: 'a1', span_id: 'a1', subagent_scope: 't:a', turn_span_id: 'A1', operation_start: at(2), operation_end: at(3) }),
+    E({ entry_id: 'd2', span_id: 'd2', kind: 'tool.output', opens_subagent_scope: 't:b', meta: { instance: 'raven-design-1' }, operation_start: at(4), operation_end: at(5) }),
+    E({ entry_id: 'b1', span_id: 'b1', subagent_scope: 't:b', turn_span_id: 'B1', operation_start: at(6), operation_end: at(7) }),
+  ], NOW)
+  expect(w.agents).toHaveLength(2)
+  const design = w.agents[1]!
+  expect(design.key).toBe('agent:raven-design-1')
+  expect(design.scopes).toEqual(['t:a', 't:b'])
+  expect(design.turns.map((turn) => turn.ordinal)).toEqual([1, 2])
+})
+
+it('folds runs of one named agent together when no instance id reached the door', () => {
+  const w = buildWaterfall([
+    E({ entry_id: 'd1', span_id: 'd1', kind: 'tool.output', opens_subagent_scope: 't:a', meta: { agent: 'Claude Code-Mirasim' }, operation_start: at(0), operation_end: at(1) }),
+    E({ entry_id: 'a1', span_id: 'a1', subagent_scope: 't:a', turn_span_id: 'A1', operation_start: at(2), operation_end: at(3) }),
+    E({ entry_id: 'd2', span_id: 'd2', kind: 'tool.output', opens_subagent_scope: 't:b', meta: { agent: 'Claude Code-Mirasim' }, operation_start: at(4), operation_end: at(5) }),
+    E({ entry_id: 'b1', span_id: 'b1', subagent_scope: 't:b', turn_span_id: 'B1', operation_start: at(6), operation_end: at(7) }),
+  ], NOW)
+  expect(w.agents).toHaveLength(2)
+  expect(w.agents[1]!.scopes).toEqual(['t:a', 't:b'])
+})
+
+it('keeps runs of differently named agents apart', () => {
+  const w = buildWaterfall([
+    E({ entry_id: 'd1', span_id: 'd1', kind: 'tool.output', opens_subagent_scope: 't:a', meta: { agent: 'coder' }, operation_start: at(0), operation_end: at(1) }),
+    E({ entry_id: 'a1', span_id: 'a1', subagent_scope: 't:a', turn_span_id: 'A1', operation_start: at(2), operation_end: at(3) }),
+    E({ entry_id: 'd2', span_id: 'd2', kind: 'tool.output', opens_subagent_scope: 't:b', meta: { agent: 'writer' }, operation_start: at(4), operation_end: at(5) }),
+    E({ entry_id: 'b1', span_id: 'b1', subagent_scope: 't:b', turn_span_id: 'B1', operation_start: at(6), operation_end: at(7) }),
+  ], NOW)
+  expect(w.agents).toHaveLength(3)
+})

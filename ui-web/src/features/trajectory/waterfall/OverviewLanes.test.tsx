@@ -32,7 +32,7 @@ it('draws one lane per agent, in the waterfall order', () => {
   const { container } = render(<OverviewLanes waterfall={waterfall} axis={axis} viewport={{ from: 0, to: axis.length }} />)
   const lanes = container.querySelectorAll('[data-lane]')
   expect(lanes).toHaveLength(2)
-  expect([...lanes].map((lane) => lane.getAttribute('data-lane'))).toEqual(['', 't:sub'])
+  expect([...lanes].map((lane) => lane.getAttribute('data-lane'))).toEqual(['main', 'scope:t:sub'])
 })
 
 it('places a stretch as a fraction of the viewport', () => {

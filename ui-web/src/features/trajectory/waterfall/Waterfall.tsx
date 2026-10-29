@@ -24,7 +24,7 @@ import * as store from '../store'
 import { AxisIndex, barOf, clampViewport, tickMarks, zoomViewport } from './axis'
 import { WaterfallIndex } from './incremental'
 import { crossLinks } from './links'
-import { agentKey, entryEnd, entryStart, isLive, turnKey } from './model'
+import { entryEnd, entryStart, isLive, turnKey } from './model'
 import { OverviewLanes } from './OverviewLanes'
 import { turnSegments } from './segments'
 
@@ -51,8 +51,8 @@ export function displayRows(
 ): DisplayRow[] {
   const rows: DisplayRow[] = []
   waterfall.agents.forEach((agent, at) => {
-    rows.push({ kind: 'agent', key: `agent:${agentKey(agent.scope)}`, agent: at, turn: null, row: null, turnRow: null })
-    if (collapsedAgents.has(agentKey(agent.scope))) return
+    rows.push({ kind: 'agent', key: `agent:${agent.key}`, agent: at, turn: null, row: null, turnRow: null })
+    if (collapsedAgents.has(agent.key)) return
     for (const turn of agent.turns) {
       rows.push({ kind: 'turn', key: `turn:${turnKey(at, turn.id)}`, agent: at, turn: turn.id, row: null, turnRow: turn })
       if (!openTurns.has(turnKey(at, turn.id))) continue
@@ -325,7 +325,7 @@ export function Waterfall(): JSX.Element {
       }
     }
     if (owner === null) return
-    const group = agentKey(waterfall.agents[owner.agent]!.scope)
+    const group = waterfall.agents[owner.agent]!.key
     if (collapsed.has(group)) {
       setCollapsed((previous) => {
         const next = new Set(previous)
@@ -425,7 +425,7 @@ export function Waterfall(): JSX.Element {
   const locate = (entry: TrajectoryEntry): void => {
     const scope = entry.opens_subagent_scope
     if (scope === null || scope === undefined) return
-    const agent = waterfall.agents.find((candidate) => candidate.scope === scope)
+    const agent = waterfall.agents.find((candidate) => candidate.scopes.includes(scope))
     const first = agent?.turns[0]?.rows[0] ?? agent?.loose[0]
     if (first !== undefined) store.selectAcross(first.entry.entry_id, { source: 'link' })
   }
@@ -438,7 +438,8 @@ export function Waterfall(): JSX.Element {
   /* A scope id is `trace:span`; the badge must say who the worker is. */
   const nameOfScope = new Map<string, string>()
   for (const agent of waterfall.agents) {
-    if (agent.scope !== null) nameOfScope.set(agent.scope, scopeTitle(agent.door))
+    if (agent.scope === null) continue
+    for (const scope of agent.scopes) if (scope !== null) nameOfScope.set(scope, scopeTitle(agent.door))
   }
 
   /* The header's numbers, from the rows the page draws. */
@@ -477,10 +478,10 @@ export function Waterfall(): JSX.Element {
       const bar = barOf(axis, view, agent.start, agent.end)
       painted.push(
         <div key={row.key} className="trajectory-wf-row trajectory-wf-agent" data-row="agent" style={style}
-          onClick={() => toggleAgent(agentKey(agent.scope))}>
+          onClick={() => toggleAgent(agent.key)}>
           <span className="trajectory-wf-label" style={{ paddingLeft: 12 }}>
             <span className="trajectory-wf-guide" style={{ left: 30 }} />
-            <span className="trajectory-wf-chev">{collapsed.has(agentKey(agent.scope)) ? '\u25b8' : '\u25be'}</span>
+            <span className="trajectory-wf-chev">{collapsed.has(agent.key) ? '\u25b8' : '\u25be'}</span>
             <span className="trajectory-wf-tile" data-tone={row.agent % 4}>
               {agent.scope === null
                 ? <AgentMark own />
