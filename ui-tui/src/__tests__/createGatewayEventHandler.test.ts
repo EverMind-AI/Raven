@@ -405,7 +405,7 @@ describe('createGatewayEventHandler', () => {
     onEvent({ payload: { text: 'abc' }, type: 'message.delta' } as any)
     // The typed notice marks the turn on the shared controller; this path has
     // no frame of its own for it.
-    turnController.recordSilentTurn()
+    turnController.recordSilentTurn('abc')
     onEvent({ payload: { text: '[SILENT]' }, type: 'message.complete' } as any)
 
     // Neither the marker nor the preview is drawn, and the fallback that stands
@@ -436,7 +436,7 @@ describe('createGatewayEventHandler', () => {
     const onEvent = createGatewayEventHandler(bellCtx([], write))
 
     onEvent({ payload: {}, type: 'message.start' } as any)
-    turnController.recordSilentTurn()
+    turnController.recordSilentTurn('')
     onEvent({ payload: { text: '[SILENT]' }, type: 'message.complete' } as any)
 
     // A bell is a ping, and a ping is a delivery: nothing was delivered.

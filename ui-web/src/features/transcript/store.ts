@@ -1170,7 +1170,6 @@ export function newStep(lane: Lane): StepHandle {
      comes before the tools it calls, so prose after the step's last tool call
      is a later call's: an exhausted turn's wrap-up opens no episode and streams
      into the step the last call left open. */
-  let replyAt = 0
 
   const h: StepHandle = {
     seg,
@@ -1211,8 +1210,12 @@ export function newStep(lane: Lane): StepHandle {
       seg.sayCaret = true
       scheduleFlush(lane, seg)
     },
-    dropReply() {
-      seg.say = seg.say.slice(0, replyAt)
+    dropReply(shown: string) {
+      /* What the closing reply put on screen is the end of what the step holds,
+         or, on a page that joined the turn part-way, all of what it holds is the
+         end of that reply. Anything else the step said is not the reply's. */
+      const say = seg.say
+      seg.say = say.endsWith(shown) ? say.slice(0, say.length - shown.length) : shown.endsWith(say) ? '' : say
       seg.hasSay = !!seg.say
       seg.sayCaret = false
       if (!seg.hasThink && !seg.calls.length && !seg.hasQA && replaceStep(lane, seg, null)) bumpList(lane)
@@ -1239,7 +1242,6 @@ export function newStep(lane: Lane): StepHandle {
       poke(lane)
       paintWork(lane, seg, grew)
       bumpList(lane)
-      replyAt = seg.say.length
       return {
         done: (ok, res, ms, diff, truncated) => callDone(lane, seg, c, ok, res, ms, diff, truncated),
         spawnTask: (taskId) => { c.spawnTaskId = String(taskId || '') },

@@ -1060,6 +1060,15 @@ class TurnPathMixin:
         # Set when the turn's last reply is a silence marker: the model's own choice to say
         # nothing, which the caller does not deliver.
         silent = False
+        # What the silence gates have put in front of the reader in the step drawn now: one model
+        # call with its cut answer's continuations, or the wrap-up. A reply read as the marker
+        # reports it (``LoopOutcome.shown``), for a client to take back that much and no more.
+        step_shown: list[str] = []
+
+        async def _shown(delta: str) -> None:
+            step_shown.append(delta)
+            if on_token_delta is not None:
+                await on_token_delta(delta)
 
         # The turn's window bookkeeping: the last billed context size, the retry
         # budgets every shrink draws on, and the picture window. Held here and
@@ -1363,6 +1372,8 @@ class TurnPathMixin:
             # group this call's reasoning + text + tools into a single step. Not
             # for the continuation of a cut answer: a boundary there would show
             # the reader one answer as two steps.
+            if not merge_episode:
+                step_shown.clear()
             if on_episode_start is not None and not merge_episode:
                 # A bounded per-outlet queue with a wedged worker behind it parks
                 # here forever; the boundary is a grouping hint, so losing one is
@@ -1538,7 +1549,7 @@ class TurnPathMixin:
             elif carried_gate is not None:
                 silence_gate = carried_gate.handed_over()
             else:
-                silence_gate = SilenceGate(on_token_delta, hold_all=reads_loose_silence(origin, taught=silence_taught))
+                silence_gate = SilenceGate(_shown, hold_all=reads_loose_silence(origin, taught=silence_taught))
             downstream = silence_gate or on_token_delta
             # A hook can send this whole response back, and a rollback pops the
             # history the stream has already left -- so where hooks are installed
@@ -2691,8 +2702,10 @@ class TurnPathMixin:
             # The wrap-up is the turn's last reply, so it may be a Silence Marker as an
             # answer may: its stream is held back as the answering call's is, and a
             # marker ends the turn silent.
+            # The wrap-up streams into the last call's step, after the narration that step keeps.
+            step_shown.clear()
             wrap_up_gate = (
-                SilenceGate(on_token_delta, hold_all=reads_loose_silence(origin, taught=silence_taught))
+                SilenceGate(_shown, hold_all=reads_loose_silence(origin, taught=silence_taught))
                 if on_token_delta is not None and not reply_awaited
                 else None
             )
@@ -2797,7 +2810,12 @@ class TurnPathMixin:
         # pipeline can gate on completion.
 
         outcome = LoopOutcome(
-            status=status, error=error_detail, error_full=error_full, no_output=no_output, silent=silent
+            status=status,
+            error=error_detail,
+            error_full=error_full,
+            no_output=no_output,
+            silent=silent,
+            shown="".join(step_shown) if silent else "",
         )
         checkpoint = self._turn_checkpoint()
         if checkpoint is not None:
@@ -2838,7 +2856,7 @@ class TurnPathMixin:
         origin: Origin | None = None,
         drain: Drain | None = None,
         hook_sink: dict[str, str] | None = None,
-        silence: dict[str, bool] | None = None,
+        silence: dict[str, bool | str] | None = None,
         reply_awaited: bool = False,
     ) -> tuple[str | None, list[str]] | None:
         """Process a single turn request and return its reply.
@@ -2852,7 +2870,8 @@ class TurnPathMixin:
         reply: a streamed reply has already left as deltas by then, so the
         caller has to send that tail itself. ``silence``, when given, receives
         ``"silent": True`` for the last of those: a turn the model ended on a
-        marker, and that nothing replaced with a reply of its own.
+        marker, and that nothing replaced with a reply of its own -- and, when
+        that reply had streamed anything first, ``"shown"`` (``LoopOutcome.shown``).
         ``reply_awaited`` keeps a turn whose caller waits on its text out of
         the silence protocol (``_run_agent_loop``).
         """
@@ -3616,6 +3635,8 @@ class TurnPathMixin:
             logger.info("Silent turn for {}:{}: the model chose not to reply", channel, sender_id)
             if silence is not None:
                 silence["silent"] = True
+                if outcome.shown:
+                    silence["shown"] = outcome.shown
             return None
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
@@ -4208,7 +4229,7 @@ class TurnPathMixin:
 
         streamed = False
         hook_sink: dict[str, str] = {}
-        silence: dict[str, bool] = {}
+        silence: dict[str, bool | str] = {}
 
         async def on_token(text: str) -> None:
             nonlocal streamed
@@ -4391,9 +4412,11 @@ class TurnPathMixin:
                 await emit(StreamDelta(delta=hook_sink["appended"]))
             if text_sink is not None and reply_content:
                 text_sink["text"] = reply_content
-        silent = silence.get("silent", False)
+        silent = silence.get("silent", False) is True
         if silent:
-            await emit(Notice(kind=NoticeKind.SILENT_TURN))
+            # Named so a client that drew the reply's think block takes back that and no more.
+            shown = silence.get("shown")
+            await emit(Notice(kind=NoticeKind.SILENT_TURN, detail=shown if isinstance(shown, str) and shown else None))
 
         usage = Usage(
             prompt_tokens=int(usage_sink.get("prompt_tokens", 0) or 0),

@@ -14940,7 +14940,7 @@
               "detail": {
                 "type": "string",
                 "default": "",
-                "description": "What `kind` says it is: the blocking tool's own first line, the failed call's error category (or `empty_reply` / `thinking_only` for the wait before an empty-reply resend or a reasoning step-down), or the organ that dropped out. Empty for `silent_turn`."
+                "description": "What `kind` says it is: the blocking tool's own first line, the failed call's error category (or `empty_reply` / `thinking_only` for the wait before an empty-reply resend or a reasoning step-down), or the organ that dropped out. For `silent_turn`, what the reply read as the marker had streamed before it was: a think block the model inlined ahead of it, which goes out as it comes, counted over the step it was drawn in (its call and a cut answer's continuations, or the wrap-up alone). A client that drew it takes back exactly that suffix of the step's text, and nothing it drew before. Empty when the reply showed nothing."
               },
               "transient": {
                 "type": "boolean",

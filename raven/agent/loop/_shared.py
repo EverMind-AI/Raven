@@ -314,6 +314,11 @@ class LoopOutcome:
     ``silent`` is set when the turn's last reply is a silence marker. That is the
     model's answer, not a failure and not an empty reply: the row stays in the
     history and carries ``_silent``, and the reader is shown none of it.
+    ``shown`` is what that reply had already streamed before it was read as the
+    marker -- a think block the model inlined ahead of it goes out as it comes --
+    counted over the step a reader draws it in: its call and the continuations
+    of a cut answer, or the wrap-up alone. A client that drew it takes back
+    exactly this, and nothing it drew before. Empty when the reply showed nothing.
     """
 
     status: str = "completed"  # "completed" | "interrupted" | "error"
@@ -321,6 +326,7 @@ class LoopOutcome:
     error_full: str | None = None
     no_output: bool = False
     silent: bool = False
+    shown: str = ""
     checkpoint_id: str | None = None
     edited_files: list[str] = field(default_factory=list)
 
