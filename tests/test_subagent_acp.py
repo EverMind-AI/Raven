@@ -3533,6 +3533,44 @@ async def test_dispatch_records_its_own_span_under_the_calling_span(trace_dir, t
     assert {e["name"] for e in span["events"]} >= {"acp.tool_call", "acp.usage_update"}
 
 
+async def test_the_run_writes_what_its_agent_said_and_ran_as_steps_inside_it(
+    trace_dir, tmp_path: Path, monkeypatch
+) -> None:
+    """The live lane writes the run's own steps under its span, and inside it.
+
+    The run's clock starts before the span opens -- the MCP grant is resolved
+    first -- so a first step anchored on that clock would begin before the run
+    it belongs to. A slow grant makes the gap big enough to see.
+    """
+    from datetime import datetime
+
+    backend = build_third_party_backend(stub_config("a", mode="two_messages"))
+    resolve = backend.resolve_mcp_grant_async
+
+    async def slow_grant(*args: Any, **kwargs: Any) -> Any:
+        await asyncio.sleep(0.2)
+        return await resolve(*args, **kwargs)
+
+    monkeypatch.setattr(backend, "resolve_mcp_grant_async", slow_grant)
+    await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    written = _spans_written(trace_dir)
+    run = next(s for s in written if s.get("name") == "subagent.external")
+    steps = [s for s in written if s.get("parentSpanId") == run["spanId"]]
+    assert [s["name"] for s in steps] == ["llm.call"] * 4 + ["tool.call", "llm.call"]
+    said = [
+        s["attributes"].get("llm.input_preview") or s["attributes"].get("llm.output_preview")
+        for s in steps
+        if s["name"] == "llm.call"
+    ]
+    assert said == ["ping", "let me ", "planning", "look.", "it is a repo."]
+    assert "tool.output.artifact_path" in steps[4]["attributes"]
+    opened, closed = (datetime.fromisoformat(run[key]) for key in ("startTime", "endTime"))
+    for step in steps:
+        start, end = (datetime.fromisoformat(step[key]) for key in ("startTime", "endTime"))
+        assert opened <= start <= end <= closed, (step["name"], step["startTime"], run["startTime"])
+
+
 async def test_the_span_measures_the_reply_it_handed_back(trace_dir, tmp_path: Path) -> None:
     """`answer_chars` is the length of the answer on both transports.
 
