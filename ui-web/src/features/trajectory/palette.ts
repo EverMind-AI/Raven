@@ -87,9 +87,3 @@ export function kindLabel(kind: string): string {
   const key = kindKey(kind)
   return key === null ? kind : t(key)
 }
-
-/** Every word the tag column may need to fit, in the current language. */
-export const kindLabels = (): string[] => {
-  const keys = new Set<string>([...Object.values(KNOWN), ...Object.values(NAMED), ...PREFIXED.map((p) => p[2]), 'gui.trajectory.kind.summary'])
-  return [...keys].map((key) => t(key))
-}

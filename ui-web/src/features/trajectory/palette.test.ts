@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
-import { KNOWN_KINDS, NAMED_KINDS, kindClass, kindKey, kindLabel, kindLabels, kindSlug } from './palette'
+import { KNOWN_KINDS, NAMED_KINDS, kindClass, kindKey, kindLabel, kindSlug } from './palette'
 
 const catalogue = (): Record<string, { en: string; zh: string }> =>
   (JSON.parse(readFileSync('../i18n/messages.json', 'utf8') as string) as { ui: Record<string, { en: string; zh: string }> }).ui
@@ -65,13 +65,6 @@ describe('the kind palette', () => {
     }
   })
 
-  it('marks a sub-agent row with the bullet character, not a backslash and its code', () => {
-    const sheet = readFileSync('src/features/trajectory/styles.css', 'utf8') as string
-    const rule = sheet.split('\n').find((line) => line.startsWith('.trajectory-turn-sub::after'))
-    expect(rule).toContain("content: '\\2022'")
-    expect(rule).not.toContain("content: '\\\\2022'")
-  })
-
   it('labels through the translator, naming the raw kind only where it has no word', () => {
     setTranslator((key) => `<${key}>`)
     try {
@@ -80,8 +73,6 @@ describe('the kind palette', () => {
       expect(kindLabel('subagent.external.usage')).toBe('<gui.trajectory.kind.subagent_external>')
       expect(kindLabel('weird.thing.summary')).toBe('<gui.trajectory.kind.summary>')
       expect(kindLabel('artifact:custom')).toBe('artifact:custom')
-      expect(new Set(kindLabels()).size).toBe(kindLabels().length)
-      expect(kindLabels()).toContain('<gui.trajectory.kind.summary>')
     } finally {
       resetTranslator()
     }

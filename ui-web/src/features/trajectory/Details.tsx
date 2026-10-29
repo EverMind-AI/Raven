@@ -166,7 +166,7 @@ export function Details(): JSX.Element | null {
         {kind ? <span className={`trajectory-tag ${kindClass(kind)}`}>{kindLabel(kind)}</span> : null}
         <span className="trajectory-head-name" title={value ? shortName(value, entry) : undefined}>{value ? shortName(value, entry) : (entry?.span_name ?? '')}</span>
         {jump !== null && entry ? (
-          <button className="trajectory-scope-jump" title={jump} onClick={() => { if (scopes.openFromEntry(entry)) scopes.focusTab() }}>
+          <button className="trajectory-scope-jump" title={jump} onClick={() => { if (scopes.openFromEntry(entry)) scopes.focusList() }}>
             {jump}
           </button>
         ) : null}

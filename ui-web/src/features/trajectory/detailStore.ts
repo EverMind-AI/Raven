@@ -1376,18 +1376,12 @@ export const hasFocus = (): boolean => {
   return !!pane && pane.contains(document.activeElement)
 }
 
-/* The one layer the surfaces share: the dense block's pick list and the
-   duration filter's popover, which are open or not, and the pane, which
-   counts only while it holds the focus. The list goes first, then the
-   popover, being the things on top. */
+/* The one layer the surfaces share: the pane, which counts only while it
+   holds the focus. */
 onTrajectoryEscape({
   id: 'trajectory.escapeOpen()',
-  isOpen: () => list.get().timeline.bucket !== null || list.get().timeline.threshold || (store.get().open && hasFocus()),
-  close: () => {
-    if (list.get().timeline.bucket !== null) list.closeBucket()
-    else if (list.get().timeline.threshold) list.setThresholdOpen(false)
-    else closeDetails()
-  },
+  isOpen: () => store.get().open && hasFocus(),
+  close: () => closeDetails(),
 })
 
 /** `keepStorage` stands in for a reload: everything in memory goes, the tab's storage stays. */

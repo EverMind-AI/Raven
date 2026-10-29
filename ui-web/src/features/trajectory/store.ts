@@ -55,33 +55,11 @@ export interface Anchor {
   offset: number
 }
 
-/* The duration bar's view of the entries: how far it is zoomed, where it is
-   scrolled to, whether it still fits the bar (and so re-fits as rows
-   arrive), the fit's unit it froze on the first zoom, the place at its left
-   edge, and the dense block the reader has opened a pick list for. */
-export interface Timeline {
-  scale: number
-  offset: number
-  fit: boolean
-  frozenUnit: number | null
-  /** The fit's equal share frozen with it when the rows had no duration (geometry.ts). */
-  frozenMark: number | null
-  anchor: { id: string; frac: number } | null
-  bucket: { ids: string[]; x: number } | null
-  /** The duration filter's popover is up. */
-  threshold: boolean
-}
-
-export const initialTimeline: Timeline = {
-  scale: 1, offset: 0, fit: true, frozenUnit: null, frozenMark: null, anchor: null, bucket: null, threshold: false,
-}
-
 /** What a Scope Tab keeps while another is on screen. */
 export interface ScopeView {
   selectedId: string | null
   follow: boolean
   anchor: Anchor | null
-  timeline: Timeline
 }
 
 /** An open sub-agent tab: its Sub-agent Scope and the entry that opened it, as it was then. */
@@ -129,7 +107,6 @@ export interface TrajectoryState {
   /** Within reach of the tail, so new rows pull the viewport down. */
   follow: boolean
   anchor: Anchor | null
-  timeline: Timeline
   /** The Scope Tab on screen: a Sub-agent Scope's id, or null for the main session. */
   scope: string | null
   /** The sub-agent tabs the reader opened, in the order they were opened. */
@@ -144,7 +121,7 @@ export interface TrajectoryState {
   shown: TrajectoryEntry[]
   /** `entry_id` to position in `shown`, rebuilt with it. */
   shownIndex: Record<string, number>
-  /** The rows the list draws: the tab's entries. */
+  /** The current scope's entries: every entry `scopeOf` puts in `scope`. */
   visible: TrajectoryEntry[]
   /** `entry_id` to position in `visible`, rebuilt with it. */
   visibleIndex: Record<string, number>
@@ -171,9 +148,9 @@ export const scopeKey = (scope: string | null): string => scope ?? MAIN_KEY
 
 const spanKey = (trace: string, span: string): string => `${trace}:${span}`
 
-/* Everything the list and the bar read that follows from `entries`: the
-   tab's visible rows and their positions, the span lookup, the turn totals,
-   and what the tab strip and the bar need to know about every scope. */
+/* Everything the page reads that follows from `entries`: every entry it may
+   draw and the current scope's rows, with their positions, the span lookup,
+   the turn totals, and what it needs to know about every scope. */
 function derived(entries: TrajectoryEntry[], scope: string | null) {
   const shown: TrajectoryEntry[] = []
   const visible: TrajectoryEntry[] = []
@@ -222,7 +199,6 @@ const initial: TrajectoryState = {
   selections: 0,
   follow: true,
   anchor: null,
-  timeline: initialTimeline,
   scope: null,
   scopes: [],
   saved: {},
@@ -258,7 +234,6 @@ interface Remembered {
   selectedId: string | null
   follow: boolean
   anchor: Anchor | null
-  timeline: Timeline
 }
 
 /** How many conversations' places are kept; the oldest goes when a new one arrives. */
@@ -315,7 +290,7 @@ function leaveView(): void {
   if (store.get().view === 'trajectory') {
     bump()
     const s = store.get()
-    patch({ view: 'chat', listing: false, timeline: { ...s.timeline, bucket: null, threshold: false }, ...rows(s.entries, s) })
+    patch({ view: 'chat', listing: false, ...rows(s.entries, s) })
   }
 }
 
@@ -379,10 +354,7 @@ export function setView(view: View): void {
   if (s.view === view) return
   if (view === 'trajectory' && !available(s)) return
   bump()
-  patch({
-    view, listing: false, timeline: view === 'chat' ? { ...s.timeline, bucket: null, threshold: false } : s.timeline,
-    ...rows(s.entries, s),
-  })
+  patch({ view, listing: false, ...rows(s.entries, s) })
 }
 
 export const toggleView = (): void => { setView(store.get().view === 'trajectory' ? 'chat' : 'trajectory') }
@@ -420,11 +392,9 @@ export function setPlace(follow: boolean, anchor: Anchor | null): void {
 
 /* ── the Scope Tabs ───────────────────────────────────────────────────── */
 
-const freshView = (): ScopeView => ({ selectedId: null, follow: true, anchor: null, timeline: initialTimeline })
+const freshView = (): ScopeView => ({ selectedId: null, follow: true, anchor: null })
 
-const viewOf = (s: TrajectoryState): ScopeView => ({
-  selectedId: s.selectedId, follow: s.follow, anchor: s.anchor, timeline: { ...s.timeline, bucket: null, threshold: false },
-})
+const viewOf = (s: TrajectoryState): ScopeView => ({ selectedId: s.selectedId, follow: s.follow, anchor: s.anchor })
 
 const doorOf = (s: TrajectoryState, id: string): TrajectoryEntry | null => {
   const door = s.doors[id]
@@ -455,7 +425,7 @@ function enter(target: string | null, how: {
   const moved = how.select !== undefined || selectedId !== s.selectedId
   patch({
     scope: target, scopes, saved, ...next,
-    follow: back.follow, anchor: back.anchor, timeline: back.timeline,
+    follow: back.follow, anchor: back.anchor,
     selectedId, selectedBy: selectedId === null ? null : (how.select ? how.select.source : 'migrate'),
     selections: moved ? s.selections + 1 : s.selections,
   })
@@ -560,28 +530,6 @@ function carry(saved: Record<string, ScopeView>, c: Change): Record<string, Scop
 
 const NOTHING_REPLACED: ReadonlyMap<string, string | null> = new Map()
 
-/* ── the duration bar's view ──────────────────────────────────────────── */
-
-/** The bar's zoom and scroll, written by the bar after every move. */
-export function setTimeline(next: Partial<Timeline>): void {
-  patch({ timeline: { ...store.get().timeline, ...next } })
-}
-
-/** A dense block's pick list is up, for these entries, at this content x. */
-export function openBucket(ids: string[], x: number): void {
-  if (!ids.length) return
-  setTimeline({ bucket: { ids, x } })
-}
-
-export function closeBucket(): void {
-  if (store.get().timeline.bucket !== null) setTimeline({ bucket: null })
-}
-
-/** The duration filter's popover, opened or closed by its button, Escape or a click elsewhere. */
-export function setThresholdOpen(open: boolean): void {
-  if (store.get().timeline.threshold !== open) setTimeline({ threshold: open })
-}
-
 /* ── the conversation on screen ───────────────────────────────────────── */
 
 /* What is kept of a conversation is its main session's place: the sub-agent
@@ -623,7 +571,6 @@ export function sessionChanged(key: string | null = sessionCurrent()): void {
     selectedBy: back?.selectedId ? 'migrate' : null,
     follow: back?.follow ?? true,
     anchor: back?.anchor ?? null,
-    timeline: back?.timeline ?? initialTimeline,
     scope: null,
     scopes: [],
     saved: {},
