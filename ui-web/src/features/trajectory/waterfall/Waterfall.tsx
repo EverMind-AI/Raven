@@ -386,7 +386,7 @@ export function Waterfall(): JSX.Element {
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-     
+
   }, [])
 
   /* The clock the bars are cut at. It ticks only while something is still
@@ -449,7 +449,7 @@ export function Waterfall(): JSX.Element {
   viewRef.current = view
   fullRef.current = axis.length
   /* A different conversation has a different axis; the old window means nothing. */
-   
+
   useEffect(() => { setZoom(null) }, [axis.length])
   /* The picked stretch is owned here: the axis draws it, and the rows below
      are filtered to it. It is a fraction of the viewport it was drawn on, so a

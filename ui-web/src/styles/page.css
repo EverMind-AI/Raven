@@ -7162,4 +7162,3 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    view; nothing else reads it. */
 html[data-traj] .chat > .dock { display: none }
 html[data-traj] #deskHost { display: none }
-
