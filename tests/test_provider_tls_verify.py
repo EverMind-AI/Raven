@@ -399,6 +399,20 @@ async def test_the_azure_client_verifies_as_the_section_asked(
     assert built and built[-1].get("verify") is tls_verify
 
 
+@pytest.mark.asyncio
+async def test_a_client_that_cannot_be_built_becomes_an_error_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A construction failure is the call's failure, not an exception out of `chat()`."""
+    provider = _provider(False)
+
+    def refuse() -> Any:
+        raise httpx.InvalidURL("Invalid port: ':1]'")
+
+    monkeypatch.setattr(provider, "_verify_off_client_for_route", refuse)
+    reply = await provider.chat(messages=[{"role": "user", "content": "hi"}], model="openai/gpt-4o")
+
+    assert reply.finish_reason == "error"
+
+
 @pytest.mark.parametrize("streamed", [False, True], ids=["chat", "stream"])
 async def test_an_opted_out_call_that_failed_for_another_reason_is_not_sent_again(
     monkeypatch: pytest.MonkeyPatch, streamed: bool

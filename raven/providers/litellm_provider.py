@@ -719,14 +719,6 @@ class LiteLLMProvider(LLMProvider):
         if self.api_base:
             kwargs["api_base"] = self.api_base
 
-        # A section that opted out of certificate verification sends this call
-        # through its own client: LiteLLM builds a verifying one of its own,
-        # and only a pre-construction hook turns that off. The `responses` and
-        # `anthropic` protocols live in their own providers, which read the
-        # same knob.
-        if not self.tls_verify:
-            kwargs["client"] = self._verify_off_client_for_route()
-
         # Pass extra headers (e.g. APP-Code for AiHubMix)
         if self.extra_headers:
             kwargs["extra_headers"] = self.extra_headers
@@ -745,6 +737,16 @@ class LiteLLMProvider(LLMProvider):
             kwargs["tool_choice"] = tool_choice or "auto"
 
         try:
+            # A section that opted out of certificate verification sends this
+            # call through its own client: LiteLLM builds a verifying one of its
+            # own, and only a pre-construction hook turns that off. The
+            # `responses` and `anthropic` protocols live in their own providers,
+            # which read the same knob. Built here rather than beside the other
+            # kwargs so that a client that cannot be constructed (httpx refuses
+            # an unparsable proxy setting, say) is classified like any other
+            # provider failure instead of escaping to the caller as an exception.
+            if not self.tls_verify:
+                kwargs["client"] = self._verify_off_client_for_route()
             response = await asyncio.wait_for(self._acompletion(kwargs), self.generation.timeout)
             return self._parse_response(response, sent_chars=prompt_chars(messages))
         except Exception as e:
