@@ -908,7 +908,9 @@ class SessionManager:
         # turn that ends silent to be taken back whole.
         before_runtime_turn: tuple[str, str] | None = None
         try:
-            with path.open(encoding="utf-8") as f:
+            # utf-8-sig: a Windows editor that saves UTF-8 with a byte order mark puts it in front of the
+            # metadata line, which would then fail to parse and take the session off the list.
+            with path.open(encoding="utf-8-sig") as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -939,7 +941,9 @@ class SessionManager:
                                         last_ts = ts
                                 elif before_runtime_turn is not None and not replied_via_message_tool(data):
                                     latest_preview, last_ts = before_runtime_turn
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # A transcript that is not UTF-8 (one saved in a Windows code page) is left out as an
+            # unreadable one is, rather than its decoding error escaping the whole list.
             return None, 0, "", "", ""
         return meta, count, last_ts, first_user, latest_preview
 

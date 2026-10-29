@@ -339,6 +339,38 @@ def test_a_session_holding_only_its_open_question_is_a_complete_row(tmp_path: Pa
     assert row["last_message_at"], "the row has no stamp to sort the picker by"
 
 
+def test_a_transcript_saved_with_a_byte_order_mark_is_still_listed(tmp_path: Path):
+    """A Windows editor that saves UTF-8 with a byte order mark puts it in front of the metadata line.
+    Read as plain UTF-8, that line did not parse and the whole session left the list."""
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create("tui:bom01")
+    session.add_message("user", "hello")
+    mgr.save(session)
+    path = tmp_path / "sessions" / "tui" / "bom01.jsonl"
+    path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+
+    rows = [info for info in SessionManager(tmp_path).list_sessions() if info["key"] == "tui:bom01"]
+
+    assert len(rows) == 1
+    assert rows[0]["first_user_message"] == "hello"
+
+
+def test_a_transcript_in_a_legacy_code_page_is_left_out_without_breaking_the_list(tmp_path: Path):
+    """A transcript saved in a Windows ANSI code page is not UTF-8. It is left out as an unreadable file
+    is, rather than its decoding error escaping the whole list."""
+    mgr = SessionManager(tmp_path)
+    for key in ("tui:good01", "tui:cp01"):
+        session = mgr.get_or_create(key)
+        session.add_message("user", "\u4f60\u597d")
+        mgr.save(session)
+    path = tmp_path / "sessions" / "tui" / "cp01.jsonl"
+    path.write_bytes(path.read_text(encoding="utf-8").replace("\\u4f60\\u597d", "\u4f60\u597d").encode("cp936"))
+
+    keys = [info["key"] for info in SessionManager(tmp_path).list_sessions()]
+
+    assert keys == ["tui:good01"]
+
+
 def test_list_sessions_sees_nested_layout(tmp_path: Path):
     """list_sessions enumerates nested per-channel files."""
     mgr = SessionManager(tmp_path)
