@@ -1,13 +1,14 @@
 """JSONL + artifact storage for the trace core (audit.span.v1).
 
-Dependency-free (stdlib only). Copied from the shared tracing-plugin core so
-this package stays self-contained for a clean ``pip install``.
+The one third-party dependency is ``zstandard``: a payload is stored as a zstd
+frame under the path it always had, so readers tell the encoding from the
+frame and a store written before compression stays readable.
 
 Layout under the state dir::
 
     <state_dir>/logs/audit-events.log      # one JSON event record per line
     <state_dir>/logs/audit-spans.log       # one JSON span per line
-    <state_dir>/logs/audit-artifacts/_blobs/<sha1[:2]>/<sha1>.<ext>   # one copy per payload
+    <state_dir>/logs/audit-artifacts/_blobs/<sha1[:2]>/<sha1>.<ext>   # one zstd copy per payload
     <state_dir>/logs/audit-artifacts/<kind>/<date>/...      # hard links to those blobs
     <state_dir>/logs/archive/<date>/...     # rotated logs
 """
@@ -23,7 +24,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import zstandard
+
 from . import artifact_v2
+from .codec import compress_bytes, is_compressed
 
 DEFAULT_MAX_BYTES = 50 * 1024 * 1024
 
@@ -114,7 +118,8 @@ class TraceStore:
         day_dir = self._ensure(self.archive_dir / current_day)
         suffix = datetime.now(timezone.utc).strftime("%H%M%S%f")
         base = _KIND_FILES[kind].replace(".log", "")
-        path.rename(day_dir / f"{base}-{current_day}-{suffix}.log")
+        rotated = day_dir / f"{base}-{current_day}-{suffix}.log"
+        path.rename(rotated)
         return path
 
     def append(self, kind: str, record: dict[str, Any]) -> None:
@@ -165,15 +170,25 @@ class TraceStore:
             return True
         digest = hashlib.sha1()
         with blob.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(_BLOB_READ_CHUNK), b""):
-                digest.update(chunk)
+            head = handle.read(4)
+            handle.seek(0)
+            if is_compressed(head):
+                try:
+                    with zstandard.ZstdDecompressor().stream_reader(handle, read_across_frames=False) as reader:
+                        for chunk in iter(lambda: reader.read(_BLOB_READ_CHUNK), b""):
+                            digest.update(chunk)
+                except zstandard.ZstdError:
+                    return False
+            else:
+                for chunk in iter(lambda: handle.read(_BLOB_READ_CHUNK), b""):
+                    digest.update(chunk)
         if digest.hexdigest() != sha1:
             return False
         self._verified_blobs[blob.name] = token
         return True
 
-    def _publish_blob(self, blob: Path, text: str, sha1: str) -> None:
-        """Create ``blob`` holding ``text``, losing gracefully to a racing writer.
+    def _publish_blob(self, blob: Path, payload: bytes, sha1: str) -> None:
+        """Create ``blob`` holding ``payload``, losing gracefully to a racing writer.
 
         The temp file is named with a ``uuid4`` (not just the pid), so two
         writers in the same process publishing the same new payload never
@@ -186,7 +201,7 @@ class TraceStore:
         self._ensure(blob.parent)
         tmp = blob.parent / f"{sha1}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
         try:
-            tmp.write_text(text, encoding="utf-8")
+            tmp.write_bytes(payload)
             os.link(tmp, blob)
             self._remember_blob(blob)
         except FileExistsError:
@@ -194,7 +209,7 @@ class TraceStore:
         finally:
             tmp.unlink(missing_ok=True)
 
-    def _repair_blob(self, blob: Path, text: str, sha1: str) -> None:
+    def _repair_blob(self, blob: Path, payload: bytes, sha1: str) -> None:
         """Point ``blob`` back at the bytes its name claims.
 
         ``os.replace`` here, unlike the publish path: swapping the directory
@@ -206,14 +221,14 @@ class TraceStore:
         """
         tmp = blob.parent / f"{sha1}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
         try:
-            tmp.write_text(text, encoding="utf-8")
+            tmp.write_bytes(payload)
             os.replace(tmp, blob)
             self._remember_blob(blob)
         finally:
             tmp.unlink(missing_ok=True)
 
     def _materialize(self, file_path: Path, text: str, sha1: str, extension: str) -> None:
-        """Link ``file_path`` at the single stored copy of ``text``.
+        """Link ``file_path`` at the single stored copy of ``text``'s compressed form.
 
         Hard link, not copy: the payload occupies its blocks once however many
         spans reference it, and the link count the filesystem keeps is the
@@ -228,17 +243,18 @@ class TraceStore:
         per process, not per span, and none at all when the cached
         (inode, mtime, size) still matches.
         """
+        payload = compress_bytes(text.encode("utf-8"))
         blob = self._blob_path(sha1, extension)
         try:
             if not blob.exists():
-                self._publish_blob(blob, text, sha1)
+                self._publish_blob(blob, payload, sha1)
             if blob.exists() and not self._blob_is_intact(blob, sha1):
-                self._repair_blob(blob, text, sha1)
+                self._repair_blob(blob, payload, sha1)
             os.link(blob, file_path)
         except FileExistsError:
             pass
         except OSError:
-            file_path.write_text(text, encoding="utf-8")
+            file_path.write_bytes(payload)
 
     def persist_artifact(
         self,
@@ -296,10 +312,11 @@ class TraceStore:
                 text = artifact_v2.message_text(item)
                 sha1 = artifact_v2.message_sha1(item)
                 blob = artifact_v2.message_path(self.artifacts_dir, sha1)
+                payload = compress_bytes(text.encode("utf-8"))
                 if not blob.exists():
-                    self._publish_blob(blob, text, sha1)
+                    self._publish_blob(blob, payload, sha1)
                 if blob.exists() and not self._blob_is_intact(blob, sha1):
-                    self._repair_blob(blob, text, sha1)
+                    self._repair_blob(blob, payload, sha1)
                 refs.append(artifact_v2.make_ref(sha1))
             except OSError:
                 refs.append(item)

@@ -98,9 +98,11 @@ _DISPATCH_BLACKLIST: set[tuple[str, ...]] = {
     # backing thread is not cancelled on timeout — it would keep running
     # detached after the RPC call returns, risking Ink reconciler corruption.
     # Bare ``tracing`` and ``tracing stop`` are unaffected: only this action
-    # is blacklisted. ``compact`` is a positional action, so this prefix
-    # catches it only at argv[1] — _is_tracing_compact covers the rest.
+    # is blacklisted. The maintenance actions are positional arguments, so this
+    # prefix catches only the argv[1] spelling — _is_tracing_maintenance covers
+    # every other order.
     ("tracing", "compact"),  # full-store hash walk can outrun the RPC timeout — terminal-only
+    ("tracing", "compress"),  # same walk (and, with --logs, a whole archive rewrite)
     # ``agent`` (no -m) — handled specially in _is_dispatch_compatible
 }
 
@@ -117,22 +119,21 @@ def _is_agent_repl(argv: list[str]) -> bool:
     return not any(a in ("-m", "--message") for a in argv[1:])
 
 
-def _is_tracing_compact(argv: list[str]) -> bool:
-    """Return True for a ``tracing compact`` invocation, at any argv position.
+def _is_tracing_maintenance(argv: list[str]) -> bool:
+    """Return True for a ``tracing compact`` or ``tracing compress`` invocation.
 
-    ``compact`` is a positional argument of the ``tracing`` leaf command, so
-    Click accepts it after any option: ``tracing --dry-run compact`` and
-    ``tracing --port 1 compact`` both run it. The ``_DISPATCH_BLACKLIST``
-    prefix match compares fixed positions and therefore only sees the action
-    at ``argv[1]``, so it alone would let those forms reach dispatch.
+    Both are positional arguments of the ``tracing`` leaf command, so Click
+    accepts them after any option: ``tracing --dry-run compact`` and
+    ``tracing --port 1 compress`` both run. The ``_DISPATCH_BLACKLIST`` prefix
+    match compares fixed positions and therefore only sees the action at
+    ``argv[1]``, so it alone would let those forms reach dispatch.
 
-    ``raven tracing compact``          -> blacklist hit
-    ``raven tracing --dry-run compact`` -> blacklist hit (this predicate)
+    ``raven tracing compact`` / ``tracing compress`` -> terminal-only
     ``raven tracing`` / ``tracing stop`` -> OK
     """
     if not argv or argv[0] != "tracing":
         return False
-    return "compact" in argv[1:]
+    return any(action in argv[1:] for action in ("compact", "compress"))
 
 
 # Default timeout if caller did not override.
@@ -198,7 +199,7 @@ def _is_dispatch_compatible(argv: list[str]) -> bool:
             return False
     if _is_agent_repl(argv):
         return False
-    if _is_tracing_compact(argv):
+    if _is_tracing_maintenance(argv):
         return False
     # Reflection-based positive check (replaces the v0.0.2 hardcoded
     # _DISPATCH_WHITELIST 19-tuple set). The helper module also serves

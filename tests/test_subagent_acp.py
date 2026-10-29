@@ -3715,6 +3715,14 @@ async def test_a_failed_turn_marks_the_span_and_still_stores_the_transcript(trac
 # ---- the cli lane records too -----------------------------------------------
 
 
+def _stored_text(path) -> str:
+    """A stored artifact's plaintext, whichever encoding it was written under."""
+    from raven.tracing.codec import decompress_bytes, is_compressed
+
+    data = Path(path).read_bytes()
+    return (decompress_bytes(data) if is_compressed(data) else data).decode("utf-8")
+
+
 def _cli_stub_config(name: str = "clistub", *, exit_code: int = 0) -> ThirdPartyCliSubagentConfig:
     script = (
         "import sys; "
@@ -3748,7 +3756,7 @@ async def test_the_cli_lane_records_the_same_span_shape(trace_dir, tmp_path: Pat
     assert "subagent.external.update_counts" not in attrs
     assert not span["events"]
 
-    stored = json.loads(Path(attrs["subagent.external.transcript.artifact_path"]).read_text(encoding="utf-8"))
+    stored = json.loads(_stored_text(attrs["subagent.external.transcript.artifact_path"]))
     assert stored["invocations"][0]["stdout"].strip() == "hello from the cli"
     assert stored["invocations"][0]["stderr"].strip() == "some diagnostics"
 
@@ -3764,9 +3772,7 @@ async def test_a_failed_cli_invocation_keeps_its_transcript(trace_dir, tmp_path:
     span = next(s for s in _spans_written(trace_dir) if s.get("name") == SPAN_NAME)
     assert span["status"]["code"] == "ERROR"
     assert span["attributes"]["subagent.external.exit_code"] == 3
-    stored = json.loads(
-        Path(span["attributes"]["subagent.external.transcript.artifact_path"]).read_text(encoding="utf-8")
-    )
+    stored = json.loads(_stored_text(span["attributes"]["subagent.external.transcript.artifact_path"]))
     assert stored["invocations"][0]["stdout"].strip() == "hello from the cli"
 
 

@@ -306,6 +306,32 @@ def _run_compact(*, dry_run: bool) -> None:
         console.print(f"[yellow]... and {hidden} more[/yellow]")
 
 
+def _run_compress(*, dry_run: bool) -> None:
+    from raven.tracing.compress import compress
+    from raven.tracing.store import TraceStore
+
+    artifacts_dir = TraceStore(tracing_config.state_dir()).artifacts_dir
+    if not artifacts_dir.is_dir():
+        console.print(f"[yellow]No artifacts at {escape(str(artifacts_dir))}.[/yellow]")
+        return
+    result = compress(artifacts_dir, dry_run=dry_run)
+    if dry_run:
+        console.print("[dim]dry run - nothing is written[/dim]")
+    console.print(
+        f"blobs {result.blobs}: compressed {result.compressed}, already {result.already}, relinked {result.relinked}"
+    )
+    console.print(f"messages {result.messages}: compressed {result.messages_compressed}")
+    console.print(
+        f"{result.bytes_before / (1024 * 1024):.1f} MB -> {result.bytes_after / (1024 * 1024):.1f} MB, "
+        f"saved {result.saved / (1024 * 1024):.1f} MB"
+    )
+    for message in result.errors[:10]:
+        console.print(f"[yellow]skipped:[/yellow] {escape(message)}")
+    hidden = max(len(result.errors) - 10, 0)
+    if hidden:
+        console.print(f"[yellow]... and {hidden} more[/yellow]")
+
+
 def register(app: typer.Typer) -> None:
     """Attach the ``tracing`` command to ``app``.
 
@@ -320,7 +346,8 @@ def register(app: typer.Typer) -> None:
             None,
             help=(
                 "Optional action: 'stop' shuts down the background viewer; "
-                "'compact' folds duplicate artifacts (terminal only, not available from the TUI)."
+                "'compact' folds duplicate artifacts; 'compress' rewrites payloads as zstd "
+                "(both terminal only, not available from the TUI)."
             ),
         ),
         port: int = typer.Option(None, "--port", "-p", help="Port to bind (default: config or 4318)."),
@@ -328,18 +355,21 @@ def register(app: typer.Typer) -> None:
             False, "--foreground", "-f", help="Run the viewer in the foreground (blocks; Ctrl-C to stop)."
         ),
         dry_run: bool = typer.Option(
-            False, "--dry-run", help="With 'compact': report what would change without writing."
+            False, "--dry-run", help="With 'compact' or 'compress': report what would change without writing."
         ),
     ) -> None:
         """Open the tracing dashboard (captured LLM/tool/memory spans)."""
         if action == "compact":
             _run_compact(dry_run=dry_run)
             return
+        if action == "compress":
+            _run_compress(dry_run=dry_run)
+            return
         if action == "stop":
             _stop_viewer()
             return
         if action is not None:
-            console.print(f"[red]Unknown action '{escape(action)}'.[/red] Supported actions: stop, compact")
+            console.print(f"[red]Unknown action '{escape(action)}'.[/red] Supported actions: stop, compact, compress")
             raise typer.Exit(2)
         bind_port = port if port is not None else tracing_config.port()
         if foreground:

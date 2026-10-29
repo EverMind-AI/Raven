@@ -40,6 +40,7 @@ from raven import __version__
 from raven.config.paths import get_workspace_path
 from raven.tracing import artifact_v2
 from raven.tracing import config as tracing_config
+from raven.tracing.codec import read_plaintext
 from raven.trajectory.selection import read_store_file
 from raven.trajectory.store import attempt_alias_ids, iter_spans, pin, pin_attempt, resolve_attempt_id
 from raven.trajectory.verdict import Verdict, read_verdicts
@@ -47,6 +48,16 @@ from raven.trajectory.verdict import Verdict, read_verdicts
 BUNDLE_FORMAT_VERSION = 1
 
 _ARTIFACTS_DIR = "artifacts"
+
+
+def _stored_bytes(path: Path) -> bytes | None:
+    """The payload's plaintext: a bundle leaves this machine, so it must not
+    carry the store's on-disk encoding."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    return read_plaintext(data)
 
 
 def _copy_resolved(
@@ -65,8 +76,13 @@ def _copy_resolved(
     ``read`` bounds how the shell's blobs are read.
     """
     try:
-        payload = json.loads(src.read_text(encoding="utf-8") if text is None else text)
-    except (OSError, ValueError):
+        if text is None:
+            stored = _stored_bytes(src)
+            if stored is None:
+                return False
+            text = stored.decode("utf-8")
+        payload = json.loads(text)
+    except (OSError, ValueError, UnicodeDecodeError):
         return False
     if not artifact_v2.is_v2(payload):
         return False
@@ -149,7 +165,11 @@ def _import_artifact(
         if text is None or not _copy_resolved(src, target, store_artifacts, missing_messages, text=text, read=read):
             target.write_bytes(data)
     elif not _copy_resolved(src, target, store_artifacts, missing_messages):
-        shutil.copy2(src, target)
+        plain = _stored_bytes(src)
+        if plain is None:
+            missing.append(source)
+            return None
+        target.write_bytes(plain)
     rel = f"{_ARTIFACTS_DIR}/{name}"
     copied[source] = rel
     return rel

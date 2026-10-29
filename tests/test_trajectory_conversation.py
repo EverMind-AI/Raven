@@ -685,6 +685,9 @@ def test_artifact_read_is_bounded_and_rejects_non_regular_files(state, monkeypat
             reads.append(n)
             return self._handle.read(n)
 
+        def __getattr__(self, name):
+            return getattr(self._handle, name)
+
         def __enter__(self):
             return self
 
@@ -699,7 +702,10 @@ def test_artifact_read_is_bounded_and_rejects_non_regular_files(state, monkeypat
     text, degraded = tconv._read_artifact(state, str(big))
     assert degraded == "content over 512 KiB — truncated"
     assert len(text) == tconv._ARTIFACT_LIMIT
-    assert reads == [tconv._ARTIFACT_LIMIT + 1]
+    # The reader sniffs the first four bytes for a compressed frame, then reads
+    # the bounded window; no read may exceed that window.
+    assert max(reads) == tconv._ARTIFACT_LIMIT + 1
+    assert reads.count(tconv._ARTIFACT_LIMIT + 1) == 1
 
     fifo = state / "logs" / "audit-artifacts" / "pipe"
     os.mkfifo(fifo)

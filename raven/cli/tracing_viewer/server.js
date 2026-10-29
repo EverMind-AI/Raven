@@ -4,6 +4,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const zlib = require('zlib');
 const { URL } = require('url');
 const { applyStateDirArg } = require('./state-dir');
 applyStateDirArg();
@@ -18,6 +19,33 @@ const STATE_DIR =
   path.join(os.homedir(), '.openclaw');
 const LOGS_DIR = getLogsDir();
 const ARTIFACTS_DIR = path.join(LOGS_DIR, 'audit-artifacts');
+const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
+
+// Artifacts and message blobs are stored zstd-compressed under the same paths
+// they always had; the frame, never the name, says which encoding a file
+// carries. A plain file written before compression reads unchanged.
+function readStored(file) {
+  const data = fs.readFileSync(file);
+  if (data.length >= 4 && data.subarray(0, 4).equals(ZSTD_MAGIC)) {
+    // zstd landed in Node's zlib in 22.15 / 23.8. An older viewer can still
+    // read a plain store; a compressed one is reported rather than shown as
+    // mojibake, because JSON.parse of the frame would only say "invalid".
+    if (typeof zlib.zstdDecompressSync !== 'function') {
+      console.warn('tracing viewer: this Node has no zstd support; compressed files need Node >= 22.15');
+      return Buffer.alloc(0);
+    }
+    try {
+      return zlib.zstdDecompressSync(data);
+    } catch {
+      return data;
+    }
+  }
+  return data;
+}
+
+function readStoredText(file) {
+  return readStored(file).toString('utf8');
+}
 const STATIC_DIR = path.join(__dirname, 'ui');
 const SHELL_HTML = require('./ui/shell.js');
 const BUNDLED_DESCRIPTORS_DIR = path.join(__dirname, 'descriptors');
@@ -1094,7 +1122,7 @@ function resolvePayload(payload) {
       const file = path.join(MESSAGES_DIR, sha1.slice(0, 2), `${sha1}.json`);
       let value;
       try {
-        value = JSON.parse(fs.readFileSync(file, 'utf8'));
+        value = JSON.parse(readStoredText(file));
       } catch {
         value = { role: 'unknown', content: `[message blob missing: ${sha1}]` };
       }
@@ -1128,7 +1156,7 @@ function resolvePayload(payload) {
 function readArtifact(filePath) {
   if (!filePath || !isSafeArtifactPath(filePath)) return null;
   if (!fs.existsSync(filePath)) return null;
-  const content = fs.readFileSync(filePath, 'utf8');
+  const content = readStoredText(filePath);
   let parsed = null;
   try {
     parsed = resolvePayload(JSON.parse(content));
@@ -1213,7 +1241,7 @@ function artifactTextForSearch(filePath) {
   let text = '';
   if (stat.isFile() && stat.size <= MAX_ARTIFACT_SEARCH_BYTES) {
     try {
-      text = fs.readFileSync(filePath, 'utf8');
+      text = readStoredText(filePath).slice(0, MAX_ARTIFACT_SEARCH_BYTES);
     } catch {
       text = '';
     }

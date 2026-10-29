@@ -42,6 +42,7 @@ import socket
 import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from contextlib import closing, contextmanager
 from pathlib import Path
@@ -159,6 +160,24 @@ def test_ignores_a_log_planted_outside_the_active_and_archive_paths(tmp_path):
 
     with _viewer(tmp_path) as port:
         assert _session_ids(_get(port, "/api/data")) == {"live-session"}
+
+
+def test_artifact_endpoint_decodes_a_compressed_payload(tmp_path):
+    from raven.tracing.codec import compress_bytes
+
+    logs = tmp_path / "logs"
+    artifact = logs / "audit-artifacts" / "llm.input" / "2026-08-01" / "a.json"
+    artifact.parent.mkdir(parents=True)
+    payload = {"messages": [{"role": "user", "content": "hi" * 100}]}
+    artifact.write_bytes(compress_bytes(json.dumps(payload).encode("utf-8")))
+    span = _span("live-session", "span-live")
+    span["attributes"]["llm.input.artifact_path"] = str(artifact)
+    _write_spans(logs / "audit-spans.log", [span])
+
+    with _viewer(tmp_path) as port:
+        found = _get(port, "/api/artifact?path=" + urllib.parse.quote(str(artifact), safe=""))
+
+    assert found["parsed"] == payload
 
 
 def test_repeated_read_is_served_without_rebuilding(tmp_path):

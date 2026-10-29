@@ -359,7 +359,11 @@ def read_store_file(path: Path, root: Path) -> tuple[bytes, float] | None:
             return None
         with os.fdopen(fd, "rb") as handle:
             fd = -1
-            return handle.read(), info.st_mtime
+            data = handle.read()
+        from raven.tracing.codec import read_plaintext
+
+        plain = read_plaintext(data)
+        return (plain, info.st_mtime) if plain is not None else None
     except OSError:
         return None
     finally:

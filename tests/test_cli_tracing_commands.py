@@ -12,6 +12,7 @@ reaping is left to integration/manual checks — Popen is monkeypatched here.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import signal
@@ -402,3 +403,42 @@ def test_a_below_minimum_node_is_refused(monkeypatch):
     monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda: ("/usr/bin/node", (20, 0, 0)))
     with pytest.raises(typer.Exit):
         tc._resolve_node()
+
+
+def _plain_blob_with_link(state_dir: Path, text: str) -> tuple[Path, Path]:
+    sha1 = hashlib.sha1(text.encode("utf-8")).hexdigest()
+    blob = state_dir / "logs" / "audit-artifacts" / "_blobs" / sha1[:2] / f"{sha1}.json"
+    blob.parent.mkdir(parents=True)
+    blob.write_text(text, encoding="utf-8")
+    artifact = _aged_artifact(state_dir, "a.json", text)
+    artifact.unlink()
+    os.link(blob, artifact)
+    stamp = time.time() - 3600
+    os.utime(blob, (stamp, stamp))
+    os.utime(artifact, (stamp, stamp))
+    return artifact, blob
+
+
+def test_tracing_compress_dry_run_reports_and_writes_nothing(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    text = '{"m":"same"}'
+    artifact, _ = _plain_blob_with_link(tmp_path, text)
+
+    r = runner.invoke(app, ["tracing", "compress", "--dry-run"])
+
+    assert r.exit_code == 0
+    assert "compressed 1" in r.output
+    assert "saved" in r.output
+    assert artifact.read_bytes() == text.encode("utf-8")
+
+
+def test_tracing_compress_rewrites_the_blob_and_keeps_the_link(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    text = '{"m":"same"}'
+    artifact, blob = _plain_blob_with_link(tmp_path, text)
+
+    r = runner.invoke(app, ["tracing", "compress"])
+
+    assert r.exit_code == 0
+    assert artifact.read_bytes().startswith(b"\x28\xb5\x2f\xfd")
+    assert artifact.stat().st_ino == blob.stat().st_ino

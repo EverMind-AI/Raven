@@ -258,13 +258,13 @@ def test_channels_login_normal_channels_dispatch():
 
 
 def test_blacklist_full_coverage():
-    """9-entry blacklist (5 original + tui + onboard + upgrade + tracing compact).
+    """10-entry blacklist (5 original + tui + onboard + upgrade + 2 tracing maintenance).
 
     `tui` blocks recursive Ink+Node spawn; `onboard` blocks prompt_toolkit
     wizard stdin hijack; `upgrade` blocks replacing the active Raven process;
-    `tracing compact` blocks a full-store hash walk that can outrun the RPC
-    timeout with no cancellation of the backing thread. All are necessary
-    because reflection will otherwise let them through.
+    the `tracing` maintenance actions block a full-store walk that can outrun
+    the RPC timeout with no cancellation of the backing thread. All are
+    necessary because reflection will otherwise let them through.
     """
     from raven.rpc.methods.cli_dispatch import _DISPATCH_BLACKLIST
 
@@ -278,9 +278,10 @@ def test_blacklist_full_coverage():
         ("onboard",),
         ("upgrade",),
         ("tracing", "compact"),
+        ("tracing", "compress"),
     }
     assert _DISPATCH_BLACKLIST == expected_entries, (
-        f"blacklist drift; expected 9 prefix tuples (+ agent REPL special-case), got {_DISPATCH_BLACKLIST}"
+        f"blacklist drift; expected 10 prefix tuples (+ agent REPL special-case), got {_DISPATCH_BLACKLIST}"
     )
     # Hard-reject probe (prefix match)
     assert _is_dispatch_compatible(["tui"]) is False
@@ -291,8 +292,9 @@ def test_blacklist_full_coverage():
     assert _is_dispatch_compatible(["upgrade", "--check"]) is False  # prefix
     assert _is_dispatch_compatible(["tracing", "compact"]) is False
     assert _is_dispatch_compatible(["tracing", "compact", "--dry-run"]) is False  # prefix
+    assert _is_dispatch_compatible(["tracing", "compress"]) is False
     # Bare `tracing` and its other action stay dispatchable -- only the
-    # specific `compact` action is terminal-only.
+    # maintenance actions are terminal-only.
     assert _is_dispatch_compatible(["tracing"]) is True
     assert _is_dispatch_compatible(["tracing", "stop"]) is True
 
@@ -303,7 +305,7 @@ def test_tracing_compact_is_rejected_whatever_the_option_order():
     The blacklist compares fixed argv positions, so the prefix tuple alone
     only catches the action at argv[1]: `tracing --port 1 compact` would
     otherwise reach dispatch and run a real, writing compaction detached
-    past the timeout. `_is_tracing_compact` closes every order.
+    past the timeout. `_is_tracing_maintenance` closes every order.
     """
     for argv in (
         ["tracing", "--dry-run", "compact"],
@@ -325,9 +327,17 @@ def test_tracing_compact_is_rejected_whatever_the_option_order():
         assert _is_dispatch_compatible(argv) is True, argv
 
 
-# ---------------------------------------------------------------------------
-# Reflection-based dispatch compat (_DISPATCH_WHITELIST deleted)
-# ---------------------------------------------------------------------------
+def test_tracing_compress_is_rejected_whatever_the_option_order():
+    """``compress`` walks the whole artifact store and writes in place, like
+    ``compact``; it must never run detached from a TUI slash command."""
+    for argv in (
+        ["tracing", "compress"],
+        ["tracing", "compress", "--dry-run"],
+        ["tracing", "--dry-run", "compress"],
+        ["tracing", "--port", "1", "compress"],
+        ["tracing", "-p", "1", "compress"],
+    ):
+        assert _is_dispatch_compatible(argv) is False, argv
 
 
 def test_dispatch_compatible_via_reflection_newly_active():

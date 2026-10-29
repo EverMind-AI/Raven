@@ -6,8 +6,9 @@ drift - a cross-language round-trip test compares this module's output against
 the viewer's. The canonical serialization, the envelope key, the reference
 validation and the per-field resolution rules all live here and nowhere else.
 
-Stdlib only, like :mod:`raven.tracing.store`, so the tracing package stays
-installable on its own.
+The wire shape itself is stdlib; the default reader decodes the store's zstd
+frames through :mod:`raven.tracing.codec`, imported lazily so this module
+stays cheap to import.
 """
 
 from __future__ import annotations
@@ -17,6 +18,8 @@ import json
 import re
 from pathlib import Path
 from typing import Any, Callable
+
+from .codec import read_plaintext
 
 ARTIFACT_FORMAT = "audit.artifact.v2"
 MESSAGES_DIR_NAME = "_messages"
@@ -108,6 +111,14 @@ def placeholder(sha1: str) -> dict[str, str]:
     return {"role": "unknown", "content": f"[message blob missing: {sha1}]"}
 
 
+def _read_stored_text(path: Path) -> str:
+    """A blob's plaintext, whichever encoding it was stored under."""
+    plain = read_plaintext(path.read_bytes())
+    if plain is None:
+        raise ValueError("corrupt compressed message blob")
+    return plain.decode("utf-8")
+
+
 def resolve_payload(
     payload: Any,
     artifacts_dir: Path | str,
@@ -133,7 +144,7 @@ def resolve_payload(
         if sha1 not in cache:
             try:
                 path = message_path(artifacts_dir, sha1)
-                text = path.read_text(encoding="utf-8") if read is None else read(path)
+                text = _read_stored_text(path) if read is None else read(path)
                 if text is None:
                     raise OSError(f"blob {sha1} could not be read")
                 cache[sha1] = json.loads(text)

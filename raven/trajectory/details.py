@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from raven.tracing import artifact_v2
+from raven.tracing import codec as trace_codec
 from raven.trajectory import conversation as _conv
 from raven.trajectory import entries as _entries
 from raven.trajectory import store as tstore
@@ -491,10 +492,7 @@ class _Reader:
         if not self._allowed(True):
             self.exhausted = True
             return None
-        try:
-            size: int | None = path.stat().st_size
-        except OSError:
-            size = None
+        size: int | None = trace_codec.plaintext_size(path)
         text, _ = _conv._read_artifact(self.state, str(path), limit) if size is not None else (None, None)
         self.blobs += 1
         self.bytes += len(text.encode("utf-8", errors="replace")) if text else 0

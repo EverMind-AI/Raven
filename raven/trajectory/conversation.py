@@ -42,8 +42,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
+import zstandard
+
 from raven.tracing import artifact_v2
 from raven.tracing import config as tracing_config
+from raven.tracing.codec import ZSTD_MAGIC
 from raven.trajectory import store as tstore
 
 _log = logging.getLogger("raven.trajectory.conversation")
@@ -149,9 +152,17 @@ def _read_artifact(state: Path, path: str, limit: int = _ARTIFACT_LIMIT) -> tupl
         if target.exists() and not target.is_file():
             return None, "artifact is not a regular file"
         with target.open("rb") as handle:
-            data = handle.read(limit + 1)
+            head = handle.read(4)
+            handle.seek(0)
+            if head == ZSTD_MAGIC:
+                with zstandard.ZstdDecompressor().stream_reader(handle, read_across_frames=False) as reader:
+                    data = reader.read(limit + 1)
+            else:
+                data = handle.read(limit + 1)
     except OSError:
         return None, "artifact missing"
+    except zstandard.ZstdError:
+        return None, "artifact unreadable: corrupt compressed content"
     except ValueError:
         # A pointer with an embedded NUL cannot name a file.
         return None, "artifact unreadable: the path is not valid"

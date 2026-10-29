@@ -122,6 +122,7 @@ dependencies = [
     # `AsyncOpenAI`, the only client LiteLLM's OpenAI-SDK route adopts. It
     # already arrives with litellm, and the range is litellm's own.
     "openai>=2.20.0,<3.0.0",
+    "zstandard>=0.25.0",
 ]
 
 [project.optional-dependencies]

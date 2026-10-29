@@ -165,8 +165,8 @@ class TestWhatCountsAsUnreachable:
         assert mirrors.unreachable(error) is reached
 
     def test_the_question_needs_no_httpx(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A Raven node runs with loguru and pillow and nothing else, and starts
-        agents through npx all the same."""
+        """A Raven node runs with loguru, pillow and zstandard and nothing else,
+        and starts agents through npx all the same."""
         monkeypatch.setitem(sys.modules, "httpx", None)
 
         assert mirrors.unreachable(urllib.error.URLError(ConnectionRefusedError(111, "connection refused")))
@@ -1402,7 +1402,7 @@ class TestTheProbe:
         assert not mirrors._reachable(f"http://127.0.0.1:{_closed_port()}/")
 
     def test_the_probe_needs_no_httpx(self, monkeypatch: pytest.MonkeyPatch, answering_host: str) -> None:
-        """A Raven node has loguru and pillow, and starts npx agents too."""
+        """A Raven node has loguru, pillow and zstandard, and starts npx agents too."""
         monkeypatch.setitem(sys.modules, "httpx", None)
 
         assert mirrors._reachable(answering_host)
