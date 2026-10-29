@@ -422,13 +422,12 @@ class TestRuntimeMarks:
         "arguments,result",
         [
             pytest.param({}, "Error sending message: the channel is down", id="a_send_that_failed"),
-            pytest.param({"chat_id": "c2"}, "Message sent to acp:c2", id="sent_to_another_chat"),
         ],
     )
     def test_a_runtime_turn_whose_message_call_answered_nobody_replays_as_nothing(self, arguments, result):
-        """A message call is not an answer by being made: the live turn counted it only when it
-        sent to the turn's own chat, and filed that verdict on the row that closes the turn. A
-        turn that closes on the marker without it is a Silent Turn, taken out whole."""
+        """A message call is not an answer by being made: the live turn counted it only when the send
+        went out, and filed that verdict on the row that closes the turn. A turn that closes on the
+        marker without it is a Silent Turn, taken out whole."""
         said = json.dumps({"content": "The build finished with 3 failing tests.", **arguments})
         calls = [{"id": "m1", "type": "function", "function": {"name": "message", "arguments": said}}]
         stored = [
