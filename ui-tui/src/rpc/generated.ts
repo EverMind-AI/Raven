@@ -5430,7 +5430,7 @@ export interface CronSaveParams {
 export interface CronSaveResult {
   job: CronJobInfo;
   /**
-   * How the request landed: 'created' stored a new job, 'updated' edited the returned existing job in place, 'skipped' wrote nothing and returned the matching existing job (identical message, fire still ahead) without applying the requested schedule.
+   * How the request landed: 'created' stored a new job, 'updated' edited the returned existing job in place, 'skipped' wrote nothing and returned the matching existing job (identical message, fire still ahead); the returned job's stored schedule stays in effect.
    */
   outcome: 'created' | 'updated' | 'skipped';
 }

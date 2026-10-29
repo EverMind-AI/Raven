@@ -4157,7 +4157,8 @@ class CronSaveResult(_Strict):
         description=(
             "How the request landed: 'created' stored a new job, 'updated' edited the returned "
             "existing job in place, 'skipped' wrote nothing and returned the matching existing "
-            "job (identical message, fire still ahead) without applying the requested schedule."
+            "job (identical message, fire still ahead); the returned job's stored schedule stays "
+            "in effect."
         ),
     )
 

@@ -800,6 +800,8 @@ def cron_add(
         console.print(f"[green]✓[/green] Created job '{job.name}' (id: {job.id})")
     elif res.outcome == "updated":
         console.print(f"[green]✓[/green] Updated job '{job.name}' (id: {job.id}); kept its schedule")
+    elif res.schedule_matches:
+        console.print(f"[green]✓[/green] Already scheduled: '{job.name}' (id: {job.id}); no new job was created")
     else:
         console.print(
             f"[yellow]![/yellow] No new job created: '{job.name}' (id: {job.id}) already carries this message; "

@@ -399,6 +399,7 @@ def test_outcome_created_for_a_fresh_add(svc):
     )
     assert res.outcome == "created"
     assert res.schedule_replaced is True
+    assert res.schedule_matches is True
     assert res.job.id
 
 
@@ -415,9 +416,29 @@ def test_outcome_skipped_when_an_identical_message_is_still_ahead(svc):
     )
     assert res.outcome == "skipped"
     assert res.schedule_replaced is False
+    assert res.schedule_matches is False
     assert res.job.id == first.id
     assert res.job.schedule.expr == "0 8 * * *", "the requested schedule was not applied"
     assert [j.schedule.expr for j in svc.list_jobs()] == ["0 8 * * *"], "nothing was written"
+
+
+def test_outcome_skipped_still_reports_a_matching_schedule(svc):
+    """A byte-identical message on the *same* schedule also skips at layer 2,
+    but nothing needs applying: the stored schedule is the requested one, so the
+    outcome has to say so instead of claiming the request was dropped."""
+    first = _add(svc, "take the pill", CronSchedule(kind="cron", expr="0 8 * * *"))
+    res = svc.add_job_with_outcome(
+        name="take the pill",
+        schedule=CronSchedule(kind="cron", expr="0 8 * * *"),
+        message="take the pill",
+        channel="tui",
+        to="direct",
+    )
+    assert res.outcome == "skipped"
+    assert res.schedule_replaced is False
+    assert res.schedule_matches is True
+    assert res.job.id == first.id
+    assert [j.id for j in svc.list_jobs()] == [first.id], "nothing was written"
 
 
 def test_outcome_updated_with_schedule_replaced_for_topic_tag(svc):
@@ -432,6 +453,7 @@ def test_outcome_updated_with_schedule_replaced_for_topic_tag(svc):
     )
     assert res.outcome == "updated"
     assert res.schedule_replaced is True
+    assert res.schedule_matches is True
     assert res.job.id == first.id
     assert res.job.schedule.expr == "30 13 * * *"
 
@@ -446,6 +468,7 @@ def test_outcome_updated_keeping_schedule_for_a_same_slot_reuse(svc):
     res = svc.add_job_with_outcome(name="water again", schedule=sched, message="water", channel="tui", to="direct")
     assert res.outcome == "updated"
     assert res.schedule_replaced is False
+    assert res.schedule_matches is True
     assert res.job.id == first.id
     assert res.job.name == "water again", "the name follows the request"
     assert res.job.schedule.every_ms == 60_000
@@ -463,6 +486,7 @@ def test_outcome_updated_with_schedule_replaced_for_a_job_id_edit(svc):
     )
     assert res.outcome == "updated"
     assert res.schedule_replaced is True
+    assert res.schedule_matches is True
     assert res.job.id == first.id
 
 

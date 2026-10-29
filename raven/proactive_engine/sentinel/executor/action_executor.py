@@ -223,6 +223,8 @@ class ActionExecutor:
                         side_effects.append(f"created cron job {res.job.id} ({cron_expr})")
                     elif res.outcome == "updated":
                         side_effects.append(f"updated cron job {res.job.id} ({cron_expr})")
+                    elif res.schedule_matches:
+                        side_effects.append(f"kept cron job {res.job.id}; the requested schedule is already in effect")
                     else:
                         side_effects.append(f"kept cron job {res.job.id}; the requested schedule was not applied")
                 except Exception as exc:

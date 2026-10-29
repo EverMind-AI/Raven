@@ -75,6 +75,21 @@ def _compute_next_run(schedule: CronSchedule, now_ms: int) -> int | None:
     return None
 
 
+def _same_schedule(a: CronSchedule, b: CronSchedule) -> bool:
+    """Whether two schedules fire at the same times.
+
+    A cron expression names the same slot only inside the same zone, an
+    interval only at the same length, and a one-shot only at the same instant.
+    """
+    if a.kind != b.kind:
+        return False
+    if a.kind == "cron":
+        return a.expr == b.expr and a.tz == b.tz
+    if a.kind == "every":
+        return a.every_ms == b.every_ms
+    return a.at_ms == b.at_ms
+
+
 def _validate_schedule_for_add(schedule: CronSchedule, now_ms: int) -> None:
     """Validate schedule fields that would otherwise create non-runnable jobs."""
     if schedule.tz and schedule.kind != "cron":
@@ -826,10 +841,11 @@ class CronService:
 
         The return also says how the request landed: ``created`` stored a new
         job, ``updated`` edited an existing one in place (``schedule_replaced``
-        says whether the stored schedule is now the requested one), and
-        ``skipped`` wrote nothing and returned the matching existing job --
-        byte-identical message, fire still ahead -- whose requested schedule
-        was not applied.
+        says whether this call wrote the stored schedule), and ``skipped``
+        wrote nothing and returned the matching existing job -- byte-identical
+        message, fire still ahead. ``schedule_matches`` relates that job's
+        schedule to the request, so a skip can say the schedule is already in
+        effect instead of saying it was not applied.
         """
         # One ``now`` snapshot for both validation and storage: the validate
         # predicate and the stored next_run must agree on "now", or a boundary
@@ -881,7 +897,7 @@ class CronService:
                     self._save_store()
                     self._signal_wake()
                     logger.info("Cron: updated job '{}' ({})", name, j.id)
-                    return AddJobOutcome(j, "updated", schedule_replaced=True)
+                    return AddJobOutcome(j, "updated", schedule_replaced=True, schedule_matches=True)
 
             # L7: topic_tag dedup — strictest, runs first. If the new
             # request carries a topic_tag, any existing enabled job for the
@@ -920,7 +936,7 @@ class CronService:
                     j.updated_at_ms = now
                     self._save_store()
                     self._signal_wake()
-                    return AddJobOutcome(j, "updated", schedule_replaced=True)
+                    return AddJobOutcome(j, "updated", schedule_replaced=True, schedule_matches=True)
 
             # Message-equal dedup (covers same-intent reminders the LLM
             # re-asks for across days, possibly with different schedule
@@ -945,7 +961,7 @@ class CronService:
                     schedule.kind,
                 )
                 self._signal_wake()
-                return AddJobOutcome(j, "skipped")
+                return AddJobOutcome(j, "skipped", schedule_matches=_same_schedule(j.schedule, schedule))
 
             # Dedup: same schedule slot + same channel + recipient + the
             # same message → reuse that job rather than create a duplicate.
@@ -969,7 +985,7 @@ class CronService:
                     existing.id,
                 )
                 self._signal_wake()
-                return AddJobOutcome(existing, "updated")
+                return AddJobOutcome(existing, "updated", schedule_matches=True)
 
             job = CronJob(
                 id=job_id or str(uuid.uuid4())[:8],
@@ -994,7 +1010,7 @@ class CronService:
             self._save_store()
         self._signal_wake()
         logger.info("Cron: added job '{}' ({})", name, job.id)
-        return AddJobOutcome(job, "created", schedule_replaced=True)
+        return AddJobOutcome(job, "created", schedule_replaced=True, schedule_matches=True)
 
     @staticmethod
     def _find_duplicate_schedule(
@@ -1025,14 +1041,7 @@ class CronService:
                 continue
             if j.payload.message != message:
                 continue
-            s = j.schedule
-            if s.kind != schedule.kind:
-                continue
-            if schedule.kind == "cron" and s.expr == schedule.expr and s.tz == schedule.tz:
-                return j
-            if schedule.kind == "every" and s.every_ms == schedule.every_ms:
-                return j
-            if schedule.kind == "at" and s.at_ms == schedule.at_ms:
+            if _same_schedule(j.schedule, schedule):
                 return j
         return None
 

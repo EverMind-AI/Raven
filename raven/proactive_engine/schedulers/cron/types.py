@@ -120,11 +120,18 @@ class AddJobOutcome:
       requested one;
     - ``updated`` -- an existing job was edited in place (a ``job_id`` edit,
       a ``topic_tag`` match, or a same-schedule reuse). ``schedule_replaced``
-      says whether the stored schedule is now the requested one;
+      says whether this call wrote the stored schedule;
     - ``skipped`` -- nothing was written; the returned job is the existing one
-      that matched, and the requested schedule was not applied.
+      that matched. ``schedule_matches`` says whether that job's schedule is
+      already the requested one, so a caller can say the schedule is in effect
+      instead of saying it was dropped.
+
+    ``schedule_matches`` relates the requested schedule to the stored one and
+    is true for every outcome that writes it; a ``skipped`` request whose
+    schedule differs is the only case that leaves it false.
     """
 
     job: CronJob
     outcome: Literal["created", "updated", "skipped"]
     schedule_replaced: bool = False
+    schedule_matches: bool = False

@@ -183,7 +183,15 @@ async def test_the_reply_says_what_happened_to_the_existing_job() -> None:
 
     cron.add_job_with_outcome.return_value.outcome = "skipped"
     cron.add_job_with_outcome.return_value.schedule_replaced = False
+    cron.add_job_with_outcome.return_value.schedule_matches = False
     reply = await tool.execute(action="add", message="daily", cron_expr="0 10 * * *")
     assert reply == (
         "No new job created: 'reminder' (id: j1) already carries this message; the requested schedule was not applied"
+    ), reply
+
+    cron.add_job_with_outcome.return_value.schedule_matches = True
+    reply = await tool.execute(action="add", message="daily", cron_expr="0 10 * * *")
+    assert reply == (
+        "No new job created: 'reminder' (id: j1) already carries this message; "
+        "the requested schedule is already in effect, fires on this machine's local time"
     ), reply

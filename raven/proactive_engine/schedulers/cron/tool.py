@@ -280,6 +280,11 @@ class CronTool(Tool):
             if res.schedule_replaced:
                 return f"Updated job '{job.name}' (id: {job.id}) with the new schedule{self._zone_note(job.schedule)}"
             return f"Updated job '{job.name}' (id: {job.id}); kept its schedule"
+        if res.schedule_matches:
+            return (
+                f"No new job created: '{job.name}' (id: {job.id}) already carries this message; "
+                f"the requested schedule is already in effect{self._zone_note(job.schedule)}"
+            )
         return (
             f"No new job created: '{job.name}' (id: {job.id}) already carries this message; "
             "the requested schedule was not applied"

@@ -345,5 +345,6 @@ async def test_routine_confirm_make_cron_reusing_a_job_says_so(tmp_path: Path):
     assert result.status == "ok"
     side = "\n".join(result.side_effects)
     assert "kept cron job" in side
+    assert "already in effect" in side
     assert "created cron job" not in side
     assert len(cron_service.list_jobs()) == 1

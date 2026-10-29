@@ -1102,3 +1102,35 @@ def test_add_same_slot_after_the_fire_reports_updated(runner, fake_cron_dir, fei
     assert "Updated job" in second.stdout
     assert "kept its schedule" in second.stdout
     assert "Created job" not in second.stdout
+
+
+def test_add_identical_message_and_schedule_does_not_claim_the_schedule_was_dropped(
+    runner, fake_cron_dir, feishu_enabled
+):
+    """The message-equal layer matches on the message alone, so a re-add of the
+    same message on the *same* schedule also skips. Nothing needs applying
+    there: the stored schedule is the requested one, so the reply must not say
+    it was dropped (#1060)."""
+    args = [
+        "add",
+        "--name",
+        "morning",
+        "--cron",
+        "0 9 * * *",
+        "--message",
+        "wake up",
+        "--channel",
+        "feishu",
+        "--to",
+        "ou_xxx",
+    ]
+    first = runner.invoke(cron_app, args)
+    assert first.exit_code == 0
+    second = runner.invoke(cron_app, args)
+    assert second.exit_code == 0
+    flat = " ".join(second.stdout.split())
+    assert "Already scheduled" in flat
+    assert "not applied" not in flat
+    assert "Created job" not in flat
+    jobs = CronService(fake_cron_dir / "jobs.json").list_jobs()
+    assert [(j.schedule.expr, j.payload.message) for j in jobs] == [("0 9 * * *", "wake up")]
