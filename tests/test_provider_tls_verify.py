@@ -108,6 +108,18 @@ def _provider(tls_verify: bool | None, api_base: str = "https://127.0.0.1:8001/v
     return provider
 
 
+@pytest.fixture(autouse=True)
+def _keep_the_proxy_environment_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every client here is real, and httpx reads the proxy environment as it builds one.
+
+    A `NO_PROXY` entry httpx cannot parse -- a bracketed IPv6 loopback, say --
+    raises inside `AsyncClient()`, before any request, so the tests that assert
+    on a client's `verify` never reach it. The `gateway` fixture does the same
+    for the tests that also make a request.
+    """
+    keep_loopback_off_proxies(monkeypatch)
+
+
 def test_the_schema_field_round_trips_and_defaults_on() -> None:
     assert ProviderConfig().tls_verify is True
     assert ProviderConfig.model_validate({"tlsVerify": False}).tls_verify is False
