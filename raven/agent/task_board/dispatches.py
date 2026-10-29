@@ -25,6 +25,11 @@ SPAWN_TASK_ID_RE = re.compile(r"\bstarted \(id: ([0-9a-f]{8})\)")
 
 _DAG_TOOLS = ("run_subagent_dag", "load_playbook")
 
+# The meta-tool that forwards to any registered tool by name. Under tool-search
+# compaction it is how run_subagent_dag (never resident) is reached, so a call
+# through it is read as the call it forwards.
+_FORWARDER = "tool_call"
+
 
 def dag_run_id_of(content: str) -> str | None:
     match = DAG_RUN_ID_RE.search(content)
@@ -63,8 +68,12 @@ def turn_dispatches(messages: Sequence[Mapping[str, Any]]) -> list[Dispatch]:
         if message.get("role") == "assistant":
             for call in message.get("tool_calls") or []:
                 name = (call.get("function") or {}).get("name") or ""
+                args = _arguments(call)
+                if name == _FORWARDER:
+                    forwarded = args.get("arguments")
+                    name, args = str(args.get("name") or ""), forwarded if isinstance(forwarded, dict) else {}
                 if name == "spawn" or name in _DAG_TOOLS:
-                    calls[str(call.get("id"))] = (name, _arguments(call))
+                    calls[str(call.get("id"))] = (name, args)
             continue
         if message.get("role") != "tool":
             continue

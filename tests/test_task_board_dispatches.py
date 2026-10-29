@@ -103,3 +103,18 @@ def test_the_receipt_readers():
     assert dag_run_id_of("rejected: bad spec") is None
     assert spawn_task_id_of("Subagent [quotes started (id: 11111111)] started (id: 22222222).") == "22222222"
     assert spawn_task_id_of("Error: nope") is None
+
+
+def test_a_dispatch_forwarded_through_tool_call_counts():
+    # Under tool-search compaction run_subagent_dag is reached through the
+    # tool_call meta-tool: the row names tool_call, the receipt is the graph's.
+    turn = [
+        _call("c1", "tool_call", {"name": "run_subagent_dag", "arguments": {"task_summary": "Review fixes"}}),
+        _result("c1", "tool_call", f"DAG run {RUN} started in the background (3 nodes)."),
+        _call("c2", "tool_call", {"name": "spawn", "arguments": {"node_id": "write_notes", "task_summary": "Notes"}}),
+        _result("c2", "tool_call", "Subagent [Notes] started (id: 0000beef)."),
+        _call("c3", "tool_call", {"name": "read_file", "arguments": {"path": "x"}}),
+        _result("c3", "tool_call", f"DAG run {RUN} started in the background (3 nodes)."),
+    ]
+
+    assert turn_dispatches(turn) == [Dispatch(f"dag:{RUN}", "Review fixes"), Dispatch("spawn:write_notes", "Notes")]
