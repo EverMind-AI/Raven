@@ -80,6 +80,23 @@ def test_a_shell_stops_resolving_after_its_total_budget(tmp_path: Path) -> None:
     assert "missing" in resolved["messages"][1]["content"]
 
 
+def test_a_pack_name_that_escapes_the_store_is_refused(tmp_path: Path) -> None:
+    refs = _publish(tmp_path)
+    artifacts = tmp_path / "logs" / "audit-artifacts"
+    message_pack.pack_messages(artifacts)
+    secret = tmp_path / "secret.json"
+    secret.write_text('{"secret": true}', encoding="utf-8")
+    index_file = message_pack.index_path(artifacts)
+    data = json.loads(index_file.read_text(encoding="utf-8"))
+    data["messages"][refs[0]["$msg"]] = ["../../../../secret.json", 0, 16]
+    index_file.write_text(json.dumps(data), encoding="utf-8")
+
+    assert message_pack.read_message(artifacts, refs[0]["$msg"]) is None
+    shell = {"artifactFormat": artifact_v2.ARTIFACT_FORMAT, "messages": [refs[0]]}
+    resolved = artifact_v2.resolve_payload(shell, artifacts)
+    assert "missing" in resolved["messages"][0]["content"]
+
+
 def test_a_small_target_splits_messages_across_packs(tmp_path: Path) -> None:
     refs = _publish(tmp_path)
     artifacts = tmp_path / "logs" / "audit-artifacts"
