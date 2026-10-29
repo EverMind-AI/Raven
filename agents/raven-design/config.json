@@ -12,7 +12,10 @@
         "reservedTokens": 8192,
         "preserveRecentTokens": 52429
       },
-      "temperature": 0.95
+      "temperature": 0.95,
+      "taskBoard": {
+        "enabled": false
+      }
     }
   },
   "tools": {

@@ -211,6 +211,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         skill_forge_router_config = engine.skill_forge_router_config
         memory_config = engine.memory_config
         compaction_config = engine.compaction_config
+        task_board_config = engine.task_board_config
         backend = engine.backend
         playbook_config = engine.playbook_config
         max_iterations = policy.max_iterations
@@ -221,7 +222,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         cron_service = host.cron_service
         channels_config = host.channels_config
         from raven.agent.hook import CompositeHook
-        from raven.config.schema import A2aConfig, AskUserToolConfig, CompactionConfig, ExecToolConfig
+        from raven.config.schema import A2aConfig, AskUserToolConfig, CompactionConfig, ExecToolConfig, TaskBoardConfig
         from raven.token_wise.registry import StrategyRegistry
 
         self.channels_config = channels_config
@@ -287,6 +288,12 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self.ask_user_config = ask_user_config or AskUserToolConfig()
         self.a2a_config = a2a_config or A2aConfig()
         self._compaction = compaction_config or CompactionConfig()
+        # Off unless the shell wires the config: the runtime passes
+        # `agents.defaults.taskBoard` (on by default there), while a loop built
+        # without it -- an embedding, a test -- makes no extra call per turn.
+        self._task_board_config = task_board_config or TaskBoardConfig(enabled=False)
+        # Set by `_register_orchestration_tools` on the host only; a sub-agent never keeps a board.
+        self.task_board = None
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
         # TokenWise strategies — empty registry acts as pure pass-through.
