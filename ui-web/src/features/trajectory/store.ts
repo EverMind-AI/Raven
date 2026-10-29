@@ -130,10 +130,6 @@ export interface TrajectoryState {
   follow: boolean
   anchor: Anchor | null
   timeline: Timeline
-  /** The reader's two switches for the list and the bar, kept in the browser. */
-  prefs: Prefs
-  /** Hidden rows shown for now because something pointed at them; cleared with the conversation. */
-  revealed: string[]
   /** The Scope Tab on screen: a Sub-agent Scope's id, or null for the main session. */
   scope: string | null
   /** The sub-agent tabs the reader opened, in the order they were opened. */
@@ -144,11 +140,11 @@ export interface TrajectoryState {
    *  when that change rewrote the list. A surface that caches a tree over
    *  `shown` reads this to know it may extend rather than rebuild. */
   grownFrom: number
-  /** Every entry the page may draw, across every scope, less the hidden ones unless the switch or `revealed` says otherwise. */
+  /** Every entry the page may draw, across every scope. */
   shown: TrajectoryEntry[]
   /** `entry_id` to position in `shown`, rebuilt with it. */
   shownIndex: Record<string, number>
-  /** The rows the list draws: the tab's entries less the hidden ones, unless the switch or `revealed` says otherwise. */
+  /** The rows the list draws: the tab's entries. */
   visible: TrajectoryEntry[]
   /** `entry_id` to position in `visible`, rebuilt with it. */
   visibleIndex: Record<string, number>
@@ -160,55 +156,6 @@ export interface TrajectoryState {
   doors: Record<string, string>
   /** A Sub-agent Scope's id to how many entries belong to it. */
   scopeSizes: Record<string, number>
-  /** How many of the tab's entries the index marked hidden. */
-  hiddenCount: number
-  /** The tab's turns whose reply the list leaves out, by turn number, with the reply's charged time. */
-  hiddenTurns: Record<number, number>
-}
-
-/** What the reader can set: showing the entries the page hides. */
-export interface Prefs {
-  showHidden: boolean
-}
-
-export const PREFS_KEY = 'raven.gui.trajectory.prefs'
-const DEFAULT_PREFS: Prefs = { showHidden: false }
-
-/** The switches as the browser last kept them; the defaults where it kept nothing readable. */
-export function readPrefs(): Prefs {
-  return loadPrefs()
-}
-
-function loadPrefs(): Prefs {
-  try {
-    const raw: unknown = typeof localStorage === 'undefined' ? null : JSON.parse(localStorage.getItem(PREFS_KEY) || 'null')
-    if (raw && typeof raw === 'object') {
-      /* An earlier build kept three spellings of this one switch; the newest wins,
-         and a stored duration threshold is simply ignored. */
-      const value = raw as { showHidden?: unknown; showInternal?: unknown }
-      const showHidden = typeof value.showHidden === 'boolean'
-        ? value.showHidden
-        : typeof value.showInternal === 'boolean' ? value.showInternal : DEFAULT_PREFS.showHidden
-      return { showHidden }
-    }
-  } catch {
-    /* Storage may be unavailable or hold something else; the defaults stand. */
-  }
-  return { ...DEFAULT_PREFS }
-}
-
-function savePrefs(prefs: Prefs): void {
-  try {
-    if (typeof localStorage !== 'undefined') localStorage.setItem(PREFS_KEY, JSON.stringify(prefs))
-  } catch {
-    /* Private mode or quota: the switch still holds for this page. */
-  }
-}
-
-/** The index's reason for leaving a row out of the list, or null for a row it shows. */
-export const hiddenOf = (entry: TrajectoryEntry): string | null => {
-  const value = entry.meta?.hidden
-  return typeof value === 'string' ? value : null
 }
 
 /** The Sub-agent Scope the entry belongs to; null for the main session. */
@@ -227,38 +174,29 @@ const spanKey = (trace: string, span: string): string => `${trace}:${span}`
 /* Everything the list and the bar read that follows from `entries`: the
    tab's visible rows and their positions, the span lookup, the turn totals,
    and what the tab strip and the bar need to know about every scope. */
-function derived(entries: TrajectoryEntry[], prefs: Prefs, revealed: string[], scope: string | null) {
+function derived(entries: TrajectoryEntry[], scope: string | null) {
   const shown: TrajectoryEntry[] = []
   const visible: TrajectoryEntry[] = []
   const spanIndex: Record<string, string> = {}
   const turnTotals: Record<string, number> = {}
   const doors: Record<string, string> = {}
   const scopeSizes: Record<string, number> = {}
-  const hiddenTurns: Record<number, number> = {}
-  let hiddenCount = 0
   for (const entry of entries) {
     const key = spanKey(entry.trace_id, entry.span_id)
     if (!(key in spanIndex)) spanIndex[key] = entry.entry_id
     if (entry.slot === 'turn.output' && entry.turn_span_id && typeof entry.charged_ms === 'number') {
       turnTotals[entry.turn_span_id] = entry.charged_ms
     }
-    const marked = hiddenOf(entry) !== null
-    const hidden = marked && !prefs.showHidden && !revealed.includes(entry.entry_id)
     const own = scopeOf(entry)
     if (own !== null) scopeSizes[own] = (scopeSizes[own] ?? 0) + 1
     const opens = opensOf(entry)
     if (opens !== null && !(opens in doors)) doors[opens] = entry.entry_id
-    if (!hidden) shown.push(entry)
-    if (own !== scope) continue
-    if (marked) hiddenCount += 1
-    if (!hidden || prefs.showHidden || revealed.includes(entry.entry_id)) visible.push(entry)
-    else if (entry.slot === 'turn.output' && typeof entry.turn_number === 'number' && typeof entry.charged_ms === 'number') {
-      hiddenTurns[entry.turn_number] = entry.charged_ms
-    }
+    shown.push(entry)
+    if (own === scope) visible.push(entry)
   }
   return {
     entries, index: indexOf(entries), shown, shownIndex: indexOf(shown), visible, visibleIndex: indexOf(visible), spanIndex, turnTotals,
-    doors, scopeSizes, hiddenCount, hiddenTurns,
+    doors, scopeSizes,
   }
 }
 
@@ -285,8 +223,6 @@ const initial: TrajectoryState = {
   follow: true,
   anchor: null,
   timeline: initialTimeline,
-  prefs: loadPrefs(),
-  revealed: [],
   scope: null,
   scopes: [],
   saved: {},
@@ -299,8 +235,6 @@ const initial: TrajectoryState = {
   turnTotals: {},
   doors: {},
   scopeSizes: {},
-  hiddenCount: 0,
-  hiddenTurns: {},
 }
 
 const store = makeStore<TrajectoryState>(initial)
@@ -310,7 +244,7 @@ export const { get, set, subscribe } = store
 const patch = (p: Partial<TrajectoryState>): void => { store.set({ ...store.get(), ...p }) }
 
 /** The fields that change together with the rows: the whole set, its positions, the visible set and the lookups. */
-export const rowsOf = (entries: TrajectoryEntry[], s: TrajectoryState = store.get()) => derived(entries, s.prefs, s.revealed, s.scope)
+export const rowsOf = (entries: TrajectoryEntry[], s: TrajectoryState = store.get()) => derived(entries, s.scope)
 const rows = rowsOf
 
 export const source = (): TrajectorySource | null => sources.trajectory ?? null
@@ -381,19 +315,8 @@ function leaveView(): void {
   if (store.get().view === 'trajectory') {
     bump()
     const s = store.get()
-    patch({ view: 'chat', listing: false, timeline: { ...s.timeline, bucket: null, threshold: false }, revealed: [], ...rows(s.entries, { ...s, revealed: [] }) })
+    patch({ view: 'chat', listing: false, timeline: { ...s.timeline, bucket: null, threshold: false }, ...rows(s.entries, s) })
   }
-}
-
-/* ── the reader's switches ────────────────────────────────────────────── */
-
-/** Change a setting: kept in the browser for the next visit, and the rows reconsidered now. */
-export function setPrefs(next: Partial<Prefs>): void {
-  const s = store.get()
-  const prefs = { ...s.prefs, ...next }
-  if (prefs.showHidden === s.prefs.showHidden) return
-  savePrefs(prefs)
-  patch({ prefs, revealed: [], ...derived(s.entries, prefs, [], s.scope) })
 }
 
 /** The surface is switched off for this process; the toggle goes, the data stays. */
@@ -456,10 +379,9 @@ export function setView(view: View): void {
   if (s.view === view) return
   if (view === 'trajectory' && !available(s)) return
   bump()
-  const revealed = view === 'chat' ? [] : s.revealed
   patch({
     view, listing: false, timeline: view === 'chat' ? { ...s.timeline, bucket: null, threshold: false } : s.timeline,
-    revealed, ...rows(s.entries, { ...s, revealed }),
+    ...rows(s.entries, s),
   })
 }
 
@@ -475,15 +397,8 @@ export function select(entryId: string | null, opts: { source: SelectSource }): 
     const target = scopeOf(s.entries[s.index[entryId]!]!)
     if (target !== s.scope) { enter(target, { select: { id: entryId, source: opts.source } }); return }
   }
-  /* A hidden row that something pointed at is shown for now, so the selection has a row to land on --
-     also when it was the selection already and a switch has since hidden it. */
-  const reveal = entryId !== null && !(entryId in s.visibleIndex)
-  if (s.selectedId === entryId && !reveal) return
-  const revealed = reveal ? [...s.revealed, entryId as string] : s.revealed
-  patch({
-    selectedId: entryId, selectedBy: entryId === null ? null : opts.source, selections: s.selections + 1,
-    ...(reveal ? { revealed, ...rows(s.entries, { ...s, revealed }) } : {}),
-  })
+  if (s.selectedId === entryId) return
+  patch({ selectedId: entryId, selectedBy: entryId === null ? null : opts.source, selections: s.selections + 1 })
 }
 
 /** Selects an entry whichever tab it belongs to, without moving the tab: the
@@ -492,13 +407,8 @@ export function select(entryId: string | null, opts: { source: SelectSource }): 
 export function selectAcross(entryId: string | null, opts: { source: SelectSource }): void {
   const s = store.get()
   if (entryId !== null && !(entryId in s.index)) return
-  const reveal = entryId !== null && !(entryId in s.shownIndex)
-  if (s.selectedId === entryId && !reveal) return
-  const revealed = reveal ? [...s.revealed, entryId as string] : s.revealed
-  patch({
-    selectedId: entryId, selectedBy: entryId === null ? null : opts.source, selections: s.selections + 1,
-    ...(reveal ? { revealed, ...rows(s.entries, { ...s, revealed }) } : {}),
-  })
+  if (s.selectedId === entryId) return
+  patch({ selectedId: entryId, selectedBy: entryId === null ? null : opts.source, selections: s.selections + 1 })
 }
 
 /** The list reports where the reader is: at the tail, or anchored to a row. */
@@ -531,7 +441,7 @@ const doorOf = (s: TrajectoryState, id: string): TrajectoryEntry | null => {
 function enter(target: string | null, how: {
   select?: { id: string; source: SelectSource }
   discard?: boolean
-  base?: Pick<TrajectoryState, 'scopes' | 'saved' | 'revealed'>
+  base?: Pick<TrajectoryState, 'scopes' | 'saved'>
 } = {}): void {
   const s: TrajectoryState = { ...store.get(), ...how.base }
   const saved = { ...s.saved }
@@ -541,15 +451,10 @@ function enter(target: string | null, how: {
   const scopes = target === null || s.scopes.some((o) => o.id === target) ? s.scopes : [...s.scopes, { id: target, door: doorOf(s, target) }]
   let selectedId = how.select ? how.select.id : back.selectedId
   if (selectedId !== null && !(selectedId in s.index)) selectedId = null
-  let revealed = s.revealed
-  let next = derived(s.entries, s.prefs, revealed, target)
-  if (how.select && !(how.select.id in next.visibleIndex)) {
-    revealed = [...revealed, how.select.id]
-    next = derived(s.entries, s.prefs, revealed, target)
-  }
+  const next = derived(s.entries, target)
   const moved = how.select !== undefined || selectedId !== s.selectedId
   patch({
-    scope: target, scopes, saved, revealed, ...next,
+    scope: target, scopes, saved, ...next,
     follow: back.follow, anchor: back.anchor, timeline: back.timeline,
     selectedId, selectedBy: selectedId === null ? null : (how.select ? how.select.source : 'migrate'),
     selections: moved ? s.selections + 1 : s.selections,
@@ -571,11 +476,9 @@ export function switchScope(id: string | null): void {
   enter(id)
 }
 
-/* Closes a sub-agent tab and forgets everything it kept, the hidden rows a
-   link showed in it included, so it opens afresh next time. A shown row is
-   the tab's where the row is now: one whose scope the feed has since changed
-   is shown in its new tab and stays. The tab on screen being closed hands
-   over to its right-hand neighbour, else its left, else the main session. */
+/* Closes a sub-agent tab and forgets what it kept, so it opens afresh next
+   time. The tab on screen being closed hands over to its right-hand
+   neighbour, else its left, else the main session. */
 export function closeScope(id: string): void {
   const s = store.get()
   const at = s.scopes.findIndex((o) => o.id === id)
@@ -583,33 +486,23 @@ export function closeScope(id: string): void {
   const scopes = s.scopes.filter((o) => o.id !== id)
   const saved = { ...s.saved }
   delete saved[scopeKey(id)]
-  const revealed = s.revealed.filter((rid) => {
-    const i = s.index[rid]
-    return i === undefined || scopeOf(s.entries[i]!) !== id
-  })
   if (s.scope === id) {
     const neighbour = s.scopes[at + 1]?.id ?? s.scopes[at - 1]?.id ?? null
-    enter(neighbour, { discard: true, base: { scopes, saved, revealed } })
+    enter(neighbour, { discard: true, base: { scopes, saved } })
     return
   }
-  const shown = revealed.length !== s.revealed.length
-  patch({ scopes, saved, revealed, ...(shown ? rows(s.entries, { ...s, revealed }) : {}) })
+  patch({ scopes, saved })
 }
 
 /* The rows before and after a change, what the change replaced, and which
-   rows the list draws under the reader's switches, for carrying a tab's
-   place across it. */
+   rows the list draws, for carrying a tab's place across it. */
 interface Change {
   before: TrajectoryEntry[]
   beforeIndex: Record<string, number>
   after: TrajectoryEntry[]
   afterIndex: Record<string, number>
   replaced: ReadonlyMap<string, string | null>
-  drawn: (entry: TrajectoryEntry) => boolean
 }
-
-const drawnUnder = (prefs: Prefs, revealed: string[]) => (entry: TrajectoryEntry): boolean =>
-  hiddenOf(entry) === null || prefs.showHidden || revealed.includes(entry.entry_id)
 
 /* A tab's place after the rows changed under it, worked out in the same
    write as the change: once the change is past, a gone anchor has nothing
@@ -624,7 +517,7 @@ const drawnUnder = (prefs: Prefs, revealed: string[]) => (entry: TrajectoryEntry
 function carryPlace(place: Pick<ScopeView, 'follow' | 'anchor'>, scope: string | null, c: Change): Pick<ScopeView, 'follow' | 'anchor'> {
   const { follow, anchor } = place
   if (anchor === null) return { follow, anchor }
-  const shown = (e: TrajectoryEntry): boolean => scopeOf(e) === scope && c.drawn(e)
+  const shown = (e: TrajectoryEntry): boolean => scopeOf(e) === scope
   const placeable = (id: string): boolean => {
     const at = c.afterIndex[id]
     if (at === undefined || scopeOf(c.after[at]!) !== scope) return false
@@ -731,7 +624,6 @@ export function sessionChanged(key: string | null = sessionCurrent()): void {
     follow: back?.follow ?? true,
     anchor: back?.anchor ?? null,
     timeline: back?.timeline ?? initialTimeline,
-    revealed: [],
     scope: null,
     scopes: [],
     saved: {},
@@ -743,8 +635,6 @@ export function sessionChanged(key: string | null = sessionCurrent()): void {
     turnTotals: {},
     doors: {},
     scopeSizes: {},
-    hiddenCount: 0,
-    hiddenTurns: {},
   })
   if (back?.view === 'trajectory' && !available()) patch({ view: 'chat' })
 }
@@ -810,7 +700,7 @@ export async function load(): Promise<void> {
       const next = whole ? null : rows(entries)
       const change: Change = {
         before: start.entries, beforeIndex: start.index, after: entries, afterIndex: next?.index ?? was.index,
-        replaced: NOTHING_REPLACED, drawn: drawnUnder(was.prefs, was.revealed),
+        replaced: NOTHING_REPLACED,
       }
       patch({
         ...(next ?? {}),
@@ -875,7 +765,6 @@ export function applyChanges(batch: TrajectoryChangesResult): void {
   const change: Change = {
     before: s.entries, beforeIndex: s.index, after: entries, afterIndex: index,
     replaced: new Map(batch.removed.map((r) => [r.entry_id, r.replaced_by ?? null])),
-    drawn: drawnUnder(s.prefs, s.revealed),
   }
   patch({
     ...rows(entries, s),

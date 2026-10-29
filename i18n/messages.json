@@ -11985,6 +11985,10 @@
       "en": "Request",
       "zh": "请求"
     },
+    "gui.trajectory.block.reasoning": {
+      "en": "Reasoning",
+      "zh": "推理"
+    },
     "gui.trajectory.block.thinking": {
       "en": "Thinking",
       "zh": "思考内容"
@@ -12100,6 +12104,10 @@
     "gui.trajectory.block.transcript": {
       "en": "Transcript",
       "zh": "转录"
+    },
+    "gui.trajectory.block.replay": {
+      "en": "Replay",
+      "zh": "回放"
     },
     "gui.trajectory.block.frames": {
       "en": "Frame references",
@@ -12324,10 +12332,6 @@
     "gui.trajectory.bar.zoom_out": {
       "en": "Zoom out",
       "zh": "缩小"
-    },
-    "gui.trajectory.bar.reset": {
-      "en": "Fit the whole conversation",
-      "zh": "复位到整条会话"
     },
     "gui.trajectory.bar.sum_known": {
       "en": "{dur} charged",
@@ -12605,10 +12609,6 @@
       "en": "Turn end",
       "zh": "回合结束"
     },
-    "gui.trajectory.bar.show_hidden": {
-      "en": "Show hidden entries ({n})",
-      "zh": "显示已隐藏的条目（{n} 条）"
-    },
     "gui.trajectory.bar.threshold": {
       "en": "Hide entries under {ms}",
       "zh": "隐藏短于 {ms} 的条目"
@@ -12664,6 +12664,10 @@
     "gui.trajectory.crash_retry": {
       "en": "Try again",
       "zh": "重试"
+    },
+    "gui.trajectory.agents_fewer": {
+      "en": "Show fewer agents",
+      "zh": "收起部分智能体"
     },
     "gui.trajectory.agents_more": {
       "en": "+{n} more agents",

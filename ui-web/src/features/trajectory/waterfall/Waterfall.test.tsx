@@ -4,7 +4,7 @@
  * tested in model.test.ts; what is tested here is that the page uses it. */
 
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetTranslator, setTranslator } from '../../../i18n/t'
 import { absorb, resetCapabilities } from '../../../rpc/capabilities'
@@ -13,7 +13,8 @@ import { resetSources, setSources } from '../../../state/sources'
 import * as details from '../detailStore'
 import * as store from '../store'
 import { buildWaterfall } from './model'
-import { ROW_HEIGHT, Waterfall, displayRows } from './Waterfall'
+import { MAX_LANES } from './OverviewLanes'
+import { GUIDE_X, ROW_HEIGHT, TURN_GUIDE_X, Waterfall, displayRows } from './Waterfall'
 
 import type { TrajectoryEntry, TrajectoryIndexState, TrajectoryListResult, TrajectorySource } from '../types'
 
@@ -154,6 +155,21 @@ describe('the page', () => {
     expect(count('[data-row="span"]')).toBe(2)
   })
 
+  it('hangs the trunk from the agent fold control and a branch from each turn’s', async () => {
+    /* The guides are the row's own children: a line inside the label would be
+     * only as tall as the label's text, and would stop at every row boundary. */
+    const lefts = (row: Element): number[] => [...row.children]
+      .filter((el) => el.classList.contains('trajectory-wf-guide'))
+      .map((el) => Number.parseFloat((el as HTMLElement).style.left))
+    await draw([E('m1', 0), E('m2', 1)])
+    expect(lefts(document.querySelector('[data-row="agent"]')!)).toEqual([])
+    expect(lefts(document.querySelector('[data-row="turn"]')!)).toEqual([GUIDE_X])
+    fireEvent.click(document.querySelector('[data-row="turn"]')!)
+    for (const span of document.querySelectorAll('[data-row="span"]')) {
+      expect(lefts(span)).toEqual([GUIDE_X, TURN_GUIDE_X])
+    }
+  })
+
   it('selects a span across scopes and opens the details pane', async () => {
     await draw([E('m1', 0), E('s1', 1, { subagent_scope: 't:sub', turn_span_id: 'S1' })])
     fireEvent.click(document.querySelectorAll('[data-row="turn"]')[1]!)
@@ -218,24 +234,37 @@ it('brings a row selected from elsewhere into view, opening its turn and its age
 })
 
 describe('the page’s controls', () => {
-  it('reveals the entries the index hides when the switch is turned on', async () => {
+  it('draws the entries the index marked hidden, with no switch to turn on', async () => {
     await draw([E('shown', 0), E('folded', 1, { meta: { hidden: 'redundant_reply' } })])
-    expect(document.querySelector('[data-entry="folded"]')).toBeNull()
-    fireEvent.click(document.querySelector('[data-testid="show-hidden"]')!)
+    expect(document.querySelector('[data-testid="show-hidden"]')).toBeNull()
     fireEvent.click(document.querySelector('[data-row="turn"]')!)
     expect(document.querySelector('[data-entry="folded"]')).not.toBeNull()
   })
 
-  it('labels an idle break where it compresses one', async () => {
+  it('labels an idle break when the break has room for the word', async () => {
     const base = Date.parse('2026-10-28T10:00:00.000Z')
     const at2 = (seconds: number): string => new Date(base + seconds * 1000).toISOString()
+    /* Short runs either side of a long gap: the collapsed break is a third of
+       the axis and the word fits in it. */
     await draw([
-      E('a', 0, { operation_start: at2(0), operation_end: at2(20) }),
-      E('b', 1, { turn_span_id: 'T2', operation_start: at2(900), operation_end: at2(920) }),
+      E('a', 0, { operation_start: at2(0), operation_end: at2(1) }),
+      E('b', 1, { turn_span_id: 'T2', operation_start: at2(900), operation_end: at2(901) }),
     ])
     const idle = document.querySelector('.trajectory-ruler-idle')
     expect(idle).not.toBeNull()
     expect(idle!.textContent).toMatch(/\d/)
+  })
+
+  it('leaves a break squeezed between long runs unlabelled', async () => {
+    const base = Date.parse('2026-10-28T10:00:00.000Z')
+    const at2 = (seconds: number): string => new Date(base + seconds * 1000).toISOString()
+    /* A 1,000px break inside a 41,000px axis: the word would set itself one
+       letter per line, which is what it looked like before the rule. */
+    await draw([
+      E('a', 0, { operation_start: at2(0), operation_end: at2(20) }),
+      E('b', 1, { turn_span_id: 'T2', operation_start: at2(900), operation_end: at2(920) }),
+    ])
+    expect(document.querySelector('.trajectory-ruler-idle')).toBeNull()
   })
 
   it('moves the selection with the arrow keys and opens a turn with Enter', async () => {
@@ -264,6 +293,30 @@ describe('the page’s controls', () => {
 })
 
 
+it('draws two runs of one instance that share their dispatching turn as two separate turns', async () => {
+  const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    await draw([
+      E('d1', 0, { kind: 'tool.output', opens_subagent_scope: 't:a', meta: { instance: 'pr-fix' } }),
+      E('a1', 1, { subagent_scope: 't:a', turn_span_id: 'T1' }),
+      E('d2', 2, { kind: 'tool.output', opens_subagent_scope: 't:b', meta: { instance: 'pr-fix' } }),
+      E('b1', 3, { subagent_scope: 't:b', turn_span_id: 'T1' }),
+    ])
+    const turns = [...document.querySelectorAll<HTMLElement>('[data-row="turn"]')]
+    expect(turns).toHaveLength(3)
+    /* Opening the worker's first turn opens that run's rows and no other's. */
+    act(() => { fireEvent.click(turns[1]!) })
+    expect(document.querySelector('[data-entry="a1"]')).not.toBeNull()
+    expect(document.querySelector('[data-entry="b1"]')).toBeNull()
+    /* Two siblings under one key is what leaves a stale row painted over a
+       live one once the list moves; React reports it as it renders. */
+    const duplicate = errors.mock.calls.some((call) => call.some((arg) => typeof arg === 'string' && arg.includes('same key')))
+    expect(duplicate).toBe(false)
+  } finally {
+    errors.mockRestore()
+  }
+})
+
 describe('the marks', () => {
   it('wears the host’s own mark on the main agent and the vendor’s on a named worker', async () => {
     await draw([
@@ -281,6 +334,15 @@ describe('the marks', () => {
       E('s1', 1, { subagent_scope: 't:sub', turn_span_id: 'S1' }),
     ])
     expect(document.querySelector('[data-row="agent"] .trajectory-wf-glyph')).not.toBeNull()
+  })
+
+  it('wears Raven’s own mark on a Raven-* worker', async () => {
+    await draw([
+      E('door', 0, { kind: 'tool.output', opens_subagent_scope: 't:sub', meta: { agent: 'Raven-Research' } }),
+      E('s1', 1, { subagent_scope: 't:sub', turn_span_id: 'S1' }),
+    ])
+    const marks = [...document.querySelectorAll('[data-row="agent"] img')].map((img) => img.getAttribute('src'))
+    expect(marks.filter((src) => src === 'assets/agents/raven.svg')).toHaveLength(2)
   })
 
   it('puts a span’s icon in its own boxed cell', async () => {
@@ -318,6 +380,110 @@ it('scrolls the list for a wheel anywhere over the island, not just on the list'
   const overList = wheel({ deltaY: 120, bubbles: true, cancelable: true })
   box.dispatchEvent(overList)
   expect(overList.defaultPrevented).toBe(false)
+})
+
+it('selects the interval dragged across the ruler without moving the axis', async () => {
+  await draw([E('m1', 0), E('m2', 60), E('m3', 120)])
+  const ruler = document.querySelector('.trajectory-ruler') as HTMLElement
+  Object.defineProperty(ruler, 'getBoundingClientRect', {
+    value: () => ({ left: 100, top: 0, right: 500, bottom: 56, width: 400, height: 56, x: 100, y: 0, toJSON: () => ({}) }),
+    configurable: true,
+  })
+  const labels = (): Array<string | null> => [...document.querySelectorAll('.trajectory-ruler b')].map((b) => b.textContent)
+  const before = labels()
+  fireEvent.pointerDown(ruler, { clientX: 200, clientY: 10, button: 0, pointerId: 1 })
+  fireEvent.pointerMove(ruler, { clientX: 350, clientY: 10, pointerId: 1 })
+  fireEvent.pointerUp(ruler, { clientX: 350, clientY: 10, pointerId: 1 })
+  /* The interval stays picked, with a grip at each edge ... */
+  expect(document.querySelectorAll('.trajectory-ruler-pick')).toHaveLength(1)
+  expect(document.querySelectorAll('.trajectory-ruler-grip')).toHaveLength(2)
+  /* ... and the axis keeps the scale it had: selecting does not zoom. */
+  expect(labels()).toEqual(before)
+  /* A click takes the pick back. */
+  fireEvent.pointerDown(ruler, { clientX: 300, clientY: 10, button: 0, pointerId: 1 })
+  fireEvent.pointerUp(ruler, { clientX: 300, clientY: 10, pointerId: 1 })
+  expect(document.querySelectorAll('.trajectory-ruler-pick')).toHaveLength(0)
+})
+
+it('moves one edge of the picked interval from its handle', async () => {
+  await draw([
+    E('a', 0, { turn_span_id: 'T1' }),
+    E('b', 60, { turn_span_id: 'T2' }),
+    E('c', 120, { turn_span_id: 'T3' }),
+  ])
+  const ruler = document.querySelector('.trajectory-ruler') as HTMLElement
+  Object.defineProperty(ruler, 'getBoundingClientRect', {
+    value: () => ({ left: 100, top: 0, right: 500, bottom: 56, width: 400, height: 56, x: 100, y: 0, toJSON: () => ({}) }),
+    configurable: true,
+  })
+  fireEvent.pointerDown(ruler, { clientX: 250, clientY: 10, button: 0, pointerId: 1 })
+  fireEvent.pointerMove(ruler, { clientX: 350, clientY: 10, pointerId: 1 })
+  fireEvent.pointerUp(ruler, { clientX: 350, clientY: 10, pointerId: 1 })
+  const band = (): HTMLElement => document.querySelector('.trajectory-ruler-pick') as HTMLElement
+  const width = (): number => Number.parseFloat(band().style.width)
+  const left = band().style.left
+  const grips = document.querySelectorAll<HTMLElement>('.trajectory-ruler-grip')
+  expect(grips).toHaveLength(2)
+  /* Only the right edge moves; the left one stays where it was. */
+  fireEvent.pointerDown(grips[1]!, { clientX: 350, clientY: 10, button: 0, pointerId: 1 })
+  fireEvent.pointerMove(grips[1]!, { clientX: 305, clientY: 10, pointerId: 1 })
+  fireEvent.pointerUp(grips[1]!, { clientX: 305, clientY: 10, pointerId: 1 })
+  expect(band().style.left).toBe(left)
+  expect(width()).toBeLessThan(25)
+  /* And the rows are filtered to what the edge now leaves. */
+  expect(count('[data-row="turn"]')).toBe(1)
+})
+
+it('keeps only what was running inside the picked interval', async () => {
+  await draw([
+    E('a', 0, { turn_span_id: 'T1' }),
+    E('b', 60, { turn_span_id: 'T2' }),
+    E('c', 120, { turn_span_id: 'T3' }),
+  ])
+  const ruler = document.querySelector('.trajectory-ruler') as HTMLElement
+  Object.defineProperty(ruler, 'getBoundingClientRect', {
+    value: () => ({ left: 100, top: 0, right: 500, bottom: 56, width: 400, height: 56, x: 100, y: 0, toJSON: () => ({}) }),
+    configurable: true,
+  })
+  expect(count('[data-row="turn"]')).toBe(3)
+  /* The middle of an axis that runs 0..121s plus its trailing scale: only the
+     middle turn. */
+  fireEvent.pointerDown(ruler, { clientX: 250, clientY: 10, button: 0, pointerId: 1 })
+  fireEvent.pointerMove(ruler, { clientX: 305, clientY: 10, pointerId: 1 })
+  fireEvent.pointerUp(ruler, { clientX: 305, clientY: 10, pointerId: 1 })
+  expect(count('[data-row="turn"]')).toBe(1)
+  expect(document.querySelector('[data-row="turn"]')!.textContent).toContain('"n":2')
+  /* A click takes the pick back, and the rows with it. */
+  fireEvent.pointerDown(ruler, { clientX: 120, clientY: 10, button: 0, pointerId: 1 })
+  fireEvent.pointerUp(ruler, { clientX: 120, clientY: 10, pointerId: 1 })
+  expect(count('[data-row="turn"]')).toBe(3)
+})
+
+it('lets the opened overview take the wheel while it still has lanes to show', async () => {
+  const entries = [E('m', 0)]
+  for (let i = 0; i < MAX_LANES + 2; i += 1) {
+    entries.push(E(`s${i}`, 10 + i, { subagent_scope: `t:s${i}`, turn_span_id: `S${i}` }))
+  }
+  await draw(entries)
+  fireEvent.click(document.querySelector('[data-lane-more]')!)
+  const ov = document.querySelector('.trajectory-ov') as HTMLElement
+  /* The sheet states the overflow; happy-dom applies no stylesheet. */
+  ov.style.overflowY = 'auto'
+  Object.defineProperty(ov, 'clientHeight', { value: 100, configurable: true })
+  Object.defineProperty(ov, 'scrollHeight', { value: 300, configurable: true })
+  let top = 0
+  Object.defineProperty(ov, 'scrollTop', { get: () => top, set: (value: number) => { top = value }, configurable: true })
+  const lane = ov.querySelector('[data-lane]') as HTMLElement
+  const down = wheel({ deltaY: 120, bubbles: true, cancelable: true })
+  lane.dispatchEvent(down)
+  expect(down.defaultPrevented).toBe(false)
+  /* At the end of its own scroll, the wheel goes on to the list below. */
+  top = 200
+  const box = document.querySelector('.trajectory-list') as HTMLElement
+  const end = wheel({ deltaY: 120, bubbles: true, cancelable: true })
+  lane.dispatchEvent(end)
+  expect(end.defaultPrevented).toBe(true)
+  expect(box.scrollTop).toBe(120)
 })
 
 it('sends the door’s arrow to the worker’s own first row', async () => {

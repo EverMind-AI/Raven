@@ -127,6 +127,18 @@ it('treats two runs of one instance as one agent, with one turn sequence', () =>
   expect(design.turns.map((turn) => turn.ordinal)).toEqual([1, 2])
 })
 
+it('keeps two runs of one instance as two turns when both carry the turn that dispatched them', () => {
+  const w = buildWaterfall([
+    E({ entry_id: 'd1', span_id: 'd1', kind: 'tool.output', opens_subagent_scope: 't:a', meta: { instance: 'pr-fix' }, operation_start: at(0), operation_end: at(1) }),
+    E({ entry_id: 'a1', span_id: 'a1', subagent_scope: 't:a', turn_span_id: 'T5', operation_start: at(2), operation_end: at(3) }),
+    E({ entry_id: 'd2', span_id: 'd2', kind: 'tool.output', opens_subagent_scope: 't:b', meta: { instance: 'pr-fix' }, operation_start: at(4), operation_end: at(5) }),
+    E({ entry_id: 'b1', span_id: 'b1', subagent_scope: 't:b', turn_span_id: 'T5', operation_start: at(6), operation_end: at(7) }),
+  ], NOW)
+  const fix = w.agents[1]!
+  expect(fix.turns.map((turn) => turn.ordinal)).toEqual([1, 2])
+  expect(new Set(fix.turns.map((turn) => turn.id)).size).toBe(2)
+})
+
 it('folds runs of one named agent together when no instance id reached the door', () => {
   const w = buildWaterfall([
     E({ entry_id: 'd1', span_id: 'd1', kind: 'tool.output', opens_subagent_scope: 't:a', meta: { agent: 'Claude Code-Mirasim' }, operation_start: at(0), operation_end: at(1) }),

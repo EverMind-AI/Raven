@@ -54,14 +54,26 @@
      desk of the same paper, and the edge of each card is the only thing saying
      otherwise. Its last layer is --page, so it stands alone as a background. */
   --wash:
-    radial-gradient(60% 55% at 85% 0%, rgba(214, 224, 242, .55), rgba(214, 224, 242, 0) 70%),
-    radial-gradient(55% 50% at 20% 100%, rgba(246, 236, 214, .75), rgba(246, 236, 214, 0) 70%),
-    radial-gradient(40% 45% at 70% 90%, rgba(242, 233, 214, .5), rgba(242, 233, 214, 0) 70%),
-    linear-gradient(180deg, #fafaf8 0%, #f7f7f5 100%);
+    radial-gradient(60% 55% at 85% 0%, rgba(195, 212, 237, .62) 0%, rgba(195, 212, 237, 0) 70%),
+    radial-gradient(55% 50% at 20% 100%, rgba(244, 230, 200, .80) 0%, rgba(244, 230, 200, 0) 70%),
+    radial-gradient(40% 45% at 70% 90%, rgba(239, 226, 200, .55) 0%, rgba(239, 226, 200, 0) 70%),
+    linear-gradient(180deg, #f6f5f0 0%, #f1f0ea 100%);
   --side-bg:  #ffffff;   /* the rail, one step lighter than the page */
   --paper:    #ffffff;   /* a card laid on the page: an answer, a sheet */
   --hover:    #ececea;   /* a row the pointer is on */
   --selected: #eaeae7;   /* a row that is the one open */
+  /* The trajectory's sheet. The column carries the conversation's own wash
+     behind it (--wash), so the trace is read on the same light the transcript
+     is; the glass is what separates the sheet from the rail. */
+  --traj-glass:  rgba(255, 255, 255, .70);
+  --traj-edge:   rgba(255, 255, 255, .72);
+  --traj-shadow: inset 0 1px 0 rgba(255, 255, 255, .55), 0 24px 60px -38px rgba(31, 35, 40, .38);
+  --traj-pane:   rgba(255, 255, 255, .40);
+  --traj-line:   rgba(31, 35, 40, .09);
+  --traj-hover:  rgba(255, 255, 255, .52);
+  --traj-on:     rgba(255, 255, 255, .72);
+  --traj-rule:   rgba(31, 35, 40, .12);
+  --traj-solid:  #fbfaf8;
   --text-3:   #8a8a88;   /* a group label: quieter than muted, louder than faint */
   /* The rail's own row ramp, from the design (Figma: Raven / AppSidebar): a
      label, the same label on a hovered or open row, the quiet grey of a group
@@ -276,6 +288,15 @@
     --paper:    #202020;
     --hover:    #242424;
     --selected: #2e2e2e;
+    --traj-glass:  rgba(34, 34, 34, .58);
+    --traj-edge:   rgba(255, 255, 255, .07);
+    --traj-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 24px 60px -38px #000;
+    --traj-pane:   rgba(38, 38, 38, .42);
+    --traj-line:   rgba(255, 255, 255, .08);
+    --traj-hover:  rgba(255, 255, 255, .05);
+    --traj-on:     rgba(255, 255, 255, .09);
+    --traj-rule:   rgba(255, 255, 255, .10);
+    --traj-solid:  #1c1c1c;
     --text-3:   #9b9b9b;
     --rail-ink:    #f7f7f7;
     --rail-ink-on: #ffffff;
@@ -343,6 +364,11 @@
   --page: #141414; --wash: linear-gradient(180deg, #151515, #121212);
   --side-bg: #333333; --paper: #202020; --hover: #242424;
   --selected: #2e2e2e; --text-3: #9b9b9b; --ph: #6e6e6e; --black: #e8e8e6;
+  --traj-glass: rgba(34, 34, 34, .58); --traj-edge: rgba(255, 255, 255, .07);
+  --traj-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 24px 60px -38px #000;
+  --traj-pane: rgba(38, 38, 38, .42); --traj-line: rgba(255, 255, 255, .08);
+  --traj-hover: rgba(255, 255, 255, .05); --traj-on: rgba(255, 255, 255, .09);
+  --traj-rule: rgba(255, 255, 255, .10); --traj-solid: #1c1c1c;
   --rail-ink: #f7f7f7; --rail-ink-on: #ffffff; --rail-quiet: #999999;
   --rail-hover: #474747; --rail-on: #474747; --rail-tip: #1a1a1a; --rail-tip-ink: #ffffff;
   --snav-bg: #262626; --settings-nav-on: #333333; --settings-nav-ico: #999999;
@@ -371,11 +397,16 @@
   --link: #3b6fd4; --amber: #a8801c; --amber-dp: #eee4c8; --moss: #3f7d2c;
   --clay: #b4402f; --gold: #9a7016; --sky: #2f6d9e;
   --page: #fafaf8; --side-bg: #ffffff; --paper: #ffffff; --hover: #ececea;
+  --traj-glass: rgba(255, 255, 255, .70); --traj-edge: rgba(255, 255, 255, .72);
+  --traj-shadow: inset 0 1px 0 rgba(255, 255, 255, .55), 0 24px 60px -38px rgba(31, 35, 40, .38);
+  --traj-pane: rgba(255, 255, 255, .40); --traj-line: rgba(31, 35, 40, .09);
+  --traj-hover: rgba(255, 255, 255, .52); --traj-on: rgba(255, 255, 255, .72);
+  --traj-rule: rgba(31, 35, 40, .12); --traj-solid: #fbfaf8;
   --wash:
-    radial-gradient(60% 55% at 85% 0%, rgba(214, 224, 242, .55), rgba(214, 224, 242, 0) 70%),
-    radial-gradient(55% 50% at 20% 100%, rgba(246, 236, 214, .75), rgba(246, 236, 214, 0) 70%),
-    radial-gradient(40% 45% at 70% 90%, rgba(242, 233, 214, .5), rgba(242, 233, 214, 0) 70%),
-    linear-gradient(180deg, #fafaf8 0%, #f7f7f5 100%);
+    radial-gradient(60% 55% at 85% 0%, rgba(195, 212, 237, .62) 0%, rgba(195, 212, 237, 0) 70%),
+    radial-gradient(55% 50% at 20% 100%, rgba(244, 230, 200, .80) 0%, rgba(244, 230, 200, 0) 70%),
+    radial-gradient(40% 45% at 70% 90%, rgba(239, 226, 200, .55) 0%, rgba(239, 226, 200, 0) 70%),
+    linear-gradient(180deg, #f6f5f0 0%, #f1f0ea 100%);
   --selected: #eaeae7; --text-3: #8a8a88; --ph: #b8b8b8; --black: #111111;
   --rail-ink: #333333; --rail-ink-on: #1a1a1a; --rail-quiet: #999999;
   --rail-hover: #f7f7f7; --rail-on: #f0f0f0; --rail-tip: #1a1a1a; --rail-tip-ink: #ffffff;
@@ -2856,6 +2887,37 @@ textarea:focus, textarea:focus-visible,
 .scroll[data-parked] ~ #turnNav { display: none; }
 #trajHost { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-bottom: var(--lift, 96px); }
 #trajHost[hidden] { display: none; }
+/* The glass itself: the conversation's own wash is painted on the column and
+   the island floats on it, inset far enough that the colour reads around all
+   four edges. The same background in both views is the point -- the trace is
+   read on the light the transcript is, not a second palette. The blur samples
+   that wash and nothing else: the rows scroll inside the sheet, so a scroll
+   never re-blurs a backdrop. The composer is hidden while a trace is up,
+   which is why the lift the host used to reserve is dropped here. */
+html[data-traj] .chat { background: var(--wash) }
+html[data-traj] #trajHost {
+  position: relative;
+  margin: 6px 14px 14px; padding-bottom: 0;
+  border: 1px solid var(--traj-edge); border-radius: 16px; overflow: hidden;
+  box-shadow: var(--traj-shadow);
+}
+/* The glass is a layer behind the island, not a filter on its ancestor. With
+   backdrop-filter on the host the rows scrolled inside the filtered subtree,
+   and the compositor reused its backdrop snapshot: a row's text ghosted into
+   the row below at the clipped edge. Behind the rows the blur sees only the
+   wash, and a scroll moves them over a surface that never changes. */
+html[data-traj] #trajHost::before {
+  content: ''; position: absolute; inset: 0; z-index: 0; border-radius: inherit;
+  background: var(--traj-glass);
+  -webkit-backdrop-filter: blur(22px) saturate(1.25);
+  backdrop-filter: blur(22px) saturate(1.25);
+}
+html[data-traj] #trajHost > * { position: relative; z-index: 1 }
+/* A browser without backdrop-filter gets the sheet without the frosted
+   backdrop: the wash still reads around it, the sheet is just solid. */
+@supports not ((backdrop-filter: blur(8px)) or (-webkit-backdrop-filter: blur(8px))) {
+  html[data-traj] #trajHost::before { background: var(--traj-solid) }
+}
 /* The header's view toggle is an icon like the panel toggle beside it; the
    pressed state is the only thing it says in colour. */
 .chrome-traj[aria-pressed="true"] { color: var(--text); background: var(--selected, var(--hover)); }
@@ -7102,3 +7164,4 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    view; nothing else reads it. */
 html[data-traj] .chat > .dock { display: none }
 html[data-traj] #deskHost { display: none }
+

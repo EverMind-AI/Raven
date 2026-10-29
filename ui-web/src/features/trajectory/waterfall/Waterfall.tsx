@@ -18,12 +18,12 @@ import { Icon } from '../../../components/Icon'
 import { t } from '../../../i18n/t'
 import { formatDuration } from '../../../lib/duration'
 import * as lang from '../../../state/lang'
+import { showBar } from '../../../state/scrollbars'
 import * as details from '../detailStore'
 import { scopeTitle } from '../scopes'
 import * as store from '../store'
-import { AxisIndex, barOf, clampViewport, tickMarks, zoomViewport } from './axis'
+import { AxisIndex, TRAIL_PAD, barOf, clampViewport, formatTick, tickMarks, zoomViewport } from './axis'
 import { WaterfallIndex } from './incremental'
-import { crossLinks } from './links'
 import { entryEnd, entryStart, isLive, turnKey } from './model'
 import { OverviewLanes } from './OverviewLanes'
 import { turnSegments } from './segments'
@@ -31,13 +31,23 @@ import { turnSegments } from './segments'
 import type { TrajectoryEntry } from '../types'
 import type { TimeAxis, Viewport } from './axis'
 import type { Waterfall, WaterfallAgent, WaterfallRow, WaterfallTurn } from './model'
-import type { JSX, KeyboardEvent as ReactKeyboardEvent } from 'react'
+import type { JSX, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 
 export const ROW_HEIGHT = 30
 
-/** One guide for the whole agent group, under its fold control and left of
- *  every icon: 12px of row padding plus the 18px chevron's centre. */
+/** A stretch of the axis, as fractions of the open viewport: what the reader
+ *  picked on the ruler, and what the rows are filtered to. */
+export interface Pick {
+  from: number
+  to: number
+}
+
+/** The agent group's trunk, under its fold control: 12px of row padding plus
+ *  the 18px chevron's centre. The turn's branch sits under the turn's own
+ *  chevron, 26px in, so each level's children hang from the control that
+ *  folds them -- and neither line crosses a chevron or an icon. */
 export const GUIDE_X = 21
+export const TURN_GUIDE_X = 35
 const OVERSCAN = 8
 const DEFAULT_ROWS = 20
 
@@ -78,6 +88,15 @@ function windowOf(scrollTop: number, height: number, count: number): { first: nu
 
 const percent = (fraction: number): string => `${(fraction * 100).toFixed(4)}%`
 
+/* The duration stands just past the bar it belongs to; a bar that runs into
+   the track's end would push it out, so it stops where the label still fits.
+   A row whose bar is off the visible stretch keeps the label at the edge. */
+const TIME_RESERVE = 104
+const timeStyle = (bar: { left: number; width: number } | null): { left?: string; right?: number } =>
+  bar === null
+    ? { right: 12 }
+    : { left: `min(calc(${percent(bar.left + bar.width)} + 8px), calc(100% - ${TIME_RESERVE}px))` }
+
 /** The model an agent ran on: the first model call's, as a label. */
 function agentModel(agent: WaterfallAgent): string | null {
   for (const turn of agent.turns) {
@@ -112,6 +131,17 @@ function presetOf(agent: WaterfallAgent): string | null {
   return null
 }
 
+/** An agent of Raven's own, which wears the Raven tile: the in-process row and
+ *  the vendored agents under `agents/`. The spawn span carries the displayed
+ *  name and nothing about the package behind it, so the name is the signal
+ *  here -- the roster reads `builtin`/`vendored` instead, a fact this entry
+ *  does not carry. A vendor's agent spells itself after the vendor. */
+function ownOf(agent: WaterfallAgent): boolean {
+  const meta = agent.door?.meta ?? {}
+  const raw = typeof meta.agent === 'string' ? meta.agent : typeof meta.instance === 'string' ? meta.instance : ''
+  return /^raven([^a-z0-9]|$)/i.test(raw.trim())
+}
+
 /** The line icon a row wears: the reference draws a real icon in its box, not a
  *  text glyph, so it fills the box instead of sitting small inside it. */
 function kindIcon(kind: string): typeof SparklesIcon {
@@ -127,37 +157,132 @@ const spanClass = (kind: string): string =>
   kind.startsWith('tool.') ? 'trajectory-wf-kind-tool'
     : kind === 'user.input' ? 'trajectory-wf-kind-user' : 'trajectory-wf-kind-model'
 
-function Ticks({ axis, view }: { axis: TimeAxis; view: Viewport }): JSX.Element {
+/** Whether the wheel's target stands in a scroller on the island that can
+ *  still move the way the wheel points: the overview's lanes, once the reader
+ *  has opened past the strip's height. The island's own list is the caller's
+ *  to check; everything else here is furniture with nowhere to go. */
+function scrollsAt(root: HTMLElement, target: Node | null, deltaY: number): boolean {
+  let node = target instanceof Element ? target : null
+  for (; node && node !== root; node = node.parentElement) {
+    const style = getComputedStyle(node)
+    if (style.overflowY !== 'auto' && style.overflowY !== 'scroll') continue
+    const max = node.scrollHeight - node.clientHeight
+    if (max <= 1) continue
+    if (deltaY < 0 ? node.scrollTop > 0 : node.scrollTop < max) return true
+  }
+  return false
+}
+
+function Ticks({ axis, view, pick, onPick, count, onWidth }: {
+  axis: TimeAxis; view: Viewport; pick: Pick | null; onPick: (pick: Pick | null) => void
+  count: number; onWidth: (width: number) => void
+}): JSX.Element {
   const { from, to } = view
-  /* How many labels the ruler can hold: one per ~150px, so they never collide
-     when the details pane narrows the column. */
-  const [width, setWidth] = useState(0)
+  /* The ruler is the one element that knows how wide the axis really is; the
+     rows draw their grid lines from the same count, so the measured width
+     goes up rather than each side guessing. */
   const strip = useRef<HTMLDivElement | null>(null)
+  const [width, setWidth] = useState(0)
   useEffect(() => {
     const el = strip.current
     if (!el) return
-    const measure = (): void => setWidth(el.clientWidth)
+    const measure = (): void => { setWidth(el.clientWidth); onWidth(el.clientWidth) }
     measure()
     if (typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(measure)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [])
-  const count = Math.max(3, Math.min(8, Math.floor((width > 0 ? width : 1200) / 150)))
+  }, [onWidth])
+  /* Dragging across the axis picks an interval, the way the network panel's
+     timeline does: the axis keeps its own scale -- its left edge is still the
+     start of the conversation -- and what changes is the band around the
+     picked stretch. Each edge carries a handle, and once there is a band the
+     handles are the way to move that edge alone: the other one stays put, and
+     the rows filter to whatever the band now covers. Nothing zooms, so the
+     scale never shifts under the reader. */
+  type Drag =
+    | { mode: 'new'; at: number; width: number }
+    | { mode: 'edge'; edge: 'lo' | 'hi'; width: number; fixed: number }
+  const drag = useRef<Drag | null>(null)
+  const fraction = (clientX: number, rect: DOMRect): number =>
+    Math.min(1, Math.max(0, (clientX - rect.left) / Math.max(1, rect.width)))
+  const down = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    const at = fraction(event.clientX, rect)
+    const grip = (event.target as HTMLElement).closest?.('[data-edge]') as HTMLElement | null
+    if (grip !== null && pick !== null) {
+      const lo = Math.min(pick.from, pick.to)
+      const hi = Math.max(pick.from, pick.to)
+      const edge = grip.dataset.edge === 'lo' ? 'lo' : 'hi'
+      drag.current = { mode: 'edge', edge, width: rect.width, fixed: edge === 'lo' ? hi : lo }
+    } else {
+      drag.current = { mode: 'new', at, width: rect.width }
+      onPick({ from: at, to: at })
+    }
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId)
+    } catch {
+      /* not capturable */
+    }
+  }
+  const move = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    const start = drag.current
+    if (start === null) return
+    const at = fraction(event.clientX, event.currentTarget.getBoundingClientRect())
+    if (start.mode === 'edge') {
+      onPick(start.edge === 'lo' ? { from: at, to: start.fixed } : { from: start.fixed, to: at })
+      return
+    }
+    onPick({ from: start.at, to: at })
+  }
+  const up = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    const start = drag.current
+    drag.current = null
+    if (start === null) return
+    const at = fraction(event.clientX, event.currentTarget.getBoundingClientRect())
+    if (start.mode === 'edge') {
+      onPick(start.edge === 'lo' ? { from: at, to: start.fixed } : { from: start.fixed, to: at })
+      return
+    }
+    /* A click, not a drag, is how the pick is taken back. */
+    onPick(Math.abs(at - start.at) * start.width < 4 ? null : { from: start.at, to: at })
+  }
+  const cancel = (): void => {
+    drag.current = null
+    onPick(null)
+  }
   const ticks = useMemo(() => tickMarks(axis, { from, to }, count), [axis, from, to, count])
+  const step = ticks.length > 1 ? ticks[1]!.time - ticks[0]!.time : 1
   const span = to - from
   const gaps = span > 0 ? axis.gaps : []
   return (
-    <div className="trajectory-ruler" aria-hidden="true" ref={strip}>
-      {ticks.map((tick) => (
-        <b key={tick.left} style={{ left: percent(tick.left) }}>{formatDuration(tick.time)}</b>
+    <div className="trajectory-ruler" aria-hidden="true" ref={strip}
+      onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={cancel}>
+      {ticks.map((tick, index) => (
+        /* The line under each label, drawn through the ruler the way the
+           network timeline does; the last one keeps its pixel inside the
+           ruler's own edge. */
+        <span key={`tick-${tick.left}`} className="trajectory-ruler-tick"
+          style={{ left: index === ticks.length - 1 ? 'calc(100% - 1px)' : percent(tick.left) }} />
       ))}
+      {ticks.map((tick, index) => {
+        /* The axis's left edge is the start of the session, and its label
+           would hang off the ruler anyway: the number is not written there.
+           A zoomed view starts elsewhere, and that one is written flush with
+           the edge instead. */
+        if (index === 0) return tick.time <= 0 ? null : <b key={tick.left} data-first="" style={{ left: 0 }}>{formatTick(tick.time, step)}</b>
+        return <b key={tick.left} style={{ left: percent(tick.left) }}>{formatTick(tick.time, step)}</b>
+      })}
       {gaps.map((gap, index) => {
         const left = (gap.from - view.from) / span
         const right = (gap.to - view.from) / span
         const from = Math.max(0, left)
         const to = Math.min(1, right)
-        if (to <= from) return null
+        /* A collapsed gap is a few pixels wide and a long idle stretch has a
+           long word for it; squeezed in, the word sets itself one letter per
+           line and reads as noise. Only a gap with room for the word says it. */
+        if (to <= from || (to - from) * (width > 0 ? width : 1200) < 64) return null
         return (
           <span key={index} className="trajectory-ruler-idle"
             style={{ left: percent(from), width: percent(to - from) }}>
@@ -165,6 +290,24 @@ function Ticks({ axis, view }: { axis: TimeAxis; view: Viewport }): JSX.Element 
           </span>
         )
       })}
+      {pick === null ? null : (() => {
+        const lo = Math.min(pick.from, pick.to)
+        const hi = Math.max(pick.from, pick.to)
+        return (
+          <>
+            {/* What is outside the interval is dimmed, the interval itself is
+                left at the ruler's own ground, and each edge carries a grip. */}
+            <span className="trajectory-ruler-dim" style={{ left: 0, width: percent(lo) }} />
+            <span className="trajectory-ruler-dim" style={{ left: percent(hi), width: percent(1 - hi) }} />
+            <span className="trajectory-ruler-pick" style={{ left: percent(lo), width: percent(hi - lo) }} />
+            {/* A handle is a pill straddling its edge, half on either side of
+                it -- at the axis's own ends too, where the ruler lets it out
+                rather than cutting it in half. */}
+            <span className="trajectory-ruler-grip" data-edge="lo" style={{ left: percent(lo) }} />
+            <span className="trajectory-ruler-grip" data-edge="hi" style={{ left: percent(hi) }} />
+          </>
+        )
+      })()}
     </div>
   )
 }
@@ -175,6 +318,7 @@ export function Waterfall(): JSX.Element {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set())
   const [scrollTop, setScrollTop] = useState(0)
+  const [rulerWidth, setRulerWidth] = useState(0)
   const [height, setHeight] = useState(0)
   const [zoom, setZoom] = useState<{ axis: number; view: Viewport } | null>(null)
   const observer = useRef<ResizeObserver | null>(null)
@@ -209,10 +353,13 @@ export function Waterfall(): JSX.Element {
       const zooming = event.ctrlKey || event.metaKey
       const panning = event.shiftKey && !zooming
       if (!zooming && !panning) {
-        /* Over the list the browser scrolls it; anywhere else on the island
-           (the header, the overview, the ruler) the wheel is forwarded, so the
-           page scrolls wherever the pointer happens to be. */
+        /* Over the list the browser scrolls it. Another scroller standing on
+           the island -- the overview's lanes once the reader has opened them
+           all -- takes the wheel while it can still move this way; everything
+           else (the header, the ruler, a strip with nowhere to go) forwards it
+           to the list, so the page scrolls wherever the pointer happens to be. */
         if (scroller.contains(event.target as Node)) return
+        if (scrollsAt(el, event.target as Node | null, event.deltaY)) return
         event.preventDefault()
         scroller.scrollTop += event.deltaY
         return
@@ -246,7 +393,6 @@ export function Waterfall(): JSX.Element {
      running: a fresh `Date.now()` every render would rebuild the whole model
      on every scroll frame, which is what a 500-turn session cannot afford. */
   const shown = store.get().shown
-  const prefs = store.get().prefs
   const [now, setNow] = useState(() => Date.now())
   const live = shown.some((entry) => isLive(entry, now))
   useEffect(() => {
@@ -290,7 +436,7 @@ export function Waterfall(): JSX.Element {
       prev.now = now
       return prev.index.axis()
     }
-    const index = new AxisIndex()
+    const index = new AxisIndex({ pad: TRAIL_PAD })
     index.add(shown.map((entry) => ({ start: entryStart(entry), end: entryEnd(entry, now) })))
     axes.current = { index, built: shown.length, now }
     return index.axis()
@@ -305,9 +451,57 @@ export function Waterfall(): JSX.Element {
   /* A different conversation has a different axis; the old window means nothing. */
    
   useEffect(() => { setZoom(null) }, [axis.length])
-  const rows = useMemo(() => displayRows(waterfall, collapsed, open), [waterfall, collapsed, open])
-  const links = useMemo(() => crossLinks(rows, waterfall), [rows, waterfall])
+  /* The picked stretch is owned here: the axis draws it, and the rows below
+     are filtered to it. It is a fraction of the viewport it was drawn on, so a
+     zoom or a pan drops it, and Escape drops it too. */
+  const [picked, setPicked] = useState<Pick | null>(null)
+  useEffect(() => { setPicked(null) }, [view.from, view.to])
+  const held = picked !== null
+  useEffect(() => {
+    if (!held) return
+    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') setPicked(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [held])
+  const range = useMemo(() => {
+    if (picked === null) return null
+    const span = view.to - view.from
+    const a = axis.unproject(view.from + span * Math.min(picked.from, picked.to))
+    const b = axis.unproject(view.from + span * Math.max(picked.from, picked.to))
+    return { start: Math.min(a, b), end: Math.max(a, b) }
+  }, [picked, view.from, view.to, axis])
+  /* A filtered list is a new list: it starts at its own beginning, not at
+     whatever scroll offset the full one happened to be at. */
+  useEffect(() => {
+    if (range === null) return
+    const el = box.current
+    if (el) el.scrollTop = 0
+  }, [range])
+  const rows = useMemo(() => {
+    const drawn = displayRows(waterfall, collapsed, open)
+    if (range === null) return drawn
+    /* Only what was running inside the picked stretch stays: an agent, a turn
+       and a row are in it when their own stretch of time meets it. */
+    const overlaps = (start: number, end: number): boolean => end >= range.start && start <= range.end
+    return drawn.filter((row) => {
+      if (row.kind === 'agent') {
+        const agent = waterfall.agents[row.agent]
+        return agent !== undefined && overlaps(agent.start, agent.end)
+      }
+      if (row.kind === 'turn') return row.turnRow !== null && overlaps(row.turnRow.start, row.turnRow.end)
+      const entry = row.row?.entry
+      return entry !== undefined && overlaps(entryStart(entry), entryEnd(entry, now))
+    })
+  }, [waterfall, collapsed, open, range, now])
   const { first, last } = windowOf(scrollTop, height, rows.length)
+
+  /* The rows' bar stays, so it is placed again whenever the list it stands
+     for changes length: it mounts empty (the store's pages are still on the
+     wire), folds and opens turns, and a resize moves the box under it. */
+  useEffect(() => {
+    const el = box.current
+    if (el) showBar(el)
+  }, [rows.length, height])
 
   /* What the reveal effect has already handled: one (selection, door) pair.
      Without this the effect would re-open a turn the reader just folded, since
@@ -364,7 +558,11 @@ export function Waterfall(): JSX.Element {
     observer.current?.disconnect()
     observer.current = null
     if (!el) return
-    const measure = (): void => { setHeight(el.clientHeight) }
+    /* The rows' bar stays: shown before the first scroll, not after it, and
+       placed again whenever the box moves under it -- the details pane
+       opening narrows this column without changing its height. */
+    showBar(el)
+    const measure = (): void => { setHeight(el.clientHeight); showBar(el) }
     measure()
     if (typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(measure)
@@ -478,7 +676,6 @@ export function Waterfall(): JSX.Element {
       }
     }
   }
-  const nowLine = sessionEnd > sessionStart ? barOf(axis, view, sessionEnd, sessionEnd) : null
 
   const painted: JSX.Element[] = []
   for (let at = first; at < last; at++) {
@@ -491,12 +688,11 @@ export function Waterfall(): JSX.Element {
         <div key={row.key} className="trajectory-wf-row trajectory-wf-agent" data-row="agent" style={style}
           onClick={() => toggleAgent(agent.key)}>
           <span className="trajectory-wf-label" style={{ paddingLeft: 12 }}>
-            <span className="trajectory-wf-guide" style={{ left: GUIDE_X }} />
             <span className="trajectory-wf-chev" aria-hidden="true">
               <Icon icon={collapsed.has(agent.key) ? ArrowRight01Icon : ArrowDown01Icon} size={14} />
             </span>
             <span className="trajectory-wf-tile" data-tone={row.agent % 4}>
-              {agent.scope === null
+              {agent.scope === null || ownOf(agent)
                 ? <AgentMark own />
                 : presetOf(agent) === null ? <span className="trajectory-wf-glyph"><Icon icon={BotIcon} size={15} /></span> : <AgentMark preset={presetOf(agent)} />}
             </span>
@@ -505,7 +701,7 @@ export function Waterfall(): JSX.Element {
           </span>
           <span className="trajectory-wf-track">
             {bar ? <i className="trajectory-wf-agentbar" style={{ left: percent(bar.left), width: percent(bar.width) }} /> : null}
-            {bar ? <span className="trajectory-wf-cap" style={{ left: `calc(${percent(bar.left + bar.width)} + 8px)` }}>{formatDuration(agent.end - agent.start)}</span> : null}
+            <span className="trajectory-wf-time" style={timeStyle(bar)}>{formatDuration(agent.end - agent.start)}</span>
           </span>
         </div>,
       )
@@ -514,14 +710,15 @@ export function Waterfall(): JSX.Element {
     if (row.kind === 'turn') {
       const turn = row.turnRow!
       const parts = turnSegments(turn, now)
+      const turnBar = barOf(axis, view, turn.start, turn.end)
       const openTurn = open.has(turnKey(row.agent, turn.id))
       painted.push(
         <div key={row.key} className="trajectory-wf-row trajectory-wf-turn" data-row="turn" style={style}
           data-open={openTurn ? '' : undefined}
           data-from={turn.reportedFrom === null ? undefined : turn.reportedFrom}
           onClick={() => toggleTurn(turnKey(row.agent, turn.id))}>
+          <span className="trajectory-wf-guide" style={{ left: GUIDE_X }} />
           <span className="trajectory-wf-label" style={{ paddingLeft: 26 }}>
-            <span className="trajectory-wf-guide" style={{ left: GUIDE_X }} />
             <span className="trajectory-wf-chev" aria-hidden="true">
               <Icon icon={openTurn ? ArrowDown01Icon : ArrowRight01Icon} size={14} />
             </span>
@@ -534,12 +731,7 @@ export function Waterfall(): JSX.Element {
               const slice = barOf(axis, view, part.start, part.end)
               return slice ? <i key={index} className={`trajectory-wf-seg trajectory-wf-seg-${part.kind}`} style={{ left: percent(slice.left), width: percent(slice.width) }} /> : null
             })}
-            {(() => {
-              const whole = barOf(axis, view, turn.start, turn.end)
-              return whole
-                ? <span className="trajectory-wf-cap" style={{ left: `calc(${percent(whole.left + whole.width)} + 8px)` }}>{formatDuration(turn.end - turn.start)}</span>
-                : null
-            })()}
+            <span className="trajectory-wf-time" style={timeStyle(turnBar)}>{formatDuration(turn.end - turn.start)}</span>
           </span>
         </div>,
       )
@@ -550,25 +742,31 @@ export function Waterfall(): JSX.Element {
     painted.push(
       <div key={row.key} className="trajectory-wf-row trajectory-wf-span" data-row="span" data-entry={entry.entry_id}
         style={style} onClick={() => pick(row.row!)}>
+        <span className="trajectory-wf-guide" style={{ left: GUIDE_X }} />
+        <span className="trajectory-wf-guide" style={{ left: TURN_GUIDE_X }} />
         <span className="trajectory-wf-label" style={{ paddingLeft: 44 + row.row!.depth * 20 }}>
-          <span className="trajectory-wf-guide" style={{ left: GUIDE_X }} />
           <span className="trajectory-wf-ico"><Icon icon={kindIcon(entry.kind)} size={15} /></span>
           <span className="trajectory-wf-name">{entry.preview ?? entry.span_name}</span>
           <span className="trajectory-wf-sub">{entry.span_name}</span>
           {entry.entry_id === slowestId ? <span className="trajectory-wf-slow">{t('gui.trajectory.slowest')}</span> : null}
-        </span>
-        <span className="trajectory-wf-track">
-          {bar ? <i className={`trajectory-wf-spanbar ${spanClass(entry.kind)}`} style={{ left: percent(bar.left), width: percent(bar.width) }} /> : null}
-          {bar ? <span className="trajectory-wf-cap" style={{ left: `calc(${percent(bar.left + bar.width)} + 8px)` }}>{formatDuration(entryEnd(entry, now) - entryStart(entry))}</span> : null}
           {entry.opens_subagent_scope === null || entry.opens_subagent_scope === undefined ? null : (
             <button className="trajectory-scope-opens" aria-label={t('gui.trajectory.scope.opens')}
               title={t('gui.trajectory.scope.opens')}
               onClick={(event) => { event.stopPropagation(); locate(entry) }}>{'\u2197'}</button>
           )}
         </span>
+        <span className="trajectory-wf-track">
+          {bar ? <i className={`trajectory-wf-spanbar ${spanClass(entry.kind)}`} style={{ left: percent(bar.left), width: percent(bar.width) }} /> : null}
+          <span className="trajectory-wf-time" style={timeStyle(bar)}>{formatDuration(entryEnd(entry, now) - entryStart(entry))}</span>
+        </span>
       </div>,
     )
   }
+
+  /* One label per ~150px keeps them from colliding when the details pane
+     narrows the column. The rows draw a line at every label and one between,
+     so the grid keeps a 1:2 rhythm with the ruler at any width or zoom. */
+  const tickCount = Math.max(3, Math.min(8, Math.floor((rulerWidth > 0 ? rulerWidth : 1200) / 150)))
 
   return (
     <div className="trajectory-wf" ref={island}>
@@ -579,42 +777,26 @@ export function Waterfall(): JSX.Element {
             <span className="trajectory-wf-statv" data-bad={label === t('gui.trajectory.stat.errors') && errors > 0 ? '' : undefined}>{value}</span>
           </div>
         ))}
-        <div className="trajectory-wf-tools">
-          <button className="trajectory-wf-tool" data-testid="show-hidden" aria-pressed={prefs.showHidden}
-            title={t('gui.trajectory.bar.show_hidden', { n: store.get().hiddenCount })}
-            onClick={() => store.setPrefs({ showHidden: !prefs.showHidden })}>
-            {t('gui.trajectory.bar.show_hidden', { n: store.get().hiddenCount })}
-          </button>
-          <button className="trajectory-wf-tool" aria-label={t('gui.trajectory.bar.reset')} disabled={zoom === null}
-            onClick={() => setZoom(null)}>{'\u2922'}</button>
-        </div>
       </div>
       <OverviewLanes waterfall={waterfall} axis={axis} viewport={view} />
       <div className="trajectory-wf-head">
-        <span className="trajectory-wf-spanhead">{t('gui.trajectory.span')}</span>
-        <Ticks axis={axis} view={view} />
+        <Ticks axis={axis} view={view} pick={picked} onPick={setPicked} count={tickCount} onWidth={setRulerWidth} />
       </div>
-      <div className="trajectory-list trajectory-wf-scroll" tabIndex={-1} ref={attach}
+      <div className="trajectory-list trajectory-wf-scroll" data-thumb="keep" tabIndex={-1} ref={attach}
         onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
         onKeyDown={onKeyDown}
         onDoubleClick={() => setZoom(null)}
         role="list" aria-label={t('gui.trajectory.agents')}>
         <div className="trajectory-wf-rows" style={{ height: rows.length * ROW_HEIGHT }}>
           <div className="trajectory-wf-links">
-            {tickMarks(axis, view).map((tick) => (
-              <span key={`grid-${tick.left}`} className="trajectory-wf-grid" style={{ left: percent(tick.left) }} />
+            {tickMarks(axis, view, tickCount * 2).map((tick, index, marks) => (
+              /* The last line keeps its pixel inside the track, the way the
+                 ruler's does: a 1px box on the right edge makes the scroll
+                 box wider than itself, and the overlay scrollbars answer that
+                 with a horizontal bar nobody can use. */
+              <span key={`grid-${tick.left}`} className="trajectory-wf-grid"
+                style={{ left: index === marks.length - 1 ? 'calc(100% - 1px)' : percent(tick.left) }} />
             ))}
-            {nowLine === null ? null : (
-              <span className="trajectory-wf-now" style={{ left: percent(nowLine.left) }} />
-            )}
-            {links.map((link, index) => {
-              const bar = barOf(axis, view, link.at, link.at)
-              if (bar === null) return null
-              const top = Math.min(link.fromRow, link.toRow) * ROW_HEIGHT
-              const height = (Math.abs(link.toRow - link.fromRow) + 1) * ROW_HEIGHT
-              return <span key={index} className={`trajectory-wf-link trajectory-wf-link-${link.kind}`}
-                style={{ left: percent(bar.left), top, height }} />
-            })}
           </div>
           {painted}
         </div>

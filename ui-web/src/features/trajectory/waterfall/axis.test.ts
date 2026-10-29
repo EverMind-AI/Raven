@@ -3,7 +3,7 @@
 
 import { expect, it } from 'vitest'
 
-import { AxisIndex, IDLE_MS, barOf, createAxis, tickMarks, zoomViewport } from './axis'
+import { AxisIndex, IDLE_MS, barOf, createAxis, formatTick, tickMarks, zoomViewport } from './axis'
 
 it('merges overlapping intervals into one occupied run', () => {
   const axis = createAxis([{ start: 0, end: 10 }, { start: 5, end: 20 }], { idleMs: 100 })
@@ -110,4 +110,15 @@ it('an insert that bridges two runs merges them into one', () => {
   const axis = index.axis()
   expect(axis.gaps).toHaveLength(0)
   expect(axis.length).toBe(3000)
+})
+
+it('labels a tick in one unit, the largest the value fills', () => {
+  expect(formatTick(0, 500)).toBe('0 ms')
+  expect(formatTick(0, 3_600_000)).toBe('0 h')
+  expect(formatTick(500)).toBe('500 ms')
+  expect(formatTick(2000)).toBe('2 s')
+  expect(formatTick(15_000)).toBe('15 s')
+  expect(formatTick(120_000)).toBe('2 min')
+  expect(formatTick(3_600_000)).toBe('1 h')
+  expect(formatTick(3 * 3_600_000 + 30 * 60_000)).toBe('3 h 30 min')
 })

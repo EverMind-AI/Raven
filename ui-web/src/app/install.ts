@@ -11,6 +11,7 @@
  * need a transport and the actions need the document.
  */
 
+import { show as showScrollbar } from '../chrome/behaviour/scrollbars'
 import { onFrameBytes, onFrameJson, browserSource } from '../features/browser/source'
 import { open as approveSheet } from '../features/composer/approve'
 import { closeCredential, openCredential } from '../features/composer/credential'
@@ -64,6 +65,7 @@ import { gateway } from '../rpc/gateway'
 import { setFault as setMemFault } from '../state/banner'
 import * as page from '../state/page'
 import { onDocument } from '../state/reveal'
+import * as scrollbars from '../state/scrollbars'
 import {
   clarifyRequest, dispatch, installPipeline, registerCredentialCard, replayPendingApprovals, replayPendingCredentials,
 } from '../state/session/pipeline'
@@ -404,6 +406,9 @@ export function installActions(): void {
      Registered here because state/page.ts does not import features/ -- it
      declares the slot and when it runs (state/page.ts's `show`). */
   page.onShow('markNav', markNew)
+  /* The bars' one verb: a view asks for its bar at the size its content has
+     now, not at whatever size the last scroll left it drawn for. */
+  scrollbars.onShowBar(showScrollbar)
   /* What raises the settings dialog for the two domains that are sections of
      it (schedules, memory). Registered here for the same reason the slot above
      is: state/settings.ts declares it and does not import the island that
