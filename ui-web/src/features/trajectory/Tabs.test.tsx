@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as details from './detailStore'
 import * as list from './store'
-import { Tabs } from './Tabs'
+import { ARROW_STEP, Tabs } from './Tabs'
 
 import type { TrajectoryBlockDescriptor } from './types'
 import type { JSX } from 'react'
@@ -52,13 +52,26 @@ describe('the tab strip', () => {
     expect([...document.querySelectorAll('[role="tab"]')].map((t) => t.id)).toEqual(['trajectory-tab-overview', 'trajectory-tab-messages', 'trajectory-tab-model'])
   })
 
-  it('offers no sideways arrows at all: the strip wraps instead of scrolling', () => {
+  it('shows no arrows while every tab fits, and both once they outrun the strip, each enabled for the side it can still move to', () => {
     render(<Tabs entryId="r0" blocks={Array.from({ length: 12 }, (_, i) => block(`b${i}`))} />)
+    expect(q('.trajectory-tab-arrow')).toBeNull()
     const strip = q('.trajectory-tabs') as HTMLElement
     geometry(strip, 900, 300)
     act(() => { fireEvent.scroll(strip) })
-    expect(q('.trajectory-tab-arrow')).toBeNull()
-    expect(document.querySelectorAll('[role="tab"]')).toHaveLength(13)
+    const arrows = [...document.querySelectorAll<HTMLButtonElement>('.trajectory-tab-arrow')]
+    expect(arrows).toHaveLength(2)
+    expect(arrows[0]!.disabled).toBe(true)
+    expect(arrows[1]!.disabled).toBe(false)
+    act(() => { fireEvent.click(arrows[1]!) })
+    expect(strip.scrollLeft).toBe(300 * ARROW_STEP)
+    const after = [...document.querySelectorAll<HTMLButtonElement>('.trajectory-tab-arrow')]
+    expect(after[0]!.disabled).toBe(false)
+    expect(after[1]!.disabled).toBe(false)
+    strip.scrollLeft = 600
+    act(() => { fireEvent.scroll(strip) })
+    expect([...document.querySelectorAll<HTMLButtonElement>('.trajectory-tab-arrow')].map((a) => a.disabled)).toEqual([false, true])
+    act(() => { fireEvent.click(q('.trajectory-tab-arrow') as HTMLElement) })
+    expect(strip.scrollLeft).toBe(600 - 300 * ARROW_STEP)
   })
 
   it('keeps the selected tab in view when the keyboard moves it, by scrolling the strip and nothing else', () => {
@@ -77,6 +90,29 @@ describe('the tab strip', () => {
     expect(intoView).not.toHaveBeenCalled()
   })
 
+  it('brings the selected tab into view again once the arrows take their room, and not on a nudge', () => {
+    details.setTab('r0', 'b11')
+    render(<Host blocks={Array.from({ length: 12 }, (_, i) => block(`b${i}`))} />)
+    const strip = q('.trajectory-tabs') as HTMLElement
+    /* With the arrows in, the strip is narrower and the selected tab ends 20px past its edge. */
+    strip.getBoundingClientRect = () => rect(22, 256)
+    ;(q('#trajectory-tab-b11') as HTMLElement).getBoundingClientRect = () => rect(238, 60)
+    geometry(strip, 900, 300)
+    act(() => { fireEvent.scroll(strip) })
+    expect(document.querySelectorAll('.trajectory-tab-arrow')).toHaveLength(2)
+    expect(strip.scrollLeft).toBe(20)
+    strip.scrollLeft = 0
+    act(() => { fireEvent.scroll(strip) })
+    /* A nudge changes which arrows are enabled, not whether they show: the
+       reader's own scroll stands, and the selected tab, still past the edge,
+       is not brought back over it. */
+    const arrows = (): HTMLButtonElement[] => [...document.querySelectorAll<HTMLButtonElement>('.trajectory-tab-arrow')]
+    expect(arrows().map((a) => a.disabled)).toEqual([true, false])
+    act(() => { fireEvent.click(arrows()[1]!) })
+    act(() => { fireEvent.scroll(strip) })
+    expect(strip.scrollLeft).toBe(300 * ARROW_STEP)
+    expect(arrows().map((a) => a.disabled)).toEqual([false, false])
+  })
 })
 
 describe('the pinned mark', () => {
