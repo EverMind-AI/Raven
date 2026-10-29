@@ -149,10 +149,19 @@ second schema present only in the post-turn call would miss the cache from its f
 (`:1358`), and only while `agents.defaults.taskBoard.enabled` is true (7). The host sets
 `RAVEN_SUBAGENT` on every child it launches (`raven/home.py:82`, `subagent_role_env`), so a
 product agent the host runs never sees the tool; the five product configs also set
-`taskBoard.enabled: false`, so a product served standalone does not either.
+`taskBoard.enabled: false`, so a product served standalone does not either. The tool is
+resident under tool-search compaction (`DEFAULT_ALWAYS_VISIBLE`,
+`raven/agent/tools/tool_search.py`): the post-turn call forces it by name.
 
-**Schema** (model-facing; parameter descriptions stay short -- the schema rides in every
-host call, and its cost is pinned like A2A's is in `tests/test_agent_loop_token_budget.py`):
+**Schema.** One description and six bare properties: `action` (`"recall" | "update"`),
+`query`, `group_id`, `include_turns`, and `steps` / `statuses` as arrays of objects with no
+nested fields. The schema rides in every host call: nested, the update's shape cost about 514
+tokens a call; bare, about 240, pinned as an increment beside A2A's in
+`tests/test_agent_loop_token_budget.py`. The shape is stated instead by the post-turn
+instruction (3), once per turn. The description also tells the model never to call `update`
+itself -- a live model did, mid-turn, when it only said the board was kept for it.
+
+The update's shape, as the post-turn instruction states it:
 
 ```
 task_board(
@@ -219,13 +228,21 @@ instruction"). The instruction carries:
   step for a turn that advanced nothing; mark a group completed when it is done or the user
   dropped it; place every listed handle exactly once.
 
+Both blocks sit between `[BEGIN ...]` / `[END ...]` markers under a sentence calling them
+records to read as data: they hold text earlier calls wrote, sometimes carried over from tool
+output, and the instruction is a user-role message. The rules also say what a group is: the
+matter the user pursues, titled by the matter rather than by one action inside it, with every
+request a matter even when the turn finished it.
+
 **The dispatch list.** The turn's own tool rows, read the way `session.history` already reads
 them (`raven/rpc/methods/session.py:439-448`): a `run_subagent_dag` or `load_playbook` call
 whose receipt names a run id is `dag:<run_id>`; a `spawn` call whose receipt carries the
 manager's started id is `spawn:<node_id>`, the `node_id` taken from the call's arguments,
 because that is the id `tasks.list` addresses a spawn by. A call refused before dispatch has
 no such receipt and is not a dispatch. The receipt parsing moves into one helper both readers
-call, so the two cannot come to disagree about what a turn dispatched.
+call, so the two cannot come to disagree about what a turn dispatched. A call made through
+the `tool_call` meta-tool -- how `run_subagent_dag`, never resident, is reached under
+tool-search compaction -- is read as the call it forwards.
 
 **Descendant runs.** Some runs start with no tool call of their own: a replan's successor
 (`TaskRow.replan.run_id`) and every round after the first of a stint (graphs carrying
@@ -236,7 +253,9 @@ they descend from, and the page and recall resolve them there by lineage.
 **Call.** `provider.chat_with_retry` with the turn's model and fallbacks, `tool_choice`
 forced to `task_board`, under `_llm_purpose("task_board")` so tracing and usage accounting
 name it. Reasoning effort comes from `taskBoard.reasoningEffort` (default `low`; never
-`minimal`, which Codex rejects).
+`minimal`, which Codex rejects). The call is skipped when the turn's tools array did not
+carry `task_board` -- a deploy that lists it in `disabledTools` -- since a forced call naming
+an absent tool is only a refused request.
 
 **Validation, then write.** The store applies an update only when:
 
@@ -258,8 +277,13 @@ added to the session's usage, so its cost is visible where every other call's is
 returning sub-agent result, a cron firing. A turn that errored or was stopped runs the call
 only if it dispatched something. A turn that dispatched nothing may return an empty update.
 
-**Ordering.** One update in flight per session: a per-session lock in the board service
-queues the next turn's update behind the last. The next turn itself never waits.
+**Ordering.** Two locks per session in the board service. The update queue holds a
+post-turn update across its model call, so the next turn's update is built on this one's
+result; the next turn itself never waits. The write lock covers only reading, changing and
+writing the file, for every writer -- the update's last step on a fresh read, the reader's
+two actions, clear and undo -- so none of those waits on a model call. A clear moves the
+session's generation and an undo marks the turns it removed; an update still on its way
+checks both before it writes, and writes nothing for a turn that is gone.
 
 ### 4. Wire surface
 
@@ -271,8 +295,10 @@ generated into `ui-web/src/rpc/generated` (`npm run gen`); `tests/test_rpc_schem
    file as stored (or an empty board), and each descendant run (3, "Descendant runs") mapped
    to the placed run it descends from, computed on the server from `graph.json`'s `replan`
    and the session's stint records.
-2. `tasks.set_group_status(session_key, group_id, status)` -> `{board}`: the reader's two
-   actions, `completed` and `active` (reopen). Takes the same per-session lock as an update.
+2. `tasks.set_group_status(session_key, group_id, status)` -> `{board, lineage}`: the
+   reader's two actions, `completed` and `active` (reopen). Takes the write lock only.
+   `invalid_params` for an unknown group, for another status, and on a runtime that keeps
+   no board.
 3. Event `tasks.board_updated` `{session_key, board}`: after every accepted write, from
    either writer. Sent through the emitter the delivery sink already uses
    (`raven/rpc/bootstrap.py:388`); the TUI binding (`raven/cli/tui_commands.py:412`) drops it.
@@ -300,18 +326,19 @@ inert, named by its stored summary. When `tasks.list` gains a dag row that neith
 have started.
 
 5.3 **From a step to its turn.** Clicking a step's text scrolls the transcript to the
-message whose timestamp is the step's `turn_at`.
+turn's opening question nearest the step's `turn_at`, within five minutes: a turn read back
+from history carries that very timestamp, one asked on the open page the browser's clock.
 
 5.4 **Completed.** Below the open groups, a fold `Completed - N` / `已完成 - N`, collapsed by
 default. Expanded, it lists completed groups by `created_at` descending, dimmed, each
-expandable to its thread like any other. Every row's overflow menu holds the reader's one
-action: "Mark completed" on an open group, "Reopen" on a completed one.
+expandable to its thread like any other. The reader's one action sits at the foot of an
+expanded thread: "Mark completed" on an open group, "Reopen" on a completed one.
 
 5.5 **Unassigned.** A Task the session's `tasks.list` holds but no step links, directly or
-by lineage -- a session from before the board, or an update that failed outright -- shows in
-an `Unassigned` /
-`未归类` row at the top, listing those Tasks as chips. With the board switched off this row
-holds every Task, which is the old flat list in one fold.
+by lineage -- an update that failed outright, say -- shows in an `Unassigned` / `未归类`
+fold at the top, collapsed by default, drawn the way the old flat list draws a Task. A
+conversation whose board holds no group -- one from before the board, or with the board
+switched off -- draws the old flat list itself, so nothing about it changes.
 
 5.6 **Live.** `state/session/stages.ts` arms `tasks.board_updated` the way it arms
 `subagent.status`, replacing the open session's board; switching session or reconnecting
@@ -338,7 +365,7 @@ empties the board; `session.branch` copies it with the transcript. Compaction le
 board alone -- surviving compaction is part of its purpose.
 
 6.4 **Sessions from before the board.** No file: `tasks.board` answers an empty board and
-the page shows the session's Tasks under Unassigned. No backfill.
+the page draws the session's Tasks as the old flat list (5.5). No backfill.
 
 ### 7. Configuration
 
@@ -349,7 +376,9 @@ the page shows the session's Tasks under Unassigned. No backfill.
 ```
 
 `enabled: false` removes the tool and the post-turn call. Each `agents/*/config.json` sets
-it false.
+it false. A loop built without the config at all -- an embedding, a test, a trajectory
+replay -- keeps no board: the runtime is what wires it, so only a runtime-built host makes
+the extra call per turn.
 
 ### 8. Tests
 
@@ -373,5 +402,5 @@ it false.
   input is a cache read; elsewhere the turn's input cost roughly doubles. The call is visible
   in usage and the switch turns it off.
 - **Latency.** None on the reply; the board settles a few seconds after it.
-- **Rollback.** `taskBoard.enabled: false`. The page then shows every Task under Unassigned,
-  which is the old list.
+- **Rollback.** `taskBoard.enabled: false`. With no group on any board, the page draws the
+  old flat list.
