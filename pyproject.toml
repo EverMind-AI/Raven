@@ -117,6 +117,11 @@ dependencies = [
     # nothing about a corrupt file.
     "pdfminer-six>=20250416",
     "pyflakes>=3.2,<4",
+    # The OpenAI SDK, declared because one name is imported from it directly: a
+    # provider section with `tls_verify` off hands LiteLLM a prebuilt
+    # `AsyncOpenAI`, the only client LiteLLM's OpenAI-SDK route adopts. It
+    # already arrives with litellm, and the range is litellm's own.
+    "openai>=2.20.0,<3.0.0",
 ]
 
 [project.optional-dependencies]
