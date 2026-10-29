@@ -12657,6 +12657,14 @@
       "en": "Agents",
       "zh": "智能体"
     },
+    "gui.trajectory.crash": {
+      "en": "The trace could not be drawn: {detail}",
+      "zh": "轨迹渲染出错：{detail}"
+    },
+    "gui.trajectory.crash_retry": {
+      "en": "Try again",
+      "zh": "重试"
+    },
     "gui.trajectory.agents_more": {
       "en": "+{n} more agents",
       "zh": "另有 {n} 个智能体"

@@ -10,7 +10,7 @@ import { RpcError } from '../../rpc/transport'
 import { _resetFreshForTests, unpitch } from '../../state/session/conversation'
 import { resetSources, setSources } from '../../state/sources'
 import * as store from './store'
-import { TrajectoryApp } from './TrajectoryApp'
+import { CrashBoundary, TrajectoryApp } from './TrajectoryApp'
 
 /* This file forces many renders; under a full-suite run they share the CPU
    with every other worker, so the wall clock is not the thing under test. */
@@ -107,5 +107,17 @@ describe('the trajectory island', () => {
   it('subscribes to the language, like every island', () => {
     const text = readFileSync('src/features/trajectory/TrajectoryApp.tsx', 'utf8') as string
     expect(text).toMatch(/useSyncExternalStore\(lang\.subscribe, lang\.get\)/)
+  })
+})
+
+describe('the crash boundary', () => {
+  it('shows the error and a way back instead of blanking the column', () => {
+    const Boom = (): never => { throw new Error('boom') }
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
+    render(<CrashBoundary><Boom /></CrashBoundary>)
+    const alert = document.querySelector('[role="alert"]')
+    expect(alert?.textContent).toContain('boom')
+    expect(alert?.querySelector('button')).not.toBeNull()
+    quiet.mockRestore()
   })
 })

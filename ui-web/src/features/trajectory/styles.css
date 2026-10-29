@@ -763,3 +763,8 @@ html[data-theme="dark"] {
 .trajectory-wf-turn .trajectory-wf-name { flex: 0 0 auto }
 .trajectory-wf-sub { flex: 0 1 auto; min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis }
 .trajectory-wf-from { flex: 0 1 auto; min-width: 4ch; overflow: hidden; text-overflow: ellipsis }
+
+.trajectory-crash { display: flex; align-items: center; gap: 12px; padding: 16px 20px; margin: 12px;
+  border: 1px solid #f0d7d2; background: #fdf5f4; border-radius: 10px; color: #8a3a2e;
+  font: 12px/1.5 var(--sans) }
+.trajectory-crash-text { flex: 1; min-width: 0; word-break: break-word }

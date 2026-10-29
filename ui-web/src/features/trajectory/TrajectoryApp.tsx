@@ -11,7 +11,7 @@
  * and whether the area is too narrow for two columns at all.
  */
 
-import { useCallback, useRef, useSyncExternalStore } from 'react'
+import { Component, useCallback, useRef, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
@@ -21,7 +21,7 @@ import * as store from './store'
 import { Waterfall, mib } from './waterfall/Waterfall'
 import './styles.css'
 
-import type { JSX } from 'react'
+import type { ErrorInfo, JSX, ReactNode } from 'react'
 
 function Status(): JSX.Element | null {
   const s = useSyncExternalStore(store.subscribe, store.get)
@@ -74,12 +74,41 @@ function Body(): JSX.Element {
   )
 }
 
+/* The island render throws, the page loses the whole column -- a blank page
+   with no way back and no message. This keeps the failure where it happened:
+   the reader sees what went wrong and can try again. */
+export class CrashBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null }
+
+  static getDerivedStateFromError(error: Error): { error: Error } {
+    return { error }
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.error('trajectory island:', error, info.componentStack)
+  }
+
+  render(): ReactNode {
+    if (this.state.error === null) return this.props.children
+    return (
+      <div className="trajectory-crash" role="alert">
+        <div className="trajectory-crash-text">{t('gui.trajectory.crash', { detail: this.state.error.message })}</div>
+        <button className="trajectory-wf-tool" onClick={() => this.setState({ error: null })}>
+          {t('gui.trajectory.crash_retry')}
+        </button>
+      </div>
+    )
+  }
+}
+
 export function TrajectoryApp(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
     <div className="trajectory-root">
       <Status />
-      <Body />
+      <CrashBoundary>
+        <Body />
+      </CrashBoundary>
     </div>
   )
 }
