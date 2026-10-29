@@ -19,6 +19,7 @@ import { t } from '../../../i18n/t'
 import { formatDuration } from '../../../lib/duration'
 import * as lang from '../../../state/lang'
 import * as details from '../detailStore'
+import { count } from '../diagnostics'
 import { scopeTitle } from '../scopes'
 import * as store from '../store'
 import { AxisIndex, barOf, clampViewport, tickMarks, zoomViewport } from './axis'
@@ -334,6 +335,7 @@ export function Waterfall(): JSX.Element {
     if (owner === null) return
     const group = waterfall.agents[owner.agent]!.key
     if (phase === 'none' && collapsed.has(group)) {
+      count('waterfall.reveal-collapse')
       setCollapsed((previous) => {
         const next = new Set(previous)
         next.delete(group)
@@ -343,6 +345,7 @@ export function Waterfall(): JSX.Element {
     }
     const key = turnKey(owner.agent, owner.turn)
     if (phase === 'none' && !open.has(key)) {
+      count('waterfall.reveal-open')
       setOpen((previous) => new Set(previous).add(key))
       return
     }
@@ -589,7 +592,7 @@ export function Waterfall(): JSX.Element {
         <Ticks axis={axis} view={view} />
       </div>
       <div className="trajectory-list trajectory-wf-scroll" tabIndex={-1} ref={attach}
-        onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+        onScroll={(e) => { count('waterfall.scroll'); setScrollTop(e.currentTarget.scrollTop) }}
         onKeyDown={onKeyDown}
         onDoubleClick={() => setZoom(null)}
         role="list" aria-label={t('gui.trajectory.agents')}>

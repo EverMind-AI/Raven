@@ -18,10 +18,11 @@
  * whose page the cache let go folds again until the reader asks for it.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
 import * as details from './detailStore'
+import { count } from './diagnostics'
 import * as list from './store'
 
 import type { OutlineItem } from './detailStore'
@@ -141,7 +142,7 @@ export function MessagesView({ block, entryId, render }: {
     const measure = (): void => {
       /* Layout offsets, which the pane's scrolling does not move, as the list view's anchor reads them. */
       const listTop = el.offsetTop - pane.offsetTop
-      setView((v) => (v.top === pane.scrollTop && v.height === pane.clientHeight && v.listTop === listTop ? v : { top: pane.scrollTop, height: pane.clientHeight, listTop }))
+      setView((v) => { count('messages.view'); return v.top === pane.scrollTop && v.height === pane.clientHeight && v.listTop === listTop ? v : { top: pane.scrollTop, height: pane.clientHeight, listTop } })
     }
     measure()
     pane.addEventListener('scroll', measure, { passive: true })
@@ -204,13 +205,20 @@ export function MessagesView({ block, entryId, render }: {
       estimates.current = { open, fold }
       changed = true
     }
-    if (changed) remeasured((n) => n + 1)
+    if (changed) { count('messages.remeasure'); remeasured((n) => n + 1) }
   }, [])
-  useLayoutEffect(() => { measureRows() }, [drawnKey, measureRows])
+  /* Measured after paint, never during the commit: a state write in a layout
+     effect is the one shape that can nest -- write, render, write -- and React
+     ends a cascade like that by unmounting the tree (React #185). Estimates
+     are already what the window is drawn from, so one frame of them is free. */
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => { measureRows() })
+    return () => cancelAnimationFrame(frame)
+  }, [drawnKey, measureRows])
   useEffect(() => {
     const el = box.current
     if (!el || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => { measureRows() })
+    const ro = new ResizeObserver(() => { requestAnimationFrame(() => { measureRows() }) })
     ro.observe(el)
     return () => ro.disconnect()
   }, [identityKey, measureRows])
@@ -230,6 +238,7 @@ export function MessagesView({ block, entryId, render }: {
     const page = pageOf(item)
     if (wanted.current.has(page.cursor)) return
     wanted.current.add(page.cursor)
+    count('messages.ask')
     void details.loadPageAt(block.id, page.cursor, page.index).finally(() => wanted.current.delete(page.cursor))
   }
 

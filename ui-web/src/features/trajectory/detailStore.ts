@@ -35,6 +35,7 @@ import { slot } from '../../lib/persist'
 import { onTrajectoryEscape } from '../../state/escapeOrder'
 import { makeStore } from '../../state/store'
 import { INTERNAL_BLOCKS } from './blocks'
+import { count } from './diagnostics'
 import { isDisabled, isEntryGone, revisionChange, saysAbsent } from './source'
 import * as list from './store'
 
@@ -244,7 +245,7 @@ const store = makeStore<DetailsState>(initial)
 
 export const { get, set, subscribe } = store
 
-const patch = (p: Partial<DetailsState>): void => { store.set({ ...store.get(), ...p }) }
+const patch = (p: Partial<DetailsState>): void => { count('details.patch'); store.set({ ...store.get(), ...p }) }
 
 const without = <T>(record: Record<string, T>, key: string): Record<string, T> => {
   if (!(key in record)) return record
@@ -620,6 +621,7 @@ function trimDescriptors(s: DetailsState): DetailsState {
 }
 
 function commit(next: DetailsState, keepFile: string | null = null): void {
+  count('details.commit')
   store.set(trim(trimDescriptors(next), keepFile))
 }
 
