@@ -119,20 +119,12 @@ export interface TrajectoryState {
   grownFrom: number
   /** Every entry the page may draw, across every scope. */
   shown: TrajectoryEntry[]
-  /** `entry_id` to position in `shown`, rebuilt with it. */
-  shownIndex: Record<string, number>
   /** The current scope's entries: every entry `scopeOf` puts in `scope`. */
   visible: TrajectoryEntry[]
-  /** `entry_id` to position in `visible`, rebuilt with it. */
-  visibleIndex: Record<string, number>
   /** `trace_id:span_id` to the first entry of that span, for the links a detail carries. */
   spanIndex: Record<string, string>
-  /** A turn's whole charged time, from its reply entry, by `turn_span_id`. */
-  turnTotals: Record<string, number>
   /** A Sub-agent Scope's id to the first entry that opens it. */
   doors: Record<string, string>
-  /** A Sub-agent Scope's id to how many entries belong to it. */
-  scopeSizes: Record<string, number>
 }
 
 /** The Sub-agent Scope the entry belongs to; null for the main session. */
@@ -149,32 +141,23 @@ export const scopeKey = (scope: string | null): string => scope ?? MAIN_KEY
 const spanKey = (trace: string, span: string): string => `${trace}:${span}`
 
 /* Everything the page reads that follows from `entries`: every entry it may
-   draw and the current scope's rows, with their positions, the span lookup,
-   the turn totals, and what it needs to know about every scope. */
+   draw, the current scope's rows, the span lookup, and the entry that opens
+   each scope. */
 function derived(entries: TrajectoryEntry[], scope: string | null) {
   const shown: TrajectoryEntry[] = []
   const visible: TrajectoryEntry[] = []
   const spanIndex: Record<string, string> = {}
-  const turnTotals: Record<string, number> = {}
   const doors: Record<string, string> = {}
-  const scopeSizes: Record<string, number> = {}
   for (const entry of entries) {
     const key = spanKey(entry.trace_id, entry.span_id)
     if (!(key in spanIndex)) spanIndex[key] = entry.entry_id
-    if (entry.slot === 'turn.output' && entry.turn_span_id && typeof entry.charged_ms === 'number') {
-      turnTotals[entry.turn_span_id] = entry.charged_ms
-    }
     const own = scopeOf(entry)
-    if (own !== null) scopeSizes[own] = (scopeSizes[own] ?? 0) + 1
     const opens = opensOf(entry)
     if (opens !== null && !(opens in doors)) doors[opens] = entry.entry_id
     shown.push(entry)
     if (own === scope) visible.push(entry)
   }
-  return {
-    entries, index: indexOf(entries), shown, shownIndex: indexOf(shown), visible, visibleIndex: indexOf(visible), spanIndex, turnTotals,
-    doors, scopeSizes,
-  }
+  return { entries, index: indexOf(entries), shown, visible, spanIndex, doors }
 }
 
 const initial: TrajectoryState = {
@@ -204,13 +187,9 @@ const initial: TrajectoryState = {
   saved: {},
   grownFrom: -1,
   shown: [],
-  shownIndex: {},
   visible: [],
-  visibleIndex: {},
   spanIndex: {},
-  turnTotals: {},
   doors: {},
-  scopeSizes: {},
 }
 
 const store = makeStore<TrajectoryState>(initial)
@@ -575,13 +554,9 @@ export function sessionChanged(key: string | null = sessionCurrent()): void {
     scopes: [],
     saved: {},
     shown: [],
-    shownIndex: {},
     visible: [],
-    visibleIndex: {},
     spanIndex: {},
-    turnTotals: {},
     doors: {},
-    scopeSizes: {},
   })
   if (back?.view === 'trajectory' && !available()) patch({ view: 'chat' })
 }

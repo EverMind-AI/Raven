@@ -597,9 +597,7 @@ describe('the rows the list draws', () => {
     const s = store.get()
     expect(s.entries.map((e) => e.entry_id)).toEqual(['a', 'reply', 'enq', 'b'])
     expect(s.visible.map((e) => e.entry_id)).toEqual(['a', 'reply', 'enq', 'b'])
-    expect(s.visibleIndex).toEqual({ a: 0, reply: 1, enq: 2, b: 3 })
     expect(s.index.b).toBe(3)
-    expect(s.turnTotals).toEqual({ turn: 7000 })
   })
 
   it('finds the first row of a span by trace and span id, and nothing for a span it does not hold', () => {
@@ -662,21 +660,18 @@ describe('Scope Tabs', () => {
     await walk
   }
 
-  it('draws the main session alone at first and knows every scope\'s first door and size', async () => {
+  it('draws the main session alone at first and knows every scope\'s first door', async () => {
     await loaded()
     const s = store.get()
     expect(s.scope).toBeNull()
     expect(ids(s.visible)).toEqual(['m0', 'doorA', 'doorB', 'm1', 'gIn', 'gOut', 'reply'])
     expect(s.doors).toEqual({ [A]: 'doorA', [B]: 'doorB', [G]: 'gIn' })
-    expect(s.scopeSizes).toEqual({ [A]: 5, [B]: 2, [G]: 1 })
     store.openScope(A)
     const a = store.get()
     expect(ids(a.visible)).toEqual(['a0', 'a1', 'a2', 'a3', 'ah'])
-    expect(a.visibleIndex).toEqual({ a0: 0, a1: 1, a2: 2, a3: 3, ah: 4 })
     /* The whole set stays for links and the feed. */
     expect(a.index.m0).toBe(0)
     expect(store.entryOfSpan('t', 'b0')).toBe('b0')
-    expect(a.turnTotals).toEqual({ turn: 5000 })
   })
 
   it('opens a tab at the end, says whether it opened it just now, and keeps the door it was opened from', async () => {
@@ -924,7 +919,7 @@ describe('Scope Tabs', () => {
       store.applyChanges(batch({ upserts: [step('a2', 5, B)] }))
       const s = store.get()
       expect([s.scope, s.selectedId]).toEqual([A, 'a2'])
-      expect(s.visibleIndex.a2).toBeUndefined()
+      expect(ids(s.visible)).not.toContain('a2')
     })
   })
 
@@ -939,7 +934,7 @@ describe('Scope Tabs', () => {
     expect([store.get().scope, open(), store.get().selectedId]).toEqual([A, [A], 'a1'])
     store.sessionChanged('gui:b')
     let s = store.get()
-    expect([s.scope, s.scopes, s.saved, s.doors, s.scopeSizes]).toEqual([null, [], {}, {}, {}])
+    expect([s.scope, s.scopes, s.saved, s.doors]).toEqual([null, [], {}, {}])
     store.sessionChanged('gui:a')
     s = store.get()
     expect([s.scope, s.scopes, s.selectedId, s.anchor]).toEqual([null, [], 'm1', { id: 'm1', offset: 2 }])
@@ -960,7 +955,6 @@ describe('Scope Tabs', () => {
     if (Object.keys(main.doors).length !== 20) wrong.push(`doors ${Object.keys(main.doors).length}`)
     scopes.forEach((scope, k) => {
       if (main.doors[scope] !== `d${k * 10}`) wrong.push(`door ${scope} ${main.doors[scope]}`)
-      if (main.scopeSizes[scope] !== 1500) wrong.push(`size ${scope} ${main.scopeSizes[scope]}`)
     })
     const one = store.rowsOf(rows, { ...store.get(), scope: scopes[3]! })
     if (one.visible.length !== 1500 || one.visible.some((e) => e.subagent_scope !== scopes[3])) wrong.push(`tab ${one.visible.length}`)
@@ -998,7 +992,7 @@ describe('shown and selectAcross', () => {
 
   it('selectAcross selects a row the index marked hidden like any other', async () => {
     await load([entry('main1', 0), entry('hidden1', 1, { meta: { hidden: 'folded' } })])
-    expect(store.get().shownIndex['hidden1']).toBeTypeOf('number')
+    expect(store.get().shown.map((e) => e.entry_id)).toContain('hidden1')
     store.selectAcross('hidden1', { source: 'link' })
     expect(store.get().selectedId).toBe('hidden1')
   })
@@ -1020,7 +1014,6 @@ describe('sessionChanged', () => {
     expect(store.get().shown).toHaveLength(2)
     store.sessionChanged('gui:b')
     expect(store.get().shown).toEqual([])
-    expect(store.get().shownIndex).toEqual({})
   })
 })
 
