@@ -261,6 +261,9 @@ html[data-theme="dark"] {
 .trajectory-details {
   flex: none; display: flex; flex-direction: column; min-width: 0; min-height: 0;
   border-left: 1px solid var(--line);
+  /* The same ground as the waterfall beside it: the page's wash behind a
+     transparent pane read as a different surface. */
+  background: var(--paper);
 }
 .trajectory-details-over { background: var(--ink); }
 .trajectory-details-over { position: absolute; inset: 0; width: auto; border-left: 0; z-index: 1; }

@@ -181,9 +181,17 @@ export function MessagesView({ block, entryId, render }: {
      body opened or folded, the pane's width reflowing it -- is caught by the list's resize. */
   const [, remeasured] = useState(0)
   const drawnKey = shown.map((item) => `${item.index}${drawnOpen(item) ? (record && details.pageHolding(record, item.index) ? 'b' : 'o') : 'f'}`).join(',')
-  const measureRows = useCallback((): void => {
+  const lastMeasure = useRef(0)
+  const measureRows = useCallback((force = false): void => {
     const el = box.current
     if (!el) return
+    /* Scroll-driven passes are throttled to 60ms: a drag on the scrollbar fires
+       scroll events far faster than rows need re-measuring, and each pass that
+       rewrites a height moves the thumb the reader is holding. A row that
+       resized by itself is measured at once -- that is a fact, not a frame. */
+    const at = Date.now()
+    if (!force && lastMeasure.current !== 0 && at - lastMeasure.current < 60) return
+    lastMeasure.current = at
     let changed = false
     const seenOpen: number[] = []
     const seenFold: number[] = []
@@ -197,12 +205,22 @@ export function MessagesView({ block, entryId, render }: {
         changed = true
       }
     }
+    /* The estimate settles on the first screenful and then stops moving: if it
+       kept following the median, every measurement of one row would resize
+       every unmeasured row, changing the list's total height -- and with it
+       the thumb under a drag. */
+    if (heights.current.size <= 40) {
+      const saw = seenOpen.length + seenFold.length
+    /* A pass over an empty list (nothing drawn yet) is not a measurement: it
+       must not spend the throttle the first real one needs. */
+    if (saw === 0) lastMeasure.current = 0
     const median = (xs: number[]): number | null => (xs.length ? [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]! : null)
-    const open = median(seenOpen) ?? estimates.current.open
-    const fold = median(seenFold) ?? estimates.current.fold
-    if (open !== estimates.current.open || fold !== estimates.current.fold) {
-      estimates.current = { open, fold }
-      changed = true
+      const open = median(seenOpen) ?? estimates.current.open
+      const fold = median(seenFold) ?? estimates.current.fold
+      if (open !== estimates.current.open || fold !== estimates.current.fold) {
+        estimates.current = { open, fold }
+        changed = true
+      }
     }
     if (changed) remeasured((n) => n + 1)
   }, [])
@@ -210,14 +228,11 @@ export function MessagesView({ block, entryId, render }: {
      effect is the one shape that can nest -- write, render, write -- and React
      ends a cascade like that by unmounting the tree (React #185). Estimates
      are already what the window is drawn from, so one frame of them is free. */
-  useEffect(() => {
-    const frame = requestAnimationFrame(() => { measureRows() })
-    return () => cancelAnimationFrame(frame)
-  }, [drawnKey, measureRows])
+  useEffect(() => { measureRows() }, [drawnKey, measureRows])
   useEffect(() => {
     const el = box.current
     if (!el || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => { requestAnimationFrame(() => { measureRows() }) })
+    const ro = new ResizeObserver(() => { measureRows(true) })
     ro.observe(el)
     return () => ro.disconnect()
   }, [identityKey, measureRows])
