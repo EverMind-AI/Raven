@@ -26,6 +26,7 @@ import contextlib
 import hashlib
 import json
 import time
+import weakref
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -402,7 +403,9 @@ class AcpConnectionPool:
 
     def __init__(self) -> None:
         self._connections: dict[str, dict[str, _Connection]] = {}
-        self._locks: dict[str, asyncio.Lock] = {}
+        self._locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]] = (
+            weakref.WeakKeyDictionary()
+        )
         self._idle_tasks: dict[asyncio.AbstractEventLoop, asyncio.Task] = {}
 
     def connections(self, name: str) -> list[_Connection]:
@@ -410,10 +413,17 @@ class AcpConnectionPool:
         return list(self._connections.get(name, {}).values())
 
     def _lock_for(self, name: str) -> asyncio.Lock:
-        lock = self._locks.get(name)
+        """The running loop's lock for ``name``.
+
+        One table per loop, as ``dag_store`` keeps its own: ``asyncio.Lock`` binds
+        to the loop of its first waiter, so a lock shared with a loop on another
+        thread (a CLI command the RPC server runs) could be bound there, and every
+        later wait on this loop would raise. A finished loop's table goes with it.
+        """
+        per_loop = self._locks.setdefault(asyncio.get_running_loop(), {})
+        lock = per_loop.get(name)
         if lock is None:
-            lock = asyncio.Lock()
-            self._locks[name] = lock
+            lock = per_loop[name] = asyncio.Lock()
         return lock
 
     def live(self, name: str) -> "list[_Connection]":
