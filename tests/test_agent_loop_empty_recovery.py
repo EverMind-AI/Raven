@@ -2427,6 +2427,82 @@ async def test_a_continuation_that_errors_outright_delivers_what_streamed_with_t
     assert "".join(sink.text) == final, "the note reached the reader once, after the words"
 
 
+class _ContinuationRaises(LLMProvider):
+    """Streams its words and dies; every call asked to continue them then raises, as
+    ``LiteLLMProvider.chat_stream`` does with an HTTP error, instead of answering with an error."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    async def chat(self, *args, **kwargs):  # pragma: no cover - the streaming path is under test
+        raise AssertionError("the streaming path is the one under test")
+
+    async def chat_stream(self, messages, tools=None, model=None, **_kw):
+        self.calls += 1
+        if self.calls == 1:
+            yield ChatDelta(content="The answer is 42.")
+            raise ConnectionError("connection reset by peer")
+        raise RuntimeError("the gateway refused the request")
+        yield  # pragma: no cover - makes this an async generator
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+async def test_a_continuation_that_raises_delivers_what_streamed_with_the_note(workspace, monkeypatch):
+    """A continuation can fail by raising rather than by answering with an error; the reader holds the
+    answer so far either way, so either way the turn ends on it, said to be partial, not as a failure."""
+    provider = _ContinuationRaises()
+    agent = _make_agent(workspace, provider)
+    _recorded_sleeps(monkeypatch)
+    sink = _Sink()
+
+    final, _used, messages, outcome = await agent._run_agent_loop(_seed(), on_token_delta=sink.delta)
+
+    note = "\n\n" + PARTIAL_STREAM_NOTE
+    assert final == "The answer is 42." + note
+    assert outcome.status == "interrupted" and outcome.error is None
+    assert "".join(sink.text) == final
+    assert (messages[-1]["role"], messages[-1]["content"]) == ("assistant", final)
+
+
+class _ToolThenRaises(LLMProvider):
+    """Calls a tool, then raises on the call after it, with no cut answer behind that call."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    async def chat(self, *args, **kwargs):  # pragma: no cover - the streaming path is under test
+        raise AssertionError("the streaming path is the one under test")
+
+    async def chat_stream(self, messages, tools=None, model=None, **_kw):
+        self.calls += 1
+        if self.calls == 1:
+            call = {"index": 0, "id": "t1", "function": {"name": "no_such_tool", "arguments": "{}"}}
+            yield ChatDelta(content=None, tool_call_delta={"tool_calls": [call]})
+            yield ChatDelta(content=None, finish_reason="tool_calls")
+            return
+        raise RuntimeError("the gateway refused the request")
+        yield  # pragma: no cover - makes this an async generator
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+async def test_a_call_that_raises_with_no_cut_behind_it_still_fails_the_turn(workspace, monkeypatch):
+    """The control: only a continuation ends on what streamed. A call with no cut answer behind it has
+    nothing to end on, so its error is the turn's, as it always was."""
+    agent = _make_agent(workspace, _ToolThenRaises())
+    _recorded_sleeps(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="the gateway refused the request"):
+        await agent._run_agent_loop(_seed(), on_token_delta=_Sink().delta)
+
+
 @pytest.mark.asyncio
 async def test_an_error_before_any_cut_still_waits_and_fails_as_it_did(workspace, monkeypatch):
     """The control: with no cut answer behind it, the same error is the turn's to wait out."""
