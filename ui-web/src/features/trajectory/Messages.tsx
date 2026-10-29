@@ -22,7 +22,6 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 
 import { t } from '../../i18n/t'
 import * as details from './detailStore'
-import { count } from './diagnostics'
 import * as list from './store'
 
 import type { OutlineItem } from './detailStore'
@@ -142,7 +141,7 @@ export function MessagesView({ block, entryId, render }: {
     const measure = (): void => {
       /* Layout offsets, which the pane's scrolling does not move, as the list view's anchor reads them. */
       const listTop = el.offsetTop - pane.offsetTop
-      setView((v) => { count('messages.view'); return v.top === pane.scrollTop && v.height === pane.clientHeight && v.listTop === listTop ? v : { top: pane.scrollTop, height: pane.clientHeight, listTop } })
+      setView((v) => (v.top === pane.scrollTop && v.height === pane.clientHeight && v.listTop === listTop ? v : { top: pane.scrollTop, height: pane.clientHeight, listTop }))
     }
     measure()
     pane.addEventListener('scroll', measure, { passive: true })
@@ -205,7 +204,7 @@ export function MessagesView({ block, entryId, render }: {
       estimates.current = { open, fold }
       changed = true
     }
-    if (changed) { count('messages.remeasure'); remeasured((n) => n + 1) }
+    if (changed) remeasured((n) => n + 1)
   }, [])
   /* Measured after paint, never during the commit: a state write in a layout
      effect is the one shape that can nest -- write, render, write -- and React
@@ -238,7 +237,6 @@ export function MessagesView({ block, entryId, render }: {
     const page = pageOf(item)
     if (wanted.current.has(page.cursor)) return
     wanted.current.add(page.cursor)
-    count('messages.ask')
     void details.loadPageAt(block.id, page.cursor, page.index).finally(() => wanted.current.delete(page.cursor))
   }
 
