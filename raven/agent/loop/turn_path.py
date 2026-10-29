@@ -1552,33 +1552,50 @@ class TurnPathMixin:
                 usage_context.bind(session_key) if session_key else contextlib.nullcontext(),
             ):
                 unstreamed, unstreamed_next = unstreamed_next, False
-                response = await self.harness.action.decide(
-                    ActionRequest(
-                        provider=self.provider,
-                        messages=call_messages,
-                        tools=call_tools,
-                        model=call_model,
-                        # An unstreamed resend is still the streamed turn's call: the provider's
-                        # own chain is not walked, and a model switch stays the loop's to make.
-                        fallback_models=[] if unstreamed else list(fallbacks_left),
-                        # The one streaming call that asks for a cut answer back: a
-                        # continuation (``ReplyKind.NETWORK_CUT``) follows it. The
-                        # wrap-up and the watch-work judgement call the same method
-                        # and have nothing to follow them.
-                        stream_call=functools.partial(self._llm_call_stream, hand_back_partial=True),
-                        # Spliced here rather than inside the module: the gates are
-                        # the shell's own, and which sink a delta reaches is not a
-                        # strategy decision. The module reads the field it is handed,
-                        # so the stream/retry branch stays exactly the one the loop
-                        # took -- no gate is built unless ``on_token_delta``
-                        # already is, so the spliced value is None on exactly the
-                        # turns the raw sink was, and a reasoning sink alone still
-                        # streams.
-                        on_token_delta=None if unstreamed else (draft or gate or downstream),
-                        on_reasoning_delta=None if unstreamed else on_reasoning_delta,
-                        generation_overrides=gen_overrides,
+                continuing = bool(recovery.parts)
+                try:
+                    response = await self.harness.action.decide(
+                        ActionRequest(
+                            provider=self.provider,
+                            messages=call_messages,
+                            tools=call_tools,
+                            model=call_model,
+                            # An unstreamed resend is still the streamed turn's call: the provider's
+                            # own chain is not walked, and a model switch stays the loop's to make.
+                            fallback_models=[] if unstreamed else list(fallbacks_left),
+                            # The one streaming call that asks for a cut answer back: a
+                            # continuation (``ReplyKind.NETWORK_CUT``) follows it. The
+                            # wrap-up and the watch-work judgement call the same method
+                            # and have nothing to follow them.
+                            stream_call=functools.partial(self._llm_call_stream, hand_back_partial=True),
+                            # Spliced here rather than inside the module: the gates are
+                            # the shell's own, and which sink a delta reaches is not a
+                            # strategy decision. The module reads the field it is handed,
+                            # so the stream/retry branch stays exactly the one the loop
+                            # took -- no gate is built unless ``on_token_delta``
+                            # already is, so the spliced value is None on exactly the
+                            # turns the raw sink was, and a reasoning sink alone still
+                            # streams.
+                            on_token_delta=None if unstreamed else (draft or gate or downstream),
+                            on_reasoning_delta=None if unstreamed else on_reasoning_delta,
+                            generation_overrides=gen_overrides,
+                        )
                     )
-                )
+                except Exception as exc:
+                    if not continuing:
+                        raise
+                    # A continuation can fail by raising rather than by answering with an error
+                    # (``LiteLLMProvider.chat_stream`` raises its HTTP errors), once the stream's
+                    # own reconnects are spent. The reader holds the answer so far either way, so
+                    # either way the turn ends on it, as a continuation that errored does.
+                    logger.warning(
+                        "empty-recovery: the continuation of a cut answer raised; ending the turn on the "
+                        "{} chars that streamed: {}",
+                        sum(len(part) for part in recovery.parts),
+                        exc,
+                    )
+                    final_content = await _end_on_the_partial(response)
+                    break
                 # Read inside the bind: the count belongs to it and ends with it.
                 recorded_at_seam = usage_record.recorded_inbound()
             if unstreamed and response.finish_reason != "error":
