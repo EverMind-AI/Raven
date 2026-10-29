@@ -33,6 +33,8 @@ SPAN_NAME = "subagent.external"
 _PREFIX = "subagent.external"
 TRANSCRIPT_KEY = f"{_PREFIX}.transcript"
 FRAMES_KEY = f"{_PREFIX}.frames"
+STEPS_KEY = f"{_PREFIX}.steps"
+"""How many steps a run wrote of itself while it ran; a backfill leaves such a run alone."""
 
 
 @contextmanager
@@ -329,6 +331,7 @@ def record_steps(
 __all__ = [
     "FRAMES_KEY",
     "SPAN_NAME",
+    "STEPS_KEY",
     "TRANSCRIPT_KEY",
     "external_agent_span",
     "record_events",

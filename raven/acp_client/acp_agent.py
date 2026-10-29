@@ -63,6 +63,7 @@ from raven.agent.subagent.backends import turn_rows
 from raven.agent.subagent.backends.base import bounded_delta, clamp_output
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.backends.observability import (
+    STEPS_KEY,
     external_agent_span,
     record_events,
     record_frames,
@@ -2603,8 +2604,10 @@ class AcpAgentBackend:
         activity.note_frames(frames)
         record_frames(span, frames)
         # What the agent said and ran, as the run's own steps: the caller only
-        # ever sees the answer, and the wire journal is not a timeline.
-        record_steps(span, prompt=collector.prompt, events=collector.events, elapsed_ms=elapsed_ms)
+        # ever sees the answer, and the wire journal is not a timeline. The
+        # count on the run is what keeps a later backfill from writing them again.
+        steps = record_steps(span, prompt=collector.prompt, events=collector.events, elapsed_ms=elapsed_ms)
+        span.set(**{STEPS_KEY: len(steps)})
 
 
 __all__ = ["AcpAgentBackend", "AcpEmptyTurnError"]
