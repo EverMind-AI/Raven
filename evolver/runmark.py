@@ -26,7 +26,7 @@ VERSION = 1
 
 def _ignored(p: Path) -> bool:
     """Byproducts that are not part of the harness and must not change its identity."""
-    return "__pycache__" in p.parts or p.suffix == ".pyc" or p.name == ".DS_Store"
+    return ".git" in p.parts or "__pycache__" in p.parts or p.suffix == ".pyc" or p.name == ".DS_Store"
 
 
 def fingerprint(harness_dir: Path | None) -> str:
@@ -64,16 +64,18 @@ def mark_complete(
     """Record that ``run_id`` finished. Call only after the runner returned normally.
 
     Writes atomically via a temp file + ``os.replace`` so a crash mid-write
-    never leaves a half-written marker.
+    never leaves a half-written marker. Keys in ``extra`` are supplemental
+    metadata; they cannot replace the reserved identity fields (``version``,
+    ``run_id``, ``at``, ``harness``) the marker derives itself.
     """
     d = Path(where)
     d.mkdir(parents=True, exist_ok=True)
     payload = {
+        **(extra or {}),
         "version": VERSION,
         "run_id": run_id,
         "at": time.time(),
         "harness": fingerprint(harness_dir),
-        **(extra or {}),
     }
     tmp = d / f"{MARK}.{os.getpid()}.tmp"
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True))
