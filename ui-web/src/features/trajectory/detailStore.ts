@@ -183,7 +183,6 @@ export interface DetailsState {
   /** The pane last closed because the reader moved to a tab where it was closed, not because they closed it. */
   swapped: boolean
   /** Scroll offsets by entry and tab: an intention, kept across revisions. */
-  scrollByEntryTab: Record<string, number>
   descriptors: Record<string, DescriptorRecord>
   blocks: Record<string, BlockRecord>
   /** Message outlines by descriptor key: one per entry identity. */
@@ -231,7 +230,6 @@ const initial: DetailsState = {
   openByScope: {},
   preferred: {},
   swapped: false,
-  scrollByEntryTab: {},
   descriptors: {},
   blocks: {},
   outlines: {},
@@ -420,13 +418,16 @@ export function setTab(entryId: string, tab: Tab): void {
   patch({ tabByEntry: { ...store.get().tabByEntry, [entryId]: tab }, unstable: false })
 }
 
+/* Where each entry's tab was scrolled to, kept OUTSIDE the store: only the
+   restore path reads it, and putting it in the store re-rendered the whole
+   pane -- messages list included -- on every pixel of every scroll. */
+const scrollMemory = new Map<string, number>()
+
 export function setTabScroll(entryId: string, tab: Tab, top: number): void {
-  const key = scrollKey(entryId, tab)
-  if (store.get().scrollByEntryTab[key] === top) return
-  patch({ scrollByEntryTab: { ...store.get().scrollByEntryTab, [key]: top } })
+  scrollMemory.set(scrollKey(entryId, tab), top)
 }
 
-export const tabScroll = (entryId: string, tab: Tab): number => store.get().scrollByEntryTab[scrollKey(entryId, tab)] ?? 0
+export const tabScroll = (entryId: string, tab: Tab): number => scrollMemory.get(scrollKey(entryId, tab)) ?? 0
 
 /* ── the pinned tab ───────────────────────────────────────────────────── */
 
@@ -1392,6 +1393,7 @@ onTrajectoryEscape({
 /** `keepStorage` stands in for a reload: everything in memory goes, the tab's storage stays. */
 export function _resetForTests(opts: { keepStorage?: boolean } = {}): void {
   store._resetForTests()
+  scrollMemory.clear()
   if (!opts.keepStorage) PINS.clear()
   gen = 0
   clock = 0
