@@ -306,6 +306,7 @@ def build_runtime(
             strategies=strategies,
             context_window_tokens=config.agents.defaults.context_window_tokens,
             compaction_config=config.agents.defaults.compaction,
+            task_board_config=config.agents.defaults.task_board,
             playbook_config=config.playbooks,
             skill_forge_config=ec_config.skill_forge,
             skill_forge_router_config=ec_config.skill_forge.router,

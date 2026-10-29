@@ -17,6 +17,7 @@ import * as lang from '../../state/lang'
 import { hold as holdHost } from '../../state/session/hosts'
 import { resetSources, setSources } from '../../state/sources'
 import * as mount from './mount'
+import { revealTurnAt } from './source'
 import * as store from './store'
 import * as tail from './tail'
 import { TranscriptApp } from './TranscriptApp'
@@ -343,5 +344,34 @@ describe('readingTurn', () => {
 
   it('is no turn when there are none', () => {
     expect(readingTurn([], 300, false)).toBe(-1)
+  })
+})
+
+describe('revealTurnAt', () => {
+  /* A step on the task board names its turn by the timestamp the session log
+     stores on the turn's opening message. A turn asked on this page carries the
+     browser's clock instead, so the nearest opening question is the match,
+     within five minutes either way. */
+  it('scrolls to the opening question nearest that time', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))
+    await settle(() => { mount.ask('first question') })
+    vi.setSystemTime(new Date('2026-10-29T11:00:00Z'))
+    await settle(() => { mount.ask('second question') })
+    const scroll = $('#scroll') as HTMLElement
+    const moved: number[] = []
+    scroll.scrollTo = ((opts: ScrollToOptions) => { moved.push(Number(opts.top)) }) as typeof scroll.scrollTo
+
+    expect(revealTurnAt('2026-10-29T11:00:30Z')).toBe(true)
+    expect(moved).toHaveLength(1)
+  })
+
+  it('answers false for a time no opening question is near', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))
+    await settle(() => { mount.ask('first question') })
+
+    expect(revealTurnAt('2026-10-29T15:00:00Z')).toBe(false)
+    expect(revealTurnAt('not a time')).toBe(false)
   })
 })

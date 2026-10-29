@@ -7673,6 +7673,50 @@
       "en": "Finished",
       "zh": "已结束"
     },
+    "gui.tasks.board.completed": {
+      "en": "Completed - {n}",
+      "zh": "已完成 - {n}"
+    },
+    "gui.tasks.board.unassigned": {
+      "en": "Unassigned",
+      "zh": "未归类"
+    },
+    "gui.tasks.board.st_active": {
+      "en": "In progress",
+      "zh": "推进中"
+    },
+    "gui.tasks.board.st_waiting": {
+      "en": "Waiting on you",
+      "zh": "等你"
+    },
+    "gui.tasks.board.st_blocked": {
+      "en": "Blocked",
+      "zh": "卡住"
+    },
+    "gui.tasks.board.st_parked": {
+      "en": "Parked",
+      "zh": "搁置"
+    },
+    "gui.tasks.board.st_completed": {
+      "en": "Completed",
+      "zh": "已完成"
+    },
+    "gui.tasks.board.mark_completed": {
+      "en": "Mark completed",
+      "zh": "标为已完成"
+    },
+    "gui.tasks.board.reopen": {
+      "en": "Reopen",
+      "zh": "重新打开"
+    },
+    "gui.tasks.board.running": {
+      "en": "{n} sub-agents running",
+      "zh": "{n} 个子代理在跑"
+    },
+    "gui.tasks.board.dag": {
+      "en": "DAG {done}/{total}",
+      "zh": "DAG {done}/{total}"
+    },
     "gui.tasks.files_n": {
       "en": "{n} files changed",
       "zh": "{n} 个文件改动"

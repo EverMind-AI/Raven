@@ -26,7 +26,11 @@ from raven.agent.subagent.dag_reader import branch_fields, registry_outcome
 from raven.agent.subagent.dag_store import REGISTRY_FILENAME, RUNNING, UNRECORDED, node_live_key
 from raven.agent.subagent.history import dag_root, nodes_root, session_history_root, spawn_live_key
 from raven.agent.subagent.instances import get_registry
+from raven.agent.task_board.board import Board, UpdateRejectedError, board_to_dict
+from raven.agent.task_board.lineage import board_lineage
+from raven.agent.task_board.store import load_board
 from raven.config.agent_names import canonical_agent_name
+from raven.rpc.errors import InvalidParamsError
 from raven.rpc.methods.instances import _graph_of
 from raven.rpc.methods.session import _safe_invoke_factory
 from raven.rpc.methods.subagent import (
@@ -525,6 +529,53 @@ async def tasks_list(
     return {"tasks": tasks}
 
 
+def _board_answer(session_dir: Path, board: Board) -> dict[str, Any]:
+    return {"board": board_to_dict(board), "lineage": board_lineage(session_dir, board)}
+
+
+async def tasks_board(
+    params: dict[str, Any],
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict[str, Any]:
+    """One conversation's Task Board and the lineage of the runs it places.
+
+    Read off disk, so a page reloaded with no agent loop up still draws it; an
+    absent or unknown session is an empty board, as ``tasks.list`` answers one.
+    """
+    session_key = str(params.get("session_key") or "")
+    empty = {"board": board_to_dict(Board([], [])), "lineage": {}}
+    if not session_key:
+        return empty
+    try:
+        session_dir = _session_dir(session_key, agent_loop_factory)
+    except OSError:
+        return empty
+    return _board_answer(session_dir, load_board(session_dir))
+
+
+async def tasks_set_group_status(
+    params: dict[str, Any],
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict[str, Any]:
+    """The reader's two actions on a Task Group: mark it completed, or reopen it."""
+    session_key = str(params.get("session_key") or "")
+    group_id = str(params.get("group_id") or "")
+    status = str(params.get("status") or "")
+    loop = _safe_invoke_factory(agent_loop_factory)
+    service = getattr(loop, "task_board", None) if loop is not None else None
+    if service is None:
+        raise InvalidParamsError("this runtime keeps no task board")
+    try:
+        board = await service.set_status(session_key, group_id, status)
+    except KeyError:
+        raise InvalidParamsError(f"no group {group_id!r} on this conversation's board") from None
+    except UpdateRejectedError as exc:
+        raise InvalidParamsError(str(exc)) from None
+    return _board_answer(service.session_dir(session_key), board)
+
+
 def register_tasks_methods(
     dispatcher: "Dispatcher",
     *,
@@ -533,7 +584,15 @@ def register_tasks_methods(
     async def _list(params: dict) -> dict:
         return await tasks_list(params, agent_loop_factory=agent_loop_factory)
 
+    async def _board(params: dict) -> dict:
+        return await tasks_board(params, agent_loop_factory=agent_loop_factory)
+
+    async def _set_group_status(params: dict) -> dict:
+        return await tasks_set_group_status(params, agent_loop_factory=agent_loop_factory)
+
     dispatcher.register("tasks.list", _list)
+    dispatcher.register("tasks.board", _board)
+    dispatcher.register("tasks.set_group_status", _set_group_status)
 
 
-__all__ = ["register_tasks_methods", "tasks_list"]
+__all__ = ["register_tasks_methods", "tasks_board", "tasks_list", "tasks_set_group_status"]

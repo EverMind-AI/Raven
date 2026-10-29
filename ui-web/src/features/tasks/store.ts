@@ -14,7 +14,10 @@ import { hunksForFile } from './diffs'
 import * as live from './live'
 
 import type { WsChange } from '../workspace/types'
-import type { TaskFile, TaskKind, TaskNode, TaskRow, TasksSource } from './types'
+import type {
+  ProgressStep, TaskBoard, TaskFile, TaskGroup, TaskKind, TaskLinkRef, TaskNode, TaskRow,
+  TasksBoardUpdatedPayload, TasksSource,
+} from './types'
 
 export interface TasksState {
   rows: TaskRow[]
@@ -46,10 +49,18 @@ export interface TasksState {
      node id). A fold absent here has not been touched: the caller's own
      default still applies until the reader picks one. */
   folds: Record<string, Record<string, boolean>>
+  /* The host's Task Board for the conversation on screen, read whole and
+     replaced whole -- a board is small, and the post-turn update rewrites it in
+     one go. `lineage` maps each run that continued a placed run (a replan's
+     successor, a later stint round) to the run it continues. */
+  board: TaskBoard | null
+  lineage: Record<string, string>
+  boardLoaded: boolean
 }
 
 const initial: TasksState = {
   rows: [], loaded: false, nodes: {}, tabByPane: {}, nodeVersions: {}, folds: {},
+  board: null, lineage: {}, boardLoaded: false,
 }
 
 const store = makeStore<TasksState>(initial)
@@ -64,6 +75,7 @@ export const source = (): TasksSource | null => sources.tasks ?? null
    would attribute one conversation's background work to another. */
 export function reset(): void {
   store.set(initial)
+  rechecked.clear()
   /* The stamps go with the rows they were about. Left behind they would only
      waste room -- the tick is monotonic, so an entry from the conversation
      just left can never out-rank a read taken in the one arrived at. */
@@ -71,6 +83,74 @@ export function reset(): void {
 }
 
 export const rows = (): TaskRow[] => store.get().rows
+
+/* ── the task board ─────────────────────────────────────────────────────── */
+
+/* Asked for one conversation, answered into whichever is open now: the same
+   guard `refresh` keeps, for the same reason. */
+export async function refreshBoard(): Promise<void> {
+  const src = source()
+  const key = sessionCurrent()
+  if (!src?.board || !key) { patch({ board: null, lineage: {}, boardLoaded: true }); return }
+  const got = await src.board(key)
+  if (key !== sessionCurrent()) return
+  patch({ board: got.board, lineage: got.lineage || {}, boardLoaded: true })
+}
+
+export function onBoardUpdated(p: TasksBoardUpdatedPayload): void {
+  if (p.session_key !== sessionCurrent()) return
+  patch({ board: p.board, lineage: p.lineage || {}, boardLoaded: true })
+}
+
+const newestFirst = (a: TaskGroup, b: TaskGroup): number => b.created_at - a.created_at
+
+export const openGroups = (board: TaskBoard): TaskGroup[] =>
+  board.groups.filter((g) => g.status !== 'completed').sort(newestFirst)
+
+export const completedGroups = (board: TaskBoard): TaskGroup[] =>
+  board.groups.filter((g) => g.status === 'completed').sort(newestFirst)
+
+export interface LinkedRow { link: TaskLinkRef; row: TaskRow | null }
+
+/* A step's Tasks, each followed by the runs that continued it. A link whose row
+   `tasks.list` no longer holds -- a branched conversation, a removed run -- is
+   kept, with no row, so the step still names what it started. */
+export function linkedRows(step: ProgressStep, list: TaskRow[], lineage: Record<string, string>): LinkedRow[] {
+  const find = (kind: TaskKind, id: string): TaskRow | null => list.find((r) => r.kind === kind && r.id === id) || null
+  const out: LinkedRow[] = []
+  for (const link of step.tasks) {
+    out.push({ link, row: find(link.kind, link.id) })
+    if (link.kind !== 'dag') continue
+    for (const [child, parent] of Object.entries(lineage)) {
+      if (parent === link.id) out.push({ link: { kind: 'dag', id: child, summary: link.summary }, row: find('dag', child) })
+    }
+  }
+  return out
+}
+
+/* The rows no step places, directly or as a run continuing a placed one. With
+   no board, that is every row. */
+export function unplacedRows(list: TaskRow[], board: TaskBoard | null, lineage: Record<string, string>): TaskRow[] {
+  if (!board) return list
+  const placed = new Set<string>(Object.keys(lineage).map((id) => `dag:${id}`))
+  for (const g of board.groups) for (const s of g.steps) for (const t of s.tasks) placed.add(`${t.kind}:${t.id}`)
+  return list.filter((r) => !placed.has(rowKey(r)))
+}
+
+/* A dag row nothing places may be a stint round or a replan's successor the
+   board's lineage was read without: the board is re-read once per such row. */
+const rechecked = new Set<string>()
+
+export async function noticeUnplaced(): Promise<void> {
+  const s = store.get()
+  const key = sessionCurrent()
+  if (!s.boardLoaded || !key) return
+  const fresh = unplacedRows(s.rows, s.board, s.lineage)
+    .filter((r) => r.kind === 'dag' && !rechecked.has(`${key}|${rowKey(r)}`))
+  if (!fresh.length) return
+  for (const r of fresh) rechecked.add(`${key}|${rowKey(r)}`)
+  await refreshBoard()
+}
 
 export const rowKey = (row: TaskRow): string => `${row.kind}:${row.id}`
 

@@ -14,7 +14,7 @@
  */
 
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
-import type { TaskCounts, TaskNode, TaskRow } from '../generated'
+import type { TaskBoard, TaskCounts, TaskGroup, TaskNode, TaskRow } from '../generated'
 
 const MIN = 60000
 const SEC = 1000
@@ -411,6 +411,31 @@ export function createTasks(env: FixtureEnv): TasksFixture {
     ['f', scenarioBranched(env)],
   ])
 
+  /* The host's Task Board for two of the conversations above, so the offline
+     page draws both halves of the tab: groups whose steps hang those Tasks,
+     and (everywhere else) the Unassigned row a session from before the board
+     shows. */
+  const groupOf = (id: string, rows: TaskRow[], text: string, status: TaskGroup['status']): TaskGroup => {
+    const at = Math.min(...rows.map((r) => r.started_at ?? env.now()))
+    return {
+      id, title: rows[0]?.task_summary || id, status, created_at: at, updated_at: at,
+      steps: [{
+        id: `s_${id}`, turn_at: new Date(at).toISOString(), turn_id: null, text,
+        tasks: rows.map((r) => ({ kind: r.kind, id: r.id, summary: r.task_summary || r.id })),
+      }],
+    }
+  }
+  const boards = new Map<string, TaskBoard>()
+  const spawns = bySession.get('h') ?? []
+  boards.set('h', {
+    version: 1, unassigned: [],
+    groups: spawns.map((r, i) => groupOf(`g_h${i}`, [r], 'Sent a sub-agent to do it.', r.status === 'running' ? 'active' : 'waiting')),
+  })
+  boards.set('g', {
+    version: 1, unassigned: [],
+    groups: [groupOf('g_g0', bySession.get('g') ?? [], 'Wrote the files and reported them back.', 'completed')],
+  })
+
   const findRow = (id: string, kind?: string): { rows: TaskRow[]; at: number; row: TaskRow } | null => {
     for (const rows of bySession.values()) {
       const at = rows.findIndex((r) => r.id === id && (!kind || r.kind === kind))
@@ -421,6 +446,21 @@ export function createTasks(env: FixtureEnv): TasksFixture {
 
   return {
     fixtures: {
+      'tasks.board': (p) => ({
+        board: boards.get(p.session_key) ?? { version: 1, groups: [], unassigned: [] },
+        lineage: {},
+      }),
+      /* An unknown group answers the board unchanged rather than throwing: the
+         offline library answers every method for any params it is handed. */
+      'tasks.set_group_status': (p) => {
+        const board = boards.get(p.session_key) ?? { version: 1, groups: [], unassigned: [] }
+        const group = board.groups.find((g) => g.id === p.group_id)
+        if (group) {
+          group.status = p.status
+          group.updated_at = env.now()
+        }
+        return { board, lineage: {} }
+      },
       'tasks.list': (p) => {
         const all = bySession.get(p.session_key) || []
         const filtered = p.kind && p.id ? all.filter((r) => r.kind === p.kind && r.id === p.id) : all

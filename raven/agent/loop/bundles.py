@@ -62,6 +62,7 @@ class EngineWiring:
     skill_forge_router_config: Any = None
     memory_config: Any = None
     compaction_config: Any = None
+    task_board_config: Any = None
     backend: Any = None
     playbook_config: Any = None
     # The instance socket beside the config socket: a built ContextEngine the

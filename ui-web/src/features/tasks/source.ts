@@ -26,6 +26,9 @@ const openKey = (): string => sessionCurrent() || ''
 export const tasksSource: TasksSource = {
   list: (sessionKey: string) =>
     gateway().call('tasks.list', { session_key: sessionKey }).then((r) => r.tasks || []),
+  board: (sessionKey: string) => gateway().call('tasks.board', { session_key: sessionKey }),
+  setGroupStatus: (sessionKey: string, groupId: string, status: 'completed' | 'active') =>
+    gateway().call('tasks.set_group_status', { session_key: sessionKey, group_id: groupId, status }),
   one: (kind: TaskKind, id: string) =>
     gateway().call('tasks.list', { session_key: openKey(), kind, id })
       .then((r) => (r.tasks && r.tasks[0]) || null),

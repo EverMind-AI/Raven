@@ -70,7 +70,7 @@ const questionOf = (seg: AskData): HTMLElement | null =>
 /* The reader chose a place, so the transcript stops following its tail before
    it moves; the scroller's own listener turns tail-follow back on if the move
    ends at the tail. */
-function goTo(seg: AskData): void {
+export function goTo(seg: AskData): void {
   const scroll = document.getElementById('scroll')
   const question = questionOf(seg)
   if (!scroll || !question) return

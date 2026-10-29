@@ -40,8 +40,8 @@ import * as settingsStore from '../features/settings/store'
 import { agentsSource, startAgentHeartbeat } from '../features/subagents/source'
 import { tasksSource } from '../features/tasks/source'
 import {
-  byKey as taskByKey, onNodeUpdated, onRunCompleted, onRunReplanned, onRunStarted, onSubagentStatus,
-  refresh as refreshTasks, reset as resetTasks,
+  byKey as taskByKey, onBoardUpdated, onNodeUpdated, onRunCompleted, onRunReplanned, onRunStarted, onSubagentStatus,
+  refresh as refreshTasks, refreshBoard as refreshTaskBoard, reset as resetTasks,
 } from '../features/tasks/store'
 import * as trajectoryDetails from '../features/trajectory/detailStore'
 import * as trajectoryPoll from '../features/trajectory/poll'
@@ -246,7 +246,7 @@ export function installSources(): void {
       openDeskTask(row)
       return true
     },
-    onRunStarted, onNodeUpdated, onRunCompleted, onRunReplanned, onSubagentStatus,
+    onRunStarted, onNodeUpdated, onRunCompleted, onRunReplanned, onSubagentStatus, onBoardUpdated,
   }
   sources.extAgents = extAgentsSource
   sources.machines = machinesSource
@@ -348,6 +348,7 @@ export function installPushes(): void {
      the running rows is rendered in the first frame, before any of this, so the
      ask it makes for itself finds no source and is not the one that lands. */
   void refreshTasks()
+  void refreshTaskBoard()
 }
 
 /* ── the actions: controls whose answer belongs to the session ────────────── */
@@ -423,7 +424,7 @@ export function installActions(): void {
      own "not loaded yet" effect would otherwise fire under the session being
      left. Ownership changing is what should trigger the re-read, not `loaded`
      happening to be false. */
-  onSessionChange(() => { void refreshTasks() })
+  onSessionChange(() => { void refreshTasks(); void refreshTaskBoard() })
 
   $('#newBtn')!.onclick = () => {
     if (openModelsForMissingProvider()) return

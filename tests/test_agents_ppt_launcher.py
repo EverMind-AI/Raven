@@ -202,6 +202,9 @@ TRUNK_ONLY_DEFAULTS = {
     # own thresholds but for the trigger ratio; the deck-specific part is the
     # plugin's ledger under the summary, not a different threshold.
     "compaction": {"enabled": True, "triggerRatio": 0.85},
+    # The deck engine is a product agent, and only the Raven host keeps a task
+    # board: switched off here so a standalone run makes no extra call per turn.
+    "taskBoard": {"enabled": False},
 }
 
 #: agents.defaults rows both sides carry with different values, as (fork, trunk).

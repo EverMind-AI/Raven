@@ -527,6 +527,10 @@ const dispatch = (
       // here is a product call for the terminal, not a consequence of the wire
       // event. Named for the same reason `turn.started` is.
       return
+    case 'tasks.board_updated':
+      // The host's task board is the web page's tasks tab; the terminal draws
+      // none. Named for the same reason `turn.started` is.
+      return
     default: {
       // Exhaustiveness — if a new TurnEvent variant lands the type-checker
       // will complain here, forcing this file to be updated.

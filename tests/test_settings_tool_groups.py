@@ -16,7 +16,7 @@ from pathlib import Path
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.agent.tools.media_gen import ImageGenerateTool, SpeechGenerateTool, VideoGenerateTool
-from raven.config.schema import ToolSearchConfig
+from raven.config.schema import TaskBoardConfig, ToolSearchConfig
 from raven.providers.base import LLMProvider, LLMResponse
 
 GROUPS = Path(__file__).resolve().parents[1] / "ui-web" / "src" / "features" / "settings" / "toolGroups.json"
@@ -32,7 +32,11 @@ GATED = {"cron", "load_playbook", "create_playbook", "understand_media", "delive
 # off alone would leave those refs pointing at text the model can no longer
 # read. It goes with the strategy (``context.history.strategy``), not with a
 # toggle on the page.
-UNSWITCHABLE = {"context_retrieve"}
+#
+# ``task_board`` likewise: its post-turn call forces it by name, so a page toggle
+# that withheld it would leave that call naming a tool the request lacks. It goes
+# with ``agents.defaults.taskBoard``.
+UNSWITCHABLE = {"context_retrieve", "task_board"}
 
 
 class _StubProvider(LLMProvider):
@@ -91,7 +95,8 @@ def test_tool_groups_cover_the_default_tools() -> None:
                 connection_add=True,
                 tool_search_config=ToolSearchConfig(enabled=True),
             ),
-            engine=EngineWiring(),
+            # Wired as the runtime wires the host, so the task board is on the face.
+            engine=EngineWiring(task_board_config=TaskBoardConfig()),
         )
         registered = set(loop.tools.names()) - UNSWITCHABLE
     listed = {t for tools in _listed().values() for t in tools}

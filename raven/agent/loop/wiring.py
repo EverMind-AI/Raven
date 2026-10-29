@@ -1554,6 +1554,15 @@ class WiringMixin:
                 verdict_config=self.subagent_dag_config,
             )
         )
+        # The host's own record of the conversation's matters. Host-only for the
+        # same reason as everything above: a sub-agent's turns are its caller's
+        # business, and a board kept there would record the caller's matters twice.
+        if self._task_board_config.enabled:
+            from raven.agent.task_board.service import TaskBoardService
+            from raven.agent.task_board.tool import TaskBoardTool
+
+            self.task_board = TaskBoardService(self.sessions)
+            self.tools.register(TaskBoardTool(self.task_board))
         # The two close the array, in this order, so the roster spawn's
         # description ends with is the last thing the array says and the graph
         # tool's pointer to it lands on the tool read right after.
@@ -2106,6 +2115,7 @@ class WiringMixin:
             "cancel_dag",
             "resolve_dag_node",
             "context_retrieve",
+            "task_board",
         ):
             if tool := self.tools.get(name):
                 if not hasattr(tool, "set_context"):
@@ -2120,6 +2130,7 @@ class WiringMixin:
                     "cancel_dag",
                     "resolve_dag_node",
                     "context_retrieve",
+                    "task_board",
                 ):
                     tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
                 else:

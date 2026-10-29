@@ -383,6 +383,15 @@ opens is the desk's (`kind: 'task'`), and the node's context comes from `dag.nod
 is picked, never a copy of the record.
 _Avoid_: "task" for a turn or for the composer's draft.
 
+**Task Board** (`features/tasks/BoardList.tsx`, `tasks.board`):
+the tasks tab once the host's board holds a Task Group: one row per group, newest first, a
+row opening its thread of Progress Steps in place, each step's Tasks as chips that open the
+pane a list row opens; finished groups fold away at the bottom, and Tasks no step places sit
+in an Unassigned fold at the top. A conversation whose board holds no group draws the flat
+list of Tasks it always had. The terms are the Runtime's (`CONTEXT.md`: Task Board, Task
+Group, Progress Step).
+_Avoid_: "task list" for this -- that is the flat list it falls back to.
+
 **Pane**:
 A resizable column: the workspace pane beside the chat (`src/state/ws.ts` holds
 it, `src/chrome/WsPane.tsx` renders it, and the islands drawn inside it ask it

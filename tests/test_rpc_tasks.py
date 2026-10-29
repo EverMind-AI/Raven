@@ -1458,8 +1458,9 @@ async def test_register_binds_the_method_name_to_the_reader(monkeypatch: pytest.
             handlers[name] = handler
 
     tasks_mod.register_tasks_methods(_Dispatcher(), agent_loop_factory=None)  # type: ignore[arg-type]
-    assert set(handlers) == {"tasks.list"}
+    assert set(handlers) == {"tasks.list", "tasks.board", "tasks.set_group_status"}
     assert await handlers["tasks.list"]({"session_key": ""}) == {"tasks": []}
+    assert (await handlers["tasks.board"]({"session_key": ""}))["board"]["groups"] == []
 
 
 # ---------------------------------------------------------------------------
