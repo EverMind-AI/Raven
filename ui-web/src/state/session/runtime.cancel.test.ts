@@ -244,6 +244,10 @@ describe('the turn after a stop', () => {
     h.pipeline.dispatch({ type: 'token.delta', payload: { text: 'b1' } })
 
     expect(h.steps.map((s) => s.text)).toEqual(['a1', 'a-tail', 'b1'])
+    /* The say buffer is what the turn's preview and notification read. */
+    expect(h.runtime.state().say).toBe('b1')
+    h.pipeline.dispatch({ type: 'message.complete', payload: { turn_id: 'B', usage: {} } })
+    expect(h.rows[0]!.last).toBe('b1')
   })
 
   it.each(OPENERS)('starts on a clean step when %s ends a refusal that held the lane', async (_name, opener) => {
@@ -257,6 +261,7 @@ describe('the turn after a stop', () => {
     h.pipeline.dispatch({ type: 'token.delta', payload: { text: 'b1' } })
 
     expect(h.steps.map((s) => s.text)).toEqual(['a1', 'a-tail', 'b1'])
+    expect(h.runtime.state().say).toBe('b1')
   })
 
   it.each([
@@ -282,6 +287,7 @@ describe('the turn after a stop', () => {
 
     expect(h.steps.map((s) => s.text)).toEqual(['a1b1'])
     expect(h.steps[0]!.sealed).toBe(false)
+    expect(h.runtime.state().say).toBe('a1b1')
   })
 })
 
