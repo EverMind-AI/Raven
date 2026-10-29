@@ -70,7 +70,11 @@ class MessageTool(Tool):
 
     @property
     def sent_in_turn(self) -> bool:
-        """Whether a reply was sent to the turn's own target this turn."""
+        """Whether a send went out this turn.
+
+        The send callback hands every message to the turn's own reader, whatever
+        channel or chat the call names, so a send that went out reached the reader.
+        """
         return self._cur().sent
 
     @property
@@ -119,8 +123,7 @@ class MessageTool(Tool):
 
         try:
             await st.send_callback(content, media or [])
-            if channel == st.channel and chat_id == st.chat_id:
-                self._turn.set(replace(st, sent=True))
+            self._turn.set(replace(st, sent=True))
             media_info = f" with {len(media)} attachments" if media else ""
             return f"Message sent to {channel}:{chat_id}{media_info}"
         except Exception as e:

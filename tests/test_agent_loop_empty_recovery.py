@@ -65,6 +65,7 @@ from raven.agent.loop.recovery import (
 from raven.agent.window import shrink
 from raven.config.schema import CompactionConfig
 from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
+from raven.contracts.tool import Tool
 from raven.providers import rates
 from raven.providers.base import (
     ChatDelta,
@@ -5182,14 +5183,14 @@ async def test_a_proactive_turn_that_skips_after_send_stays_silent(workspace, mo
     [
         pytest.param(_SEND, False, True, id="sent_to_its_own_chat"),
         pytest.param(_SEND, True, False, id="a_send_that_failed"),
-        pytest.param('{"content": "here is your answer", "chat_id": "c2"}', False, False, id="sent_to_another_chat"),
+        pytest.param('{"content": "here is your answer", "chat_id": "c2"}', False, True, id="sent_naming_another_chat"),
     ],
 )
 async def test_a_stored_turn_reads_the_message_tools_live_verdict(workspace, monkeypatch, arguments, fails, answered):
     """A turn the runtime opened calls the message tool and closes on the marker. The live turn counts it
-    answered only when the tool sent to the turn's own chat (``MessageTool.sent_in_turn``); the session
-    list and an ACP replay read the stored turn by that same verdict, so a send that failed or went to
-    another chat leaves a Silent Turn there too, and is taken back whole."""
+    answered when the send went out (``MessageTool.sent_in_turn``) -- the tool hands every send to the
+    turn's own reader, whatever chat the call names -- and the session list and an ACP replay read the
+    stored turn by that same verdict. Only a send that failed leaves a Silent Turn there, taken back whole."""
     from raven.acp.replay import replay
     from raven.rpc.methods.session import _map_to_wire
 
@@ -5216,6 +5217,48 @@ async def test_a_stored_turn_reads_the_message_tools_live_verdict(workspace, mon
     assert bool(replayed) is answered, "a Silent Turn the runtime opened replays as nothing"
     [listed] = agent.sessions.list_sessions()
     assert bool(listed["last_message_at"]) is answered, "and does not move the session list"
+
+
+class _DeliversAFile(Tool):
+    """Hands the reader one file, leaving its manifest for the turn stream as ``deliver_files`` does."""
+
+    @property
+    def name(self) -> str:
+        return "deliver_files"
+
+    @property
+    def description(self) -> str:
+        return "delivers files"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}}
+
+    async def execute(self, **_) -> str:
+        return "Delivered report.txt (1 KB)"
+
+    def take_metadata(self) -> dict:
+        return {"raven_delivery": {"message": "", "files": [{"name": "report.txt", "size": 1024}], "invalid": []}}
+
+
+@pytest.mark.asyncio
+async def test_a_silent_runtime_turn_that_delivered_files_is_not_taken_back(workspace, monkeypatch):
+    """Files a turn delivered are in front of the reader, as a message the tool sent is: a turn that hands
+    over a file and closes on the marker is kept by the session list and the ACP replay."""
+    from raven.acp.replay import replay
+    from raven.rpc.methods.session import _map_to_wire
+
+    _served(monkeypatch, [_tool_reply("deliver_files", "{}"), _reply("[SILENT]")])
+    agent = _litellm_agent(workspace)
+    agent.tools.register(_DeliversAFile())
+
+    await agent._process_message(_turn("check the build", Origin.CRON), session_key="cron:job", origin=Origin.CRON)
+
+    rows = agent.sessions.get_or_create("cron:job").messages
+    assert rows[-1]["silent"] is True and rows[-1].get("replied_via_tool") is True
+    assert replay(_map_to_wire(rows, "cron:job"), session_id="cron:job"), "the turn replays"
+    [listed] = agent.sessions.list_sessions()
+    assert listed["last_message_at"], "and stands in the session list"
 
 
 @pytest.mark.asyncio

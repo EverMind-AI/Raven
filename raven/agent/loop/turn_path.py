@@ -466,6 +466,16 @@ def _file_unanswered(messages: list[dict]) -> None:
     messages.append({"role": "assistant", "content": text, _NOTICE_KEY: notice})
 
 
+def _delivered_files(turn_rows: list[dict]) -> bool:
+    """Whether a tool handed the reader files this turn: a call that left a delivery manifest with files."""
+    for row in turn_rows:
+        metadata = row.get(_TOOL_METADATA_KEY)
+        delivery = metadata.get("raven_delivery") if isinstance(metadata, dict) else None
+        if isinstance(delivery, dict) and delivery.get("files"):
+            return True
+    return False
+
+
 def _taken_back_whole(messages: list[dict], skip: int) -> bool:
     """Whether the session list and the ACP replay will take this turn back whole.
 
@@ -3481,7 +3491,7 @@ class TurnPathMixin:
             # A hook composed the reply the reader is sent in place of the marker. A turn the
             # message tool answered sends no reply of its own, so its marker row stays.
             _file_composed_reply(turn_msgs, final_content)
-        if sent_by_tool:
+        if sent_by_tool or _delivered_files(turn_msgs[turn_start_idx:]):
             _stamp_replied_via_tool(turn_msgs, turn_start_idx)
         if len(self.hooks) > 0:
             _stamp_turn_observers(turn_msgs, turn_hook_meta, turn_start_idx)

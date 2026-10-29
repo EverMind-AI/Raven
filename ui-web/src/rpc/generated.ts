@@ -255,7 +255,7 @@ export interface TranscriptMessage {
    */
   silent?: boolean;
   /**
-   * Set on one assistant entry of a turn whose reply the message tool sent to the turn's own chat: the live turn's verdict, so a send that failed or went to another chat does not set it. The entry is the turn's last assistant entry with text or tool calls, not counting a notice the runtime files after the turn: the `silent` marker's entry when the turn ends on one, and otherwise, when its last reply had no text, the last entry that made a tool call, which need not be the call that sent the message. Such a turn answered whatever it ends on, and is not a Silent Turn.
+   * Set on one assistant entry of a turn whose reader got its reply from a tool: a message-tool send that went out (the tool hands every send to the turn's own reader, whatever chat the call names) or a file delivery. A send that failed does not set it. The entry is the turn's last assistant entry with text or tool calls, not counting a notice the runtime files after the turn: the `silent` marker's entry when the turn ends on one, and otherwise, when its last reply had no text, the last entry that made a tool call, which need not be the call that sent the message. Such a turn answered whatever it ends on, and is not a Silent Turn.
    */
   replied_via_tool?: boolean;
 }
