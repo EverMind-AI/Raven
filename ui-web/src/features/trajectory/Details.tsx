@@ -11,10 +11,11 @@
  */
 
 import { Pin02Icon } from '@hugeicons/core-free-icons'
-import { useLayoutEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 
 import { Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
+import { showBar } from '../../state/scrollbars'
 import { BlockView } from './BlockView'
 import * as details from './detailStore'
 import { Overview } from './Overview'
@@ -88,21 +89,37 @@ function Pane({ entryId, value }: { entryId: string; value: TrajectoryDetailResu
   const tab = details.tabOf(entryId)
   const box = useRef<HTMLDivElement>(null)
   /* Each tab of each entry keeps its own place; a tab opened for the first
-     time starts at the top, which is what an absent entry means. */
+     time starts at the top, which is what an absent entry means. The bar is
+     placed here too: this pane's bar stays, so another tab's length cannot be
+     left standing over this one. */
   useLayoutEffect(() => {
     const el = box.current
-    if (el) el.scrollTop = details.tabScroll(entryId, tab)
+    if (!el) return
+    el.scrollTop = details.tabScroll(entryId, tab)
+    showBar(el)
   }, [entryId, tab])
   const block = tab === 'overview' ? null : value.blocks.find((b) => b.id === tab)
+  /* A tab's body arrives in pages, and each page makes the content longer than
+     the bar standing over it was drawn for. */
+  const panel = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = box.current
+    const inner = panel.current
+    if (!el || !inner || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => showBar(el))
+    ro.observe(inner)
+    return () => ro.disconnect()
+  }, [entryId, tab])
   return (
     <div
       className="trajectory-pane"
+      data-thumb="keep"
       ref={box}
       onScroll={(e) => details.setTabScroll(entryId, tab, e.currentTarget.scrollTop)}
     >
       {tab === 'overview' || !block
         ? <Overview entryId={entryId} value={value} />
-        : <div role="tabpanel" id={panelId(tab)} aria-labelledby={tabId(tab)}><BlockView block={block} /></div>}
+        : <div role="tabpanel" id={panelId(tab)} aria-labelledby={tabId(tab)} ref={panel}><BlockView block={block} /></div>}
     </div>
   )
 }

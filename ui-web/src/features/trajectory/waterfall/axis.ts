@@ -61,8 +61,13 @@ function merge(intervals: readonly Interval[]): Interval[] {
   return merged
 }
 
+/** The empty scale left after the last bar, as a fraction of the projected
+ *  length: the rows draw their duration just past the bar, and the longest
+ *  bar has to end before the track's edge for that label to have a place. */
+export const TRAIL_PAD = 0.15
+
 /** The pieces and the closures over them, from runs that are already merged. */
-function axisOf(runs: readonly Interval[], options: { idleMs?: number; gapWidth?: number }): TimeAxis {
+function axisOf(runs: readonly Interval[], options: { idleMs?: number; gapWidth?: number; pad?: number }): TimeAxis {
   const idleMs = options.idleMs ?? IDLE_MS
   if (!runs.length) {
     return { start: 0, end: 0, length: 1, gaps: [], project: () => 0, unproject: () => 0 }
@@ -88,6 +93,9 @@ function axisOf(runs: readonly Interval[], options: { idleMs?: number; gapWidth?
     cursor = Math.max(cursor, run.end)
   }
   append(cursor, end, end - cursor > idleMs)
+  const pad = options.pad ?? 0
+  const padMs = pad > 0 ? Math.max(1, Math.round(position * pad)) : 0
+  if (padMs > 0) append(end, end + padMs, false)
 
   /* Lower bound so a shared boundary keeps the earlier piece, which is what
      makes an instant at the end of a run project to the end of that run. */
@@ -104,7 +112,7 @@ function axisOf(runs: readonly Interval[], options: { idleMs?: number; gapWidth?
 
   return {
     start,
-    end,
+    end: end + padMs,
     length: Math.max(1, position),
     gaps,
     project(time: number): number {
@@ -124,7 +132,7 @@ function axisOf(runs: readonly Interval[], options: { idleMs?: number; gapWidth?
   }
 }
 
-export function createAxis(intervals: readonly Interval[], options: { idleMs?: number; gapWidth?: number } = {}): TimeAxis {
+export function createAxis(intervals: readonly Interval[], options: { idleMs?: number; gapWidth?: number; pad?: number } = {}): TimeAxis {
   return axisOf(merge(intervals), options)
 }
 
@@ -133,9 +141,9 @@ export function createAxis(intervals: readonly Interval[], options: { idleMs?: n
 export class AxisIndex {
   private runs: Interval[] = []
   private cached: TimeAxis | null = null
-  private readonly options: { idleMs?: number; gapWidth?: number }
+  private readonly options: { idleMs?: number; gapWidth?: number; pad?: number }
 
-  constructor(options: { idleMs?: number; gapWidth?: number } = {}) {
+  constructor(options: { idleMs?: number; gapWidth?: number; pad?: number } = {}) {
     this.options = options
   }
 
@@ -210,6 +218,32 @@ export function barOf(axis: TimeAxis, viewport: Viewport, start: number, end: nu
   const left = (Math.max(a, viewport.from) - viewport.from) / span
   const right = (Math.min(b, viewport.to) - viewport.from) / span
   return { left, width: Math.max(0, right - left) }
+}
+
+/** The ruler's spelling of an instant: one unit, the largest the value fills,
+ *  so a label reads "2 s", "15 min" or "3 h" -- the network timeline's own
+ *  habit -- and never "1085m21s". `step` picks the unit for the zero mark,
+ *  which has no magnitude of its own to go by. */
+export function formatTick(ms: number, step = 1): string {
+  const at = Math.max(0, Math.round(ms))
+  if (at === 0) {
+    if (step >= 3_600_000) return '0 h'
+    if (step >= 60_000) return '0 min'
+    if (step >= 1000) return '0 s'
+    return '0 ms'
+  }
+  if (at < 1000) return `${at} ms`
+  if (at < 60_000) {
+    const seconds = at / 1000
+    return Number.isInteger(seconds) ? `${seconds} s` : `${seconds.toFixed(1)} s`
+  }
+  if (at < 3_600_000) {
+    const minutes = at / 60_000
+    return Number.isInteger(minutes) ? `${minutes} min` : `${minutes.toFixed(1)} min`
+  }
+  const hours = Math.floor(at / 3_600_000)
+  const rest = Math.round((at % 3_600_000) / 60_000)
+  return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`
 }
 
 /** The ruler's marks: a handful of positions across the viewport, labelled with

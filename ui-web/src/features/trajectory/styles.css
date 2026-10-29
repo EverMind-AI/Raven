@@ -4,8 +4,8 @@
  * one CSS asset that build.py inlines after page.css (`cssFileName` in
  * vite.config.ts) -- so the page still ships one <style> block. Every class
  * below carries this domain's prefix; the only rules outside this sheet are
- * the two in styles/page.css that park the scroller and size `#trajHost`,
- * which are the chat column's and not this island's.
+ * the few in styles/page.css that park the scroller, size `#trajHost` and
+ * paint its glass, which are the chat column's and not this island's.
  *
  * Colours are pairs of custom properties per kind, `-bg` for the row's tag and
  * `-fg` for its text -- the duration bar reads the same `-fg` later, so a tool
@@ -119,7 +119,6 @@ html[data-theme="dark"] {
   position: relative; outline: 0; scrollbar-gutter: stable;
   --trajectory-cols: 72px 14px 176px minmax(0, 1fr);
 }
-.trajectory-list:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
 .trajectory-list[data-narrow] { --trajectory-cols: 48px 14px 120px minmax(0, 1fr); }
 .trajectory-rows { position: relative; width: 100%; }
 
@@ -325,7 +324,12 @@ html[data-theme="dark"] {
 
 /* ── the pane's body ────────────────────────────────────────────── */
 
-.trajectory-pane { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 12px 14px 20px; font-size: 12.5px; }
+/* The message list stands empty height in for the rows it does not draw, so
+   the pane's content above the viewport changes size while the reader scrolls
+   -- the one case scroll anchoring reacts to, and it reacts by moving the
+   offset under the reader's hand. The list places its own rows; the browser
+   must not place them a second time. */
+.trajectory-pane { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 12px 14px 20px; font-size: 12.5px; overflow-anchor: none; }
 .trajectory-overview { display: flex; flex-direction: column; gap: 20px; }
 
 /* Info: two borderless rows, a 72px label, the value free to wrap. */
@@ -482,7 +486,7 @@ html[data-theme="dark"] {
 .trajectory-wf-dot { width: 7px; height: 7px; border-radius: 2px; background: var(--trajectory-c-llm-output-fg); flex: none }
 .trajectory-wf-from { font: 9px/1 var(--mono); color: var(--moss); border: 1px solid var(--line);
   border-radius: 4px; padding: 2px 4px; margin-left: 6px; overflow: hidden; text-overflow: ellipsis }
-.trajectory-wf-track { position: relative; height: 12px }
+.trajectory-wf-track { position: relative; height: 12px; overflow: hidden }
 .trajectory-wf-track i { position: absolute; top: 0; height: 12px; border-radius: 3px; min-width: 2px }
 .trajectory-wf-agentbar { background: var(--raised) }
 .trajectory-wf-span .trajectory-wf-track { height: 8px }
@@ -506,12 +510,9 @@ html[data-theme="dark"] {
   background: var(--trajectory-c-llm-output-bg) }
 
 .trajectory-wf-links { position: absolute; top: 0; bottom: 0; left: 196px; right: 0; pointer-events: none }
-.trajectory-wf-link { position: absolute; width: 0; border-left: 1px dashed var(--faint); opacity: .55 }
-.trajectory-wf-link-report { border-left-color: var(--moss) }
 .trajectory-wf-seg { position: absolute; top: 0; height: 10px; border-radius: 3px; min-width: 2px }
 .trajectory-wf-spanbar { position: absolute; top: 0; height: 8px; border-radius: 2px; min-width: 2px }
 
-.trajectory-wf-tools { display: flex; align-items: center; gap: 8px; padding: 6px 12px 2px; flex: none }
 .trajectory-wf-tool { font: 10px/1 var(--mono); color: var(--muted); background: var(--surface);
   border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; cursor: pointer }
 .trajectory-wf-tool[aria-pressed='true'] { color: var(--text); background: var(--raised) }
@@ -537,7 +538,6 @@ html[data-theme="dark"] {
 .trajectory-wf-statk { font: 10px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: #9a9a9a }
 .trajectory-wf-statv { font: 600 19px/1 var(--mono); color: #1a1a1a; font-variant-numeric: tabular-nums }
 .trajectory-wf-statv[data-bad] { color: #c0392b }
-.trajectory-wf-tools { margin-left: auto; display: flex; align-items: center; gap: 6px }
 .trajectory-wf-tool { font: 10px/1 var(--mono); color: #6b6b6b; background: var(--paper);
   border: 1px solid #e8e8e8; border-radius: 8px; padding: 5px 9px; cursor: pointer }
 .trajectory-wf-tool[aria-pressed='true'] { color: #1a1a1a; background: #f2f2f2 }
@@ -594,19 +594,13 @@ html[data-theme="dark"] {
 
 .trajectory-wf-links { left: var(--wf-gutter) }
 .trajectory-wf-grid { position: absolute; top: 0; bottom: 0; width: 1px; background: #f4f4f4 }
-.trajectory-wf-now { position: absolute; top: 0; bottom: 0; width: 1.5px; background: #3b82f6 }
-.trajectory-wf-now::before { content: ''; position: absolute; top: -3px; left: -3px; width: 7px; height: 7px;
-  border-radius: 50%; background: #3b82f6 }
-.trajectory-wf-link { border-left-color: #cbcbcb }
-.trajectory-wf-link-report { border-left-color: #86b57a }
 .trajectory-wf-links { pointer-events: none }
 
 .trajectory-ov { padding: 8px 16px 6px; border-bottom: 1px solid #f0f0f0 }
 .trajectory-ov-lane { grid-template-columns: 180px minmax(0, 1fr); gap: 16px; height: 16px }
 .trajectory-ov-name { font: 10px/1 var(--sans); color: #9a9a9a }
 .trajectory-ov-track i { background: #ececf7; border-radius: 3px }
-.trajectory-ruler-idle { font: 9px/1 var(--mono); color: #b4b4b4; border-left: 1px dashed #e6e6e6;
-  border-right: 1px dashed #e6e6e6 }
+.trajectory-ruler-idle { font: 9px/1 var(--mono); color: #b4b4b4; white-space: nowrap; overflow: hidden }
 
 /* ── type and air, matched to the reference card ──────────────────────
    The reference is set in one sans with tabular figures, at a much larger
@@ -619,14 +613,14 @@ html[data-theme="dark"] {
 .trajectory-wf-stat { padding: 0 40px; min-width: 128px; gap: 8px }
 .trajectory-wf-stat:first-child { padding-left: 4px }
 .trajectory-wf-statk { font: 500 11px/1 var(--sans); letter-spacing: .1em; color: #9aa0a6 }
-.trajectory-wf-statv { font: 600 24px/1 var(--sans); letter-spacing: -.01em; color: #1f2328;
+.trajectory-wf-statv { font: 600 23px/1 var(--sans); letter-spacing: -.01em; color: #1f2328;
   font-variant-numeric: tabular-nums }
 .trajectory-wf-tool { font: 500 11px/1 var(--sans); padding: 6px 11px; border-radius: 9px }
 
 .trajectory-wf-head { border-bottom: 1px solid #ededed }
 .trajectory-wf-spanhead { font: 500 11px/1 var(--sans); letter-spacing: .1em; color: #9aa0a6;
   padding: 18px 0 18px 20px }
-.trajectory-ruler { height: 56px; font: 400 15px/56px var(--sans); color: #8a8f98;
+.trajectory-ruler { height: 56px; font: 400 14px/56px var(--sans); color: #8a8f98;
   font-variant-numeric: tabular-nums }
 
 .trajectory-wf-row { height: 48px }
@@ -720,14 +714,14 @@ html[data-theme="dark"] {
 .trajectory-ov-lane { height: 16px }
 
 /* The guide is a trunk plus one branch per depth: every row draws its own
-   column and its ancestors', each half a row above and below, so the columns
-   join into unbroken lines down the whole agent group. */
-.trajectory-wf-guide { position: absolute; top: calc(var(--wf-row) / -2); bottom: calc(var(--wf-row) / -2);
+   column and its ancestors'. A line runs exactly the row's height -- rows are
+   contiguous, so the columns still join into unbroken lines, but no line ever
+   reaches up into the chevron that folds it. */
+.trajectory-wf-guide { position: absolute; top: 0; bottom: 0;
   width: 1px; background: #dfe4e9 }
 
-/* The label clips its text, but not its guide: the guide is a child of the
-   label, and `overflow: hidden` was cutting it to the row's height and
-   leaving a gap between every two rows. The name truncates on its own. */
+/* The label clips its text, but not its guide: each piece of text truncates
+   on its own, so nothing needs the label to clip. */
 .trajectory-wf-label { overflow: visible }
 
 /* One size up: a 22px plate with a 15px drawing (68%), which still clears the
@@ -773,8 +767,10 @@ html[data-theme="dark"] {
 .trajectory-crash-text { flex: 1; min-width: 0; word-break: break-word }
 
 /* The last label ends at the ruler's right edge instead of hanging half of
-   itself past it -- into the details pane -- on a long session. */
-.trajectory-ruler { overflow: hidden }
+   itself past it -- into the details pane -- on a long session. The handles
+   are the exception: one straddling the axis's end keeps both halves, so the
+   ruler does not clip its content. */
+.trajectory-ruler { overflow: visible }
 .trajectory-ruler b:last-of-type { transform: translateX(-100%) }
 
 /* The fold control, as the reference draws it: a thin chevron in a quiet
@@ -788,3 +784,121 @@ html[data-theme="dark"] {
    own -- the overlay thumb is opted out on the element, the native one here. */
 .trajectory-tabs { scrollbar-width: none }
 .trajectory-tabs::-webkit-scrollbar { display: none }
+
+/* The overview folds past a shape, and the count itself is the control: the
+   reader says when the rest of the roster is worth the room. Drawn as a lane,
+   so the toggle stands in the column the lanes use; expanded, the strip may
+   grow to a share of the window rather than pushing the rows off it. */
+.trajectory-ov-more, .trajectory-ov-fewer {
+  width: 100%; background: none; border: 0; padding: 0; font: inherit; text-align: left; cursor: pointer;
+}
+.trajectory-ov-fewer .trajectory-ov-name { color: #b4b4b4 }
+.trajectory-ov-more:hover .trajectory-ov-name, .trajectory-ov-fewer:hover .trajectory-ov-name { color: #828a93 }
+.trajectory-ov[data-expanded] { max-height: min(70vh, 640px); overflow-y: auto }
+
+/* The way into a sub-agent's own trace stands at the end of the label column,
+   not out on the axis: which agent ran this row is a property of the row, not
+   of when it ran. Right-aligned in the gutter, so every door lines up. */
+.trajectory-wf-label .trajectory-scope-opens {
+  margin-left: auto; margin-right: 4px; flex: none; width: 18px; height: 18px;
+  border: 0; border-radius: 6px; background: none; cursor: pointer;
+  font: 12px/1 var(--sans); color: #b4b4b4;
+}
+.trajectory-wf-label .trajectory-scope-opens:hover { background: #f1f2f4; color: #5f6673 }
+
+/* Selecting an interval on the axis, drawn the way the network panel's
+   timeline draws one: what is outside is dimmed, the interval is left at the
+   ruler's own ground, and each edge carries a grip. The axis itself never
+   moves -- selecting is not zooming. */
+.trajectory-ruler { cursor: crosshair; touch-action: none; user-select: none }
+.trajectory-ruler-dim, .trajectory-ruler-pick, .trajectory-ruler-grip { pointer-events: none }
+.trajectory-ruler-dim { position: absolute; top: 0; bottom: 0; background: rgba(31, 35, 40, .07) }
+.trajectory-ruler-pick { position: absolute; top: 0; bottom: 0;
+  border-left: 1px solid rgba(31, 35, 40, .35); border-right: 1px solid rgba(31, 35, 40, .35) }
+/* One per edge of the picked band, drawn the way the network panel draws its
+   handles: a rounded pill straddling the edge, on a wider invisible target and
+   with a grab cursor. These are what the reader drags to move an edge alone. */
+.trajectory-ruler-grip { position: absolute; top: 0; bottom: 0; width: 14px; margin-left: -7px;
+  pointer-events: auto; cursor: ew-resize; z-index: 2 }
+.trajectory-ruler-grip::before { content: ''; position: absolute; top: 9px; bottom: 9px; left: 2px; right: 2px;
+  border: 1px solid rgba(31, 35, 40, .30); border-radius: 4px; background: #fff }
+.trajectory-ruler-grip:hover::before { border-color: rgba(31, 35, 40, .55); background: #f7f7f8 }
+
+/* The labels own the column in front of the axis, and the axis starts where
+   they end: a bar's position is a fraction of that track, never of the whole
+   row, so a row's name and its bar cannot sit on top of each other. The
+   duration is a column at the row's right edge, where every row lines it up
+   -- the reference's Time column. */
+.trajectory-wf-head .trajectory-ruler { grid-column: 2 }
+.trajectory-wf-guide { z-index: 1 }
+.trajectory-wf-time { position: absolute; top: 0; bottom: 0; z-index: 2;
+  display: flex; align-items: center; pointer-events: none; white-space: nowrap;
+  font: 400 15px/1 var(--sans); color: #6b7280; font-variant-numeric: tabular-nums }
+
+/* A label stands to the left of its own tick, the way the network panel's
+   timeline reads: the number ends where the line begins, so the line itself
+   is never under text. The axis's left edge carries no number -- it is the
+   start of the session -- unless a zoom moved the view off it. */
+.trajectory-ruler b, .trajectory-ruler b:first-child, .trajectory-ruler b:last-of-type {
+  transform: translateX(-100%); padding-right: 4px; white-space: nowrap
+}
+.trajectory-ruler b[data-first] { transform: none; padding-left: 2px; padding-right: 0 }
+
+/* The tick lines, drawn: through the ruler as well as down the rows, so a
+   label, its line and the bar under it are one reading. */
+.trajectory-ruler-tick { position: absolute; top: 0; bottom: 0; width: 1px; background: #e9ebee; pointer-events: none }
+.trajectory-wf-grid { background: #e9ebee }
+
+/* ── inside the sheet ────────────────────────────────────────────────
+   The host carries the blur, so the island's own grounds go away and the one
+   sheet shows through. The details pane keeps one step more body than the
+   waterfall: it is the reading surface, and 11px monospace needs the extra
+   white more than the rows do. Hairlines swap paper values for translucent
+   ink, which is what keeps a rule visible on the wash instead of a grey line
+   that only worked on white. */
+html[data-traj] .trajectory-wf,
+html[data-traj] .trajectory-wf-scroll,
+html[data-traj] .trajectory-wf-head,
+html[data-traj] .trajectory-ruler { background: transparent }
+html[data-traj] .trajectory-details { background: var(--traj-pane); border-left-color: var(--traj-line) }
+html[data-traj] .trajectory-details-over { background: var(--traj-solid) }
+html[data-traj] .trajectory-wf-row:hover { background: var(--traj-hover) }
+html[data-traj] .trajectory-row-on,
+html[data-traj] .trajectory-row-on:hover { background: var(--traj-on) }
+html[data-traj] .trajectory-wf-guide,
+html[data-traj] .trajectory-ruler-tick,
+html[data-traj] .trajectory-wf-grid { background: var(--traj-rule) }
+html[data-traj] .trajectory-wf-head,
+html[data-traj] .trajectory-wf-stats,
+html[data-traj] .trajectory-ov,
+html[data-traj] .trajectory-tabs-wrap { border-bottom-color: var(--traj-line) }
+
+/* The track holds the duration label as well as the bar now, so it is the
+   row's full height. The per-kind heights further up (8px for a span, 10px
+   for a turn) were the bar's own box from before the label moved in; left as
+   they were, the label was clipped top and bottom by the track's clip. The
+   bar keeps its own thickness. */
+.trajectory-wf-track,
+.trajectory-wf-span .trajectory-wf-track,
+.trajectory-wf-turn .trajectory-wf-track { height: var(--wf-row, 30px) }
+
+/* Every bar carries a 1px edge of its own hue, one step darker. On the glass
+   the pale fill alone sits at almost the same value as the sheet, and the
+   edge is what gives a short bar a readable shape without changing its
+   colour; border-box keeps the drawn width. */
+.trajectory-wf-agentbar { border: 1px solid #d0d5da }
+.trajectory-wf-spanbar.trajectory-wf-kind-model,
+.trajectory-wf-seg-model { border: 1px solid #c5bdec }
+.trajectory-wf-spanbar.trajectory-wf-kind-tool,
+.trajectory-wf-seg-tool { border: 1px solid #b3d3ee }
+.trajectory-wf-spanbar.trajectory-wf-kind-user { border: 1px solid #cdd4db }
+.trajectory-wf-seg-subagent { border: 1px solid #bcdabc }
+.trajectory-wf-seg-failure { border: 1px solid #e9b6ae }
+.trajectory-wf-seg-waiting { border: 1px solid #d3d3d3 }
+
+/* The vertical rules stand over the bars: a bar is a duration, not an
+   occluder, and a rule that vanishes under every long stretch stops reading
+   as an axis. The duration labels stay above the rules so a line never runs
+   through the text. */
+.trajectory-wf-links { z-index: 2 }
+.trajectory-wf-time { z-index: 3 }

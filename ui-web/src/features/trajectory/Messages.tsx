@@ -18,7 +18,7 @@
  * whose page the cache let go folds again until the reader asks for it.
  */
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
 import * as details from './detailStore'
@@ -76,6 +76,30 @@ function FoldedRow({ item, onOpen }: { item: OutlineItem; onOpen: () => void }):
     </button>
   )
 }
+
+/* An open row is the expensive part of this list: its body is a whole prompt.
+   The view is re-read on every scroll event, so a row that redrew with its
+   parent would draw every visible prompt once a frame. Memoised on what the
+   row is -- its index, its body, the label -- it redraws when one of those
+   changes, which is the only time its content can differ. */
+const OpenRow = memo(function OpenRow({ index, body, label, onClose, render }: {
+  index: number
+  body: unknown
+  label: string
+  onClose: (index: number) => void
+  render: (message: unknown) => ReactNode
+}): JSX.Element {
+  return (
+    <div className="trajectory-msg-open" data-index={index}>
+      <button className="trajectory-msg-close" aria-label={label} onClick={() => onClose(index)}>
+        {'−'}
+      </button>
+      {body === undefined
+        ? <div className="trajectory-skel-line" aria-busy="true" />
+        : render(body)}
+    </div>
+  )
+})
 
 /* Where the pane's viewport stands over the list: its scroll offset, its
    height, and the list's own offset inside the scrolled content. */
@@ -276,6 +300,7 @@ export function MessagesView({ block, entryId, render }: {
     setChoices((c) => ({ ...c, [item.index]: true }))
     if (permitted) ask(item)
   }
+  const closeRow = useCallback((index: number) => setChoices((c) => ({ ...c, [index]: false })), [])
 
   const note = delta.state === 'unknown'
     ? t('gui.trajectory.details.delta_unknown')
@@ -315,16 +340,11 @@ export function MessagesView({ block, entryId, render }: {
           if (!drawnOpen(item)) {
             return <FoldedRow key={item.index} item={item} onOpen={() => open(item)} />
           }
-          const body = record ? details.messageAt(record, item.index) : undefined
           return (
-            <div key={item.index} className="trajectory-msg-open" data-index={item.index}>
-              <button className="trajectory-msg-close" aria-label={t('gui.trajectory.details.collapse_one')} onClick={() => setChoices((c) => ({ ...c, [item.index]: false }))}>
-                {'−'}
-              </button>
-              {body === undefined
-                ? <div className="trajectory-skel-line" aria-busy="true" />
-                : render(body)}
-            </div>
+            <OpenRow key={item.index} index={item.index}
+              body={record ? details.messageAt(record, item.index) : undefined}
+              label={t('gui.trajectory.details.collapse_one')}
+              onClose={closeRow} render={render} />
           )
         })}
         {bottomPad > 0 ? <div className="trajectory-msg-space" style={{ height: bottomPad - ROW_GAP }} aria-hidden="true" /> : null}

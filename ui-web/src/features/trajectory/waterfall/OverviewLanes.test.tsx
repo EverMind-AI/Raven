@@ -2,12 +2,12 @@
 /* The overview strip: one thin lane per agent, so a reader can see who was
  * busy across the whole session before reading any of it. */
 
-import { render } from '@testing-library/react'
+import { fireEvent, render } from '@testing-library/react'
 import { expect, it } from 'vitest'
 
 import { createAxis } from './axis'
 import { buildWaterfall } from './model'
-import { OverviewLanes } from './OverviewLanes'
+import { MAX_LANES, OverviewLanes } from './OverviewLanes'
 
 import type { TrajectoryEntry } from '../types'
 
@@ -67,4 +67,27 @@ it('keeps the strip to a handful of lanes and counts the rest', () => {
   expect(container.querySelectorAll('[data-lane]').length).toBe(6)
   expect(container.querySelector('[data-lane-more]')).not.toBeNull()
   expect(container.textContent).toContain('25')
+})
+
+it('opens the rest of the roster from the count, and folds it again from the row it leaves', () => {
+  const now = Date.parse('2026-10-28T10:05:00.000Z')
+  const entries = [E('m', 0)]
+  for (let i = 0; i < MAX_LANES + 3; i += 1) {
+    entries.push(E(`s${i}`, 10 + i, { subagent_scope: `t:s${i}`, turn_span_id: `S${i}` }))
+  }
+  const waterfall = buildWaterfall(entries, now)
+  const axis = createAxis([{ start: now - 300_000, end: now }])
+  const { container } = render(<OverviewLanes waterfall={waterfall} axis={axis} viewport={{ from: 0, to: axis.length }} />)
+  /* Past the shape the lane count is a button, not a caption. */
+  expect(container.querySelectorAll('[data-lane]')).toHaveLength(MAX_LANES)
+  const more = container.querySelector<HTMLElement>('[data-lane-more]')!
+  expect(more.getAttribute('aria-expanded')).toBe('false')
+  fireEvent.click(more)
+  expect(container.querySelectorAll('[data-lane]')).toHaveLength(MAX_LANES + 4)
+  /* And the row it leaves is the way back. */
+  const fewer = container.querySelector<HTMLElement>('[data-lane-fewer]')!
+  expect(fewer.getAttribute('aria-expanded')).toBe('true')
+  fireEvent.click(fewer)
+  expect(container.querySelectorAll('[data-lane]')).toHaveLength(MAX_LANES)
+  expect(container.querySelector('[data-lane-more]')).not.toBeNull()
 })

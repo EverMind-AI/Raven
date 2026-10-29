@@ -21,6 +21,8 @@ export interface WaterfallRow {
 }
 
 export interface WaterfallTurn {
+  /** Unique within its agent: the turn span for the host, the run and the
+   *  turn span for a worker (see `foldAgents`). */
   id: string
   ordinal: number
   preview: string | null
@@ -182,7 +184,13 @@ export function foldAgents(parts: readonly WaterfallAgent[]): WaterfallAgent[] {
   const agents: WaterfallAgent[] = []
   for (const [key, group] of groups) {
     group.sort((a, b) => a.start - b.start || (a.scope ?? '').localeCompare(b.scope ?? ''))
-    const turns = group.flatMap((part) => part.turns).sort((a, b) => a.start - b.start || a.id.localeCompare(b.id))
+    /* A worker's steps carry the turn span that dispatched them, so two runs
+       sent from one turn name the same span. The run is part of a worker
+       turn's identity; without it the folded agent lists two turns under one
+       id, which is one React key for two rows and one open state for both. */
+    const turns = group
+      .flatMap((part) => (part.scope === null ? part.turns : part.turns.map((turn) => ({ ...turn, id: `${part.scope}/${turn.id}` }))))
+      .sort((a, b) => a.start - b.start || a.id.localeCompare(b.id))
     agents.push({
       key,
       scope: group[0]!.scope,

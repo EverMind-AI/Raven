@@ -24,9 +24,9 @@ describe('the detail vocabulary', () => {
        (raven/trajectory/details.py). */
     const expected = [
       'content', 'media', 'origin', 'capabilities', 'turn', 'messages', 'system', 'prompt', 'model', 'tools', 'request',
-      'thinking', 'thinkingBlocks', 'toolCalls', 'finish', 'usage', 'response', 'tool', 'params', 'schema', 'result',
+      'thinking', 'reasoning', 'thinkingBlocks', 'toolCalls', 'finish', 'usage', 'response', 'tool', 'params', 'schema', 'result',
       'skill', 'skills', 'stats', 'query', 'decision', 'task', 'candidates', 'agent', 'settings', 'hits', 'injected',
-      'used', 'position', 'operation', 'qa', 'summary', 'plugin', 'contribution', 'transcript', 'frames', 'attributes',
+      'used', 'position', 'operation', 'qa', 'summary', 'plugin', 'contribution', 'transcript', 'frames', 'replay', 'attributes',
       'error', 'timing', 'relations', 'integrity', 'raw', 'outline',
     ]
     expect([...BLOCK_IDS].sort()).toEqual([...expected].sort())
