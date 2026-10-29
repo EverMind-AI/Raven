@@ -10,7 +10,7 @@
  * session must mount a screenful, not a session.
  */
 
-import { BotIcon, Message01Icon, SparklesIcon, UserGroupIcon, Wrench01Icon } from '@hugeicons/core-free-icons'
+import { ArrowDown01Icon, ArrowRight01Icon, BotIcon, Message01Icon, SparklesIcon, UserGroupIcon, Wrench01Icon } from '@hugeicons/core-free-icons'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 
 import { AgentMark, agentMarkPath } from '../../../components/AgentMark'
@@ -488,7 +488,9 @@ export function Waterfall(): JSX.Element {
           onClick={() => toggleAgent(agent.key)}>
           <span className="trajectory-wf-label" style={{ paddingLeft: 12 }}>
             <span className="trajectory-wf-guide" style={{ left: 30 }} />
-            <span className="trajectory-wf-chev">{collapsed.has(agent.key) ? '\u25b8' : '\u25be'}</span>
+            <span className="trajectory-wf-chev" aria-hidden="true">
+              <Icon icon={collapsed.has(agent.key) ? ArrowRight01Icon : ArrowDown01Icon} size={14} />
+            </span>
             <span className="trajectory-wf-tile" data-tone={row.agent % 4}>
               {agent.scope === null
                 ? <AgentMark own />
@@ -516,7 +518,9 @@ export function Waterfall(): JSX.Element {
           onClick={() => toggleTurn(turnKey(row.agent, turn.id))}>
           <span className="trajectory-wf-label" style={{ paddingLeft: 26 }}>
             <span className="trajectory-wf-guide" style={{ left: 30 }} />
-            <span className="trajectory-wf-chev">{openTurn ? '\u25be' : '\u25b8'}</span>
+            <span className="trajectory-wf-chev" aria-hidden="true">
+              <Icon icon={openTurn ? ArrowDown01Icon : ArrowRight01Icon} size={14} />
+            </span>
             <span className="trajectory-wf-name">{t('gui.trajectory.turn.ordinal', { n: turn.ordinal })}</span>
             {turn.preview === null ? null : <span className="trajectory-wf-sub">{turn.preview}</span>}
             {turn.reportedFrom === null ? null : <span className="trajectory-wf-from">{t('gui.trajectory.turn.from_report', { name: nameOfScope.get(turn.reportedFrom) ?? turn.reportedFrom })}</span>}
