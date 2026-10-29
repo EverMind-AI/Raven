@@ -784,6 +784,7 @@ html[data-theme="dark"] {
 .trajectory-wf-row:hover .trajectory-wf-chev { background: #f1f2f4; color: #5f6673 }
 .trajectory-wf-chev svg { width: 14px; height: 14px; display: block }
 
-/* The pane's tabs wrap rather than scroll: no arrows, nothing hidden past the
-   edge, and the strip grows a line taller when it must. */
-.trajectory-tabs { flex-wrap: wrap; row-gap: 2px; overflow: visible }
+/* The strip scrolls sideways under its arrows, but shows no scrollbar of its
+   own -- the overlay thumb is opted out on the element, the native one here. */
+.trajectory-tabs { scrollbar-width: none }
+.trajectory-tabs::-webkit-scrollbar { display: none }
