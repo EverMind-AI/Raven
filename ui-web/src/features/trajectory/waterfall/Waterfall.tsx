@@ -34,6 +34,10 @@ import type { Waterfall, WaterfallAgent, WaterfallRow, WaterfallTurn } from './m
 import type { JSX, KeyboardEvent as ReactKeyboardEvent } from 'react'
 
 export const ROW_HEIGHT = 30
+
+/** One guide for the whole agent group, under its fold control and left of
+ *  every icon: 12px of row padding plus the 18px chevron's centre. */
+export const GUIDE_X = 21
 const OVERSCAN = 8
 const DEFAULT_ROWS = 20
 
@@ -487,7 +491,7 @@ export function Waterfall(): JSX.Element {
         <div key={row.key} className="trajectory-wf-row trajectory-wf-agent" data-row="agent" style={style}
           onClick={() => toggleAgent(agent.key)}>
           <span className="trajectory-wf-label" style={{ paddingLeft: 12 }}>
-            <span className="trajectory-wf-guide" style={{ left: 30 }} />
+            <span className="trajectory-wf-guide" style={{ left: GUIDE_X }} />
             <span className="trajectory-wf-chev" aria-hidden="true">
               <Icon icon={collapsed.has(agent.key) ? ArrowRight01Icon : ArrowDown01Icon} size={14} />
             </span>
@@ -517,7 +521,7 @@ export function Waterfall(): JSX.Element {
           data-from={turn.reportedFrom === null ? undefined : turn.reportedFrom}
           onClick={() => toggleTurn(turnKey(row.agent, turn.id))}>
           <span className="trajectory-wf-label" style={{ paddingLeft: 26 }}>
-            <span className="trajectory-wf-guide" style={{ left: 30 }} />
+            <span className="trajectory-wf-guide" style={{ left: GUIDE_X }} />
             <span className="trajectory-wf-chev" aria-hidden="true">
               <Icon icon={openTurn ? ArrowDown01Icon : ArrowRight01Icon} size={14} />
             </span>
@@ -547,9 +551,7 @@ export function Waterfall(): JSX.Element {
       <div key={row.key} className="trajectory-wf-row trajectory-wf-span" data-row="span" data-entry={entry.entry_id}
         style={style} onClick={() => pick(row.row!)}>
         <span className="trajectory-wf-label" style={{ paddingLeft: 44 + row.row!.depth * 20 }}>
-          {Array.from({ length: row.row!.depth + 1 }, (_, step) => (
-            <span key={`guide-${step}`} className="trajectory-wf-guide" style={{ left: 30 + step * 20 }} />
-          ))}
+          <span className="trajectory-wf-guide" style={{ left: GUIDE_X }} />
           <span className="trajectory-wf-ico"><Icon icon={kindIcon(entry.kind)} size={15} /></span>
           <span className="trajectory-wf-name">{entry.preview ?? entry.span_name}</span>
           <span className="trajectory-wf-sub">{entry.span_name}</span>

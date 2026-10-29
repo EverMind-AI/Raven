@@ -59,7 +59,6 @@ export interface Waterfall {
   agents: readonly WaterfallAgent[]
 }
 
-const DEPTH_LIMIT = 32
 
 /** The instant a row starts: its operation's clock, else the event's. */
 export function entryStart(entry: TrajectoryEntry): number {
@@ -84,21 +83,16 @@ interface Row {
   depth: number
 }
 
+/* Rows under a turn are siblings, whatever the span tree says: the page draws
+   one flat list per turn, so a model call and the tool it triggered sit on the
+   same line and read in time order. */
 function rowOf(entry: TrajectoryEntry, bySpan: ReadonlyMap<string, string | null>, now: number): Row {
-  let depth = 0
-  let parent: string | null = entry.parent_span_id ?? null
-  const seen = new Set<string>([entry.span_id])
-  while (parent !== null && depth < DEPTH_LIMIT && bySpan.has(parent) && !seen.has(parent)) {
-    seen.add(parent)
-    depth += 1
-    parent = bySpan.get(parent) ?? null
-  }
-  return { entry, start: entryStart(entry), end: entryEnd(entry, now), depth }
+  void bySpan
+  return { entry, start: entryStart(entry), end: entryEnd(entry, now), depth: 0 }
 }
 
-/** The rows of one bucket: sorted by start, each with its depth in the
- *  parent_span_id chain. Exported for the incremental index, which rebuilds a
- *  bucket at a time rather than the whole tree. */
+/** The rows of one bucket, sorted by start. Exported for the incremental index,
+ *  which rebuilds a bucket at a time rather than the whole tree. */
 export function buildRows(entries: readonly TrajectoryEntry[], now: number): WaterfallRow[] {
   const bySpan = new Map<string, string | null>()
   for (const entry of entries) if (!bySpan.has(entry.span_id)) bySpan.set(entry.span_id, entry.parent_span_id ?? null)
