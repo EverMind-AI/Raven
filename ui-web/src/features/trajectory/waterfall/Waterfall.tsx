@@ -308,7 +308,7 @@ export function Waterfall(): JSX.Element {
   /* What the reveal effect has already handled: one (selection, door) pair.
      Without this the effect would re-open a turn the reader just folded, since
      everything it depends on changes on that click. */
-  const revealed = useRef<{ id: string | null; tick: number }>({ id: null, tick: -1 })
+  const revealed = useRef<{ id: string | null; tick: number; phase: 'none' | 'opening' | 'done' }>({ id: null, tick: -1, phase: 'none' })
 
   /* A selection made elsewhere -- a link in the pane, a tab's locate button --
      opens the turn that holds the row and brings the row into view, so a jump
@@ -317,7 +317,14 @@ export function Waterfall(): JSX.Element {
   const selections = store.get().selections
   useEffect(() => {
     if (selectedId === null) return
-    if (revealed.current.id === selectedId && revealed.current.tick === selections) return
+    const same = revealed.current.id === selectedId && revealed.current.tick === selections
+    if (same && revealed.current.phase === 'done') return
+    /* Claimed before anything is written. A branch that opens a turn re-renders;
+       acting on that render again is how a page gets into an update loop (React
+       #185, which unmounts the island), so once the state has been asked for,
+       the effect only ever scrolls -- never asks again. */
+    const phase = same ? revealed.current.phase : 'none'
+    revealed.current = { id: selectedId, tick: selections, phase: 'opening' }
     let owner: { agent: number; turn: string } | null = null
     for (const [index, agent] of waterfall.agents.entries()) {
       for (const turn of agent.turns) {
@@ -326,7 +333,7 @@ export function Waterfall(): JSX.Element {
     }
     if (owner === null) return
     const group = waterfall.agents[owner.agent]!.key
-    if (collapsed.has(group)) {
+    if (phase === 'none' && collapsed.has(group)) {
       setCollapsed((previous) => {
         const next = new Set(previous)
         next.delete(group)
@@ -335,7 +342,7 @@ export function Waterfall(): JSX.Element {
       return
     }
     const key = turnKey(owner.agent, owner.turn)
-    if (!open.has(key)) {
+    if (phase === 'none' && !open.has(key)) {
       setOpen((previous) => new Set(previous).add(key))
       return
     }
@@ -344,7 +351,7 @@ export function Waterfall(): JSX.Element {
     if (at < 0 || scroller === null) return
     const top = at * ROW_HEIGHT
     if (top < scroller.scrollTop || top + ROW_HEIGHT > scroller.scrollTop + scroller.clientHeight) scroller.scrollTop = top
-    revealed.current = { id: selectedId, tick: selections }
+    revealed.current = { id: selectedId, tick: selections, phase: 'done' }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, selections, rows, open, collapsed])
 
