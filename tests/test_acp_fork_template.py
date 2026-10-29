@@ -245,6 +245,44 @@ async def test_an_acp_launch_of_a_raven_agent_is_forked_and_offered_the_relay(tm
     assert client.endpoint.returncode is not None
 
 
+@pytest.mark.parametrize(
+    ("own", "relayed"),
+    [({"OPENAI_BASE_URL": "http://agent-only.invalid/v1"}, False), ({"SERPER_API_KEY": "for-a-tool"}, True)],
+)
+async def test_an_agent_configured_with_its_own_llm_environment_makes_its_own_calls(
+    tmp_path: Path, monkeypatch, own: dict[str, str], relayed: bool
+) -> None:
+    """A relayed call is made in the host, with the host's environment.
+
+    An agent whose own config sets something LiteLLM reads at call time (an
+    endpoint, a cloud credential, a proxy) would have that setting ignored, so it
+    is launched without the relay. A key for one of its tools changes nothing.
+    """
+    from raven.acp_client.client import AcpClient
+    from raven.acp_client.pool import close_pool
+
+    for key in own:
+        monkeypatch.delenv(key, raising=False)
+    stub = Path(__file__).with_name("acp_stub_server.py")
+    seen = tmp_path / "relay.txt"
+    script = _product(
+        tmp_path,
+        f"""
+        import os, runpy
+        open({str(seen)!r}, "w").write(os.environ.get("RAVEN_LLM_RELAY", ""))
+        runpy.run_path({str(stub)!r}, run_name="__main__")
+        """,
+    )
+    client = await AcpClient.launch(name="own-env", command=[sys.executable, str(script)], cwd=str(tmp_path), env=own)
+    try:
+        result = await client.request("initialize", {"protocolVersion": 1, "clientCapabilities": {}}, timeout=60)
+        assert isinstance(result, dict)
+        assert bool(seen.read_text()) is relayed
+    finally:
+        await client.close()
+        await close_pool()
+
+
 async def test_switching_both_off_launches_a_raven_agent_as_before(tmp_path: Path, monkeypatch) -> None:
     from raven.acp_client.client import AcpClient
     from raven.config import live as live_mod

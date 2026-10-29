@@ -142,8 +142,53 @@ async def _end(pgid: int, proc: Any) -> None:
         pass
 
 
+#: What LiteLLM reads from the environment at call time beside the key and base
+#: a provider passes explicitly: other endpoints and API versions, cloud
+#: credentials, proxies and CA bundles. A relayed call is made in the host, with
+#: the host's environment, so an agent configured with its own value for one of
+#: these is launched without the relay and makes its calls itself.
+_LLM_ENV_SUFFIXES = ("_API_BASE", "_BASE_URL", "_API_VERSION")
+_LLM_ENV_PREFIXES = ("AWS_", "AZURE_", "VERTEX", "LITELLM_")
+_LLM_ENV_NAMES = frozenset(
+    {
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+    }
+)
+
+
+def _own_llm_env(agent_env: dict[str, str]) -> list[str]:
+    """The variables LiteLLM would read that this agent's own config sets differently from the host.
+
+    Only the agent's configured map: the login shell's environment differs from a
+    host's in ways nobody chose for one agent (a proxy list's casing), and
+    reading those would turn the relay off for every agent.
+    """
+    own = []
+    for key, value in agent_env.items():
+        upper = key.upper()
+        if upper.startswith("RAVEN_"):
+            continue
+        if upper in _LLM_ENV_NAMES or upper.endswith(_LLM_ENV_SUFFIXES) or upper.startswith(_LLM_ENV_PREFIXES):
+            if os.environ.get(key) != value:
+                own.append(key)
+    return sorted(own)
+
+
 async def _share_with_raven_agent(
-    name: str, argv: list[str], env: dict[str, str], cwd: str | None, base_env: dict[str, str]
+    name: str,
+    argv: list[str],
+    env: dict[str, str],
+    cwd: str | None,
+    base_env: dict[str, str],
+    agent_env: dict[str, str] | None = None,
 ) -> Any:
     """What this host shares with a Raven agent it launches: its model calls, and its loaded code.
 
@@ -162,7 +207,10 @@ async def _share_with_raven_agent(
         return env
     runtime = subagent_runtime(default_live())
     relayed = False
-    if runtime.llm_relay:
+    own = _own_llm_env(agent_env or {})
+    if runtime.llm_relay and own:
+        logger.info("acp agent {!r}: its own {} would not reach relayed calls; it makes them itself", name, own)
+    elif runtime.llm_relay:
         from raven.providers.relay_server import relay_env
 
         try:
@@ -532,7 +580,7 @@ class AcpClient:
         # The agent's own argv, for what this logs and reports: the spawned one
         # may lead with the wrapper that ties the agent to this host.
         program_argv = argv
-        shared = await _share_with_raven_agent(name, argv, child_env, cwd, base_env)
+        shared = await _share_with_raven_agent(name, argv, child_env, cwd, base_env, env or {})
         if isinstance(shared, dict):
             child_env = shared
         else:
