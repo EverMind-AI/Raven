@@ -1573,12 +1573,8 @@ def test_provider(
 
     result = _probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport, **probe_tls, extras=extras)
     if check_credential and api_key and result.get("status") == "valid":
-        if tls_verify:
-            _extra: dict[str, Any] = {}
-        else:
-            _extra = {"verify": False}
         result = _confirm_credential(
-            spec, api_base, url, headers, result, timeout_s=timeout_s, transport=transport, **_extra
+            spec, api_base, url, headers, result, timeout_s=timeout_s, transport=transport, **probe_tls
         )
     if derived_api_base and result.get("status") == "http_404":
         # The address LiteLLM sends completions to is not always where the
