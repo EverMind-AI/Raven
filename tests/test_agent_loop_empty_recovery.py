@@ -5150,6 +5150,50 @@ async def test_the_verdict_rides_the_last_row_with_text_or_a_call_and_never_a_no
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "origin,first,last,noticed",
+    [
+        (Origin.CRON, None, "[SILENT]", False),
+        (Origin.CRON, None, "Report.", True),
+        (Origin.CRON, "message", "[SILENT]", True),
+        (Origin.USER, None, "[SILENT]", True),
+    ],
+    ids=["silent", "answered", "silent_after_the_message_tool_sent", "a_persons_silent_turn"],
+)
+async def test_a_silent_runtime_turn_files_no_unanswered_notice(workspace, monkeypatch, origin, first, last, noticed):
+    """A runtime-opened turn that ends silent is taken back whole by the session list and the ACP replay.
+    A notice filed after its marker outlived that take-back: an orphan question row in the replay, and the
+    session list moved by a turn it otherwise hides. Such a turn files none; one that answered still does,
+    and so does a person's silent turn, which both keep: its notice is what the next turn reads."""
+    import raven.permissions.turn as permissions_turn
+    from raven.acp.replay import _without_silent_runtime_turns
+
+    asked: list[str] = []
+    filing = ("A question went unanswered.", {"kind": permissions_turn.UNANSWERED_KIND, "text": "q"})
+    monkeypatch.setattr(permissions_turn, "unanswered_filing", lambda: filing if asked else None)
+    _served(monkeypatch, [_tool_reply("message", _SEND) if first else _tool_reply(), _reply(last)])
+    agent = _litellm_agent(workspace)
+    if first:
+        _wire_message_tool(agent)
+    real_execute = agent.tools.execute
+
+    async def execute(name, arguments, **kwargs):
+        asked.append(name)
+        return await real_execute(name, arguments, **kwargs)
+
+    monkeypatch.setattr(agent.tools, "execute", execute)
+
+    await agent._process_message(_turn(origin=origin), session_key="s1")
+
+    rows = agent.sessions.get_or_create("s1").messages
+    notices = [m for m in rows if isinstance(m.get("notice"), dict)]
+    assert asked, "the turn met its question"
+    assert bool(notices) is noticed
+    kept = _without_silent_runtime_turns([dict(m) for m in rows if m.get("role")])
+    assert any(m.get("role") == "user" for m in kept) is noticed, "a notice is filed exactly where the turn stays"
+
+
+@pytest.mark.asyncio
 async def test_a_marker_after_the_message_tool_sent_is_not_a_silent_turn(workspace, monkeypatch):
     """The reader has the answer from the tool; the marker only says there is nothing more.
     A turn that answered is not a turn that said nothing, and a surface told otherwise would drop the answer."""
