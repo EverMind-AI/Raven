@@ -126,6 +126,36 @@ async def test_a_no_output_failure_reaches_turn_failed():
     assert failed.no_output is True and failed.reported is True
 
 
+class _SkipsInit(AnswerlessTurnError):
+    """A runner's subclass that never sets ``no_output``."""
+
+    def __init__(self, text: str) -> None:
+        Exception.__init__(self, text)
+
+
+class _GuardsNoOutput(AnswerlessTurnError):
+    """A runner's subclass whose ``no_output`` is a getter that throws."""
+
+    def __init__(self, text: str) -> None:
+        Exception.__init__(self, text)
+
+    @property
+    def no_output(self) -> bool:
+        raise RuntimeError("a foreign getter")
+
+
+@pytest.mark.parametrize(
+    "exc", [_SkipsInit("no answer"), _GuardsNoOutput("no answer")], ids=["skips_init", "throwing_getter"]
+)
+async def test_a_foreign_answerless_error_still_has_its_turn_failed(exc):
+    """``no_output`` is read off the instance dictionary, as ``full_detail`` is: a subclass that never set
+    it, or guards it with a getter that throws, still gets its ``TurnFailed`` rather than killing the lane."""
+    events = await _lifecycle_of(RaisingRunner(exc))
+    failed = [e for e in events if isinstance(e, TurnFailed)]
+    assert len(failed) == 1
+    assert failed[0].no_output is False and failed[0].reported is True
+
+
 async def test_an_answerless_failure_is_no_output_only_when_the_runner_says_so():
     exc = AnswerlessTurnError("Error calling LLM (rate_limit@openrouter): busy")
     events = await _lifecycle_of(RaisingRunner(exc))

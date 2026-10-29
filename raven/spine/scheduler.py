@@ -63,6 +63,17 @@ def full_detail_of(exc: BaseException) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
+def no_output_of(exc: BaseException) -> bool:
+    """Whether a runner's ``AnswerlessTurnError`` says the turn's last reply was empty.
+
+    Read off the instance dictionary for the reason ``full_detail_of`` is: a foreign getter can throw,
+    and a throw here would leave the turn's failure unfiled. Anything but ``True`` means no.
+    """
+    if not isinstance(exc, AnswerlessTurnError):
+        return False
+    return BaseException.__dict__["__dict__"].__get__(exc).get("no_output") is True
+
+
 def conversation_id(req: TurnRequest) -> str:
     """The lane key a request runs on: its explicit conversation, else
     ``<channel>:<chat_id>``.
@@ -572,7 +583,7 @@ class Lane:
                 # hosts and paths.
                 reported=isinstance(exc, AnswerlessTurnError),
                 full_detail=full_detail_of(exc),
-                no_output=isinstance(exc, AnswerlessTurnError) and exc.no_output,
+                no_output=no_output_of(exc),
             )
             await self._sink(failed)
             self._payload_reported = True
