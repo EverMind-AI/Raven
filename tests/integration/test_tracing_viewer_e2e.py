@@ -194,6 +194,42 @@ def test_artifact_endpoint_resolves_a_packed_message(tmp_path):
     assert found["parsed"]["prompt"] == "packed"
 
 
+def test_sessions_spawn_synthesis_reads_a_compressed_artifact(tmp_path):
+    from raven.tracing.codec import compress_bytes
+
+    logs = tmp_path / "logs"
+    artifacts = logs / "audit-artifacts" / "tool" / "2026-08-01"
+    artifacts.mkdir(parents=True)
+    input_artifact = artifacts / "in.json"
+    output_artifact = artifacts / "out.json"
+    input_artifact.write_bytes(
+        compress_bytes(
+            json.dumps({"params": {"runtime": "subagent", "agentId": "raven", "task": "do"}}).encode("utf-8")
+        )
+    )
+    output_artifact.write_bytes(
+        compress_bytes(json.dumps({"result": {"status": "accepted", "childSessionKey": "child"}}).encode("utf-8"))
+    )
+    span = _span("live-session", "span-spawn", name="tool.call")
+    span["attributes"].update(
+        {
+            "tool.name": "sessions_spawn",
+            "tool.call_id": "call-1",
+            "tool.args_preview": "[truncated]",
+            "tool.result_preview": "[truncated]",
+            "tool.input.artifact_path": str(input_artifact),
+            "tool.output.artifact_path": str(output_artifact),
+        }
+    )
+    _write_spans(logs / "audit-spans.log", [span])
+
+    with _viewer(tmp_path) as port:
+        payload = _get(port, "/api/data")
+
+    names = {s["name"] for session in payload["sessions"] for trace in session["traces"] for s in trace["spans"]}
+    assert "subagent.call" in names
+
+
 def test_ignores_a_log_planted_outside_the_active_and_archive_paths(tmp_path):
     logs = tmp_path / "logs"
     _write_spans(logs / "audit-spans.log", [_span("live-session", "span-live")])

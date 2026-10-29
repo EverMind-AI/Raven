@@ -111,7 +111,9 @@ function readJsonFileMaybe(filePath) {
   if (!filePath || typeof filePath !== 'string') return null;
   if (!fs.existsSync(filePath)) return null;
   try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    // Persisted artifacts are stored encoded; readStoredText picks the
+    // encoding from the frame, so a compressed artifact still parses here.
+    return JSON.parse(readStoredText(filePath));
   } catch {
     return null;
   }
@@ -1099,7 +1101,12 @@ function readPackedMessage(sha1) {
   const index = messagePackIndex();
   const entry = index && index.messages ? index.messages[sha1] : null;
   if (!Array.isArray(entry) || entry.length !== 3) return null;
+  // The index travels with an imported store; a name is a generated basename,
+  // never a path, and the range fields are non-negative integers.
+  if (typeof entry[0] !== 'string' || !/^[0-9a-f]{32}\.pack\.zst$/.test(entry[0])) return null;
+  if (!Number.isInteger(entry[1]) || !Number.isInteger(entry[2]) || entry[1] < 0 || entry[2] < 0) return null;
   const packPath = path.join(MESSAGE_PACKS_DIR, entry[0]);
+  if (!path.resolve(packPath).startsWith(path.resolve(MESSAGE_PACKS_DIR) + path.sep)) return null;
   let plain = packCache.get(packPath);
   if (!plain) {
     try {
