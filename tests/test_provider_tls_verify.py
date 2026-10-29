@@ -127,9 +127,7 @@ async def test_an_opted_out_chat_call_sends_a_prebuilt_client_that_verifies_noth
 ) -> None:
     captured: dict[str, Any] = {}
     spy = _SpyClients(monkeypatch)
-    monkeypatch.setattr(
-        "raven.providers.litellm_provider.acompletion", _spy_acompletion(captured, _FakeResponse())
-    )
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", _spy_acompletion(captured, _FakeResponse()))
     await _provider(False).chat(messages=[{"role": "user", "content": "hi"}], model="openai/gpt-4o")
 
     args = spy.client_and_args()
@@ -150,7 +148,9 @@ async def test_an_opted_out_stream_sends_a_prebuilt_client(monkeypatch: pytest.M
         return _stream_of([_FakeChunk()])
 
     monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
-    async for _chunk in _provider(False).chat_stream(messages=[{"role": "user", "content": "hi"}], model="openai/gpt-4o"):
+    async for _chunk in _provider(False).chat_stream(
+        messages=[{"role": "user", "content": "hi"}], model="openai/gpt-4o"
+    ):
         break
 
     args = spy.client_and_args()
@@ -162,9 +162,7 @@ async def test_an_opted_out_stream_sends_a_prebuilt_client(monkeypatch: pytest.M
 async def test_the_default_verifies_and_builds_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
     spy = _SpyClients(monkeypatch)
-    monkeypatch.setattr(
-        "raven.providers.litellm_provider.acompletion", _spy_acompletion(captured, _FakeResponse())
-    )
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", _spy_acompletion(captured, _FakeResponse()))
     await _provider(None).chat(messages=[{"role": "user", "content": "hi"}], model="openai/gpt-4o")
 
     assert "client" not in captured

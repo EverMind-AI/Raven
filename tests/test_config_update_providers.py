@@ -44,6 +44,23 @@ def _restore_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(u, "_probe_models_endpoint", _REAL_PROBE)
 
 
+def _loopback_handshake_is_not_proxied(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep a system proxy out of a throwaway gateway on ``127.0.0.1``.
+
+    Deleting the proxy variables is not enough on Windows: the probe's client
+    keeps httpx's default ``trust_env=True``, which there also reads the WinINET
+    registry, so the request for ``127.0.0.1`` goes to the system proxy, the
+    tunnel dies mid handshake, and the probe reports ``network_error`` instead
+    of a certificate verdict. ``NO_PROXY`` is the one setting that turns that
+    off on every platform, and unlike passing a transport it leaves the
+    client's ``verify`` knob -- the thing under test -- on the real path.
+    """
+    for var in _PROXY_VARIABLES:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+
+
 @pytest.fixture
 def cfg_path(tmp_path: Path) -> Path:
     """Sandboxed config path; the real ``~/.raven/config.json`` is never touched."""
@@ -681,11 +698,10 @@ def test_a_section_that_opted_out_accepts_the_same_certificate(
 
     The same gateway that reads `certificate_untrusted` above reads valid here:
     the field is the section's, so the settings dialog reports the setup the
-    model calls could actually live with. The proxy variables go, so the
-    handshake is this machine's alone.
+    model calls could actually live with. The proxy goes, so the handshake is
+    this machine's alone.
     """
-    for var in _PROXY_VARIABLES:
-        monkeypatch.delenv(var, raising=False)
+    _loopback_handshake_is_not_proxied(monkeypatch)
     _restore_probe(monkeypatch)
     ca = private_ca(tmp_path / "pki")
     with https_endpoint(ca.server, OpenAIModels) as origin:
@@ -698,16 +714,13 @@ def test_a_section_that_opted_out_accepts_the_same_certificate(
     assert result["status"] == "valid"
 
 
-def test_an_undressed_section_still_verifies(
-    cfg_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_an_undressed_section_still_verifies(cfg_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A section that names no `tls_verify` verifies, as every section always has.
 
     The field defaults to True, and the probe of a section that never turned the
     knob reads the same `certificate_untrusted` result as before.
     """
-    for var in _PROXY_VARIABLES:
-        monkeypatch.delenv(var, raising=False)
+    _loopback_handshake_is_not_proxied(monkeypatch)
     _restore_probe(monkeypatch)
     ca = private_ca(tmp_path / "pki")
     with https_endpoint(ca.server, OpenAIModels) as origin:
