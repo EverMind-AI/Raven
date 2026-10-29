@@ -39,7 +39,7 @@ from typing import Any, Iterable, Iterator, Sequence
 
 from raven.tracing import artifact_v2
 from raven.tracing import config as tracing_config
-from raven.tracing.codec import read_plaintext_file
+from raven.tracing.codec import ZSTD_MAGIC, read_plaintext, read_plaintext_file
 from raven.trajectory import entries as _entries
 from raven.trajectory import store as tstore
 
@@ -461,11 +461,23 @@ def _turn_input(turn: TurnSummary, state_dir: Path) -> str | None:
         return None
     try:
         with target.open("rb") as handle:
-            data = handle.read(_INPUT_READ_LIMIT + 1)
-        if len(data) > _INPUT_READ_LIMIT:
-            return None
-        payload = json.loads(data.decode("utf-8"))
-    except (OSError, UnicodeDecodeError, ValueError):
+            head = handle.read(4)
+            handle.seek(0)
+            if head == ZSTD_MAGIC:
+                # A turn input written after compression is a zstd frame; the
+                # bounded decoder is the same one every other artifact reader
+                # uses. A plain file keeps the bounded read it always had.
+                plain = read_plaintext(handle.read(), _INPUT_READ_LIMIT)
+            else:
+                data = handle.read(_INPUT_READ_LIMIT + 1)
+                plain = data if len(data) <= _INPUT_READ_LIMIT else None
+    except OSError:
+        return None
+    if plain is None:
+        return None
+    try:
+        payload = json.loads(plain.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
         return None
     payload = artifact_v2.resolve_payload(payload, state_dir / "logs" / "audit-artifacts")
     return _text_of(payload.get("content")) if isinstance(payload, dict) else None

@@ -120,6 +120,27 @@ def _plan(*trace_ids: str, answering: bool = False) -> sel.SelectionPlan:
 # -- main-line turns ---------------------------------------------------------
 
 
+def test_turn_input_reads_a_compressed_artifact(state):
+    from raven.tracing.codec import compress_bytes
+
+    artifact = state / "logs" / "audit-artifacts" / "turn.input" / "2026-10-01" / "a.json"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(compress_bytes(json.dumps({"content": "hello"}).encode("utf-8")))
+    turn = sel.TurnSummary(
+        trace_id="t",
+        span_id="s",
+        number=1,
+        start=_ts(0),
+        end=None,
+        input_preview="",
+        in_progress=False,
+        input_artifact=str(artifact),
+        main_line=True,
+    )
+
+    assert sel._turn_input(turn, state) == "hello"
+
+
 def test_main_line_turns_leave_out_dispatched_and_foreign_turns(state):
     _write(
         state,
