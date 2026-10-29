@@ -18247,7 +18247,7 @@
               "integer",
               "null"
             ],
-            "description": "What the duration bar charges this entry; null means unknown, never zero."
+            "description": "The time charged to this entry, so a span is counted once however many entries it has; null means unknown, never zero."
           },
           "timing_basis": {
             "type": "string",
