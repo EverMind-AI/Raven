@@ -2138,7 +2138,14 @@ def test_an_external_runs_own_steps_are_rows_of_that_run(state, monkeypatch):
 
     class Handle:
         def identity(self):
-            return {"trace_id": "t", "span_id": "ext", "session_key": None, "channel": None, "chat_id": None, "surface": None}
+            return {
+                "trace_id": "t",
+                "span_id": "ext",
+                "session_key": None,
+                "channel": None,
+                "chat_id": None,
+                "surface": None,
+            }
 
     class Call:
         name = "read_file"
@@ -2195,7 +2202,6 @@ def test_a_span_that_only_thought_has_no_empty_output_row(state):
     kinds = {e.kind for e in entries if e.span_id == "think-only"}
     assert "llm.thinking" in kinds
     assert "llm.output" not in kinds
-
 
 
 def test_a_call_that_reasoned_without_returning_the_words_says_so():

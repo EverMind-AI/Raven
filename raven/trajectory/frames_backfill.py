@@ -148,7 +148,11 @@ def backfill(
             tracing_spans.emit({**record, "endTime": max(opened or run_end, run_end).isoformat()})
 
     return {
-        "runs": len(runs), "written": written, "steps": steps, "already": len(runs) - written, "repaired": repaired,
+        "runs": len(runs),
+        "written": written,
+        "steps": steps,
+        "already": len(runs) - written,
+        "repaired": repaired,
     }
 
 
