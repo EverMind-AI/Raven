@@ -253,7 +253,7 @@ def build(ctx: LaunchContext) -> BenchBundle:
             make_precheck()()
 
         def base_eval(_node, task_ids, k, job_name, *, split="train"):
-            return aw_adapter.run_eval(cfg, K=k, experiment=job_name, task_ids=task_ids)
+            return aw_adapter.run_eval(cfg, K=k, experiment=job_name, task_ids=task_ids, reuse_complete=True)
 
         eval_with_infra_rerun(base_eval, None, train_ids, k_confirm, van_exp)
 

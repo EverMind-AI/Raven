@@ -42,6 +42,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from evolver import runmark
 from evolver.analysis.stability_bucket import (
     TaskStability,
     _bucket_for,
@@ -234,6 +235,7 @@ def run_eval(
     task_ids: list[str] | None = None,
     timeout: float | None = None,
     cwd: str | Path | None = None,
+    reuse_complete: bool = False,
 ) -> dict[str, TaskEval]:
     """Run the AppWorld batch scorer and read per-task results back.
 
@@ -249,9 +251,18 @@ def run_eval(
     (cwd is first on ``sys.path`` for ``-m``) — the zero-contamination eval that
     replaces writing candidate files into the live repo. Activation env is then
     unnecessary: the committed code is already the candidate.
+
+    A successful batch writes a trial-identity marker into ``out_dir``
+    (``evolver.runmark``) recording the experiment name and a digest of the
+    harness tree at ``cwd``. With ``reuse_complete=True``, a marker matching the
+    same experiment and the same harness tree short-circuits the batch and
+    re-reads the existing results — the idempotency the cold-start and confirm
+    paths rely on when a run is resumed.
     """
     out_dir = aw.out_dir_root / experiment
     out_dir.mkdir(parents=True, exist_ok=True)
+    if reuse_complete and runmark.is_complete(out_dir, run_id=experiment, harness_dir=cwd):
+        return read_out_dir(out_dir)
     tasklist_path: Path | None = None
     if task_ids:
         tasklist_path = out_dir / "tasklist.txt"
@@ -265,7 +276,14 @@ def run_eval(
         tasklist_path=tasklist_path,
     )
     subprocess.run(argv, cwd=str(cwd or aw.appworld_root), env=dict(os.environ), check=True, timeout=timeout)
-    return read_out_dir(out_dir)
+    evals = read_out_dir(out_dir)
+    runmark.mark_complete(
+        out_dir,
+        run_id=experiment,
+        harness_dir=cwd,
+        extra={"split": aw.split, "k": K, "n_tasks": len(evals)},
+    )
+    return evals
 
 
 def stability_from_out_dir(out_dir: str | Path) -> dict[str, TaskStability]:
