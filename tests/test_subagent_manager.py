@@ -26,7 +26,7 @@ import pytest
 from pydantic import ValidationError
 
 from raven.agent import workdir
-from raven.agent.context.silence import SILENCE_INSTRUCTION
+from raven.agent.context.silence import SILENCE_INSTRUCTION, teaches_silence
 from raven.agent.subagent import manager as manager_mod
 from raven.agent.subagent.backends.base import clamp_output
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
@@ -1305,6 +1305,27 @@ async def test_announce_result_routes_to_tui_session_key(monkeypatch):
 
     assert len(submitted) == 1
     assert submitted[0].conversation == "tui:sess123"
+
+
+async def test_a_relayed_result_does_not_teach_the_silence_marker():
+    """The person asked for the work, so its result is relayed to them, never withheld: the turn is
+    not told the marker, and a reply that only looks like one is delivered."""
+    mgr = _make_manager(max_concurrent=1)
+    submitted = []
+    mgr.set_submit(submitted.append)
+
+    await mgr._announce_result(
+        task_id="t1",
+        task_summary="label",
+        task="task",
+        result="No reply needed.",
+        origin={"channel": "web", "chat_id": "d", "session_key": "web:s1"},
+        status="ok",
+    )
+
+    assert len(submitted) == 1
+    assert "Summarize this naturally for the user" in submitted[0].text
+    assert not teaches_silence(submitted[0].text)
 
 
 async def test_announce_result_routes_non_tui_origin_unchanged(monkeypatch):
@@ -5208,6 +5229,7 @@ async def test_an_unprompted_report_teaches_the_silence_marker() -> None:
     text = submitted[0].text
     assert text.count(SILENCE_INSTRUCTION) == 1
     assert text.endswith("\n\n" + SILENCE_INSTRUCTION)
+    assert teaches_silence(text), "so the turn reads the loose rule the lesson asks for"
     assert text.rindex(SILENCE_INSTRUCTION) > text.rindex("END UNTRUSTED")
     assert "no reply to the user are needed" not in text
     assert "If it is routine progress only, no action is needed." in text

@@ -811,11 +811,14 @@ _Avoid_: "shadow git" as the term — Checkpoint is the per-turn snapshot it pro
 **Silence Marker** (`agent/context/silence.py`):
 What a model answers with to say a turn has nothing to report: `[SILENT]`, `SILENT`, `NO_REPLY`
 or `NO REPLY` (`SILENCE_MARKERS`); `SILENCE_INSTRUCTION` is the two sentences that teach the
-bracketed form. The turn's `Origin` picks the rule, in one place (`is_silence`). A `USER` turn, or
-one with no origin, is never taught a marker, so it honours only `[SILENT]` itself with nothing but
-whitespace around it: a one-word answer such as `Silent.` or `No reply.` is the person's answer, and
-is delivered. A turn from a proactive origin -- `SENTINEL`, `CRON`, `HEARTBEAT` or `SUBAGENT` --
-reads the whole set by two rules: the strict one (`is_exact_silence`), a reply that is exactly a
+bracketed form. The turn's `Origin`, and whether its prompt taught the marker, pick the rule, in one
+place (`is_silence`). A turn whose prompt does not carry `SILENCE_INSTRUCTION` (`teaches_silence`)
+honours only `[SILENT]` itself with nothing but whitespace around it: a `USER` turn, one with no
+origin, and a proactive one that was never taught -- a heartbeat task, a sub-agent's relayed result,
+a sentinel notice. There a one-word answer such as `Silent.` or `No reply.`, or a reply ending on
+one, is the model's answer, and is delivered. A turn from a proactive origin (`PROACTIVE_ORIGINS`)
+whose prompt carries it -- the cron reminder and a sub-agent's unprompted report --
+reads the whole set by two rules (`reads_loose_silence`): the strict one (`is_exact_silence`), a reply that is exactly a
 marker, with case, edge whitespace and stray edge punctuation forgiven up to `SILENCE_MAX_CHARS`;
 and the loose one (`is_loose_silence`): nobody is waiting on such a turn and models wrap the marker
 in a note on why they stayed quiet, so a marker alone on the first or last line, or a bracketed
@@ -837,9 +840,9 @@ bracket goes out at once), reads past an inline think block the way the loop doe
 as it arrives, and what follows it is held; a closing tag with no block open is debris, as the loop
 reads it, and does not end the hold), keeps holding across a stream cut while the reply could
 still be the marker, and drops what it held when the loop reads the reply as
-a marker (a turn from a proactive origin, whose marker may close a report, holds the
+a marker (a turn that reads the loose rule, whose marker may close a report, holds the
 whole call instead). An exhausted turn's wrap-up is gated and read the same way. The marker row
-stays in the history holding the model's whole reply -- the marker, or, from a proactive origin,
+stays in the history holding the model's whole reply -- the marker, or, under the loose rule,
 the note around it -- filed with `silent: true` so a reload does not read it as an answer, and it
 carries the turn's Response Meta. The turn reports itself as
 `TurnOutcome.silent` and, for a surface drawing it live, as a closing `NoticeKind.SILENT_TURN`
@@ -898,7 +901,7 @@ keeps it, so the refusal is handled as one rather than continued. The model is a
 the parts are joined, up to `MAX_CONTINUATIONS` times,
 after which the partial is delivered with `PARTIAL_STREAM_NOTE` as an `interrupted` turn. A
 continuation that comes back empty leaves what streamed as the answer, and on a person's turn, which
-showed what streamed, so does one that is a marker on its own; a turn from a proactive origin showed
+showed what streamed, so does one that is a marker on its own; a turn that reads the loose rule showed
 nothing of it, so there such a marker is read with what came before it, on its own line, as the
 reply uncut would be. Either way a continuation inside a think block the cut left open is read only
 joined to what came before it. One that comes back as an error, a stream cut off before any new text

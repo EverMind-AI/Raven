@@ -25,6 +25,7 @@ from unittest.mock import patch
 
 import pytest
 
+from raven.agent.context.silence import SILENCE_INSTRUCTION
 from raven.agent.hook import AgentHook
 from raven.agent.loop import AgentLoop, recovery, turn_path
 from raven.agent.loop._shared import _MAX_ITER_STATIC_FALLBACK
@@ -86,6 +87,10 @@ from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
 def workspace():
     with tempfile.TemporaryDirectory() as td:
         yield Path(td)
+
+
+# A prompt that teaches the marker, as the cron reminder's does: only such a proactive turn reads the loose rule.
+_TAUGHT = f"[Scheduled Task] Timer finished.\n\n{SILENCE_INSTRUCTION}"
 
 
 def _turn(text: str = "hi", origin: Origin = Origin.USER) -> TurnRequest:
@@ -187,11 +192,21 @@ def test_limits_from_defaults_uses_defaults_for_missing_attrs():
 # --------------------------------------------------------------------------- #
 
 
-def _kind(content, finish="stop", *, origin=Origin.USER, streamed=False, prev_had_tool_calls=False, **fields):
-    """``reply_kind`` asked the way the loop asks it, of the text left once think blocks are out."""
+def _kind(
+    content, finish="stop", *, origin=Origin.USER, streamed=False, prev_had_tool_calls=False, taught=True, **fields
+):
+    """``reply_kind`` asked the way the loop asks it, of the text left once think blocks are out, on a
+    turn whose prompt taught the marker unless ``taught`` says otherwise."""
     response = LLMResponse(content=content or None, finish_reason=finish, **fields)
     visible = (strip_think_blocks(content) or None) if content else None
-    return reply_kind(response, visible, origin=origin, prev_had_tool_calls=prev_had_tool_calls, streamed=streamed)
+    return reply_kind(
+        response,
+        visible,
+        origin=origin,
+        prev_had_tool_calls=prev_had_tool_calls,
+        streamed=streamed,
+        silence_taught=taught,
+    )
 
 
 @pytest.mark.parametrize(
@@ -269,6 +284,13 @@ def _kind(content, finish="stop", *, origin=Origin.USER, streamed=False, prev_ha
 )
 def test_reply_kind(content, finish, extra, origin, streamed, kind):
     assert _kind(content, finish, origin=origin, streamed=streamed, **extra) is kind
+
+
+@pytest.mark.parametrize("origin", [Origin.CRON, Origin.HEARTBEAT, Origin.SENTINEL, Origin.SUBAGENT])
+def test_reply_kind_reads_a_loose_marker_as_text_on_a_turn_never_taught_it(origin):
+    assert _kind("No reply.", origin=origin, taught=False) is ReplyKind.TEXT
+    assert _kind("nothing new\n\n[SILENT]", origin=origin, taught=False) is ReplyKind.TEXT
+    assert _kind("[SILENT]", origin=origin, taught=False) is ReplyKind.SILENT
 
 
 def test_an_empty_reply_after_tools_is_its_own_kind():
@@ -2607,10 +2629,11 @@ def _empty_finish() -> _Stream:
 
 
 async def _ends_on(agent: AgentLoop, origin: Origin, **kwargs):
-    """Run the loop on a streamed turn and return what it ended on, what was filed and what streamed."""
+    """Run the loop on a streamed turn whose prompt taught the marker, and return what it ended on,
+    what was filed and what streamed."""
     sink = _Sink()
     final, _used, messages, outcome = await agent._run_agent_loop(
-        _seed(), on_token_delta=sink.delta, origin=origin, **kwargs
+        _seed(), on_token_delta=sink.delta, origin=origin, silence_taught=True, **kwargs
     )
     return final, outcome, messages[-1], sink.text
 
@@ -4489,7 +4512,7 @@ async def test_a_marker_wrapped_in_punctuation_is_silent_on_a_proactive_turn(wor
     sink = _Sink()
 
     final, _used, messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
-        _seed(), on_token_delta=sink.delta, origin=Origin.CRON
+        _seed(), on_token_delta=sink.delta, origin=Origin.CRON, silence_taught=True
     )
 
     assert outcome.silent is True and final == "".join(deltas)
@@ -4570,9 +4593,103 @@ async def test_a_proactive_turn_still_reads_a_loosely_spelled_marker_as_silence(
     agent = _litellm_agent(workspace)
     silence: dict[str, bool] = {}
 
-    out = await agent._process_message(_turn(origin=Origin.CRON), session_key="s1", origin=Origin.CRON, silence=silence)
+    out = await agent._process_message(
+        _turn(_TAUGHT, origin=Origin.CRON), session_key="s1", origin=Origin.CRON, silence=silence
+    )
 
     assert out is None and silence == {"silent": True}
+
+
+class _RewritesTheInbound(AgentHook):
+    """A user-inbound hook that hands the model its own text in place of what was sent."""
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    @property
+    def name(self) -> str:
+        return "RewritesTheInbound"
+
+    async def before_user_inbound(self, ctx):
+        from raven.agent.hook import HookDecision
+
+        return HookDecision(modified_content=self._text)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sent,read,silent",
+    [(_TAUGHT, "Timer finished.", False), ("Timer finished.", _TAUGHT, True)],
+    ids=["lesson_rewritten_out", "lesson_rewritten_in"],
+)
+async def test_the_lesson_is_read_off_the_prompt_the_model_read(workspace, monkeypatch, sent, read, silent):
+    """A hook may rewrite the inbound before the model reads it, so whether the turn was taught the
+    marker is read off the text the model got, not the request that carried it."""
+    calls = _served(monkeypatch, [_reply("No reply.")])
+    agent = _litellm_agent(workspace, hooks=[_RewritesTheInbound(read)])
+    silence: dict[str, bool] = {}
+
+    out = await agent._process_message(
+        _turn(sent, origin=Origin.CRON), session_key="s1", origin=Origin.CRON, silence=silence
+    )
+
+    asked = calls[0]["messages"][-1]["content"]
+    assert read in str(asked) and (SILENCE_INSTRUCTION in str(asked)) is silent
+    assert (out is None) is silent and silence == ({"silent": True} if silent else {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", [Origin.HEARTBEAT, Origin.SUBAGENT, Origin.SENTINEL])
+@pytest.mark.parametrize("reply", ["No reply.", "Silent", "Checked the queue twice.\n\nNo reply"])
+async def test_a_proactive_turn_never_taught_the_marker_delivers_a_reply_that_looks_like_one(
+    workspace, monkeypatch, origin, reply
+):
+    """Heartbeat, a sub-agent's relayed result and a sentinel notice never tell the model the marker,
+    so a reply that is, or ends on, one of its spellings is the model's answer and reaches the reader."""
+    _served(monkeypatch, [_reply(reply)])
+    agent = _litellm_agent(workspace)
+    silence: dict[str, bool] = {}
+
+    out = await agent._process_message(
+        _turn("Summarize this naturally for the user.", origin=origin),
+        session_key="s1",
+        origin=origin,
+        silence=silence,
+    )
+
+    assert out is not None and out[0] == reply and silence == {}
+
+
+@pytest.mark.asyncio
+async def test_a_proactive_turn_never_taught_the_marker_still_honours_the_bracketed_one(workspace, monkeypatch):
+    _served(monkeypatch, [_reply("[SILENT]")])
+    agent = _litellm_agent(workspace)
+    silence: dict[str, bool] = {}
+
+    out = await agent._process_message(
+        _turn("Summarize this naturally for the user.", origin=Origin.SUBAGENT),
+        session_key="s1",
+        origin=Origin.SUBAGENT,
+        silence=silence,
+    )
+
+    assert out is None and silence == {"silent": True}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("taught,shown", [(False, ["Checked ", "the queue.\n\n", "No reply"]), (True, [])])
+async def test_only_a_taught_proactive_turn_holds_its_whole_call(workspace, monkeypatch, taught, shown):
+    """The loose rule's marker may close a report, so a taught turn holds every delta until the call
+    ends; a turn that reads the bracketed marker alone streams each one as a person's turn does."""
+    _served(monkeypatch, [_finished_stream("Checked ", "the queue.\n\n", "No reply")])
+    sink = _Sink()
+
+    final, _used, _messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=sink.delta, origin=Origin.HEARTBEAT, silence_taught=taught
+    )
+
+    assert final == "Checked the queue.\n\nNo reply" and outcome.silent is taught
+    assert sink.text == shown
 
 
 @pytest.mark.asyncio
@@ -4587,7 +4704,7 @@ async def test_a_wrap_up_that_closes_a_note_with_the_marker_is_read_by_its_turns
     sink = _Sink()
 
     final, _used, messages, outcome = await _litellm_agent(workspace, max_iterations=1)._run_agent_loop(
-        _seed(), on_token_delta=sink.delta, origin=origin
+        _seed(), on_token_delta=sink.delta, origin=origin, silence_taught=True
     )
 
     assert final == wrap_up and outcome.silent is silent
@@ -4602,7 +4719,7 @@ async def test_a_wrap_up_that_spells_a_marker_loosely_is_read_by_its_turns_rule(
     sink = _Sink()
 
     final, _used, messages, outcome = await _litellm_agent(workspace, max_iterations=1)._run_agent_loop(
-        _seed(), on_token_delta=sink.delta, origin=origin
+        _seed(), on_token_delta=sink.delta, origin=origin, silence_taught=True
     )
 
     assert final == "No reply." and outcome.silent is silent
@@ -4611,12 +4728,26 @@ async def test_a_wrap_up_that_spells_a_marker_loosely_is_read_by_its_turns_rule(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("taught,shown", [(False, ["Checked ", "twice.\n\n", "No reply"]), (True, [])])
+async def test_only_a_taught_proactive_wrap_up_holds_its_whole_call(workspace, monkeypatch, taught, shown):
+    _served(monkeypatch, [_tool_stream(), _finished_stream("Checked ", "twice.\n\n", "No reply")])
+    sink = _Sink()
+
+    final, _used, _messages, outcome = await _litellm_agent(workspace, max_iterations=1)._run_agent_loop(
+        _seed(), on_token_delta=sink.delta, origin=Origin.HEARTBEAT, silence_taught=taught
+    )
+
+    assert final == "Checked twice.\n\nNo reply" and outcome.silent is taught
+    assert sink.text == shown
+
+
+@pytest.mark.asyncio
 async def test_a_cron_turn_may_put_the_marker_on_its_last_line(workspace, monkeypatch):
     _served(monkeypatch, [_finished_stream("2 deals ", "filtered\n\n", "[SILENT]")])
     sink = _Sink()
 
     final, _used, messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
-        _seed(), on_token_delta=sink.delta, origin=Origin.CRON
+        _seed(), on_token_delta=sink.delta, origin=Origin.CRON, silence_taught=True
     )
 
     assert outcome.silent is True and final == "2 deals filtered\n\n[SILENT]"
@@ -4654,7 +4785,7 @@ async def test_a_reply_that_is_no_marker_is_shown_whole(workspace, monkeypatch, 
     sink = _Sink()
 
     final, _used, _messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
-        _seed(), on_token_delta=sink.delta, origin=origin
+        _seed(), on_token_delta=sink.delta, origin=origin, silence_taught=True
     )
 
     assert final == "2 deals filtered" and outcome.silent is False
@@ -5170,7 +5301,7 @@ async def test_a_proactive_turn_that_skips_after_send_stays_silent(workspace, mo
     silence: dict[str, bool] = {}
 
     out = await _litellm_agent(workspace, hooks=[sees])._process_message(
-        _turn(origin=Origin.SENTINEL), session_key="s1", origin=Origin.SENTINEL, silence=silence
+        _turn(_TAUGHT, origin=Origin.SENTINEL), session_key="s1", origin=Origin.SENTINEL, silence=silence
     )
 
     assert out is None and silence == {"silent": True}

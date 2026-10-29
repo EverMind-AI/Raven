@@ -8,7 +8,7 @@ import contextlib
 import functools
 from typing import TYPE_CHECKING
 
-from raven.agent.context.silence import is_silence
+from raven.agent.context.silence import is_silence, reads_loose_silence, teaches_silence
 from raven.agent.loop._shared import (
     _ABORTED_ACTION_REPLY,
     _CONTEXT_USED_KEY,
@@ -141,7 +141,7 @@ from raven.providers.first_byte import first_byte_budget
 from raven.providers.tool_calls import openai_tool_call
 from raven.session.refs import TOOL_RESULT_TRUNCATION_MARKER, tool_result_view
 from raven.spine.events import bound_failure_text
-from raven.spine.turn import PROACTIVE_ORIGINS, AnswerlessTurnError
+from raven.spine.turn import AnswerlessTurnError
 from raven.token_wise import usage_context
 from raven.token_wise.turn_spend import TurnSpend
 from raven.tracing import config as tracing_config
@@ -942,12 +942,14 @@ class TurnPathMixin:
         turn_log: TurnLog | None = None,
         rungs_used: set[str] | None = None,
         reply_awaited: bool = False,
+        silence_taught: bool = False,
     ) -> tuple[str | None, list[str], list[dict], LoopOutcome]:
         """Run the agent iteration loop.
 
         ``origin`` is the turn's: the watch-work judgement reads the owner's
         request off the messages, and a turn the runtime re-injected has none
-        to read (``watch_work.asked_for``). It also picks the silence rule a
+        to read (``watch_work.asked_for``). With ``silence_taught``, whether
+        the turn's prompt taught the marker, it also picks the silence rule a
         reply is read by -- unless ``reply_awaited`` says the caller waits on
         the turn's text, as an inbound A2A call's peer does: such a turn takes
         no part in the silence protocol, so nothing is held back for a marker
@@ -1289,7 +1291,7 @@ class TurnPathMixin:
             nonlocal messages, status, silent
             final = self._strip_think("".join(recovery.parts)) or ""
             held = carried_gate.handed_over() if carried_gate is not None else None
-            silent = not reply_awaited and is_silence(final, origin)
+            silent = not reply_awaited and is_silence(final, origin, taught=silence_taught)
             if silent:
                 if held is not None:
                     held.discard()
@@ -1500,7 +1502,7 @@ class TurnPathMixin:
                 if reply_room := self._reply_room(call_messages, call_tools, call_model):
                     gen_overrides["max_tokens"] = min(gen_overrides.get("max_tokens", reply_room), reply_room)
             # A reply that is a silence marker is shown to no one, so the start of one is
-            # held until the loop has read the reply. A turn from a proactive origin holds the
+            # held until the loop has read the reply. A turn that reads the loose rule holds the
             # whole call, because its marker may close a report and only the end of the call
             # shows that. The gates below deliver into this one.
             if on_token_delta is None or reply_awaited:
@@ -1508,7 +1510,7 @@ class TurnPathMixin:
             elif carried_gate is not None:
                 silence_gate = carried_gate.handed_over()
             else:
-                silence_gate = SilenceGate(on_token_delta, hold_all=origin in PROACTIVE_ORIGINS)
+                silence_gate = SilenceGate(on_token_delta, hold_all=reads_loose_silence(origin, taught=silence_taught))
             downstream = silence_gate or on_token_delta
             # A hook can send this whole response back, and a rollback pops the
             # history the stream has already left -- so where hooks are installed
@@ -2271,6 +2273,7 @@ class TurnPathMixin:
                     prev_had_tool_calls=prev_had_tool_calls,
                     streamed=streamed_call,
                     reply_awaited=reply_awaited,
+                    silence_taught=silence_taught,
                 )
                 if kind in (ReplyKind.EMPTY, ReplyKind.POST_TOOL_EMPTY):
                     recovery.empty_streak.append(EmptyAttempt.of(response, call_model))
@@ -2521,14 +2524,14 @@ class TurnPathMixin:
                 # continued rather than judged on its fragment, so after one -- or when one can
                 # no longer be continued -- the joined text is what may be the marker.
                 if recovery.parts or kind is ReplyKind.NETWORK_CUT:
-                    ends_silent = not reply_awaited and is_silence(clean, origin)
+                    ends_silent = not reply_awaited and is_silence(clean, origin, taught=silence_taught)
                     if own_marker and not ends_silent and not reply_awaited:
                         # Dropping a continuation that is only the marker rests on the reader already
                         # holding what streamed, which a turn holding its whole call never showed. So
                         # the marker is read with what came before it, on its own line, as the same
                         # reply uncut would be; only the loose rule can find it there.
                         with_marker = clean + "\n" + (response.content or "").strip()
-                        if is_silence(with_marker, origin):
+                        if is_silence(with_marker, origin, taught=silence_taught):
                             clean, ends_silent = with_marker, True
                 else:
                     ends_silent = action is RecoveryAction.SILENT
@@ -2645,7 +2648,7 @@ class TurnPathMixin:
             # answer may: its stream is held back as the answering call's is, and a
             # marker ends the turn silent.
             wrap_up_gate = (
-                SilenceGate(on_token_delta, hold_all=origin in PROACTIVE_ORIGINS)
+                SilenceGate(on_token_delta, hold_all=reads_loose_silence(origin, taught=silence_taught))
                 if on_token_delta is not None and not reply_awaited
                 else None
             )
@@ -2666,7 +2669,7 @@ class TurnPathMixin:
                 ),
                 synthesis_policy=turn_synthesis(turn_meta),
             )
-            silent = not reply_awaited and is_silence(final_content, origin)
+            silent = not reply_awaited and is_silence(final_content, origin, taught=silence_taught)
             await _settle_silence(wrap_up_gate, silent=silent)
             # Persist the wrap-up into history like any normal final reply.
             # Persistence downstream reads only the returned ``messages`` list,
@@ -3242,6 +3245,7 @@ class TurnPathMixin:
                 turn_log=live["log"],
                 rungs_used=rungs_used,
                 reply_awaited=reply_awaited,
+                silence_taught=teaches_silence(content),
             )
 
         # Taken BEFORE the first attempt, because the loop appends to the list it is
