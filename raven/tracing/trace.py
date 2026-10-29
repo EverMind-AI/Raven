@@ -104,6 +104,19 @@ class Span:
         """The attribute ``key`` as merged so far, or ``default``."""
         return self._attrs.get(key, default)
 
+    def identity(self) -> dict[str, Any]:
+        """Who this span belongs to, for records built beside it rather than
+        under the context manager -- a backend that synthesizes child spans
+        after the fact needs the trace, the parent and the conversation."""
+        return {
+            "trace_id": self.trace_id,
+            "span_id": self.span_id,
+            "session_key": self._session_key,
+            "channel": self._channel,
+            "chat_id": self._chat_id,
+            "surface": self._surface,
+        }
+
     def set(self, attributes: dict[str, Any] | None = None, **kw) -> "Span":
         """Merge attributes onto the span.
 
@@ -220,6 +233,9 @@ class _NoopSpan:
 
     def get(self, _key, default=None):
         return default
+
+    def identity(self):
+        return {"trace_id": "", "span_id": "", "session_key": None, "channel": None, "chat_id": None, "surface": None}
 
     def set(self, *_a, **_k):
         return self

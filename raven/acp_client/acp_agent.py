@@ -68,6 +68,7 @@ from raven.agent.subagent.backends.observability import (
     record_frames,
     record_outcome,
     record_session,
+    record_steps,
 )
 from raven.agent.subagent.instances import InstanceRegistry, get_registry
 from raven.agent.subagent.mcp_grant import McpDispatchError, McpGrant, McpSource, acp_target, resolve_grant
@@ -389,6 +390,11 @@ class _TurnCollector:
     @staticmethod
     def _now() -> str:
         return datetime.now().isoformat()
+
+    @property
+    def prompt(self) -> str:
+        """The prompt this turn was opened with, as sent."""
+        return self._prompt
 
     def _budgeted(self) -> Callable[[str], Awaitable[None]] | None:
         deliver = self._deliver
@@ -2569,10 +2575,11 @@ class AcpAgentBackend:
         counts = collector.counts()
         record_events(span, transport="acp", kinds=counts)
         thought_chars = sum(len(t) for t in collector.thoughts)
+        elapsed_ms = int((time.monotonic() - started) * 1000)
         record_outcome(
             span,
             answer_chars=len(collector.reply),
-            elapsed_ms=int((time.monotonic() - started) * 1000),
+            elapsed_ms=elapsed_ms,
             stop_reason=stop_reason,
             update_counts=counts,
             tool_calls=collector.tool_calls,
@@ -2595,6 +2602,9 @@ class AcpAgentBackend:
         activity.note_closing(collector.closing_text)
         activity.note_frames(frames)
         record_frames(span, frames)
+        # What the agent said and ran, as the run's own steps: the caller only
+        # ever sees the answer, and the wire journal is not a timeline.
+        record_steps(span, prompt=collector.prompt, events=collector.events, elapsed_ms=elapsed_ms)
 
 
 __all__ = ["AcpAgentBackend", "AcpEmptyTurnError"]

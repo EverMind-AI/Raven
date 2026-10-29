@@ -2112,3 +2112,116 @@ def test_a_reply_is_not_hidden_while_either_side_is_unread(state):
         [turn, call], state=state, cached_records={("t", "turn"): turn_cache.records, ("t", "l1"): call_cache.records}
     ).entries
     assert _one(both, "turn", "turn.output").meta.get("hidden") == "redundant_reply"
+
+
+def test_an_external_runs_own_steps_are_rows_of_that_run(state, monkeypatch):
+    """The prompt, what it said, what it thought and what it ran: spans beside
+    the external span, reading as the run's own entries."""
+    import hashlib
+    from datetime import datetime, timedelta
+
+    from raven.agent.subagent.backends import observability as obs
+    from raven.tracing import spans as tracing_spans
+
+    captured: list[dict] = []
+    artifacts = state / "logs" / "audit-artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+
+    def persist(kind, meta, payload, *, label=None):
+        digest = hashlib.sha1(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()[:8]
+        path = artifacts / f"{label}-{digest}.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return {"path": str(path), "sha1": "x", "bytes": path.stat().st_size}
+
+    monkeypatch.setattr(tracing_spans, "emit", captured.append)
+    monkeypatch.setattr(tracing_spans, "persist_artifact", persist)
+
+    class Handle:
+        def identity(self):
+            return {"trace_id": "t", "span_id": "ext", "session_key": None, "channel": None, "chat_id": None, "surface": None}
+
+    class Call:
+        name = "read_file"
+
+        def arguments_json(self):
+            return '{"path": "a.py"}'
+
+    # The collector stamps naive local time; the run began a minute ago.
+    base = datetime.now() - timedelta(seconds=60)
+
+    def at(offset):
+        return (base + timedelta(seconds=offset)).isoformat()
+
+    events = [
+        {"t": "say", "text": "I will read it", "at": at(1)},
+        {"t": "thought", "text": "hmm", "at": at(2)},
+        {"t": "call", "id": "c1", "call": Call(), "at": at(3)},
+        {"t": "result", "id": "c1", "ok": True, "text": "contents", "at": at(4)},
+    ]
+    obs.record_steps(Handle(), prompt="do the task", events=events, elapsed_ms=60_000)
+
+    assert [s["name"] for s in captured] == ["llm.call", "llm.call", "llm.call", "tool.call"]
+    assert {s["parentSpanId"] for s in captured} == {"ext"}
+    assert all(s["traceId"] == "t" for s in captured)
+    assert captured[0]["startTime"] < captured[1]["startTime"] <= captured[2]["startTime"] <= captured[3]["startTime"]
+
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=50),
+        _tool_span(state, "t", "spawn", "turn", "spawn", start=1),
+        _run_span("t", "run", "spawn", start=2, end=40),
+        _span("t", "ext", "subagent.external", parent="run", start=3, end=39),
+        *captured,
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+    steps = [e for e in entries if e.span_id in {s["spanId"] for s in captured}]
+    assert {(e.slot, e.kind) for e in steps} == {
+        ("llm.input", "llm.input"),
+        ("llm.output", "llm.output"),
+        ("llm.thinking", "llm.thinking"),
+        ("tool.input", "tool.input"),
+        ("tool.output", "tool.output"),
+    }
+    for span_id in {s["spanId"] for s in captured}:
+        assert _scope_fields(entries, span_id) == ("t:run", None, None)
+
+
+def test_a_span_that_only_thought_has_no_empty_output_row(state):
+    attrs = _llm_attrs(state, "think-only", _messages("q"), {"content": "", "reasoning_content": "hmm"})
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=10),
+        _span("t", "think-only", "llm.call", parent="turn", start=1, end=2, attrs=attrs),
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+    kinds = {e.kind for e in entries if e.span_id == "think-only"}
+    assert "llm.thinking" in kinds
+    assert "llm.output" not in kinds
+
+
+
+def test_a_call_that_reasoned_without_returning_the_words_says_so():
+    """The responses protocol counts reasoning tokens and hands back no text."""
+    from raven.trajectory import details
+
+    class Loaded:
+        loaded = True
+        payload = {"content": "ok", "usage": {"reasoning_tokens": 593}}
+        integrity = ()
+        text = None
+        availability = "available"
+        reason = None
+
+    class WithText(Loaded):
+        payload = {"content": "ok", "reasoning_content": "hmm"}
+
+    availability, data, _, _ = details._d_llm_reasoning(None, {}, lambda _key: Loaded())
+    assert availability == "available"
+    assert "593 reasoning tokens" in (data or {})["text"]
+
+    availability, data, _, _ = details._d_llm_reasoning(None, {}, lambda _key: WithText())
+    assert availability == "available"
+    assert (data or {})["text"] == "hmm"
+
+    class Silent(Loaded):
+        payload = {"content": "ok"}
+
+    assert details._d_llm_reasoning(None, {}, lambda _key: Silent())[0] == "not_recorded"
