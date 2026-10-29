@@ -791,6 +791,18 @@ def test_set_enabled_on_restricted_channel_skips_gate(tmp_config: Path) -> None:
     assert section["allowFrom"] == ["alice"]
 
 
+@pytest.mark.parametrize("disable_args", [["--no-enabled"], ["--enabled", "false"]])
+def test_set_disable_on_open_channel_skips_gate(tmp_config: Path, disable_args: list[str]) -> None:
+    """Turning an open channel off never meets the gate: only a write that
+    resolves ``enabled`` to true does, so closing it always goes through."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "*"])
+    assert seed.exit_code == 0, seed.stdout
+    r = runner.invoke(app, ["channels", "set", "telegram", *disable_args])
+    assert r.exit_code == 0, r.stdout
+    assert "Refusing" not in r.stdout
+    assert _read(tmp_config)["channels"]["telegram"]["enabled"] is False
+
+
 def test_set_enabled_with_explicit_wildcard_nontty_warns(tmp_config: Path) -> None:
     """Pairing --enabled with an explicit wildcard is the same acceptance
     ``enable`` takes: warn, then write."""
@@ -858,14 +870,39 @@ def test_set_open_allowfrom_prompt_is_verb_neutral(tmp_config: Path, tty_mock, m
     assert "telegram" in prompts[0]
 
 
-def test_reset_warns_when_defaults_open_the_channel(tmp_config: Path) -> None:
-    """``reset --yes`` restores the open default; the unattended path must say so."""
+def test_reset_says_the_channel_is_off_with_the_open_default(tmp_config: Path) -> None:
+    """``reset --yes`` writes ``enabled: false`` beside the open default, so it
+    says the channel is off rather than calling it open to anyone."""
     seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "alice"])
     assert seed.exit_code == 0, seed.stdout
     r = runner.invoke(app, ["channels", "reset", "telegram", "--yes"])
     assert r.exit_code == 0, r.stdout
-    assert "anyone" in r.stdout
-    assert _read(tmp_config)["channels"]["telegram"]["allowFrom"] == ["*"]
+    out = " ".join(r.stdout.split())
+    assert "telegram is off" in out
+    assert "can command the agent" not in out
+    section = _read(tmp_config)["channels"]["telegram"]
+    assert section["enabled"] is False
+    assert section["allowFrom"] == ["*"]
+
+
+def test_reset_warns_when_the_defaults_leave_the_channel_open(
+    tmp_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A schema whose defaults turn the channel on with ``'*'`` makes reset
+    the step that opens it, so reset warns that anyone can command it."""
+    from raven.config import update_channels
+
+    monkeypatch.setitem(update_channels._SOCKET_SCHEMA["enabled"], "default", True)
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "alice"])
+    assert seed.exit_code == 0, seed.stdout
+    r = runner.invoke(app, ["channels", "reset", "telegram", "--yes"])
+    assert r.exit_code == 0, r.stdout
+    out = " ".join(r.stdout.split())
+    assert "can command the agent" in out
+    assert "is off" not in out
+    section = _read(tmp_config)["channels"]["telegram"]
+    assert section["enabled"] is True
+    assert section["allowFrom"] == ["*"]
 
 
 def test_enable_missing_token_exits_nonzero(tmp_config: Path) -> None:

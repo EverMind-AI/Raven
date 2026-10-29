@@ -394,11 +394,17 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
             raise typer.Exit(1)
 
         non_default = [k for k, v in current.items() if v not in (False, "", None, [], {})]
-        default_allow = channel_field_specs(name).get("allow_from", {}).get("default") or []
-        if "*" in default_allow:
+        specs = channel_field_specs(name)
+        default_allow = specs.get("allow_from", {}).get("default") or []
+        if "*" in default_allow and specs.get("enabled", {}).get("default") is True:
             console.print(
-                f"[yellow]⚠ Reset restores allow_from='*' for {name}: anyone who can message "
+                f"[yellow]⚠ Reset turns {name} on with allow_from='*': anyone who can message "
                 f"this channel can command the agent on this host.[/yellow]"
+            )
+        elif "*" in default_allow:
+            console.print(
+                f"  [dim]After reset, {name} is off and allow_from is back to '*'. Turning it on "
+                f"again will ask you to confirm that or restrict senders.[/dim]"
             )
 
         if not yes:
