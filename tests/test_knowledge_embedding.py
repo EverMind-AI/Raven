@@ -7,6 +7,7 @@ exercised here, plus the case where neither is configured.
 
 from __future__ import annotations
 
+import http.server
 import json
 
 import httpx
@@ -113,6 +114,39 @@ class TestTheConfiguredPinIsTheOnlySource:
         # itself contain a slash.
         assert config.model == "text-embedding-3-large"
 
+    def test_the_providers_opt_out_reaches_the_client(self, raven_config, monkeypatch) -> None:
+        """The call goes out on the provider's address, so it takes the
+        provider's TLS verdict: a self-signed gateway the chat section reaches
+        with ``tls_verify: false`` must not stop embeddings at the handshake."""
+        self._pin(
+            monkeypatch,
+            model="openai/text-embedding-3-large",
+            provider="openai",
+            credentials=("https://gw.test/v1", "sk-pinned"),
+        )
+        monkeypatch.setattr(
+            "raven.config.update_providers.resolve_provider_tls_verify",
+            lambda name, **_: False,
+        )
+
+        config = load_embedding_config()
+
+        assert config is not None
+        assert config.tls_verify is False
+
+    def test_a_section_that_names_nothing_verifies(self, raven_config, monkeypatch) -> None:
+        self._pin(
+            monkeypatch,
+            model="openai/text-embedding-3-large",
+            provider="openai",
+            credentials=("https://gw.test/v1", "sk-pinned"),
+        )
+
+        config = load_embedding_config()
+
+        assert config is not None
+        assert config.tls_verify is True
+
     def test_half_a_pin_is_no_configuration(self, raven_config, monkeypatch) -> None:
         """A model with nobody to serve it cannot be called, and guessing the
         provider from the id is how two subsystems end up on different ones."""
@@ -179,6 +213,73 @@ def mock_transport(monkeypatch):
         monkeypatch.setattr("raven.knowledge._embedding.httpx.AsyncClient", _patched)
 
     return install
+
+
+@pytest.fixture
+def recorded_clients(monkeypatch):
+    """Record what the embedding client hands httpx, and answer with one vector."""
+    seen: list[dict] = []
+    original = httpx.AsyncClient
+
+    def _patched(*args, **kwargs):
+        seen.append(dict(kwargs))
+        kwargs.setdefault(
+            "transport",
+            httpx.MockTransport(lambda request: httpx.Response(200, json={"data": [{"index": 0, "embedding": [0.1]}]})),
+        )
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr("raven.knowledge._embedding.httpx.AsyncClient", _patched)
+    return seen
+
+
+@pytest.mark.parametrize(("tls_verify", "expected"), [(True, True), (False, False)], ids=["default", "opted-out"])
+async def test_the_client_verifies_as_the_section_asked(recorded_clients, tls_verify, expected) -> None:
+    client = EmbeddingClient(
+        EmbeddingConfig(model="m", base_url="https://gw.test/v1", api_key="k", tls_verify=tls_verify)
+    )
+
+    await client.embed(["hello"])
+
+    assert recorded_clients and recorded_clients[-1].get("verify") is expected
+
+
+class _EmbeddingsHandler(http.server.BaseHTTPRequestHandler):
+    """Answers ``POST /embeddings`` with one two-wide vector per input."""
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length") or 0)
+        body = json.loads(self.rfile.read(length) or b"{}")
+        inputs = body.get("input") or []
+        answer = json.dumps(
+            {"data": [{"index": index, "embedding": [0.1, 0.2]} for index in range(len(inputs))]}
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(answer)))
+        self.end_headers()
+        self.wfile.write(answer)
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+
+async def test_an_opted_out_embedding_reaches_a_private_ca_gateway(tmp_path, monkeypatch) -> None:
+    """The panel's reproduction, as a regression: chat reaches this gateway
+    with the section opted out, and the embedding call on the same address
+    must too; the same client without the opt-out still refuses it."""
+    from tests._tls import https_endpoint, keep_loopback_off_proxies, private_ca
+
+    keep_loopback_off_proxies(monkeypatch)
+    ca = private_ca(tmp_path / "pki")
+
+    with https_endpoint(ca.server, _EmbeddingsHandler) as origin:
+        opted_out = EmbeddingClient(EmbeddingConfig(model="m", base_url=origin + "/v1", api_key="k", tls_verify=False))
+        assert await opted_out.embed(["hello"]) == [[0.1, 0.2]]
+
+        strict = EmbeddingClient(EmbeddingConfig(model="m", base_url=origin + "/v1", api_key="k"))
+        with pytest.raises(EmbeddingError, match="CERTIFICATE_VERIFY_FAILED"):
+            await strict.embed(["hello"])
 
 
 async def test_embedding_nothing_never_calls_the_endpoint(mock_transport) -> None:
@@ -506,6 +607,22 @@ def test_a_base_model_keeps_its_namespace_when_a_provider_is_resolved(monkeypatc
     assert config.model == "BAAI/bge-large-zh-v1.5"
     assert config.provider == "siliconflow"
     assert config.dimensions == 1024
+
+
+def test_a_resolved_base_carries_the_providers_opt_out(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "raven.config.update_providers.resolve_provider_credentials",
+        lambda provider: ("https://gw.test/v1", "key"),
+    )
+    monkeypatch.setattr(
+        "raven.config.update_providers.resolve_provider_tls_verify",
+        lambda provider, **_: False,
+    )
+
+    config = embedding_config_for("siliconflow", "BAAI/bge-large-zh-v1.5")
+
+    assert config is not None
+    assert config.tls_verify is False
 
 
 def test_a_provider_with_no_credentials_resolves_to_nothing(monkeypatch) -> None:

@@ -479,13 +479,16 @@ settings page says why.
 """
 
 
-def probe_embedding_dimensions(url: str, headers: dict[str, str], model: str) -> int | str:
+def probe_embedding_dimensions(url: str, headers: dict[str, str], model: str, *, verify: bool = True) -> int | str:
     """The width ``model`` answers with at ``url``, or why it could not be asked.
 
     Asks with ``dimensions=REQUIRED_EMBEDDING_DIMENSIONS`` first -- the API-level
     truncation MRL-capable models honour -- and falls back to the native width.
     An int is a measured width; a str is a transport or shape failure, which is
     not a verdict about the model.
+
+    ``verify`` is the provider section's TLS verdict: the probe posts to that
+    section's address, so it follows the same answer its calls do.
     """
     import httpx
 
@@ -504,7 +507,7 @@ def probe_embedding_dimensions(url: str, headers: dict[str, str], model: str) ->
         except Exception as exc:  # noqa: BLE001 - whatever failed, it is "could not measure", never a verdict
             return str(exc)
 
-    with httpx.Client(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
+    with httpx.Client(timeout=httpx.Timeout(10.0, connect=5.0), verify=verify) as client:
         result = _try(
             client, {"model": model, "input": ["dimension check"], "dimensions": REQUIRED_EMBEDDING_DIMENSIONS}
         )
@@ -619,7 +622,7 @@ def _refuse_a_pin_that_cannot_embed(clean: dict[str, Any], *, path: "Path") -> N
     if not model:
         raise EmbeddingPinError("an embedding provider needs the model to run on it")
 
-    from raven.config.update_providers import resolve_provider_credentials
+    from raven.config.update_providers import resolve_provider_credentials, resolve_provider_tls_verify
 
     try:
         resolved = resolve_provider_credentials(provider, config_path=path)
@@ -644,10 +647,12 @@ def _refuse_a_pin_that_cannot_embed(clean: dict[str, Any], *, path: "Path") -> N
     from raven.providers.wire import wire_model
 
     base_url, api_key = resolved
+    probe_tls = {} if resolve_provider_tls_verify(provider, config_path=path) else {"verify": False}
     width = probe_embedding_dimensions(
         base_url.rstrip("/") + "/embeddings",
         {"Authorization": f"Bearer {api_key}"} if api_key else {},
         wire_model(model, client_provider=provider),
+        **probe_tls,
     )
     if isinstance(width, int) and width < REQUIRED_EMBEDDING_DIMENSIONS:
         raise EmbeddingPinError(
@@ -716,7 +721,7 @@ def configured_embedding_width(config_path: "Path | None" = None) -> int | str |
     model = str(pin.get("model") or "")
     if not provider or not model:
         return None
-    from raven.config.update_providers import resolve_provider_credentials
+    from raven.config.update_providers import resolve_provider_credentials, resolve_provider_tls_verify
 
     try:
         resolved = resolve_provider_credentials(provider, config_path=path)
@@ -727,10 +732,12 @@ def configured_embedding_width(config_path: "Path | None" = None) -> int | str |
     from raven.providers.wire import wire_model
 
     base_url, api_key = resolved
+    probe_tls = {} if resolve_provider_tls_verify(provider, config_path=path) else {"verify": False}
     return probe_embedding_dimensions(
         base_url.rstrip("/") + "/embeddings",
         {"Authorization": f"Bearer {api_key}"} if api_key else {},
         wire_model(model, client_provider=provider),
+        **probe_tls,
     )
 
 

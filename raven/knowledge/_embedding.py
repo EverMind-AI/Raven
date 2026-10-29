@@ -48,6 +48,14 @@ class EmbeddingConfig:
     model id does not name a credential, and the address a query has to go out
     on is the provider's, not something derivable from the model."""
 
+    tls_verify: bool = True
+    """Whether the endpoint's certificate is checked.
+
+    The provider section's own opt-out, carried here because this client posts
+    to the section's address with the section's key: a gateway a chat call
+    reaches with ``tls_verify: false`` must not fail the same embedding call at
+    the handshake."""
+
     batch_size: int | None = None
     """How many inputs the endpoint accepts in one call, when it is known.
 
@@ -211,7 +219,7 @@ def embedding_config_for(provider: str, model: str, dimensions: int | None = Non
     if not provider or not model:
         return None
     try:
-        from raven.config.update_providers import resolve_provider_credentials
+        from raven.config.update_providers import resolve_provider_credentials, resolve_provider_tls_verify
         from raven.providers.wire import wire_model
     except Exception:  # noqa: BLE001 - an import failure here is not this module's to report
         return None
@@ -228,6 +236,7 @@ def embedding_config_for(provider: str, model: str, dimensions: int | None = Non
         base_url=base_url.rstrip("/"),
         api_key=api_key,
         provider=provider,
+        tls_verify=resolve_provider_tls_verify(provider),
         dimensions=dimensions,
     )
 
@@ -248,7 +257,7 @@ def load_embedding_config() -> EmbeddingConfig | None:
     """
     try:
         from raven.config.raven import load_raven_config
-        from raven.config.update_providers import resolve_provider_credentials
+        from raven.config.update_providers import resolve_provider_credentials, resolve_provider_tls_verify
         from raven.providers.wire import wire_model
     except Exception:  # noqa: BLE001 - an import failure here is not this module's to report
         return None
@@ -277,6 +286,7 @@ def load_embedding_config() -> EmbeddingConfig | None:
         base_url=base_url.rstrip("/"),
         api_key=api_key,
         provider=provider,
+        tls_verify=resolve_provider_tls_verify(provider),
         dimensions=pin.dimensions if pin.dimensions and pin.dimensions > 0 else None,
     )
 
@@ -385,7 +395,7 @@ class EmbeddingClient:
     async def _embed_batch(self, texts: list[str]) -> list[list[float]]:
         """One request. Width is checked by the caller, across every batch."""
         try:
-            async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
+            async with httpx.AsyncClient(timeout=_TIMEOUT_S, verify=self._config.tls_verify) as client:
                 response = await client.post(
                     f"{self._config.base_url}/embeddings",
                     headers={

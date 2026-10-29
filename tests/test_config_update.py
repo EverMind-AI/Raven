@@ -667,6 +667,26 @@ class TestTheWidthGateIsEverosOnly:
                 {"model": "deepinfra/BAAI/bge-base-en-v1.5", "provider": "deepinfra"}, config_path=cfg
             )
 
+    def test_the_providers_opt_out_reaches_the_write_time_probe(self, tmp_path, monkeypatch) -> None:
+        """The width is measured through the provider's address, so it verifies
+        exactly as that section's calls do."""
+        from raven.config.update import set_embedding_endpoint
+
+        cfg = self._config(tmp_path)
+        monkeypatch.setattr(
+            "raven.config.update_providers.resolve_provider_tls_verify",
+            lambda name, config_path=None: False,
+        )
+        seen: dict[str, object] = {}
+        monkeypatch.setattr(
+            "raven.config.update.probe_embedding_dimensions",
+            lambda url, headers, model, **kwargs: seen.update(kwargs) or 1024,
+        )
+
+        set_embedding_endpoint({"model": "deepinfra/BAAI/bge-base-en-v1.5", "provider": "deepinfra"}, config_path=cfg)
+
+        assert seen == {"verify": False}
+
 
 class TestProbeEmbeddingDimensions:
     """The one request the pin writer makes, against a fake provider."""
@@ -725,6 +745,29 @@ class TestProbeEmbeddingDimensions:
         assert probe_embedding_dimensions("https://d/v1/embeddings", {}, "bge-base") == 768
         # Asked with the index width first, then without it.
         assert len(calls) == 2
+
+    def test_the_verification_switch_reaches_the_client(self, monkeypatch, real_probe_embedding_dimensions) -> None:
+        """The probe posts to the provider's address, so the section's TLS
+        verdict has to ride the request."""
+        import httpx
+
+        seen: list[dict] = []
+        real = httpx.Client
+
+        def factory(**kwargs):
+            seen.append(dict(kwargs))
+            kwargs.pop("transport", None)
+            return real(
+                transport=httpx.MockTransport(
+                    lambda request: httpx.Response(200, json={"data": [{"index": 0, "embedding": [0.0, 0.1]}]})
+                ),
+                **kwargs,
+            )
+
+        monkeypatch.setattr(httpx, "Client", factory)
+
+        assert real_probe_embedding_dimensions("https://gw/embeddings", {}, "m", verify=False) == 2
+        assert seen and seen[-1].get("verify") is False
 
     @pytest.mark.parametrize(
         ("response", "verdict"),
@@ -828,6 +871,30 @@ class TestTheWidthOfThePinnedModel:
 
         assert update.configured_embedding_width(cfg) == 768
         assert seen == {"url": "http://p/v1/embeddings", "headers": {"Authorization": "Bearer k"}}
+
+    def test_the_providers_opt_out_reaches_the_start_time_probe(self, tmp_path, monkeypatch) -> None:
+        from raven.config import update
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps({"embedding": {"provider": "deepinfra", "model": "m"}}), encoding="utf-8")
+        monkeypatch.setattr(update, "_everos_plugin_present", lambda: True)
+        monkeypatch.setattr(
+            "raven.config.update_providers.resolve_provider_credentials",
+            lambda provider, config_path=None: ("https://gw/v1", "k"),
+        )
+        monkeypatch.setattr(
+            "raven.config.update_providers.resolve_provider_tls_verify",
+            lambda provider, config_path=None: False,
+        )
+        seen: dict[str, object] = {}
+        monkeypatch.setattr(
+            update,
+            "probe_embedding_dimensions",
+            lambda url, headers, model, **kwargs: seen.update(url=url, **kwargs) or 768,
+        )
+
+        assert update.configured_embedding_width(cfg) == 768
+        assert seen == {"url": "https://gw/v1/embeddings", "verify": False}
 
     def test_a_backend_that_is_not_everos_is_not_measured(self, tmp_path, monkeypatch) -> None:
         from raven.config import update

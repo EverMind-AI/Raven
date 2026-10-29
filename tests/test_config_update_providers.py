@@ -2408,6 +2408,40 @@ class TestResolveProviderCredentials:
         assert resolve_provider_credentials("openai", config_path=cfg_path) is None
 
 
+class TestResolveProviderTlsVerify:
+    """The TLS verdict read off the same section the credentials come from."""
+
+    def test_an_opted_out_section_resolves_off(self, cfg_path: Path) -> None:
+        from raven.config.update_providers import resolve_provider_tls_verify, set_provider_fields
+
+        set_provider_fields(
+            "custom", {"api_key": "k", "api_base": "https://gw.test/v1", "tls_verify": False}, config_path=cfg_path
+        )
+
+        assert resolve_provider_tls_verify("custom", config_path=cfg_path) is False
+
+    def test_a_section_that_names_nothing_verifies(self, cfg_path: Path) -> None:
+        from raven.config.update_providers import resolve_provider_tls_verify, set_provider_fields
+
+        set_provider_fields("custom", {"api_key": "k", "api_base": "https://gw.test/v1"}, config_path=cfg_path)
+
+        assert resolve_provider_tls_verify("custom", config_path=cfg_path) is True
+
+    def test_an_unreadable_config_verifies(self, cfg_path: Path) -> None:
+        """The safe answer when there is nothing to read: every section's default."""
+        from raven.config.update_providers import resolve_provider_tls_verify
+
+        cfg_path.write_text("{not json", encoding="utf-8")
+
+        assert resolve_provider_tls_verify("custom", config_path=cfg_path) is True
+
+    def test_an_oauth_seat_verifies(self, cfg_path: Path) -> None:
+        """An OAuth seat names no address of its own for an opt-out to apply to."""
+        from raven.config.update_providers import resolve_provider_tls_verify
+
+        assert resolve_provider_tls_verify("openai_codex", config_path=cfg_path) is True
+
+
 # lend_provider_credentials: the three documented outcomes
 # ---------------------------------------------------------------------------
 

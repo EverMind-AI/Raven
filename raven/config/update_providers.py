@@ -1261,6 +1261,22 @@ def resolve_provider_credentials(name: str, *, config_path: Path | None = None) 
     when no key is configured, which reads as "not set up" rather than as an
     anonymous request to somebody's paid endpoint.
     """
+    section = _validated_provider_section(name, config_path=config_path)
+    if section is None:
+        return None
+    api_base, api_key, _ = provider_connection(name, section)
+    if not api_key or not api_base:
+        return None
+    return api_base, api_key
+
+
+def _validated_provider_section(name: str, *, config_path: Path | None = None) -> Any | None:
+    """The section a request to ``name`` would be built from, validated.
+
+    ``None`` for an OAuth seat, whose credential is not a key in the config, and
+    for a config that cannot be read. A section that does not validate falls
+    back to the schema's defaults, the same way the request path does.
+    """
     name = canonical_provider_name(name)
     spec = _provider_spec(name)
     if spec is not None and spec.is_oauth:
@@ -1272,18 +1288,27 @@ def resolve_provider_credentials(name: str, *, config_path: Path | None = None) 
         return None
     try:
         cls, _ = _load_provider_endpoints(name, data)
-        instance = cls.model_validate(_raw_section(data, name))
+        return cls.model_validate(_raw_section(data, name))
     except ValidationError:
         # A hand-edited section with a wrong type is not a reason to raise at a
-        # caller that only asked for an address. Both calls are inside the
-        # guard: the loader validates the section too, so catching only the
-        # second let the same bad config raise from one line higher.
-        cls = _provider_schema_cls(name)
-        instance = cls()
-    api_base, api_key, _ = provider_connection(name, instance)
-    if not api_key or not api_base:
-        return None
-    return api_base, api_key
+        # caller that only asked about it. Both calls are inside the guard: the
+        # loader validates the section too, so catching only the second let the
+        # same bad config raise from one line higher.
+        return _provider_schema_cls(name)()
+
+
+def resolve_provider_tls_verify(name: str, *, config_path: Path | None = None) -> bool:
+    """Whether a request to ``name`` checks the endpoint's certificate.
+
+    Read off the same validated section :func:`resolve_provider_credentials`
+    reads, so the verdict and the address it applies to come from one place.
+    ``True`` when there is no section to read -- an OAuth seat, a provider the
+    config does not name, an unreadable file: verification is the default every
+    section has always had, and a caller with no credential to send has nothing
+    for an opt-out to apply to.
+    """
+    section = _validated_provider_section(name, config_path=config_path)
+    return True if section is None else bool(getattr(section, "tls_verify", True))
 
 
 def provider_connection(name: str, section: Any) -> tuple[str, str, dict[str, str]]:
@@ -2391,6 +2416,7 @@ __all__ = [
     "provider_field_specs",
     "provider_serving_at",
     "resolve_provider_credentials",
+    "resolve_provider_tls_verify",
     "list_providers",
     "get_provider_config",
     "set_provider_fields",
