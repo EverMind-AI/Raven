@@ -898,12 +898,14 @@ continued rather than taken for silence, and a stream that had already received 
 keeps it, so the refusal is handled as one rather than continued. The model is asked to go on, and
 the parts are joined, up to `MAX_CONTINUATIONS` times,
 after which the partial is delivered with `PARTIAL_STREAM_NOTE` as an `interrupted` turn. A
-continuation that comes back empty leaves what streamed as the answer, and so does one that is a
-marker on its own, unless the cut left a think block open, when it is read only joined to what came
-before it; one that comes back as an
-error, a stream cut off before any new text included, ends the turn at once on the partial with
-the note, as `interrupted`, with no wait and no fallback model, and so does one that raises once the
-stream's own reconnects are spent -- and so does a turn that runs out
+continuation that comes back empty leaves what streamed as the answer, and on a person's turn, which
+showed what streamed, so does one that is a marker on its own; a turn from a proactive origin showed
+nothing of it, so there such a marker is read with what came before it, on its own line, as the
+reply uncut would be. Either way a continuation inside a think block the cut left open is read only
+joined to what came before it. One that comes back as an error, a stream cut off before any new text
+included, ends the turn at once on the partial with the note, as `interrupted`, with no wait and no
+fallback model, and so does one that raises once the stream's own reconnects are spent -- and so
+does a turn that runs out
 of iterations or time while a continuation is still owed, with no wrap-up. On each of those exits
 the reply the turn ends on is the joined parts with their closed think blocks taken out of the whole
 -- a cut can split one -- and a block still unclosed left in as text, read for a Silence Marker by

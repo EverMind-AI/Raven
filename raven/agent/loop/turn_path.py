@@ -2556,6 +2556,14 @@ class TurnPathMixin:
                 # no longer be continued -- the joined text is what may be the marker.
                 if recovery.parts or kind is ReplyKind.NETWORK_CUT:
                     ends_silent = not reply_awaited and is_silence(clean, origin)
+                    if own_marker and not ends_silent and not reply_awaited:
+                        # Dropping a continuation that is only the marker rests on the reader already
+                        # holding what streamed, which a turn holding its whole call never showed. So
+                        # the marker is read with what came before it, on its own line, as the same
+                        # reply uncut would be; only the loose rule can find it there.
+                        with_marker = clean + "\n" + (response.content or "").strip()
+                        if is_silence(with_marker, origin):
+                            clean, ends_silent = with_marker, True
                 else:
                     ends_silent = action is RecoveryAction.SILENT
                 dropped_marker = own_marker and not ends_silent
