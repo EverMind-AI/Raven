@@ -10,6 +10,7 @@
 import { pick as pickLang } from '../../state/lang/pick'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
+import { show as toast } from '../../state/toast'
 import { setupState } from '../model/source'
 
 import type { Lang } from '../../state/lang'
@@ -208,8 +209,12 @@ export async function finish(): Promise<void> {
   if (!isLast(get().step)) { move(1); return }
   /* Finishing is the page's opt-in for the Hub source, so seed the endpoint
      the way the CLI onboarding does. A refusal here is not the wizard's gate:
-     the Skills page switch can still turn it on later. */
-  try { await source().seedSkillHub() } catch { /* optional default */ }
+     the Skills page switch can still turn it on later. A seeded endpoint that
+     the first-run loop cannot use yet comes back as the reload notice. */
+  try {
+    const warning = await source().seedSkillHub()
+    if (warning) toast(warning)
+  } catch { /* optional default */ }
   if (get().step === 'sync' && syncable().length) {
     const platforms = Object.entries(get().syncPick).filter(([, on]) => on).map(([id]) => id)
     set({ busy: true, error: '' })

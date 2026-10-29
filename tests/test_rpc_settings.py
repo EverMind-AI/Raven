@@ -1286,7 +1286,7 @@ async def test_settings_set_hub_switch_on_seeds_the_endpoint(cfg):
     assert result == {
         "applied": True,
         "previous": False,
-        "warning": "Saved. Turning the Skill Hub source on takes effect after Raven reloads.",
+        "warning": "Saved. Skill Hub search starts after Raven reloads.",
     }
     assert _read(cfg)["skillForge"]["router"]["hub"] == {
         "enabled": True,
@@ -1335,7 +1335,13 @@ async def test_settings_set_hub_init_seeds_without_re_enabling(cfg):
 
     result = await rpc_console.settings_set({"key": "skillForge.router.hub.init", "value": True})
 
-    assert result == {"applied": True, "previous": None}
+    # The first-run loop may have been built before this seed; the wizard shows
+    # the same reload cost the switch write returns.
+    assert result == {
+        "applied": True,
+        "previous": None,
+        "warning": "Saved. Skill Hub search starts after Raven reloads.",
+    }
     assert _read(cfg)["skillForge"]["router"]["hub"] == {
         "enabled": False,
         "endpoint": "https://skillhub.evermind.ai",

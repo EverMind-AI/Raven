@@ -38,8 +38,9 @@ export interface OnboardSource {
      page's first-run redirects stop once the reader has set one up. */
   providerConfigured(): Promise<boolean>
   /* The wizard's opt-in for conversational Skill Hub retrieval: seeds the
-     shared endpoint the way the CLI onboarding does. */
-  seedSkillHub(): Promise<void>
+     shared endpoint the way the CLI onboarding does. Returns the server's
+     reload notice when the first-run loop cannot pick the seed up. */
+  seedSkillHub(): Promise<string | null>
   scan(): Promise<ImportScan>
   startImport(platforms: string[], tier: ImportTier): Promise<ImportStarted>
 }

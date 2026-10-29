@@ -615,6 +615,12 @@ async def cron_runs(params: dict, *, agent_loop_factory=None) -> dict:
 # ---------------------------------------------------------------------------
 
 
+# The one write a running gateway cannot pick up: an endpoint seeded after the
+# loop was built has no Hub client to use. Both the settings switch and the web
+# wizard's finish return this, and the page shows it as a toast.
+_SKILL_HUB_RELOAD_WARNING = "Saved. Skill Hub search starts after Raven reloads."
+
+
 def _mask_secrets(node: Any, key_hint: str = "") -> Any:
     if isinstance(node, dict):
         return {k: _mask_secrets(v, k) for k, v in node.items()}
@@ -716,7 +722,7 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
             # The running loop was built without an endpoint, so it has no Hub
             # client to switch back on. Off is live in both directions; this is
             # the one write that needs a reload, and the page shows the warning.
-            reply["warning"] = "Saved. Turning the Skill Hub source on takes effect after Raven reloads."
+            reply["warning"] = _SKILL_HUB_RELOAD_WARNING
         return reply
 
     if key == "skillForge.router.hub.init":
@@ -728,10 +734,16 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
         from raven.config.update import initialize_skill_hub_endpoint
 
         try:
-            initialize_skill_hub_endpoint()
+            seeded = initialize_skill_hub_endpoint()
         except ValueError as exc:
             raise ConfigValidationError(str(exc)) from exc
-        return {"applied": True, "previous": None}
+        reply: dict[str, Any] = {"applied": True, "previous": None}
+        if seeded is not None:
+            # The first-run page may already have a loop without a Hub client;
+            # the wizard surfaces this so the switch does not read on while
+            # retrieval waits for a restart.
+            reply["warning"] = _SKILL_HUB_RELOAD_WARNING
+        return reply
 
     if key in ("plugins.disabled", "tools.disabledTools", "skillForge.blocklist"):
         if not isinstance(value, list) or not all(isinstance(x, str) for x in value):

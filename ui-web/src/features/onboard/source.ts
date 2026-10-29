@@ -14,7 +14,8 @@ export const onboardSource: OnboardSource = {
     catch { return true }
   },
   seedSkillHub: async () => {
-    await gateway().call('settings.set', { key: 'skillForge.router.hub.init', value: true })
+    const r = await gateway().call('settings.set', { key: 'skillForge.router.hub.init', value: true })
+    return r.warning ?? null
   },
   scan: () => gateway().call('import.scan', {}),
   startImport: (platforms, tier) => gateway().call('import.run', { platforms, tier }),
