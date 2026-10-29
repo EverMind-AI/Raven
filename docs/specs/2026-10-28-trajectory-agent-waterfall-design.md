@@ -99,11 +99,14 @@ decoration; everything else is position.
    overlap the page exists to show.
 3. Between occupied intervals, any gap longer than 60s becomes a fixed-width
    break labelled with its real length (`12.4m idle`).
-4. `project(t)` and `unproject(x)` interpolate across the resulting piecewise
+4. After the last occupied interval the axis adds 15% of empty scale
+   (`TRAIL_PAD`), so the longest bar ends short of the track's edge and the
+   duration printed just past it has room.
+5. `project(t)` and `unproject(x)` interpolate across the resulting piecewise
    map, so every bar, the ruler, the overview and hit testing share it.
 
-Zoom and pan operate on the projected domain, as the current bar's viewport
-already does.
+Zoom (ctrl or cmd with the wheel, about the pointer) and pan (shift with the
+wheel) operate on the projected domain; a plain wheel scrolls the rows.
 
 ## Per-agent turn ordinals
 
@@ -139,13 +142,33 @@ are load-bearing for the tab-per-scope page and both are wrong for this one:
 the waterfall has to place every agent's entries at once, and a click on any of
 them has to select it.
 
-So the store grows a second derived set — every entry the page may show
-(hidden excluded unless revealed), indexed by entry id — and `select()` accepts
-an id from either index. `visible` keeps its meaning for the tab strip and the
-details pane's first-block preference; it stops being the only door.
+So the store grows a second derived set, `shown` — every entry the page may
+draw — and the waterfall selects with `selectAcross`, which takes any entry
+without moving the current scope. `visible` keeps its meaning for the current
+scope and the details pane's first-block preference; it stops being the only
+door.
 
-Agent naming reuses `scopes.ts`'s existing title logic so a group header, a tab
-and the details pane name a worker the same way.
+Agent naming reuses `scopes.ts`'s existing title logic so a group header, an
+overview lane and the details pane name a worker the same way.
+
+## An external agent's own steps
+
+A worker reached over ACP runs in its own process, so the trace used to hold
+one `subagent.external` span per run and nothing inside it: the waterfall would
+draw the worker as a single bar. The backend now writes what the agent said,
+thought and ran as child spans of that run, shaped like the main loop's
+(`llm.call` with `llm.input` / `llm.output`, `tool.call` with `tool.input` /
+`tool.output`), so the index and the page read them with no code of their own.
+A step ends where the next begins, and every step is held inside its run.
+
+Runs recorded before this existed still have their wire journal on disk, and
+`raven trajectory backfill-frames` writes their steps from it, under ids
+derived from the run so a second pass adds nothing; a run that wrote its steps
+while it ran says so (`subagent.external.steps`) and is left alone.
+
+Replay never re-runs an external agent -- the tool that launched it is answered
+from the recording -- so `load_recording` and the cassette minimizer leave out
+everything under a `subagent.external` span.
 
 ## The decisions this design takes
 
@@ -154,24 +177,25 @@ These were open, and are now settled here rather than left to the builder.
 - **The details pane stays.** `detailStore` is 1400 lines of block loading,
   cursors, width clamping, narrow-screen overlay and Escape ordering. The pane
   moves from beside a list to beside a waterfall; nothing inside it changes.
-- **Sub-agent Scope tabs become a filter, not a mode.** The waterfall shows
-  every agent at once, so switching tabs no longer changes what can be seen.
-  The strip keeps its job as a locator: clicking a tab scrolls to that agent
-  and selects its door entry.
+- **The Sub-agent Scope strip goes.** The waterfall shows every agent at once,
+  so a tab strip has nothing left to switch. Its one remaining job, finding a
+  worker, moves onto the rows: the arrow on a dispatching row selects the
+  worker's first row and scrolls to it.
 - **The duration threshold filter is removed.** It existed so the cost bar
   would not drown in sub-millisecond blocks. The waterfall answers the same
   problem with zoom and with turn-level collapsing, and a filter that can
   silently hide a span from the only view of it is worse than no filter. The
   `minChargedMs` preference, its detent scale and its popover go with it.
-- **Hidden entries stay hidden, with the existing switch.** `meta.hidden` is
-  the index's verdict, not a display preference; the toggle that reveals them
-  carries over unchanged.
+- **Hidden entries are drawn too.** `meta.hidden` is the index's verdict on
+  what a list may skip, but the waterfall is the only view of a span, and for
+  the reason the threshold filter goes, a row it hides is time nobody can
+  account for. Every entry the index returns has a row, and the switch goes.
 - **Turn rows are collapsed by default; agent groups are expanded.** A
   session's turn count is large and its agent count is small. Agent groups
   collapse too, for the DAG case where ten workers run at once.
-- **Rows are windowed.** `EntryList` already renders a window around the
-  viewport (`ROW_HEIGHT`, `OVERSCAN`, `windowOf`). The waterfall keeps that
-  approach; a 387-step session must not mount 387 rows × 3 levels.
+- **Rows are windowed.** Only the rows around the viewport mount (`windowOf`
+  over `ROW_HEIGHT`, `OVERSCAN` rows either side), the way the row list it
+  replaces did; a 387-step session must not mount 387 rows × 3 levels.
 - **Agents are a flat list.** A group per scope, ordered by first event, the
   host first. If a worker ever dispatches another, the child group is a
   sibling and the dispatch rule points at it; group nesting is not attempted.
@@ -182,19 +206,22 @@ These were open, and are now settled here rather than left to the builder.
 ## What is removed
 
 `DurationBar.tsx` and its canvas painter, `geometry.ts`'s block/slot model
-(anchor, dense-block gathering, `expand`), and the bucket popover. The parts of
-that arithmetic worth keeping — fit/zoom/pan on a viewport, and the hit test —
-are re-expressed against the new axis in a new module rather than carried
-over. `EntryList.tsx` is replaced by the agent/turn/span row renderer, but its
-window arithmetic and its keyboard behaviour are the starting point.
+(anchor, dense-block gathering, `expand`), the bucket popover, the duration
+threshold, the hidden-entries switch and the viewer preferences that held
+them, the Scope Tab strip, and the store state, styles and catalogue words
+only they used. The parts of that arithmetic worth keeping — fit/zoom/pan on a
+viewport, and the hit test — are re-expressed against the new axis in a new
+module rather than carried over. `EntryList.tsx` is replaced by the
+agent/turn/span row renderer, but its window arithmetic and its keyboard
+behaviour are the starting point.
 
 ## Non-goals
 
-- No change to `raven/trajectory/` or to the `trajectory.*` RPC surface. The
-  page is a mirror of what the index already holds; every field it needs
-  (`subagent_scope`, `opens_subagent_scope`, `dispatched_by_subagent_scope`,
-  `turn_span_id`, `parent_span_id`, `operation_start`, `operation_end`,
-  `duration_ms`, `meta.hidden`) is on the wire today.
+- No change to the `trajectory.*` RPC surface. The page is a mirror of what
+  the index already holds; every field it needs (`subagent_scope`,
+  `opens_subagent_scope`, `dispatched_by_subagent_scope`, `turn_span_id`,
+  `parent_span_id`, `operation_start`, `operation_end`, `duration_ms`) is on
+  the wire today.
 - No live streaming animation inside a running span. A running span's bar ends
   at `now` and extends on the clock tick the store already provides.
 - No changes to the chat view or to the Chat/Trace toggle.
