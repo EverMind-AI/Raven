@@ -62,6 +62,7 @@ class RelayProvider(LiteLLMShape):
             "disable_auto_cache_control": bool(self.disable_auto_cache_control),
             "extra_body": dict(self.extra_body or {}) or None,
             "model_overrides": dict(self.model_overrides or {}) or None,
+            "tls_verify": bool(self.tls_verify),
             "unparsed_reasoning": self._unparsed_reasoning,
             "generation": relay_wire.encode(getattr(self, "generation", None) or GenerationSettings()),
         }

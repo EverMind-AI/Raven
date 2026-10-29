@@ -647,6 +647,31 @@ def test_the_default_builder_makes_the_direct_provider_with_the_agents_settings(
     assert built.generation == generation and built.default_model == "custom/m"
 
 
+def test_the_spec_carries_every_construction_argument() -> None:
+    """The host builds an agent's provider from the spec alone, so whatever the construction takes, the spec carries.
+
+    Listed by hand, the spec misses an argument added to the construction later,
+    and the host then builds a provider unlike the agent's without a word.
+    ``export_env`` is the host's own choice, not the agent's.
+    """
+    import inspect
+
+    taken = set(inspect.signature(LiteLLMShape.__init__).parameters) - {"self", "export_env"}
+    carried = set(relay_provider.RelayProvider(default_model="custom/m").spec()) - {"generation"}
+    assert carried == taken
+
+
+def test_a_section_without_certificate_checks_keeps_them_off_on_the_host() -> None:
+    """``tls_verify`` off (a self-signed gateway) crosses with the construction, to the host and to the fallback."""
+    agent = relay_provider.RelayProvider(
+        default_model="custom/m", provider_name="custom", api_base="https://gateway.internal/v1", tls_verify=False
+    )
+    assert relay_server.build_litellm_provider(agent.spec()).tls_verify is False
+    assert agent._locally().tls_verify is False
+    checked = relay_provider.RelayProvider(default_model="custom/m", provider_name="custom")
+    assert relay_server.build_litellm_provider(checked.spec()).tls_verify is True
+
+
 @pytest.mark.parametrize(
     ("provider_name", "model", "names"),
     [
