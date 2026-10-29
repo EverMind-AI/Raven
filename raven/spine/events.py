@@ -37,6 +37,7 @@ class NoticeKind(StrEnum):
     # `thinking_only`, never the vendor's own body.
     LLM_RETRY = "llm_retry"
     # The turn ended on a silence marker: an outlet draws one faint line, a channel sends nothing.
+    # The detail, when set, is what that reply had streamed anyway, for a client to take back.
     SILENT_TURN = "silent_turn"
 
 

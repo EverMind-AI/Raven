@@ -552,25 +552,29 @@ class TurnController {
    * the turn reads as the one muted line `recordNotice` carries.
    *
    * The reply streams through `bufRef` and the live `streaming` text until the
-   * turn lands, so whatever of it was already drawn is taken back here and the
-   * commit in `recordMessageComplete` writes none of it. Whatever an earlier
-   * flush took out of the buffer (`flushStreamingSegment`, chiefly run when a
-   * tool call starts) is in the episodes and segments as narration, not the
-   * reply, and it stays.
-   *
-   * A message-tool reply is the exception: that tool streams its reply as token
-   * deltas and sends no `tool.start`, so the reply is still in `bufRef` unless a
-   * flush came after it, and this would take it back. It stays on screen only
-   * because the server sends no silent-turn notice for a turn the message tool
-   * answered, whatever the model ends it on.
+   * turn lands. `shown` is what the server says that reply had already streamed
+   * (a think block it inlined ahead of the marker), the end of the buffer, so
+   * that is taken back here and the commit in `recordMessageComplete` writes
+   * none of it. On a view that joined part-way, all the buffer holds may be the
+   * end of it. What the buffer held before it was said on the way -- narration
+   * a call with no `tool.start` left there, as one whose only tool was a
+   * message that went nowhere does -- and moves to the segments, as a flush
+   * when a tool call starts moves it: it stays, and it is not the reply.
    */
-  recordSilentTurn() {
+  recordSilentTurn(shown: string) {
     if (this.interrupted) {
       return
     }
 
     this.turnSilent = true
     this.streamTimer = clear(this.streamTimer)
+    const buf = this.bufRef
+    this.bufRef = buf.endsWith(shown) ? buf.slice(0, buf.length - shown.length) : shown.endsWith(buf) ? '' : buf
+
+    if (this.bufRef.trim()) {
+      this.flushStreamingSegment()
+    }
+
     this.bufRef = ''
     patchTurnState({ streaming: '' })
   }

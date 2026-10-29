@@ -914,6 +914,16 @@ async def test_a_silent_turn_notice_reaches_clients():
     TypeAdapter(TurnEvent).validate_python(emitter.emitted[0][1])
 
 
+async def test_a_silent_turn_notice_carries_what_its_reply_showed():
+    """The detail is the text the reply had streamed before it was read as the marker, for a client
+    to take back; the outlet passes it through as it came."""
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter)
+    await outlet.deliver(Notice(kind=NoticeKind.SILENT_TURN, detail="<think>x</think>", conversation_id="tui:c1"))
+    payload = {"kind": "silent_turn", "detail": "<think>x</think>", "transient": False}
+    assert emitter.emitted == [("tui:c1", {"type": "notice", "payload": payload})]
+
+
 async def test_a_retry_wait_rides_notice_marked_transient_and_tagged_with_its_lane():
     """The other notice the runtime raises about a turn, and the opposite of a
     blocked action: the turn is still running, so a client must draw it where the
