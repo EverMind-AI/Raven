@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from raven.agent.context.silence import SILENCE_INSTRUCTION
+from raven.agent.context.silence import SILENCE_INSTRUCTION, teaches_silence
 from raven.core.cron_stack import make_on_cron_job
 from raven.proactive_engine.schedulers.cron.types import (
     CronJob,
@@ -136,6 +136,7 @@ async def test_the_reminder_teaches_the_silence_marker(spine):
     text = spine.captured[0].text
     assert text.endswith("\n\n" + SILENCE_INSTRUCTION)
     assert text.count(SILENCE_INSTRUCTION) == 1
+    assert teaches_silence(text), "so the turn reads the loose rule the lesson asks for"
 
 
 # ─────────────────────────────────────────────────────────────────────

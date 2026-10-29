@@ -297,10 +297,12 @@ while user work is busy. Wake drives Heartbeat, not Sentinel's tick loop.
 
 A successful Cron turn that explicitly replies uses the Spine's delivery
 path and does not enqueue a completion event or wake Heartbeat to repeat the
-reminder. The reminder also teaches the `[SILENT]` marker. Cron is a
-proactive origin, so a marker alone on the first or last line, or `[SILENT]`
-opening the reply, counts too, and a note on why the model stayed quiet does
-not defeat it. A run that ends this way is recorded as a success and delivers
+reminder. The reminder also teaches the `[SILENT]` marker, and a proactive
+turn whose prompt teaches it reads the marker loosely: a marker alone on the
+first or last line, or `[SILENT]` opening the reply, counts too, and a note on
+why the model stayed quiet does not defeat it. A proactive turn that was never
+taught the marker (a heartbeat task, a relayed sub-agent result, a sentinel
+notice) honours only an exact `[SILENT]`. A run that ends this way is recorded as a success and delivers
 nothing: it enqueues no event and wakes no Heartbeat. A run in which the model
 produced no output after every retry is recorded as failed, delivers nothing,
 and does not wake Heartbeat either. Every other failure still wakes

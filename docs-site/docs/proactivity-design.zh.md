@@ -239,9 +239,10 @@ HeartbeatService（`schedulers/heartbeat/service.py`）通过结构化模型决�
 限制频率，并在用户工作繁忙时延后。Wake 驱动 Heartbeat，不驱动 Sentinel 的节拍循环。
 
 已明确回复的成功 Cron 轮次通过 Spine 投递，不再生成完成事件或唤醒 Heartbeat 重复提醒。
-提醒文本还会教模型使用 `[SILENT]` 标记。Cron 属于主动来源（proactive origin），
+提醒文本还会教模型使用 `[SILENT]` 标记；prompt 教过标记的主动来源（proactive origin）轮次按宽松规则读：
 标记单独占第一行或最后一行、或回复以 `[SILENT]` 开头，同样算沉默，
-所以模型附带的一句说明不会让标记失效。以标记结束的运行记为成功、不投递：
+所以模型附带的一句说明不会让标记失效。没有教过标记的主动轮次（heartbeat 任务、转述的子代理结果、
+sentinel 通知）只认完整的 `[SILENT]`。以标记结束的运行记为成功、不投递：
 不生成事件，也不唤醒 Heartbeat。模型在所有重试后仍什么都没给的运行记为失败、不投递，
 同样不唤醒 Heartbeat。其他失败、既没有回复也没有标记的成功轮次、错过的提醒以及自动禁用
 仍会唤醒 Heartbeat。任务重试成功后会清除自身待处理的失败事件；明确回复或以 `[SILENT]`
