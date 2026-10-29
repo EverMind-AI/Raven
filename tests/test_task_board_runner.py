@@ -268,3 +268,57 @@ async def test_malformed_arguments_are_asked_again_not_raised(tmp_path):
 
     assert board is not None
     assert call.seen[1][-1]["content"].startswith("Rejected: each step must be an object")
+
+
+def _gated(reply: LLMResponse) -> tuple[asyncio.Event, object]:
+    gate = asyncio.Event()
+
+    async def call(_rows):
+        await gate.wait()
+        return reply
+
+    return gate, call
+
+
+async def test_reader_actions_do_not_wait_for_a_running_update(tmp_path):
+    service = _service(tmp_path)
+    old = TaskGroup("g_old", "Release notes", "active", 1, 1, [ProgressStep("s", "T0", None, "Draft", [])])
+    save_board(service.session_dir(KEY), Board([old], []))
+    gate, call = _gated(GOOD)
+    run = asyncio.create_task(_run(service, call))
+    await asyncio.sleep(0.01)
+
+    board = await asyncio.wait_for(service.set_status(KEY, "g_old", "completed"), timeout=1)
+
+    assert board.groups[0].status == "completed"
+    gate.set()
+    await run
+    stored = load_board(service.session_dir(KEY))
+    assert [(g.title, g.status) for g in stored.groups] == [("Release notes", "completed"), ("Fix bug A", "waiting")]
+
+
+async def test_an_update_for_an_undone_turn_is_dropped(tmp_path):
+    service = _service(tmp_path)
+    gate, call = _gated(GOOD)
+    run = asyncio.create_task(_run(service, call, turn_at="T9"))
+    await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(service.drop_turns(KEY, {"T9"}), timeout=1)
+    gate.set()
+
+    assert await run is None
+    stored = load_board(service.session_dir(KEY))
+    assert stored.groups == [] and stored.unassigned == []
+
+
+async def test_an_update_that_outlives_a_clear_is_dropped(tmp_path):
+    service = _service(tmp_path)
+    gate, call = _gated(GOOD)
+    run = asyncio.create_task(_run(service, call))
+    await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(service.reset(KEY), timeout=1)
+    gate.set()
+
+    assert await run is None
+    assert load_board(service.session_dir(KEY)).groups == []
