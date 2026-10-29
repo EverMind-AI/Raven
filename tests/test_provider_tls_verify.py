@@ -8,13 +8,21 @@ covers:
   absent, so LiteLLM builds and verifies as before
 - the anthropic-messages provider builds its httpx clients with `verify=False`
   only when the section asked
+- end to end, against a gateway signed by a root no store holds: an opted-out
+  section reaches it on both of LiteLLM's client families (the OpenAI SDK and
+  LiteLLM's own HTTP handler), chat and stream, sending the request once; a
+  section that did not opt out is refused
+- a failure other than a refused certificate is not sent again
 
-Mocks patch `raven.providers.litellm_provider.acompletion` (imported at module
+The spy tests patch `raven.providers.litellm_provider.acompletion` (imported at module
 top, so patching `litellm.acompletion` post-import would not be picked up).
 """
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -23,6 +31,7 @@ import pytest
 from raven.config.schema import ProviderConfig
 from raven.contracts.llm_provider import GenerationSettings
 from raven.providers.litellm_provider import LiteLLMProvider
+from tests._tls import OpenAIChat, https_endpoint, keep_loopback_off_proxies, private_ca
 
 
 class _FakeDelta:
@@ -235,3 +244,138 @@ async def test_the_anthropic_client_verifies_by_default(
 
     await provider.chat(messages=[{"role": "user", "content": "hi"}], model="anthropic/claude-sonnet-5")
     assert built and built[-1].get("verify") is True
+
+
+# LiteLLM sends a request through one of two client families: the OpenAI SDK
+# (custom gateways, LM Studio, ...) or its own HTTP handler (vLLM, Ollama,
+# DeepSeek, Mistral, ...). Each adopts a prebuilt client of its own kind only,
+# so the opt-out is exercised end to end, against a gateway whose certificate
+# this machine holds no root for, on one section of each family.
+_SECTIONS = [
+    pytest.param("custom", "served", id="openai-sdk-route"),
+    pytest.param("vllm", "hosted_vllm/served", id="litellm-http-route"),
+]
+
+
+def _section(provider_name: str, model: str, origin: str, *, tls_verify: bool) -> LiteLLMProvider:
+    provider = LiteLLMProvider(
+        api_key="test-key",
+        api_base=f"{origin}/v1",
+        default_model=model,
+        provider_name=provider_name,
+        tls_verify=tls_verify,
+    )
+    provider.generation = GenerationSettings(timeout=30.0, stream_idle_timeout=30.0, first_byte_timeout=15.0)
+    return provider
+
+
+async def _release(provider: LiteLLMProvider) -> None:
+    """Close the HTTP client an opted-out section built, so its session ends with the test's loop."""
+    if provider._verify_off_http_handler is not None:
+        await provider._verify_off_http_handler.close()
+
+
+@pytest.fixture
+def gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[str, type[OpenAIChat]]]:
+    """A chat gateway on 127.0.0.1 signed by a root no store holds, and the requests it saw."""
+    keep_loopback_off_proxies(monkeypatch)
+    # LiteLLMProvider exports a section's key into the process environment.
+    for name in ("HOSTED_VLLM_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.setenv(name, "test-key")
+    handler = type("Chat", (OpenAIChat,), {"requests": []})
+    ca = private_ca(tmp_path / "pki")
+    with https_endpoint(ca.server, handler) as origin:
+        yield origin, handler
+
+
+@pytest.mark.parametrize(("provider_name", "model"), _SECTIONS)
+async def test_an_opted_out_section_reaches_its_gateway(
+    gateway: tuple[str, type[OpenAIChat]], provider_name: str, model: str
+) -> None:
+    """The request is sent once, whichever client family LiteLLM picks.
+
+    A section on LiteLLM's own HTTP route learns that from a refused handshake,
+    which ends before the request is written, so the gateway still sees one.
+    """
+    origin, handler = gateway
+    provider = _section(provider_name, model, origin, tls_verify=False)
+    reply = await provider.chat(messages=[{"role": "user", "content": "ping"}], model=model)
+    await _release(provider)
+
+    assert (reply.finish_reason, reply.content) == ("stop", "pong")
+    assert len(handler.requests) == 1
+
+
+@pytest.mark.parametrize(("provider_name", "model"), _SECTIONS)
+async def test_an_opted_out_section_streams_from_its_gateway(
+    gateway: tuple[str, type[OpenAIChat]], provider_name: str, model: str
+) -> None:
+    origin, handler = gateway
+    provider = _section(provider_name, model, origin, tls_verify=False)
+    text = "".join(
+        [
+            delta.content or ""
+            async for delta in provider.chat_stream(messages=[{"role": "user", "content": "ping"}], model=model)
+        ]
+    )
+    await _release(provider)
+
+    assert text == "pong"
+    assert len(handler.requests) == 1
+
+
+async def test_the_first_calls_of_an_opted_out_section_reach_its_gateway_together(
+    gateway: tuple[str, type[OpenAIChat]],
+) -> None:
+    """Calls that went out together through the ignored client are each sent again, not only the first."""
+    origin, handler = gateway
+    provider = _section("vllm", "hosted_vllm/served", origin, tls_verify=False)
+    replies = await asyncio.gather(
+        *(provider.chat(messages=[{"role": "user", "content": "ping"}], model="hosted_vllm/served") for _ in range(3))
+    )
+    await _release(provider)
+
+    assert [(reply.finish_reason, reply.content) for reply in replies] == [("stop", "pong")] * 3
+    assert len(handler.requests) == 3
+
+
+@pytest.mark.parametrize(("provider_name", "model"), _SECTIONS)
+async def test_a_section_that_did_not_opt_out_still_refuses_the_gateway(
+    gateway: tuple[str, type[OpenAIChat]], provider_name: str, model: str
+) -> None:
+    origin, handler = gateway
+    reply = await _section(provider_name, model, origin, tls_verify=True).chat(
+        messages=[{"role": "user", "content": "ping"}], model=model
+    )
+
+    assert reply.finish_reason == "error"
+    assert handler.requests == []
+
+
+@pytest.mark.parametrize("streamed", [False, True], ids=["chat", "stream"])
+async def test_an_opted_out_call_that_failed_for_another_reason_is_not_sent_again(
+    monkeypatch: pytest.MonkeyPatch, streamed: bool
+) -> None:
+    """Only a refused certificate says the client was ignored before anything was sent.
+
+    Any other failure may have reached the gateway, so sending again could run
+    the request twice.
+    """
+    sent: list[Any] = []
+
+    async def failing_acompletion(**kwargs: Any):
+        sent.append(kwargs.get("client"))
+        raise httpx.ReadError("connection reset")
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", failing_acompletion)
+    provider = _provider(False)
+    messages = [{"role": "user", "content": "hi"}]
+    if streamed:
+        with pytest.raises(httpx.ReadError):
+            async for _delta in provider.chat_stream(messages=messages, model="openai/gpt-4o"):
+                pass
+    else:
+        reply = await provider.chat(messages=messages, model="openai/gpt-4o")
+        assert reply.finish_reason == "error"
+
+    assert len(sent) == 1

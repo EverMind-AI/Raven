@@ -29,7 +29,7 @@ from raven.config.update_providers import (
 )
 from raven.config.update_providers import test_provider as probe_provider
 from raven.providers.registry import PROVIDERS as _PROVIDERS
-from tests._tls import OpenAIModels, connect_proxy, https_endpoint, private_ca
+from tests._tls import OpenAIModels, connect_proxy, https_endpoint, keep_loopback_off_proxies, private_ca
 
 # The real probe, kept from module import time: the `_no_provider_probe`
 # autouse fixture replaces the module attribute in every test, and the two
@@ -42,23 +42,6 @@ def _restore_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     import raven.config.update_providers as u
 
     monkeypatch.setattr(u, "_probe_models_endpoint", _REAL_PROBE)
-
-
-def _loopback_handshake_is_not_proxied(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep a system proxy out of a throwaway gateway on ``127.0.0.1``.
-
-    Deleting the proxy variables is not enough on Windows: the probe's client
-    keeps httpx's default ``trust_env=True``, which there also reads the WinINET
-    registry, so the request for ``127.0.0.1`` goes to the system proxy, the
-    tunnel dies mid handshake, and the probe reports ``network_error`` instead
-    of a certificate verdict. ``NO_PROXY`` is the one setting that turns that
-    off on every platform, and unlike passing a transport it leaves the
-    client's ``verify`` knob -- the thing under test -- on the real path.
-    """
-    for var in _PROXY_VARIABLES:
-        monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
-    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
 
 
 @pytest.fixture
@@ -701,7 +684,7 @@ def test_a_section_that_opted_out_accepts_the_same_certificate(
     model calls could actually live with. The proxy goes, so the handshake is
     this machine's alone.
     """
-    _loopback_handshake_is_not_proxied(monkeypatch)
+    keep_loopback_off_proxies(monkeypatch)
     _restore_probe(monkeypatch)
     ca = private_ca(tmp_path / "pki")
     with https_endpoint(ca.server, OpenAIModels) as origin:
@@ -720,7 +703,7 @@ def test_an_undressed_section_still_verifies(cfg_path: Path, tmp_path: Path, mon
     The field defaults to True, and the probe of a section that never turned the
     knob reads the same `certificate_untrusted` result as before.
     """
-    _loopback_handshake_is_not_proxied(monkeypatch)
+    keep_loopback_off_proxies(monkeypatch)
     _restore_probe(monkeypatch)
     ca = private_ca(tmp_path / "pki")
     with https_endpoint(ca.server, OpenAIModels) as origin:

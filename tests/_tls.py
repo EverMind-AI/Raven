@@ -19,6 +19,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -107,6 +108,75 @@ class OpenAIModels(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, *args: object) -> None:
         pass
+
+
+class OpenAIChat(http.server.BaseHTTPRequestHandler):
+    """Answers ``POST .../chat/completions`` with ``pong``, streamed or not, as an OpenAI-compatible gateway does.
+
+    ``requests`` collects the path of every request that got as far as HTTP;
+    give each test its own list with ``type("Chat", (OpenAIChat,), {"requests": []})``.
+    """
+
+    requests: list[str]
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length") or 0)
+        body = json.loads(self.rfile.read(length) or b"{}")
+        self.requests.append(self.path)
+        model = body.get("model")
+        if body.get("stream"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            for delta, finish in (({"role": "assistant", "content": "pong"}, None), ({}, "stop")):
+                chunk = {
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion.chunk",
+                    "created": 0,
+                    "model": model,
+                    "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+                }
+                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+            self.wfile.write(b"data: [DONE]\n\n")
+            return
+        answer = json.dumps(
+            {
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 0,
+                "model": model,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(answer)))
+        self.end_headers()
+        self.wfile.write(answer)
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+
+_PROXY_VARIABLES = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy")
+
+
+def keep_loopback_off_proxies(monkeypatch: Any) -> None:
+    """Keep a system proxy out of a throwaway gateway on ``127.0.0.1``.
+
+    Deleting the proxy variables is not enough on Windows: a client that keeps
+    httpx's default ``trust_env=True`` there also reads the WinINET registry, so
+    the request for ``127.0.0.1`` goes to the system proxy, the tunnel dies mid
+    handshake, and the caller sees a network error instead of a certificate
+    verdict. ``NO_PROXY`` is the one setting that turns that off on every
+    platform, and unlike passing a transport it leaves the client's ``verify``
+    knob -- the thing these tests exercise -- on the real path.
+    """
+    for var in _PROXY_VARIABLES:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
 
 
 @contextmanager
