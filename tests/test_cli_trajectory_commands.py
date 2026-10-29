@@ -2560,3 +2560,21 @@ def test_receiver_reports_an_unusable_save_dir(tmp_path, monkeypatch, exc):
     (line,) = [line for line in r.output.splitlines() if "Cannot prepare" in line]
     assert str(deep) in line and exc.strerror in line
     assert isinstance(r.exception, SystemExit)
+
+
+def test_backfill_frames_reports_what_it_wrote_and_what_it_closed(monkeypatch):
+    from raven.trajectory import frames_backfill
+
+    seen: dict = {}
+
+    def backfill(*, session_key=None, dry_run=False):
+        seen.update(session_key=session_key, dry_run=dry_run)
+        return {"runs": 3, "written": 1, "steps": 7, "already": 2, "repaired": 4}
+
+    monkeypatch.setattr(frames_backfill, "backfill", backfill)
+    r = runner.invoke(trajectory_app, ["backfill-frames", "--session", "tui:x", "--dry-run"])
+    assert r.exit_code == 0, r.output
+    assert seen == {"session_key": "tui:x", "dry_run": True}
+    assert "7 step span(s) for 1 of 3" in r.output
+    assert "2 already on record" in r.output
+    assert "4 step(s)" in r.output

@@ -1285,4 +1285,32 @@ def trajectory_list(
     console.print(table)
 
 
+@trajectory_app.command("backfill-frames")
+def trajectory_backfill_frames(
+    session: str | None = typer.Option(None, "--session", help="Only this session key"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Count what would be written, without writing"),
+) -> None:
+    """Write an external run's frame journal back as spans.
+
+    Runs recorded before their steps were spans left only the journal pointer,
+    so the timeline shows one summary row. This turns each run's stretch into
+    the ``llm.call`` / ``tool.call`` rows it should have written -- the prompt,
+    what it said and thought, and its tool calls. Idempotent: a second pass
+    finds the spans and writes none, except to close a step an earlier pass
+    left running past its run's end.
+    """
+    from raven.trajectory import frames_backfill
+
+    result = frames_backfill.backfill(session_key=session, dry_run=dry_run)
+    verb = "Would write" if dry_run else "Wrote"
+    message = (
+        f"{verb} {result['steps']} step span(s) for {result['written']} of {result['runs']} "
+        f"external run(s); {result['already']} already on record."
+    )
+    if result.get("repaired"):
+        closing = "Would close" if dry_run else "Closed"
+        message += f" {closing} {result['repaired']} step(s) that ran past their run's end."
+    console.print(message, highlight=False)
+
+
 __all__ = ["trajectory_app"]
