@@ -214,6 +214,9 @@ def record_steps(
     ``elapsed_ms`` is timed from before that (the caller resolves its MCP grant
     first), and only stands in for a span that cannot say.
 
+    A step's artifacts are written with the step: a dry run, and a step whose
+    id is already on record (``skip_ids``), leave no file behind.
+
     Nothing here may fail a run: the caller's answer is already on its way.
     """
     emitted: list[str] = []
@@ -225,7 +228,7 @@ def record_steps(
         floor = started_at or _utc(identity.get("start")) or close - timedelta(milliseconds=max(0, elapsed_ms))
         ats = [_utc(event.get("at")) for event in events]
         results = {event.get("id"): event for event in events if event.get("t") == "result"}
-        steps: list[tuple[str, str, datetime, datetime, dict[str, Any]]] = []
+        steps: list[tuple[str, str, datetime, datetime, list[tuple[str, Any]], dict[str, Any]]] = []
 
         def span_end(index: int) -> datetime:
             for later in ats[index + 1 :]:
@@ -241,10 +244,8 @@ def record_steps(
                     "llm",
                     floor,
                     first,
-                    {
-                        **_artifact(span, "llm.input", {"messages": [{"role": "user", "content": prompt}]}),
-                        "llm.input_preview": prompt[:_PREVIEW_CHARS],
-                    },
+                    [("llm.input", {"messages": [{"role": "user", "content": prompt}]})],
+                    {"llm.input_preview": prompt[:_PREVIEW_CHARS]},
                 )
             )
         for index, event in enumerate(events):
@@ -261,10 +262,8 @@ def record_steps(
                         "llm",
                         at,
                         end,
-                        {
-                            **_artifact(span, "llm.output", {"content": text}),
-                            "llm.output_preview": text[:_PREVIEW_CHARS],
-                        },
+                        [("llm.output", {"content": text})],
+                        {"llm.output_preview": text[:_PREVIEW_CHARS]},
                     )
                 )
             elif kind == "thought":
@@ -275,10 +274,8 @@ def record_steps(
                         "llm",
                         at,
                         end,
-                        {
-                            **_artifact(span, "llm.output", {"content": "", "reasoning_content": text}),
-                            "llm.output_preview": text[:_PREVIEW_CHARS],
-                        },
+                        [("llm.output", {"content": "", "reasoning_content": text})],
+                        {"llm.output_preview": text[:_PREVIEW_CHARS]},
                     )
                 )
             elif kind == "user":
@@ -289,10 +286,8 @@ def record_steps(
                         "llm",
                         at,
                         end,
-                        {
-                            **_artifact(span, "llm.input", {"messages": [{"role": "user", "content": text}]}),
-                            "llm.input_preview": text[:_PREVIEW_CHARS],
-                        },
+                        [("llm.input", {"messages": [{"role": "user", "content": text}]})],
+                        {"llm.input_preview": text[:_PREVIEW_CHARS]},
                     )
                 )
             elif kind == "call":
@@ -302,27 +297,30 @@ def record_steps(
                     arguments = call.arguments_json() if call is not None else "{}"
                 except Exception:  # noqa: BLE001 — a call we cannot read is still a row
                     arguments = "{}"
+                artifacts: list[tuple[str, Any]] = [("tool.input", {"name": name, "params": arguments or "{}"})]
                 attributes: dict[str, Any] = {
-                    **_artifact(span, "tool.input", {"name": name, "params": arguments or "{}"}),
                     "tool.args_preview": (arguments or "")[:_PREVIEW_CHARS],
                     "tool.name": name,
                 }
                 result = results.get(event.get("id"))
                 if result is not None:
                     text = str(result.get("text") or "")
-                    attributes.update(_artifact(span, "tool.output", {"result": text, "ok": result.get("ok")}))
+                    artifacts.append(("tool.output", {"result": text, "ok": result.get("ok")}))
                     attributes["tool.result_preview"] = text[:_PREVIEW_CHARS]
                     end = max(end, _utc(result.get("at")) or end)
-                steps.append(("tool.call", "tool", at, end, attributes))
-        for index, (name, span_type, start, end, attributes) in enumerate(steps):
+                steps.append(("tool.call", "tool", at, end, artifacts, attributes))
+        for index, (name, span_type, start, end, artifacts, attributes) in enumerate(steps):
             if ended_at is not None:
                 end = min(end, ended_at)
             span_id = f"span-{id_seed}-{index}" if id_seed else tracing_context.new_span_id()
             if skip_ids is not None and span_id in skip_ids:
                 continue
             emitted.append(span_id)
-            if not dry_run:
-                _step_span(span, identity, name, span_type, start, end, attributes, span_id)
+            if dry_run:
+                continue
+            for key, payload in artifacts:
+                attributes.update(_artifact(span, key, payload))
+            _step_span(span, identity, name, span_type, start, end, attributes, span_id)
     except Exception:  # noqa: BLE001 — an audit trail must not take down the run
         logger.debug("tracing: record_steps failed", exc_info=True)
     return emitted
