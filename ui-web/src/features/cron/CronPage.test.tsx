@@ -7,6 +7,7 @@ import * as confirmStore from '../../state/confirm'
 import * as lang from '../../state/lang'
 import * as settingsDialog from '../../state/settings'
 import { resetSources, setSources } from '../../state/sources'
+import { _resetForTests as resetToasts } from '../../state/toast'
 import { domSnapshot } from '../../test/domSnapshot'
 import { mountPageRoot } from '../../test/pageRoot'
 import { CronApp } from './CronPage'
@@ -320,6 +321,47 @@ describe('cron island', () => {
     expect(saved).toEqual(['renamed'])
     /* And the reader is still on the job. */
     expect(nameBox()).toBeTruthy()
+  })
+
+  /* A save the server answers with an existing job that already carries the
+     same instruction wrote nothing, so the notice says no job was created
+     instead of "saved". The page root renders a notice into the #toasts host
+     it was raised in, which install() leaves out, so each case adds one. */
+  describe('a save that lands on an existing job', () => {
+    const notices = (): Array<string | null> =>
+      [...document.querySelectorAll('#toasts .toast .t')].map((n) => n.textContent)
+    const flush = async (): Promise<void> => {
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+    }
+
+    it('says so when it was a create', async () => {
+      const existing = job({ id: 'j9', name: 'evening digest' })
+      install([existing], { save: async () => ({ row: existing, outcome: 'skipped' }) })
+      document.body.insertAdjacentHTML('afterbegin', '<div id="toasts"></div>')
+      resetToasts()
+      await mount()
+      await act(async () => { store.openSheet(job({ id: 'new', name: 'digest again' })) })
+      await act(async () => {
+        ;(await screen.findByText('gui.cron.create')).click()
+      })
+      await flush()
+      expect(notices()).toEqual(['gui.cron.existing_kept'])
+    })
+
+    /* An edit whose job was deleted meanwhile is stored as a new add, which
+       can land on another job carrying the same instruction. */
+    it('says so when it was an edit', async () => {
+      install([job()], { save: async (d) => ({ row: { ...job(), ...d }, outcome: 'skipped' }) })
+      document.body.insertAdjacentHTML('afterbegin', '<div id="toasts"></div>')
+      resetToasts()
+      await mount()
+      await act(async () => {
+        rowText('morning digest').click()
+      })
+      await retype('renamed')
+      await flush()
+      expect(notices()).toEqual(['gui.cron.existing_kept'])
+    })
   })
 
   /* A blur starts the save and the answer lands later, so the reader is free

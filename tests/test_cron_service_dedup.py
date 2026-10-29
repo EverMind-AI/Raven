@@ -371,6 +371,20 @@ def test_same_slot_identical_message_reuses_an_overdue_job(svc):
     assert stored[0].state.next_run_at_ms == overdue, "the overdue fire must stay pending"
 
 
+def test_same_cron_expr_in_another_zone_is_another_slot(svc):
+    """A cron expression names a wall-clock time, so the same expression in
+    another zone fires at another instant: the schedule layer must not reuse
+    the existing job for it."""
+    first = _add(svc, "take the morning meds", CronSchedule(kind="cron", expr="0 8 * * *", tz="Asia/Shanghai"))
+    first.state.next_run_at_ms = None
+    svc._save_store()
+
+    again = _add(svc, "take the morning meds", CronSchedule(kind="cron", expr="0 8 * * *", tz="America/Vancouver"))
+
+    assert again.id != first.id
+    assert sorted(j.schedule.tz for j in _stored(svc)) == ["America/Vancouver", "Asia/Shanghai"]
+
+
 @pytest.mark.parametrize("gap_minutes", [5, 10])
 def test_same_kind_distinct_messages_minutes_apart_are_kept(svc, gap_minutes):
     base = 2_000_000_000_000
@@ -439,6 +453,23 @@ def test_outcome_skipped_still_reports_a_matching_schedule(svc):
     assert res.schedule_matches is True
     assert res.job.id == first.id
     assert [j.id for j in svc.list_jobs()] == [first.id], "nothing was written"
+
+
+def test_outcome_skipped_in_another_zone_is_not_a_matching_schedule(svc):
+    """The same cron expression in another zone fires at another instant, so a
+    skip on it must not report the requested schedule as already in effect."""
+    first = _add(svc, "take the pill", CronSchedule(kind="cron", expr="0 8 * * *", tz="Asia/Shanghai"))
+    res = svc.add_job_with_outcome(
+        name="take the pill",
+        schedule=CronSchedule(kind="cron", expr="0 8 * * *", tz="America/Vancouver"),
+        message="take the pill",
+        channel="tui",
+        to="direct",
+    )
+    assert res.outcome == "skipped"
+    assert res.schedule_matches is False
+    assert res.job.id == first.id
+    assert res.job.schedule.tz == "Asia/Shanghai", "the stored zone stays"
 
 
 def test_outcome_updated_with_schedule_replaced_for_topic_tag(svc):
