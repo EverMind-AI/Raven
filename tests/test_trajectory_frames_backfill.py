@@ -352,3 +352,80 @@ def test_a_result_stamped_after_the_run_closed_does_not_stretch_its_step(tmp_pat
 
     tool = next(s for s in captured if s["name"] == "tool.call")
     assert datetime.fromisoformat(tool["endTime"]) == datetime.fromisoformat(RUN_END)
+
+
+def test_a_dry_run_or_a_step_already_on_record_persists_no_artifact(monkeypatch):
+    """Artifacts are part of writing a step: a dry run counts the steps, and a
+    step already on record is skipped, so neither may leave a file behind."""
+    from raven.agent.subagent.backends import observability
+    from raven.tracing import spans as tracing_spans
+
+    persisted: list[str] = []
+    emitted: list[dict] = []
+
+    def persist(kind, meta, payload, *, label=None):
+        persisted.append(kind)
+        return {"path": f"/artifacts/{kind}.json", "sha1": "x", "bytes": 1}
+
+    monkeypatch.setattr(tracing_spans, "persist_artifact", persist)
+    monkeypatch.setattr(tracing_spans, "emit", emitted.append)
+
+    class Handle:
+        def identity(self):
+            return {
+                "trace_id": "t",
+                "span_id": "ext",
+                "session_key": None,
+                "channel": None,
+                "chat_id": None,
+                "surface": None,
+            }
+
+    events = [{"t": "say", "text": "done", "at": datetime.now().isoformat()}]
+
+    def steps(**how):
+        return observability.record_steps(
+            Handle(), prompt="do it", events=events, elapsed_ms=10, id_seed="0123456789", **how
+        )
+
+    counted = steps(dry_run=True)
+    assert len(counted) == 2
+    assert (persisted, emitted) == ([], [])
+
+    assert steps(skip_ids=set(counted)) == []
+    assert (persisted, emitted) == ([], [])
+
+    assert steps() == counted
+    assert sorted(persisted) == ["llm.input", "llm.output"]
+    assert len(emitted) == 2
+
+
+def test_a_dry_run_and_a_second_pass_leave_the_store_as_they_found_it(tmp_path: Path, monkeypatch):
+    from raven.tracing import spans as tracing_spans
+
+    state = _state(tmp_path)
+    journal = tmp_path / "journal.jsonl"
+    _journal(journal)
+    _spans(state, journal)
+    monkeypatch.setenv("RAVEN_TRACING", "1")
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(state))
+    tracing_spans._store = None
+
+    def files() -> dict[str, bytes]:
+        return {str(p.relative_to(state)): p.read_bytes() for p in state.rglob("*") if p.is_file()}
+
+    try:
+        before = files()
+        dry = frames_backfill.backfill(state, dry_run=True)
+        assert dry["written"] == 1 and dry["steps"] >= 3
+        assert files() == before
+
+        frames_backfill.backfill(state)
+        written = files()
+        assert any("artifact" in name for name in set(written) - set(before)), "the real pass writes artifacts"
+
+        again = frames_backfill.backfill(state)
+        assert again["written"] == 0
+        assert files() == written
+    finally:
+        tracing_spans._store = None
