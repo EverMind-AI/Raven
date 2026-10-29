@@ -92,7 +92,7 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
       'src/features/transcript/mount': {
         nudge: () => {},
         stopStream: () => {},
-        finishTurn: () => log.push(['foldTurn']),
+        finishTurn: (_st: unknown, steps: unknown[]) => log.push(['foldTurn', steps.length]),
         artifacts: () => log.push(['artifacts']),
         turnKept: () => turnKept,
         killStatus: () => log.push(['killStatus']),
@@ -241,6 +241,7 @@ describe('the turn after a stop', () => {
     await stopOnLateFrame(h, { type: 'token.delta', payload: { text: 'a-tail' } })
 
     h.pipeline.dispatch(opener)
+    expect(h.runtime.state().steps).toHaveLength(0)
     h.pipeline.dispatch({ type: 'token.delta', payload: { text: 'b1' } })
 
     expect(h.steps.map((s) => s.text)).toEqual(['a1', 'a-tail', 'b1'])
@@ -258,10 +259,25 @@ describe('the turn after a stop', () => {
     expect(turn.phase()).toBe('streaming')
 
     h.pipeline.dispatch(opener)
+    expect(h.runtime.state().steps).toHaveLength(0)
     h.pipeline.dispatch({ type: 'token.delta', payload: { text: 'b1' } })
 
     expect(h.steps.map((s) => s.text)).toEqual(['a1', 'a-tail', 'b1'])
     expect(h.runtime.state().say).toBe('b1')
+  })
+
+  it('hands the fold no stale step when the next turn ends without prose', async () => {
+    /* A turn stopped before its first token has no prose of its own, so the
+       fold's `said` fallback walks the step list -- and the stopped turn's
+       tail would be promoted as this turn's answer if it were still there. */
+    const h = await harness()
+    await stopOnLateFrame(h, { type: 'token.delta', payload: { text: 'a-tail' } })
+    h.pipeline.dispatch({ type: 'message.start', payload: { content: 'ask B', turn_id: 'B' } })
+
+    h.runtime.stop()
+    await h.settle()
+
+    expect(h.did('foldTurn').at(-1)).toEqual(['foldTurn', 0])
   })
 
   it.each([
