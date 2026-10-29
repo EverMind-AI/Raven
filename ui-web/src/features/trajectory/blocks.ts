@@ -166,8 +166,7 @@ const EVIDENCE: Record<string, string> = {
 
 export const evidenceKey = (code: string): string | null => EVIDENCE[code] ?? null
 
-/* What the timing tab says about the charge: one sentence per basis, the
-   same three the duration bar's hover will read. */
+/* What the timing tab says about the charge: one sentence per basis. */
 const BASIS: Record<string, string> = {
   zero: 'gui.trajectory.basis.zero',
   span_full: 'gui.trajectory.basis.span_full',
