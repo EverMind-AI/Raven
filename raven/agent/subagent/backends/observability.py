@@ -200,7 +200,9 @@ def record_steps(
     A step ends when the next one starts; the last one ends with the run.
     ``ended_at`` is that end when it is already known -- a backfill replaying a
     run long after it closed -- and every step is held inside it. A live run
-    ends now.
+    ends now. The first step, the prompt, starts when the run's span opened:
+    ``elapsed_ms`` is timed from before that (the caller resolves its MCP grant
+    first), and only stands in for a span that cannot say.
 
     Nothing here may fail a run: the caller's answer is already on its way.
     """
@@ -210,7 +212,7 @@ def record_steps(
         if not identity.get("trace_id") or not identity.get("span_id"):
             return emitted
         close = ended_at or datetime.now(timezone.utc)
-        floor = started_at or close - timedelta(milliseconds=max(0, elapsed_ms))
+        floor = started_at or _utc(identity.get("start")) or close - timedelta(milliseconds=max(0, elapsed_ms))
         ats = [_utc(event.get("at")) for event in events]
         results = {event.get("id"): event for event in events if event.get("t") == "result"}
         steps: list[tuple[str, str, datetime, datetime, dict[str, Any]]] = []
