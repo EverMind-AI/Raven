@@ -79,7 +79,7 @@ const changesSettings = (name: string | undefined, args: unknown): boolean => {
    it is here because reading them in this order is how the turn reads. */
 export const STAGES: readonly Stage[] = [
   arm('message.start', (rt, p) => {
-    if (turn.phase() !== 'streaming') dropStaleSteps(rt)
+    dropStaleSteps(rt)
     /* Read BEFORE the phase is set: the window that sent this turn has already
        drawn the question; a window that is only watching has not.
 
@@ -125,7 +125,7 @@ export const STAGES: readonly Stage[] = [
   }),
 
   arm('turn.started', (rt, p) => {
-    if (turn.phase() !== 'streaming') dropStaleSteps(rt)
+    dropStaleSteps(rt)
     /* A turn the RUNTIME opened (a delegated result re-entering) has begun.
        The spine suppresses message.start for these, so this event is the whole
        opening: the workspace turn advances, the client enters the busy state

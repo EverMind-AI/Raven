@@ -200,10 +200,18 @@ export function ensureStep(rt: SessionRuntime = viewRuntime()) {
   return rt.st
 }
 
-/* A step opened after the last fold belongs to a turn that is gone: a stopped
-   turn's late delta still calls `ensureStep` and opens one. A turn that opens
-   next has to start from a clean boundary, so its opening events drop it. */
+/* A step opened while no turn is open here belongs to a turn that is gone: a
+   stopped turn's late delta still calls `ensureStep` and opens one after the
+   fold at the press. Every opening -- a send, `message.start`, `turn.started`
+   -- lets go of it, so the next turn starts on a clean boundary, and seals it
+   first so a late thought does not read as live forever.
+
+   Keyed on `turnId`, which only a fold clears, rather than on the phase: a
+   refusal that holds the lane reads `streaming` with no turn open, and a turn
+   waiting on a prompt reads `waiting` with one. */
 export function dropStaleSteps(rt: SessionRuntime = viewRuntime()): void {
+  if (rt.turnId !== null) return
+  rt.st?.seal()
   rt.st = null
   rt.steps = []
 }
@@ -333,6 +341,7 @@ export function send(text: string): void {
   rt.lastAsk = text
   ask(text)
   turn.dispatch({ type: 'send' })
+  dropStaleSteps(rt)
   reset(rt)
   drawMeter(); goState(); sessionDraw()
   const failed = (e: unknown) => {
