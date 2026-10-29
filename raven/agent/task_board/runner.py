@@ -7,8 +7,8 @@ model with its reason, up to :data:`MAX_ATTEMPTS` times. When no update can be
 had, the turn's dispatches are parked in ``unassigned`` and the next update has
 to place them first -- a dispatch is never silently dropped.
 
-The whole run holds the session's lock, so the next turn's update is built on
-this one's result. Nothing here touches the session's messages.
+Updates of one session run one at a time, so the next turn's update is built
+on this one's result. Nothing here touches the session's messages.
 """
 
 from __future__ import annotations
@@ -94,8 +94,7 @@ def _park(board: Board, dispatches: Sequence[Dispatch], turn_at: str, turn_id: s
     return Board(board.groups, board.unassigned + fresh, board.version) if fresh else board
 
 
-async def _update(
-    service: TaskBoardService,
+async def _ask(
     board: Board,
     *,
     session_key: str,
@@ -105,8 +104,8 @@ async def _update(
     turn_at: str,
     turn_id: str | None,
     now_ms: Callable[[], int],
-) -> Board | None:
-    """Up to MAX_ATTEMPTS asks; the board written, or ``None`` when no update was had."""
+) -> dict[str, Any] | None:
+    """Up to MAX_ATTEMPTS asks; the arguments of an update the board accepted, or ``None``."""
     rows = list(window) + [{"role": "user", "content": build_instruction(board, dispatches)}]
     for _ in range(MAX_ATTEMPTS):
         try:
@@ -126,13 +125,11 @@ async def _update(
             result = _NOT_UPDATE
         else:
             try:
-                updated = apply_update(board, args, dispatches, turn_at=turn_at, turn_id=turn_id, now_ms=now_ms())
+                apply_update(board, args, dispatches, turn_at=turn_at, turn_id=turn_id, now_ms=now_ms())
             except UpdateRejectedError as exc:
                 result = f"Rejected: {exc}. Call task_board again with action=update."
             else:
-                if board_to_dict(updated) != board_to_dict(board):
-                    await service.write(session_key, updated)
-                return updated
+                return args
         rows += [
             _assistant_row(response, tool_call),
             {"role": "tool", "tool_call_id": tool_call.id, "name": TOOL_NAME, "content": result},
@@ -153,16 +150,18 @@ async def run_post_turn(
 ) -> Board | None:
     """Keep the board for the turn that just ended; the board written, or ``None`` when no update was had.
 
-    Whatever goes wrong on the way -- the provider, the model's arguments, the
-    disk -- ends with this turn's dispatches parked rather than with an exception
-    in a background task nobody awaits.
+    The model is asked under the session's update queue only; the write lock is
+    taken for the last step, on a fresh read of the board, so the reader's own
+    actions never wait on the call. Whatever goes wrong on the way -- the
+    provider, the model's arguments, the disk -- ends with this turn's dispatches
+    parked rather than with an exception in a background task nobody awaits,
+    unless a clear or an undo removed the turn meanwhile: then nothing is written.
     """
-    async with service.lock(session_key):
-        board = service.load(session_key)
+    async with service.queue(session_key):
+        generation = service.generation(session_key)
         try:
-            updated = await _update(
-                service,
-                board,
+            args = await _ask(
+                service.load(session_key),
                 session_key=session_key,
                 call=call,
                 window=window,
@@ -173,18 +172,31 @@ async def run_post_turn(
             )
         except Exception:
             logger.opt(exception=True).warning("Task board update for {} failed", session_key)
-            updated = None
-        if updated is not None:
-            return updated
-        parked = _park(board, dispatches, turn_at, turn_id)
-        if parked is not board:
-            logger.warning(
-                "Task board update for {} never landed; {} dispatch(es) parked for the next turn",
-                session_key,
-                len(parked.unassigned) - len(board.unassigned),
-            )
+            args = None
+        async with service.lock(session_key):
+            if service.generation(session_key) != generation or service.was_dropped(session_key, turn_at):
+                return None
+            board = service.load(session_key)
             try:
-                await service.write(session_key, parked)
+                if args is not None:
+                    try:
+                        updated = apply_update(
+                            board, args, dispatches, turn_at=turn_at, turn_id=turn_id, now_ms=now_ms()
+                        )
+                    except UpdateRejectedError:
+                        updated = None
+                    if updated is not None:
+                        if board_to_dict(updated) != board_to_dict(board):
+                            await service.write(session_key, updated)
+                        return updated
+                parked = _park(board, dispatches, turn_at, turn_id)
+                if parked is not board:
+                    logger.warning(
+                        "Task board update for {} never landed; {} dispatch(es) parked for the next turn",
+                        session_key,
+                        len(parked.unassigned) - len(board.unassigned),
+                    )
+                    await service.write(session_key, parked)
             except Exception:
                 logger.opt(exception=True).warning("Task board for {} could not be written", session_key)
-        return None
+            return None
