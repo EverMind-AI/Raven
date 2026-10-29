@@ -18,10 +18,10 @@ afterEach(() => {
 const tabs = (): HTMLButtonElement[] => [...document.querySelectorAll<HTMLButtonElement>('.hub-head-tab')]
 
 describe('the hub header', () => {
-  it('names the three modules and marks the one on screen', () => {
+  it('names the four modules and marks the one on screen', () => {
     render(<HubHead current="channels" />)
-    expect(tabs().map((b) => b.textContent)).toEqual(['gui.hub.agents', 'gui.hub.channels', 'gui.hub.machines'])
-    expect(tabs().map((b) => b.getAttribute('aria-selected'))).toEqual(['false', 'true', 'false'])
+    expect(tabs().map((b) => b.textContent)).toEqual(['gui.hub.agents', 'gui.hub.channels', 'gui.hub.machines', 'gui.hub.robots'])
+    expect(tabs().map((b) => b.getAttribute('aria-selected'))).toEqual(['false', 'true', 'false', 'false'])
   })
 
   /* The line under the tabs belongs to the module on screen, not the hub. */
@@ -45,5 +45,7 @@ describe('the hub header', () => {
     expect(open).toHaveBeenCalledWith('channels')
     act(() => tabs()[2]!.click())
     expect(open).toHaveBeenCalledWith('machines')
+    act(() => tabs()[3]!.click())
+    expect(open).toHaveBeenCalledWith('robots')
   })
 })

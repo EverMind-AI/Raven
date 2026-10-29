@@ -37,6 +37,7 @@ import { createMachines } from './machines'
 import { createMemory } from './memory'
 import { createModel } from './model'
 import { createPlughub } from './plughub'
+import { createRobots } from './robots'
 import { createSessions } from './sessions'
 import { createSettings } from './settings'
 import { createSkillhub } from './skillhub'
@@ -78,6 +79,7 @@ export function demoFixtures(env: FixtureEnv): Fixtures {
     ...createPlughub(env, ext).fixtures,
     ...createSubagents(env).fixtures,
     ...createMachines(env).fixtures,
+    ...createRobots(env).fixtures,
     ...createTasks(env).fixtures,
     ...createMemory(env).fixtures,
     ...createFs(env).fixtures,

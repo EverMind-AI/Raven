@@ -89,6 +89,11 @@ def _resolve_pyd_ref(ref: str, root: dict[str, Any]) -> dict[str, Any]:
 _ANY_REFS = {"JsonValue"}
 
 
+def _oas_nullable(node: dict[str, Any]) -> bool:
+    kinds = node.get("type", [])
+    return isinstance(kinds, list) and "null" in kinds
+
+
 def _normalize_oas_type(
     node: dict[str, Any], schema: dict[str, Any], _seen: frozenset[str] = frozenset()
 ) -> dict[str, Any]:
@@ -138,7 +143,9 @@ def _normalize_oas_type(
             out["properties"] = {
                 pname: _normalize_oas_type(psub, schema, _seen) for pname, psub in node["properties"].items()
             }
-            out["required"] = sorted(node.get("required", []))
+            out["required"] = sorted(
+                name for name in node.get("required", []) if not _oas_nullable(node["properties"][name])
+            )
         if "additionalProperties" in node:
             ap = node["additionalProperties"]
             if isinstance(ap, dict):
@@ -230,7 +237,7 @@ def _oas_params_to_canonical(method: dict[str, Any], schema: dict[str, Any]) -> 
     out: dict[str, dict[str, Any]] = {}
     for p in method.get("params", []):
         out[p["name"]] = {
-            "required": bool(p.get("required", False)),
+            "required": bool(p.get("required", False)) and not _oas_nullable(p["schema"]),
             "schema": _normalize_oas_type(p["schema"], schema),
         }
     return out
@@ -270,6 +277,8 @@ def _oas_object_properties(
     out: dict[str, dict[str, Any]] = {}
     for name, sub in properties.items():
         out[name] = _normalize_oas_type(sub, schema)
+        if _oas_nullable(sub):
+            required_set.discard(name)
     return out, required_set
 
 
@@ -799,3 +808,24 @@ def test_a_model_is_built_when_first_used_not_at_import(tmp_path: Path) -> None:
     assert "built at import: []" in done.stdout, done.stdout + done.stderr
     assert "first use: 3 True" in done.stdout, done.stdout + done.stderr
     assert "refused: extra_forbidden" in done.stdout, done.stdout + done.stderr
+
+
+def test_required_nullable_arrays_normalize_like_pydantic_without_relaxing_the_wire():
+    import jsonschema
+
+    class Example(BaseModel):
+        value: str | None
+
+    wire = {
+        "type": "object",
+        "required": ["value"],
+        "properties": {"value": {"type": ["string", "null"]}},
+        "additionalProperties": False,
+    }
+    assert _normalize_oas_type(wire, {}) == _normalize_pyd_type(
+        Example.model_json_schema(), Example.model_json_schema()
+    )
+    assert _oas_object_properties(wire, {}) == _pyd_object_properties(Example)
+    jsonschema.validate({"value": None}, wire)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({}, wire)

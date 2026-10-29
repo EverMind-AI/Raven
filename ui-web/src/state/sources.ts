@@ -19,7 +19,7 @@ import type { ComposerSource } from '../features/composer/types'
 import type { ConnectionsSource } from '../features/connections/types'
 import type { CronSource } from '../features/cron/types'
 import type { ExportSource } from '../features/export/types'
-import type { ExtAgentsSource, MachinesSource } from '../features/extAgents/types'
+import type { ExtAgentsSource, MachinesSource, RobotsSource } from '../features/extAgents/types'
 import type { ImportedSource } from '../features/imported/types'
 import type { ImportSyncSource } from '../features/importSync/types'
 import type { KnowledgeSource } from '../features/knowledge/types'
@@ -56,6 +56,7 @@ export interface Sources {
   cron: CronSource
   /* The registered machines, read by the extAgents island's machines tab. */
   machines: MachinesSource
+  robots: RobotsSource
   export: ExportSource
   extAgents: ExtAgentsSource
   importSync: ImportSyncSource

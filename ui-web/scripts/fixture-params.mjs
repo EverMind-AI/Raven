@@ -9,6 +9,12 @@
 
 /** One call per method. Anything not named here is called with `{}`. */
 export const PARAMS = {
+  'robots.list': { trash: false },
+  'robots.save': { device: { domain: 'personal', confirm_personal: true, name: 'Fixture robot', type: 'sparkbot', connection_mode: 'http_status', status_url: 'http://10.0.0.2:8080/health' } },
+  'robots.remove': { id: '00000000000000000000000000000001' },
+  'robots.restore': { id: '00000000000000000000000000000001' },
+  'robots.check': { id: '00000000000000000000000000000001' },
+
   'system.hello': { client_version: '0.1.0', surface: 'page' },
   'config.get': { keys: ['language', 'permissions.mode'] },
   'config.set': { key: 'language', value: 'en' },
