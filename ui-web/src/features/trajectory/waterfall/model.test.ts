@@ -72,14 +72,14 @@ it('an entry with no turn lands under its agent as a loose row', () => {
   expect(w.agents[0]!.loose.map((row) => row.entry.entry_id)).toEqual(['bg'])
 })
 
-it('depth follows parent_span_id inside a turn', () => {
+it('every row under a turn is a sibling, whatever parent_span_id says', () => {
   const w = buildWaterfall([
     E({ entry_id: 'root', span_id: 'r', turn_span_id: 'T1', operation_start: '2026-10-28T10:00:00.000Z', operation_end: '2026-10-28T10:00:10.000Z' }),
     E({ entry_id: 'mid', span_id: 'm', parent_span_id: 'r', turn_span_id: 'T1', operation_start: '2026-10-28T10:00:01.000Z', operation_end: '2026-10-28T10:00:02.000Z' }),
     E({ entry_id: 'leaf', span_id: 'l', parent_span_id: 'm', turn_span_id: 'T1', operation_start: '2026-10-28T10:00:01.100Z', operation_end: '2026-10-28T10:00:01.900Z' }),
   ], NOW)
   const rows = w.agents[0]!.turns[0]!.rows
-  expect(rows.map((row) => [row.entry.entry_id, row.depth])).toEqual([['root', 0], ['mid', 1], ['leaf', 2]])
+  expect(rows.map((row) => [row.entry.entry_id, row.depth])).toEqual([['root', 0], ['mid', 0], ['leaf', 0]])
 })
 
 it('the host agent comes first and agents are ordered by first start', () => {
