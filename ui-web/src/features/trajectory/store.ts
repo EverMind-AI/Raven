@@ -39,6 +39,7 @@ import { has, servesTrajectory } from '../../rpc/capabilities'
 import { isFresh, onFresh } from '../../state/session/conversation'
 import { sources } from '../../state/sources'
 import { makeStore } from '../../state/store'
+import { count } from './diagnostics'
 import { indexOf, insertSorted, removeIds } from './order'
 import { isAbsent, isCursorExpired, isDisabled } from './source'
 
@@ -307,7 +308,7 @@ const store = makeStore<TrajectoryState>(initial)
 
 export const { get, set, subscribe } = store
 
-const patch = (p: Partial<TrajectoryState>): void => { store.set({ ...store.get(), ...p }) }
+const patch = (p: Partial<TrajectoryState>): void => { count('list.patch'); store.set({ ...store.get(), ...p }) }
 
 /** The fields that change together with the rows: the whole set, its positions, the visible set and the lookups. */
 export const rowsOf = (entries: TrajectoryEntry[], s: TrajectoryState = store.get()) => derived(entries, s.prefs, s.revealed, s.scope)
