@@ -461,4 +461,3 @@ describe('the chat column chrome when a language is applied', () => {
     expect(el('stage').lastElementChild).toBe(live)
   })
 })
-

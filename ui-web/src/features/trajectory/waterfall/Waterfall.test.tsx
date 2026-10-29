@@ -507,4 +507,3 @@ it('leaves a turn folded when the reader folds it, even with the selection insid
   act(() => { fireEvent.click(document.querySelector('[data-row="turn"]')!) })
   expect(document.querySelectorAll('[data-row="span"]')).toHaveLength(0)
 })
-
