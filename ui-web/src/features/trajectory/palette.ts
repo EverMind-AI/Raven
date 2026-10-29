@@ -1,11 +1,11 @@
-/* One colour and one word per kind of entry, for the list's type tag today
- * and the duration bar later: both read the same table so a tool call is the
- * same purple in the row and in the bar.
+/* One colour and one word per kind of entry, for the tag the details pane and
+ * the overview put on an entry; the waterfall's bars read the same `-fg`
+ * colours, so a tool call is the same purple in its tag and in its bar.
  *
  * The kinds the index names are an open set (a span's own io slots, an
  * artifact's name, an evidence slot), so only the seven the conversation is
  * made of get a colour of their own; everything else is one stable grey and
- * keeps its own name on the row, which is more honest than a colour the reader
+ * keeps its own name on its tag, which is more honest than a colour the reader
  * cannot look up.
  */
 
@@ -76,8 +76,8 @@ export const NAMED_KINDS: readonly string[] = [...Object.keys(KNOWN), ...Object.
 export const isKnownKind = (kind: string): boolean => kind in KNOWN
 
 /* The class suffix is the kind with its dot folded, so `styles.css` can name
-   `.trajectory-k-llm-input` and the duration bar can read the same variable
-   name back (`--trajectory-c-llm-input-fg`). */
+   `.trajectory-k-llm-input` after the variables it reads
+   (`--trajectory-c-llm-input-fg`). */
 export const kindSlug = (kind: string): string => (isKnownKind(kind) ? kind.replace(/\./g, '-') : 'other')
 
 export const kindClass = (kind: string): string => `trajectory-k-${kindSlug(kind)}`
