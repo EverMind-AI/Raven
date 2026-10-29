@@ -1880,9 +1880,25 @@ async def test_a_silent_turn_emits_its_notice_and_reports_itself_silent(tmp_path
 
     assert not any(isinstance(e, EvStreamDelta) for e in sink.events), "no delta carried any of the marker"
     assert not any(isinstance(e, EvText) for e in sink.events)
-    assert [e.kind for e in sink.events if isinstance(e, EvNotice)] == [NoticeKind.SILENT_TURN]
+    assert [(e.kind, e.detail) for e in sink.events if isinstance(e, EvNotice)] == [(NoticeKind.SILENT_TURN, None)]
     assert outcome.silent is True
     assert outcome.explicit_reply is False
+
+
+async def test_a_silent_turns_notice_names_what_its_reply_showed(tmp_path):
+    """The marker is held back, but a think block the model inlined before it streams as it comes. The
+    notice names exactly that text, so a client takes back what the closing reply drew and nothing else."""
+    chunks = [ChatDelta(content="<think>nothing new</think>"), ChatDelta(content="\n[SIL"), ChatDelta(content="ENT]")]
+    loop = AgentLoop(provider=_FakeStreamProvider(chunks), workspace=tmp_path)
+    _stub_edges(loop)
+    sink = _EmitCollector()
+
+    outcome = await loop.run_turn(_req("anything new?"), sink, _drain)
+
+    shown = "".join(e.delta for e in sink.events if isinstance(e, EvStreamDelta))
+    assert shown == "<think>nothing new</think>"
+    assert [(e.kind, e.detail) for e in sink.events if isinstance(e, EvNotice)] == [(NoticeKind.SILENT_TURN, shown)]
+    assert outcome.silent is True
 
 
 async def test_a_turn_that_replied_emits_no_silent_notice(tmp_path):

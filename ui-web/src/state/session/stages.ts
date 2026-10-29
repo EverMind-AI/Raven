@@ -197,11 +197,11 @@ export const STAGES: readonly Stage[] = [
     if (p.transient) { transcript.status(t('gui.notice.' + (p.kind || ''), null, p.kind || '')); return }
     transcript.killStatus()
     /* The model ended the turn on its silence marker, so the turn has no answer:
-       the reply the open step was streaming is taken back, and the turn lands
-       without promoting anything it said on the way. The row below is all of it.
-       The server holds a marker back while it streams -- past a think block the
-       model inlined, which streams as it comes, and across a stream cut and its
-       continuation -- so there is usually nothing to take back. An exhausted
+       what the notice's detail says that reply showed is taken back from the open
+       step, and the turn lands without promoting anything it said on the way. The
+       row below is all of it. The server holds a marker back while it streams, so
+       the detail is at most a think block the model inlined ahead of it, and is
+       empty when nothing went out; it is not drawn in the row. An exhausted
        turn's wrap-up shares its step with the last call's narration, which stays.
        Not marked while this page is cancelling the turn: the stop already folded
        it, and the message.complete that would read and clear the mark is
@@ -212,11 +212,11 @@ export const STAGES: readonly Stage[] = [
        above stays where it was said. */
     if (rt.st) {
       rt.st.seal()
-      if (silent) rt.st.dropReply()
+      if (silent) rt.st.dropReply(p.detail || '')
       rt.st = null
     }
     flushSay(rt)
-    noteRow(t('gui.notice.' + (p.kind || ''), null, p.kind || ''), p.detail || '', { quiet: true })
+    noteRow(t('gui.notice.' + (p.kind || ''), null, p.kind || ''), silent ? '' : p.detail || '', { quiet: true })
   }),
 
   arm('thinking.delta', (rt, p) => {

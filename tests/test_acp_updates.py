@@ -556,6 +556,12 @@ class TestTerminationMapping:
         for kind in ("progress", "tool_hint", "injected", "delivery_failed"):
             assert translate({"type": "notice", "payload": {"kind": kind}}).updates == ()
 
+    def test_a_silent_turn_notice_writes_nothing_of_what_its_reply_showed(self):
+        """ACP has no way to take a chunk back, and the detail is text the client already holds."""
+        payload = {"kind": "silent_turn", "detail": "<think>nothing new</think>", "transient": False}
+        result = translate({"type": "notice", "payload": payload})
+        assert (result.updates, result.latch, result.stop) == ((), None, None)
+
 
 class TestUnmappedEvents:
     @pytest.mark.parametrize(

@@ -354,7 +354,7 @@ describe('a turn the model chose not to answer', () => {
     vi.advanceTimersByTime(STREAM_IDLE_BATCH_MS)
     expect(getTurnState().streaming).toBe('abc')
 
-    fake.__pushEvent({ type: 'notice', payload: { kind: 'silent_turn' } })
+    fake.__pushEvent({ type: 'notice', payload: { kind: 'silent_turn', detail: 'abc' } })
 
     // Taken off the screen when the signal arrives, not when the turn lands.
     expect(getTurnState().streaming).toBe('')
@@ -372,7 +372,7 @@ describe('a turn the model chose not to answer', () => {
 
     fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
     fake.__pushEvent({ type: 'token.delta', payload: { text: 'abc' } })
-    fake.__pushEvent({ type: 'notice', payload: { kind: 'silent_turn' } })
+    fake.__pushEvent({ type: 'notice', payload: { kind: 'silent_turn', detail: 'abc' } })
     complete(fake)
 
     expect(appended).toEqual([{ role: 'system', text: SILENT_LINE }])
@@ -394,7 +394,7 @@ describe('a turn the model chose not to answer', () => {
     })
     fake.__pushEvent({ type: 'episode.start', payload: { index: 1 } })
     fake.__pushEvent({ type: 'token.delta', payload: { text: 'abc' } })
-    fake.__pushEvent({ type: 'notice', payload: { kind: 'silent_turn' } })
+    fake.__pushEvent({ type: 'notice', payload: { kind: 'silent_turn', detail: 'abc' } })
     complete(fake)
 
     // The work stays; there is no answer under it, and what was said on the way
@@ -406,6 +406,38 @@ describe('a turn the model chose not to answer', () => {
     expect(appended[0]!.episodes?.[0]).toMatchObject({ narration: 'Checking the logs.' })
     expect(appended[0]!.episodes?.[0]?.tools[0]).toMatchObject({ id: 'call-1', ok: true })
     expect(JSON.stringify(appended)).not.toContain('abc')
+  })
+
+  it('keeps what the turn said before the reply the notice takes back', async () => {
+    const { appended, fake } = await open()
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({ type: 'episode.start', payload: { index: 0 } })
+    fake.__pushEvent({ type: 'token.delta', payload: { text: 'Let me check the queue.' } })
+    // That call's only tool was a message that went nowhere, which sends no
+    // tool.start: nothing moved the narration out of the stream buffer.
+    fake.__pushEvent({ type: 'episode.start', payload: { index: 1 } })
+    fake.__pushEvent({ type: 'token.delta', payload: { text: '<think>still nothing</think>' } })
+    fake.__pushEvent({ type: 'notice', payload: { kind: 'silent_turn', detail: '<think>still nothing</think>' } })
+    complete(fake)
+
+    // The narration lands as the segment a tool call's flush would have made of
+    // it; the thought the closing reply showed is gone, and the line closes the turn.
+    expect(appended).toEqual([
+      { role: 'assistant', text: 'Let me check the queue.' },
+      { role: 'system', text: SILENT_LINE }
+    ])
+  })
+
+  it('takes back a reply it saw only the end of', async () => {
+    const { appended, fake } = await open()
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({ type: 'token.delta', payload: { text: 'nothing</think>' } })
+    fake.__pushEvent({ type: 'notice', payload: { kind: 'silent_turn', detail: '<think>still nothing</think>' } })
+    complete(fake)
+
+    expect(appended).toEqual([{ role: 'system', text: SILENT_LINE }])
   })
 
   it('does not carry the mark into the next turn', async () => {

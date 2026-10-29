@@ -846,7 +846,10 @@ stays in the history holding the model's whole reply -- the marker, or, under th
 the note around it -- filed with `silent: true` so a reload does not read it as an answer, and it
 carries the turn's Response Meta. The turn reports itself as
 `TurnOutcome.silent` and, for a surface drawing it live, as a closing `NoticeKind.SILENT_TURN`
-notice. The kernel holds no marker rules -- they live in `agent/context/silence.py` -- and the
+notice. Its detail is what that reply had streamed before it was read as the marker -- at most a
+think block the model inlined ahead of it -- counted over the step a reader draws it in (its call and
+a cut answer's continuations, or the wrap-up alone; `LoopOutcome.shown`), so a client takes back
+exactly that suffix of the step's text and keeps the narration before it. The kernel holds no marker rules -- they live in `agent/context/silence.py` -- and the
 spine's `TurnEnded` carries no flag of its own; what the kernel names of silence is the outcome
 (`TurnOutcome.silent`), the notice (`NoticeKind.SILENT_TURN`) and which origins are proactive
 (`PROACTIVE_ORIGINS`).

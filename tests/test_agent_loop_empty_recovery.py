@@ -2927,25 +2927,52 @@ async def test_a_proactive_turn_shows_only_the_answer_a_thought_was_prefilled_in
 
 
 @pytest.mark.asyncio
+async def test_a_marker_its_continuation_finished_reports_the_thought_its_step_showed(workspace, monkeypatch):
+    """A cut answer's continuation is drawn in the step the cut call opened, so what that step showed
+    before the marker -- here the thought, ahead of a marker the cut split -- counts across both calls."""
+    _served(monkeypatch, [_DyingStream("<think>a</think> [SIL"), _finished_stream("ENT]")])
+    started: list[int] = []
+
+    async def _step(index: int) -> None:
+        started.append(index)
+
+    final, outcome, _last, streamed = await _ends_on(_litellm_agent(workspace), Origin.USER, on_episode_start=_step)
+
+    assert outcome.silent is True and len(started) == 1
+    assert "".join(streamed) == outcome.shown == "<think>a</think>"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "script",
+    "script,shown,steps",
     [
-        pytest.param(lambda: [_finished_stream("<think>a", "b</think>", "[SILENT]")], id="uncut"),
         pytest.param(
-            lambda: [_DyingStream("<think>a"), _DyingStream("b</think>"), _finished_stream("[SILENT]")], id="cut"
+            lambda: [_finished_stream("<think>a", "b</think>", "[SILENT]")], "<think>ab</think>", 1, id="uncut"
+        ),
+        pytest.param(
+            lambda: [_DyingStream("<think>a"), _DyingStream("b</think>"), _finished_stream("[SILENT]")], "", 2, id="cut"
         ),
     ],
 )
-async def test_a_marker_after_a_thought_the_cuts_closed_is_the_reply(workspace, monkeypatch, script):
+async def test_a_marker_after_a_thought_the_cuts_closed_is_the_reply(workspace, monkeypatch, script, shown, steps):
     """With nothing but a thought before it, the marker that continues it is the whole reply, not a
-    continuation that adds nothing: the turn ends silent as the uncut reply does."""
+    continuation that adds nothing: the turn ends silent as the uncut reply does. What the reply
+    reports having shown is its own step's: uncut, the thought it opened with; cut, nothing, since a
+    thought the cuts closed is answered as a thinking-only reply, and the marker comes in a call and
+    a step of its own."""
     _served(monkeypatch, script())
+    started: list[int] = []
 
-    final, outcome, last, streamed = await _ends_on(_litellm_agent(workspace), Origin.USER)
+    async def _step(index: int) -> None:
+        started.append(index)
+
+    final, outcome, last, streamed = await _ends_on(_litellm_agent(workspace), Origin.USER, on_episode_start=_step)
 
     assert final == "[SILENT]" and outcome.silent is True
     assert last.get("_silent") is True
-    assert "[SIL" not in "".join(streamed)
+    assert "".join(streamed) == "<think>ab</think>"
+    assert len(started) == steps
+    assert outcome.shown == shown
 
 
 @pytest.mark.asyncio
@@ -5089,6 +5116,38 @@ async def test_a_marker_reply_returns_nothing_and_files_a_flagged_row(workspace,
     rows = agent.sessions.get_or_create("s1").messages
     assert [(m["role"], m["content"]) for m in rows] == [("user", "hi"), ("assistant", "[SILENT]")]
     assert rows[-1]["silent"] is True and "silent" not in rows[0]
+
+
+@pytest.mark.asyncio
+async def test_a_silent_wrap_up_names_only_what_it_showed_not_the_narration_before_it(workspace, monkeypatch):
+    """An exhausted turn's wrap-up shares the reader's step with the last call's narration, and a call whose
+    only tool sent nothing leaves no tool row to mark where that narration ends. The notice names what the
+    wrap-up itself showed, so a client takes back the think block and keeps the narration."""
+    from raven.spine.events import Notice, StreamDelta
+
+    narrated = _Stream(
+        [_chunk("Let me check the queue."), *_tool_stream()._chunks], received_finish_reason="tool_calls"
+    )
+    _served(monkeypatch, [narrated, _finished_stream("<think>still nothing</think>", "\n[SILENT]")])
+    agent = _litellm_agent(workspace, max_iterations=1)
+
+    async def _noop(**_kw) -> None:
+        return None
+
+    agent._start_executor = _noop
+    agent._connect_mcp = _noop
+    events: list = []
+
+    async def emit(event) -> None:
+        events.append(event)
+
+    outcome = await agent.run_turn(_turn("anything new?"), emit, lambda: [])
+
+    assert outcome.silent is True
+    streamed = "".join(e.delta for e in events if isinstance(e, StreamDelta))
+    assert streamed == "Let me check the queue.<think>still nothing</think>"
+    silent = [e.detail for e in events if isinstance(e, Notice) and e.kind is NoticeKind.SILENT_TURN]
+    assert silent == ["<think>still nothing</think>"]
 
 
 @pytest.mark.asyncio
