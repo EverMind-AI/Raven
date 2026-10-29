@@ -2616,6 +2616,38 @@ async def _ends_on(agent: AgentLoop, origin: Origin, **kwargs):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "origin,continuation,silent,shown",
+    [
+        pytest.param(Origin.CRON, "[SILENT]", True, "", id="proactive_note_then_marker"),
+        pytest.param(Origin.CRON, "nothing new\n\n[SILENT]", True, "", id="proactive_note_then_a_noted_marker"),
+        pytest.param(
+            Origin.CRON,
+            " Two files changed.",
+            False,
+            "Here is the update: Two files changed.",
+            id="proactive_note_then_more",
+        ),
+        pytest.param(Origin.USER, "[SILENT]", False, "Here is the update:", id="person_note_then_marker"),
+    ],
+)
+async def test_a_marker_continuing_a_held_note_is_read_with_it(
+    workspace, monkeypatch, origin, continuation, silent, shown
+):
+    """A proactive turn holds its whole call, so nothing of a cut note was shown, and a continuation that
+    is only the marker is read together with the note, as the same reply uncut ("note", then the marker on
+    its own line) is: silent. A person's turn saw the note already, and only a whole ``[SILENT]`` is silence
+    there, so the note stays its answer."""
+    _served(monkeypatch, [_DyingStream("Here is the update:"), _finished_stream(continuation)])
+
+    final, outcome, last, streamed = await _ends_on(_litellm_agent(workspace), origin)
+
+    assert outcome.silent is silent
+    assert "".join(streamed).replace("\n\n" + PARTIAL_STREAM_NOTE, "") == shown
+    assert bool(last.get("_silent")) is silent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "origin,cuts,continuation",
     [
         pytest.param(Origin.USER, ["[SILENT]"], _empty_finish, id="person_marker_then_empty"),
@@ -2694,13 +2726,25 @@ async def test_a_no_reply_cut_that_goes_on_to_a_summary_is_delivered_whole(works
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("origin", [Origin.USER, Origin.CRON])
-async def test_a_marker_after_a_held_cut_shows_what_streamed_and_drops_the_marker(workspace, monkeypatch, origin):
-    """A continuation that is a marker adds nothing, so what streamed is the answer: a start that was held
-    across the cut goes out, and the marker after it does not."""
+async def test_a_proactive_marker_cut_and_started_over_ends_silent(workspace, monkeypatch):
+    """A proactive turn cut inside its marker, whose continuation starts the marker over, said nothing:
+    the fragment and the marker are read together, and neither reaches the reader."""
     _served(monkeypatch, [_DyingStream("[SIL"), _finished_stream("[SILENT]")])
 
-    final, outcome, last, streamed = await _ends_on(_litellm_agent(workspace), origin)
+    final, outcome, last, streamed = await _ends_on(_litellm_agent(workspace), Origin.CRON)
+
+    assert outcome.silent is True and last.get("_silent") is True
+    assert streamed == []
+
+
+@pytest.mark.asyncio
+async def test_a_marker_after_a_held_cut_shows_what_streamed_and_drops_the_marker(workspace, monkeypatch):
+    """On a person's turn a continuation that is a marker adds nothing, so what streamed is the answer: a
+    start that was held across the cut goes out, and the marker after it does not. A proactive turn reads
+    the two together instead (``test_a_marker_continuing_a_held_note_is_read_with_it``)."""
+    _served(monkeypatch, [_DyingStream("[SIL"), _finished_stream("[SILENT]")])
+
+    final, outcome, last, streamed = await _ends_on(_litellm_agent(workspace), Origin.USER)
 
     assert final == "[SIL" and outcome.silent is False
     assert "_silent" not in last
@@ -4768,7 +4812,7 @@ async def test_a_stream_cut_right_after_a_marker_is_continued_not_ended_silent(w
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("origin", [Origin.USER, Origin.CRON])
+@pytest.mark.parametrize("origin", [Origin.USER])
 @pytest.mark.parametrize(
     "continuation",
     [
@@ -4779,9 +4823,10 @@ async def test_a_stream_cut_right_after_a_marker_is_continued_not_ended_silent(w
 async def test_a_continuation_that_is_a_marker_ends_the_turn_as_an_empty_one_does(
     workspace, monkeypatch, origin, continuation
 ):
-    """After a cut answer the reader holds, a continuation that is a marker under the turn's rule has
-    nothing to add, as an empty one has not: what streamed is the answer, with the same row, status
-    and stream as the empty continuation leaves."""
+    """After a cut answer the reader holds -- a person's turn, which shows what streams -- a continuation
+    that is a marker under the turn's rule has nothing to add, as an empty one has not: what streamed is
+    the answer, with the same row, status and stream as the empty continuation leaves. A proactive turn
+    showed nothing and reads the two together (``test_a_marker_continuing_a_held_note_is_read_with_it``)."""
 
     async def run(second):
         _served(monkeypatch, [_DyingStream("Hello "), second])
