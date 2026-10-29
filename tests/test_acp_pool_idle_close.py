@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import sys
 import time
@@ -316,6 +317,37 @@ async def test_an_idle_check_on_another_loop_leaves_this_loops_connections(monke
 
     assert await pool.close_idle(0.04) == ["here"]
     assert here.closed
+
+
+async def test_an_idle_check_on_another_loop_leaves_an_agents_lock_usable_here() -> None:
+    """A worker loop's check must not bind an agent's lock while this loop holds it.
+
+    The main loop and a worker loop (a CLI command the RPC server runs) each
+    hold a binding of one agent. ``asyncio.Lock`` binds to the loop of its first
+    waiter, so a worker check that waited on the lock this loop holds would leave
+    every later wait here raising "bound to a different event loop".
+    """
+    here = _Client(idle=0)
+    there = _Client(idle=3600)
+    pool = AcpConnectionPool()
+    beside_connection = _held(there, _LOADS)
+    pool._connections["agent"] = {"here": _held(here, _LOADS, leased_ago=0), "there": beside_connection}
+    lock = pool._lock_for("agent")
+    await lock.acquire()
+
+    async def beside() -> None:
+        beside_connection.loop = asyncio.get_running_loop()
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(pool.close_idle(60), timeout=0.5)
+
+    await asyncio.to_thread(asyncio.run, beside())
+    lock.release()
+
+    async def hold_briefly() -> None:
+        async with pool._lock_for("agent"):
+            await asyncio.sleep(0.01)
+
+    await asyncio.gather(hold_briefly(), hold_briefly())
 
 
 async def test_a_failed_idle_check_does_not_end_the_next_one(monkeypatch: pytest.MonkeyPatch) -> None:
