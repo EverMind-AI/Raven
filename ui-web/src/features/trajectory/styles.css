@@ -753,3 +753,13 @@ html[data-theme="dark"] {
 .trajectory-wf-stats { overflow-x: auto; overflow-y: hidden }
 .trajectory-wf-stat { flex: 0 0 auto }
 .trajectory-wf-statk, .trajectory-wf-statv { white-space: nowrap }
+
+/* The row label cannot clip (its tree guide is a child that must show outside
+   the row), so each piece of text clips itself: the preview gives way first,
+   the fixed words and the source badge keep their size. Nothing is left to
+   paint over its neighbour. */
+.trajectory-wf-label { min-width: 0; max-width: 100% }
+.trajectory-wf-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis }
+.trajectory-wf-turn .trajectory-wf-name { flex: 0 0 auto }
+.trajectory-wf-sub { flex: 0 1 auto; min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis }
+.trajectory-wf-from { flex: 0 1 auto; min-width: 4ch; overflow: hidden; text-overflow: ellipsis }
