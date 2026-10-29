@@ -488,6 +488,28 @@ def _file_unanswered(messages: list[dict]) -> None:
     messages.append({"role": "assistant", "content": text, _NOTICE_KEY: notice})
 
 
+def _taken_back_whole(messages: list[dict], skip: int) -> bool:
+    """Whether the session list and the ACP replay will take this turn back whole.
+
+    By the rule they read a transcript with: the turn's closing assistant row is a Silence Marker
+    the message tool did not answer, and the last user row before it carries an origin, so the
+    runtime opened the turn. A person's message opens one they keep. ``skip`` is where the turn's
+    new rows start; the row that opened it may be older, filed by the opening write.
+    """
+    for index in range(len(messages) - 1, skip - 1, -1):
+        if messages[index].get("role") == "assistant":
+            closing = messages[index]
+            break
+    else:
+        return False
+    if not closing.get(_SILENT_KEY) or closing.get(_REPLIED_VIA_TOOL_KEY):
+        return False
+    for row in reversed(messages[:index]):
+        if row.get("role") == "user" and not row.get("_recovery_synthetic"):
+            return bool(row.get(_ORIGIN_KEY) or row.get("origin"))
+    return False
+
+
 def _turn_trace_id() -> str | None:
     """The trace id of the ``session.turn`` span this code runs directly inside.
 
@@ -3830,8 +3852,11 @@ class TurnPathMixin:
 
         # Both exits that persist a turn come through here, so a question noted
         # on the turn is filed once whichever exit runs. The early inbound write
-        # also comes through, before any question, and files nothing.
-        _file_unanswered(messages)
+        # also comes through, before any question, and files nothing. A turn the
+        # session list and the ACP replay take back whole files none: a notice
+        # after its marker would outlive the take-back as an orphan.
+        if not _taken_back_whole(messages, skip):
+            _file_unanswered(messages)
         first_user_pending = received_at is not None
         # The turn's first user entry is the inbound message; hooks may have
         # rewritten what the model saw (a memo prepended, a reminder appended),
