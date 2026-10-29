@@ -4,11 +4,10 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const zlib = require('zlib');
 const { URL } = require('url');
 const { applyStateDirArg } = require('./state-dir');
 applyStateDirArg();
-const { readJsonl, readJsonlFile, statLogFiles, getLogsDir } = require('./log-store');
+const { readJsonl, readJsonlFile, readStored, readStoredText, statLogFiles, getLogsDir } = require('./log-store');
 const everosDeposits = require('./everos-deposits');
 const shardIndex = require('./shard-index');
 
@@ -19,33 +18,7 @@ const STATE_DIR =
   path.join(os.homedir(), '.openclaw');
 const LOGS_DIR = getLogsDir();
 const ARTIFACTS_DIR = path.join(LOGS_DIR, 'audit-artifacts');
-const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
 
-// Artifacts and message blobs are stored zstd-compressed under the same paths
-// they always had; the frame, never the name, says which encoding a file
-// carries. A plain file written before compression reads unchanged.
-function readStored(file) {
-  const data = fs.readFileSync(file);
-  if (data.length >= 4 && data.subarray(0, 4).equals(ZSTD_MAGIC)) {
-    // zstd landed in Node's zlib in 22.15 / 23.8. An older viewer can still
-    // read a plain store; a compressed one is reported rather than shown as
-    // mojibake, because JSON.parse of the frame would only say "invalid".
-    if (typeof zlib.zstdDecompressSync !== 'function') {
-      console.warn('tracing viewer: this Node has no zstd support; compressed files need Node >= 22.15');
-      return Buffer.alloc(0);
-    }
-    try {
-      return zlib.zstdDecompressSync(data);
-    } catch {
-      return data;
-    }
-  }
-  return data;
-}
-
-function readStoredText(file) {
-  return readStored(file).toString('utf8');
-}
 const STATIC_DIR = path.join(__dirname, 'ui');
 const SHELL_HTML = require('./ui/shell.js');
 const BUNDLED_DESCRIPTORS_DIR = path.join(__dirname, 'descriptors');

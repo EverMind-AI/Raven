@@ -149,6 +149,19 @@ def test_reads_the_active_log_and_the_archive(tmp_path):
         assert _session_ids(_get(port, "/api/data")) == {"live-session", "archived-session"}
 
 
+def test_reads_a_compressed_archive(tmp_path):
+    from raven.tracing.codec import compress_bytes
+
+    logs = tmp_path / "logs"
+    archive = logs / "archive" / "2026-07-01" / "audit-spans-2026-07-01-1.log"
+    _write_spans(archive, [_span("archived-session", "span-arch")])
+    archive.write_bytes(compress_bytes(archive.read_bytes()))
+    _write_spans(logs / "audit-spans.log", [_span("live-session", "span-live")])
+
+    with _viewer(tmp_path) as port:
+        assert _session_ids(_get(port, "/api/data")) == {"live-session", "archived-session"}
+
+
 def test_ignores_a_log_planted_outside_the_active_and_archive_paths(tmp_path):
     logs = tmp_path / "logs"
     _write_spans(logs / "audit-spans.log", [_span("live-session", "span-live")])

@@ -35,6 +35,7 @@
 | `raven sandbox` | 列出沙箱虚拟机、执行命令或打开 Shell；需要设置 `tools.sandbox.debug.enabled=true` |
 | `raven tracing` | 打开本地追踪面板 |
 | `raven tracing compact` | 合并重复的追踪产物，回收磁盘空间 |
+| `raven tracing compress [--logs]` | 以 zstd 重写追踪载荷（加 `--logs` 时还包括轮转后的日志），回收磁盘空间 |
 | `raven trajectory` | 保存、回放、脱敏、标注和保留执行轨迹，用于调试；也运行问题报告接收器 |
 
 运行 `raven --help` 查看命令列表，或运行 `raven <command> --help` 查看指定命令的详细说明。

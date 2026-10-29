@@ -47,6 +47,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from raven.tracing import codec as trace_codec
 from raven.tracing import config as tracing_config
 from raven.trajectory import entries as _entries
 from raven.trajectory import store as tstore
@@ -260,6 +261,19 @@ class SpanLogScanner:
         self.cursors: dict[FileKey, FileCursor] = {}
         self.active_key: FileKey | None = None
         self._active_path = state_dir / "logs" / "audit-spans.log"
+        # key -> (mtime_ns, raw size, plaintext size), so a catalog pass over
+        # an unchanged archive never reopens it just to learn its encoding.
+        self._sizes: dict[FileKey, tuple[int, int, int]] = {}
+
+    def _plaintext_size(self, path: Path, key: FileKey, stat_result: Any) -> int | None:
+        cached = self._sizes.get(key)
+        if cached is not None and cached[0] == stat_result.st_mtime_ns and cached[1] == stat_result.st_size:
+            return cached[2]
+        size = trace_codec.plaintext_size(path)
+        if size is None:
+            return None
+        self._sizes[key] = (stat_result.st_mtime_ns, stat_result.st_size, size)
+        return size
 
     def _catalog(self) -> list[tuple[Path, FileKey, int, int]]:
         archive: list[tuple[Path, FileKey, int, int]] = []
@@ -269,7 +283,11 @@ class SpanLogScanner:
                 stat_result = path.stat()
             except OSError:
                 continue
-            item = (path, _file_key(stat_result), stat_result.st_size, stat_result.st_mtime_ns)
+            key = _file_key(stat_result)
+            size = self._plaintext_size(path, key, stat_result)
+            if size is None:
+                continue
+            item = (path, key, size, stat_result.st_mtime_ns)
             (active if path == self._active_path else archive).append(item)
         return archive + active
 
@@ -291,6 +309,7 @@ class SpanLogScanner:
                 if cursor.offset < cursor.size_seen or cursor.partial:
                     return True
                 del self.cursors[key]
+                self._sizes.pop(key, None)
                 continue
             if present[key] < cursor.offset:
                 return True
@@ -334,16 +353,31 @@ class SpanLogScanner:
         batch.scanned_bytes = sum(c.offset for c in self.cursors.values())
         return batch
 
+    @staticmethod
+    def _stream_stat(handle: Any, path: Path) -> tuple[Any, int]:
+        """The stat describing the opened stream, and its plaintext length.
+
+        A real descriptor is stat-ed through the handle, so identity and size
+        come from the file actually read. A decompressed buffer has no
+        descriptor; its length is the frame's plaintext size and the path is
+        stat-ed for identity, with the fingerprint check beside it catching a
+        rotation in between.
+        """
+        if hasattr(handle, "getbuffer"):
+            return path.stat(), len(handle.getbuffer())
+        stat_result = os.fstat(handle.fileno())
+        return stat_result, stat_result.st_size
+
     def _verify(self, cursor: FileCursor) -> str:
         """Re-check an unchanged-size file's identity and first bytes; "ok", "retry" or "generation"."""
         try:
-            with cursor.path.open("rb") as handle:
-                stat_result = os.fstat(handle.fileno())
+            with trace_codec.open_plaintext(cursor.path) as handle:
+                stat_result, size = self._stream_stat(handle, cursor.path)
                 if _file_key(stat_result) != cursor.key:
                     return "retry"
-                if stat_result.st_size < cursor.offset:
+                if size < cursor.offset:
                     return "generation"
-                if stat_result.st_size >= FINGERPRINT_BYTES:
+                if size >= FINGERPRINT_BYTES:
                     fingerprint = self._fingerprint(handle)
                     if fingerprint is not None:
                         if cursor.fingerprint is None:
@@ -367,11 +401,10 @@ class SpanLogScanner:
         """
         assembler = _LineAssembler(cursor, self.max_line_bytes)
         try:
-            with cursor.path.open("rb") as handle:
-                stat_result = os.fstat(handle.fileno())
+            with trace_codec.open_plaintext(cursor.path) as handle:
+                stat_result, size = self._stream_stat(handle, cursor.path)
                 if _file_key(stat_result) != cursor.key:
                     return "retry"
-                size = stat_result.st_size
                 if size < cursor.offset:
                     return "generation"
                 cursor.size_seen = size
@@ -425,11 +458,10 @@ class SpanLogScanner:
                 task.discarding = False
             assembler = _LineAssembler(task, self.max_line_bytes)
             try:
-                with path.open("rb") as handle:
-                    stat_result = os.fstat(handle.fileno())
+                with trace_codec.open_plaintext(path) as handle:
+                    stat_result, size = self._stream_stat(handle, path)
                     if _file_key(stat_result) != key:
                         return records, False
-                    size = stat_result.st_size
                     handle.seek(task.offset)
                     while task.offset < size:
                         want = min(SCAN_CHUNK, size - task.offset, budget.remaining())

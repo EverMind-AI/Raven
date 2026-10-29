@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+from typing import BinaryIO
 
 import zstandard
 
@@ -62,10 +63,52 @@ def plaintext_size(path: Path) -> int | None:
             if not is_compressed(head):
                 return path.stat().st_size
             handle.seek(0)
-            size = zstandard.frame_content_size(handle.read(18))
-    except (OSError, zstandard.ZstdError):
+            try:
+                size = zstandard.frame_content_size(handle.read(18))
+            except zstandard.ZstdError:
+                return None
+            if size >= 0:
+                return int(size)
+            # A frame written without a content size is only measurable by
+            # decoding it; the store's own writer always records the size.
+            data = handle.read()
+    except OSError:
         return None
-    return None if size < 0 else int(size)
+    plain = read_plaintext(data)
+    return None if plain is None else len(plain)
+
+
+def read_plaintext_file(path: Path) -> bytes | None:
+    """A stored file's plaintext, or None when it cannot be read or decoded."""
+    try:
+        return read_plaintext(path.read_bytes())
+    except OSError:
+        return None
+
+
+def open_plaintext(path: Path) -> BinaryIO:
+    """Open a stored file as a plaintext byte stream.
+
+    A caller that seeks or sizes the stream works in plaintext offsets, which
+    is the only coordinate the store records (a span log's cursor, an
+    artifact's range). A compressed payload is decompressed whole: these files
+    are bounded by the writer's own rotation cap.
+    """
+    handle = path.open("rb")
+    try:
+        head = handle.read(4)
+        handle.seek(0)
+        if not is_compressed(head):
+            return handle
+        data = handle.read()
+    except BaseException:
+        handle.close()
+        raise
+    handle.close()
+    try:
+        return io.BytesIO(decompress_bytes(data))
+    except zstandard.ZstdError as exc:
+        raise OSError(f"corrupt compressed payload: {path}") from exc
 
 
 __all__ = [
@@ -74,6 +117,8 @@ __all__ = [
     "compress_bytes",
     "decompress_bytes",
     "is_compressed",
+    "open_plaintext",
     "plaintext_size",
     "read_plaintext",
+    "read_plaintext_file",
 ]

@@ -442,3 +442,16 @@ def test_tracing_compress_rewrites_the_blob_and_keeps_the_link(tmp_path, monkeyp
     assert r.exit_code == 0
     assert artifact.read_bytes().startswith(b"\x28\xb5\x2f\xfd")
     assert artifact.stat().st_ino == blob.stat().st_ino
+
+
+def test_tracing_compress_logs_dry_run_reports_and_writes_nothing(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    archive = tmp_path / "logs" / "archive" / "2026-01-01" / "audit-spans-2026-01-01-1.log"
+    archive.parent.mkdir(parents=True)
+    archive.write_text('{"spanId": "s"}\n', encoding="utf-8")
+
+    r = runner.invoke(app, ["tracing", "compress", "--logs", "--dry-run"])
+
+    assert r.exit_code == 0
+    assert "logs 1: compressed 1" in r.output
+    assert archive.read_text(encoding="utf-8") == '{"spanId": "s"}\n'

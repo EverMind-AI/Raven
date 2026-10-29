@@ -8,7 +8,13 @@ never from the name, which is also what lets a half-migrated store read.
 
 Idempotent: a blob or message already compressed is counted and left alone, so
 a second pass writes nothing. A dry run compresses in memory to report the real
-saving and writes no file at all."""
+saving and writes no file at all.
+
+The rotated span/event logs are the same story one level up: closed files under
+``archive/``, re-encoded in place. The active log and the ACP frame journals
+are not touched -- the first is still being appended to, and a span records a
+plaintext byte range into the second.
+"""
 
 from __future__ import annotations
 
@@ -159,4 +165,62 @@ def compress(artifacts_dir: Path, *, dry_run: bool = False) -> CompressResult:
     return result
 
 
-__all__ = ["CompressResult", "compress"]
+def _is_rotated_log(name: str) -> bool:
+    return (name.startswith("audit-spans-") or name.startswith("audit-events-")) and name.endswith(".log")
+
+
+@dataclass
+class LogCompressResult:
+    """What one pass over the rotated logs saw, did, and saved."""
+
+    files: int = 0
+    compressed: int = 0
+    already: int = 0
+    bytes_before: int = 0
+    bytes_after: int = 0
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def saved(self) -> int:
+        return max(self.bytes_before - self.bytes_after, 0)
+
+
+def compress_logs(logs_dir: Path, *, dry_run: bool = False) -> LogCompressResult:
+    """Compress rotated span and event logs in place.
+
+    Only ``archive/`` is touched: the active log is still being appended to.
+    ACP frame journals are left alone -- a span records a plaintext byte range
+    into one, so re-encoding it would invalidate that audit record.
+
+    A rotated log is closed and never appended to again, which is why it can be
+    rewritten here and why a running writer needs no coordination. Idempotent:
+    a compressed file is counted and left alone; a dry run writes nothing.
+    """
+    result = LogCompressResult()
+    archive = Path(logs_dir) / "archive"
+    if not archive.is_dir():
+        return result
+    for path in sorted(p for p in _files(archive) if _is_rotated_log(p.name)):
+        result.files += 1
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            result.errors.append(f"{path}: {exc}")
+            continue
+        if is_compressed(data):
+            result.already += 1
+            continue
+        packed = compress_bytes(data)
+        result.bytes_before += len(data)
+        result.bytes_after += len(packed)
+        result.compressed += 1
+        if dry_run:
+            continue
+        try:
+            _replace(path, packed)
+        except OSError as exc:
+            result.errors.append(f"{path}: {exc}")
+    return result
+
+
+__all__ = ["CompressResult", "LogCompressResult", "compress", "compress_logs"]

@@ -52,6 +52,7 @@ from typing import Any, Callable, Iterable, Iterator, Sequence, TypeVar
 from loguru import logger
 
 from raven.tracing import config as tracing_config
+from raven.tracing.codec import read_plaintext_file
 from raven.utils.atomic_io import atomic_update
 
 T = TypeVar("T")
@@ -679,10 +680,10 @@ def iter_spans(
         if owner is not None:
             match_ids = set(defs[owner]["traces"])
     for path in span_log_paths(state_dir):
-        try:
-            raw_lines = path.read_bytes().splitlines()
-        except OSError:
+        data = read_plaintext_file(path)
+        if data is None:
             continue
+        raw_lines = data.splitlines()
         for raw_line in raw_lines:
             # Decode per line: one invalid-UTF-8 byte must hide one record,
             # not the whole log file.

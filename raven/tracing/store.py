@@ -120,7 +120,29 @@ class TraceStore:
         base = _KIND_FILES[kind].replace(".log", "")
         rotated = day_dir / f"{base}-{current_day}-{suffix}.log"
         path.rename(rotated)
+        self._compress_rotated(rotated)
         return path
+
+    def _compress_rotated(self, path: Path) -> None:
+        """Store a just-rotated log compressed under the name it already has.
+
+        Rotation is the safe moment: the file is closed and never appended to
+        again, so rewriting it cannot race the writer. A failure leaves it
+        plain, which every reader accepts.
+        """
+        try:
+            data = path.read_bytes()
+            if is_compressed(data):
+                return
+            packed = compress_bytes(data)
+            tmp = path.parent / f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.compress.tmp"
+            try:
+                tmp.write_bytes(packed)
+                os.replace(tmp, path)
+            finally:
+                tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def append(self, kind: str, record: dict[str, Any]) -> None:
         text = f"{to_json_text(record)}\n"

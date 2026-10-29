@@ -1,8 +1,33 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const zlib = require('zlib');
 
 const DEFAULT_MAX_BYTES = 50 * 1024 * 1024;
+const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
+
+function readStored(filePath) {
+  const data = fs.readFileSync(filePath);
+  if (data.length >= 4 && data.subarray(0, 4).equals(ZSTD_MAGIC)) {
+    // zstd landed in Node's zlib in 22.15 / 23.8. An older viewer can still
+    // read a plain store; a compressed one is reported rather than parsed as
+    // mojibake, because JSON.parse of the frame would only say "invalid".
+    if (typeof zlib.zstdDecompressSync !== 'function') {
+      console.warn('tracing viewer: this Node has no zstd support; compressed files need Node >= 22.15');
+      return Buffer.alloc(0);
+    }
+    try {
+      return zlib.zstdDecompressSync(data);
+    } catch {
+      return data;
+    }
+  }
+  return data;
+}
+
+function readStoredText(filePath) {
+  return readStored(filePath).toString('utf8');
+}
 
 const KIND_FILES = {
   events: 'audit-events.log',
@@ -65,8 +90,7 @@ function statOrNull(filePath) {
 
 function readJsonlFile(filePath) {
   if (!fs.existsSync(filePath)) return [];
-  return fs
-    .readFileSync(filePath, 'utf8')
+  return readStoredText(filePath)
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
@@ -199,6 +223,8 @@ module.exports = {
   ensureDir,
   readJsonl,
   readJsonlFile,
+  readStored,
+  readStoredText,
   statLogFiles,
   appendJsonl,
   rotateIfNeeded,

@@ -39,6 +39,7 @@ from typing import Any, Iterable, Iterator, Sequence
 
 from raven.tracing import artifact_v2
 from raven.tracing import config as tracing_config
+from raven.tracing.codec import read_plaintext_file
 from raven.trajectory import entries as _entries
 from raven.trajectory import store as tstore
 
@@ -133,10 +134,10 @@ def _records(
     themselves only.
     """
     for path in tstore.span_log_paths(state_dir):
-        try:
-            raw_lines = path.read_bytes().splitlines()
-        except OSError:
+        data = read_plaintext_file(path)
+        if data is None:
             continue
+        raw_lines = data.splitlines()
         for raw_line in raw_lines:
             if needles and not any(needle in raw_line for needle in needles):
                 continue

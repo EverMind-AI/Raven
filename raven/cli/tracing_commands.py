@@ -306,28 +306,41 @@ def _run_compact(*, dry_run: bool) -> None:
         console.print(f"[yellow]... and {hidden} more[/yellow]")
 
 
-def _run_compress(*, dry_run: bool) -> None:
-    from raven.tracing.compress import compress
+def _run_compress(*, dry_run: bool, logs: bool = False) -> None:
+    from raven.tracing.compress import compress, compress_logs
     from raven.tracing.store import TraceStore
 
-    artifacts_dir = TraceStore(tracing_config.state_dir()).artifacts_dir
-    if not artifacts_dir.is_dir():
-        console.print(f"[yellow]No artifacts at {escape(str(artifacts_dir))}.[/yellow]")
-        return
-    result = compress(artifacts_dir, dry_run=dry_run)
+    store = TraceStore(tracing_config.state_dir())
     if dry_run:
         console.print("[dim]dry run - nothing is written[/dim]")
-    console.print(
-        f"blobs {result.blobs}: compressed {result.compressed}, already {result.already}, relinked {result.relinked}"
-    )
-    console.print(f"messages {result.messages}: compressed {result.messages_compressed}")
-    console.print(
-        f"{result.bytes_before / (1024 * 1024):.1f} MB -> {result.bytes_after / (1024 * 1024):.1f} MB, "
-        f"saved {result.saved / (1024 * 1024):.1f} MB"
-    )
-    for message in result.errors[:10]:
+    artifacts_dir = store.artifacts_dir
+    if artifacts_dir.is_dir():
+        result = compress(artifacts_dir, dry_run=dry_run)
+        console.print(
+            f"blobs {result.blobs}: compressed {result.compressed}, already {result.already}, relinked {result.relinked}"
+        )
+        console.print(f"messages {result.messages}: compressed {result.messages_compressed}")
+        console.print(
+            f"{result.bytes_before / (1024 * 1024):.1f} MB -> {result.bytes_after / (1024 * 1024):.1f} MB, "
+            f"saved {result.saved / (1024 * 1024):.1f} MB"
+        )
+        _print_skipped(result.errors)
+    else:
+        console.print(f"[yellow]No artifacts at {escape(str(artifacts_dir))}.[/yellow]")
+    if logs:
+        log_result = compress_logs(store.logs_dir, dry_run=dry_run)
+        console.print(f"logs {log_result.files}: compressed {log_result.compressed}, already {log_result.already}")
+        console.print(
+            f"{log_result.bytes_before / (1024 * 1024):.1f} MB -> {log_result.bytes_after / (1024 * 1024):.1f} MB, "
+            f"saved {log_result.saved / (1024 * 1024):.1f} MB"
+        )
+        _print_skipped(log_result.errors)
+
+
+def _print_skipped(errors: list[str]) -> None:
+    for message in errors[:10]:
         console.print(f"[yellow]skipped:[/yellow] {escape(message)}")
-    hidden = max(len(result.errors) - 10, 0)
+    hidden = max(len(errors) - 10, 0)
     if hidden:
         console.print(f"[yellow]... and {hidden} more[/yellow]")
 
@@ -347,7 +360,7 @@ def register(app: typer.Typer) -> None:
             help=(
                 "Optional action: 'stop' shuts down the background viewer; "
                 "'compact' folds duplicate artifacts; 'compress' rewrites payloads as zstd "
-                "(both terminal only, not available from the TUI)."
+                "(--logs adds the rotated span and event logs; both terminal only, not available from the TUI)."
             ),
         ),
         port: int = typer.Option(None, "--port", "-p", help="Port to bind (default: config or 4318)."),
@@ -357,13 +370,14 @@ def register(app: typer.Typer) -> None:
         dry_run: bool = typer.Option(
             False, "--dry-run", help="With 'compact' or 'compress': report what would change without writing."
         ),
+        logs: bool = typer.Option(False, "--logs", help="With 'compress': also compress rotated span and event logs."),
     ) -> None:
         """Open the tracing dashboard (captured LLM/tool/memory spans)."""
         if action == "compact":
             _run_compact(dry_run=dry_run)
             return
         if action == "compress":
-            _run_compress(dry_run=dry_run)
+            _run_compress(dry_run=dry_run, logs=logs)
             return
         if action == "stop":
             _stop_viewer()

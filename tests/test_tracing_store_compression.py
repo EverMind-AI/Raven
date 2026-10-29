@@ -16,12 +16,13 @@ from pathlib import Path
 import zstandard
 
 from raven.tracing import artifact_v2
-from raven.tracing.codec import plaintext_size
+from raven.tracing.codec import is_compressed, plaintext_size
 from raven.tracing.compact import compact
-from raven.tracing.compress import compress
+from raven.tracing.compress import compress, compress_logs
 from raven.tracing.store import TraceStore
-from raven.trajectory import details
+from raven.trajectory import details, selection
 from raven.trajectory.conversation import _read_artifact
+from raven.trajectory.store import iter_spans
 
 MAGIC = b"\x28\xb5\x2f\xfd"
 PAYLOAD = {"messages": [{"role": "user", "content": "hi " * 4000}]}
@@ -213,3 +214,83 @@ def test_compact_records_a_corrupt_frame(tmp_path: Path) -> None:
 
     assert result.errors
     assert bad.exists()
+
+
+def _span_record(trace: str, span_id: str) -> dict:
+    return {"traceId": trace, "spanId": span_id, "name": "tool.call", "attributes": {}}
+
+
+def _plant_logs(state: Path) -> Path:
+    """A store with one rotated span log, one active log, and one frame journal."""
+    logs = state / "logs"
+    archive = logs / "archive" / "2026-07-01" / "audit-spans-2026-07-01-1.log"
+    archive.parent.mkdir(parents=True)
+    archive.write_text(json.dumps(_span_record("t1", "s1")) + "\n", encoding="utf-8")
+    (logs / "audit-spans.log").write_text(json.dumps(_span_record("t2", "s2")) + "\n", encoding="utf-8")
+    frames = logs / "acp-frames" / "2026-07-01" / "a.jsonl"
+    frames.parent.mkdir(parents=True)
+    frames.write_text('{"method": "x"}\n', encoding="utf-8")
+    return archive
+
+
+def test_compress_logs_rewrites_only_rotated_files(tmp_path: Path) -> None:
+    archive = _plant_logs(tmp_path)
+    active = tmp_path / "logs" / "audit-spans.log"
+    frames = tmp_path / "logs" / "acp-frames" / "2026-07-01" / "a.jsonl"
+    active_before = active.read_bytes()
+    frames_before = frames.read_bytes()
+
+    result = compress_logs(tmp_path / "logs")
+
+    assert (result.files, result.compressed, result.already) == (1, 1, 0)
+    assert result.errors == []
+    assert is_compressed(archive.read_bytes())
+    # A span records a plaintext byte range into a frame journal, so that file
+    # must keep its bytes; the active log is still being appended to.
+    assert active.read_bytes() == active_before
+    assert frames.read_bytes() == frames_before
+
+
+def test_iter_spans_reads_a_compressed_archive(tmp_path: Path) -> None:
+    _plant_logs(tmp_path)
+    compress_logs(tmp_path / "logs")
+
+    ids = [span["spanId"] for span in iter_spans(tmp_path)]
+
+    assert ids == ["s1", "s2"]
+
+
+def test_selection_reads_a_compressed_archive(tmp_path: Path) -> None:
+    _plant_logs(tmp_path)
+    compress_logs(tmp_path / "logs")
+
+    records = list(selection._records(tmp_path, None))
+
+    assert [record["spanId"] for record in records] == ["s1", "s2"]
+
+
+def test_compress_logs_is_idempotent_and_dry_run_writes_nothing(tmp_path: Path) -> None:
+    archive = _plant_logs(tmp_path)
+    before = archive.read_bytes()
+
+    dry = compress_logs(tmp_path / "logs", dry_run=True)
+    assert dry.compressed == 1
+    assert archive.read_bytes() == before
+
+    once = compress_logs(tmp_path / "logs")
+    assert once.compressed == 1
+    again = compress_logs(tmp_path / "logs")
+    assert again.compressed == 0
+    assert again.already == 1
+
+
+def test_rotation_compresses_the_rotated_file(tmp_path: Path) -> None:
+    store = TraceStore(tmp_path, max_bytes=1)
+
+    store.append_span(_span_record("t1", "s1"))
+    store.append_span(_span_record("t2", "s2"))
+
+    archives = list((tmp_path / "logs" / "archive").rglob("audit-spans-*.log"))
+    assert len(archives) == 1
+    assert is_compressed(archives[0].read_bytes())
+    assert [span["spanId"] for span in iter_spans(tmp_path)] == ["s1", "s2"]
