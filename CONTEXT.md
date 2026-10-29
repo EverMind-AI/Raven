@@ -3399,8 +3399,11 @@ and a loop running beside it in another thread is offered the same socket. A con
 the token first, alone and under a deadline, so a peer without it is dropped before a frame is
 read. The host builds an agent's provider without writing the agent's key into its own
 environment, and makes each call in a context of its own under the window of the agent's turn,
-so the output ceiling on the wire is the one the agent's loop reserved. An agent that cannot
-reach the host loads LiteLLM and works as before.
+so the output ceiling on the wire is the one the agent's loop reserved. A call is made with the
+host's environment, so an agent whose own configuration sets something LiteLLM reads from it (an
+endpoint, a cloud credential, a proxy or CA bundle) is launched without the relay; and a refusal
+of prompt-cache marks is learned on the host too, which builds the agent's resend. An agent that
+cannot reach the host loads LiteLLM and works as before.
 
 **Fork template** (`raven/acp_client/fork_template.py`, `raven/cli/_fork_template.py`, `subagents.runtime.forkTemplate`):
 On Linux, one process per host that has imported what Raven agents import, frozen out of the
