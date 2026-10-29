@@ -394,15 +394,18 @@ def test_tracing_rejects_an_unknown_action_with_bracketed_markup(tmp_path, monke
 
 def test_a_below_minimum_node_is_refused(monkeypatch):
     """find_node deliberately returns the best node it saw even below the
-    minimum; the viewer used to discard the version and run on it anyway."""
+    minimum; the viewer reads zstd-compressed payloads, whose decoder landed
+    in Node's zlib in 22.15."""
     import pytest
     import typer
 
     import raven.cli.tracing_commands as tc
 
-    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda: ("/usr/bin/node", (20, 0, 0)))
+    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda: ("/usr/bin/node", (22, 14, 0)))
     with pytest.raises(typer.Exit):
         tc._resolve_node()
+    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda: ("/usr/bin/node", (22, 15, 0)))
+    assert tc._resolve_node() == "/usr/bin/node"
 
 
 def _plain_blob_with_link(state_dir: Path, text: str) -> tuple[Path, Path]:

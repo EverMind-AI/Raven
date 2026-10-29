@@ -42,6 +42,10 @@ from raven.tracing import config as tracing_config
 
 console = Console()
 
+#: zstd decoding landed in Node's zlib in 22.15, and the viewer reads payloads
+#: compressed by default. Its floor is therefore higher than the TUI's.
+_MIN_VIEWER_NODE_VERSION = (22, 15, 0)
+
 
 def _viewer_dir() -> Path:
     return Path(__file__).resolve().parent / "tracing_viewer"
@@ -190,15 +194,15 @@ def _stop_viewer() -> None:
 
 
 def _resolve_node() -> str:
-    from raven.cli.tui_commands import _MIN_NODE_VERSION, find_node
+    from raven.cli.tui_commands import find_node
 
     node, version = find_node()
     # find_node returns the best node it saw even below the minimum, so the
     # version check is the caller's -- the TUI's own launch does the same.
-    if not node or version is None or version < _MIN_NODE_VERSION:
+    if not node or version is None or version < _MIN_VIEWER_NODE_VERSION:
         console.print(
-            "[red]Node (>= 22) not found.[/red] The tracing dashboard needs the "
-            "same Node runtime as the TUI.\n"
+            "[red]Node (>= 22.15) not found.[/red] The tracing dashboard reads zstd-compressed "
+            "payloads and needs a Node with zlib zstd support.\n"
             "Install: https://nodejs.org/  or  brew install node@22  or  nvm install 22"
         )
         raise typer.Exit(1)
