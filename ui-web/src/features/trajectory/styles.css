@@ -776,3 +776,10 @@ html[data-theme="dark"] {
    itself past it -- into the details pane -- on a long session. */
 .trajectory-ruler { overflow: hidden }
 .trajectory-ruler b:last-of-type { transform: translateX(-100%) }
+
+/* The fold control, as the reference draws it: a thin chevron in a quiet
+   square that only shows itself on hover, instead of a bare text glyph. */
+.trajectory-wf-chev { width: 18px; height: 18px; display: grid; place-items: center;
+  border-radius: 6px; color: #9aa0a6; flex: none; transition: background 120ms ease }
+.trajectory-wf-row:hover .trajectory-wf-chev { background: #f1f2f4; color: #5f6673 }
+.trajectory-wf-chev svg { width: 14px; height: 14px; display: block }
