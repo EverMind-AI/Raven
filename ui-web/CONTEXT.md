@@ -159,62 +159,54 @@ instead. A single root, not one per lane: it reads the lane whose host is on
 _Avoid_: "minimap" -- it marks turns, not a scaled copy of the transcript.
 
 **Trajectory View**:
-The chat column's second view: the conversation's trace entries as a list, in
-place of the transcript, drawn by `features/trajectory/` into `#trajHost` -- the
-box `src/chrome/ChatTop.tsx` renders beside `#scroll` and hands over empty.
+The chat column's second view: the conversation's trace entries as an agent
+waterfall, in place of the transcript, drawn by `features/trajectory/` into
+`#trajHost` -- the box `src/chrome/ChatTop.tsx` renders beside `#scroll` and
+hands over empty.
 Switching to it parks the scroller (`#scroll[data-parked]`: out of the flow,
 hidden, its size and scroll position kept) rather than unmounting it, so the
 transcript goes on streaming underneath and comes back exactly where it was.
 The header's toggle (`#trajBtn`) appears only when the gateway announced
 `trajectory-v1` (every gateway does while its trajectory policy is on, which is the default), `trajectory.state` says the view is on, a conversation is open
 and that conversation is not in its empty state (`state/session/conversation.ts`'s
-flag); the store's `available` is that one condition. Picking a row opens the
-details pane beside the list (`features/trajectory/detailStore.ts`): a descriptor
-read through `trajectory.detail` and block bodies read through
-`trajectory.block`, each filed under its whole identity (session, epoch,
-entry, revision, block) and shown only under the ticket it was asked with.
+flag); the store's `available` is that one condition.
+The waterfall (`features/trajectory/waterfall/`) draws every entry the list
+store holds (`shown`), the ones the index marked `meta.hidden` included: grouped
+by agent -- the main session first, then one group per worker, a worker's runs
+folded into one by instance, else by name (`model.ts`'s `agentIdentity`) -- then
+by turn, then by span. Every agent shares one time axis (`axis.ts`): a stretch
+in which no agent was doing anything collapses to a fixed width, and the axis
+leaves room after the last bar for the duration each row prints just past its
+bar. Above the rows sit the overview, one lane per agent, and the ruler; a
+dispatch and a report are drawn as rules between the agents' rows. Agent groups
+start open and turns folded; a plain wheel scrolls, ctrl or cmd with the wheel
+zooms about the pointer, and shift with the wheel pans.
+Picking a row opens the details pane beside the waterfall
+(`features/trajectory/detailStore.ts`): a descriptor read through
+`trajectory.detail` and block bodies read through `trajectory.block`, each filed
+under its whole identity (session, epoch, entry, revision, block) and shown only
+under the ticket it was asked with.
 The pane's head carries a pin for the tab on screen: the conversation's
 **pinned tab**, opened first whenever the pane arrives at an entry whose strip
 has it (a new selection, or the pane reopened) and never while the reader is
 already on the entry; kept per conversation in memory and in the tab's session
 storage (`lib/persist.ts`), with no cap.
-Above the list sits the duration bar (`features/trajectory/DurationBar.tsx`,
-arithmetic in `geometry.ts`): every entry as a block as wide as what it is
-charged, zoomed about the pointer and dragged, dense blocks where the fit has
-no room, a click on a block being one more door to the same `select`. The list
-store keeps two indexes: the server's whole `entries` (every coordinate, change
-feeds and the anchor) and the derived `visible` rows, which leave out the
-entries the index marked `meta.hidden` (a turn's end that repeats the turn's
-last model output or delivered nothing, an internal step that recorded
-nothing) unless "show hidden entries" is on or a link `revealed` one. That
-switch and the bar's duration threshold (`minChargedMs`, a detent from 0 to
-1000 ms that leaves out of the bar -- never the list -- the entries charged
-less) are the viewer's `prefs`, kept in `localStorage` and never in the session
-memory. A hidden turn's end is drawn as the turn's band under the blocks rather
-than a block of its own. Under the raw record the details pane lists the files
+Under the raw record the details pane lists the files
 the span names (`features/trajectory/Files.tsx`): the `files` directory whole,
 each file's content read by its own cursor while it is open and in view, kept
 apart from the block pages and let go stalest first when the budget is short.
-Over all of it sits the strip of **Scope Tabs** (`features/trajectory/ScopeTabs.tsx`):
-the main session's tab, always first, then one tab per Sub-agent Scope the
-reader opened, in the order opened, each closable; the strip shows only once
-the conversation has an entry that opens a scope or a tab is open. A tab is a
-filter over the one list store, not a store of its own: `visible` and the bar
-draw only the entries whose `subagent_scope` is the tab's (null for the main
-session), while `entries`, `index` and `spanIndex` keep every entry; each tab
-keeps its own selection, place, bar zoom and whether the details pane was open
-(`scope`, `scopes`, `saved` in `store.ts`; the pane's in `detailStore.ts`), moving
-between tabs never moves the generation, and a closed tab keeps nothing. An
-entry that opens a scope (`opens_subagent_scope`) and the first row of a turn a
-sub-agent's report started (`dispatched_by_subagent_scope`) open their tab on a
-double click, on Enter, or from a button in the details head; `select` on an
-entry of another tab moves to that tab, which is how a details link crosses
-tabs (`scopes.ts` holds the moves that touch both stores).
+The list store also keeps a current Sub-agent Scope and that scope's entries
+(`scope`, `scopes`, `saved` and `visible` in `store.ts`), though no strip shows
+it: `select` on an entry of another scope (a link in the pane) moves it, so does
+the pane's button on an entry that opens a scope or on the first row of a turn
+a sub-agent's report started, and a scope entered for the first time on an
+external agent's run lands the pane on what the agent recorded (`scopes.ts`
+holds the moves that touch both stores). A click on a waterfall row
+selects across scopes without moving it (`selectAcross`), since every agent is
+on screen at once.
 _Avoid_: "trace view" or "audit view" for this -- the trace is what the runtime
-records, the trajectory is how this page reads it back. "Tab" alone for a Scope
-Tab -- the details pane's block tabs and its pinned tab already use the word --
-and "sub-agent trace" -- a spawned run's steps are in the trace of the turn that
-dispatched it.
+records, the trajectory is how this page reads it back -- and "sub-agent trace"
+-- a spawned run's steps are in the trace of the turn that dispatched it.
 
 **Region**:
 One of the things `src/App.tsx` renders at the body, in the standing order

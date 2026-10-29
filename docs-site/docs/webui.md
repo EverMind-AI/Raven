@@ -15,10 +15,13 @@ service, run `raven web --stop`.
 ## Trajectory view
 
 Once a conversation has content, a trajectory toggle appears in the chat
-header, to the left of the workspace panel button. The trajectory view lists
+header, to the left of the workspace panel button. The trajectory view draws
 every recorded step of that conversation (inputs, model calls, tool calls,
-replies) with its timing, opens the details of any step, and draws a
-duration bar above the list.
+replies) on one timeline: the main agent and each sub-agent in a group of its
+own, their turns inside, and each step as a bar with its duration beside it,
+so you can see what ran at the same time as what. Click a step to open its
+details. Hold Ctrl (Cmd on macOS) and scroll to zoom the timeline, or hold
+Shift and scroll to move along it.
 
 ## Export and report a problem
 
