@@ -232,16 +232,23 @@ export function MessagesView({ block, entryId, render }: {
     wanted.current.add(page.cursor)
     void details.loadPageAt(block.id, page.cursor, page.index).finally(() => wanted.current.delete(page.cursor))
   }
+
   /* Open rows in the window read their bodies; nothing beyond the window is asked for,
      and a page that failed waits for the reader's retry rather than being asked again. */
   const pageFault = details.fault({ blockId: block.id, more: true }, s) ?? details.fault({ blockId: block.id }, s)
   const faulted = pageFault !== null
+  /* Only when what is drawn changed. Running on every render let an open row
+     whose page never arrives ask again and again -- a write, a render, a write
+     -- until React gave up and unmounted the island (React #185). The key
+     carries the rows, their open/folded state and whether their page is held,
+     so a genuine change still asks and a scroll alone does not. */
   useEffect(() => {
     if (!permitted || faulted) return
     for (const item of shown) {
       if (drawnOpen(item) && (!record || details.pageHolding(record, item.index) === null)) ask(item)
     }
-  })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drawnKey, permitted, faulted])
 
   const open = (item: OutlineItem): void => {
     setChoices((c) => ({ ...c, [item.index]: true }))
