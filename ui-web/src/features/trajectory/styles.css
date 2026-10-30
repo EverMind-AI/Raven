@@ -126,7 +126,9 @@ html[data-theme="dark"] {
 
 .trajectory-root { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0;
   /* The header's height, which the details card starts below. */
-  --wf-stats-h: 96px; }
+  --wf-stats-h: 96px;
+  /* The details card's size handle, and the strip at its foot the pane leaves it. */
+  --wf-corner: 18px; }
 
 /* One quiet line above the list for what the index wants the reader to know:
    a scan still running, a head cut off, a failure. Absent when nothing is. */
@@ -195,7 +197,7 @@ html[data-theme="dark"] {
    opens, its right edge pinned there, and bottom-right once moved -- the desk
    palette's own handle and hatch, set in from the rounded corner. */
 .trajectory-corner {
-  position: absolute; left: 0; bottom: 0; z-index: 3; width: 18px; height: 18px; cursor: nesw-resize; touch-action: none;
+  position: absolute; left: 0; bottom: 0; z-index: 3; width: var(--wf-corner); height: var(--wf-corner); cursor: nesw-resize; touch-action: none;
 }
 .trajectory-corner::after {
   content: ''; position: absolute; left: 5px; bottom: 5px; width: 9px; height: 9px; opacity: .55; pointer-events: none;
@@ -266,6 +268,10 @@ html[data-theme="dark"] {
    offset under the reader's hand. The list places its own rows; the browser
    must not place them a second time. */
 .trajectory-pane { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 12px 14px 20px; font-size: 12.5px; overflow-anchor: none; }
+/* The pane's overlay bar runs along the pane's own box, and the size handle
+   owns the card's bottom corner: the pane stops a handle's height short of the
+   card's foot, so the bar never runs under the handle on either side. */
+.trajectory-details:not(.trajectory-details-over) > .trajectory-pane { margin-bottom: var(--wf-corner); }
 .trajectory-overview { display: flex; flex-direction: column; gap: 20px; }
 
 /* Info: two borderless rows, a 72px label, the value free to wrap. */

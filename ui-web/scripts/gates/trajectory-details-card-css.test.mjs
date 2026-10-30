@@ -54,6 +54,18 @@ describe('the details pane', () => {
     expect(['left', 'right', 'bottom'].map((side) => effective(moved, side))).toEqual(['auto', '0', '0'])
   })
 
+  /* The pane's overlay bar is laid along the pane's own box, and the size
+     handle owns the card's bottom corner: the pane stops a handle's height
+     short of the card's foot, so the bar never runs under the handle. One
+     variable sizes both. */
+  it('keeps the pane, and so its scroll bar, clear of the size handle', () => {
+    const pane = ['.trajectory-details:not(.trajectory-details-over) > .trajectory-pane']
+    expect(effective(['.trajectory-corner'], 'width')).toBe('var(--wf-corner)')
+    expect(effective(['.trajectory-corner'], 'height')).toBe('var(--wf-corner)')
+    expect(effective(pane, 'margin-bottom')).toBe('var(--wf-corner)')
+    expect(sheet).toMatch(/--wf-corner:\s*\d+px/)
+  })
+
   /* A touch drag on either would scroll the page, and a mouse drag on the head
      would select its name. */
   it('lets the head and the size handle be dragged by touch as well as by mouse', () => {
