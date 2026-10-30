@@ -23,7 +23,8 @@ so you can see what ran at the same time as what. Click a step to open its
 details. Hold Ctrl (Cmd on macOS) and scroll to zoom the timeline, or hold
 Shift and scroll to move along it. A step that failed carries a red dot, and
 so does the turn that holds it. While the trajectory view is open the message
-box is hidden; switch back to the chat to send a message.
+box is hidden; switch back to the chat to send a message. An approval or a
+question the conversation raises still shows over the trajectory.
 
 ## Export and report a problem
 
