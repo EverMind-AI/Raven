@@ -12717,6 +12717,46 @@
       "en": "Error",
       "zh": "错误"
     },
+    "gui.trajectory.tool.read": {
+      "en": "Read",
+      "zh": "读取"
+    },
+    "gui.trajectory.tool.edit": {
+      "en": "Edit",
+      "zh": "编辑"
+    },
+    "gui.trajectory.tool.delete": {
+      "en": "Delete",
+      "zh": "删除"
+    },
+    "gui.trajectory.tool.move": {
+      "en": "Move",
+      "zh": "移动"
+    },
+    "gui.trajectory.tool.search": {
+      "en": "Search",
+      "zh": "搜索"
+    },
+    "gui.trajectory.tool.execute": {
+      "en": "Run",
+      "zh": "执行"
+    },
+    "gui.trajectory.tool.think": {
+      "en": "Think",
+      "zh": "思考"
+    },
+    "gui.trajectory.tool.fetch": {
+      "en": "Fetch",
+      "zh": "抓取"
+    },
+    "gui.trajectory.tool.switch_mode": {
+      "en": "Switch mode",
+      "zh": "切换模式"
+    },
+    "gui.trajectory.tool.other": {
+      "en": "Other",
+      "zh": "其他"
+    },
     "gui.trajectory.busy": {
       "en": "BUSY",
       "zh": "忙碌"

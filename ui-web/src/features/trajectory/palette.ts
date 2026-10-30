@@ -87,3 +87,23 @@ export function kindLabel(kind: string): string {
   const key = kindKey(kind)
   return key === null ? kind : t(key)
 }
+
+/* The kinds of call an external agent reports (ACP's tool kind, a closed set),
+   each with its word; literal keys, so the i18n gate holds each one to the
+   catalogue. A tool's own name -- exec, read_file -- is the identifier the
+   model called, and is shown as it is. */
+const TOOL_KINDS = new Map<string, () => string>([
+  ['read', () => t('gui.trajectory.tool.read')],
+  ['edit', () => t('gui.trajectory.tool.edit')],
+  ['delete', () => t('gui.trajectory.tool.delete')],
+  ['move', () => t('gui.trajectory.tool.move')],
+  ['search', () => t('gui.trajectory.tool.search')],
+  ['execute', () => t('gui.trajectory.tool.execute')],
+  ['think', () => t('gui.trajectory.tool.think')],
+  ['fetch', () => t('gui.trajectory.tool.fetch')],
+  ['switch_mode', () => t('gui.trajectory.tool.switch_mode')],
+  ['other', () => t('gui.trajectory.tool.other')],
+])
+
+/** A tool call's name for the page: an external agent's tool kind in the page's language, any other name as it is. */
+export const toolLabel = (name: string): string => TOOL_KINDS.get(name)?.() ?? name

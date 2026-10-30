@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
-import { KNOWN_KINDS, NAMED_KINDS, kindClass, kindKey, kindLabel, kindSlug } from './palette'
+import { KNOWN_KINDS, NAMED_KINDS, kindClass, kindKey, kindLabel, kindSlug, toolLabel } from './palette'
 
 const catalogue = (): Record<string, { en: string; zh: string }> =>
   (JSON.parse(readFileSync('../i18n/messages.json', 'utf8') as string) as { ui: Record<string, { en: string; zh: string }> }).ui
@@ -77,4 +77,17 @@ describe('the kind palette', () => {
       resetTranslator()
     }
   })
+})
+
+it('names a tool kind an external agent reports in the page’s language, and leaves a tool’s own name as it is', () => {
+  /* ACP reports a call's kind from a closed set; a tool's own name (exec,
+     read_file) is an identifier the model called, and stays one. */
+  setTranslator((key) => `<${key}>`)
+  try {
+    const kinds = ['read', 'edit', 'delete', 'move', 'search', 'execute', 'think', 'fetch', 'switch_mode', 'other']
+    expect(kinds.map(toolLabel)).toEqual(kinds.map((kind) => `<gui.trajectory.tool.${kind}>`))
+    expect([toolLabel('exec'), toolLabel('read_file'), toolLabel('bash')]).toEqual(['exec', 'read_file', 'bash'])
+  } finally {
+    resetTranslator()
+  }
 })
