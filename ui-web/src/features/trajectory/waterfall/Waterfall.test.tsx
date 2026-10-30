@@ -835,3 +835,50 @@ describe('the clock ruler', () => {
     expect(shownWindow().to - shownWindow().from).toBeLessThan(Date.parse(local(13)) - Date.parse(local(10)))
   })
 })
+
+describe('the window presets and the fold-all button', () => {
+  const local = (h: number, m = 0): string => new Date(2026, 9, 28, h, m).toISOString()
+  const preset = (name: string): HTMLButtonElement =>
+    [...document.querySelectorAll<HTMLButtonElement>('.trajectory-wf-zoom button')].find((b) => b.textContent === `gui.trajectory.zoom.${name}`)!
+  const pressed = (): string[] =>
+    [...document.querySelectorAll<HTMLButtonElement>('.trajectory-wf-zoom button[aria-pressed="true"]')].map((b) => b.textContent ?? '')
+
+  it('narrows the window to a preset about its middle, and Fit gives the whole session back', async () => {
+    await draw([E('long', 0, { operation_start: local(9), operation_end: local(19) })])
+    expect(pressed()).toEqual(['gui.trajectory.zoom.fit'])
+    act(() => { fireEvent.click(preset('1h')) })
+    const narrowed = shownWindow()
+    expect(narrowed.to - narrowed.from).toBe(3_600_000)
+    /* The middle of 09:00 to the axis's end, its trailing scale included. */
+    expect(narrowed.from).toBe(Date.parse(local(14, 15)))
+    expect(pressed()).toEqual(['gui.trajectory.zoom.1h'])
+    act(() => { fireEvent.click(preset('fit')) })
+    expect(pressed()).toEqual(['gui.trajectory.zoom.fit'])
+    expect(document.querySelector('.trajectory-wf-window')!.textContent).toContain('gui.trajectory.window.whole')
+  })
+
+  it('presses no preset for a window the wheel made', async () => {
+    await draw([E('long', 0, { operation_start: local(9), operation_end: local(19) })])
+    expect(document.querySelectorAll('.trajectory-wf-zoom button')).toHaveLength(4)
+    const box = document.querySelector('.trajectory-list') as HTMLElement
+    act(() => { box.dispatchEvent(wheel({ deltaY: -240, clientX: 100, ctrlKey: true, bubbles: true, cancelable: true })) })
+    expect(pressed()).toEqual([])
+  })
+
+  it('folds every agent and closes every turn from the one button', async () => {
+    await draw([
+      E('m1', 0), E('door', 1, { opens_subagent_scope: 'x' }),
+      E('x1', 2, { subagent_scope: 'x', turn_span_id: 'X1' }),
+    ])
+    act(() => { fireEvent.click(document.querySelector('[data-row="turn"]')!) })
+    expect(count('[data-row="span"]')).toBeGreaterThan(0)
+    act(() => { fireEvent.click(document.querySelector('button.trajectory-wf-foldall')!) })
+    expect(count('[data-row="span"]')).toBe(0)
+    expect(count('[data-row="turn"]')).toBe(0)
+    expect([...document.querySelectorAll('[data-row="agent"]')].map((row) => row.getAttribute('aria-expanded'))).toEqual(['false', 'false'])
+    /* Opened again, the agent shows its turns closed: the turns were folded too. */
+    act(() => { fireEvent.click(document.querySelector('[data-row="agent"]')!) })
+    expect(count('[data-row="turn"]')).toBeGreaterThan(0)
+    expect(count('[data-row="span"]')).toBe(0)
+  })
+})

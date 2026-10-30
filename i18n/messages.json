@@ -12633,6 +12633,30 @@
       "en": "slowest",
       "zh": "最慢"
     },
+    "gui.trajectory.zoom.label": {
+      "en": "Window",
+      "zh": "时间窗口"
+    },
+    "gui.trajectory.zoom.fit": {
+      "en": "Fit",
+      "zh": "全部"
+    },
+    "gui.trajectory.zoom.3h": {
+      "en": "3h",
+      "zh": "3 小时"
+    },
+    "gui.trajectory.zoom.1h": {
+      "en": "1h",
+      "zh": "1 小时"
+    },
+    "gui.trajectory.zoom.15m": {
+      "en": "15m",
+      "zh": "15 分钟"
+    },
+    "gui.trajectory.fold_all": {
+      "en": "Collapse all",
+      "zh": "全部折叠"
+    },
     "gui.trajectory.window.whole": {
       "en": "{from} – {to} · whole session",
       "zh": "{from} – {to} · 整段会话"
