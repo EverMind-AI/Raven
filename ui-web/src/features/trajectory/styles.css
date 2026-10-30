@@ -46,8 +46,7 @@
   --trajectory-wf-grid: #e9ebee;           --trajectory-wf-guide: #dfe4e9;
   --trajectory-wf-grid-major: #d5d9de;
   --trajectory-act-veil: rgba(255, 255, 255, .62);
-  --trajectory-card-line: rgba(31, 35, 40, .08);
-  --trajectory-card-shadow: 0 18px 48px -22px rgba(31, 35, 40, .36), 0 2px 8px -4px rgba(31, 35, 40, .12);
+  --trajectory-card-shadow: 0 16px 42px rgba(0, 0, 0, .16), 0 1px 1px rgba(0, 0, 0, .04);
   --trajectory-wf-main: #b8892a;          --trajectory-wf-agent: #66635c;        --trajectory-wf-err: #d0453b;
   --trajectory-crash-bg: #fdf5f4;          --trajectory-crash-line: #f0d7d2;    --trajectory-crash-fg: #8a3a2e;
   --trajectory-ruler-dim: rgba(31, 35, 40, .07);    --trajectory-ruler-pick: rgba(31, 35, 40, .35);
@@ -80,8 +79,7 @@ html[data-theme="dark"] {
   --trajectory-wf-grid: #2c2c2e;           --trajectory-wf-guide: #3a3a3d;
   --trajectory-wf-grid-major: #3d3d41;
   --trajectory-act-veil: rgba(32, 32, 32, .62);
-  --trajectory-card-line: rgba(255, 255, 255, .08);
-  --trajectory-card-shadow: 0 18px 48px -18px rgba(0, 0, 0, .66), 0 2px 8px -4px rgba(0, 0, 0, .4);
+  --trajectory-card-shadow: 0 16px 42px rgba(0, 0, 0, .16), 0 1px 1px rgba(0, 0, 0, .04);
   --trajectory-wf-main: #b68a30;          --trajectory-wf-agent: #a8a49a;        --trajectory-wf-err: #ec6b5f;
   --trajectory-crash-bg: #3a2220;          --trajectory-crash-line: #5a302b;    --trajectory-crash-fg: #f0a493;
   --trajectory-ruler-dim: rgba(255, 255, 255, .06); --trajectory-ruler-pick: rgba(255, 255, 255, .35);
@@ -115,8 +113,7 @@ html[data-theme="dark"] {
     --trajectory-wf-grid: #2c2c2e;           --trajectory-wf-guide: #3a3a3d;
     --trajectory-wf-grid-major: #3d3d41;
     --trajectory-act-veil: rgba(32, 32, 32, .62);
-    --trajectory-card-line: rgba(255, 255, 255, .08);
-    --trajectory-card-shadow: 0 18px 48px -18px rgba(0, 0, 0, .66), 0 2px 8px -4px rgba(0, 0, 0, .4);
+    --trajectory-card-shadow: 0 16px 42px rgba(0, 0, 0, .16), 0 1px 1px rgba(0, 0, 0, .04);
     --trajectory-wf-main: #b68a30;          --trajectory-wf-agent: #a8a49a;        --trajectory-wf-err: #ec6b5f;
     --trajectory-crash-bg: #3a2220;          --trajectory-crash-line: #5a302b;    --trajectory-crash-fg: #f0a493;
     --trajectory-ruler-dim: rgba(255, 255, 255, .06); --trajectory-ruler-pick: rgba(255, 255, 255, .35);
@@ -178,13 +175,15 @@ html[data-theme="dark"] {
    whole width, so opening the pane never moves the axis under the reader.
    It opens below the header, whose window presets and fold button stay in
    reach, and a height the reader gives it stops at the bottom of the room
-   there. Plain paper, rounded, lifted by a shadow; under 800px it covers the
-   whole area. The 10px is the store's CARD_GAP, which a moved card keeps. */
+   there. Plain paper, rounded, with the desk palette's edge -- the page's line
+   and a shadow on every side: the frosted sheet under it is nearly white, so
+   the edge is what sets the card apart. Under 800px it covers the whole area.
+   The 10px is the store's CARD_GAP, which a moved card keeps. */
 .trajectory-details {
   position: absolute; top: calc(var(--wf-stats-h) + 10px); right: 10px; bottom: 10px; z-index: 6;
   max-height: calc(100% - var(--wf-stats-h) - 20px);
   display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;
-  border: 1px solid var(--trajectory-card-line); border-radius: 14px;
+  border: 1px solid var(--line); border-radius: 14px;
   background: var(--paper); box-shadow: var(--trajectory-card-shadow);
 }
 .trajectory-details-over { inset: 10px; width: auto; }
