@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from raven.providers.relay import relayed
+
 
 def common_models_for(slug: str) -> list[str]:
     """The curated shortlist for ``slug``, as ids a caller can store and send.
@@ -48,6 +50,7 @@ def _is_priced_template(model: str) -> bool:
 
 
 @lru_cache(maxsize=1)
+@relayed(keep=bool, shape=lambda index: {provider: tuple(models) for provider, models in (index or {}).items()})
 def _cached_chat_models_by_provider() -> dict[str, tuple[str, ...]]:
     """LiteLLM's own catalogue, indexed by the provider it belongs to.
 

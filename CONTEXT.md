@@ -3366,6 +3366,65 @@ and every tool result.
 _Avoid_: calling it a transcript - a reader drawing a delegated run wants the Instance Log
 or `transcript.jsonl`, not this.
 
+**Idle close** (`AcpConnectionPool.close_idle`, `subagents.runtime.idleCloseS`):
+The pool ending a pooled ACP agent's process once the connection has been quiet for the
+configured budget: no request of the host's unanswered (a held wake is one), none of the agent's
+being answered, no frame from the agent and no lease for the whole budget. Only an agent that
+advertises `loadSession`, or one that never opened a session, is closed, so a stateful
+instance's next turn reopens its session in a fresh process with `session/load`. An agent that
+declares `raven.residentWork` is asked first and kept while it holds Resident work. Each event
+loop closes only the connections made on it, whose pipes are its own.
+_Avoid_: calling it a timeout - nothing in flight is cut short, nor anything held for later.
+
+**Resident work** (`_raven/residentWork`, `CronService.armed_jobs`, `running_plugin_services`):
+What a Raven agent holds that runs with nobody asking: an enabled cron job of its own partition
+while its scheduler runs, and a running plugin Service. Neither puts anything on the wire, and
+closing the process loses both: no other partition claims the job, and the Service lives only as
+long as the process. The agent declares `raven.residentWork` in `agentCapabilities._meta` and
+answers `_raven/residentWork` as things stand at the moment of asking, so a one-shot wake that
+has fired no longer counts. The host decides on it, so it is a protocol extension the host asks,
+not Response Meta.
+_Avoid_: a held wake (`raven.holdTurn`) for it - that keeps a prompt open and the agent busy;
+resident work is what an agent holds between prompts.
+
+**LLM relay** (`raven/providers/relay.py`, `relay_provider.py`, `relay_server.py`, `subagents.runtime.llmRelay`):
+The host making a Raven agent's LiteLLM calls for it. The host offers a local socket and a token
+in the launch environment (`RAVEN_LLM_RELAY`), and an agent that reads them builds a
+`RelayProvider` where it would have built a `LiteLLMProvider`: the same construction and the
+same answers (both stand on `LiteLLMShape`), with only the single `chat` / `chat_stream` attempt
+and the `relayed` catalogue lookups crossing to the host. Retry, classification, usage records
+and traces stay in the agent; the host's calls run under `recorded_by_caller` so a call is
+billed once. The relay is served by the event loop that started it: a later loop starts another,
+and a loop running beside it in another thread is offered the same socket. A connection presents
+the token first, alone and under a deadline, so a peer without it is dropped before a frame is
+read. The host builds an agent's provider without writing the agent's key into its own
+environment, and makes each call in a context of its own under the window of the agent's turn,
+so the output ceiling on the wire is the one the agent's loop reserved. A call is made with the
+host's environment, so an agent whose own configuration sets something LiteLLM reads from it (an
+endpoint, a cloud credential, a proxy or CA bundle) is launched without the relay; and a refusal
+of prompt-cache marks is learned on the host too, which builds the agent's resend. An agent that
+cannot reach the host loads LiteLLM and works as before.
+
+**Fork template** (`raven/acp_client/fork_template.py`, `raven/cli/_fork_template.py`, `subagents.runtime.forkTemplate`):
+On Linux, one process per host that has imported what Raven agents import, frozen out of the
+collector's reach, and forks each Raven agent the host launches, so the agents share those pages.
+Two halves: the host's side in `acp_client` decides when to ask, starts and ends the template and
+holds the endpoint a forked agent runs behind; the template's own side is a launcher beside the
+CLI, because it loads the surfaces by name and runs `python -m raven`, which the client shelf may
+not. The client starts it through Raven's entry point, which settles the certificate store first,
+and never imports it. It starts through the parent-death
+wrapper like any agent, its stdin is a lifeline only the host holds, and it belongs to the event
+loop that started it: its pipes and the watcher that reaps it are that loop's, so it is ended with
+that loop and a later loop starts another; a loop running beside it in another thread launches the
+ordinary way rather than end the agents it still has. Each forked agent leads a session of its own
+and arms the parent-death signal against the template. A product launcher's `os.execv` of
+`python -m raven` runs Raven in the same process. Agents write the modules they imported beside
+the template, per product, and the next template loads the modules at least two products import
+(one product's own while only one has been seen): a module one product alone imports is shared by
+no other process, so it is left for that product to import after the fork. Only the host's own
+interpreter starting `-m raven` or a product launcher is forked; anything else launches the
+ordinary way.
+
 **Leftover agent** (`raven/acp_client/leftovers.py`):
 An ACP agent process group whose launching host is no longer running. An ACP agent runs in a
 session of its own, so it gets none of the signals sent to its host's process group or

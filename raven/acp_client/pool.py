@@ -22,8 +22,11 @@ the way an operator's config edit does: a turn was running on it.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
+import time
+import weakref
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -57,6 +60,13 @@ _DELETE_TIMEOUT_S = 10.0
 # transport, but no longer reaps the child.
 _CLOSE_TIMEOUT_S = 10.0
 
+# How often the idle check runs, as a share of the idle budget and within
+# bounds: often enough that a closed agent's memory comes back close to the
+# budget the operator set, rarely enough that the check itself is free.
+_IDLE_CHECK_SHARE = 4
+_IDLE_CHECK_MIN_S = 1.0
+_IDLE_CHECK_MAX_S = 60.0
+
 # How long a connection may sit silent before a reuse pays for a probe. Under
 # this, the connection spoke recently and is handed out on that evidence alone;
 # past it, one round trip settles the question a 120s session open would
@@ -72,6 +82,10 @@ _STALE_AFTER_S = 300.0
 # convicts nothing that works, and is 24x cheaper than the session-open budget
 # the caller would otherwise spend finding out.
 _PROBE_TIMEOUT_S = 5.0
+
+# How long an agent about to be closed for idleness has to say it holds resident
+# work. Answered from the agent's dispatcher like the probe, so the same budget.
+_RESIDENT_ASK_TIMEOUT_S = _PROBE_TIMEOUT_S
 
 SessionSink = Callable[[str, dict[str, Any]], Awaitable[None]]
 """Receives ``(method, params)`` for one session's notifications."""
@@ -297,6 +311,18 @@ class _SessionResponders:
         return True
 
 
+def _running_loop() -> asyncio.AbstractEventLoop | None:
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+
+
+def _on(connections: Any, loop: asyncio.AbstractEventLoop) -> bool:
+    """Whether any of ``connections`` belongs to ``loop`` (one made outside any loop belongs to every one)."""
+    return any(connection.loop is None or connection.loop is loop for connection in connections)
+
+
 class _Connection:
     """A client, the router whose lifetime is tied to it, and one lock per session."""
 
@@ -334,10 +360,21 @@ class _Connection:
         actually serving requests, where a stored snapshot only describes the one
         that was verified."""
         self._session_locks: dict[str, asyncio.Lock] = {}
+        self.loop = _running_loop()
+        """The loop this connection was made on. Its client's pipes are that loop's,
+        so only that loop's idle check may close it."""
+        self.leased_at = time.monotonic()
+        """When the pool last handed this connection out. A caller sends its
+        request right after taking it, so the idle check leaves a connection
+        alone for a full budget after a lease even if the agent has said nothing."""
 
     @property
     def alive(self) -> bool:
         return self.client.alive
+
+    def idle_for(self, now: float) -> float:
+        """How long nothing has happened here: no frame from the agent and no lease, as of ``now``."""
+        return min(self.client.idle_seconds, now - self.leased_at)
 
     def session_lock(self, session_id: str) -> asyncio.Lock:
         """Serialises turns on one session id.
@@ -366,17 +403,27 @@ class AcpConnectionPool:
 
     def __init__(self) -> None:
         self._connections: dict[str, dict[str, _Connection]] = {}
-        self._locks: dict[str, asyncio.Lock] = {}
+        self._locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]] = (
+            weakref.WeakKeyDictionary()
+        )
+        self._idle_tasks: dict[asyncio.AbstractEventLoop, asyncio.Task] = {}
 
     def connections(self, name: str) -> list[_Connection]:
         """Every connection held under ``name``, live or not."""
         return list(self._connections.get(name, {}).values())
 
     def _lock_for(self, name: str) -> asyncio.Lock:
-        lock = self._locks.get(name)
+        """The running loop's lock for ``name``.
+
+        One table per loop, as ``dag_store`` keeps its own: ``asyncio.Lock`` binds
+        to the loop of its first waiter, so a lock shared with a loop on another
+        thread (a CLI command the RPC server runs) could be bound there, and every
+        later wait on this loop would raise. A finished loop's table goes with it.
+        """
+        per_loop = self._locks.setdefault(asyncio.get_running_loop(), {})
+        lock = per_loop.get(name)
         if lock is None:
-            lock = asyncio.Lock()
-            self._locks[name] = lock
+            lock = per_loop[name] = asyncio.Lock()
         return lock
 
     def live(self, name: str) -> "list[_Connection]":
@@ -444,6 +491,7 @@ class AcpConnectionPool:
             existing = held.get(bkey)
             if existing is not None and existing.alive and existing.launch_key == key:
                 if await self._responsive(existing):
+                    existing.leased_at = time.monotonic()
                     return existing
                 # Alive by its process and unchanged by its key, yet not answering:
                 # a wedged worker is replaced rather than hit again (see _responsive).
@@ -533,6 +581,7 @@ class AcpConnectionPool:
                 config=config,
             )
             held[bkey] = connection
+            self._watch_idle()
             return connection
 
     async def adopt(
@@ -582,6 +631,7 @@ class AcpConnectionPool:
             if existing is not None and existing.alive:
                 return connection, False
             held[bkey] = connection
+            self._watch_idle()
             return connection, True
 
     async def drop(self, name: str) -> None:
@@ -619,6 +669,108 @@ class AcpConnectionPool:
             )
         return ok
 
+    @staticmethod
+    def _idle_budget() -> float | None:
+        """``subagents.runtime.idleCloseS`` as the host's config has it now; ``None`` when closing is off."""
+        from raven.config.live import default_live, subagent_runtime
+
+        budget = subagent_runtime(default_live()).idle_close_s
+        return budget if budget is not None and budget > 0 else None
+
+    @staticmethod
+    def _closable(connection: _Connection, budget: float, now: float) -> bool:
+        """Whether closing this connection now loses nothing a later turn could want.
+
+        Nothing in flight either way, quiet for the whole budget, and an agent
+        that can reopen what it held: a session this connection served is
+        resumed in the next process with ``session/load``, so only an agent
+        that advertises it, or one that never opened a session, is closed.
+        """
+        client = connection.client
+        if not connection.alive or getattr(client, "busy", True):
+            return False
+        if connection.idle_for(now) < budget:
+            return False
+        return handshake_of(connection.initialize).can_load or not connection.router.seen
+
+    @staticmethod
+    async def _holds_resident_work(connection: _Connection) -> bool:
+        """Whether the agent says it holds work that runs with nobody asking.
+
+        An armed cron wake or a running plugin service lives in the agent's
+        process and puts nothing on the wire, so a connection quiet for the
+        whole budget can still be holding one, and closing it loses it. Asked
+        only of an agent that declared it answers, and only once closing it is
+        otherwise settled, so the answer is the one at the moment of closing.
+        An agent that does not answer in time is closed as before.
+        """
+        if not handshake_of(connection.initialize).reports_resident_work:
+            return False
+        try:
+            answer = await connection.client.request(protocol.RESIDENT_WORK_METHOD, {}, timeout=_RESIDENT_ASK_TIMEOUT_S)
+        except Exception as exc:  # noqa: BLE001 - an agent that cannot answer is closed as before
+            logger.debug("acp agent {!r}: no resident-work answer: {}", connection.client.name, exc)
+            return False
+        return isinstance(answer, dict) and bool(answer.get("resident"))
+
+    async def close_idle(self, budget: float | None = None) -> list[str]:
+        """Close every connection idle for ``budget`` seconds; the names closed.
+
+        ``budget`` defaults to the host's live setting. Each candidate is
+        judged again under its agent's lock, the one ``acquire`` holds while it
+        hands a connection out, so a connection being reused is never closed
+        underneath its caller. Only the running loop's connections are
+        considered: another loop's are that loop's to close.
+        """
+        budget = self._idle_budget() if budget is None else budget
+        if budget is None:
+            return []
+        loop = asyncio.get_running_loop()
+        closing: list[tuple[str, _Connection]] = []
+        for name in [name for name, held in self._connections.items() if _on(held.values(), loop)]:
+            async with self._lock_for(name):
+                held = self._connections.get(name, {})
+                now = time.monotonic()
+                for bkey, connection in list(held.items()):
+                    if not _on((connection,), loop):
+                        continue
+                    # A connection whose agent already ended goes too: nothing
+                    # would hand it out again, and holding it keeps this check running.
+                    if connection.alive and not self._closable(connection, budget, now):
+                        continue
+                    if connection.alive and await self._holds_resident_work(connection):
+                        continue
+                    held.pop(bkey, None)
+                    closing.append((name, connection))
+                if not held:
+                    self._connections.pop(name, None)
+        for name, connection in closing:
+            if connection.alive:
+                logger.info("acp agent {!r}: idle for {:.0f}s, closing its process", name, budget)
+            await connection.client.close()
+        return [name for name, _ in closing]
+
+    def _watch_idle(self) -> None:
+        """Start this loop's idle check if it is not running; it ends once the loop holds nothing."""
+        loop = asyncio.get_running_loop()
+        for other in [other for other in self._idle_tasks if other is not loop and other.is_closed()]:
+            del self._idle_tasks[other]
+        task = self._idle_tasks.get(loop)
+        if task is not None and not task.done():
+            return
+        self._idle_tasks[loop] = loop.create_task(self._idle_loop(), name="acp-idle-close")
+
+    async def _idle_loop(self) -> None:
+        loop = asyncio.get_running_loop()
+        while any(_on(held.values(), loop) for held in list(self._connections.values())):
+            budget = self._idle_budget()
+            share = budget / _IDLE_CHECK_SHARE if budget is not None else _IDLE_CHECK_MAX_S
+            await asyncio.sleep(min(max(share, _IDLE_CHECK_MIN_S), _IDLE_CHECK_MAX_S))
+            try:
+                await self.close_idle(budget)
+            except Exception as exc:  # noqa: BLE001 - a failed check must not end the next one
+                logger.warning("acp idle check failed: {}", exc)
+
     async def close_all(self) -> None:
         """Close every connection. For process shutdown and for tests.
 
@@ -628,6 +780,15 @@ class AcpConnectionPool:
         request runs. Serially and unbounded, one such connection held every
         other one -- and the exit waiting behind them -- for that whole time.
         """
+        tasks, self._idle_tasks = self._idle_tasks, {}
+        running = asyncio.get_running_loop()
+        for loop, task in tasks.items():
+            if loop is running:
+                task.cancel()
+            elif not loop.is_closed():
+                # Another thread's loop: its task is cancelled from that loop.
+                with contextlib.suppress(RuntimeError):
+                    loop.call_soon_threadsafe(task.cancel)
         names = list(self._connections)
         if not names:
             return
@@ -712,6 +873,13 @@ async def close_pool() -> None:
     if _POOL is not None:
         await _POOL.close_all()
         _POOL = None
+    # What the pool's agents shared, started with the first of them and of no
+    # use once they are gone.
+    from raven.acp_client.fork_template import close_template
+    from raven.providers.relay_server import close_relay
+
+    await close_template()
+    await close_relay()
 
 
 __all__ = ["AcpConnectionPool", "SessionSink", "close_pool", "get_pool"]

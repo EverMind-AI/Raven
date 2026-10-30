@@ -14,13 +14,14 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.providers.base import ChatDelta, LLMProvider, LLMResponse
-from raven.providers.litellm_provider import LiteLLMProvider, session_affinity_headers
+from raven.providers.litellm_shape import LiteLLMShape, session_affinity_headers
+from raven.providers.relay_provider import litellm_provider
 
 if TYPE_CHECKING:
     from raven.config.schema import ModelEndpoint
 
 
-def _endpoint_provider(endpoint: "ModelEndpoint") -> LiteLLMProvider:
+def _endpoint_provider(endpoint: "ModelEndpoint") -> LiteLLMShape:
     """Build a LiteLLM provider pinned to one endpoint.
 
     ``provider_name="custom"`` selects the generic OpenAI-compatible gateway
@@ -39,7 +40,7 @@ def _endpoint_provider(endpoint: "ModelEndpoint") -> LiteLLMProvider:
         # api.openai.com), silently shipping the prompt and this endpoint's key
         # to a third party. Routing config must name the endpoint it routes to.
         raise ValueError(f"routing.models entry for {endpoint.model!r} has no api_base")
-    return LiteLLMProvider(
+    return litellm_provider(
         api_key=endpoint.api_key,
         api_base=endpoint.api_base,
         default_model=endpoint.model,
@@ -55,7 +56,7 @@ class PerModelProvider(LLMProvider):
     def __init__(self, models: "Sequence[ModelEndpoint]", fallback: LLMProvider):
         super().__init__()
         self._fallback = fallback
-        self._by_model: dict[str, LiteLLMProvider] = {m.model: _endpoint_provider(m) for m in models if m.model}
+        self._by_model: dict[str, LiteLLMShape] = {m.model: _endpoint_provider(m) for m in models if m.model}
         self._default = next(iter(self._by_model), None) or fallback.get_default_model()
         # Per-model sub-providers are built here without generation settings;
         # inherit the fallback's (already configured from AgentDefaults) and push
