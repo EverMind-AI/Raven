@@ -355,6 +355,10 @@ def test_a_transcript_saved_with_a_byte_order_mark_is_still_listed(tmp_path: Pat
     assert rows[0]["first_user_message"] == "hello"
 
 
+def _in_a_legacy_code_page(path: Path) -> None:
+    path.write_bytes(path.read_text(encoding="utf-8").replace("\\u4f60\\u597d", "\u4f60\u597d").encode("cp936"))
+
+
 def test_a_transcript_in_a_legacy_code_page_is_left_out_without_breaking_the_list(tmp_path: Path):
     """A transcript saved in a Windows ANSI code page is not UTF-8. It is left out as an unreadable file
     is, rather than its decoding error escaping the whole list."""
@@ -363,12 +367,34 @@ def test_a_transcript_in_a_legacy_code_page_is_left_out_without_breaking_the_lis
         session = mgr.get_or_create(key)
         session.add_message("user", "\u4f60\u597d")
         mgr.save(session)
-    path = tmp_path / "sessions" / "tui" / "cp01.jsonl"
-    path.write_bytes(path.read_text(encoding="utf-8").replace("\\u4f60\\u597d", "\u4f60\u597d").encode("cp936"))
+    _in_a_legacy_code_page(tmp_path / "sessions" / "tui" / "cp01.jsonl")
 
     keys = [info["key"] for info in SessionManager(tmp_path).list_sessions()]
 
     assert keys == ["tui:good01"]
+    assert SessionManager(tmp_path).find_most_recent_chat_id("tui") == "good01"
+
+
+def test_a_turn_on_a_transcript_in_a_legacy_code_page_fails_without_writing(tmp_path: Path):
+    """Leaving such a transcript out of the list must not reach a write: UTF-8 lines appended to a file
+    no reader can open lose the turn without a word, where failing the save reports it."""
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create("tui:cp02")
+    session.add_message("user", "\u4f60\u597d")
+    mgr.save(session)
+    path = tmp_path / "sessions" / "tui" / "cp02.jsonl"
+    _in_a_legacy_code_page(path)
+    before = path.read_bytes()
+
+    fresh = SessionManager(tmp_path)
+    opened = fresh.get_or_create("tui:cp02")
+    opened.add_message("user", "again")
+    with pytest.raises(UnicodeDecodeError):
+        fresh.save(opened)
+    with pytest.raises(UnicodeDecodeError):
+        fresh.append_metadata_patch("tui:cp02", {"archived": True})
+
+    assert path.read_bytes() == before
 
 
 def test_list_sessions_sees_nested_layout(tmp_path: Path):
