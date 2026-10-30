@@ -26,6 +26,29 @@
   --trajectory-c-tool-input-bg: #ebe0f5;  --trajectory-c-tool-input-fg: #6a3fa0;
   --trajectory-c-tool-output-bg: #dccbee; --trajectory-c-tool-output-fg: #512a84;
   --trajectory-c-other-bg: #ececec;       --trajectory-c-other-fg: #5c5c5c;
+  /* The waterfall's own surfaces: bars, chips, tiles, the ruler's pick. Every
+     ink is a token, so the dark theme is a second set of values rather than a
+     second set of rules; text uses the page's --text / --muted / --faint. */
+  --trajectory-wf-quiet: #b4b4b4;          --trajectory-wf-hover: #fafafa;
+  --trajectory-wf-soft: #f1f2f4;           --trajectory-wf-tile: #fbfbfc;
+  --trajectory-wf-tone1-bg: #f7f9fe;       --trajectory-wf-tone1-line: #e6ecf9;
+  --trajectory-wf-tone2-bg: #f7fbf8;       --trajectory-wf-tone2-line: #e4f0e7;
+  --trajectory-wf-tone3-bg: #faf8fd;       --trajectory-wf-tone3-line: #eee8f7;
+  --trajectory-wf-glyph: #b48ce0;
+  --trajectory-wf-from-fg: #3f6b2c;        --trajectory-wf-from-bg: #f1f7ee;    --trajectory-wf-from-line: #d9e7d2;
+  --trajectory-wf-slow-fg: #c2713a;        --trajectory-wf-slow-bg: #fdf0e3;
+  --trajectory-wf-agentbar: #f4f5f6;       --trajectory-wf-agentbar-line: #d0d5da;
+  --trajectory-wf-model-bg: #e9e8fb;       --trajectory-wf-model-line: #c5bdec;
+  --trajectory-wf-tool-bg: #e2eef9;        --trajectory-wf-tool-line: #b3d3ee;
+  --trajectory-wf-user-bg: #eef0f2;        --trajectory-wf-user-line: #cdd4db;
+  --trajectory-wf-sub-bg: #e7f1e7;         --trajectory-wf-sub-line: #bcdabc;
+  --trajectory-wf-fail-bg: #fae3e1;        --trajectory-wf-fail-line: #e9b6ae;
+  --trajectory-wf-wait-bg: #f4f4f4;        --trajectory-wf-wait-line: #d3d3d3;
+  --trajectory-wf-grid: #e9ebee;           --trajectory-wf-guide: #dfe4e9;      --trajectory-wf-ov: #ececf7;
+  --trajectory-crash-bg: #fdf5f4;          --trajectory-crash-line: #f0d7d2;    --trajectory-crash-fg: #8a3a2e;
+  --trajectory-ruler-dim: rgba(31, 35, 40, .07);    --trajectory-ruler-pick: rgba(31, 35, 40, .35);
+  --trajectory-ruler-grip-line: rgba(31, 35, 40, .30); --trajectory-ruler-grip-line-hover: rgba(31, 35, 40, .55);
+  --trajectory-ruler-grip-bg: #fff;        --trajectory-ruler-grip-bg-hover: #f7f7f8;
 }
 html[data-theme="dark"] {
   --trajectory-c-user-input-bg: #243a1c;  --trajectory-c-user-input-fg: #9fd48a;
@@ -36,6 +59,26 @@ html[data-theme="dark"] {
   --trajectory-c-tool-input-bg: #37284d;  --trajectory-c-tool-input-fg: #c9aef2;
   --trajectory-c-tool-output-bg: #45336a; --trajectory-c-tool-output-fg: #d9c5f7;
   --trajectory-c-other-bg: #343434;       --trajectory-c-other-fg: #b0b0b0;
+  --trajectory-wf-quiet: #8a8a88;          --trajectory-wf-hover: #262626;
+  --trajectory-wf-soft: #2e2e30;           --trajectory-wf-tile: #2a2a2c;
+  --trajectory-wf-tone1-bg: #212938;       --trajectory-wf-tone1-line: #2f3b55;
+  --trajectory-wf-tone2-bg: #1f2a22;       --trajectory-wf-tone2-line: #2c3f31;
+  --trajectory-wf-tone3-bg: #282233;       --trajectory-wf-tone3-line: #3b3150;
+  --trajectory-wf-glyph: #c9aef2;
+  --trajectory-wf-from-fg: #9fd48a;        --trajectory-wf-from-bg: #22301d;    --trajectory-wf-from-line: #34482b;
+  --trajectory-wf-slow-fg: #e8a06c;        --trajectory-wf-slow-bg: #3d2a1a;
+  --trajectory-wf-agentbar: #2c2d30;       --trajectory-wf-agentbar-line: #4a4d52;
+  --trajectory-wf-model-bg: #2f2b52;       --trajectory-wf-model-line: #514a8c;
+  --trajectory-wf-tool-bg: #1e3346;        --trajectory-wf-tool-line: #2f5677;
+  --trajectory-wf-user-bg: #2b2f34;        --trajectory-wf-user-line: #4a5159;
+  --trajectory-wf-sub-bg: #22331f;         --trajectory-wf-sub-line: #3b5933;
+  --trajectory-wf-fail-bg: #45221f;        --trajectory-wf-fail-line: #7a3a33;
+  --trajectory-wf-wait-bg: #2a2a2a;        --trajectory-wf-wait-line: #4a4a4a;
+  --trajectory-wf-grid: #2c2c2e;           --trajectory-wf-guide: #3a3a3d;      --trajectory-wf-ov: #34344a;
+  --trajectory-crash-bg: #3a2220;          --trajectory-crash-line: #5a302b;    --trajectory-crash-fg: #f0a493;
+  --trajectory-ruler-dim: rgba(255, 255, 255, .06); --trajectory-ruler-pick: rgba(255, 255, 255, .35);
+  --trajectory-ruler-grip-line: rgba(255, 255, 255, .30); --trajectory-ruler-grip-line-hover: rgba(255, 255, 255, .55);
+  --trajectory-ruler-grip-bg: #3a3a3d;     --trajectory-ruler-grip-bg-hover: #46464a;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -47,6 +90,26 @@ html[data-theme="dark"] {
     --trajectory-c-tool-input-bg: #37284d;  --trajectory-c-tool-input-fg: #c9aef2;
     --trajectory-c-tool-output-bg: #45336a; --trajectory-c-tool-output-fg: #d9c5f7;
     --trajectory-c-other-bg: #343434;       --trajectory-c-other-fg: #b0b0b0;
+    --trajectory-wf-quiet: #8a8a88;          --trajectory-wf-hover: #262626;
+    --trajectory-wf-soft: #2e2e30;           --trajectory-wf-tile: #2a2a2c;
+    --trajectory-wf-tone1-bg: #212938;       --trajectory-wf-tone1-line: #2f3b55;
+    --trajectory-wf-tone2-bg: #1f2a22;       --trajectory-wf-tone2-line: #2c3f31;
+    --trajectory-wf-tone3-bg: #282233;       --trajectory-wf-tone3-line: #3b3150;
+    --trajectory-wf-glyph: #c9aef2;
+    --trajectory-wf-from-fg: #9fd48a;        --trajectory-wf-from-bg: #22301d;    --trajectory-wf-from-line: #34482b;
+    --trajectory-wf-slow-fg: #e8a06c;        --trajectory-wf-slow-bg: #3d2a1a;
+    --trajectory-wf-agentbar: #2c2d30;       --trajectory-wf-agentbar-line: #4a4d52;
+    --trajectory-wf-model-bg: #2f2b52;       --trajectory-wf-model-line: #514a8c;
+    --trajectory-wf-tool-bg: #1e3346;        --trajectory-wf-tool-line: #2f5677;
+    --trajectory-wf-user-bg: #2b2f34;        --trajectory-wf-user-line: #4a5159;
+    --trajectory-wf-sub-bg: #22331f;         --trajectory-wf-sub-line: #3b5933;
+    --trajectory-wf-fail-bg: #45221f;        --trajectory-wf-fail-line: #7a3a33;
+    --trajectory-wf-wait-bg: #2a2a2a;        --trajectory-wf-wait-line: #4a4a4a;
+    --trajectory-wf-grid: #2c2c2e;           --trajectory-wf-guide: #3a3a3d;      --trajectory-wf-ov: #34344a;
+    --trajectory-crash-bg: #3a2220;          --trajectory-crash-line: #5a302b;    --trajectory-crash-fg: #f0a493;
+    --trajectory-ruler-dim: rgba(255, 255, 255, .06); --trajectory-ruler-pick: rgba(255, 255, 255, .35);
+    --trajectory-ruler-grip-line: rgba(255, 255, 255, .30); --trajectory-ruler-grip-line-hover: rgba(255, 255, 255, .55);
+    --trajectory-ruler-grip-bg: #3a3a3d;     --trajectory-ruler-grip-bg-hover: #46464a;
   }
 }
 
@@ -370,69 +433,69 @@ html[data-theme="dark"] {
 
 .trajectory-wf { background: var(--paper); --wf-gutter: max(240px, 30%); }
 .trajectory-wf-stats { display: flex; align-items: stretch; gap: 0; padding: 10px 16px;
-  border-bottom: 1px solid #ededed; flex: none }
+  border-bottom: 1px solid var(--line); flex: none }
 .trajectory-wf-stat { display: flex; flex-direction: column; gap: 5px; padding: 0 24px;
-  border-left: 1px solid #f0f0f0; min-width: 96px }
+  border-left: 1px solid var(--line-soft); min-width: 96px }
 .trajectory-wf-stat:first-child { padding-left: 0; border-left: 0 }
-.trajectory-wf-statk { font: 10px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: #9a9a9a }
-.trajectory-wf-statv { font: 600 19px/1 var(--mono); color: #1a1a1a; font-variant-numeric: tabular-nums }
-.trajectory-wf-statv[data-bad] { color: #c0392b }
-.trajectory-wf-tool { font: 10px/1 var(--mono); color: #6b6b6b; background: var(--paper);
-  border: 1px solid #e8e8e8; border-radius: 8px; padding: 5px 9px; cursor: pointer }
-.trajectory-wf-tool[aria-pressed='true'] { color: #1a1a1a; background: #f2f2f2 }
+.trajectory-wf-statk { font: 10px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--faint) }
+.trajectory-wf-statv { font: 600 19px/1 var(--mono); color: var(--text); font-variant-numeric: tabular-nums }
+.trajectory-wf-statv[data-bad] { color: var(--clay) }
+.trajectory-wf-tool { font: 10px/1 var(--mono); color: var(--muted); background: var(--paper);
+  border: 1px solid var(--line); border-radius: 8px; padding: 5px 9px; cursor: pointer }
+.trajectory-wf-tool[aria-pressed='true'] { color: var(--text); background: var(--trajectory-wf-soft) }
 .trajectory-wf-tool:disabled { opacity: .45; cursor: default }
 
 .trajectory-wf-head { display: grid; grid-template-columns: var(--wf-gutter) minmax(0, 1fr);
-  border-bottom: 1px solid #ededed; background: var(--paper); flex: none }
+  border-bottom: 1px solid var(--line); background: var(--paper); flex: none }
 .trajectory-ruler { position: relative; height: 34px; margin-left: 0; border-bottom: 0;
-  font: 11px/34px var(--mono); color: #9a9a9a; background: var(--paper) }
+  font: 11px/34px var(--mono); color: var(--faint); background: var(--paper) }
 .trajectory-ruler b { position: absolute; top: 0; transform: translateX(-50%); font-weight: 400 }
 .trajectory-ruler b:first-child { transform: none }
 
 .trajectory-wf-scroll { background: var(--paper) }
 .trajectory-wf-row { grid-template-columns: var(--wf-gutter) minmax(0, 1fr); gap: 0 }
-.trajectory-wf-row:hover { background: #fafafa }
-.trajectory-wf-label { font: 12px/1.25 var(--sans); color: #1a1a1a; gap: 6px }
+.trajectory-wf-row:hover { background: var(--trajectory-wf-hover) }
+.trajectory-wf-label { font: 12px/1.25 var(--sans); color: var(--text); gap: 6px }
 .trajectory-wf-agent .trajectory-wf-label { font-weight: 600 }
 .trajectory-wf-name { font: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
-.trajectory-wf-sub { font: 11px/1.25 var(--sans); color: #9a9a9a; flex: none; max-width: 45%;
+.trajectory-wf-sub { font: 11px/1.25 var(--sans); color: var(--faint); flex: none; max-width: 45%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
-.trajectory-wf-chev { flex: none; width: 10px; color: #b4b4b4; font-size: 9px; line-height: 1 }
+.trajectory-wf-chev { flex: none; width: 10px; color: var(--trajectory-wf-quiet); font-size: 9px; line-height: 1 }
 .trajectory-wf-tile { flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid;
-  place-items: center; border: 1px solid #ececec; background: #fbfbfb; overflow: hidden }
-.trajectory-wf-tile[data-tone='1'] { background: #f7f9fe; border-color: #e6ecf9 }
-.trajectory-wf-tile[data-tone='2'] { background: #f7fbf8; border-color: #e4f0e7 }
-.trajectory-wf-tile[data-tone='3'] { background: #faf8fd; border-color: #eee8f7 }
+  place-items: center; border: 1px solid var(--line); background: var(--trajectory-wf-tile); overflow: hidden }
+.trajectory-wf-tile[data-tone='1'] { background: var(--trajectory-wf-tone1-bg); border-color: var(--trajectory-wf-tone1-line) }
+.trajectory-wf-tile[data-tone='2'] { background: var(--trajectory-wf-tone2-bg); border-color: var(--trajectory-wf-tone2-line) }
+.trajectory-wf-tile[data-tone='3'] { background: var(--trajectory-wf-tone3-bg); border-color: var(--trajectory-wf-tone3-line) }
 .trajectory-wf-tile img { width: 14px; height: 14px; display: block }
-.trajectory-wf-glyph { font-size: 10px; color: #b48ce0 }
-.trajectory-wf-ico { flex: none; width: 18px; height: 18px; border: 1px solid #ececec; border-radius: 5px;
-  display: grid; place-items: center; background: var(--paper); color: #8a8a8a; font-size: 10px }
-.trajectory-wf-from { font: 9.5px/1 var(--mono); color: #3f6b2c; background: #f1f7ee; border: 1px solid #d9e7d2;
+.trajectory-wf-glyph { font-size: 10px; color: var(--trajectory-wf-glyph) }
+.trajectory-wf-ico { flex: none; width: 18px; height: 18px; border: 1px solid var(--line); border-radius: 5px;
+  display: grid; place-items: center; background: var(--paper); color: var(--faint); font-size: 10px }
+.trajectory-wf-from { font: 9.5px/1 var(--mono); color: var(--trajectory-wf-from-fg); background: var(--trajectory-wf-from-bg); border: 1px solid var(--trajectory-wf-from-line);
   border-radius: 4px; padding: 2px 5px; flex: none; max-width: 190px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap }
 .trajectory-wf-slow { flex: none; font: 9px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase;
-  color: #c2713a; background: #fcefe3; border-radius: 4px; padding: 3px 5px }
+  color: var(--trajectory-wf-slow-fg); background: var(--trajectory-wf-slow-bg); border-radius: 4px; padding: 3px 5px }
 
 .trajectory-wf-track { position: relative; height: 32px }
 .trajectory-wf-track i { top: 50%; transform: translateY(-50%); height: 14px; border-radius: 4px; min-width: 3px }
-.trajectory-wf-agentbar { background: #f2f2f2 }
-.trajectory-wf-spanbar.trajectory-wf-kind-model, .trajectory-wf-seg-model { background: #e9e8fb }
-.trajectory-wf-spanbar.trajectory-wf-kind-tool, .trajectory-wf-seg-tool { background: #e2eef9 }
-.trajectory-wf-spanbar.trajectory-wf-kind-user { background: #eef0f2 }
-.trajectory-wf-seg-subagent { background: #e7f1e7 }
-.trajectory-wf-spanbar.trajectory-wf-kind-failure, .trajectory-wf-seg-failure { background: #fae3e1 }
-.trajectory-wf-seg-waiting { background: #f4f4f4 }
+.trajectory-wf-agentbar { background: var(--trajectory-wf-agentbar) }
+.trajectory-wf-spanbar.trajectory-wf-kind-model, .trajectory-wf-seg-model { background: var(--trajectory-wf-model-bg) }
+.trajectory-wf-spanbar.trajectory-wf-kind-tool, .trajectory-wf-seg-tool { background: var(--trajectory-wf-tool-bg) }
+.trajectory-wf-spanbar.trajectory-wf-kind-user { background: var(--trajectory-wf-user-bg) }
+.trajectory-wf-seg-subagent { background: var(--trajectory-wf-sub-bg) }
+.trajectory-wf-spanbar.trajectory-wf-kind-failure, .trajectory-wf-seg-failure { background: var(--trajectory-wf-fail-bg) }
+.trajectory-wf-seg-waiting { background: var(--trajectory-wf-wait-bg) }
 .trajectory-wf-turn .trajectory-wf-track i { height: 14px }
 
 .trajectory-wf-links { left: var(--wf-gutter) }
-.trajectory-wf-grid { position: absolute; top: 0; bottom: 0; width: 1px; background: #f4f4f4 }
+.trajectory-wf-grid { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--trajectory-wf-grid) }
 .trajectory-wf-links { pointer-events: none }
 
-.trajectory-ov { padding: 8px 16px 6px; border-bottom: 1px solid #f0f0f0 }
+.trajectory-ov { padding: 8px 16px 6px; border-bottom: 1px solid var(--line-soft) }
 .trajectory-ov-lane { grid-template-columns: 180px minmax(0, 1fr); gap: 16px; height: 16px }
-.trajectory-ov-name { font: 10px/1 var(--sans); color: #9a9a9a }
-.trajectory-ov-track i { background: #ececf7; border-radius: 3px }
-.trajectory-ruler-idle { font: 9px/1 var(--mono); color: #b4b4b4; white-space: nowrap; overflow: hidden }
+.trajectory-ov-name { font: 10px/1 var(--sans); color: var(--faint) }
+.trajectory-ov-track i { background: var(--trajectory-wf-ov); border-radius: 3px }
+.trajectory-ruler-idle { font: 9px/1 var(--mono); color: var(--trajectory-wf-quiet); white-space: nowrap; overflow: hidden }
 
 /* ── type and air, matched to the reference card ──────────────────────
    The reference is set in one sans with tabular figures, at a much larger
@@ -444,44 +507,44 @@ html[data-theme="dark"] {
 .trajectory-wf-stats { padding: 16px 24px; }
 .trajectory-wf-stat { padding: 0 40px; min-width: 128px; gap: 8px }
 .trajectory-wf-stat:first-child { padding-left: 4px }
-.trajectory-wf-statk { font: 500 11px/1 var(--sans); letter-spacing: .1em; color: #9aa0a6 }
-.trajectory-wf-statv { font: 600 23px/1 var(--sans); letter-spacing: -.01em; color: #1f2328;
+.trajectory-wf-statk { font: 500 11px/1 var(--sans); letter-spacing: .1em; color: var(--faint) }
+.trajectory-wf-statv { font: 600 23px/1 var(--sans); letter-spacing: -.01em; color: var(--text);
   font-variant-numeric: tabular-nums }
 .trajectory-wf-tool { font: 500 11px/1 var(--sans); padding: 6px 11px; border-radius: 9px }
 
-.trajectory-wf-head { border-bottom: 1px solid #ededed }
-.trajectory-ruler { height: 56px; font: 400 14px/56px var(--sans); color: #8a8f98;
+.trajectory-wf-head { border-bottom: 1px solid var(--line) }
+.trajectory-ruler { height: 56px; font: 400 14px/56px var(--sans); color: var(--faint);
   font-variant-numeric: tabular-nums }
 
 .trajectory-wf-row { height: 48px }
 .trajectory-wf-track { height: 48px }
-.trajectory-wf-label { font: 400 15px/1.3 var(--sans); color: #1f2328; gap: 10px; position: relative }
+.trajectory-wf-label { font: 400 15px/1.3 var(--sans); color: var(--text); gap: 10px; position: relative }
 .trajectory-wf-agent .trajectory-wf-label { font-weight: 600; font-size: 16px }
 .trajectory-wf-name { font: inherit }
-.trajectory-wf-sub { font: 400 13.5px/1.3 var(--sans); color: #9aa0a6; max-width: 42% }
-.trajectory-wf-chev { width: 12px; font-size: 10px; color: #b9bec6 }
-.trajectory-wf-tile { width: 26px; height: 26px; border-radius: 50%; border-color: #eceef1; background: #fbfbfc }
+.trajectory-wf-sub { font: 400 13.5px/1.3 var(--sans); color: var(--faint); max-width: 42% }
+.trajectory-wf-chev { width: 12px; font-size: 10px; color: var(--trajectory-wf-quiet) }
+.trajectory-wf-tile { width: 26px; height: 26px; border-radius: 50%; border-color: var(--line); background: var(--trajectory-wf-tile) }
 .trajectory-wf-tile img { width: 17px; height: 17px }
 .trajectory-wf-glyph { font-size: 12px }
-.trajectory-wf-ico { width: 26px; height: 26px; border-radius: 8px; border-color: #eceef1;
-  color: #8a8f98; font-size: 12px }
+.trajectory-wf-ico { width: 26px; height: 26px; border-radius: 8px; border-color: var(--line);
+  color: var(--faint); font-size: 12px }
 .trajectory-wf-from { font: 500 10.5px/1 var(--sans); padding: 3px 7px; border-radius: 6px; max-width: 200px }
-.trajectory-wf-slow { font: 600 10.5px/1 var(--sans); letter-spacing: .08em; color: #c2713a;
-  background: #fdf0e3; border-radius: 6px; padding: 4px 7px }
+.trajectory-wf-slow { font: 600 10.5px/1 var(--sans); letter-spacing: .08em; color: var(--trajectory-wf-slow-fg);
+  background: var(--trajectory-wf-slow-bg); border-radius: 6px; padding: 4px 7px }
 
 .trajectory-wf-track i { height: 18px; border-radius: 6px; min-width: 4px }
 .trajectory-wf-turn .trajectory-wf-track i { height: 18px }
-.trajectory-wf-agentbar { background: #f4f5f6 }
+.trajectory-wf-agentbar { background: var(--trajectory-wf-agentbar) }
 
 /* The tree's guide: one hairline at the row's own indent, behind the icons. */
 .trajectory-wf-span .trajectory-wf-label::before { content: ''; position: absolute;
-  left: calc(var(--indent, 44px) - 14px); top: -14px; bottom: -14px; width: 1px; background: #f1f2f4 }
+  left: calc(var(--indent, 44px) - 14px); top: -14px; bottom: -14px; width: 1px; background: var(--trajectory-wf-soft) }
 
 .trajectory-ov { padding: 12px 20px 10px }
 .trajectory-ov-lane { grid-template-columns: 280px minmax(0, 1fr); gap: 20px; height: 22px }
-.trajectory-ov-name { font: 400 12px/1 var(--sans); color: #9aa0a6 }
+.trajectory-ov-name { font: 400 12px/1 var(--sans); color: var(--faint) }
 .trajectory-ov-track { height: 9px }
-.trajectory-ov-track i { height: 9px; border-radius: 5px; background: #ececf7 }
+.trajectory-ov-track i { height: 9px; border-radius: 5px; background: var(--trajectory-wf-ov) }
 
 /* The overview shares the rows' gutter, so a lane's bar is the same column as
    the bar under it. */
@@ -546,7 +609,7 @@ html[data-theme="dark"] {
    contiguous, so the columns still join into unbroken lines, but no line ever
    reaches up into the chevron that folds it. */
 .trajectory-wf-guide { position: absolute; top: 0; bottom: 0;
-  width: 1px; background: #dfe4e9 }
+  width: 1px; background: var(--trajectory-wf-guide) }
 
 /* The label clips its text, but not its guide: each piece of text truncates
    on its own, so nothing needs the label to clip. */
@@ -561,7 +624,7 @@ html[data-theme="dark"] {
 
 /* The overview is a strip: a handful of lanes, never taller than a few rows. */
 .trajectory-ov { max-height: 160px; overflow: hidden }
-.trajectory-ov-more .trajectory-ov-name { color: #b4b4b4 }
+.trajectory-ov-more .trajectory-ov-name { color: var(--trajectory-wf-quiet) }
 
 /* The header is allowed to shrink: its six cells at their old size set a
    min-content width wider than the column, which pushed the details pane off
@@ -589,7 +652,7 @@ html[data-theme="dark"] {
 .trajectory-wf-from { flex: 0 1 auto; min-width: 4ch; overflow: hidden; text-overflow: ellipsis }
 
 .trajectory-crash { display: flex; align-items: center; gap: 12px; padding: 16px 20px; margin: 12px;
-  border: 1px solid #f0d7d2; background: #fdf5f4; border-radius: 10px; color: #8a3a2e;
+  border: 1px solid var(--trajectory-crash-line); background: var(--trajectory-crash-bg); border-radius: 10px; color: var(--trajectory-crash-fg);
   font: 12px/1.5 var(--sans) }
 .trajectory-crash-text { flex: 1; min-width: 0; word-break: break-word }
 
@@ -604,9 +667,9 @@ html[data-theme="dark"] {
    square that only shows itself on hover, instead of a bare text glyph. It is
    a button for the keyboard, so the button's own chrome is taken off. */
 .trajectory-wf-chev { width: 18px; height: 18px; display: grid; place-items: center;
-  border-radius: 6px; color: #9aa0a6; flex: none; transition: background 120ms ease }
+  border-radius: 6px; color: var(--faint); flex: none; transition: background 120ms ease }
 button.trajectory-wf-chev { border: 0; padding: 0; margin: 0; background: none; font: inherit; cursor: pointer }
-.trajectory-wf-row:hover .trajectory-wf-chev { background: #f1f2f4; color: #5f6673 }
+.trajectory-wf-row:hover .trajectory-wf-chev { background: var(--trajectory-wf-soft); color: var(--muted) }
 .trajectory-wf-chev svg { width: 14px; height: 14px; display: block }
 
 /* The strip scrolls sideways under its arrows, but shows no scrollbar of its
@@ -621,8 +684,8 @@ button.trajectory-wf-chev { border: 0; padding: 0; margin: 0; background: none; 
 .trajectory-ov-more, .trajectory-ov-fewer {
   width: 100%; background: none; border: 0; padding: 0; font: inherit; text-align: left; cursor: pointer;
 }
-.trajectory-ov-fewer .trajectory-ov-name { color: #b4b4b4 }
-.trajectory-ov-more:hover .trajectory-ov-name, .trajectory-ov-fewer:hover .trajectory-ov-name { color: #828a93 }
+.trajectory-ov-fewer .trajectory-ov-name { color: var(--trajectory-wf-quiet) }
+.trajectory-ov-more:hover .trajectory-ov-name, .trajectory-ov-fewer:hover .trajectory-ov-name { color: var(--faint) }
 .trajectory-ov[data-expanded] { max-height: min(70vh, 640px); overflow-y: auto }
 
 /* The way into a sub-agent's own trace stands at the end of the label column,
@@ -631,9 +694,9 @@ button.trajectory-wf-chev { border: 0; padding: 0; margin: 0; background: none; 
 .trajectory-wf-label .trajectory-scope-opens {
   margin-left: auto; margin-right: 4px; flex: none; width: 18px; height: 18px;
   border: 0; border-radius: 6px; background: none; cursor: pointer;
-  font: 12px/1 var(--sans); color: #b4b4b4;
+  font: 12px/1 var(--sans); color: var(--trajectory-wf-quiet);
 }
-.trajectory-wf-label .trajectory-scope-opens:hover { background: #f1f2f4; color: #5f6673 }
+.trajectory-wf-label .trajectory-scope-opens:hover { background: var(--trajectory-wf-soft); color: var(--muted) }
 
 /* Selecting an interval on the axis, drawn the way the network panel's
    timeline draws one: what is outside is dimmed, the interval is left at the
@@ -641,17 +704,17 @@ button.trajectory-wf-chev { border: 0; padding: 0; margin: 0; background: none; 
    moves -- selecting is not zooming. */
 .trajectory-ruler { cursor: crosshair; touch-action: none; user-select: none }
 .trajectory-ruler-dim, .trajectory-ruler-pick, .trajectory-ruler-grip { pointer-events: none }
-.trajectory-ruler-dim { position: absolute; top: 0; bottom: 0; background: rgba(31, 35, 40, .07) }
+.trajectory-ruler-dim { position: absolute; top: 0; bottom: 0; background: var(--trajectory-ruler-dim) }
 .trajectory-ruler-pick { position: absolute; top: 0; bottom: 0;
-  border-left: 1px solid rgba(31, 35, 40, .35); border-right: 1px solid rgba(31, 35, 40, .35) }
+  border-left: 1px solid var(--trajectory-ruler-pick); border-right: 1px solid var(--trajectory-ruler-pick) }
 /* One per edge of the picked band, drawn the way the network panel draws its
    handles: a rounded pill straddling the edge, on a wider invisible target and
    with a grab cursor. These are what the reader drags to move an edge alone. */
 .trajectory-ruler-grip { position: absolute; top: 0; bottom: 0; width: 14px; margin-left: -7px;
   pointer-events: auto; cursor: ew-resize; z-index: 2 }
 .trajectory-ruler-grip::before { content: ''; position: absolute; top: 9px; bottom: 9px; left: 2px; right: 2px;
-  border: 1px solid rgba(31, 35, 40, .30); border-radius: 4px; background: #fff }
-.trajectory-ruler-grip:hover::before { border-color: rgba(31, 35, 40, .55); background: #f7f7f8 }
+  border: 1px solid var(--trajectory-ruler-grip-line); border-radius: 4px; background: var(--trajectory-ruler-grip-bg) }
+.trajectory-ruler-grip:hover::before { border-color: var(--trajectory-ruler-grip-line-hover); background: var(--trajectory-ruler-grip-bg-hover) }
 
 /* The labels own the column in front of the axis, and the axis starts where
    they end: a bar's position is a fraction of that track, never of the whole
@@ -662,7 +725,7 @@ button.trajectory-wf-chev { border: 0; padding: 0; margin: 0; background: none; 
 .trajectory-wf-guide { z-index: 1 }
 .trajectory-wf-time { position: absolute; top: 0; bottom: 0; z-index: 2;
   display: flex; align-items: center; pointer-events: none; white-space: nowrap;
-  font: 400 15px/1 var(--sans); color: #6b7280; font-variant-numeric: tabular-nums }
+  font: 400 15px/1 var(--sans); color: var(--muted); font-variant-numeric: tabular-nums }
 
 /* A label stands to the left of its own tick, the way the network panel's
    timeline reads: the number ends where the line begins, so the line itself
@@ -675,8 +738,8 @@ button.trajectory-wf-chev { border: 0; padding: 0; margin: 0; background: none; 
 
 /* The tick lines, drawn: through the ruler as well as down the rows, so a
    label, its line and the bar under it are one reading. */
-.trajectory-ruler-tick { position: absolute; top: 0; bottom: 0; width: 1px; background: #e9ebee; pointer-events: none }
-.trajectory-wf-grid { background: #e9ebee }
+.trajectory-ruler-tick { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--trajectory-wf-grid); pointer-events: none }
+.trajectory-wf-grid { background: var(--trajectory-wf-grid) }
 
 /* ── inside the sheet ────────────────────────────────────────────────
    The host carries the blur, so the island's own grounds go away and the one
@@ -719,16 +782,16 @@ html[data-traj] .trajectory-tabs-wrap { border-bottom-color: var(--traj-line) }
    the pale fill alone sits at almost the same value as the sheet, and the
    edge is what gives a short bar a readable shape without changing its
    colour; border-box keeps the drawn width. */
-.trajectory-wf-agentbar { border: 1px solid #d0d5da }
+.trajectory-wf-agentbar { border: 1px solid var(--trajectory-wf-agentbar-line) }
 .trajectory-wf-spanbar.trajectory-wf-kind-model,
-.trajectory-wf-seg-model { border: 1px solid #c5bdec }
+.trajectory-wf-seg-model { border: 1px solid var(--trajectory-wf-model-line) }
 .trajectory-wf-spanbar.trajectory-wf-kind-tool,
-.trajectory-wf-seg-tool { border: 1px solid #b3d3ee }
-.trajectory-wf-spanbar.trajectory-wf-kind-user { border: 1px solid #cdd4db }
-.trajectory-wf-seg-subagent { border: 1px solid #bcdabc }
+.trajectory-wf-seg-tool { border: 1px solid var(--trajectory-wf-tool-line) }
+.trajectory-wf-spanbar.trajectory-wf-kind-user { border: 1px solid var(--trajectory-wf-user-line) }
+.trajectory-wf-seg-subagent { border: 1px solid var(--trajectory-wf-sub-line) }
 .trajectory-wf-spanbar.trajectory-wf-kind-failure,
-.trajectory-wf-seg-failure { border: 1px solid #e9b6ae }
-.trajectory-wf-seg-waiting { border: 1px solid #d3d3d3 }
+.trajectory-wf-seg-failure { border: 1px solid var(--trajectory-wf-fail-line) }
+.trajectory-wf-seg-waiting { border: 1px solid var(--trajectory-wf-wait-line) }
 
 /* The vertical rules stand over the bars: a bar is a duration, not an
    occluder, and a rule that vanishes under every long stretch stops reading
