@@ -7,7 +7,7 @@
  * between the two is hidden behind the frost and has not been reached. The
  * jump lands it just under the band for the same reason. */
 
-import { headerBand } from '../../chrome/behaviour/headerBand'
+import { headerBand } from '../../lib/dom'
 
 export function previousUserTop(scroll: HTMLElement): number | null {
   const box = scroll.getBoundingClientRect()
