@@ -39,7 +39,7 @@ from typing import Any
 from raven.acp.tool_kinds import locations, title_for, tool_kind
 from raven.acp.updates import notice_text, turn_failure_text
 from raven.security import redact
-from raven.session.turn_shape import replied_via_message_tool
+from raven.session.turn_shape import TakeBack, TakeBackStep
 
 # A replayed transcript is bounded by what a client can draw, not by what is
 # stored: a session with two thousand messages would otherwise emit two thousand
@@ -92,26 +92,23 @@ def _without_silent_runtime_turns(entries: list[dict[str, Any]]) -> list[dict[st
 
     The marker is sent as no text, so such a turn replayed as the runtime's prose
     for the model, drawn as a user message, with no answer under it. The whole
-    turn goes, the narration and tool calls on the way included, by the rule the
-    session list reads a transcript with (``SessionManager._scan_file``): only a
-    user row carrying ``origin`` opens a turn that can be taken back, so a
-    person's own message stays when the model answers it with silence. A turn
-    the message tool answered stays too: it is not a Silent Turn whatever it ends
-    on, and its reply reached the reader. Its marker's row carries the live turn's
-    verdict, read from one place (``raven/session/turn_shape.py``), so the session
-    list and this replay cannot come to disagree about which turn answered.
+    turn goes, the narration and tool calls on the way included. Which turns go is
+    the rule the session list and the live turn read too (``TakeBack`` in
+    ``raven/session/turn_shape.py``): only a user row carrying ``origin`` opens a
+    turn that can be taken back, so a person's own message stays when the model
+    answers it with silence, and a turn a tool answered stays as well, its reply
+    having reached the reader.
     """
     kept: list[dict[str, Any]] = []
-    opened_at: int | None = None
+    opened_at = 0
+    take_back = TakeBack()
     for entry in entries:
-        role = entry.get("role")
-        if role == "user":
-            opened_at = len(kept) if entry.get("origin") else None
-        elif role == "assistant" and entry.get("silent") is True and opened_at is not None:
-            start, opened_at = opened_at, None
-            if not replied_via_message_tool(entry):
-                del kept[start:]
-                continue
+        step = take_back.read(entry)
+        if step is TakeBackStep.OPENS:
+            opened_at = len(kept)
+        elif step is TakeBackStep.TAKES_BACK:
+            del kept[opened_at:]
+            continue
         kept.append(entry)
     return kept
 
