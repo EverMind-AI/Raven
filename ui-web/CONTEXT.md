@@ -194,9 +194,10 @@ real time, its idle stretches folded wide enough to say how long they were, and
 the window as a brush a drag takes, moves or stretches (`ActivityStrip.tsx`) --
 and the ruler, marked on round clock times (`ticks.ts`) beside the name of the
 window it shows; what
-crosses between agents is marked on rows rather than drawn between them -- a
-dispatching row's door arrow, and the worker's name on the host turn its report
-started. Agents start folded when there are several, one row each: a capsule
+crosses between agents is marked on rows -- a dispatching row's door arrow, and
+the worker's name on the host turn its report started -- and drawn only once a
+worker is open: a line from the instant it was sent, on its dispatcher's row,
+to where its work begins. Agents start folded when there are several, one row each: a capsule
 per run of work on a faint line from the first to the last, the main agent in
 gold, a diamond where a failure happened, an arrow at an edge its work runs
 past, and a chip naming when it works next once none of it is in the window.
