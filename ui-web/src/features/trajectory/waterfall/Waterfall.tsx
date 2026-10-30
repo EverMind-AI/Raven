@@ -22,18 +22,20 @@ import { showBar } from '../../../state/scrollbars'
 import * as details from '../detailStore'
 import { enter as enterScope, scopeTitle } from '../scopes'
 import * as store from '../store'
-import { AxisIndex, TRAIL_PAD, barOf, clampViewport, formatTick, tickMarks, zoomViewport } from './axis'
-import { spanOf } from './clock'
+import { AxisIndex, TRAIL_PAD, barOf, clampViewport, zoomViewport } from './axis'
+import { lengthOf, spanOf, windowText } from './clock'
 import { WaterfallIndex } from './incremental'
 import { entryEnd, entryStart, isLive, turnKey } from './model'
 import { OverviewLanes } from './OverviewLanes'
 import { turnSegments } from './segments'
 import { summarize } from './summary'
+import { clockTicks, stepFor, tickLabel } from './ticks'
 
 import type { TrajectoryEntry } from '../types'
 import type { TimeAxis, Viewport } from './axis'
 import type { Waterfall, WaterfallAgent, WaterfallRow, WaterfallTurn } from './model'
 import type { Figures } from './summary'
+import type { ClockTick } from './ticks'
 import type { JSX, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 
 export const ROW_HEIGHT = 30
@@ -202,9 +204,18 @@ function scrollsAt(root: HTMLElement, target: Node | null, deltaY: number): bool
   return false
 }
 
-function Ticks({ axis, view, pick, onPick, count, onWidth }: {
+/* A label closer than this to either end of the ruler would hang past it; its
+   tick still draws. */
+const EDGE_PX = 24
+
+/** Where a vertical line is drawn: the last pixel stays inside the track, or
+ *  the scroll box grows wider than itself and the overlay scrollbars answer
+ *  with a horizontal bar nobody can use. */
+const lineLeft = (left: number): string => (left >= 1 ? 'calc(100% - 1px)' : percent(left))
+
+function Ticks({ axis, view, pick, onPick, ticks, step, onWidth }: {
   axis: TimeAxis; view: Viewport; pick: Pick | null; onPick: (pick: Pick | null) => void
-  count: number; onWidth: (width: number) => void
+  ticks: readonly ClockTick[]; step: number; onWidth: (width: number) => void
 }): JSX.Element {
   const { from, to } = view
   /* The ruler is the one element that knows how wide the axis really is; the
@@ -281,28 +292,21 @@ function Ticks({ axis, view, pick, onPick, count, onWidth }: {
     drag.current = null
     onPick(null)
   }
-  const ticks = useMemo(() => tickMarks(axis, { from, to }, count), [axis, from, to, count])
-  const step = ticks.length > 1 ? ticks[1]!.time - ticks[0]!.time : 1
   const span = to - from
+  const room = width > 0 ? width : 1200
   const gaps = span > 0 ? axis.gaps : []
   return (
     <div className="trajectory-ruler" aria-hidden="true" ref={strip}
       onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={cancel}>
-      {ticks.map((tick, index) => (
-        /* The line under each label, drawn through the ruler the way the
-           network timeline does; the last one keeps its pixel inside the
-           ruler's own edge. */
-        <span key={`tick-${tick.left}`} className="trajectory-ruler-tick"
-          style={{ left: index === ticks.length - 1 ? 'calc(100% - 1px)' : percent(tick.left) }} />
+      {ticks.map((tick) => (
+        <span key={`tick-${tick.time}`} className="trajectory-ruler-tick" data-major={tick.major ? '' : undefined}
+          style={{ left: lineLeft(tick.left) }} />
       ))}
-      {ticks.map((tick, index) => {
-        /* The axis's left edge is the start of the session, and its label
-           would hang off the ruler anyway: the number is not written there.
-           A zoomed view starts elsewhere, and that one is written flush with
-           the edge instead. */
-        if (index === 0) return tick.time <= 0 ? null : <b key={tick.left} data-first="" style={{ left: 0 }}>{formatTick(tick.time, step)}</b>
-        return <b key={tick.left} style={{ left: percent(tick.left) }}>{formatTick(tick.time, step)}</b>
-      })}
+      {ticks.map((tick) => (
+        tick.left * room < EDGE_PX || (1 - tick.left) * room < EDGE_PX ? null : (
+          <b key={tick.time} data-major={tick.major ? '' : undefined} style={{ left: percent(tick.left) }}>{tickLabel(tick.time, step)}</b>
+        )
+      ))}
       {gaps.map((gap, index) => {
         const left = (gap.from - view.from) / span
         const right = (gap.to - view.from) / span
@@ -856,10 +860,20 @@ export function Waterfall(): JSX.Element {
     )
   }
 
-  /* One label per ~150px keeps them from colliding when the details pane
-     narrows the column. The rows draw a line at every label and one between,
-     so the grid keeps a 1:2 rhythm with the ruler at any width or zoom. */
-  const tickCount = Math.max(3, Math.min(8, Math.floor((rulerWidth > 0 ? rulerWidth : 1200) / 150)))
+  /* The ruler and the rows' grid read the same marks: one per round clock
+     time the ruler's width has room to label. */
+  const room = rulerWidth > 0 ? rulerWidth : 1200
+  const step = stepFor(view, room)
+  const marks = useMemo(() => clockTicks(axis, { from: view.from, to: view.to }, room), [axis, view.from, view.to, room])
+  /* The window the axis shows, named in the head: what ran inside it, from
+     its first instant to its last, and how long a window it is once the
+     reader has narrowed it. The element carries the window itself. */
+  const windowFrom = axis.unproject(view.from)
+  const windowTo = axis.unproject(view.to)
+  const shownFrom = Math.min(Math.max(windowFrom, figures.start), figures.end)
+  const shownTo = Math.min(Math.max(windowTo, shownFrom), figures.end)
+  const named = windowText(shownFrom, shownTo, step < 60_000 ? 'second' : 'minute')
+  const zoomedView = view.from > 0 || view.to < axis.length
 
   return (
     <div className="trajectory-wf" ref={island}>
@@ -882,7 +896,17 @@ export function Waterfall(): JSX.Element {
       </div>
       <OverviewLanes waterfall={waterfall} axis={axis} viewport={view} />
       <div className="trajectory-wf-head">
-        <Ticks axis={axis} view={view} pick={pickOnView} onPick={pickFromView} count={tickCount} onWidth={setRulerWidth} />
+        {waterfall.agents.length === 0 ? <div /> : (
+          <div className="trajectory-wf-window" data-start={windowFrom} data-end={windowTo}>
+            <b>{named.day}</b>
+            <span>
+              {zoomedView
+                ? t('gui.trajectory.window.zoomed', { from: named.from, to: named.to, length: lengthOf(windowTo - windowFrom) })
+                : t('gui.trajectory.window.whole', { from: named.from, to: named.to })}
+            </span>
+          </div>
+        )}
+        <Ticks axis={axis} view={view} pick={pickOnView} onPick={pickFromView} ticks={marks} step={step} onWidth={setRulerWidth} />
       </div>
       {/* A tree, as the old list was a listbox: the box holds the focus, the
           arrows move the selection, and the selected row is its active
@@ -895,13 +919,9 @@ export function Waterfall(): JSX.Element {
         aria-activedescendant={selectedAt >= first && selectedAt < last ? rowId(selectedAt) : undefined}>
         <div className="trajectory-wf-rows" role="none" style={{ height: rows.length * ROW_HEIGHT }}>
           <div className="trajectory-wf-links" aria-hidden="true">
-            {tickMarks(axis, view, tickCount * 2).map((tick, index, marks) => (
-              /* The last line keeps its pixel inside the track, the way the
-                 ruler's does: a 1px box on the right edge makes the scroll
-                 box wider than itself, and the overlay scrollbars answer that
-                 with a horizontal bar nobody can use. */
-              <span key={`grid-${tick.left}`} className="trajectory-wf-grid"
-                style={{ left: index === marks.length - 1 ? 'calc(100% - 1px)' : percent(tick.left) }} />
+            {marks.map((tick) => (
+              <span key={`grid-${tick.time}`} className="trajectory-wf-grid" data-major={tick.major ? '' : undefined}
+                style={{ left: lineLeft(tick.left) }} />
             ))}
           </div>
           {painted}

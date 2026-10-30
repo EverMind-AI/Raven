@@ -185,7 +185,8 @@ preset key `components/AgentMark.tsx` is built on is not available here.
 Every agent shares one time axis (`axis.ts`): a stretch
 in which no agent was doing anything collapses to a fixed width, and the axis
 leaves room after the last bar for the duration each row prints just past its
-bar. Above the rows sit the overview, one row of activity marks per agent, and the ruler; what
+bar. Above the rows sit the overview, one row of activity marks per agent, and the ruler,
+marked on round clock times (`ticks.ts`) beside the name of the window it shows; what
 crosses between agents is marked on rows rather than drawn between them -- a
 dispatching row's door arrow, and the worker's name on the host turn its report
 started. Agent groups start open and turns folded; a plain wheel scrolls, ctrl

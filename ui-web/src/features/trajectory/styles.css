@@ -45,6 +45,7 @@
   --trajectory-wf-fail-bg: #fae3e1;        --trajectory-wf-fail-line: #e9b6ae;
   --trajectory-wf-wait-bg: #f4f4f4;        --trajectory-wf-wait-line: #d3d3d3;
   --trajectory-wf-grid: #e9ebee;           --trajectory-wf-guide: #dfe4e9;      --trajectory-wf-ov: #ececf7;
+  --trajectory-wf-grid-major: #d5d9de;
   --trajectory-crash-bg: #fdf5f4;          --trajectory-crash-line: #f0d7d2;    --trajectory-crash-fg: #8a3a2e;
   --trajectory-ruler-dim: rgba(31, 35, 40, .07);    --trajectory-ruler-pick: rgba(31, 35, 40, .35);
   --trajectory-ruler-grip-line: rgba(31, 35, 40, .30); --trajectory-ruler-grip-line-hover: rgba(31, 35, 40, .55);
@@ -75,6 +76,7 @@ html[data-theme="dark"] {
   --trajectory-wf-fail-bg: #45221f;        --trajectory-wf-fail-line: #7a3a33;
   --trajectory-wf-wait-bg: #2a2a2a;        --trajectory-wf-wait-line: #4a4a4a;
   --trajectory-wf-grid: #2c2c2e;           --trajectory-wf-guide: #3a3a3d;      --trajectory-wf-ov: #34344a;
+  --trajectory-wf-grid-major: #3d3d41;
   --trajectory-crash-bg: #3a2220;          --trajectory-crash-line: #5a302b;    --trajectory-crash-fg: #f0a493;
   --trajectory-ruler-dim: rgba(255, 255, 255, .06); --trajectory-ruler-pick: rgba(255, 255, 255, .35);
   --trajectory-ruler-grip-line: rgba(255, 255, 255, .30); --trajectory-ruler-grip-line-hover: rgba(255, 255, 255, .55);
@@ -106,6 +108,7 @@ html[data-theme="dark"] {
     --trajectory-wf-fail-bg: #45221f;        --trajectory-wf-fail-line: #7a3a33;
     --trajectory-wf-wait-bg: #2a2a2a;        --trajectory-wf-wait-line: #4a4a4a;
     --trajectory-wf-grid: #2c2c2e;           --trajectory-wf-guide: #3a3a3d;      --trajectory-wf-ov: #34344a;
+    --trajectory-wf-grid-major: #3d3d41;
     --trajectory-crash-bg: #3a2220;          --trajectory-crash-line: #5a302b;    --trajectory-crash-fg: #f0a493;
     --trajectory-ruler-dim: rgba(255, 255, 255, .06); --trajectory-ruler-pick: rgba(255, 255, 255, .35);
     --trajectory-ruler-grip-line: rgba(255, 255, 255, .30); --trajectory-ruler-grip-line-hover: rgba(255, 255, 255, .55);
@@ -450,7 +453,6 @@ html[data-theme="dark"] {
 .trajectory-ruler { position: relative; height: 34px; margin-left: 0; border-bottom: 0;
   font: 11px/34px var(--mono); color: var(--faint); background: var(--paper) }
 .trajectory-ruler b { position: absolute; top: 0; transform: translateX(-50%); font-weight: 400 }
-.trajectory-ruler b:first-child { transform: none }
 
 .trajectory-wf-scroll { background: var(--paper) }
 .trajectory-wf-row { grid-template-columns: var(--wf-gutter) minmax(0, 1fr); gap: 0 }
@@ -665,12 +667,9 @@ html[data-theme="dark"] {
   font: 12px/1.5 var(--sans) }
 .trajectory-crash-text { flex: 1; min-width: 0; word-break: break-word }
 
-/* The last label ends at the ruler's right edge instead of hanging half of
-   itself past it -- into the details pane -- on a long session. The handles
-   are the exception: one straddling the axis's end keeps both halves, so the
-   ruler does not clip its content. */
+/* A handle straddling the axis's end keeps both halves, so the ruler does not
+   clip its content; no label reaches an edge (EDGE_PX in Waterfall.tsx). */
 .trajectory-ruler { overflow: visible }
-.trajectory-ruler b:last-of-type { transform: translateX(-100%) }
 
 /* The fold control, as the reference draws it: a thin chevron in a quiet
    square that only shows itself on hover, instead of a bare text glyph. It is
@@ -736,18 +735,16 @@ button.trajectory-wf-chev { border: 0; padding: 0; margin: 0; background: none; 
   display: flex; align-items: center; pointer-events: none; white-space: nowrap;
   font: 400 15px/1 var(--sans); color: var(--muted); font-variant-numeric: tabular-nums }
 
-/* A label stands to the left of its own tick, the way the network panel's
-   timeline reads: the number ends where the line begins, so the line itself
-   is never under text. The axis's left edge carries no number -- it is the
-   start of the session -- unless a zoom moved the view off it. */
-.trajectory-ruler b, .trajectory-ruler b:first-child, .trajectory-ruler b:last-of-type {
-  transform: translateX(-100%); padding-right: 4px; white-space: nowrap
-}
-.trajectory-ruler b[data-first] { transform: none; padding-left: 2px; padding-right: 0 }
+/* A label stands centred over its own clock time, and its tick is a short
+   mark at the ruler's foot -- longer on a major one -- so no line runs under
+   the text; the rows' grid carries the line on down. No label sits closer to
+   either end than EDGE_PX (Waterfall.tsx), so none hangs past the ruler. */
+.trajectory-ruler b { transform: translateX(-50%); padding: 0; white-space: nowrap }
 
-/* The tick lines, drawn: through the ruler as well as down the rows, so a
-   label, its line and the bar under it are one reading. */
-.trajectory-ruler-tick { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--trajectory-wf-grid); pointer-events: none }
+/* The ticks: short marks at the ruler's foot, where the rows' grid lines
+   begin, so a label, its mark and the line under it are one reading. */
+.trajectory-ruler-tick { position: absolute; top: auto; bottom: 0; height: 6px; width: 1px; background: var(--trajectory-wf-grid-major); pointer-events: none }
+.trajectory-ruler-tick[data-major] { height: 10px }
 .trajectory-wf-grid { background: var(--trajectory-wf-grid) }
 
 /* ── inside the sheet ────────────────────────────────────────────────
@@ -808,3 +805,14 @@ html[data-traj] .trajectory-tabs-wrap { border-bottom-color: var(--traj-line) }
    through the text. */
 .trajectory-wf-links { z-index: 2 }
 .trajectory-wf-time { z-index: 3 }
+
+/* ── the clock ruler and the window it names ─────────────────────────
+   Marks on round clock times; the next unit up (whole hours, minutes or
+   midnights) is major, darker on the ruler and in the rows' grid. The head's
+   first column names the window the axis shows. */
+.trajectory-ruler b[data-major] { color: var(--text); font-weight: 500 }
+.trajectory-wf-grid[data-major] { background: var(--trajectory-wf-grid-major) }
+.trajectory-wf-window { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 16px 0 24px;
+  font: 400 12.5px/1 var(--sans); color: var(--faint); white-space: nowrap; overflow: hidden }
+.trajectory-wf-window b { flex: none; color: var(--text); font-weight: 600 }
+.trajectory-wf-window span { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums }

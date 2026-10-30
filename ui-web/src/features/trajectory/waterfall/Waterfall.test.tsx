@@ -12,7 +12,7 @@ import { _resetFreshForTests, unpitch } from '../../../state/session/conversatio
 import { resetSources, setSources } from '../../../state/sources'
 import * as details from '../detailStore'
 import * as store from '../store'
-import { spanOf } from './clock'
+import { dayOf, spanOf } from './clock'
 import { buildWaterfall } from './model'
 import { MAX_LANES } from './OverviewLanes'
 import { GUIDE_X, ROW_HEIGHT, TURN_GUIDE_X, Waterfall, displayRows } from './Waterfall'
@@ -79,6 +79,12 @@ async function draw(entries: TrajectoryEntry[]): Promise<void> {
 }
 
 const count = (selector: string): number => document.querySelectorAll(selector).length
+
+/** The window the axis shows, as the head's label names it. */
+const shownWindow = (): { from: number; to: number } => {
+  const label = document.querySelector<HTMLElement>('.trajectory-wf-window')!
+  return { from: Number(label.dataset.start), to: Number(label.dataset.end) }
+}
 
 /* happy-dom drops the modifier keys and the pointer's position out of
    WheelEventInit, so they are written onto the event after construction; a
@@ -369,20 +375,19 @@ it('zooms about the instant under the pointer, read against the axis and not the
   /* A 1000px column: the labels take the first 340px, the axis the rest. */
   boxAt(box, 0, 1000)
   boxAt(ruler, 340, 660)
-  /* By position, not by index: the zero mark at the left edge carries no label. */
-  const middle = (): string | null =>
-    [...document.querySelectorAll<HTMLElement>('.trajectory-ruler b')].find((b) => b.style.left === '50.0000%')?.textContent ?? null
-  const firstLabel = (): string | null => document.querySelector('.trajectory-ruler b[data-first]')?.textContent ?? null
+  const whole = shownWindow()
   /* On the axis's left edge, the instant there -- the session's start -- stays put. */
   act(() => { box.dispatchEvent(wheel({ deltaY: -240, clientX: 340, ctrlKey: true, bubbles: true, cancelable: true })) })
-  expect(firstLabel()).toBeNull()
+  expect(shownWindow().from).toBe(whole.from)
+  expect(shownWindow().to).toBeLessThan(whole.to)
   act(() => { fireEvent.doubleClick(box) })
-  /* In its middle, the instant at the middle tick keeps its time. */
-  const before = middle()
-  expect(before).not.toBeNull()
+  expect(shownWindow()).toEqual(whole)
+  /* In its middle, the instant under the pointer keeps its place: the window
+     narrows about it. */
   act(() => { box.dispatchEvent(wheel({ deltaY: -240, clientX: 670, ctrlKey: true, bubbles: true, cancelable: true })) })
-  expect(firstLabel()).not.toBeNull()
-  expect(middle()).toBe(before)
+  const zoomed = shownWindow()
+  expect(zoomed.from).toBeGreaterThan(whole.from)
+  expect(Math.abs((zoomed.from + zoomed.to) / 2 - (whole.from + whole.to) / 2)).toBeLessThan(1)
 })
 
 it('leaves a plain wheel to the list, and takes only ctrl+wheel or shift+wheel', async () => {
@@ -422,16 +427,15 @@ it('selects the interval dragged across the ruler without moving the axis', asyn
     value: () => ({ left: 100, top: 0, right: 500, bottom: 56, width: 400, height: 56, x: 100, y: 0, toJSON: () => ({}) }),
     configurable: true,
   })
-  const labels = (): Array<string | null> => [...document.querySelectorAll('.trajectory-ruler b')].map((b) => b.textContent)
-  const before = labels()
+  const before = shownWindow()
   fireEvent.pointerDown(ruler, { clientX: 200, clientY: 10, button: 0, pointerId: 1 })
   fireEvent.pointerMove(ruler, { clientX: 350, clientY: 10, pointerId: 1 })
   fireEvent.pointerUp(ruler, { clientX: 350, clientY: 10, pointerId: 1 })
   /* The interval stays picked, with a grip at each edge ... */
   expect(document.querySelectorAll('.trajectory-ruler-pick')).toHaveLength(1)
   expect(document.querySelectorAll('.trajectory-ruler-grip')).toHaveLength(2)
-  /* ... and the axis keeps the scale it had: selecting does not zoom. */
-  expect(labels()).toEqual(before)
+  /* ... and the axis keeps the window it had: selecting does not zoom. */
+  expect(shownWindow()).toEqual(before)
   /* A click takes the pick back. */
   fireEvent.pointerDown(ruler, { clientX: 300, clientY: 10, button: 0, pointerId: 1 })
   fireEvent.pointerUp(ruler, { clientX: 300, clientY: 10, pointerId: 1 })
@@ -476,7 +480,6 @@ describe('a live session growing under the reader', () => {
       })
     })
   }
-  const firstLabel = (): string | null => document.querySelector('.trajectory-ruler b[data-first]')?.textContent ?? null
   const zoomIn = (): void => {
     const box = document.querySelector('.trajectory-list') as HTMLElement
     act(() => { box.dispatchEvent(wheel({ deltaY: -240, clientX: 100, ctrlKey: true, bubbles: true, cancelable: true })) })
@@ -494,12 +497,13 @@ describe('a live session growing under the reader', () => {
 
   it('keeps the reader’s zoom when a step lands past the session’s end', async () => {
     await draw([E('m1', 0), E('m2', 30)])
+    const whole = shownWindow()
     zoomIn()
-    const zoomed = firstLabel()
-    expect(zoomed).not.toBeNull()
+    const zoomed = shownWindow()
+    expect(zoomed.to - zoomed.from).toBeLessThan(whole.to - whole.from)
     grow(E('m3', 40))
     expect(store.get().entries).toHaveLength(3)
-    expect(firstLabel()).toBe(zoomed)
+    expect(shownWindow()).toEqual(zoomed)
   })
 
   it('keeps the picked interval when a step lands past the session’s end', async () => {
@@ -526,7 +530,7 @@ describe('a live session growing under the reader', () => {
       store.sessionChanged('gui:b')
       await store.load()
     })
-    expect(firstLabel()).toBeNull()
+    expect(document.querySelector('.trajectory-wf-window')!.textContent).toContain('gui.trajectory.window.whole')
     expect(document.querySelectorAll('.trajectory-ruler-pick')).toHaveLength(0)
   })
 })
@@ -796,4 +800,38 @@ it('jumps from the error count to the earliest failure, opening what holds it', 
 it('offers no jump when nothing failed', async () => {
   await draw([E('ok', 0)])
   expect(document.querySelector('.trajectory-wf-jump')).toBeNull()
+})
+
+describe('the clock ruler', () => {
+  const local = (h: number, m = 0): string => new Date(2026, 9, 28, h, m).toISOString()
+  const session = (): TrajectoryEntry[] => [E('long', 0, { operation_start: local(10), operation_end: local(13) })]
+
+  it('labels the ruler in clock time, the whole hours major', async () => {
+    await draw(session())
+    const labels = [...document.querySelectorAll<HTMLElement>('.trajectory-ruler b')]
+    expect(labels.map((b) => b.textContent)).toEqual(['10:30', '11:00', '11:30', '12:00', '12:30', '13:00'])
+    expect(labels.filter((b) => b.hasAttribute('data-major')).map((b) => b.textContent)).toEqual(['11:00', '12:00', '13:00'])
+  })
+
+  it('draws a grid line under every mark, the major ones set apart', async () => {
+    await draw(session())
+    expect(count('.trajectory-wf-grid')).toBe(7)
+    expect(count('.trajectory-wf-grid[data-major]')).toBe(4)
+  })
+
+  it('names the window it shows: its day, both ends, and that it is the whole session', async () => {
+    await draw(session())
+    const label = document.querySelector<HTMLElement>('.trajectory-wf-window')!
+    expect(label.querySelector('b')?.textContent).toBe(dayOf(Date.parse(local(10)), { weekday: true }))
+    expect(label.textContent).toContain('gui.trajectory.window.whole {"from":"10:00","to":"13:00"}')
+  })
+
+  it('names a zoomed window by its length', async () => {
+    await draw(session())
+    const box = document.querySelector('.trajectory-list') as HTMLElement
+    act(() => { box.dispatchEvent(wheel({ deltaY: -240, clientX: 100, ctrlKey: true, bubbles: true, cancelable: true })) })
+    const label = document.querySelector<HTMLElement>('.trajectory-wf-window')!
+    expect(label.textContent).toMatch(/gui\.trajectory\.window\.zoomed \{"from":"\d\d:\d\d","to":"\d\d:\d\d","length":"[^"]+"\}/)
+    expect(shownWindow().to - shownWindow().from).toBeLessThan(Date.parse(local(13)) - Date.parse(local(10)))
+  })
 })
