@@ -33,6 +33,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from loguru import logger
+
 MODEL_OPTION = "model"
 
 PLATFORM_GROUP = ("platform", "Mirasim")
@@ -299,11 +301,16 @@ def _menu(agent: str, listed: list[ModelEntry]) -> tuple[list[ModelEntry], list[
     taken = {entry.id for entry in listed}
 
     def on(route: str) -> list[ModelEntry]:
-        return [
-            replace(entry, id=f"{route}:{entry.id}", model=entry.id, session_route=route)
-            for entry in own
-            if f"{route}:{entry.id}" not in taken
-        ]
+        offered: list[ModelEntry] = []
+        for entry in own:
+            value = f"{route}:{entry.id}"
+            if value in taken:
+                logger.warning(
+                    "model {!r} is already a catalog entry, so its route-prefixed copy is not offered", value
+                )
+                continue
+            offered.append(replace(entry, id=value, model=entry.id, session_route=route))
+        return offered
 
     return [*on(OWN_ROUTE), *on(PLATFORM_ROUTE), *(entry for entry in listed if entry.route)], own
 
