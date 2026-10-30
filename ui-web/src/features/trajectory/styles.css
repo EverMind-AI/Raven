@@ -875,3 +875,11 @@ html[data-traj] .trajectory-tabs-wrap { border-bottom-color: var(--traj-line) }
 .trajectory-wf-key.trajectory-wf-kind-failure,
 .trajectory-wf-spanbar.trajectory-wf-kind-failure, .trajectory-wf-seg-failure { background: var(--trajectory-wf-err); border-color: var(--trajectory-wf-err) }
 .trajectory-wf-spanbar.trajectory-wf-kind-other { background: var(--trajectory-wf-wait-bg); border: 1px solid var(--trajectory-wf-wait-line) }
+
+/* The hovered turn's breakdown: an inverted card -- the page's ink as its
+   ground -- under the row, one line per kind of time, each with its key. */
+.trajectory-wf-tip { position: absolute; z-index: 5; width: 262px; padding: 10px 12px; border-radius: 10px;
+  background: var(--text); color: var(--paper); font: 400 12px/1.55 var(--sans); pointer-events: none;
+  font-variant-numeric: tabular-nums }
+.trajectory-wf-tip [data-part] { display: flex; align-items: center; gap: 6px; white-space: nowrap }
+.trajectory-wf-tip [data-part='head'] { font-weight: 600 }

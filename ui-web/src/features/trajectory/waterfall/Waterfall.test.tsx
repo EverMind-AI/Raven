@@ -1142,3 +1142,31 @@ describe('an agent’s name', () => {
     expect(agentRow(0).querySelector('.trajectory-wf-agentsub')).toBeNull()
   })
 })
+
+describe('a turn’s summary on hover', () => {
+  const base = Date.parse('2026-10-28T10:00:00.000Z')
+  const at2 = (seconds: number): string => new Date(base + seconds * 1000).toISOString()
+
+  it('says what the turn’s time went on while the pointer is over it, and goes when it leaves', async () => {
+    await draw([
+      E('llm', 0, { operation_start: at2(0), operation_end: at2(15) }),
+      E('run', 15, { kind: 'tool.output', span_name: 'tool.call', slot: 'tool.output', operation_start: at2(15), operation_end: at2(40), meta: { tool: 'bash' } }),
+      E('end', 49, { kind: 'turn.output', span_name: 'session.turn', slot: 'turn.output', operation_start: at2(50), operation_end: at2(50) }),
+    ])
+    /* A 50 s turn, so a share and a count of seconds cannot be mistaken for each other. */
+    const turnRow = document.querySelector<HTMLElement>('[data-row="turn"]')!
+    act(() => { fireEvent.pointerEnter(turnRow) })
+    const tip = document.querySelector<HTMLElement>('.trajectory-wf-tip')!
+    expect(tip.getAttribute('role')).toBe('tooltip')
+    expect(turnRow.getAttribute('aria-describedby')).toBe(tip.id)
+    expect([...tip.querySelectorAll('[data-part]')].map((line) => [line.getAttribute('data-part'), line.textContent])).toEqual([
+      ['head', expect.stringMatching(/^gui\.trajectory\.tip\.head \{"turn":"gui\.trajectory\.turn\.ordinal \{\\"n\\":1\}","from":"[\d:]+","to":"[\d:]+","length":"50s"\}$/)],
+      ['model', 'gui.trajectory.tip.model {"calls":"gui.trajectory.tip.calls_one","time":"15s","percent":30}'],
+      ['tool', 'gui.trajectory.tip.tool {"calls":"gui.trajectory.tip.calls_one","time":"25s","percent":50}'],
+      ['waiting', 'gui.trajectory.tip.waiting {"time":"10s","percent":20}'],
+    ])
+    act(() => { fireEvent.pointerLeave(turnRow) })
+    expect(document.querySelector('.trajectory-wf-tip')).toBeNull()
+    expect(turnRow.hasAttribute('aria-describedby')).toBe(false)
+  })
+})
