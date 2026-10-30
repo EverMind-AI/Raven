@@ -972,6 +972,10 @@ const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg: StepDa
     : seg.thinkMs >= 1000
       ? t('gui.transcript.think_done', { label: thinkWord, t: store.durText(seg.thinkMs) })
       : thinkWord
+  /* One state, one writer: the summary's `open` class and this body read the
+     same `seg.wkOpen`, so the row cannot say "open" over a body that is shut.
+     `wkOpen` is the default `paintWork` sets (open for a delegating step) or
+     the reader's own toggle (`toggleWork`), never a second rule layered here. */
   const wkinHidden = seg.calls.length === 0 ? true : seg.calls.length === 1 ? false : !seg.wkOpen
   if (stepBlank(seg)) return null
   return (
@@ -1596,9 +1600,12 @@ const FoldView = memo(function FoldView({ lane, seg }: { lane: Lane; seg: FoldDa
       </button>
       {/* A shut body is not built, which is where the weight was: a forty-turn
           session built 7361 nodes of which 6400 sat in shut fold bodies. On the
-          conversation's lane the runtime opens none: a turn that just finished
-          shuts its own (`collapse`) and a replayed one arrives shut, so the only
-          bodies built are the ones the reader opened.
+          conversation's lane the runtime opens a turn only when its work holds
+          a message of two or more rendered lines or a spawn/dag call
+          (`foldKeepsOpen`); every other finished turn shuts its own. The
+          protected turns are not free: on a 443-turn session 182 of 287 folds
+          arrived open, building 77,194 nodes against 57,141 before the rule
+          (+35.1%).
 
           A delegated pane opens every turn's, and is a different size of thing:
           measured on the two largest instance records on hand, 55 messages in

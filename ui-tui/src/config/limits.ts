@@ -26,6 +26,14 @@ export const LONG_MSG = 300
 export const MAX_HISTORY = 800
 export const THINKING_COT_MAX = 160
 
+// An agent message this long keeps the work it introduced open rather than
+// folding into a one-line summary. A character count, not measured rows: the
+// fold decision is made outside a layout pass and the renderer only has the
+// string. 100 is about two rows in an ordinary 100-column terminal body
+// (~50 double-width glyphs per row), which is the reading measure a message of
+// "two lines" is judged by here.
+export const MESSAGE_FOLD_KEEP_OPEN_CHARS = 100
+
 // Rows per wheel event (pre-accel). 1 keeps Ink's DECSTBM fast path live
 // (each scroll < viewport-1) and produces smooth motion. wheelAccel.ts
 // ramps this on sustained scrolls.

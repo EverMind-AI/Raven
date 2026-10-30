@@ -1612,15 +1612,16 @@ describe('the node panel', () => {
       })
       pick(withTwo, 0)
       await act(async () => {})
-      /* The process fold starts closed for a settled node (item 15); open it
-         to reach the thought inside. */
+      /* The process fold starts closed for a settled node (item 15), and a
+         node's own reasoning does too -- open both to read the thought. */
       fireEvent.click(document.querySelector('.tkprock') as Element)
-      fireEvent.click(document.querySelector('.tkthh') as Element)
       expect(document.querySelector('.tkthink blockquote')).toBeNull()
+      fireEvent.click(document.querySelector('.tkthh') as Element)
+      expect(document.querySelector('.tkthink blockquote')).not.toBeNull()
       fireEvent.click(document.querySelectorAll('.daggraph .nd')[1] as Element)
       await act(async () => {})
       fireEvent.click(document.querySelector('.tkprock') as Element)
-      expect(document.querySelector('.tkthink blockquote')).not.toBeNull()
+      expect(document.querySelector('.tkthink blockquote')).toBeNull()
     })
   })
 

@@ -861,6 +861,89 @@ describe('transcript island, history', () => {
     expect($('.answer .prose')?.textContent).toBe('the config was wrong')
   })
 
+  it('keeps a turn open when its agent message runs to two rendered lines', () => {
+    /* Importance is read off the message's length, not off the rendered rows:
+       the threshold is the one constant `collapse` applies. */
+    const t0 = Date.now() - 60000
+    const long = 'x'.repeat(store.FOLD_KEEP_OPEN_CHARS)
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'check the login timeout', timestamp: iso(t0) },
+        {
+          role: 'assistant', text: long,
+          tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{"path":"/tmp/a.log"}' }],
+        },
+        { role: 'tool', tool_call_id: 'c1', name: 'read_file', text: 'line1\nline2' },
+        { role: 'assistant', text: 'the config was wrong', timestamp: iso(t0 + 3000) },
+      ])
+    })
+    const fold = $('.tfold')
+    expect(fold).toBeTruthy()
+    expect(fold?.classList.contains('open')).toBe(true)
+    expect(fold?.textContent).toContain(long)
+  })
+
+  it('shows a delegating step\'s call rows by default, without locking them open', () => {
+    const t0 = Date.now() - 60000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'fan it out', timestamp: iso(t0) },
+        {
+          role: 'assistant', text: '',
+          tool_calls: [
+            { id: 'c1', name: 'spawn', arguments: '{"agent":"Coder","task":"look"}' },
+            { id: 'c2', name: 'read_file', arguments: '{"path":"/tmp/a"}' },
+          ],
+        },
+        { role: 'tool', tool_call_id: 'c1', name: 'spawn', text: 'started' },
+        { role: 'tool', tool_call_id: 'c2', name: 'read_file', text: 'x' },
+        { role: 'assistant', text: 'done', timestamp: iso(t0 + 3000) },
+      ])
+    })
+    /* The turn's own fold is open by the same rule, and the step's work list is
+       not shut over the spawn row: the call has to be visible without a click. */
+    expect($('.tfold')?.classList.contains('open')).toBe(true)
+    expect($('.wkin')?.hasAttribute('hidden')).toBe(false)
+    expect($$('.wkin .wrow .vb')).toHaveLength(2)
+  })
+
+  it('lets the reader shut a delegating step, and keeps it shut', () => {
+    /* `keepCalls` used to make the body visible regardless of `wkOpen`, so the
+       summary stayed clickable while the click could never hide anything. The
+       default and the reader's decision are two different things: the first is
+       `paintWork`'s, the second is `wkPinned`'s. */
+    let st!: ReturnType<typeof mount.step>
+    act(() => {
+      mount.ask('fan it out')
+      st = mount.step()
+      st.tool('spawn', { task: 'look' }, null, 'c1')
+      st.tool('read_file', { path: '/tmp/a' }, null, 'c2').done(true, 'x', 5)
+    })
+    const sum = (): HTMLElement => $('.wrow.sum') as HTMLElement
+    const body = (): HTMLElement => $('.wkin') as HTMLElement
+
+    /* Untouched: open, and the summary's own marker agrees with the body. */
+    expect(sum().classList.contains('open')).toBe(true)
+    expect(body().hidden).toBe(false)
+
+    /* The reader shuts it. Style and body are asserted together, because a
+       summary still reading "open" over a shut body is the same defect one
+       layer up. */
+    act(() => sum().click())
+    expect(body().hidden).toBe(true)
+    expect(sum().classList.contains('open')).toBe(false)
+
+    /* A call landing afterwards is a default, not an instruction to reopen. */
+    act(() => { st.tool('read_file', { path: '/tmp/b' }, null, 'c3').done(true, 'y', 5) })
+    expect(body().hidden).toBe(true)
+    expect(sum().classList.contains('open')).toBe(false)
+
+    /* And the reader can open it again, style and body still agreeing. */
+    act(() => sum().click())
+    expect(body().hidden).toBe(false)
+    expect(sum().classList.contains('open')).toBe(true)
+  })
+
   it('keeps a redirection whole: an ACP shell title stays one row, one command', () => {
     act(() => {
       mount.history([
@@ -1501,14 +1584,16 @@ describe('a thought box while the model is still thinking', () => {
   })
 })
 
-/** A fold shuts over a sub-agent that is still working, like any other.
+/** A fold holding a delegated run opens, so the delegation stays in sight.
  *
- * The run goes on for minutes after the turn that dispatched it has answered;
- * it is followed on the task rows, not by holding the turn's fold open. What
- * is asserted here is that a spawn in flight buys the fold nothing: not at the
- * turn's end, and not when the next turn shuts the folds before it.
+ * The run itself goes on for minutes after the turn that dispatched it has
+ * answered, and its status is followed on the task rows -- a run still working
+ * is not what holds the fold open. The call kind is: a spawn or dag row inside
+ * the fold is the only place the delegation is named, so that turn's fold
+ * arrives open at its end and on replay, and a later turn does not shut it.
+ * It stays a default -- the reader's own toggle takes it over.
  */
-describe('a fold holding a run that has not finished', () => {
+describe('a fold holding a delegated run', () => {
   const RUNNING = {
     agent: 'Raven', instance: 'raven-9bc249', label: 'draw the poster',
     status: 'running', tool_call_id: 'call_7', call_id: 'rec-1',
@@ -1534,7 +1619,7 @@ describe('a fold holding a run that has not finished', () => {
     return st
   }
 
-  /* An ordinary turn after it -- the one that used to shut the first. */
+  /* An ordinary turn after it. */
   function askAgain(): void {
     let st!: ReturnType<typeof mount.step>
     act(() => {
@@ -1547,20 +1632,21 @@ describe('a fold holding a run that has not finished', () => {
     act(() => { mount.finishTurn(st, [st], '2s') })
   }
 
-  it('shuts at the end of its own turn', () => {
+  it('opens at the end of its own turn, so the delegation stays in sight', () => {
     dispatched('running')
-    expect(openFlags()).toEqual([false])
+    expect(openFlags()).toEqual([true])
   })
 
-  it('finds no reason to stay open when the next turn arrives', () => {
+  it('stays open when the next turn arrives, which folds itself', () => {
     dispatched('running')
     askAgain()
-    expect(openFlags()).toEqual([false, false])
+    expect(openFlags()).toEqual([true, false])
   })
 
-  it('arrives shut on replay too, with the run still going under it', () => {
-    /* A reopened conversation opens no fold, the last turn's included, and a
-       run still in flight under it buys it nothing there either. */
+  it('arrives open on replay too, with the run still going under it', () => {
+    /* A reopened conversation used to open no fold, the last turn's included.
+       A spawn or dag call is the exception: its row is the only place the
+       delegation is visible. */
     wire({
       spawnList: async () => [{
         id: '20260827T095926366482Z-78da7ea7', kind: 'spawn', agent: 'Raven',
@@ -1579,11 +1665,11 @@ describe('a fold holding a run that has not finished', () => {
         { role: 'assistant', text: 'dispatching it now', timestamp: iso(t0 + 3000) },
       ])
     })
-    expect(openFlags()).toEqual([false])
+    expect(openFlags()).toEqual([true])
 
     askAgain()
 
-    expect(openFlags()).toEqual([false, false])
+    expect(openFlags()).toEqual([true, false])
   })
 })
 
@@ -3061,7 +3147,7 @@ describe('transcript island, the delegation verbs', () => {
       st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const row = $$('.wkin .wrow')[0] as HTMLElement
     act(() => { row.click() })
     return row.nextElementSibling as HTMLElement
@@ -3120,7 +3206,7 @@ describe('transcript island, the delegation verbs', () => {
       st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const row = $$('.wkin .wrow')[0] as HTMLElement
     act(() => { row.click() })
     await act(async () => { await Promise.resolve() })
@@ -3166,7 +3252,7 @@ describe('transcript island, tool episodes', () => {
 
   it('opens a settled row into its detail card and closes it again', () => {
     twoCalls()
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const row = $$('.wkin .wrow')[0] as HTMLElement
     expect(row.classList.contains('tog')).toBe(true)
     /* Shut is not built at all, so the row stands with no card behind it. */
@@ -3195,7 +3281,7 @@ describe('transcript island, tool episodes', () => {
       st.tool('raven_config', { action: 'describe' }).done(true, '{}', 5)
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const row = $$('.wkin .wrow')[0] as HTMLElement
     act(() => { row.click() })
     const dtl = row.nextElementSibling as HTMLElement
@@ -3220,7 +3306,7 @@ describe('transcript island, tool episodes', () => {
         st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
         st.seal()
       })
-      act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+      openWork()
       const row = $$('.wkin .wrow')[0] as HTMLElement
       act(() => { row.click() })
       return (row.nextElementSibling as HTMLElement).querySelector<HTMLElement>('.bd pre .pth')!
@@ -4309,7 +4395,7 @@ describe('transcript island, delegated calls', () => {
         { run_id: 'r-1', tool_call_id: 'call-1', node: 'alpha', status: 'failed' })
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const cards = $$('.wkin .wrow').map((row) => row.nextElementSibling as HTMLElement)
     const calls = store._dagCallsForTests()
 
@@ -4347,7 +4433,7 @@ describe('transcript island, delegated calls', () => {
       st.tool('run_subagent_dag', { nodes: [{ id: 'beta' }, { id: 'beta2' }] }, null, 'call-2')
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const cards = $$('.wkin .wrow').map((row) => row.nextElementSibling as HTMLElement)
 
     expect(cards.map((c) => dagField(c, 'gui.dag.run_id'))).toEqual(['r-1', 'r-2'])
@@ -4835,7 +4921,7 @@ describe('transcript island, an imported conversation', () => {
       st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const row = $$('.wkin .wrow')[0] as HTMLElement
     act(() => { row.click() })
     return row.nextElementSibling as HTMLElement
@@ -4893,7 +4979,7 @@ describe('transcript island, an imported conversation', () => {
       st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     act(() => { ($$('.wkin .wrow')[0] as HTMLElement).click() })
     await act(async () => { await Promise.resolve() })
     expect(asked).toEqual([])
