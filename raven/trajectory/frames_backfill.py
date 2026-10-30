@@ -85,9 +85,11 @@ def backfill(
     Returns ``runs`` (external runs with a journal still on disk), ``written``
     (runs this pass added spans for), ``steps`` (spans added), ``already``
     (runs whose steps were all on record, from an earlier pass or written by
-    the run itself while it ran) and ``repaired`` (steps on record
-    that ended after their run and were closed at its end), so a dry run
-    reports the same numbers a real one would write.
+    the run itself while it ran), ``unread`` (runs whose recorded stretch read
+    back empty -- the journal shorter than it, or the stretch past the
+    reader's cap -- so nothing was written and nothing is on record) and
+    ``repaired`` (steps on record that ended after their run and were closed
+    at its end), so a dry run reports the same numbers a real one would write.
     """
     existing: set[str] = set()
     steps_on_record: dict[str, dict[str, Any]] = {}
@@ -109,7 +111,7 @@ def backfill(
         if isinstance(path, str) and path and Path(path).exists():
             runs.append((span, attrs))
 
-    written = steps = 0
+    written = steps = unread = 0
     for span, attrs in runs:
         if attrs.get(observability.STEPS_KEY) is not None:
             continue
@@ -121,6 +123,7 @@ def backfill(
             end=_int(attrs.get(FRAMES_KEY + "end")),
         )
         if prompt is None and not events:
+            unread += 1
             continue
         added = observability.record_steps(
             _Handle(_identity(span, attrs)),
@@ -160,7 +163,8 @@ def backfill(
         "runs": len(runs),
         "written": written,
         "steps": steps,
-        "already": len(runs) - written,
+        "already": len(runs) - written - unread,
+        "unread": unread,
         "repaired": repaired,
     }
 

@@ -155,7 +155,7 @@ def test_a_run_whose_journal_is_gone_is_left_alone(tmp_path: Path, monkeypatch):
     captured: list[dict] = []
     monkeypatch.setattr(tracing_spans, "emit", captured.append)
     result = frames_backfill.backfill(state)
-    assert result == {"runs": 0, "written": 0, "steps": 0, "already": 0, "repaired": 0}
+    assert result == {"runs": 0, "written": 0, "steps": 0, "already": 0, "unread": 0, "repaired": 0}
     assert captured == []
 
 
@@ -380,6 +380,28 @@ def test_a_step_an_earlier_pass_wrote_wholly_after_its_run_is_moved_inside_it_on
     assert datetime.fromisoformat(moved["endTime"]) == datetime.fromisoformat(RUN_END)
     captured.clear()
     assert frames_backfill.backfill(state)["repaired"] == 0
+    assert captured == []
+
+
+def test_a_run_whose_stretch_the_journal_no_longer_holds_is_not_counted_on_record(tmp_path: Path, monkeypatch):
+    """A run whose recorded stretch reads back empty -- the journal shorter than
+    it, or the stretch past the reader's cap -- has no steps written and none
+    on record: it is reported as unread, not as already done."""
+    state = _state(tmp_path)
+    journal = tmp_path / "journal.jsonl"
+    _timed_journal(journal)
+    _timed_run(state, journal)
+    log = state / "logs" / "audit-spans.log"
+    run = json.loads(log.read_text().splitlines()[0])
+    size = journal.stat().st_size
+    run["attributes"]["subagent.external.frames.start"] = size
+    run["attributes"]["subagent.external.frames.end"] = size + 4096
+    log.write_text(json.dumps(run) + "\n", encoding="utf-8")
+    captured = _recording(state, monkeypatch)
+
+    result = frames_backfill.backfill(state)
+
+    assert (result["runs"], result["written"], result["already"], result["unread"]) == (1, 0, 0, 1)
     assert captured == []
 
 
