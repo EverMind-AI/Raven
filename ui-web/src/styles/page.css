@@ -66,7 +66,7 @@
   /* The trajectory's sheet. The column carries the conversation's own wash
      behind it (--wash), so the trace is read on the same light the transcript
      is; the glass is what separates the sheet from the rail. */
-  --traj-glass:  rgba(255, 255, 255, .70);
+  --traj-glass:  rgba(255, 255, 255, .85);
   --traj-edge:   rgba(255, 255, 255, .72);
   --traj-shadow: inset 0 1px 0 rgba(255, 255, 255, .55), 0 24px 60px -38px rgba(31, 35, 40, .38);
   --traj-pane:   rgba(255, 255, 255, .40);
@@ -396,7 +396,7 @@
   --link: #3b6fd4; --amber: #a8801c; --amber-dp: #eee4c8; --moss: #3f7d2c;
   --clay: #b4402f; --gold: #9a7016; --sky: #2f6d9e;
   --page: #fafaf8; --side-bg: #ffffff; --paper: #ffffff; --hover: #ececea;
-  --traj-glass: rgba(255, 255, 255, .70); --traj-edge: rgba(255, 255, 255, .72);
+  --traj-glass: rgba(255, 255, 255, .85); --traj-edge: rgba(255, 255, 255, .72);
   --traj-shadow: inset 0 1px 0 rgba(255, 255, 255, .55), 0 24px 60px -38px rgba(31, 35, 40, .38);
   --traj-pane: rgba(255, 255, 255, .40); --traj-line: rgba(31, 35, 40, .09);
   --traj-hover: rgba(255, 255, 255, .52);
