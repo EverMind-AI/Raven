@@ -237,3 +237,21 @@ export function isLive(entry: TrajectoryEntry, now: number): boolean {
   if (entry.operation_end !== null && entry.operation_end !== undefined) return false
   return now - entryStart(entry) <= LIVE_WINDOW_MS
 }
+
+/** When an agent was doing something: its turns and its loose rows, merged
+ *  where they touch. Their total is the agent's busy time, which is what its
+ *  row reports -- a worker alive for a day that worked ten minutes of it
+ *  reads ten minutes. */
+export function busyRuns(agent: WaterfallAgent, now: number): Array<{ start: number; end: number }> {
+  const spans = [
+    ...agent.turns.map((turn) => ({ start: turn.start, end: turn.end })),
+    ...agent.loose.map((row) => ({ start: entryStart(row.entry), end: entryEnd(row.entry, now) })),
+  ].sort((a, b) => a.start - b.start)
+  const merged: Array<{ start: number; end: number }> = []
+  for (const span of spans) {
+    const last = merged.at(-1)
+    if (last !== undefined && span.start <= last.end) last.end = Math.max(last.end, span.end)
+    else merged.push({ ...span })
+  }
+  return merged
+}

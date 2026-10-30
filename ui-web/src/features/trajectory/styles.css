@@ -828,3 +828,14 @@ html[data-traj] .trajectory-tabs-wrap { border-bottom-color: var(--traj-line) }
 .trajectory-wf-zoom button[aria-pressed='true'] { background: var(--text); color: var(--paper) }
 .trajectory-wf-zoom button:focus-visible, .trajectory-wf-foldall:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px }
 .trajectory-wf-foldall { white-space: nowrap }
+
+/* Each row's busy time stands in one column at the end of its label, right
+   aligned so the figures line up down the page, under a header in the head's
+   label column. The window's name takes the rest of that column. */
+.trajectory-wf-busy { flex: none; margin-left: auto; width: 76px; padding-right: 14px; text-align: right;
+  font: 400 12.5px/1 var(--sans); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap }
+.trajectory-wf-agent .trajectory-wf-busy { color: var(--text); font-weight: 400 }
+.trajectory-wf-headlabel { display: flex; align-items: center; min-width: 0 }
+.trajectory-wf-headlabel .trajectory-wf-window { flex: 1 1 auto }
+.trajectory-wf-busyhead { flex: none; width: 76px; padding-right: 14px; margin-left: auto; text-align: right;
+  font: 500 10.5px/1 var(--sans); letter-spacing: .09em; text-transform: uppercase; color: var(--faint) }

@@ -12633,6 +12633,10 @@
       "en": "slowest",
       "zh": "最慢"
     },
+    "gui.trajectory.busy": {
+      "en": "BUSY",
+      "zh": "忙碌"
+    },
     "gui.trajectory.zoom.label": {
       "en": "Window",
       "zh": "时间窗口"

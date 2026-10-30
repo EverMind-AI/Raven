@@ -183,9 +183,10 @@ by turn, then by span. A worker's mark is picked by that same recorded name
 (`meta.agent`, else `meta.instance`): an entry carries no preset, so the
 preset key `components/AgentMark.tsx` is built on is not available here.
 Every agent shares one time axis (`axis.ts`): a stretch
-in which no agent was doing anything collapses to a fixed width, and the axis
-leaves room after the last bar for the duration each row prints just past its
-bar. Above the rows sit the overview, one row of activity marks per agent, and the ruler,
+in which no agent was doing anything collapses to a fixed width. Each row
+prints its busy time in a column at the end of its label -- for an agent, its
+turns and loose rows merged (`model.ts`'s `busyRuns`), never its lifetime.
+Above the rows sit the overview, one row of activity marks per agent, and the ruler,
 marked on round clock times (`ticks.ts`) beside the name of the window it shows; what
 crosses between agents is marked on rows rather than drawn between them -- a
 dispatching row's door arrow, and the worker's name on the host turn its report
