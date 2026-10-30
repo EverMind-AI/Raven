@@ -704,6 +704,20 @@ it('re-renders a scroll without walking every row of the session', async () => {
   }
 })
 
+it('brings a selected row that belongs to no turn into view, opening its agent', async () => {
+  const turns = Array.from({ length: 40 }, (_, i) => E(`r${i}`, i * 2, { turn_span_id: `T${i}` }))
+  await draw([...turns, E('loose', 100, { turn_span_id: null })])
+  const box = document.querySelector('.trajectory-list') as HTMLElement
+  Object.defineProperty(box, 'clientHeight', { value: 300, configurable: true })
+  act(() => { fireEvent.click(document.querySelector('[data-row="agent"]')!) })
+  expect(document.querySelector('[data-row="agent"]')!.getAttribute('aria-expanded')).toBe('false')
+  act(() => { fireEvent.keyDown(box, { key: 'End' }) })
+  expect(store.get().selectedId).toBe('loose')
+  expect(document.querySelector('[data-row="agent"]')!.getAttribute('aria-expanded')).toBe('true')
+  /* The agent's row, its forty turns, then the row outside them. */
+  expect(box.scrollTop).toBe(41 * ROW_HEIGHT)
+})
+
 it('leaves a turn folded when the reader folds it, even with the selection inside', async () => {
   await draw([E('m1', 0), E('m2', 1)])
   fireEvent.click(document.querySelector('[data-row="turn"]')!)

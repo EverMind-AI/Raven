@@ -577,11 +577,14 @@ export function Waterfall(): JSX.Element {
        the effect only ever scrolls -- never asks again. */
     const phase = same ? revealed.current.phase : 'none'
     revealed.current = { id: selectedId, tick: selections, phase: 'opening' }
-    let owner: { agent: number; turn: string } | null = null
+    /* The row's agent, and its turn -- none for a row outside every turn, which
+       hangs from its agent directly and needs only the agent open. */
+    let owner: { agent: number; turn: string | null } | null = null
     for (const [index, agent] of waterfall.agents.entries()) {
       for (const turn of agent.turns) {
         if (turn.rows.some((row) => row.entry.entry_id === selectedId)) owner = { agent: index, turn: turn.id }
       }
+      if (owner === null && agent.loose.some((row) => row.entry.entry_id === selectedId)) owner = { agent: index, turn: null }
     }
     if (owner === null) return
     const group = waterfall.agents[owner.agent]!.key
@@ -593,12 +596,12 @@ export function Waterfall(): JSX.Element {
       })
       return
     }
-    const key = turnKey(owner.agent, owner.turn)
-    if (phase === 'none' && !open.has(key)) {
+    const key = owner.turn === null ? null : turnKey(owner.agent, owner.turn)
+    if (phase === 'none' && key !== null && !open.has(key)) {
       setOpen((previous) => new Set(previous).add(key))
       return
     }
-    const at = rows.findIndex((row) => row.kind === 'span' && row.row?.entry.entry_id === selectedId)
+    const at = selectedAt
     const scroller = box.current
     if (at < 0 || scroller === null) return
     const top = at * ROW_HEIGHT
