@@ -325,6 +325,14 @@ class TestTheHubSwitch:
         assert (bool(hub.endpoint) and hub.enabled) is on
         assert skill_hub_enabled(LiveConfig(path)) is on
 
+    def test_a_section_the_migration_cannot_walk_answers_off(self, tmp_path: Path) -> None:
+        """The migration walks the whole file for this one answer. A hand edit
+        that breaks an unrelated section is a file the loader refuses: it costs
+        the Hub, not every search that asks."""
+        live = self._live(tmp_path, {"tools": [], "skillForge": {"router": {"hub": {"endpoint": "https://hub.test"}}}})
+
+        assert skill_hub_enabled(live) is False
+
     def test_the_migration_runs_once_per_change_of_the_file(self, tmp_path: Path, monkeypatch) -> None:
         """Asked before every Hub search and tool call: the copy-and-migrate is
         paid when the bytes change, not per ask."""

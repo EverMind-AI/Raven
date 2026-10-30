@@ -639,7 +639,10 @@ def _skill_hub_awaits_reload(on: bool, agent_loop_factory: Any) -> bool:
     """
     if not on or agent_loop_factory is None:
         return False
-    loop = agent_loop_factory()
+    try:
+        loop = agent_loop_factory()
+    except Exception:  # noqa: BLE001 - the stack raises its build error: nothing is serving
+        return False
     return loop is not None and getattr(loop, "_skill_hub_client", None) is None
 
 

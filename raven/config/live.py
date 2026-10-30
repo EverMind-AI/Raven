@@ -710,7 +710,10 @@ def skill_hub_on(raw: Any) -> bool:
 
     if not isinstance(raw, dict):
         return False
-    data = _migrate_config(copy.deepcopy(raw), pop_extension_keys=False)
+    try:
+        data = _migrate_config(copy.deepcopy(raw), pop_extension_keys=False)
+    except Exception:  # noqa: BLE001 - a file the loader cannot walk is not consent
+        return False
     camel = data.get("skillForge")
     snake = data.get("skill_forge")
     if camel is not None and snake is not None:

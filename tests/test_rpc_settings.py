@@ -1488,6 +1488,23 @@ async def test_the_skill_hub_notices_follow_the_reply_language(cfg, monkeypatch)
     assert i18n.t_in("zh", _HUB_NOTICE) != _HUB_NOTICE
 
 
+async def test_a_loop_that_failed_to_build_leaves_the_settings_page_working(cfg):
+    """The stack's factory raises the build error when the loop could not be
+    built, which is when a reader most needs this page. Nothing is serving, so
+    nothing waits for a reload."""
+
+    def broken():
+        raise RuntimeError("no model configured")
+
+    result = await rpc_console.settings_set(
+        {"key": "skillForge.router.hub.enabled", "value": True}, agent_loop_factory=broken
+    )
+    got = await rpc_console.settings_get({}, agent_loop_factory=broken)
+
+    assert result == {"applied": True, "previous": False}
+    assert (got["skill_hub_on"], got["skill_hub_awaiting_reload"]) == (True, False)
+
+
 async def test_settings_get_awaits_no_reload_while_the_source_is_off(cfg):
     cfg.write_text(
         json.dumps({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test", "enabled": False}}}}),
