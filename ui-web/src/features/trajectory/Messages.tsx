@@ -235,10 +235,11 @@ export function MessagesView({ block, entryId, render }: {
        the thumb under a drag. */
     if (heights.current.size <= 40) {
       const saw = seenOpen.length + seenFold.length
-    /* A pass over an empty list (nothing drawn yet) is not a measurement: it
-       must not spend the throttle the first real one needs. */
-    if (saw === 0) lastMeasure.current = 0
-    const median = (xs: number[]): number | null => (xs.length ? [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]! : null)
+      /* While the estimate settles, a pass over an empty list (nothing drawn
+         yet) is not a measurement: it must not spend the throttle the first
+         real one needs. */
+      if (saw === 0) lastMeasure.current = 0
+      const median = (xs: number[]): number | null => (xs.length ? [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]! : null)
       const open = median(seenOpen) ?? estimates.current.open
       const fold = median(seenFold) ?? estimates.current.fold
       if (open !== estimates.current.open || fold !== estimates.current.fold) {

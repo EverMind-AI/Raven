@@ -44,7 +44,7 @@ const E = (over: Partial<TrajectoryEntry>): TrajectoryEntry => ({
 
 const at = (seconds: number): string => new Date(Date.parse('2026-10-28T10:00:00.000Z') + seconds * 1000).toISOString()
 
-const row = (over: Partial<TrajectoryEntry>): WaterfallRow => ({ entry: E(over), depth: 0 })
+const row = (over: Partial<TrajectoryEntry>): WaterfallRow => ({ entry: E(over) })
 
 const turn = (rows: WaterfallRow[], start: number, end: number): WaterfallTurn => ({
   id: 'T', ordinal: 1, preview: null, start, end, reportedFrom: null, failure: false, rows,
