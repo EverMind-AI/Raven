@@ -2192,6 +2192,74 @@ def test_an_external_runs_own_steps_are_rows_of_that_run(state, monkeypatch):
         assert _scope_fields(entries, span_id) == ("t:run", None, None)
 
 
+def _external_steps(state, monkeypatch, events: list[dict]) -> list[dict]:
+    """The spans ``record_steps`` writes for one external run's events."""
+    from raven.agent.subagent.backends import observability as obs
+    from raven.tracing import spans as tracing_spans
+
+    captured: list[dict] = []
+    artifacts = state / "logs" / "audit-artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+
+    def persist(kind, meta, payload, *, label=None):
+        path = artifacts / f"{label}-{len(list(artifacts.iterdir()))}.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return {"path": str(path), "sha1": "x", "bytes": path.stat().st_size}
+
+    monkeypatch.setattr(tracing_spans, "emit", captured.append)
+    monkeypatch.setattr(tracing_spans, "persist_artifact", persist)
+
+    class Handle:
+        def identity(self):
+            return {
+                "trace_id": "t",
+                "span_id": "ext",
+                "session_key": None,
+                "channel": None,
+                "chat_id": None,
+                "surface": None,
+            }
+
+    obs.record_steps(Handle(), prompt="do the task", events=events, elapsed_ms=60_000)
+    return captured
+
+
+class _Call:
+    name = "bash"
+
+    def arguments_json(self):
+        return '{"command": "npm test"}'
+
+
+def test_a_failed_external_tool_call_is_a_failed_step(state, monkeypatch):
+    from datetime import datetime, timedelta
+
+    base = datetime.now() - timedelta(seconds=60)
+    events = [
+        {"t": "call", "id": "c1", "call": _Call(), "at": (base + timedelta(seconds=1)).isoformat()},
+        {
+            "t": "result",
+            "id": "c1",
+            "ok": False,
+            "text": "2 tests failed",
+            "at": (base + timedelta(seconds=9)).isoformat(),
+        },
+    ]
+    captured = _external_steps(state, monkeypatch, events)
+    tool_span = next(s for s in captured if s["name"] == "tool.call")
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=50),
+        _tool_span(state, "t", "spawn", "turn", "spawn", start=1),
+        _run_span("t", "run", "spawn", start=2, end=40),
+        _span("t", "ext", "subagent.external", parent="run", start=3, end=39),
+        *captured,
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+    rows = [e for e in entries if e.span_id == tool_span["spanId"]]
+    assert {e.operation_status for e in rows} == {"error"}
+    assert sum(1 for e in rows if e.failure_entry) == 1
+
+
 def test_a_span_that_only_thought_has_no_empty_output_row(state):
     attrs = _llm_attrs(state, "think-only", _messages("q"), {"content": "", "reasoning_content": "hmm"})
     spans = [
