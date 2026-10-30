@@ -239,15 +239,98 @@ function placeholder(): string {
   return t(turn.busy() ? 'gui.composer.ph_busy' : 'gui.composer.ph_session')
 }
 
-/* A textarea cannot size itself to its content, so the height is set here --
-   but the ceiling stays in CSS and is read back, so there is one cap to tune
-   and it can be viewport-relative. */
+/* The field may take half the window, computed when asked rather than stored,
+   so a resized window moves the cap with it and there is no second number to
+   keep in step. The stylesheet gives it the same half as a backstop for the
+   frame between a resize and the fit below. */
+const fieldCeiling = (): number => Math.round(window.innerHeight * 0.5)
+
+/* The floor is today's resting height, which is the CSS min-height: read back
+   rather than repeated, so the two cannot drift. */
+const fieldFloor = (e: HTMLTextAreaElement): number => parseFloat(getComputedStyle(e).minHeight) || 52
+
+/* The height a drag left the field at, or null while the field still follows
+   its content. Nothing renders from it -- the field carries the result -- so
+   it is module state rather than a store key. */
+let manualHeight: number | null = null
+
+function fieldBounds(e: HTMLTextAreaElement): { max: number; min: number } {
+  const min = fieldFloor(e)
+  return { max: Math.max(min, fieldCeiling()), min }
+}
+
+/* A textarea cannot size itself to its content, so the height is set here.
+   Once the reader has dragged one, that height wins over the content and is
+   re-clamped on each pass, so a window that shrank pulls the field back under
+   the smaller ceiling instead of leaving it taller than half of one. */
 export function fitField(): void {
   const e = field()
   if (!e) return
+  if (manualHeight !== null) {
+    const { max, min } = fieldBounds(e)
+    e.style.height = Math.round(Math.min(max, Math.max(min, manualHeight))) + 'px'
+    dockLift()
+    return
+  }
   e.style.height = 'auto'
-  e.style.height = Math.min(parseFloat(getComputedStyle(e).maxHeight) || 168, e.scrollHeight) + 'px'
+  e.style.height = Math.min(fieldCeiling(), e.scrollHeight) + 'px'
   dockLift()
+}
+
+/* A drag step: the height the pointer asked for, clamped and written at once.
+   The write and the lift below happen inside the move handler rather than on
+   the next paint, so the transcript's reserve and the sheets stacked over the
+   card travel with the pointer instead of a frame behind it. */
+export function resizeField(px: number): void {
+  const e = field()
+  if (!e) return
+  const { max, min } = fieldBounds(e)
+  manualHeight = Math.round(Math.max(min, Math.min(max, px)))
+  e.style.height = manualHeight + 'px'
+  dockLift()
+}
+
+/* The seam on the card's top edge: up grows the field, down shrinks it. The
+   pointer is captured on the handle and the move writes the height directly,
+   with no state and no re-render, for the reason `resizeField` gives. */
+export function gripDrag(el: HTMLElement): void {
+  el.tabIndex = 0
+  el.addEventListener('pointerdown', (e) => {
+    const ta = field()
+    if (!ta) return
+    e.preventDefault()
+    e.stopPropagation()
+    const pointerId = e.pointerId
+    const startY = e.clientY
+    const startH = ta.getBoundingClientRect().height
+    el.dataset.drag = 'true'
+    el.setPointerCapture(pointerId)
+    document.body.style.userSelect = 'none'
+    const move = (ev: PointerEvent): void => {
+      if (ev.pointerId !== pointerId) return
+      resizeField(startH + startY - ev.clientY)
+    }
+    const up = (): void => {
+      el.removeEventListener('pointermove', move)
+      el.removeEventListener('pointerup', up)
+      el.removeEventListener('pointercancel', up)
+      delete el.dataset.drag
+      document.body.style.userSelect = ''
+    }
+    el.addEventListener('pointermove', move)
+    el.addEventListener('pointerup', up)
+    el.addEventListener('pointercancel', up)
+  })
+  /* The handle is a separator, so arrows move it: ten pixels a press, forty
+     with Shift, the same step the pane grips take. */
+  el.addEventListener('keydown', (e) => {
+    const ta = field()
+    if (!ta) return
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
+    e.preventDefault()
+    const base = manualHeight ?? ta.getBoundingClientRect().height
+    resizeField(base + (e.key === 'ArrowUp' ? (e.shiftKey ? 40 : 10) : -(e.shiftKey ? 40 : 10)))
+  })
 }
 
 /* Everything docked at the bottom moves: the composer grows with its content,
@@ -888,6 +971,7 @@ export function _resetForTests(): void {
   liveT0 = 0
   draftOwner = null
   draftTick = null
+  manualHeight = null
   jumpReset()
   trays.clear()
   store.set({ ...initial })
