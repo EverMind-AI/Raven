@@ -114,7 +114,8 @@ agents' rows; everything else is position.
 5. `project(t)` and `unproject(x)` interpolate across the resulting piecewise
    map, so every bar, the ruler and hit testing share it. The activity strip
    folds the same idle stretches on an axis of its own, each fold wide enough
-   to say how long it was; the two meet in real time.
+   to say how long it was while the folds keep to a third of the strip; the two
+   meet in real time.
 
 Zoom (ctrl or cmd with the wheel, about the pointer) and pan (shift with the
 wheel) operate on the projected domain; a plain wheel scrolls the rows.

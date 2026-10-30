@@ -191,8 +191,9 @@ in which no agent was doing anything collapses to a fixed width. Each row
 prints its busy time in a column at the end of its label -- for an agent, its
 turns and loose rows merged (`model.ts`'s `busyRuns`), never its lifetime.
 Above the rows sit the activity strip -- the whole session's calls per bucket of
-real time, its idle stretches folded wide enough to say how long they were, and
-the window as a brush a drag takes, moves or stretches (`ActivityStrip.tsx`) --
+real time, its idle stretches folded wide enough to say how long they were
+while the folds keep to a third of it, and the window as a brush a drag takes,
+moves or stretches (`ActivityStrip.tsx`) --
 and the ruler, marked on round clock times (`ticks.ts`) beside the name of the
 window it shows; what
 crosses between agents is marked on rows -- a dispatching row's door arrow, and

@@ -4,22 +4,23 @@
  * It always draws the whole session on the folded axis, whatever the window:
  * a bar per bucket of real time, the model's calls under the tools', a mark
  * over a bucket that holds a failure, and each folded idle stretch with how
- * long it was. The window is a brush over it: dragging across the strip takes
- * a new window, dragging the brush moves it, and dragging either edge moves
- * that edge alone. A click keeps the window's length and centres it there.
+ * long it was, where it is wide enough to say. The window is a brush over it:
+ * dragging across the strip takes a new window, dragging the brush moves it,
+ * and dragging either edge moves that edge alone. A click keeps the window's
+ * length and centres it there.
  *
  * The strip folds the same idle stretches the rows' axis does, but on an axis
- * of its own that gives each fold room for its length (FOLD_PX): the rows'
- * axis keeps a fold to a sliver of the working time, too narrow to read. The
- * two meet in real time -- the window is kept in milliseconds -- so the brush
- * frames on this axis exactly the stretch the rows show on theirs.
+ * of its own (`stripAxis`) that gives each fold room for its length while the
+ * folds keep to a third of the strip: the rows' axis keeps a fold to a sliver
+ * of the working time, too narrow to read. The two meet in real time -- the
+ * window is kept in milliseconds -- so the brush frames on this axis exactly
+ * the stretch the rows show on theirs.
  */
 
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 
 import { t } from '../../../i18n/t'
-import { activity, bucketWidth } from './activity'
-import { createAxis } from './axis'
+import { activity, bucketWidth, stripAxis } from './activity'
 import { clockOf, dayOf, lengthOf } from './clock'
 
 import type { TrajectoryEntry } from '../types'
@@ -28,9 +29,8 @@ import type { JSX, PointerEvent as ReactPointerEvent } from 'react'
 
 const percent = (fraction: number): string => `${(fraction * 100).toFixed(4)}%`
 
-/* How wide the strip draws a folded idle stretch, and how narrow one may get
-   (a session folded many times over) before its length is left unsaid. */
-const FOLD_PX = 36
+/* How narrow a folded idle stretch may get (a session folded many times over)
+   before its length is left unsaid. */
 const FOLD_LABEL_PX = 22
 
 /** An idle stretch's length in its largest unit, rounded: "10h", "25m", "40s". */
@@ -65,22 +65,7 @@ export const ActivityStrip = memo(function ActivityStrip({ axis: rowsAxis, entri
     return () => ro.disconnect()
   }, [])
   const room = width > 0 ? width : 1200
-  /* The rows' working stretches, between their folds, laid on an axis whose
-     every fold is FOLD_PX wide at this width. */
-  const axis = useMemo(() => {
-    const end = rowsAxis.unproject(rowsAxis.length)
-    const runs: Interval[] = []
-    let from = rowsAxis.start
-    for (const gap of rowsAxis.gaps) {
-      runs.push({ start: from, end: gap.start })
-      from = gap.end
-    }
-    runs.push({ start: from, end })
-    const working = runs.reduce((sum, run) => sum + run.end - run.start, 0)
-    const spare = room - FOLD_PX * rowsAxis.gaps.length
-    const gapWidth = spare > FOLD_PX ? (FOLD_PX * working) / spare : working / 50
-    return createAxis(runs, { gapWidth, idleMs: 0 })
-  }, [rowsAxis, room])
+  const axis = useMemo(() => stripAxis(rowsAxis, room), [rowsAxis, room])
   const bucketMs = bucketWidth(axis, room)
   const buckets = useMemo(() => activity(entries, axis, bucketMs), [entries, axis, bucketMs])
   const peak = Math.max(1, ...buckets.map((bucket) => bucket.llm + bucket.tool))
