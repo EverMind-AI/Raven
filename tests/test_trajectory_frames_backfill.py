@@ -540,3 +540,72 @@ def test_a_dry_run_and_a_second_pass_leave_the_store_as_they_found_it(tmp_path: 
         assert files() == written
     finally:
         tracing_spans._store = None
+
+
+def test_a_backfill_reads_a_run_with_the_dialect_its_connections_handshake_chose(tmp_path: Path, monkeypatch):
+    from raven.tracing import spans as tracing_spans
+
+    state = _state(tmp_path)
+    journal = tmp_path / "journal.jsonl"
+
+    def line(direction: str, frame: dict) -> str:
+        return (
+            json.dumps({"_type": "acp_frame", "timestamp": "2026-10-27T09:00:01", "dir": direction, "frame": frame})
+            + "\n"
+        )
+
+    def update(body: dict) -> dict:
+        return {"method": "session/update", "params": {"sessionId": "s", "update": body}}
+
+    text = line("out", {"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {}})
+    text += line("in", {"jsonrpc": "2.0", "id": 0, "result": {"agentInfo": {"name": "codex-acp"}}})
+    handshake_end = len(text.encode("utf-8"))
+    text += line(
+        "out",
+        {"method": "session/prompt", "params": {"sessionId": "s", "prompt": [{"type": "text", "text": "lint it"}]}},
+    )
+    text += line(
+        "in",
+        update(
+            {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "c1",
+                "title": "lint",
+                "kind": "execute",
+                "status": "in_progress",
+                "rawInput": {"command": ["pnpm", "lint"]},
+            }
+        ),
+    )
+    text += line(
+        "in",
+        update(
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "status": "completed",
+                "rawOutput": {"formatted_output": "2 missing keys", "exit_code": 1},
+            }
+        ),
+    )
+    journal.write_text(text, encoding="utf-8")
+    _spans(state, journal)
+    log = state / "logs" / "audit-spans.log"
+    spans = [json.loads(row) for row in log.read_text(encoding="utf-8").splitlines()]
+    spans[-1]["attributes"]["subagent.external.frames.handshake_end"] = handshake_end
+    log.write_text("\n".join(json.dumps(span) for span in spans) + "\n", encoding="utf-8")
+    _recording(state, monkeypatch)
+    payloads: list[object] = []
+    artifacts = state / "logs" / "audit-artifacts"
+    monkeypatch.setattr(
+        tracing_spans,
+        "persist_artifact",
+        lambda kind, meta, payload, label=None: (
+            payloads.append(payload) or {"path": str(artifacts / f"{label}.json"), "sha1": "x", "bytes": 1}
+        ),
+    )
+
+    frames_backfill.backfill(state)
+
+    results = [p for p in payloads if isinstance(p, dict) and "ok" in p]
+    assert results == [{"result": "2 missing keys", "ok": False}]
