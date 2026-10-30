@@ -1,11 +1,11 @@
 /* The reader's moves into a Sub-agent Scope, and what a sub-agent run is called.
  *
- * A move touches both stores -- the list's scope and selection, and the pane's
- * first block on an external agent's run -- and the pane's store already
- * follows the list's, so the moves live here, beside both, rather than in
- * either. The surfaces call these; the stores keep the rules. A run's name is
- * worked out here too, so the waterfall, its overview and the pane name a
- * sub-agent the same way.
+ * A move touches both stores -- the list's selection, and the pane's first
+ * block on an external agent's run -- and the pane's store already follows the
+ * list's, so the moves live here, beside both, rather than in either. The
+ * surfaces call these; the stores keep the rules. A run's name is worked out
+ * here too, so the waterfall, its overview and the pane name a sub-agent the
+ * same way.
  */
 
 import { t } from '../../i18n/t'
@@ -27,23 +27,34 @@ export function openTarget(entry: TrajectoryEntry): string | null {
   return entry.turn_start ? list.reportedFromOf(entry) : null
 }
 
-/* Goes to a Sub-agent Scope. One entered for the first time on an external
-   agent's run lands on that agent's entry with the pane open on what the
-   agent recorded, since that entry is all such a run has to show. */
-export function enter(scopeId: string): void {
-  if (!list.openScope(scopeId)) return
-  const external = list.get().visible.find((e) => e.span_name === 'subagent.external')
-  if (!external) return
-  details.prefer(external.entry_id, EXTERNAL_BLOCKS)
-  list.select(external.entry_id, { source: 'link' })
+/* Where a move into a scope lands: the run's external agent entry when it has
+   one, which opens on what the agent recorded, else the scope's first entry.
+   Every agent is drawn at once, so the move selects across scopes rather than
+   making this one current: making it current restored that scope's own
+   selection, which for a scope never visited is none, and the pane closed. */
+export function landingOf(scopeId: string): TrajectoryEntry | null {
+  let first: TrajectoryEntry | null = null
+  for (const entry of list.get().entries) {
+    if (list.scopeOf(entry) !== scopeId) continue
+    if (entry.span_name === 'subagent.external') return entry
+    first ??= entry
+  }
+  return first
+}
+
+/** Goes to a Sub-agent Scope's own run; false when it has nothing on record to land on. */
+export function enter(scopeId: string): boolean {
+  const target = landingOf(scopeId)
+  if (target === null) return false
+  if (target.span_name === 'subagent.external') details.prefer(target.entry_id, EXTERNAL_BLOCKS)
+  list.selectAcross(target.entry_id, { source: 'link' })
+  return true
 }
 
 /** Goes to the scope a row leads to; false for a row that leads nowhere. */
 export function openFromEntry(entry: TrajectoryEntry): boolean {
   const target = openTarget(entry)
-  if (target === null) return false
-  enter(target)
-  return true
+  return target !== null && enter(target)
 }
 
 /* ── what a run is called ─────────────────────────────────────────────── */

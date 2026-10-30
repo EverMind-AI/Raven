@@ -524,6 +524,7 @@ describe('the way to a Sub-agent Scope from the head', () => {
     { ...entry('back', 2, 'user.input'), turn_start: true, turn_number: 2, origin: 'subagent', dispatched_by_subagent_scope: A },
     { ...entry('backEnd', 3, 'turn.end'), turn_number: 2, origin: 'subagent', dispatched_by_subagent_scope: A },
     entry('plain', 4),
+    { ...entry('lonely', 5, 'subagent.run'), span_name: 'subagent.run', opens_subagent_scope: 't:runEmpty', meta: { agent: 'coder' } },
   ]
 
   beforeEach(() => {
@@ -537,7 +538,7 @@ describe('the way to a Sub-agent Scope from the head', () => {
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 260)) })
   }
 
-  it('offers to open a door\'s trajectory, and opens it', async () => {
+  it('offers to open a door\'s trajectory, and lands on the run with the pane still open', async () => {
     await draw()
     await pickDoor('door')
     expect(jump()?.textContent).toBe('gui.trajectory.scope.open')
@@ -547,15 +548,40 @@ describe('the way to a Sub-agent Scope from the head', () => {
       'trajectory-head-name', 'trajectory-scope-jump', 'trajectory-close',
     ])
     act(() => { fireEvent.click(jump()!) })
-    expect(list.get().scope).toBe(A)
+    await flush()
+    /* Every agent is drawn at once, so the jump selects the run's own row and
+       the pane follows it there: nothing is filtered, nothing is closed. */
+    expect([list.get().scope, list.get().selectedId]).toEqual([null, 'a0'])
+    expect(pane()).not.toBeNull()
   })
 
-  it('names the sub-agent a report turn came from, and opens its tab', async () => {
+  it('lands again on a second jump from the same door', async () => {
+    await draw()
+    await pickDoor('door')
+    act(() => { fireEvent.click(jump()!) })
+    await flush()
+    await pickDoor('door')
+    act(() => { fireEvent.click(jump()!) })
+    await flush()
+    expect(list.get().selectedId).toBe('a0')
+    expect(pane()).not.toBeNull()
+  })
+
+  it('names the sub-agent a report turn came from, and lands on its run', async () => {
     await draw()
     await pickDoor('back')
     expect(jump()?.textContent).toBe('gui.trajectory.scope.from {"title":"coder · Fix the parser"}')
     act(() => { fireEvent.click(jump()!) })
-    expect(list.get().scope).toBe(A)
+    await flush()
+    expect([list.get().scope, list.get().selectedId]).toEqual([null, 'a0'])
+    expect(pane()).not.toBeNull()
+  })
+
+  it('offers no jump into a run that has nothing on record yet', async () => {
+    await draw()
+    await pickDoor('lonely')
+    expect(pane()).not.toBeNull()
+    expect(jump()).toBeNull()
   })
 
   it('offers nothing on a row that leads nowhere', async () => {
