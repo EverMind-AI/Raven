@@ -3,10 +3,11 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { activity, bucketWidth } from './activity'
+import { activity, bucketWidth, FOLD_PX, stripAxis } from './activity'
 import { createAxis } from './axis'
 
 import type { TrajectoryEntry } from '../types'
+import type { TimeAxis } from './axis'
 
 const T0 = Date.parse('2026-10-28T10:00:00.000Z')
 const at = (seconds: number): string => new Date(T0 + seconds * 1000).toISOString()
@@ -50,3 +51,41 @@ describe('the activity buckets', () => {
     expect(bucketWidth(day, 1200)).toBe(600_000)
   })
 })
+
+/* A session of busy minutes ten minutes apart: the rows' axis folds the idle
+   stretch between each two. */
+const rowsWith = (folds: number): TimeAxis =>
+  createAxis(Array.from({ length: folds + 1 }, (_, i) => ({ start: T0 + i * 660_000, end: T0 + i * 660_000 + 60_000 })))
+
+/* The share of the strip the session's working time is drawn on. */
+const working = (axis: TimeAxis): number => 1 - axis.gaps.reduce((sum, gap) => sum + gap.to - gap.from, 0) / axis.length
+
+describe('the strip\'s own axis', () => {
+  it('gives each fold room for its length while the folds fit', () => {
+    const axis = stripAxis(rowsWith(5), 1200)
+    expect(axis.gaps).toHaveLength(5)
+    for (const gap of axis.gaps) expect(((gap.to - gap.from) / axis.length) * 1200).toBeCloseTo(FOLD_PX, 6)
+  })
+
+  /* A strip just wide enough to give 27 folds their 36px each drew a
+     46-hour session's working time on what was left, a few dozen pixels. */
+  it('keeps the working time on two thirds of the strip or more, however many folds and whatever its width', () => {
+    for (const folds of [1, 5, 10, 27, 60]) {
+      expect(rowsWith(folds).gaps).toHaveLength(folds)
+      for (const room of [600, 840, 1120, 1600]) {
+        expect(working(stripAxis(rowsWith(folds), room)), `${folds} folds at ${room}px`).toBeGreaterThanOrEqual(2 / 3 - 1e-9)
+      }
+    }
+  })
+
+  it('never gives the working time less of the strip as the strip widens', () => {
+    const rows = rowsWith(27)
+    let last = 0
+    for (let room = 600; room <= 1600; room += 10) {
+      const px = working(stripAxis(rows, room)) * room
+      expect(px, `${room}px`).toBeGreaterThanOrEqual(last - 1e-6)
+      last = px
+    }
+  })
+})
+
