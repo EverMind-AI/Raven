@@ -23,14 +23,17 @@ import * as details from '../detailStore'
 import { enter as enterScope, scopeTitle } from '../scopes'
 import * as store from '../store'
 import { AxisIndex, TRAIL_PAD, barOf, clampViewport, formatTick, tickMarks, zoomViewport } from './axis'
+import { spanOf } from './clock'
 import { WaterfallIndex } from './incremental'
 import { entryEnd, entryStart, isLive, turnKey } from './model'
 import { OverviewLanes } from './OverviewLanes'
 import { turnSegments } from './segments'
+import { summarize } from './summary'
 
 import type { TrajectoryEntry } from '../types'
 import type { TimeAxis, Viewport } from './axis'
 import type { Waterfall, WaterfallAgent, WaterfallRow, WaterfallTurn } from './model'
+import type { Figures } from './summary'
 import type { JSX, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 
 export const ROW_HEIGHT = 30
@@ -99,6 +102,16 @@ const timeStyle = (bar: { left: number; width: number } | null): { left?: string
   bar === null
     ? { right: 12 }
     : { left: `min(calc(${percent(bar.left + bar.width)} + 8px), calc(100% - ${TIME_RESERVE}px))` }
+
+/** Who the agents were, as the header's second line: zero counts are left out. */
+function agentSplit(agents: Figures['agents']): string | null {
+  const parts = [
+    agents.main > 0 ? t('gui.trajectory.stat.main', { n: agents.main }) : null,
+    agents.external > 0 ? t('gui.trajectory.stat.external', { n: agents.external }) : null,
+    agents.sub === 1 ? t('gui.trajectory.stat.sub_one') : agents.sub > 1 ? t('gui.trajectory.stat.sub_n', { n: agents.sub }) : null,
+  ].filter((part): part is string => part !== null)
+  return parts.length ? parts.join(' \u00b7 ') : null
+}
 
 /** The model an agent ran on: the first model call's, as a label. */
 function agentModel(agent: WaterfallAgent): string | null {
@@ -712,29 +725,10 @@ export function Waterfall(): JSX.Element {
       if (agent.scope === null) continue
       for (const scope of agent.scopes) if (scope !== null) nameOfScope.set(scope, scopeTitle(agent.door))
     }
-    /* A call writes several entries -- its input, its thinking, its output --
-       under one span, so calls are counted by span. A failed span has one
-       failure entry, which is what the error count reads. */
-    const llmSpans = new Set<string>()
-    const toolSpans = new Set<string>()
-    let errors = 0
-    for (const entry of shown) {
-      if (entry.kind.startsWith('llm.')) llmSpans.add(entry.span_id)
-      else if (entry.kind.startsWith('tool.')) toolSpans.add(entry.span_id)
-      if (entry.failure_entry) errors += 1
-    }
-    const llm = llmSpans.size
-    const tool = toolSpans.size
-    let turnCount = 0
-    let sessionStart = Infinity
-    let sessionEnd = -Infinity
     /* The slowest single span wears the badge, as the reference does. */
     let slowestId: string | null = null
     let slowestMs = 0
     for (const agent of waterfall.agents) {
-      turnCount += agent.turns.length
-      sessionStart = Math.min(sessionStart, agent.start)
-      sessionEnd = Math.max(sessionEnd, agent.end)
       for (const turn of agent.turns) {
         for (const row of turn.rows) {
           const ms = entryEnd(row.entry, now) - entryStart(row.entry)
@@ -742,17 +736,28 @@ export function Waterfall(): JSX.Element {
         }
       }
     }
-    const duration = waterfall.agents.length ? sessionEnd - sessionStart : 0
-    return { nameOfScope, llm, tool, errors, turnCount, duration, slowestId }
+    return { nameOfScope, slowestId, figures: summarize(waterfall, shown, now) }
   }, [shown, waterfall, now])
-  const { nameOfScope, errors, slowestId } = summary
-  const stats: Array<[string, string]> = [
-    [t('gui.trajectory.stat.duration'), formatDuration(summary.duration)],
-    [t('gui.trajectory.stat.agents'), String(waterfall.agents.length)],
-    [t('gui.trajectory.stat.turns'), String(summary.turnCount)],
-    [t('gui.trajectory.stat.llm'), String(summary.llm)],
-    [t('gui.trajectory.stat.tool'), String(summary.tool)],
-    [t('gui.trajectory.stat.errors'), String(errors)],
+  const { nameOfScope, slowestId, figures } = summary
+  const errors = figures.errors
+  const jumpToFirstError = (): void => {
+    if (figures.firstError === null) return
+    store.selectAcross(figures.firstError, { source: 'click' })
+    details.openDetails()
+  }
+  const stats: Array<[string, string, string | null]> = [
+    [t('gui.trajectory.stat.duration'), formatDuration(waterfall.agents.length ? figures.end - figures.start : 0),
+      waterfall.agents.length ? t('gui.trajectory.stat.span', spanOf(figures.start, figures.end)) : null],
+    [t('gui.trajectory.stat.agents'), String(waterfall.agents.length), agentSplit(figures.agents)],
+    [t('gui.trajectory.stat.turns'), String(figures.turns),
+      figures.medianTurn === null ? null : t('gui.trajectory.stat.median', { duration: formatDuration(figures.medianTurn) })],
+    [t('gui.trajectory.stat.llm'), String(figures.llm),
+      figures.modelShare === null ? null : t('gui.trajectory.stat.model_share', { percent: Math.round(figures.modelShare * 100) })],
+    [t('gui.trajectory.stat.tool'), String(figures.tool),
+      figures.topTools.length
+        ? figures.topTools.map(({ name, share }) => t('gui.trajectory.stat.tool_share', { name, percent: Math.round(share * 100) })).join(' \u00b7 ')
+        : null],
+    [t('gui.trajectory.stat.errors'), String(errors), null],
   ]
 
   const painted: JSX.Element[] = []
@@ -859,12 +864,21 @@ export function Waterfall(): JSX.Element {
   return (
     <div className="trajectory-wf" ref={island}>
       <div className="trajectory-wf-stats">
-        {stats.map(([label, value]) => (
-          <div key={label} className="trajectory-wf-stat">
-            <span className="trajectory-wf-statk">{label}</span>
-            <span className="trajectory-wf-statv" data-bad={label === t('gui.trajectory.stat.errors') && errors > 0 ? '' : undefined}>{value}</span>
-          </div>
-        ))}
+        {stats.map(([label, value, sub]) => {
+          const errorCell = label === t('gui.trajectory.stat.errors')
+          return (
+            <div key={label} className="trajectory-wf-stat">
+              <span className="trajectory-wf-statk">{label}</span>
+              <span className="trajectory-wf-statv" data-bad={errorCell && errors > 0 ? '' : undefined}>{value}</span>
+              {sub === null ? null : <span className="trajectory-wf-statsub">{sub}</span>}
+              {errorCell && figures.firstError !== null ? (
+                <button type="button" className="trajectory-wf-statsub trajectory-wf-jump" onClick={jumpToFirstError}>
+                  {t('gui.trajectory.stat.jump')}
+                </button>
+              ) : null}
+            </div>
+          )
+        })}
       </div>
       <OverviewLanes waterfall={waterfall} axis={axis} viewport={view} />
       <div className="trajectory-wf-head">

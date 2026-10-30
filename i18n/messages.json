@@ -12593,6 +12593,42 @@
       "en": "ERRORS",
       "zh": "错误"
     },
+    "gui.trajectory.stat.span": {
+      "en": "{from} → {to}",
+      "zh": "{from} → {to}"
+    },
+    "gui.trajectory.stat.main": {
+      "en": "{n} main",
+      "zh": "主会话 {n}"
+    },
+    "gui.trajectory.stat.external": {
+      "en": "{n} external",
+      "zh": "外部代理 {n}"
+    },
+    "gui.trajectory.stat.sub_one": {
+      "en": "1 sub-agent",
+      "zh": "子智能体 1"
+    },
+    "gui.trajectory.stat.sub_n": {
+      "en": "{n} sub-agents",
+      "zh": "子智能体 {n}"
+    },
+    "gui.trajectory.stat.median": {
+      "en": "median {duration}",
+      "zh": "中位 {duration}"
+    },
+    "gui.trajectory.stat.model_share": {
+      "en": "{percent}% of busy time",
+      "zh": "占忙碌时间 {percent}%"
+    },
+    "gui.trajectory.stat.tool_share": {
+      "en": "{name} {percent}%",
+      "zh": "{name} {percent}%"
+    },
+    "gui.trajectory.stat.jump": {
+      "en": "Jump to first ›",
+      "zh": "跳到第一个 ›"
+    },
     "gui.trajectory.slowest": {
       "en": "slowest",
       "zh": "最慢"
