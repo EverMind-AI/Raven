@@ -373,10 +373,39 @@ describe('the marks', () => {
     expect(marks.filter((src) => src === 'assets/agents/raven.svg')).toHaveLength(2)
   })
 
-  it('puts a span’s icon in its own boxed cell', async () => {
-    await draw([E('m1', 0), E('m2', 1)])
+  it('keys each call by a square in its kind’s colour', async () => {
+    await draw([
+      E('m1', 0),
+      E('t1', 1, { kind: 'tool.output', span_name: 'tool.call', slot: 'tool.output', meta: { tool: 'bash' } }),
+    ])
     fireEvent.click(document.querySelector('[data-row="turn"]')!)
-    expect(document.querySelector('[data-entry="m1"] .trajectory-wf-ico')).not.toBeNull()
+    expect(document.querySelector('[data-entry="m1"] .trajectory-wf-key')?.classList.contains('trajectory-wf-kind-model')).toBe(true)
+    expect(document.querySelector('[data-entry="t1"] .trajectory-wf-key')?.classList.contains('trajectory-wf-kind-tool')).toBe(true)
+    expect(document.querySelector('.trajectory-wf-ico')).toBeNull()
+  })
+
+  it('keys a row that is neither a model nor a tool call in a neutral colour, as the turn’s bar paints it', async () => {
+    await draw([E('m1', 0), E('end', 1, { kind: 'turn.output', span_name: 'session.turn', slot: 'turn.output' })])
+    fireEvent.click(document.querySelector('[data-row="turn"]')!)
+    expect(document.querySelector('[data-entry="end"] .trajectory-wf-key')?.className).toBe('trajectory-wf-key trajectory-wf-kind-other')
+    expect(document.querySelector('[data-entry="end"] .trajectory-wf-spanbar')?.classList.contains('trajectory-wf-kind-other')).toBe(true)
+  })
+
+  it('names a model call by its model, and a tool call by its tool and what it was given', async () => {
+    await draw([
+      E('m1', 0, { meta: { model: 'claude-opus-5-5' } }),
+      E('in', 1, { kind: 'tool.input', span_name: 'tool.call', slot: 'tool.input', span_id: 'c', meta: { tool: 'bash' }, preview: 'bash npm test -- Spinner' }),
+      E('out', 2, { kind: 'tool.output', span_name: 'tool.call', slot: 'tool.output', span_id: 'c', meta: { tool: 'bash' }, preview: 'bash: 3 passed' }),
+    ])
+    fireEvent.click(document.querySelector('[data-row="turn"]')!)
+    const said = (id: string): Array<string | null | undefined> => {
+      const row = document.querySelector(`[data-entry="${id}"]`)!
+      return [row.querySelector('.trajectory-wf-name')?.textContent, row.querySelector('.trajectory-wf-sub')?.textContent]
+    }
+    /* One model call is three entries, so its rows say which part they are. */
+    expect(said('m1')).toEqual(['gui.trajectory.kind.llm_output', 'claude-opus-5-5'])
+    expect(said('in')).toEqual(['bash', 'npm test -- Spinner'])
+    expect(said('out')).toEqual(['bash', '3 passed'])
   })
 })
 

@@ -10,7 +10,7 @@
  * session must mount a screenful, not a session.
  */
 
-import { ArrowDown01Icon, ArrowRight01Icon, BotIcon, Message01Icon, SparklesIcon, UserGroupIcon, Wrench01Icon } from '@hugeicons/core-free-icons'
+import { ArrowDown01Icon, ArrowRight01Icon, BotIcon } from '@hugeicons/core-free-icons'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 
 import { AgentMark, agentMarkPath } from '../../../components/AgentMark'
@@ -20,6 +20,7 @@ import { formatDuration } from '../../../lib/duration'
 import * as lang from '../../../state/lang'
 import { showBar } from '../../../state/scrollbars'
 import * as details from '../detailStore'
+import { kindLabel } from '../palette'
 import { enter as enterScope, scopeTitle } from '../scopes'
 import * as store from '../store'
 import { AxisIndex, TRAIL_PAD, barOf, clampViewport, presetWindow, zoomViewport } from './axis'
@@ -207,22 +208,39 @@ function agentMark(agent: WaterfallAgent): JSX.Element {
   return preset === null ? <span className="trajectory-wf-glyph"><Icon icon={BotIcon} size={15} /></span> : <AgentMark preset={preset} />
 }
 
-/** The line icon a row wears: the reference draws a real icon in its box, not a
- *  text glyph, so it fills the box instead of sitting small inside it. */
-function kindIcon(kind: string): typeof SparklesIcon {
-  if (kind.startsWith('llm.')) return SparklesIcon
-  if (kind.startsWith('tool.')) return Wrench01Icon
-  if (kind === 'user.input') return Message01Icon
-  if (kind.startsWith('subagent')) return UserGroupIcon
-  return BotIcon
+/** A call row's name: a tool by its own name, a model call by the part of
+ *  the call the entry is (one call writes its input, its thinking and its
+ *  answer), anything else by what it says. */
+function callName(entry: TrajectoryEntry): string {
+  const tool = entry.meta?.tool
+  if (entry.kind.startsWith('tool.') && typeof tool === 'string' && tool !== '') return tool
+  if (entry.kind.startsWith('llm.')) return kindLabel(entry.kind)
+  return entry.preview ?? entry.span_name
 }
 
-/** One of four fixed classes; the index's kind strings never reach a class name.
- *  A failed operation's bar is the failure's colour, whatever kind it was. */
+/** What the call worked on, beside its name: the model a model call ran on,
+ *  and a tool's argument or result without the tool's name the preview
+ *  starts with ("bash npm test", "bash: 3 passed"). */
+function callSubject(entry: TrajectoryEntry): string | null {
+  if (entry.kind.startsWith('llm.')) return typeof entry.meta?.model === 'string' ? entry.meta.model : null
+  const tool = entry.meta?.tool
+  if (entry.kind.startsWith('tool.') && typeof tool === 'string' && tool !== '') {
+    const said = entry.preview ?? ''
+    const rest = said.startsWith(`${tool}: `) ? said.slice(tool.length + 2) : said.startsWith(`${tool} `) ? said.slice(tool.length + 1) : said
+    return rest === '' ? null : rest
+  }
+  return entry.span_name
+}
+
+/** One of five fixed classes; the index's kind strings never reach a class name.
+ *  A failed operation's bar is the failure's colour, whatever kind it was, and
+ *  only a model call wears the model's: anything that is neither a model nor a
+ *  tool call is neutral, as the turn's bar paints it (`segments.ts`). */
 const spanClass = (entry: TrajectoryEntry): string =>
   entry.failure_entry ? 'trajectory-wf-kind-failure'
     : entry.kind.startsWith('tool.') ? 'trajectory-wf-kind-tool'
-      : entry.kind === 'user.input' ? 'trajectory-wf-kind-user' : 'trajectory-wf-kind-model'
+      : entry.kind === 'user.input' ? 'trajectory-wf-kind-user'
+        : entry.kind.startsWith('llm.') ? 'trajectory-wf-kind-model' : 'trajectory-wf-kind-other'
 
 /* The mark a failed operation carries on its own row, and on the turn that
    holds it -- folded, the turn's bar shows red only for a failure that took
@@ -1045,10 +1063,10 @@ export function Waterfall(): JSX.Element {
         <span className="trajectory-wf-guide" style={{ left: GUIDE_X }} />
         <span className="trajectory-wf-guide" style={{ left: TURN_GUIDE_X }} />
         <span className="trajectory-wf-label" style={{ paddingLeft: 44 }}>
-          <span className="trajectory-wf-ico"><Icon icon={kindIcon(entry.kind)} size={15} /></span>
-          <span className="trajectory-wf-name">{entry.preview ?? entry.span_name}</span>
+          <span className={`trajectory-wf-key ${spanClass(entry)}`} aria-hidden="true" />
+          <span className="trajectory-wf-name">{callName(entry)}</span>
           {entry.failure_entry ? <FailMark /> : null}
-          <span className="trajectory-wf-sub">{entry.span_name}</span>
+          {callSubject(entry) === null ? null : <span className="trajectory-wf-sub">{callSubject(entry)}</span>}
           {entry.entry_id === slowestId ? <span className="trajectory-wf-slow">{t('gui.trajectory.slowest')}</span> : null}
           {entry.opens_subagent_scope === null || entry.opens_subagent_scope === undefined ? null : (
             <button className="trajectory-scope-opens" aria-label={t('gui.trajectory.scope.opens')}
