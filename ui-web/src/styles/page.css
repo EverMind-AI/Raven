@@ -2412,6 +2412,25 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
    the reader sees. */
 .dock-in:has(.field.drop) { box-shadow: 0 0 20px var(--composer-sh), 0 0 0 1px var(--amber); }
 
+/* The card's height seam, at its top edge: a short pill that stays quiet until
+   the pointer is on it, the restraint the pane grips show above. Laid over the
+   card's own top inset rather than given a row of its own, so the composer
+   still opens at exactly the height it did before the handle existed.
+   `touch-action` keeps a touch drag from scrolling the page instead. */
+.chrome-composer-grip {
+  position: absolute; top: 0; left: 0; right: 0; height: 12px; z-index: 2;
+  display: flex; align-items: center; justify-content: center;
+  cursor: ns-resize; touch-action: none;
+}
+.chrome-composer-grip::before {
+  content: ''; width: 32px; height: 3px; border-radius: 999px;
+  background: var(--composer-line); transition: background .12s ease;
+}
+.chrome-composer-grip:hover::before, .chrome-composer-grip[data-drag="true"]::before,
+.chrome-composer-grip:focus-visible::before { background: var(--composer-ph); }
+.chrome-composer-grip:focus-visible { outline: none; }
+@media (prefers-reduced-motion: reduce) { .chrome-composer-grip::before { transition: none; } }
+
 /* ── the work indicator ───────────────────────────────────────────────────
    One glyph for "this is happening now", in every place that used to say it in
    its own words: the turn's own row, a sub-agent's row and its open transcript,
@@ -2497,8 +2516,8 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 .field .c { font-family: var(--mono); color: var(--amber); padding-bottom: 3px; }
 /* The ceiling is viewport-relative on purpose: a fixed 168px eats a third of a
    short window, and what it eats is the tail of the transcript the reader is
-   writing about. This is the single source for the cap -- taFit() reads it back
-   rather than repeating the number. */
+   writing about. The composer's own field takes the same viewport-relative
+   ceiling, set where its height is (features/composer/store.ts). */
 /* Two lines at rest: an input that opens at one cramped line undersells
    itself as the main act of the page. */
 textarea {
@@ -2506,12 +2525,14 @@ textarea {
   min-height: 46px; max-height: min(200px, 24vh); padding: 2px 0; line-height: 1.6;
 }
 textarea::placeholder { color: var(--faint); }
-/* The composer's own field: the reply's 15/26 body (--fs-body), two lines at rest and
-   about eleven before it scrolls -- still viewport-bounded, so a short window
-   keeps the transcript it is writing about. */
+/* The composer's own field: the reply's 15/26 body (--fs-body), two lines at
+   rest and up to half the window before it scrolls. Its height is written by
+   features/composer/store.ts, which owns both bounds; the min-height here is
+   the floor that file reads back, and the max-height only holds the field
+   between writes. */
 .dock-in textarea {
   font-size: var(--fs-body); line-height: 26px; padding: 0; color: var(--composer-ink);
-  min-height: 52px; max-height: min(286px, 36vh);
+  min-height: 52px; max-height: 50vh;
 }
 .dock-in textarea::placeholder { color: var(--composer-ph); }
 /* WebKit paints its own focus ring on text controls; ours is the container

@@ -9269,6 +9269,10 @@
       "en": "Continue the conversation; Raven will receive your new instruction directly",
       "zh": "继续对话，Raven 将直接收到你的新指令"
     },
+    "gui.composer.resize": {
+      "en": "Drag to resize the composer",
+      "zh": "拖动调整输入框高度"
+    },
     "gui.at.point": {
       "en": "What this is about",
       "zh": "本次对话的范围"

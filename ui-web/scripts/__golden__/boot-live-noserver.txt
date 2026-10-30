@@ -136,6 +136,7 @@ div.app[data-rail=on]
         div.dock
           div#sheetRack.sheets
           div.dock-in
+            div#composerGrip.chrome-composer-grip
             div#queued.queued
             div#atts.atts
             div.field
