@@ -70,6 +70,7 @@ html[data-theme="dark"] {
   flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
   position: relative; outline: 0; scrollbar-gutter: stable;
 }
+.trajectory-list:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
 
 /* A kind named in the details pane and the overview, on its own colours. */
 .trajectory-tag {
@@ -600,9 +601,11 @@ html[data-theme="dark"] {
 .trajectory-ruler b:last-of-type { transform: translateX(-100%) }
 
 /* The fold control, as the reference draws it: a thin chevron in a quiet
-   square that only shows itself on hover, instead of a bare text glyph. */
+   square that only shows itself on hover, instead of a bare text glyph. It is
+   a button for the keyboard, so the button's own chrome is taken off. */
 .trajectory-wf-chev { width: 18px; height: 18px; display: grid; place-items: center;
   border-radius: 6px; color: #9aa0a6; flex: none; transition: background 120ms ease }
+button.trajectory-wf-chev { border: 0; padding: 0; margin: 0; background: none; font: inherit; cursor: pointer }
 .trajectory-wf-row:hover .trajectory-wf-chev { background: #f1f2f4; color: #5f6673 }
 .trajectory-wf-chev svg { width: 14px; height: 14px; display: block }
 
@@ -689,6 +692,12 @@ html[data-traj] .trajectory-ruler { background: transparent }
 html[data-traj] .trajectory-details { background: var(--traj-pane); border-left-color: var(--traj-line) }
 html[data-traj] .trajectory-details-over { background: var(--traj-solid) }
 html[data-traj] .trajectory-wf-row:hover { background: var(--traj-hover) }
+/* The selected row: the reader's place, for the eye as aria-selected is for a
+   screen reader. It holds over the hover, on the glass and off it. */
+.trajectory-wf-span[aria-selected="true"],
+.trajectory-wf-span[aria-selected="true"]:hover,
+html[data-traj] .trajectory-wf-span[aria-selected="true"],
+html[data-traj] .trajectory-wf-span[aria-selected="true"]:hover { background: var(--selected, var(--raised)) }
 html[data-traj] .trajectory-wf-guide,
 html[data-traj] .trajectory-ruler-tick,
 html[data-traj] .trajectory-wf-grid { background: var(--traj-rule) }

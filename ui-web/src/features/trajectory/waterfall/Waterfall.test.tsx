@@ -513,6 +513,54 @@ it('sends a later run’s door to that run, not to the first run of the agent it
   expect(store.get().selectedId).toBe('a1')
 })
 
+it('draws the rows as a tree the keyboard can reach, each row at its level and fold state', async () => {
+  await draw([E('a', 0), E('b', 2)])
+  const tree = document.querySelector('[role="tree"]') as HTMLElement
+  expect(tree).not.toBeNull()
+  expect(tree.tabIndex).toBe(0)
+  expect(tree.getAttribute('aria-label')).toBe('gui.trajectory.agents')
+  const agent = document.querySelector('[data-row="agent"]') as HTMLElement
+  const turn = document.querySelector('[data-row="turn"]') as HTMLElement
+  expect([agent.getAttribute('role'), agent.getAttribute('aria-level'), agent.getAttribute('aria-expanded')]).toEqual(['treeitem', '1', 'true'])
+  expect([turn.getAttribute('role'), turn.getAttribute('aria-level'), turn.getAttribute('aria-expanded')]).toEqual(['treeitem', '2', 'false'])
+  act(() => { fireEvent.click(turn) })
+  expect(document.querySelector('[data-row="turn"]')!.getAttribute('aria-expanded')).toBe('true')
+  const span = document.querySelector('[data-entry="b"]') as HTMLElement
+  expect([span.getAttribute('role'), span.getAttribute('aria-level')]).toEqual(['treeitem', '3'])
+  /* Every drawn row is an item of the tree; the grid lines are not. */
+  expect(tree.querySelectorAll('[role="treeitem"]')).toHaveLength(document.querySelectorAll('.trajectory-wf-row').length)
+  expect(tree.querySelector('.trajectory-wf-links')!.getAttribute('aria-hidden')).toBe('true')
+})
+
+it('marks the selected row for the eye and for a screen reader, and moves the mark with the keys', async () => {
+  await draw([E('a', 0), E('b', 2)])
+  act(() => { fireEvent.click(document.querySelector('[data-row="turn"]')!) })
+  const tree = document.querySelector('[role="tree"]') as HTMLElement
+  const row = (id: string): HTMLElement => document.querySelector(`[data-entry="${id}"]`) as HTMLElement
+  expect(tree.hasAttribute('aria-activedescendant')).toBe(false)
+  act(() => { fireEvent.click(row('b')) })
+  expect([row('a').getAttribute('aria-selected'), row('b').getAttribute('aria-selected')]).toEqual(['false', 'true'])
+  expect(tree.getAttribute('aria-activedescendant')).toBe(row('b').id)
+  act(() => { fireEvent.keyDown(tree, { key: 'ArrowUp' }) })
+  expect([row('a').getAttribute('aria-selected'), row('b').getAttribute('aria-selected')]).toEqual(['true', 'false'])
+  expect(tree.getAttribute('aria-activedescendant')).toBe(row('a').id)
+})
+
+it('folds a group from its own button, and Enter on that button is the button’s, not the selected row’s', async () => {
+  await draw([E('a', 0), E('b', 2, { turn_span_id: 'T2' })])
+  const buttons = (): HTMLButtonElement[] => [...document.querySelectorAll<HTMLButtonElement>('[data-row] button.trajectory-wf-chev')]
+  /* One fold button per agent and per turn, each saying whether it is open. */
+  expect(buttons().map((b) => b.getAttribute('aria-expanded'))).toEqual(['true', 'false', 'false'])
+  act(() => { fireEvent.click(buttons()[1]!) })
+  expect(buttons().map((b) => b.getAttribute('aria-expanded'))).toEqual(['true', 'true', 'false'])
+  act(() => { fireEvent.click(document.querySelector('[data-entry="a"]') as HTMLElement) })
+  /* Enter pressed on the second turn's button: the first turn, which holds the
+     selection, must not fold under it. */
+  act(() => { fireEvent.keyDown(buttons()[2]!, { key: 'Enter' }) })
+  expect(buttons()[1]!.getAttribute('aria-expanded')).toBe('true')
+  expect(document.querySelector('[data-entry="a"]')).not.toBeNull()
+})
+
 it('marks a failed span, and the turn that holds it while it is folded', async () => {
   await draw([
     E('ok1', 0),
