@@ -35,29 +35,35 @@ inside, its spans inside those.
 
 ```
 ┌ status line (index progress, truncation, faults) ─────────────────┐
-├ overview: a row of marks per agent ───────────────────────────────┤
-├ ruler: shared axis, idle gaps collapsed and labelled ─────────────┤
+├ header: six figures, each with a second line · Fit 3h 1h 15m · fold ┤
+├ activity: calls per bucket, whole session, idle folded · brush ───┤
+├ window name · BUSY · ruler in clock time, idle gaps folded ───────┤
 ├ agents ────────────────────────────────────────┬ details pane ────┤
-│ ▾ main  · model · 3 turns · tokens            │ selected span's  │
-│     Turn 1  ▓▓░▓▓▓                            │ blocks: overview │
-│       ├ llm.call    ███                        │ input / output  │
-│       ├ spawn A     ⇢                          │ timing / links  │
-│       └ memory.store  ░░   (outside any turn)  │                  │
-│     Turn 2  ⇠ report from A   ▓▓▓              │                  │
-│ ▾ A · ACP · 3 turns                            │                  │
-│     Turn 1  ⇡ from main  ██████                │                  │
+│ ▸ main · model      1h 55m  ━━  ━━━━   ━━━━   │ selected span's  │
+│ ▸ 2 agents finished earlier · last at 10:51    │ blocks: overview │
+│ ▾ Fix the parser        49m ◂ ───━━━━───━━  ▸  │ input / output  │
+│   coder · from Turn 3 · 4 turns                │ timing / links  │
+│     Turn 1  preview  16m      ▓▓░▓▓▓           │                  │
+│       ■ LLM output  claude   1m   █            │                  │
+│       ■ bash  npm test       5s    ▌           │                  │
+│ ▸ 1 more agent later · from 12:36              │                  │
 └────────────────────────────────────────────────┴─────────────────┘
 ```
 
 Three levels, one vertical axis of rows and one horizontal axis of time.
 
-- **Agent** — a group with a header row: name, model or transport, turn count,
-  tokens, and a lifetime bar showing every moment it was active.
-- **Turn** — a row inside the group: the turn's own segmented bar, its input
-  preview, its duration and tokens. Collapsed by default; expanding reveals
-  its spans.
-- **Span** — a row inside the turn, indented by `parent_span_id` depth. Its
-  own bar, its own duration.
+- **Agent** — a row of its own: its mark, its name (a worker by its task;
+  open, a second line naming the agent that ran it, the turn that sent it and
+  how many turns it took), its busy time, and a capsule per run of work on a
+  faint line from its first to its last -- the main agent in gold, every
+  other in one neutral. Folded by default when the session has several
+  agents, so it reads as one row per agent.
+- **Turn** — a row inside the agent: the turn's own segmented bar, its input
+  preview, its length in the busy column. Collapsed by default; expanding
+  reveals its spans; hovering it says what its time went on.
+- **Span** — a row inside the turn, keyed by a square in its kind's colour and
+  named by its tool, or by the part of a model call it is, beside what the
+  call worked on. Its own bar, its own duration.
 
 Work an agent did outside any turn (a `memory.store` that outlived its turn,
 a `plugin.load` after the report) is a row directly under the agent, not
@@ -98,14 +104,30 @@ agents' rows; everything else is position.
    overlap the page exists to show.
 3. Between occupied intervals, any gap longer than 60s becomes a fixed-width
    break labelled with its real length (`12.4m idle`).
-4. After the last occupied interval the axis adds 15% of empty scale
-   (`TRAIL_PAD`), so the longest bar ends short of the track's edge and the
-   duration printed just past it has room.
+4. After the last occupied interval the axis adds 2% of empty scale
+   (`TRAIL_PAD`), which keeps the session's end off the track's edge, where a
+   row's arrow sits; durations stand in a column of their own.
 5. `project(t)` and `unproject(x)` interpolate across the resulting piecewise
-   map, so every bar, the ruler, the overview and hit testing share it.
+   map, so every bar, the ruler and hit testing share it. The activity strip
+   folds the same idle stretches on an axis of its own, each fold wide enough
+   to say how long it was; the two meet in real time.
 
 Zoom (ctrl or cmd with the wheel, about the pointer) and pan (shift with the
 wheel) operate on the projected domain; a plain wheel scrolls the rows.
+
+## The window
+
+The rows show a window of the session, kept in real time. The header's
+presets set one three hours, one hour or fifteen minutes long about the middle
+of the one on screen (a middle in an idle fold moves to the work beside it),
+and Fit gives the whole session back. On the activity strip the window is a
+brush: dragging across the strip takes a new one, dragging the brush moves it,
+and dragging an edge moves that edge alone. The ruler marks round clock times,
+the next unit up major, beside the window's name ("Wed, Oct 28 10:12 - 13:12 .
+3h window"). Once the window is narrowed, workers whose work lies wholly before
+it or wholly after it fold into one row for each side; the main agent always
+keeps its own. An open worker's dispatch is drawn: a line from the instant it
+was sent, on its dispatcher's row, to where its work begins.
 
 ## Per-agent turn ordinals
 
@@ -147,8 +169,8 @@ without moving the current scope. `visible` keeps its meaning for the current
 scope and the details pane's first-block preference; it stops being the only
 door.
 
-Agent naming reuses `scopes.ts`'s existing title logic so a group header, an
-overview lane and the details pane name a worker the same way.
+Agent naming reuses `scopes.ts`'s existing title logic so an agent row's hover,
+a fold row and the details pane name a worker the same way.
 
 ## An external agent's own steps
 
@@ -260,3 +282,8 @@ behaviour are the starting point.
 5. Work outside a turn appears under its agent, not inside the nearest turn.
 6. The details pane opens the same blocks for the same entry as today.
 7. A 500-turn synthetic session scrolls at interactive frame rates.
+8. Each header figure carries a second line, and the error count leads to the
+   earliest failure.
+9. With several agents each starts as one row of capsules; with the window
+   narrowed, a worker wholly outside it folds into the earlier or the later
+   row, and selecting one of its rows from elsewhere opens what hides it.
