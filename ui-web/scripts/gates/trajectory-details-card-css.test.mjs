@@ -79,6 +79,14 @@ describe('the details pane', () => {
     }
   })
 
+  /* A fixed ceiling on the key column cut a key the reader had just widened
+     the card to read. A share of the card grows with it, the same share in
+     every section so their values still line up, with a cap so a short key
+     in a very wide card is not left far from its value. */
+  it('widens the key column of a key-value list with the card, the same in every section', () => {
+    expect(effective(['.trajectory-kv'], 'grid-template-columns')).toMatch(/^minmax\(\d+px, min\(\d+%, \d+px\)\) minmax\(0, 1fr\)$/)
+  })
+
   /* The narrow pane carries both classes, and is the same card over the whole area. */
   for (const pane of [['.trajectory-details'], ['.trajectory-details', '.trajectory-details-over']]) {
     it(`is a white card with rounded corners (${pane.join(' ')})`, () => {
