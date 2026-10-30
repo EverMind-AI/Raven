@@ -147,3 +147,23 @@ def test_a_corrupt_message_file_is_reported_and_not_removed(tmp_path: Path) -> N
     assert corrupt.exists()
     assert not artifact_v2.message_path(artifacts, refs[0]["$msg"]).exists()
     assert message_pack.read_message(artifacts, refs[0]["$msg"]) is not None
+
+
+def test_a_budget_that_splits_a_character_resolves_to_the_placeholder(tmp_path: Path) -> None:
+    messages = [
+        {"role": "user", "content": "a" * 200},
+        {"role": "user", "content": "\u00e9" * 100},
+    ]
+    refs = TraceStore(tmp_path).address_items(messages)
+    artifacts = tmp_path / "logs" / "audit-artifacts"
+    first = len(artifact_v2.message_text(messages[0]).encode("utf-8"))
+    second = artifact_v2.message_text(messages[1]).encode("utf-8")
+    cut = next(i for i in range(1, len(second)) if 0x80 <= second[i] <= 0xBF)
+    message_pack.pack_messages(artifacts)
+
+    shell = {"artifactFormat": artifact_v2.ARTIFACT_FORMAT, "messages": refs}
+    resolved = artifact_v2.resolve_payload(shell, artifacts, max_total_bytes=first + cut)
+
+    assert resolved["messages"][0] == messages[0]
+    assert "missing" in resolved["messages"][1]["content"]
+

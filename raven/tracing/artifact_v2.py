@@ -121,10 +121,20 @@ def _read_stored_text(path: Path, limit: int = MAX_PLAINTEXT_BYTES) -> str:
 
 
 def _packed_text(artifacts_dir: Path | str, sha1: str, limit: int = MAX_PLAINTEXT_BYTES) -> str | None:
+    """A packed message's text, or None when it is missing or cut mid-character.
+
+    ``limit`` can end the slice inside a multi-byte character; that is not a
+    message this reader can hand back, so it degrades like a missing one.
+    """
     from . import message_pack
 
     packed = message_pack.read_message(artifacts_dir, sha1, limit)
-    return None if packed is None else packed.decode("utf-8")
+    if packed is None:
+        return None
+    try:
+        return packed.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
 
 
 def resolve_payload(
