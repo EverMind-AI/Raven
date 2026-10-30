@@ -12153,6 +12153,10 @@
       "en": "No confirmable historical schema was recorded",
       "zh": "未记录可确认的历史 Schema"
     },
+    "gui.trajectory.reason.reasoning_withheld": {
+      "en": "The provider counted reasoning tokens but returned no reasoning text; the count is on the Usage tab",
+      "zh": "服务商计了推理 token，但没有返回推理内容，数量见“用量”标签"
+    },
     "gui.trajectory.reason.preview_dropped": {
       "en": "Preview omitted to keep the overview small",
       "zh": "为控制概述大小已省略预览"
