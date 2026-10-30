@@ -12633,6 +12633,14 @@
       "en": "slowest",
       "zh": "最慢"
     },
+    "gui.trajectory.next": {
+      "en": "next at {time} ›",
+      "zh": "下次 {time} ›"
+    },
+    "gui.trajectory.last": {
+      "en": "‹ last at {time}",
+      "zh": "‹ 上次 {time}"
+    },
     "gui.trajectory.busy": {
       "en": "BUSY",
       "zh": "忙碌"

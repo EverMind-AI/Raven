@@ -190,7 +190,11 @@ Above the rows sit the overview, one row of activity marks per agent, and the ru
 marked on round clock times (`ticks.ts`) beside the name of the window it shows; what
 crosses between agents is marked on rows rather than drawn between them -- a
 dispatching row's door arrow, and the worker's name on the host turn its report
-started. Agent groups start open and turns folded; a plain wheel scrolls, ctrl
+started. Agents start folded when there are several, one row each: a capsule
+per run of work on a faint line from the first to the last, the main agent in
+gold, a diamond where a failure happened, an arrow at an edge its work runs
+past, and a chip naming when it works next once none of it is in the window.
+A lone agent starts open, and turns start folded; a plain wheel scrolls, ctrl
 or cmd with the wheel zooms about the pointer (read against the ruler, which
 spans the axis exactly), and shift with the wheel pans. The header's presets
 set a window of three hours, one hour or fifteen minutes about the middle of

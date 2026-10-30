@@ -80,6 +80,14 @@ async function draw(entries: TrajectoryEntry[]): Promise<void> {
 
 const count = (selector: string): number => document.querySelectorAll(selector).length
 
+/** Opens every agent the page drew folded: with several agents each starts
+ *  as one row, and a test about a worker's turns opens it as a reader would. */
+const openAgents = (): void => {
+  for (const row of [...document.querySelectorAll<HTMLElement>('[data-row="agent"][aria-expanded="false"]')]) {
+    act(() => { fireEvent.click(row) })
+  }
+}
+
 /** The window the axis shows, as the head's label names it. */
 const shownWindow = (): { from: number; to: number } => {
   const label = document.querySelector<HTMLElement>('.trajectory-wf-window')!
@@ -155,11 +163,12 @@ describe('displayRows', () => {
 })
 
 describe('the page', () => {
-  it('draws one agent row per agent and one turn row per turn', async () => {
+  it('draws one agent row per agent, and a turn row per turn once its agent is open', async () => {
     await draw([
       E('m1', 0),
       E('s1', 1, { subagent_scope: 't:sub', turn_span_id: 'S1' }),
     ])
+    openAgents()
     expect(count('[data-row="agent"]')).toBe(2)
     expect(count('[data-row="turn"]')).toBe(2)
   })
@@ -188,6 +197,7 @@ describe('the page', () => {
 
   it('selects a span across scopes and opens the details pane', async () => {
     await draw([E('m1', 0), E('s1', 1, { subagent_scope: 't:sub', turn_span_id: 'S1' })])
+    openAgents()
     fireEvent.click(document.querySelectorAll('[data-row="turn"]')[1]!)
     const span = [...document.querySelectorAll<HTMLElement>('[data-row="span"]')].find((el) => el.dataset.entry === 's1')!
     fireEvent.click(span)
@@ -209,6 +219,7 @@ describe('the page', () => {
       E('m1', 5, { turn_span_id: 'T2', turn_start: true, dispatched_by_subagent_scope: 't:sub' }),
       E('s1', 6, { subagent_scope: 't:sub', turn_span_id: 'S1' }),
     ])
+    openAgents()
     const badge = document.querySelector('[data-from]')!
     expect(badge.getAttribute('data-from')).toBe('t:sub')
     expect(badge.textContent).toContain('coder')
@@ -318,6 +329,7 @@ it('draws two runs of one instance that share their dispatching turn as two sepa
       E('d2', 2, { kind: 'tool.output', opens_subagent_scope: 't:b', meta: { instance: 'pr-fix' } }),
       E('b1', 3, { subagent_scope: 't:b', turn_span_id: 'T1' }),
     ])
+    openAgents()
     const turns = [...document.querySelectorAll<HTMLElement>('[data-row="turn"]')]
     expect(turns).toHaveLength(3)
     /* Opening the worker's first turn opens that run's rows and no other's. */
@@ -592,6 +604,7 @@ it('sends the door’s arrow to the worker’s own first row', async () => {
     E('door', 0, { kind: 'tool.output', opens_subagent_scope: 't:sub', meta: { agent: 'coder' } }),
     E('s1', 1, { subagent_scope: 't:sub', turn_span_id: 'S1' }),
   ])
+  openAgents()
   fireEvent.click(document.querySelector('[data-row="turn"]')!)
   const arrow = document.querySelector('[data-entry="door"] .trajectory-scope-opens') as HTMLElement
   act(() => { fireEvent.click(arrow) })
@@ -605,6 +618,7 @@ it('sends a later run’s door to that run, not to the first run of the agent it
     E('d2', 10, { kind: 'tool.output', opens_subagent_scope: 't:b', meta: { agent: 'claude-code' } }),
     E('b1', 11, { subagent_scope: 't:b', turn_span_id: 'TB' }),
   ])
+  openAgents()
   /* The host and one worker: both runs fold into the agent their name gives. */
   expect(document.querySelectorAll('[data-row="agent"]')).toHaveLength(2)
   fireEvent.click(document.querySelector('[data-row="turn"]')!)
@@ -751,6 +765,16 @@ it('brings a selected row that belongs to no turn into view, opening its agent',
   expect(box.scrollTop).toBe(41 * ROW_HEIGHT)
 })
 
+it('brings a row selected from elsewhere into view through its folded agent and its closed turn', async () => {
+  await draw([
+    E('door', 0, { kind: 'tool.output', opens_subagent_scope: 't:sub', meta: { agent: 'coder' } }),
+    E('s1', 1, { subagent_scope: 't:sub', turn_span_id: 'S1' }),
+  ])
+  expect(document.querySelector('[data-entry="s1"]')).toBeNull()
+  act(() => { store.selectAcross('s1', { source: 'link' }) })
+  expect(document.querySelector('[data-entry="s1"]')).not.toBeNull()
+})
+
 it('leaves a turn folded when the reader folds it, even with the selection inside', async () => {
   await draw([E('m1', 0), E('m2', 1)])
   fireEvent.click(document.querySelector('[data-row="turn"]')!)
@@ -873,6 +897,7 @@ describe('the window presets and the fold-all button', () => {
       E('m1', 0), E('door', 1, { opens_subagent_scope: 'x' }),
       E('x1', 2, { subagent_scope: 'x', turn_span_id: 'X1' }),
     ])
+    openAgents()
     act(() => { fireEvent.click(document.querySelector('[data-row="turn"]')!) })
     expect(count('[data-row="span"]')).toBeGreaterThan(0)
     act(() => { fireEvent.click(document.querySelector('button.trajectory-wf-foldall')!) })
@@ -907,5 +932,76 @@ describe('the busy column', () => {
   it('heads the column above the rows', async () => {
     await draw([E('a', 0)])
     expect(document.querySelector('.trajectory-wf-head .trajectory-wf-busyhead')?.textContent).toBe('gui.trajectory.busy')
+  })
+})
+
+describe('a folded agent', () => {
+  const local = (h: number, m = 0): string => new Date(2026, 9, 28, h, m).toISOString()
+  const step = (id: string, from: string, to: string, over: Partial<TrajectoryEntry> = {}): TrajectoryEntry =>
+    E(id, 0, { operation_start: from, operation_end: to, ...over })
+  const agentRow = (index: number): HTMLElement => document.querySelectorAll<HTMLElement>('[data-row="agent"]')[index]!
+
+  it('starts folded when the session has several agents', async () => {
+    await draw([step('m', local(10), local(10, 5)), step('door', local(10, 1), local(10, 2), { opens_subagent_scope: 'x' }),
+      step('x1', local(10, 2), local(10, 4), { subagent_scope: 'x', turn_span_id: 'X1' })])
+    expect([agentRow(0), agentRow(1)].map((row) => row.getAttribute('aria-expanded'))).toEqual(['false', 'false'])
+    expect(count('[data-row="turn"]')).toBe(0)
+  })
+
+  it('starts open when it is the session’s only agent', async () => {
+    await draw([step('m', local(10), local(10, 5))])
+    expect(agentRow(0).getAttribute('aria-expanded')).toBe('true')
+    expect(count('[data-row="turn"]')).toBe(1)
+  })
+
+  it('draws a capsule per run of work, on a faint line from its first to its last', async () => {
+    await draw([step('a', local(10), local(10, 20)), step('b', local(11), local(11, 30), { turn_span_id: 'T2' })])
+    const row = agentRow(0)
+    expect(row.querySelectorAll('.trajectory-wf-cap')).toHaveLength(2)
+    expect(row.querySelectorAll('.trajectory-wf-life')).toHaveLength(1)
+    expect(row.querySelector('.trajectory-wf-agentbar')).toBeNull()
+  })
+
+  it('wears the main agent’s colour on the main row only', async () => {
+    await draw([step('m', local(10), local(10, 5)), step('door', local(10, 1), local(10, 2), { opens_subagent_scope: 'x' }),
+      step('x1', local(10, 2), local(10, 4), { subagent_scope: 'x', turn_span_id: 'X1' })])
+    expect([agentRow(0), agentRow(1)].map((row) => row.hasAttribute('data-main'))).toEqual([true, false])
+  })
+
+  it('marks where a failure happened on its agent’s row', async () => {
+    await draw([step('a', local(10), local(10, 20)),
+      step('bad', local(10, 5), local(10, 6), { failure_entry: true, operation_status: 'error' })])
+    expect(agentRow(0).querySelectorAll('.trajectory-wf-diamond')).toHaveLength(1)
+  })
+
+  it('names when it last worked once all of its work lies before the window', async () => {
+    await draw([
+      step('m', local(9), local(17)),
+      step('door', local(9), local(9), { opens_subagent_scope: 'x' }),
+      step('x1', local(9), local(9, 10), { subagent_scope: 'x', turn_span_id: 'X1' }),
+    ])
+    const preset = [...document.querySelectorAll<HTMLButtonElement>('.trajectory-wf-zoom button')].find((b) => b.textContent === 'gui.trajectory.zoom.1h')!
+    act(() => { fireEvent.click(preset) })
+    const chip = agentRow(1).querySelector('.trajectory-wf-next[data-side="start"]')
+    expect(chip?.textContent).toBe('gui.trajectory.last {"time":"09:10"}')
+  })
+
+  it('points past an end of the window at work it cannot show, and names when it works next', async () => {
+    await draw([
+      step('a', local(9), local(9, 30)),
+      step('door', local(9, 5), local(9, 6), { opens_subagent_scope: 'x' }),
+      step('c', local(16), local(16, 30), { turn_span_id: 'T3' }),
+      step('x1', local(11), local(14), { subagent_scope: 'x', turn_span_id: 'X1' }),
+    ])
+    /* The idle stretches either side of the worker fold away, so an hour about
+       the axis's middle lands inside the worker's three: 12:02 to 13:02, with
+       nothing of the main agent in it and its work on either side. */
+    const preset = [...document.querySelectorAll<HTMLButtonElement>('.trajectory-wf-zoom button')].find((b) => b.textContent === 'gui.trajectory.zoom.1h')!
+    act(() => { fireEvent.click(preset) })
+    const row = agentRow(0)
+    expect(row.querySelector('.trajectory-wf-edge[data-side="start"]')).not.toBeNull()
+    expect(row.querySelector('.trajectory-wf-edge[data-side="end"]')).not.toBeNull()
+    expect(row.querySelectorAll('.trajectory-wf-cap')).toHaveLength(0)
+    expect(row.querySelector('.trajectory-wf-next')?.textContent).toBe('gui.trajectory.next {"time":"16:00"}')
   })
 })

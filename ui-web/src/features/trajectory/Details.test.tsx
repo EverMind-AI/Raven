@@ -93,12 +93,18 @@ async function draw(): Promise<void> {
   })
 }
 
-/* Turns are folded until asked; a test that wants a row opens them all first. */
+/* Agents start folded when there are several, and turns until asked; a test
+   that wants a row opens them all first -- the agents in an act of their own,
+   so their turns are drawn by the time the second one looks for them. */
+const openAgents = (): void => {
+  for (const agent of document.querySelectorAll<HTMLElement>('[data-row="agent"][aria-expanded="false"]')) fireEvent.click(agent)
+}
 const openTurns = (): void => {
   for (const turn of document.querySelectorAll<HTMLElement>('[data-row="turn"]:not([data-open])')) fireEvent.click(turn)
 }
 
 const pick = async (id: string): Promise<void> => {
+  act(openAgents)
   act(openTurns)
   await flush()
   act(() => { fireEvent.click(q(`[data-entry="${id}"]`) as HTMLElement) })
