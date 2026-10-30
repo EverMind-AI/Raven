@@ -37,8 +37,8 @@
   --trajectory-wf-glyph: #b48ce0;
   --trajectory-wf-from-fg: #3f6b2c;        --trajectory-wf-from-bg: #f1f7ee;    --trajectory-wf-from-line: #d9e7d2;
   --trajectory-wf-slow-fg: #c2713a;        --trajectory-wf-slow-bg: #fdf0e3;
-  --trajectory-wf-model-bg: #e9e8fb;       --trajectory-wf-model-line: #c5bdec;
-  --trajectory-wf-tool-bg: #e2eef9;        --trajectory-wf-tool-line: #b3d3ee;
+  --trajectory-wf-model-bg: #6a5ae0;       --trajectory-wf-model-line: #6a5ae0;
+  --trajectory-wf-tool-bg: #1e9e8c;        --trajectory-wf-tool-line: #1e9e8c;
   --trajectory-wf-user-bg: #eef0f2;        --trajectory-wf-user-line: #cdd4db;
   --trajectory-wf-sub-bg: #e7f1e7;         --trajectory-wf-sub-line: #bcdabc;
   --trajectory-wf-fail-bg: #fae3e1;        --trajectory-wf-fail-line: #e9b6ae;
@@ -68,8 +68,8 @@ html[data-theme="dark"] {
   --trajectory-wf-glyph: #c9aef2;
   --trajectory-wf-from-fg: #9fd48a;        --trajectory-wf-from-bg: #22301d;    --trajectory-wf-from-line: #34482b;
   --trajectory-wf-slow-fg: #e8a06c;        --trajectory-wf-slow-bg: #3d2a1a;
-  --trajectory-wf-model-bg: #2f2b52;       --trajectory-wf-model-line: #514a8c;
-  --trajectory-wf-tool-bg: #1e3346;        --trajectory-wf-tool-line: #2f5677;
+  --trajectory-wf-model-bg: #776ae0;       --trajectory-wf-model-line: #776ae0;
+  --trajectory-wf-tool-bg: #25a28f;        --trajectory-wf-tool-line: #25a28f;
   --trajectory-wf-user-bg: #2b2f34;        --trajectory-wf-user-line: #4a5159;
   --trajectory-wf-sub-bg: #22331f;         --trajectory-wf-sub-line: #3b5933;
   --trajectory-wf-fail-bg: #45221f;        --trajectory-wf-fail-line: #7a3a33;
@@ -100,8 +100,8 @@ html[data-theme="dark"] {
     --trajectory-wf-glyph: #c9aef2;
     --trajectory-wf-from-fg: #9fd48a;        --trajectory-wf-from-bg: #22301d;    --trajectory-wf-from-line: #34482b;
     --trajectory-wf-slow-fg: #e8a06c;        --trajectory-wf-slow-bg: #3d2a1a;
-    --trajectory-wf-model-bg: #2f2b52;       --trajectory-wf-model-line: #514a8c;
-    --trajectory-wf-tool-bg: #1e3346;        --trajectory-wf-tool-line: #2f5677;
+    --trajectory-wf-model-bg: #776ae0;       --trajectory-wf-model-line: #776ae0;
+    --trajectory-wf-tool-bg: #25a28f;        --trajectory-wf-tool-line: #25a28f;
     --trajectory-wf-user-bg: #2b2f34;        --trajectory-wf-user-line: #4a5159;
     --trajectory-wf-sub-bg: #22331f;         --trajectory-wf-sub-line: #3b5933;
     --trajectory-wf-fail-bg: #45221f;        --trajectory-wf-fail-line: #7a3a33;
@@ -469,8 +469,6 @@ html[data-theme="dark"] {
 .trajectory-wf-tile[data-tone='3'] { background: var(--trajectory-wf-tone3-bg); border-color: var(--trajectory-wf-tone3-line) }
 .trajectory-wf-tile img { width: 14px; height: 14px; display: block }
 .trajectory-wf-glyph { font-size: 10px; color: var(--trajectory-wf-glyph) }
-.trajectory-wf-ico { flex: none; width: 18px; height: 18px; border: 1px solid var(--line); border-radius: 5px;
-  display: grid; place-items: center; background: var(--paper); color: var(--faint); font-size: 10px }
 .trajectory-wf-from { font: 9.5px/1 var(--mono); color: var(--trajectory-wf-from-fg); background: var(--trajectory-wf-from-bg); border: 1px solid var(--trajectory-wf-from-line);
   border-radius: 4px; padding: 2px 5px; flex: none; max-width: 190px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap }
@@ -526,8 +524,6 @@ html[data-theme="dark"] {
 .trajectory-wf-tile { width: 26px; height: 26px; border-radius: 50%; border-color: var(--line); background: var(--trajectory-wf-tile) }
 .trajectory-wf-tile img { width: 17px; height: 17px }
 .trajectory-wf-glyph { font-size: 12px }
-.trajectory-wf-ico { width: 26px; height: 26px; border-radius: 8px; border-color: var(--line);
-  color: var(--faint); font-size: 12px }
 .trajectory-wf-from { font: 500 10.5px/1 var(--sans); padding: 3px 7px; border-radius: 6px; max-width: 200px }
 .trajectory-wf-slow { font: 600 10.5px/1 var(--sans); letter-spacing: .08em; color: var(--trajectory-wf-slow-fg);
   background: var(--trajectory-wf-slow-bg); border-radius: 6px; padding: 4px 7px }
@@ -553,7 +549,7 @@ html[data-theme="dark"] {
 
 /* A fixed word never gives way to a preview: the preview truncates first. */
 .trajectory-wf-name { flex: none }
-.trajectory-wf-chev, .trajectory-wf-ico, .trajectory-wf-tile { flex: none }
+.trajectory-wf-chev, .trajectory-wf-tile { flex: none }
 .trajectory-wf-sub { flex: 0 1 auto; min-width: 0 }
 
 /* A span's label is its preview, so it is the part that truncates; the turn's
@@ -567,16 +563,14 @@ html[data-theme="dark"] {
 .trajectory-wf { --wf-row: 40px }
 .trajectory-wf-row, .trajectory-wf-track { height: 40px }
 .trajectory-wf-track i, .trajectory-wf-turn .trajectory-wf-track i { height: 16px; border-radius: 5px }
-.trajectory-wf-tile, .trajectory-wf-ico { width: 24px; height: 24px }
-.trajectory-wf-ico { border-radius: 7px }
+.trajectory-wf-tile { width: 24px; height: 24px }
 .trajectory-wf-tile img { width: 16px; height: 16px }
 .trajectory-wf-span .trajectory-wf-label::before { top: -10px; bottom: -10px }
 .trajectory-ov-lane { height: 20px }
 
 /* The icon fills its box: a 15px drawing in a 24px cell, the reference's
    proportion, rather than a text glyph's own small em box. */
-.trajectory-wf-ico { font-size: 0; justify-items: center }
-.trajectory-wf-ico svg { width: 15px; height: 15px; display: block }
+
 .trajectory-wf-glyph { display: grid; place-items: center; font-size: 0 }
 .trajectory-wf-tile img { width: 18px; height: 18px }
 
@@ -585,8 +579,8 @@ html[data-theme="dark"] {
 .trajectory-wf { --wf-row: 34px }
 .trajectory-wf-row, .trajectory-wf-track { height: 34px }
 .trajectory-wf-track i, .trajectory-wf-turn .trajectory-wf-track i { height: 14px; border-radius: 4px }
-.trajectory-wf-tile, .trajectory-wf-ico { width: 22px; height: 22px }
-.trajectory-wf-ico svg, .trajectory-wf-glyph svg { width: 14px; height: 14px }
+.trajectory-wf-tile { width: 22px; height: 22px }
+.trajectory-wf-glyph svg { width: 14px; height: 14px }
 .trajectory-wf-tile img { width: 16px; height: 16px }
 .trajectory-wf-span .trajectory-wf-label::before { top: -8px; bottom: -8px }
 .trajectory-ov-lane { height: 18px }
@@ -596,9 +590,8 @@ html[data-theme="dark"] {
 .trajectory-wf { --wf-row: 30px }
 .trajectory-wf-row, .trajectory-wf-track { height: 30px }
 .trajectory-wf-track i, .trajectory-wf-turn .trajectory-wf-track i { height: 12px; border-radius: 4px }
-.trajectory-wf-tile, .trajectory-wf-ico { width: 20px; height: 20px }
-.trajectory-wf-ico { border-radius: 6px }
-.trajectory-wf-ico svg, .trajectory-wf-glyph svg { width: 13px; height: 13px }
+.trajectory-wf-tile { width: 20px; height: 20px }
+.trajectory-wf-glyph svg { width: 13px; height: 13px }
 .trajectory-wf-tile img { width: 15px; height: 15px }
 .trajectory-wf-span .trajectory-wf-label::before { content: none }
 .trajectory-ov-lane { height: 16px }
@@ -616,9 +609,8 @@ html[data-theme="dark"] {
 
 /* One size up: a 22px plate with a 15px drawing (68%), which still clears the
    30px row. */
-.trajectory-wf-tile, .trajectory-wf-ico { width: 22px; height: 22px }
-.trajectory-wf-ico { border-radius: 7px }
-.trajectory-wf-ico svg, .trajectory-wf-glyph svg { width: 15px; height: 15px }
+.trajectory-wf-tile { width: 22px; height: 22px }
+.trajectory-wf-glyph svg { width: 15px; height: 15px }
 .trajectory-wf-tile img { width: 17px; height: 17px }
 
 /* The overview is a strip: a handful of lanes, never taller than a few rows. */
@@ -874,3 +866,12 @@ html[data-traj] .trajectory-tabs-wrap { border-bottom-color: var(--traj-line) }
 .trajectory-wf-agentsub { font: 400 11px/1.15 var(--sans); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
 .trajectory-wf-tag { flex: none; padding: 2px 6px; border-radius: 5px; background: var(--trajectory-wf-soft);
   font: 500 10.5px/1.2 var(--sans); color: var(--muted); white-space: nowrap }
+
+/* A call row is keyed by a small square in its kind's colour -- the same ink
+   as its bar and as the turn's stretch of that kind -- in place of an icon. */
+.trajectory-wf-key { flex: none; width: 8px; height: 8px; border-radius: 2px; background: var(--trajectory-wf-quiet) }
+.trajectory-wf-key.trajectory-wf-kind-model { background: var(--trajectory-wf-model-bg) }
+.trajectory-wf-key.trajectory-wf-kind-tool { background: var(--trajectory-wf-tool-bg) }
+.trajectory-wf-key.trajectory-wf-kind-failure,
+.trajectory-wf-spanbar.trajectory-wf-kind-failure, .trajectory-wf-seg-failure { background: var(--trajectory-wf-err); border-color: var(--trajectory-wf-err) }
+.trajectory-wf-spanbar.trajectory-wf-kind-other { background: var(--trajectory-wf-wait-bg); border: 1px solid var(--trajectory-wf-wait-line) }

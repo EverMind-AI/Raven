@@ -212,7 +212,10 @@ were made on, so a live session growing past its end does not reset them.
 The rows are a tree for assistive technology: agents, turns and spans at three
 levels, each fold a button with `aria-expanded`, and the selected row
 `aria-selected` and the tree's active descendant. A failed operation is marked
-on its own row and on the turn that holds it.
+on its own row and on the turn that holds it. A call row is keyed by a square
+in its kind's colour -- the model's violet, a tool's teal, anything else
+neutral, as the turn's bar paints it -- and named by its tool, or by the part
+of a model call it is, beside what the call worked on.
 Picking a row opens the details pane beside the waterfall
 (`features/trajectory/detailStore.ts`): a descriptor read through
 `trajectory.detail` and block bodies read through `trajectory.block`, each filed
