@@ -7158,9 +7158,11 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .tkout { margin-top: 9px; font-size: 12px; line-height: 1.7; color: var(--muted);
   background: var(--surface); border-radius: 8px; padding: 9px 10px; }
 
-/* The trajectory view owns the column: the composer dock and the desk are the
-   conversation's furniture, not the trace's, so while a trace is up the page
-   shows the trace and the rail alone. ChatTop sets the attribute with the
-   view; nothing else reads it. */
-html[data-traj] .chat > .dock { display: none }
+/* The trajectory view owns the column: the composer card, the task strip and
+   the desk are the conversation's furniture, not the trace's, so they step
+   aside while a trace is up. The sheet rack stays: an approval, confirm or
+   clarify sheet the open conversation raised is still waiting on the reader,
+   and its keys keep listening whether or not it can be seen. ChatTop sets the
+   attribute with the view; nothing else reads it. */
+html[data-traj] .chat > .dock > :not(#sheetRack) { display: none }
 html[data-traj] #deskHost { display: none }

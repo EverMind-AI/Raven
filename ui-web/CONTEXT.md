@@ -162,9 +162,12 @@ _Avoid_: "minimap" -- it marks turns, not a scaled copy of the transcript.
 The chat column's second view: the conversation's trace entries as an agent
 waterfall, in place of the transcript, drawn by `features/trajectory/` into
 `#trajHost` -- the box `src/chrome/ChatTop.tsx` renders beside `#scroll` and
-hands over empty. While it is up the page shows the trace and the rail alone:
-`ChatTop.tsx` sets `data-traj` on the document, and the composer dock and the
-desk are hidden under it.
+hands over empty. While it is up the composer card, the task strip and the
+desk step aside: `ChatTop.tsx` sets `data-traj` on the document and the
+stylesheet hides them under it. The sheet rack stays, so an approval, confirm
+or clarify sheet the open conversation raises is still in front of the reader,
+who would otherwise answer one they cannot see with the Escape that closes the
+details pane.
 Switching to it parks the scroller (`#scroll[data-parked]`: out of the flow,
 hidden, its size and scroll position kept) rather than unmounting it, so the
 transcript goes on streaming underneath and comes back exactly where it was.
