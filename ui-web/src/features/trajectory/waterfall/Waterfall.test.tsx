@@ -12,6 +12,7 @@ import { _resetFreshForTests, unpitch } from '../../../state/session/conversatio
 import { resetSources, setSources } from '../../../state/sources'
 import * as details from '../detailStore'
 import * as store from '../store'
+import { spanOf } from './clock'
 import { buildWaterfall } from './model'
 import { MAX_LANES } from './OverviewLanes'
 import { GUIDE_X, ROW_HEIGHT, TURN_GUIDE_X, Waterfall, displayRows } from './Waterfall'
@@ -715,6 +716,13 @@ it('re-renders a scroll without walking every row of the session', async () => {
   const n = 2000
   await draw(Array.from({ length: n }, (_, i) => E(`e${i}`, i, { turn_span_id: `T${Math.floor(i / 10)}` })))
   const box = document.querySelector('.trajectory-list') as HTMLElement
+  /* Two turns open where the scroll lands, so the rows it draws read their
+     own clocks -- the calls the control below counts. The header's figures
+     have swept every turn's bar already, so a folded turn reads none. */
+  for (const id of ['T3', 'T4']) {
+    const turn = [...document.querySelectorAll<HTMLElement>('[data-row="turn"]')].find((el) => el.textContent?.includes(`"n":${Number(id.slice(1)) + 1}}`))
+    act(() => { fireEvent.click(turn!) })
+  }
   const parse = vi.spyOn(Date, 'parse')
   try {
     act(() => { box.scrollTop = 300; fireEvent.scroll(box) })
@@ -748,4 +756,44 @@ it('leaves a turn folded when the reader folds it, even with the selection insid
   expect(document.querySelectorAll('[data-row="span"]')).toHaveLength(2)
   act(() => { fireEvent.click(document.querySelector('[data-row="turn"]')!) })
   expect(document.querySelectorAll('[data-row="span"]')).toHaveLength(0)
+})
+
+it('prints a second line under the header’s figures', async () => {
+  await draw([
+    E('ask', 0, { span_id: 'model-1' }),
+    E('run', 1, { kind: 'tool.output', span_name: 'tool.call', slot: 'tool.output', span_id: 'tool-1', meta: { tool: 'bash' } }),
+    E('door', 2, { opens_subagent_scope: 'x' }),
+    E('x1', 3, { subagent_scope: 'x', span_name: 'subagent.external', kind: 'subagent.external', meta: { agent: 'Claude Code' } }),
+  ])
+  const sub = (key: string): string | null | undefined =>
+    [...document.querySelectorAll('.trajectory-wf-stat')]
+      .find((cell) => cell.querySelector('.trajectory-wf-statk')?.textContent === key)
+      ?.querySelector('.trajectory-wf-statsub')?.textContent
+  const start = Date.parse('2026-10-28T10:00:00.000Z')
+  const span = spanOf(start, start + 4000)
+  expect(sub('gui.trajectory.stat.duration')).toBe(`gui.trajectory.stat.span ${JSON.stringify(span)}`)
+  expect(sub('gui.trajectory.stat.agents')).toBe('gui.trajectory.stat.main {"n":1} · gui.trajectory.stat.external {"n":1}')
+  /* The main turn runs 3 s and the worker's 1 s: the middle pair, averaged. */
+  expect(sub('gui.trajectory.stat.turns')).toBe('gui.trajectory.stat.median {"duration":"2s"}')
+  expect(sub('gui.trajectory.stat.llm')).toMatch(/^gui\.trajectory\.stat\.model_share \{"percent":\d+\}$/)
+  expect(sub('gui.trajectory.stat.tool')).toBe('gui.trajectory.stat.tool_share {"name":"bash","percent":100}')
+})
+
+it('jumps from the error count to the earliest failure, opening what holds it', async () => {
+  await draw([
+    E('ok', 0),
+    E('late', 4, { turn_span_id: 'T2', failure_entry: true, operation_status: 'error' }),
+    E('early', 2, { failure_entry: true, operation_status: 'error' }),
+  ])
+  const jump = document.querySelector<HTMLButtonElement>('button.trajectory-wf-jump')
+  expect(jump?.textContent).toBe('gui.trajectory.stat.jump')
+  act(() => { fireEvent.click(jump!) })
+  expect(store.get().selectedId).toBe('early')
+  expect(details.get().open).toBe(true)
+  expect(document.querySelector('[data-entry="early"]')).not.toBeNull()
+})
+
+it('offers no jump when nothing failed', async () => {
+  await draw([E('ok', 0)])
+  expect(document.querySelector('.trajectory-wf-jump')).toBeNull()
 })
