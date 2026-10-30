@@ -825,7 +825,7 @@ class SessionManager:
         else:
             candidates = self.sessions_dir.glob("*/*.jsonl")
         for p in candidates:
-            meta, count, _last, _first, _preview = self._scan_file(p)
+            meta, count, _last, _first, _preview = self._scan_listed(p)
             if meta is None:
                 continue
             key_val = meta.get("key", "")
@@ -941,11 +941,22 @@ class SessionManager:
                                         last_ts = ts
                                 elif before_runtime_turn is not None and not replied_via_message_tool(data):
                                     latest_preview, last_ts = before_runtime_turn
-        except (OSError, UnicodeDecodeError):
-            # A transcript that is not UTF-8 (one saved in a Windows code page) is left out as an
-            # unreadable one is, rather than its decoding error escaping the whole list.
+        except OSError:
             return None, 0, "", "", ""
         return meta, count, last_ts, first_user, latest_preview
+
+    def _scan_listed(self, path: Path) -> tuple[dict[str, Any] | None, int, str, str, str]:
+        """``_scan_file`` for a reader that only lists: a transcript that is not UTF-8 (one saved in a
+        Windows code page) is left out as an unreadable one is, rather than its decoding error escaping
+        the whole scan.
+
+        Only for such a reader. A save reading it that way would take the file for an empty one and
+        append UTF-8 lines no reader can open, so on the way to a write the error still stops it.
+        """
+        try:
+            return self._scan_file(path)
+        except UnicodeDecodeError:
+            return None, 0, "", "", ""
 
     def get_or_create(self, key: str) -> Session:
         """
@@ -1366,7 +1377,7 @@ class SessionManager:
         sessions = []
 
         for path in self.sessions_dir.glob("*/*.jsonl"):
-            data, message_count, last_ts, first_user, latest_preview = self._scan_file(path)
+            data, message_count, last_ts, first_user, latest_preview = self._scan_listed(path)
             if data is None:
                 continue
             key = data.get("key") or self.key_from_path(path)
