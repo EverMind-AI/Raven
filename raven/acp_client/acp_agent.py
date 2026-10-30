@@ -1894,6 +1894,16 @@ class AcpAgentBackend:
                     if self.can_steer or steer_offered(connection.initialize):
                         activity.offer_steer(collector._run, self._steerer(client, session_id))
                     answered = False
+                    # Whether the prompt went out: a turn that ended before it
+                    # did has no step to record, and a prompt step would say the
+                    # agent was asked what it never received.
+                    prompt_out: list[int] = []
+
+                    def heard_sent(request_id: int) -> None:
+                        prompt_out.append(request_id)
+                        if tracker is not None:
+                            tracker.prompt_sent(request_id)
+
                     try:
                         result = await client.request(
                             "session/prompt",
@@ -1913,7 +1923,7 @@ class AcpAgentBackend:
                             },
                             timeout=_prompt_deadline(self.timeout),
                             cancel_session=session_id,
-                            sent=tracker.prompt_sent if tracker is not None else None,
+                            sent=heard_sent,
                         )
                         answered = True
                     except asyncio.CancelledError:
@@ -1951,7 +1961,8 @@ class AcpAgentBackend:
                         cancelled = self._frames(journal, connection, session_id, frames_start)
                         activity.note_frames(cancelled)
                         record_frames(span, cancelled)
-                        self._write_steps(span, collector, started)
+                        if prompt_out:
+                            self._write_steps(span, collector, started)
                         raise
                     except Exception:
                         # The prompt ended with no answer of its own -- its
@@ -1964,7 +1975,8 @@ class AcpAgentBackend:
                             failed = self._frames(journal, connection, session_id, frames_start)
                             activity.note_frames(failed)
                             record_frames(span, failed)
-                            self._write_steps(span, collector, started)
+                            if prompt_out:
+                                self._write_steps(span, collector, started)
                         except Exception:  # noqa: BLE001 - the turn's own error is the one to raise
                             logger.debug(
                                 "acp agent {!r}: recording a failed turn's steps failed", self.name, exc_info=True

@@ -655,6 +655,9 @@ it('folds a group from its own button, and Enter on that button is the button’
   act(() => { fireEvent.keyDown(buttons()[2]!, { key: 'Enter' }) })
   expect(buttons()[1]!.getAttribute('aria-expanded')).toBe('true')
   expect(document.querySelector('[data-entry="a"]')).not.toBeNull()
+  /* The arrows are still the tree's: from a fold button they move the selection on. */
+  act(() => { fireEvent.keyDown(buttons()[2]!, { key: 'ArrowDown' }) })
+  expect(store.get().selectedId).toBe('b')
 })
 
 it('marks a failed span, and the turn that holds it while it is folded', async () => {

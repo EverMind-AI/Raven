@@ -29,9 +29,9 @@ export function openTarget(entry: TrajectoryEntry): string | null {
 
 /* Where a move into a scope lands: the run's external agent entry when it has
    one, which opens on what the agent recorded, else the scope's first entry.
-   Every agent is drawn at once, so the move selects across scopes rather than
-   making this one current: making it current restored that scope's own
-   selection, which for a scope never visited is none, and the pane closed. */
+   Every agent is drawn at once, so the move selects across scopes and leaves
+   the current one alone: making a scope current brings back that scope's own
+   saved selection -- none, for one never visited -- instead of landing. */
 export function landingOf(scopeId: string): TrajectoryEntry | null {
   let first: TrajectoryEntry | null = null
   for (const entry of list.get().entries) {

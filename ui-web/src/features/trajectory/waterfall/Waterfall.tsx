@@ -336,13 +336,11 @@ export function Waterfall(): JSX.Element {
   const [scrollTop, setScrollTop] = useState(0)
   const [rulerWidth, setRulerWidth] = useState(0)
   const [height, setHeight] = useState(0)
-  /* The reader's window and picked stretch, both in real time and both owned
-     by the conversation they were made on. A live session's axis grows with
-     every step that lands past its end, and a window kept in the axis's own
-     positions (or as fractions of the view) went stale with each one -- so it
-     was dropped, every few seconds, while the session the reader was watching
-     ran. In milliseconds they mean the same stretch on every axis of the same
-     conversation, and only a change of conversation, or the reader, drops them. */
+  /* The reader's window and picked stretch, kept in real time and owned by
+     the conversation they were made on. A live session's axis grows with
+     every step that lands past its end, which moves every position on it; in
+     milliseconds the two mean the same stretch on every axis of the
+     conversation, so only a change of conversation, or the reader, drops them. */
   const [zoom, setZoom] = useState<{ session: string | null; start: number; end: number } | null>(null)
   const [picked, setPicked] = useState<{ a: number; b: number } | null>(null)
   const sessionKey = store.get().sessionKey
@@ -396,8 +394,8 @@ export function Waterfall(): JSX.Element {
       /* The axis is drawn over the track, not the whole row: the labels take
          the gutter on its left. So the pointer is read against the ruler, the
          one element that spans exactly the axis; read against the whole box,
-         a pointer on the track's left edge anchored a third of the way in, and
-         a pan moved by the row's width rather than the axis's. */
+         a pointer on the track's left edge would anchor a third of the way in,
+         and a pan would move by the row's width rather than the axis's. */
       const ruler = el.querySelector<HTMLElement>('.trajectory-ruler')
       const rect = (ruler ?? scroller).getBoundingClientRect()
       const at = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0.5
@@ -655,10 +653,10 @@ export function Waterfall(): JSX.Element {
   )
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
-    /* A key pressed on a control inside a row -- a fold button, a door's
-       arrow -- is that control's: Enter there must not also act on the row
-       that holds the selection. */
-    if (event.target !== event.currentTarget) return
+    /* Enter pressed on a control inside a row -- a fold button, a door's
+       arrow -- is that control's: it must not also act on the row that holds
+       the selection. The arrows have no meaning on a button and stay the tree's. */
+    if (event.key === 'Enter' && event.target !== event.currentTarget) return
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End') {
       event.preventDefault()
       const selected = store.get().selectedId
