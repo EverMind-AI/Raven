@@ -415,25 +415,38 @@ class FindSkillTool(Tool):
         get_router: Callable[[], Any],
         *,
         hub_wired: bool = False,
+        enabled_reader: "Callable[[], bool] | None" = None,
         min_safety: float = 0.7,
         blocklist: "Iterable[str] | None" = None,
         blocklist_reader: "Callable[[], frozenset[str]] | None" = None,
     ) -> None:
         self._get_router = get_router
         self._hub_wired = hub_wired
+        self._enabled_reader = enabled_reader
         self._policy = SkillPolicy.create(min_safety=min_safety, blocklist=blocklist, blocklist_reader=blocklist_reader)
 
     @property
     def name(self) -> str:
         return "find_skill"
 
+    def to_schema(self) -> dict[str, Any]:
+        """Rendered per model call, so the Hub sentence follows the settings switch.
+
+        Authored rather than inherited on purpose: ``ToolRegistry`` serves a
+        tool from the copy it took at registration unless the tool writes its
+        own ``to_schema``, and the Hub client is built while the switch is off,
+        so whether the Hub is searched is known only per call.
+        """
+        return super().to_schema()
+
     @property
     def description(self) -> str:
-        # The blurb must describe what is actually wired: without a Hub
-        # endpoint the search covers only the locally installed pool, and
-        # promising a 110k-skill library would send the model chasing
-        # results that cannot exist on this deployment.
-        scope = f"{_LIBRARY_BLURB} " if self._hub_wired else "It searches the locally installed skill pool. "
+        # The blurb must describe what is actually searched: without a Hub
+        # endpoint, or with the switch off, the search covers only the locally
+        # installed pool, and promising a 110k-skill library would send the
+        # model chasing results that cannot exist on this deployment.
+        searched = self._hub_wired and (self._enabled_reader is None or self._enabled_reader())
+        scope = f"{_LIBRARY_BLURB} " if searched else "It searches the locally installed skill pool. "
         return (
             f"Search the skill library for reusable methodology. {scope}"
             "Facing an unfamiliar kind of task, search before improvising -- "

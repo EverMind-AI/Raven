@@ -72,6 +72,40 @@ def test_the_hub_client_is_built_while_switched_off(tmp_path: Path) -> None:
     )
 
 
+def test_find_skill_offers_the_hub_library_only_while_the_switch_is_on(tmp_path: Path, monkeypatch) -> None:
+    """The schema the model receives, through the real registry: a loop built
+    with the switch off still holds a client, and turning the switch on or off
+    must move the sentence without a rebuild."""
+    import json
+
+    from raven import home as raven_home
+    from raven.agent.loop.bundles import EngineWiring
+
+    config = tmp_path / "config.json"
+    hub = {"endpoint": "http://hub.test", "enabled": False}
+    config.write_text(json.dumps({"skillForge": {"router": {"hub": hub}}}), encoding="utf-8")
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: config)
+    raven_home.set_config_path(config)
+    loop = AgentLoop(
+        provider=_StubProvider(),
+        workspace=tmp_path / "ws",
+        model="stub",
+        policy=TurnPolicy(max_iterations=2),
+        engine=EngineWiring(skill_forge_router_config=SkillForgeRouterConfig(hub=HubSourceConfig(**hub))),
+    )
+
+    def described() -> str:
+        return next(d["function"]["description"] for d in loop.tools.get_definitions() if d["function"]["name"] == "find_skill")
+
+    try:
+        assert loop._skill_hub_client is not None
+        assert "110k" not in described()
+        config.write_text(json.dumps({"skillForge": {"router": {"hub": {**hub, "enabled": True}}}}), encoding="utf-8")
+        assert "110k" in described()
+    finally:
+        asyncio.run(loop._skill_hub_client.aclose())
+
+
 def test_the_digest_names_a_tool_this_loop_registered(loop) -> None:
     """Pins the two halves together: a description-mode skill's body is in no
     other segment, so an unregistered tool in its hint is a dead end the agent

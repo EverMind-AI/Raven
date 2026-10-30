@@ -1438,6 +1438,7 @@ class WiringMixin:
                 FindSkillTool(
                     lambda: getattr(self.context_engine, "skills_router", None),
                     hub_wired=self._skill_hub_client is not None,
+                    enabled_reader=lambda: skill_hub_enabled(self._live_config),
                     min_safety=self._skill_min_safety,
                     blocklist=self._skill_blocklist,
                     blocklist_reader=self._skill_blocklist_reader,
