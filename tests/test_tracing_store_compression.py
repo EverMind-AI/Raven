@@ -235,16 +235,50 @@ def _span_record(trace: str, span_id: str) -> dict:
 
 
 def _plant_logs(state: Path) -> Path:
-    """A store with one rotated span log, one active log, and one frame journal."""
+    """A store with two rotated span logs, one active log, and one frame journal.
+
+    Returns the older rotated log: the newest is left for the next rotation.
+    """
     logs = state / "logs"
     archive = logs / "archive" / "2026-07-01" / "audit-spans-2026-07-01-1.log"
     archive.parent.mkdir(parents=True)
     archive.write_text(json.dumps(_span_record("t1", "s1")) + "\n", encoding="utf-8")
+    os.utime(archive, ns=(1_000_000_000_000_000_000, 1_000_000_000_000_000_000))
+    newest = archive.with_name("audit-spans-2026-07-01-2.log")
+    newest.write_text(json.dumps(_span_record("t1", "s1b")) + "\n", encoding="utf-8")
+    os.utime(newest, ns=(1_000_000_100_000_000_000, 1_000_000_100_000_000_000))
     (logs / "audit-spans.log").write_text(json.dumps(_span_record("t2", "s2")) + "\n", encoding="utf-8")
     frames = logs / "acp-frames" / "2026-07-01" / "a.jsonl"
     frames.parent.mkdir(parents=True)
     frames.write_text('{"method": "x"}\n', encoding="utf-8")
     return archive
+
+
+def _rotated(state: Path, kind: str, name: str, mtime_ns: int) -> Path:
+    path = state / "logs" / "archive" / "2026-07-01" / f"audit-{kind}-2026-07-01-{name}.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(_span_record("t", f"{kind}-{name}")) + "\n", encoding="utf-8")
+    os.utime(path, ns=(mtime_ns, mtime_ns))
+    return path
+
+
+def test_compress_logs_leaves_the_newest_log_of_each_kind_and_keeps_mtimes(tmp_path: Path) -> None:
+    """A writer that opened the active log just before it rotated may still
+    append to the newest archive, so that one waits for the next rotation; the
+    viewer orders logs by mtime, so a compressed one keeps its own."""
+    old_spans = _rotated(tmp_path, "spans", "1", 1_000_000_000_000_000_000)
+    new_spans = _rotated(tmp_path, "spans", "2", 1_000_000_100_000_000_000)
+    old_events = _rotated(tmp_path, "events", "1", 1_000_000_000_000_000_000)
+    new_events = _rotated(tmp_path, "events", "2", 1_000_000_100_000_000_000)
+
+    result = compress_logs(tmp_path / "logs")
+
+    for newest in (new_spans, new_events):
+        assert not is_compressed(newest.read_bytes())
+    for older in (old_spans, old_events):
+        assert is_compressed(older.read_bytes())
+        assert older.stat().st_mtime_ns == 1_000_000_000_000_000_000
+    assert (result.files, result.compressed, result.newest) == (4, 2, 2)
 
 
 def test_compress_logs_rewrites_only_rotated_files(tmp_path: Path) -> None:
@@ -256,7 +290,7 @@ def test_compress_logs_rewrites_only_rotated_files(tmp_path: Path) -> None:
 
     result = compress_logs(tmp_path / "logs")
 
-    assert (result.files, result.compressed, result.already) == (1, 1, 0)
+    assert (result.files, result.compressed, result.already, result.newest) == (2, 1, 0, 1)
     assert result.errors == []
     assert is_compressed(archive.read_bytes())
     # A span records a plaintext byte range into a frame journal, so that file
@@ -266,21 +300,23 @@ def test_compress_logs_rewrites_only_rotated_files(tmp_path: Path) -> None:
 
 
 def test_iter_spans_reads_a_compressed_archive(tmp_path: Path) -> None:
-    _plant_logs(tmp_path)
+    archive = _plant_logs(tmp_path)
     compress_logs(tmp_path / "logs")
+    assert is_compressed(archive.read_bytes())
 
     ids = [span["spanId"] for span in iter_spans(tmp_path)]
 
-    assert ids == ["s1", "s2"]
+    assert ids == ["s1", "s1b", "s2"]
 
 
 def test_selection_reads_a_compressed_archive(tmp_path: Path) -> None:
-    _plant_logs(tmp_path)
+    archive = _plant_logs(tmp_path)
     compress_logs(tmp_path / "logs")
+    assert is_compressed(archive.read_bytes())
 
     records = list(selection._records(tmp_path, None))
 
-    assert [record["spanId"] for record in records] == ["s1", "s2"]
+    assert [record["spanId"] for record in records] == ["s1", "s1b", "s2"]
 
 
 def test_compress_logs_is_idempotent_and_dry_run_writes_nothing(tmp_path: Path) -> None:
@@ -295,7 +331,7 @@ def test_compress_logs_is_idempotent_and_dry_run_writes_nothing(tmp_path: Path) 
     assert once.compressed == 1
     again = compress_logs(tmp_path / "logs")
     assert again.compressed == 0
-    assert again.already == 1
+    assert (again.already, again.newest) == (1, 1)
 
 
 def test_rotation_compresses_the_previous_archive_and_keeps_its_mtime(tmp_path: Path) -> None:

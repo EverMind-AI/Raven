@@ -59,11 +59,17 @@ def _files(root: Path) -> Iterator[Path]:
                 yield path
 
 
-def _replace(path: Path, payload: bytes) -> None:
-    """Swap ``path``'s bytes without ever leaving the name pointing at nothing."""
+def _replace(path: Path, payload: bytes, *, times: tuple[int, int] | None = None) -> None:
+    """Swap ``path``'s bytes without ever leaving the name pointing at nothing.
+
+    ``times`` (atime, mtime in ns) goes on the new file before the swap, for a
+    file whose readers order by mtime.
+    """
     tmp = path.parent / f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.compress.tmp"
     try:
         tmp.write_bytes(payload)
+        if times is not None:
+            os.utime(tmp, ns=times)
         os.replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)
@@ -171,6 +177,20 @@ def _is_rotated_log(name: str) -> bool:
     return (name.startswith("audit-spans-") or name.startswith("audit-events-")) and name.endswith(".log")
 
 
+def _newest_of_each_kind(paths: list[Path]) -> set[Path]:
+    """The last rotated log of each kind (spans, events), by mtime."""
+    newest: dict[str, tuple[int, Path]] = {}
+    for path in paths:
+        try:
+            mtime = path.stat().st_mtime_ns
+        except OSError:
+            continue
+        kind = path.name.split("-", 2)[1]
+        if kind not in newest or mtime > newest[kind][0]:
+            newest[kind] = (mtime, path)
+    return {path for _, path in newest.values()}
+
+
 @dataclass
 class LogCompressResult:
     """What one pass over the rotated logs saw, did, and saved."""
@@ -178,6 +198,7 @@ class LogCompressResult:
     files: int = 0
     compressed: int = 0
     already: int = 0
+    newest: int = 0
     bytes_before: int = 0
     bytes_after: int = 0
     errors: list[str] = field(default_factory=list)
@@ -194,18 +215,28 @@ def compress_logs(logs_dir: Path, *, dry_run: bool = False) -> LogCompressResult
     ACP frame journals are left alone -- a span records a plaintext byte range
     into one, so re-encoding it would invalidate that audit record.
 
-    A rotated log is closed and never appended to again, which is why it can be
-    rewritten here and why a running writer needs no coordination. Idempotent:
-    a compressed file is counted and left alone; a dry run writes nothing.
+    The newest rotated log of each kind is left for the store to compress at
+    its next rotation: a writer that opened the active log just before it was
+    renamed may still append its last line to that inode, and a rewrite would
+    drop the line. Every older one is closed for good, which is why it can be
+    rewritten here and why a running writer needs no coordination. A compressed
+    log keeps its mtime, which is how the viewer orders logs. Idempotent: a
+    compressed file is counted and left alone; a dry run writes nothing.
     """
     result = LogCompressResult()
     archive = Path(logs_dir) / "archive"
     if not archive.is_dir():
         return result
-    for path in sorted(p for p in _files(archive) if _is_rotated_log(p.name)):
+    logs = sorted(p for p in _files(archive) if _is_rotated_log(p.name))
+    newest = _newest_of_each_kind(logs)
+    for path in logs:
         result.files += 1
+        if path in newest:
+            result.newest += 1
+            continue
         try:
             data = path.read_bytes()
+            stat = path.stat()
         except OSError as exc:
             result.errors.append(f"{path}: {exc}")
             continue
@@ -219,7 +250,7 @@ def compress_logs(logs_dir: Path, *, dry_run: bool = False) -> LogCompressResult
         if dry_run:
             continue
         try:
-            _replace(path, packed)
+            _replace(path, packed, times=(stat.st_atime_ns, stat.st_mtime_ns))
         except OSError as exc:
             result.errors.append(f"{path}: {exc}")
     return result

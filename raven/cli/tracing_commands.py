@@ -341,7 +341,10 @@ def _run_compress(*, dry_run: bool, logs: bool = False) -> None:
         console.print(f"[yellow]No artifacts at {escape(str(artifacts_dir))}.[/yellow]")
     if logs:
         log_result = compress_logs(store.logs_dir, dry_run=dry_run)
-        console.print(f"logs {log_result.files}: compressed {log_result.compressed}, already {log_result.already}")
+        console.print(
+            f"logs {log_result.files}: compressed {log_result.compressed}, already {log_result.already}, "
+            f"left for the next rotation {log_result.newest}"
+        )
         console.print(
             f"{log_result.bytes_before / (1024 * 1024):.1f} MB -> {log_result.bytes_after / (1024 * 1024):.1f} MB, "
             f"saved {log_result.saved / (1024 * 1024):.1f} MB"

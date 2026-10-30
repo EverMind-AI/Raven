@@ -11,7 +11,6 @@ from pathlib import Path
 import pytest
 
 from raven.tracing.codec import is_compressed
-from raven.tracing.compress import compress_logs
 from raven.tracing.store import TraceStore
 from raven.trajectory import conversation as tconv
 from raven.trajectory import entries as tent
@@ -197,7 +196,8 @@ def test_compressed_archive_is_indexed_in_plaintext_offsets(state, clock):
     archive = state / "logs" / "archive" / "2026-09-01" / "audit-spans-2026-09-01-100000000000.log"
     _append(state, [_turn("t", "before", start=0, end=1)], path=archive)
     plaintext_bytes = len(archive.read_bytes())
-    compress_logs(state / "logs")
+    _compress(state, archive)
+    assert is_compressed(archive.read_bytes())
     _append(state, [_turn("t", "after", start=2, end=3)])
 
     index = _index(state, clock)
@@ -212,8 +212,7 @@ def test_compressing_a_consumed_archive_keeps_the_cursor_moving(state, clock):
     index = _index(state, clock)
     _refresh_until_ready(index, clock)
 
-    _rotate(state)
-    compress_logs(state / "logs")
+    _compress(state, _rotate(state))
     _append(state, [_turn("t", "after", start=2, end=3)])
     _refresh_until_ready(index, clock)
 

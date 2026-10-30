@@ -466,11 +466,13 @@ def test_tracing_compress_logs_dry_run_reports_and_writes_nothing(tmp_path, monk
     archive = tmp_path / "logs" / "archive" / "2026-01-01" / "audit-spans-2026-01-01-1.log"
     archive.parent.mkdir(parents=True)
     archive.write_text('{"spanId": "s"}\n', encoding="utf-8")
+    os.utime(archive, ns=(1_000_000_000_000_000_000, 1_000_000_000_000_000_000))
+    archive.with_name("audit-spans-2026-01-01-2.log").write_text('{"spanId": "t"}\n', encoding="utf-8")
 
     r = runner.invoke(app, ["tracing", "compress", "--logs", "--dry-run"])
 
     assert r.exit_code == 0
-    assert "logs 1: compressed 1" in r.output
+    assert "logs 2: compressed 1, already 0, left for the next rotation 1" in r.output
     assert archive.read_text(encoding="utf-8") == '{"spanId": "s"}\n'
 
 
