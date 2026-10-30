@@ -152,10 +152,23 @@ function kindIcon(kind: string): typeof SparklesIcon {
   return BotIcon
 }
 
-/** One of three fixed classes; the index's kind strings never reach a class name. */
-const spanClass = (kind: string): string =>
-  kind.startsWith('tool.') ? 'trajectory-wf-kind-tool'
-    : kind === 'user.input' ? 'trajectory-wf-kind-user' : 'trajectory-wf-kind-model'
+/** One of four fixed classes; the index's kind strings never reach a class name.
+ *  A failed operation's bar is the failure's colour, whatever kind it was. */
+const spanClass = (entry: TrajectoryEntry): string =>
+  entry.failure_entry ? 'trajectory-wf-kind-failure'
+    : entry.kind.startsWith('tool.') ? 'trajectory-wf-kind-tool'
+      : entry.kind === 'user.input' ? 'trajectory-wf-kind-user' : 'trajectory-wf-kind-model'
+
+/* The mark a failed operation carries on its own row, and on the turn that
+   holds it -- folded, the turn's bar shows red only for a failure that took
+   time, and a failure in an open turn otherwise reads like any other row. The
+   index flags one entry per failed span (`failure_entry`), so the mark and the
+   header's count both read that, never the span's status, which every entry
+   of the span shares. */
+function FailMark(): JSX.Element {
+  const label = t('gui.trajectory.status.error')
+  return <span className="trajectory-wf-fail" role="img" aria-label={label} title={label} />
+}
 
 /** Whether the wheel's target stands in a scroller on the island that can
  *  still move the way the wheel points: the overview's lanes, once the reader
@@ -651,7 +664,7 @@ export function Waterfall(): JSX.Element {
 
   /* The header's numbers, from the rows the page draws. */
   const countOf = (prefix: string): number => shown.filter((entry) => entry.kind.startsWith(prefix)).length
-  const errors = shown.filter((entry) => entry.failure_entry || entry.operation_status === 'error').length
+  const errors = shown.filter((entry) => entry.failure_entry).length
   const turnCount = waterfall.agents.reduce((total, agent) => total + agent.turns.length, 0)
   const sessionStart = waterfall.agents.length ? Math.min(...waterfall.agents.map((agent) => agent.start)) : 0
   const sessionEnd = waterfall.agents.length ? Math.max(...waterfall.agents.map((agent) => agent.end)) : 0
@@ -712,7 +725,7 @@ export function Waterfall(): JSX.Element {
       const openTurn = open.has(turnKey(row.agent, turn.id))
       painted.push(
         <div key={row.key} className="trajectory-wf-row trajectory-wf-turn" data-row="turn" style={style}
-          data-open={openTurn ? '' : undefined}
+          data-open={openTurn ? '' : undefined} data-failed={turn.failure ? '' : undefined}
           data-from={turn.reportedFrom === null ? undefined : turn.reportedFrom}
           onClick={() => toggleTurn(turnKey(row.agent, turn.id))}>
           <span className="trajectory-wf-guide" style={{ left: GUIDE_X }} />
@@ -721,6 +734,7 @@ export function Waterfall(): JSX.Element {
               <Icon icon={openTurn ? ArrowDown01Icon : ArrowRight01Icon} size={14} />
             </span>
             <span className="trajectory-wf-name">{t('gui.trajectory.turn.ordinal', { n: turn.ordinal })}</span>
+            {turn.failure ? <FailMark /> : null}
             {turn.preview === null ? null : <span className="trajectory-wf-sub">{turn.preview}</span>}
             {turn.reportedFrom === null ? null : <span className="trajectory-wf-from">{t('gui.trajectory.turn.from_report', { name: nameOfScope.get(turn.reportedFrom) ?? turn.reportedFrom })}</span>}
           </span>
@@ -739,12 +753,13 @@ export function Waterfall(): JSX.Element {
     const bar = barOf(axis, view, entryStart(entry), entryEnd(entry, now))
     painted.push(
       <div key={row.key} className="trajectory-wf-row trajectory-wf-span" data-row="span" data-entry={entry.entry_id}
-        style={style} onClick={() => pick(row.row!)}>
+        data-failed={entry.failure_entry ? '' : undefined} style={style} onClick={() => pick(row.row!)}>
         <span className="trajectory-wf-guide" style={{ left: GUIDE_X }} />
         <span className="trajectory-wf-guide" style={{ left: TURN_GUIDE_X }} />
         <span className="trajectory-wf-label" style={{ paddingLeft: 44 + row.row!.depth * 20 }}>
           <span className="trajectory-wf-ico"><Icon icon={kindIcon(entry.kind)} size={15} /></span>
           <span className="trajectory-wf-name">{entry.preview ?? entry.span_name}</span>
+          {entry.failure_entry ? <FailMark /> : null}
           <span className="trajectory-wf-sub">{entry.span_name}</span>
           {entry.entry_id === slowestId ? <span className="trajectory-wf-slow">{t('gui.trajectory.slowest')}</span> : null}
           {entry.opens_subagent_scope === null || entry.opens_subagent_scope === undefined ? null : (
@@ -754,7 +769,7 @@ export function Waterfall(): JSX.Element {
           )}
         </span>
         <span className="trajectory-wf-track">
-          {bar ? <i className={`trajectory-wf-spanbar ${spanClass(entry.kind)}`} style={{ left: percent(bar.left), width: percent(bar.width) }} /> : null}
+          {bar ? <i className={`trajectory-wf-spanbar ${spanClass(entry)}`} style={{ left: percent(bar.left), width: percent(bar.width) }} /> : null}
           <span className="trajectory-wf-time" style={timeStyle(bar)}>{formatDuration(entryEnd(entry, now) - entryStart(entry))}</span>
         </span>
       </div>,

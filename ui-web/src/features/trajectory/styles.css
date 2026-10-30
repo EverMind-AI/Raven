@@ -339,6 +339,9 @@ html[data-theme="dark"] {
 .trajectory-wf-kind-model { background: var(--trajectory-c-llm-output-fg) }
 .trajectory-wf-kind-tool { background: var(--trajectory-c-tool-output-fg) }
 .trajectory-wf-kind-user { background: var(--trajectory-c-user-input-fg) }
+.trajectory-wf-kind-failure { background: var(--chat-danger) }
+/* A failed operation's mark, beside its name and its turn's. */
+.trajectory-wf-fail { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--chat-danger) }
 
 .trajectory-ov { padding: 6px 8px 4px 0; border-bottom: 1px solid var(--line); flex: none }
 .trajectory-ov-lane { display: grid; grid-template-columns: 188px minmax(0, 1fr); gap: 8px; align-items: center; height: 13px }
@@ -416,7 +419,7 @@ html[data-theme="dark"] {
 .trajectory-wf-spanbar.trajectory-wf-kind-tool, .trajectory-wf-seg-tool { background: #e2eef9 }
 .trajectory-wf-spanbar.trajectory-wf-kind-user { background: #eef0f2 }
 .trajectory-wf-seg-subagent { background: #e7f1e7 }
-.trajectory-wf-seg-failure { background: #fae3e1 }
+.trajectory-wf-spanbar.trajectory-wf-kind-failure, .trajectory-wf-seg-failure { background: #fae3e1 }
 .trajectory-wf-seg-waiting { background: #f4f4f4 }
 .trajectory-wf-turn .trajectory-wf-track i { height: 14px }
 
@@ -714,6 +717,7 @@ html[data-traj] .trajectory-tabs-wrap { border-bottom-color: var(--traj-line) }
 .trajectory-wf-seg-tool { border: 1px solid #b3d3ee }
 .trajectory-wf-spanbar.trajectory-wf-kind-user { border: 1px solid #cdd4db }
 .trajectory-wf-seg-subagent { border: 1px solid #bcdabc }
+.trajectory-wf-spanbar.trajectory-wf-kind-failure,
 .trajectory-wf-seg-failure { border: 1px solid #e9b6ae }
 .trajectory-wf-seg-waiting { border: 1px solid #d3d3d3 }
 
