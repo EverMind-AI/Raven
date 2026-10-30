@@ -616,6 +616,16 @@ async def cron_runs(params: dict, *, agent_loop_factory=None) -> dict:
 
 
 _SKILL_HUB_RELOAD_WARNING = "Saved. Skill Hub search starts after Raven reloads."
+# Finishing the web wizard turns the source on, and no screen on the way says
+# what that sends; the page shows the answer as a toast.
+_SKILL_HUB_ON_NOTICE = (
+    "Skill Hub search is on: when Raven looks for a skill, it sends text from your conversation "
+    "to EverMind Skill Hub. You can turn it off in Settings > Skills."
+)
+_SKILL_HUB_ON_RELOAD_NOTICE = (
+    "Skill Hub search is on and starts after Raven reloads: when Raven looks for a skill, it sends "
+    "text from your conversation to EverMind Skill Hub. You can turn it off in Settings > Skills."
+)
 
 
 def _skill_hub_awaits_reload(on: bool, agent_loop_factory: Any) -> bool:
@@ -633,14 +643,20 @@ def _skill_hub_awaits_reload(on: bool, agent_loop_factory: Any) -> bool:
     return loop is not None and getattr(loop, "_skill_hub_client", None) is None
 
 
-def _skill_hub_reply(previous: Any, agent_loop_factory: Any) -> dict[str, Any]:
-    """A Skill Hub write's answer, warning when the serving loop cannot search yet."""
+def _skill_hub_reply(previous: Any, agent_loop_factory: Any, *, seeded: bool = False) -> dict[str, Any]:
+    """A Skill Hub write's answer: what a seed that left the source on sends,
+    and whether the serving loop cannot search yet."""
     from raven.config.live import skill_hub_on
     from raven.config.loader import get_config_path, read_raw_or_raise
+    from raven.i18n import t
 
+    on = skill_hub_on(read_raw_or_raise(get_config_path()))
+    waits = _skill_hub_awaits_reload(on, agent_loop_factory)
     reply: dict[str, Any] = {"applied": True, "previous": previous}
-    if _skill_hub_awaits_reload(skill_hub_on(read_raw_or_raise(get_config_path())), agent_loop_factory):
-        reply["warning"] = _SKILL_HUB_RELOAD_WARNING
+    if seeded and on:
+        reply["warning"] = t(_SKILL_HUB_ON_RELOAD_NOTICE if waits else _SKILL_HUB_ON_NOTICE)
+    elif waits:
+        reply["warning"] = t(_SKILL_HUB_RELOAD_WARNING)
     return reply
 
 
@@ -762,10 +778,10 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
         from raven.config.update import initialize_skill_hub_endpoint
 
         try:
-            initialize_skill_hub_endpoint()
+            seeded = initialize_skill_hub_endpoint()
         except ValueError as exc:
             raise ConfigValidationError(str(exc)) from exc
-        return _skill_hub_reply(None, agent_loop_factory)
+        return _skill_hub_reply(None, agent_loop_factory, seeded=seeded is not None)
 
     if key in ("plugins.disabled", "tools.disabledTools", "skillForge.blocklist"):
         if not isinstance(value, list) or not all(isinstance(x, str) for x in value):

@@ -86,19 +86,22 @@ describe('skills page', () => {
     expect(calls).toEqual([['set', { key: 'skillForge.router.hub.enabled', value: false }]])
   })
 
-  it('the Skill Hub row says so while the serving loop cannot search yet', async () => {
+  it('the Skill Hub row says what it sends, and when the serving loop cannot search yet', async () => {
     /* The switch reads on as soon as the endpoint is written, but a loop that
        started without one holds no Hub client until a reload; a toast is gone
-       before the reader looks at the switch again. */
+       before the reader looks at the switch again. What the switch sends is
+       said either way, on or off: it is what the reader is deciding. */
     install(snap({ skillHub: { on: true, awaitingReload: true } }))
     await mount('skills')
-    expect(screen.getByText('gui.settings.skills.hub_reload')).toBeTruthy()
+    expect(screen.getByText('gui.settings.skills.hub_sub_reload')).toBeTruthy()
+    expect(screen.queryByText('gui.settings.skills.hub_sub')).toBeNull()
     cleanup()
     store._resetForTests()
 
-    install(snap({ skillHub: { on: true, awaitingReload: false } }))
+    install(snap({ skillHub: { on: false, awaitingReload: false } }))
     await mount('skills')
-    expect(screen.queryByText('gui.settings.skills.hub_reload')).toBeNull()
+    expect(screen.getByText('gui.settings.skills.hub_sub')).toBeTruthy()
+    expect(screen.queryByText('gui.settings.skills.hub_sub_reload')).toBeNull()
   })
 
   it('reads the blocklist from a snake_case skill_forge block', async () => {

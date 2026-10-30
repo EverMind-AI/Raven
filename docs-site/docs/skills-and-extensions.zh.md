@@ -34,6 +34,14 @@ SkillForge 有三个来源：本地文件、通过配置的记忆后端召回的
 Skill Hub 候选。可用性取决于配置和服务连通性；目录搜索命中不证明 bundle 已安装，
 也不证明所需工具存在。
 
+搜索 Skill Hub 会把文字发出本机。两个初始化向导都会把共享目录地址
+（`https://skillhub.evermind.ai`）写入 `skillForge.router.hub.endpoint`，配置里已有地址时
+保留原值；开启期间，Raven 每次查找技能都会把对话中的文字（消息本身，或模型据此写出的查询）
+发送到这个地址。可以用设置弹窗「技能」页上的 Skill Hub 开关关闭，或把
+`skillForge.router.hub.enabled` 设为 `false`；地址会保留，重新打开时回到同一个目录。没有
+配置地址时不会搜索 Hub。关闭对下一次搜索即生效；网关启动时没有地址的话，打开后要等重新
+加载才开始搜索。
+
 `skillForge.discovery` 默认 `pull`：在符合条件的轮次中提供简短的名称/描述菜单，
 模型用 `find_skill` 搜索、用 `read_skill` 读取正文。`push` 则运行选择/注入管线，
 把选中正文放入上下文。Pull 避免 push 路径逐轮的重写与门控模型调用，但不意味着所有
@@ -55,7 +63,7 @@ Bundle 下载有独立的同意设置：
 应使用 blocklist。执行前检查脚本；目录安全分数不是安全保证，当前策略也不会仅因缺少
 分数就直接拒绝。成功安装记录在 `<workspace>/skills/hub/installs.jsonl`。
 
-网页端设置弹窗的「技能」页只负责开关；页上的「新增」会把你带到对话里，并替你写好半句
+网页端设置弹窗的「技能」页负责技能和 Skill Hub 搜索的开关；页上的「新增」会把你带到对话里，并替你写好半句
 请求——技能是让 Raven 在对话里安装的，受上面的同意设置约束。
 
 ## 记忆与学习边界 { #memory-and-learning-boundaries }

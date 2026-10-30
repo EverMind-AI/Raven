@@ -209,8 +209,8 @@ export async function finish(): Promise<void> {
   if (!isLast(get().step)) { move(1); return }
   /* Finishing is the page's opt-in for the Hub source, so seed the endpoint
      the way the CLI onboarding does. A refusal here is not the wizard's gate:
-     the Skills page switch can still turn it on later. A seeded endpoint that
-     the first-run loop cannot use yet comes back as the reload notice. */
+     the Skills page switch can still turn it on later. The server's notice
+     says what turning it on sends, and whether search waits for a reload. */
   try {
     const warning = await source().seedSkillHub()
     if (warning) toast(warning)

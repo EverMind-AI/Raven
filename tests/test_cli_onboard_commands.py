@@ -3524,6 +3524,34 @@ def test_bootstrap_does_not_re_enable_a_switched_off_hub(tmp_env: Path, monkeypa
     assert load_raven_config().skill_forge.router.hub.enabled is False
 
 
+def test_bootstrap_says_what_turning_skill_hub_search_on_sends(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Onboarding is the opt-in, so it is where the reader hears what the
+    opt-in sends, where to, and how to stop it."""
+    onboard_commands._bootstrap_empty_config()
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "Skill Hub search is on" in out
+    assert "sends text from your conversation to https://skillhub.evermind.ai" in out
+    assert "skillForge.router.hub.enabled" in out
+
+
+@pytest.mark.parametrize(
+    "hub",
+    [{"enabled": False}, {"endpoint": None}, {"endpoint": "https://hub.internal.test"}],
+    ids=["switched off", "explicit null", "already configured"],
+)
+def test_bootstrap_says_nothing_about_skill_hub_when_it_turned_nothing_on(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], hub: dict
+) -> None:
+    tmp_env.write_text(json.dumps({"skillForge": {"router": {"hub": hub}}}))
+
+    onboard_commands._bootstrap_empty_config()
+
+    assert "Skill Hub" not in capsys.readouterr().out
+
+
 def _onboard_once() -> Any:
     return runner.invoke(
         app,

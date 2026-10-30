@@ -342,7 +342,8 @@ def _bootstrap_empty_config() -> None:
     ``Config()`` is only written when the file is absent — overwriting an
     existing file there would clobber it.
     """
-    from raven.config.loader import get_config_path, load_config, save_config
+    from raven.config.live import skill_hub_on
+    from raven.config.loader import get_config_path, load_config, read_raw_or_raise, save_config
     from raven.config.paths import get_workspace_path
     from raven.config.update import initialize_skill_hub_endpoint
     from raven.utils.workspace import sync_workspace_templates
@@ -352,7 +353,16 @@ def _bootstrap_empty_config() -> None:
         # Creates the file; save_config dumps with exclude_defaults, so a
         # fresh config is sparse -- it records what the user set, nothing else.
         save_config(load_config())
-    initialize_skill_hub_endpoint(config_path=path)
+    seeded = initialize_skill_hub_endpoint(config_path=path)
+    if seeded is not None and skill_hub_on(read_raw_or_raise(path)):
+        console.print(
+            t(
+                "  [dim]Skill Hub search is on: when Raven looks for a skill, it sends text from your "
+                "conversation to {endpoint}. Turn it off under Settings > Skills on the web page, or set "
+                "skillForge.router.hub.enabled to false.[/dim]",
+                endpoint=seeded,
+            )
+        )
     workspace = get_workspace_path()
     workspace.mkdir(parents=True, exist_ok=True)
     sync_workspace_templates(workspace, notify=lambda m: console.print(f"  [dim]{m}[/dim]"))

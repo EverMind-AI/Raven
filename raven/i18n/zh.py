@@ -6,6 +6,11 @@ boundary test keeps every other module free of CJK text.
 
 MESSAGES: dict[str, str] = {
     "Saved. Applies after the next gateway reload or restart.": "已保存。下次网关重载或重启后生效。",
+    # Skill Hub search: the reload wait, and what turning it on sends.
+    "Saved. Skill Hub search starts after Raven reloads.": "已保存。Raven 重新加载后才会开始搜索 Skill Hub。",
+    "Skill Hub search is on: when Raven looks for a skill, it sends text from your conversation to EverMind Skill Hub. You can turn it off in Settings > Skills.": "Skill Hub 搜索已开启：Raven 查找技能时，会把对话中的文字发送到 EverMind Skill Hub。可以在“设置 > 技能”中关闭。",
+    "Skill Hub search is on and starts after Raven reloads: when Raven looks for a skill, it sends text from your conversation to EverMind Skill Hub. You can turn it off in Settings > Skills.": "Skill Hub 搜索已开启，Raven 重新加载后生效：Raven 查找技能时，会把对话中的文字发送到 EverMind Skill Hub。可以在“设置 > 技能”中关闭。",
+    "  [dim]Skill Hub search is on: when Raven looks for a skill, it sends text from your conversation to {endpoint}. Turn it off under Settings > Skills on the web page, or set skillForge.router.hub.enabled to false.[/dim]": "  [dim]Skill Hub 搜索已开启：Raven 查找技能时，会把对话中的文字发送到 {endpoint}。可以在网页的“设置 > 技能”中关闭，或把 skillForge.router.hub.enabled 设为 false。[/dim]",
     # raven.playbook rounds: the word that ends a plan early, and who hears it.
     "You are the last role of this round, so what you write is what the stint reads when it decides whether to open another one. If nothing is left that is worth another round, write {marker} on a line of its own and the stint ends with this round. That is the only thing that ends it early: without those words it keeps going until its rounds are spent.": "你是这一轮的最后一个角色，所以计划在决定要不要再开一轮时，读的就是你写的东西。如果已经没有任何值得再开一轮的事情，就单独占一行写下 {marker}，计划就到这一轮为止。能提前结束它的只有这一件事：没有这个词，它会一直跑到轮数用完。",
     # raven.playbook rounds: which directory a role is standing in.

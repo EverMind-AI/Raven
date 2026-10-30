@@ -1392,12 +1392,13 @@ async def test_settings_set_hub_init_seeds_without_re_enabling(cfg):
     [(None, False), (_ServingLoop(None), True), (_ServingLoop(object()), False)],
     ids=["no loop yet", "loop without a client", "loop with a client"],
 )
-@pytest.mark.parametrize("key", ["skillForge.router.hub.enabled", "skillForge.router.hub.init"])
-async def test_the_reload_notice_follows_the_serving_loop(cfg, key, serving, warned):
+async def test_the_reload_notice_follows_the_serving_loop(cfg, serving, warned):
     """The notice answers "can the loop serving now search?", not "did this
     write seed the endpoint?": with no loop yet the first one is built from
     this file, and a loop that started with an endpoint switches live."""
-    result = await rpc_console.settings_set({"key": key, "value": True}, agent_loop_factory=lambda: serving)
+    result = await rpc_console.settings_set(
+        {"key": "skillForge.router.hub.enabled", "value": True}, agent_loop_factory=lambda: serving
+    )
 
     assert ("warning" in result) is warned
     got = await rpc_console.settings_get({}, agent_loop_factory=lambda: serving)
@@ -1423,6 +1424,68 @@ async def test_the_reload_notice_repeats_while_the_loop_still_cannot_search(cfg)
     ]
     off = await rpc_console.settings_get({}, agent_loop_factory=lambda: serving)
     assert off["skill_hub_awaiting_reload"] is True
+
+
+_HUB_RELOAD = "Saved. Skill Hub search starts after Raven reloads."
+_HUB_NOTICE = (
+    "Skill Hub search is on: when Raven looks for a skill, it sends text from your conversation "
+    "to EverMind Skill Hub. You can turn it off in Settings > Skills."
+)
+_HUB_NOTICE_RELOAD = (
+    "Skill Hub search is on and starts after Raven reloads: when Raven looks for a skill, it sends "
+    "text from your conversation to EverMind Skill Hub. You can turn it off in Settings > Skills."
+)
+
+
+@pytest.mark.parametrize(
+    ("serving", "notice"),
+    [(None, _HUB_NOTICE), (_ServingLoop(None), _HUB_NOTICE_RELOAD), (_ServingLoop(object()), _HUB_NOTICE)],
+    ids=["no loop yet", "loop without a client", "loop with a client"],
+)
+async def test_a_wizard_finish_that_turns_skill_hub_search_on_says_what_it_sends(cfg, serving, notice):
+    """Finishing the wizard is the opt-in, and the reader has not been told
+    what it sends anywhere else on the way: the answer says it, and how to stop."""
+    result = await rpc_console.settings_set(
+        {"key": "skillForge.router.hub.init", "value": True}, agent_loop_factory=lambda: serving
+    )
+
+    assert result == {"applied": True, "previous": None, "warning": notice}
+
+
+@pytest.mark.parametrize(
+    ("serving", "warning"),
+    [(None, None), (_ServingLoop(None), _HUB_RELOAD), (_ServingLoop(object()), None)],
+    ids=["no loop yet", "loop without a client", "loop with a client"],
+)
+async def test_a_wizard_finish_that_turned_nothing_on_reports_only_the_wait(cfg, serving, warning):
+    cfg.write_text(
+        json.dumps({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test"}}}}),
+        encoding="utf-8",
+    )
+
+    result = await rpc_console.settings_set(
+        {"key": "skillForge.router.hub.init", "value": True}, agent_loop_factory=lambda: serving
+    )
+
+    assert result.get("warning") == warning
+
+
+async def test_the_skill_hub_notices_follow_the_reply_language(cfg, monkeypatch):
+    from raven import i18n
+
+    monkeypatch.setattr(i18n, "_language", "zh")
+    serving = _ServingLoop(None)
+
+    wizard = await rpc_console.settings_set(
+        {"key": "skillForge.router.hub.init", "value": True}, agent_loop_factory=lambda: serving
+    )
+    switch = await rpc_console.settings_set(
+        {"key": "skillForge.router.hub.enabled", "value": True}, agent_loop_factory=lambda: serving
+    )
+
+    assert wizard["warning"] == i18n.t_in("zh", _HUB_NOTICE_RELOAD) != _HUB_NOTICE_RELOAD
+    assert switch["warning"] == i18n.t_in("zh", _HUB_RELOAD) != _HUB_RELOAD
+    assert i18n.t_in("zh", _HUB_NOTICE) != _HUB_NOTICE
 
 
 async def test_settings_get_awaits_no_reload_while_the_source_is_off(cfg):

@@ -35,7 +35,7 @@ function HubCard({ on, awaitingReload }: { on: boolean; awaitingReload: boolean 
   const label = t('gui.settings.skills.hub_title')
   return (
     <Card title={t('gui.settings.skills.hub_card')}>
-      <Row label={label} sub={awaitingReload ? t('gui.settings.skills.hub_reload') : undefined}>
+      <Row label={label} sub={t(awaitingReload ? 'gui.settings.skills.hub_sub_reload' : 'gui.settings.skills.hub_sub')}>
         <Switch on={on} label={label} onChange={(next) => void store.write(HUB_SWITCH, next)} />
       </Row>
     </Card>

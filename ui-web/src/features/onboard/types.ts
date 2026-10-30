@@ -39,7 +39,7 @@ export interface OnboardSource {
   providerConfigured(): Promise<boolean>
   /* The wizard's opt-in for conversational Skill Hub retrieval: seeds the
      shared endpoint the way the CLI onboarding does. Returns the server's
-     reload notice when the first-run loop cannot pick the seed up. */
+     notice: what turning it on sends, and whether search waits for a reload. */
   seedSkillHub(): Promise<string | null>
   scan(): Promise<ImportScan>
   startImport(platforms: string[], tier: ImportTier): Promise<ImportStarted>

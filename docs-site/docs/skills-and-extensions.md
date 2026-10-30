@@ -38,6 +38,17 @@ configured memory backend, and remote Skill Hub candidates. Availability
 depends on configuration and service connectivity; a catalog result is not
 proof that a bundle is installed or its required tools exist.
 
+Searching Skill Hub sends text off the machine. Both onboarding wizards write
+the shared catalog URL (`https://skillhub.evermind.ai`) to
+`skillForge.router.hub.endpoint` unless the config already names one, and
+while the source is on, Raven sends text from the conversation (the message,
+or a query the model writes from it) to that address whenever it looks for a
+skill. Turn it off with the Skill Hub switch on the settings dialog's Skills
+page, or set `skillForge.router.hub.enabled` to `false`; the URL is kept, so
+turning it back on returns to the same catalog. A config with no endpoint never
+searches the Hub. Switching it off applies to the next search; switching it on
+in a gateway that started without an endpoint waits for a reload.
+
 `skillForge.discovery` defaults to `pull`: the model receives a small
 name/description menu on eligible turns and uses `find_skill` to search and
 `read_skill` to fetch a body. `push` instead runs the selection/injection
@@ -64,7 +75,8 @@ safety score is not a security guarantee, and missing scores are not a hard
 rejection in the current policy. Successful installs are audited under
 `<workspace>/skills/hub/installs.jsonl`.
 
-In the web UI, the settings dialog's Skills page switches skills on and off;
+In the web UI, the settings dialog's Skills page switches skills, and Skill
+Hub search, on and off;
 its **Add** button leads into the chat with the request half written, because
 a skill is installed by asking Raven, under the consent setting above.
 

@@ -8697,9 +8697,13 @@
       "en": "Use 110k+ skills from EverMind Skill Hub",
       "zh": "使用 EverMind Skill Hub 的 11 万+ 技能"
     },
-    "gui.settings.skills.hub_reload": {
-      "en": "Search starts after Raven reloads.",
-      "zh": "Raven 重新加载后才会开始搜索。"
+    "gui.settings.skills.hub_sub": {
+      "en": "While on, Raven sends text from your conversation to the Skill Hub when it looks for a skill.",
+      "zh": "开启时，Raven 查找技能会把对话中的文字发送到 Skill Hub。"
+    },
+    "gui.settings.skills.hub_sub_reload": {
+      "en": "While on, Raven sends text from your conversation to the Skill Hub when it looks for a skill. Search starts after Raven reloads.",
+      "zh": "开启时，Raven 查找技能会把对话中的文字发送到 Skill Hub。Raven 重新加载后才会开始搜索。"
     },
     "gui.settings.skills.builtin": {
       "en": "Built-in",
