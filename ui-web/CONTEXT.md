@@ -179,10 +179,13 @@ The waterfall (`features/trajectory/waterfall/`) draws every entry the list
 store holds (`shown`), the ones the index marked `meta.hidden` included: grouped
 by agent -- the main session first, then one group per worker, a worker's runs
 folded into one by instance, else by name (`model.ts`'s `agentIdentity`) -- then
-by turn, then by span. Every agent shares one time axis (`axis.ts`): a stretch
+by turn, then by span. A worker's mark is picked by that same recorded name
+(`meta.agent`, else `meta.instance`): an entry carries no preset, so the
+preset key `components/AgentMark.tsx` is built on is not available here.
+Every agent shares one time axis (`axis.ts`): a stretch
 in which no agent was doing anything collapses to a fixed width, and the axis
 leaves room after the last bar for the duration each row prints just past its
-bar. Above the rows sit the overview, one lane per agent, and the ruler; what
+bar. Above the rows sit the overview, one row of activity marks per agent, and the ruler; what
 crosses between agents is marked on rows rather than drawn between them -- a
 dispatching row's door arrow, and the worker's name on the host turn its report
 started. Agent groups start open and turns folded; a plain wheel scrolls, ctrl
