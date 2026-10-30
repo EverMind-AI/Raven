@@ -140,6 +140,7 @@ from raven.providers.base import bound_llm_detail, canonical_llm_error, llm_erro
 from raven.providers.first_byte import first_byte_budget
 from raven.providers.tool_calls import openai_tool_call
 from raven.session.refs import TOOL_RESULT_TRUNCATION_MARKER, tool_result_view
+from raven.session.turn_shape import REPLIED_VIA_TOOL, TakeBack, TakeBackStep
 from raven.spine.events import bound_failure_text
 from raven.spine.turn import AnswerlessTurnError
 from raven.token_wise import usage_context
@@ -477,25 +478,39 @@ def _delivered_files(turn_rows: list[dict]) -> bool:
 
 
 def _taken_back_whole(messages: list[dict], skip: int) -> bool:
-    """Whether the session list and the ACP replay will take this turn back whole.
+    """Whether the session list and the ACP replay will take back the row that closes this turn.
 
-    By the rule they read a transcript with: the turn's closing assistant row is a Silence Marker
-    the message tool did not answer, and the last user row before it carries an origin, so the
-    runtime opened the turn. A person's message opens one they keep. ``skip`` is where the turn's
-    new rows start; the row that opened it may be older, filed by the opening write.
+    Asked of the rule they read a transcript with (``TakeBack``), over the rows as ``_save_turn``
+    will store them: a recovery nudge is never stored, and the turn's own rows carry their marks
+    under the live names. ``skip`` is where the turn's new rows start; the row that opened it may be
+    older, filed by the opening write.
     """
-    for index in range(len(messages) - 1, skip - 1, -1):
-        if messages[index].get("role") == "assistant":
-            closing = messages[index]
-            break
-    else:
-        return False
-    if not closing.get(_SILENT_KEY) or closing.get(_REPLIED_VIA_TOOL_KEY):
-        return False
-    for row in reversed(messages[:index]):
-        if row.get("role") == "user" and not row.get("_recovery_synthetic"):
-            return bool(row.get(_ORIGIN_KEY) or row.get("origin"))
-    return False
+    # Every user row sets the rule's state afresh, so reading from the last one before the turn's new
+    # rows reads what the whole transcript would, without walking a long session on every save.
+    start = next(
+        (
+            i
+            for i in range(skip - 1, -1, -1)
+            if messages[i].get("role") == "user" and not messages[i].get("_recovery_synthetic")
+        ),
+        0,
+    )
+    take_back = TakeBack()
+    taken = False
+    for index, row in enumerate(messages[start:], start):
+        if row.get("_recovery_synthetic"):
+            continue
+        step = take_back.read(
+            {
+                "role": row.get("role"),
+                "origin": row.get(_ORIGIN_KEY) or row.get("origin"),
+                "silent": row.get(_SILENT_KEY) or row.get("silent"),
+                REPLIED_VIA_TOOL: row.get(_REPLIED_VIA_TOOL_KEY) or row.get(REPLIED_VIA_TOOL),
+            }
+        )
+        if index >= skip and row.get("role") == "assistant":
+            taken = step is TakeBackStep.TAKES_BACK
+    return taken
 
 
 def _turn_trace_id() -> str | None:
