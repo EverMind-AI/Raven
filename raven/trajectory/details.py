@@ -949,11 +949,13 @@ def _d_replay(view: EntryView, attrs: dict[str, Any], loaded: _Loader, *, store:
     session_id = attrs.get("subagent.external.frames.session_id")
     start = attrs.get("subagent.external.frames.start")
     end = attrs.get("subagent.external.frames.end")
+    handshake_end = attrs.get("subagent.external.frames.handshake_end")
     messages = frames_replay.replay(
         journal,
         session_id=session_id if isinstance(session_id, str) else None,
         start=start if isinstance(start, int) else None,
         end=end if isinstance(end, int) else None,
+        handshake_end=handshake_end if isinstance(handshake_end, int) else None,
     )
     rows = frames_replay.items(messages)
     if not rows:

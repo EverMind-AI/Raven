@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.acp_client import remote, remote_runs
-from raven.acp_client.acp_dialects import AcpDialect, ToolCall, agent_version, content_texts, dialect_for
+from raven.acp_client.acp_dialects import AcpDialect, ToolCall, agent_version, dialect_for
 from raven.acp_client.ask_user import AskUserResponder, clarify_responder
 from raven.acp_client.capabilities import (
     CapabilitySnapshot,
@@ -57,6 +57,7 @@ from raven.acp_client.protocol import (
     AcpRemoteError,
     AcpTimeoutError,
 )
+from raven.acp_client.turn_events import ANSWER_UPDATES, THOUGHT_UPDATES, USER_UPDATES, TurnEvents
 from raven.agent.subagent import activity, github_copilot
 from raven.agent.subagent.attachments import attachment_blocks
 from raven.agent.subagent.backends import turn_rows
@@ -85,17 +86,6 @@ from raven.spine.message import Media
 if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider
 
-# Text-bearing update kinds, and the ones whose text is the answer rather than
-# commentary. Only `usage_update` was observed on a live server; the rest follow
-# the ACP contract and are handled defensively -- an unrecognised shape is
-# recorded raw and skipped, never guessed at.
-_ANSWER_UPDATES = ("agent_message_chunk",)
-_THOUGHT_UPDATES = ("agent_thought_chunk",)
-# What the person said mid-turn. Only a steer produces one during a live turn:
-# every other user message reached the agent as the prompt and is already on
-# the caller's side, so this frame is the one record of a steer landing.
-_USER_UPDATES = ("user_message_chunk",)
-
 # A tool call ends whatever message was being written: an agent that says what
 # it is about to do, runs a command and then reports back has sent two messages,
 # and the protocol marks the boundary only by what came between them. Thoughts
@@ -104,13 +94,6 @@ _USER_UPDATES = ("user_message_chunk",)
 # its call is pending or in progress is passed over for the same reason.
 _BREAKING_UPDATES = ("tool_call", "tool_call_update")
 _MESSAGE_BREAK = "\n\n"
-
-# One synthetic id for the turn's plan. The frame carries no call id of its
-# own, and a plan frame re-sends the whole list on every change -- five times
-# for one plan in codex's capture, the only adapter measured sending one -- so
-# a row per frame would be five near-identical rows. The branch this feeds is
-# dialect-independent: any adapter's plan frame lands here.
-_PLAN_CALL_ID = "acp-plan"
 
 
 def _uploads_root() -> Path | None:
@@ -174,9 +157,6 @@ class AcpProviderRefusalError(AcpEmptyTurnError):
     def __init__(self, message: str, *, said: str) -> None:
         super().__init__(message)
         self.said = said
-
-
-_RESULT_TEXT_CAP = 2000
 
 
 def _counted(value: Any) -> bool:
@@ -354,6 +334,9 @@ class _TurnCollector:
         # The spec by default, so a collector built without one (every test that
         # only cares about answer text) still reads tool calls correctly.
         self._dialect = dialect or AcpDialect()
+        # What the agent said, thought and ran, reduced by the same code the
+        # journal replay uses; ``events`` is its list, read in place.
+        self._turn = TurnEvents(self._dialect, prompt)
         self._agent_version = agent_version
         self._tool_ran = False
         self._steered = False
@@ -385,7 +368,7 @@ class _TurnCollector:
         self.thoughts: list[str] = []
         self.kinds: list[str] = []
         self.usage: dict[str, Any] = {}
-        self.events: list[dict[str, Any]] = []
+        self.events = self._turn.events
         self.answer_at: str | None = None
 
     @staticmethod
@@ -427,14 +410,8 @@ class _TurnCollector:
         # otherwise leave the stall watcher reading a run that never moved.
         activity.note_alive(self._run)
         if method == PERMISSION_METHOD:
-            # Subject only, never the name: this frame reports `kind: "execute"`
-            # even for a call the session update badged `read`, and reading it
-            # for a name would erase the distinction codex drew.
-            command = self._dialect.permission_command(params)
+            call_id = self._turn.permission(params)
             tool = params.get("toolCall")
-            call_id = str(tool.get("toolCallId") or "") if isinstance(tool, dict) else ""
-            if command and call_id:
-                self._backfill_permission_command(call_id, command)
             # The earliest frame that names the call. An agent that asks first
             # and announces the call as it runs it -- raven's own does -- leaves
             # the announce too late for a listing to be a baseline: the file the
@@ -448,11 +425,11 @@ class _TurnCollector:
         kind = update.get("sessionUpdate")
         kind = kind if isinstance(kind, str) else "unknown"
         self.kinds.append(kind)
-        if kind in _ANSWER_UPDATES:
+        applied = self._turn.apply(update, self._now())
+        if kind in ANSWER_UPDATES:
             if not self.answer:
                 self.answer_at = self._now()
-            texts = content_texts(update.get("content"))
-            said = "".join(texts)
+            texts = applied.texts
             step = bool(texts) and self._tool_ran and bool(self.answer)
             broke = step or (bool(texts) and self._steered and bool(self.answer))
             if broke:
@@ -464,15 +441,6 @@ class _TurnCollector:
                 self._tool_ran = False
                 self._steered = False
             self.answer.extend(texts)
-            if said:
-                # Merged with the previous burst only when nothing came between:
-                # a `call` event in between is exactly what makes this a new
-                # burst, and the boundary is what puts each one on the step it
-                # was said before instead of at the end with the rest.
-                if self.events and self.events[-1].get("t") == "say":
-                    self.events[-1]["text"] += said
-                else:
-                    self.events.append({"t": "say", "text": said, "at": self._now()})
             if broke:
                 # Raven's separator, not the agent's words. A step's break comes
                 # before the message it opens and is in no reply, so it rides past
@@ -486,23 +454,15 @@ class _TurnCollector:
             if self._on_delta is not None:
                 for text in texts:
                     await self._on_delta(text)
-        elif kind in _USER_UPDATES:
-            said = "".join(content_texts(update.get("content")))
-            if said and said.strip() != self._prompt:
+        elif kind in USER_UPDATES:
+            if applied.steered:
                 # Set apart by a break, but not the end of the message: raven
                 # puts a steer on the wire as it arrives and reads it only before
                 # its next model call, so the words after it can finish the
                 # message it landed in.
                 self._steered = bool(self.answer)
-                self.events.append({"t": "user", "text": said, "at": self._now()})
-        elif kind in _THOUGHT_UPDATES:
-            chunks = content_texts(update.get("content"))
-            self.thoughts.extend(chunks)
-            for c in chunks:
-                if self.events and self.events[-1].get("t") == "thought":
-                    self.events[-1]["text"] += c
-                else:
-                    self.events.append({"t": "thought", "text": c, "at": self._now()})
+        elif kind in THOUGHT_UPDATES:
+            self.thoughts.extend(applied.texts)
         elif kind in _BREAKING_UPDATES:
             # Both tool kinds break the message, and each also contributes its
             # own row to the transcript: the call names what was run, the update
@@ -516,50 +476,19 @@ class _TurnCollector:
             # claude-agent-acp reports a finished call's result on one.
             if kind == "tool_call" or update.get("status") not in ("pending", "in_progress"):
                 self._tool_ran = True
-            if kind == "tool_call":
-                call = self._dialect.call(update)
-                if call.id and any(e.get("t") == "call" and e.get("id") == call.id for e in self.events):
-                    # A second opening frame for a call already announced. The spec
-                    # revises with `tool_call_update`, but codebuddy re-sends
-                    # `tool_call` once it knows the kind, and appending again
-                    # rendered one read as two rows with only one result to pair.
-                    # Treated as the revision it is, which also lets the finer
-                    # `kind` on this frame name the call.
-                    self._revise_call(update)
-                else:
-                    self.events.append(
-                        {
-                            "t": "call",
-                            "id": call.id or f"call-{len(self.calls) + 1}",
-                            "call": call,
-                            "at": self._now(),
-                        }
-                    )
-            else:
-                self._revise_call(update)
-                status = update.get("status")
-                if status in ("completed", "failed"):
-                    outcome = self._dialect.result(update)
-                    self.events.append(
-                        {
-                            "t": "result",
-                            "id": str(update.get("toolCallId") or ""),
-                            "ok": outcome.ok,
-                            "text": outcome.text[:_RESULT_TEXT_CAP],
-                            "at": self._now(),
-                        }
-                    )
-                    self._backfill_subject(str(update.get("toolCallId") or ""), update)
             if self._track_files:
                 await self._note_files(update)
         elif kind == "plan":
-            self._plan(update)
+            # Only the opening frame breaks the message. A revision that broke it
+            # too would split the narration around a plan that changes four times.
+            if applied.opened_plan:
+                self._tool_ran = True
         elif kind == "usage_update":
             self.usage = {k: v for k, v in update.items() if k != "sessionUpdate"}
         # Republished on every update rather than once at the end: the live
         # index is how a panel watches the run, and a transcript that only
         # exists after the answer is not a live view of anything.
-        if kind in (*_ANSWER_UPDATES, *_THOUGHT_UPDATES, *_USER_UPDATES, "tool_call", "tool_call_update", "plan"):
+        if kind in (*ANSWER_UPDATES, *THOUGHT_UPDATES, *USER_UPDATES, "tool_call", "tool_call_update", "plan"):
             activity.set_transcript(self._run, self.messages(in_flight=True))
         # The count beside it, on the same beat: `tasks.list` draws a running
         # node's tool count off the live account, and a tally published only
@@ -720,150 +649,6 @@ class _TurnCollector:
         if os.path.isabs(path) or self._workspace is None:
             return path
         return str(Path(self._workspace) / path)
-
-    def _revise_call(self, update: dict[str, Any]) -> None:
-        """Re-read a call's arguments from a later frame.
-
-        The opening ``tool_call`` announces the call before the arguments are
-        known: measured on claude-agent-acp and opencode, it carries
-        ``rawInput: {}`` and the real input follows on a ``tool_call_update``.
-        Until that lands, the only thing a reader has is the title -- which is
-        why the fallback to it is resolved at render time (``ToolCall.subject``)
-        rather than stored here.
-
-        The newest input wins, because that is what a ``tool_call_update``
-        means: the fields it carries replace the call's current ones, so an
-        adapter that revises an argument has revised what the tool actually ran
-        with. The whole call is re-parsed rather than only its input, since the
-        same frame also carries the ``kind`` and ``_meta`` a dialect names the
-        tool from -- but only when it does: ``names_call`` is what decides, and
-        a frame that answers False leaves the name alone.
-        """
-        if not self._dialect.revises_call(update):
-            return
-        call_id = str(update.get("toolCallId") or "")
-        for event in reversed(self.events):
-            if event.get("t") == "call" and event.get("id") == call_id:
-                revised = self._dialect.call(update)
-                previous: ToolCall = event["call"]
-                event["call"] = ToolCall(
-                    id=previous.id,
-                    # Guarded like the fields below it: a frame that carries no
-                    # kind cannot name the call, and reading one anyway is what
-                    # renamed codex's searches to the fallback.
-                    name=revised.name if self._dialect.names_call(update) else previous.name,
-                    argument=revised.argument or previous.argument,
-                    # An update need not repeat the title, and losing it would
-                    # leave a no-argument call with nothing to show at all.
-                    title=revised.title or previous.title,
-                    raw_input=revised.raw_input or previous.raw_input,
-                )
-                return
-
-    def _backfill_subject(self, call_id: str, update: dict[str, Any]) -> None:
-        """Set a call's subject from its own result.
-
-        The frame that opened the call did not have it: codex sends
-        ``apply_patch`` as the command and names the files it patched only in
-        the output. Never overwrites a subject already known -- a later frame
-        revising an argument is ``_revise_call``'s business, not this.
-
-        Passes the call's own name, established when it opened, into
-        ``subject_from_result`` as the tool the completed frame belongs to: that
-        frame typically carries none of ``tool_name``'s own discriminators, so
-        without it a dialect could not tell an ``apply_patch`` completion from
-        any other tool's own -- including one whose output merely looks like an
-        apply_patch envelope.
-        """
-        for event in reversed(self.events):
-            if event.get("t") == "call" and event.get("id") == call_id:
-                previous: ToolCall = event["call"]
-                if previous.argument:
-                    return
-                subject = self._dialect.subject_from_result(update, name=previous.name)
-                if not subject:
-                    return
-                # The new subject must win a `path` collision -- an
-                # `imageGeneration` call's own `rawInput` can already carry one
-                # -- so it seeds the dict and `previous.raw_input` is copied in
-                # behind it, the same order `CodexDialect.call` merges with.
-                raw_input = {"path": subject}
-                for key, value in previous.raw_input.items():
-                    if key == "path":
-                        continue
-                    # `apply_patch`'s own `command` is the tool's name, not an
-                    # argument -- a reader that picks a subject by scanning
-                    # known key names rather than by position (as
-                    # `ui-tui`'s `callSubject` does) would otherwise take it
-                    # over the subject just recovered here. A real recovered
-                    # command never equals the call's own name, so this never
-                    # drops one.
-                    if key == "command" and value == previous.name:
-                        continue
-                    raw_input[key] = value
-                event["call"] = ToolCall(
-                    id=previous.id,
-                    name=previous.name,
-                    argument=subject,
-                    title=previous.title,
-                    raw_input=raw_input,
-                )
-                return
-
-    def _backfill_permission_command(self, call_id: str, command: str) -> None:
-        """Set a call's subject to the command a permission request recovered.
-
-        Guarded on ``raw_input`` already carrying a ``command`` key rather than
-        on ``argument`` being non-empty: a ``commandExecution.read`` opens with
-        its ``locations`` path already filling ``argument``, and that
-        placeholder is exactly what this must replace. A real
-        ``commandExecution`` -- and ``apply_patch``, whose ``rawInput.command``
-        is its own name -- already carry their command there, and overwriting
-        either would either restate the same value or, for ``apply_patch``,
-        block the file-derived subject its own result still owes it.
-        """
-        for event in reversed(self.events):
-            if event.get("t") == "call" and event.get("id") == call_id:
-                previous: ToolCall = event["call"]
-                if previous.raw_input.get("command"):
-                    return
-                event["call"] = ToolCall(
-                    id=previous.id,
-                    name=previous.name,
-                    argument=command,
-                    title=previous.title,
-                    raw_input={"command": command, **previous.raw_input},
-                )
-                return
-
-    def _plan(self, update: dict[str, Any]) -> None:
-        """Open the turn's plan row, or move the one already open.
-
-        Only the opening frame breaks the message. A revision that broke it too
-        would split the narration around a plan that changes four times.
-        """
-        subject, checklist = self._dialect.plan_rows(update)
-        if not checklist:
-            return
-        call = ToolCall(
-            id=_PLAN_CALL_ID,
-            name=self._dialect.plan_tool_name,
-            argument=subject,
-            title="",
-            raw_input={"argument": subject} if subject else {},
-        )
-        for event in self.events:
-            if event.get("t") == "call" and event.get("id") == _PLAN_CALL_ID:
-                event["call"] = call
-                break
-        else:
-            self._tool_ran = True
-            self.events.append({"t": "call", "id": _PLAN_CALL_ID, "call": call, "at": self._now()})
-        for event in self.events:
-            if event.get("t") == "result" and event.get("id") == _PLAN_CALL_ID:
-                event["text"] = checklist
-                return
-        self.events.append({"t": "result", "id": _PLAN_CALL_ID, "ok": True, "text": checklist, "at": self._now()})
 
     def turn_counts(self, answered: Any) -> dict[str, Any]:
         """The turn's token counts, from one source: never both, as ``note_usage`` adds.

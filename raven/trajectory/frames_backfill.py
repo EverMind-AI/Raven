@@ -121,6 +121,7 @@ def backfill(
             session_id=session_id if isinstance(session_id, str) else None,
             start=_int(attrs.get(FRAMES_KEY + "start")),
             end=_int(attrs.get(FRAMES_KEY + "end")),
+            handshake_end=_int(attrs.get(FRAMES_KEY + "handshake_end")),
         )
         if prompt is None and not events:
             unread += 1

@@ -1958,29 +1958,81 @@ def _frames(path: Path) -> Path:
     return path
 
 
-def _external_run(state: Path, journal: Path) -> tidx.SessionIndex:
+def _external_run(state: Path, journal: Path, *, handshake_end: int | None = None) -> tidx.SessionIndex:
+    attrs = {
+        "subagent.external.agent": "claude-code",
+        "subagent.external.frames.path": str(journal),
+        "subagent.external.frames.session_id": "s",
+        "subagent.external.frames.start": 0,
+        "subagent.external.frames.end": journal.stat().st_size,
+    }
+    if handshake_end is not None:
+        attrs["subagent.external.frames.handshake_end"] = handshake_end
     _append(
         state,
         [
             _turn(state, "t", "turn", start=0, end=30),
-            _span(
-                "t",
-                "ext",
-                "subagent.external",
-                parent="turn",
-                start=1,
-                end=5,
-                attrs={
-                    "subagent.external.agent": "claude-code",
-                    "subagent.external.frames.path": str(journal),
-                    "subagent.external.frames.session_id": "s",
-                    "subagent.external.frames.start": 0,
-                    "subagent.external.frames.end": journal.stat().st_size,
-                },
-            ),
+            _span("t", "ext", "subagent.external", parent="turn", start=1, end=5, attrs=attrs),
         ],
     )
     return _ready(state)
+
+
+def _resumed_codex_frames(path: Path) -> tuple[Path, int]:
+    """A codex connection's journal: the handshake, a resumed session's load and
+    the history it replays, then this run's prompt and one command that failed."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    def line(direction: str, frame: dict) -> str:
+        record = {"_type": "acp_frame", "timestamp": "2026-09-01T10:00:01+00:00", "dir": direction, "frame": frame}
+        return json.dumps(record) + "\n"
+
+    def update(body: dict) -> dict:
+        return {"method": "session/update", "params": {"sessionId": "s", "update": body}}
+
+    text = line("out", {"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {}})
+    text += line("in", {"jsonrpc": "2.0", "id": 0, "result": {"agentInfo": {"name": "codex-acp"}}})
+    handshake_end = len(text.encode("utf-8"))
+    text += line("out", {"jsonrpc": "2.0", "id": 1, "method": "session/load", "params": {"sessionId": "s"}})
+    text += line(
+        "in", update({"sessionUpdate": "agent_message_chunk", "content": [{"type": "text", "text": "earlier turn"}]})
+    )
+    text += line("in", {"jsonrpc": "2.0", "id": 1, "result": {}})
+    text += line(
+        "out",
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/prompt",
+            "params": {"sessionId": "s", "prompt": [{"type": "text", "text": "run the i18n gate"}]},
+        },
+    )
+    text += line(
+        "in",
+        update(
+            {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "c1",
+                "title": "lint",
+                "kind": "execute",
+                "status": "in_progress",
+                "rawInput": {"command": ["pnpm", "lint:i18n"]},
+            }
+        ),
+    )
+    text += line(
+        "in",
+        update(
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "status": "completed",
+                "rawOutput": {"formatted_output": "2 missing keys", "exit_code": 1},
+            }
+        ),
+    )
+    path.write_text(text, encoding="utf-8")
+    return path, handshake_end
 
 
 def _replay(index: tidx.SessionIndex, state: Path):
@@ -1993,6 +2045,12 @@ def test_replay_reads_the_runs_journal_from_this_stores_own_journals(state):
     body = _replay(_external_run(state, journal), state)
     assert body.availability == tdet.AVAILABLE
     assert body.data["items"][0] == {"key": "llm.input", "value": "do it", "source": "replay"}
+
+
+def test_replay_reads_a_command_with_the_dialect_the_connections_handshake_chose(state):
+    journal, handshake_end = _resumed_codex_frames(state / "logs" / "acp-frames" / "2026-09-01" / "agent-2.jsonl")
+    body = _replay(_external_run(state, journal, handshake_end=handshake_end), state)
+    assert {"key": "tool.output", "value": "[failed] 2 missing keys", "source": "replay"} in body.data["items"]
 
 
 def test_replay_will_not_open_a_journal_the_record_names_outside_this_store(state, tmp_path):

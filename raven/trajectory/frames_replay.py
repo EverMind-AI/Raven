@@ -5,11 +5,11 @@ reader could see that the worker ran but not what it said or did. Spans are
 recorded for new runs (see ``observability.record_steps``); this module serves
 the runs that predate them, and is the one place the journal is parsed.
 
-The aggregation mirrors ``acp_client.acp_agent._TurnCollector``: message chunks
-merge into one message per burst, thoughts merge the same way, and a tool call
-is paired with the ``tool_call_update`` that settled it. The result is the
-provider shape ``turn_rows`` already renders, so the page shows a replayed run
-with the same renderer as the live one.
+The frames are reduced by ``acp_client.turn_events.TurnEvents``, the code the
+live collector (``acp_client.acp_agent._TurnCollector``) runs, under the dialect
+the connection's own handshake chose -- so a replayed run reads the way the live
+one did. The result is the provider shape ``turn_rows`` already renders, so the
+page shows a replayed run with the same renderer as the live one.
 """
 
 from __future__ import annotations
@@ -18,7 +18,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from raven.acp_client.acp_dialects import AcpDialect, content_texts
+from raven.acp_client.acp_dialects import AcpDialect, content_texts, dialect_for
+from raven.acp_client.permissions import PERMISSION_METHOD
+from raven.acp_client.turn_events import TurnEvents
 from raven.agent.subagent.backends import turn_rows
 
 _MAX_FRAMES = 400_000
@@ -36,106 +38,77 @@ def _slice(path: Path, start: int | None, end: int | None) -> bytes:
         return handle.read(stop - begin)
 
 
+def _records(raw: bytes) -> Any:
+    for index, line in enumerate(raw.splitlines()):
+        if index > _MAX_FRAMES:
+            return
+        try:
+            record = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(record, dict) and record.get("_type") == "acp_frame" and isinstance(record.get("frame"), dict):
+            yield record
+
+
+def _dialect(path: Path, handshake_end: int | None) -> AcpDialect:
+    """The dialect the live run read its frames with: the one its handshake chose.
+
+    A journal is per connection and opens with the handshake, so ``[0,
+    handshake_end)`` holds the ``initialize`` request and the agent's answer
+    to it -- the same answer ``dialect_for`` was given live.
+    """
+    if not isinstance(handshake_end, int) or handshake_end <= 0:
+        return AcpDialect()
+    asked: set[Any] = set()
+    for record in _records(_slice(path, 0, handshake_end)):
+        frame = record["frame"]
+        if frame.get("method") == "initialize":
+            asked.add(frame.get("id"))
+        elif frame.get("id") in asked and isinstance(frame.get("result"), dict):
+            return dialect_for(frame["result"])
+    return AcpDialect()
+
+
 def events(
     path: str | Path,
     *,
     session_id: str | None = None,
     start: int | None = None,
     end: int | None = None,
+    handshake_end: int | None = None,
 ) -> tuple[str | None, list[dict[str, Any]]]:
     """(prompt, ordered events) for one run, in the collector's own shape.
 
-    The events are ``{"t": say|thought|call|result, "at": <journal time>}`` --
-    the same vocabulary ``_TurnCollector`` builds live, so a backfill writes
-    spans with the same code the recorder does.
+    The events are ``{"t": say|thought|user|call|result, "at": <journal time>}``
+    -- the same list ``_TurnCollector`` builds live, so a backfill writes spans
+    with the same code the recorder does.
     """
     try:
         raw = _slice(Path(path), start, end)
+        dialect = _dialect(Path(path), handshake_end)
     except OSError:
         return None, []
-    dialect = AcpDialect()
     prompt_text: str | None = None
-    events: list[dict[str, Any]] = []
-    said: list[str] = []
-    said_at: str | None = None
-    thought: list[str] = []
-    thought_at: str | None = None
-
-    def flush_say() -> None:
-        nonlocal said_at
-        text = "".join(said).strip()
-        said.clear()
-        if text:
-            events.append({"t": "say", "text": text, "at": said_at})
-        said_at = None
-
-    def flush_thought() -> None:
-        nonlocal thought_at
-        text = "".join(thought).strip()
-        thought.clear()
-        if text:
-            events.append({"t": "thought", "text": text, "at": thought_at})
-        thought_at = None
-
-    for index, line in enumerate(raw.splitlines()):
-        if index > _MAX_FRAMES:
-            break
-        try:
-            record = json.loads(line)
-        except (ValueError, TypeError):
-            continue
-        if not isinstance(record, dict) or record.get("_type") != "acp_frame":
-            continue
-        frame = record.get("frame") if isinstance(record.get("frame"), dict) else {}
+    turn = TurnEvents(dialect)
+    for record in _records(raw):
+        frame = record["frame"]
         params = frame.get("params") if isinstance(frame.get("params"), dict) else {}
         if session_id is not None and str(params.get("sessionId") or "") != session_id:
             continue
         at = record.get("timestamp") if isinstance(record.get("timestamp"), str) else None
         method = frame.get("method")
         if method == "session/prompt":
-            flush_thought()
             prompt = params.get("prompt")
             texts = content_texts(prompt) if isinstance(prompt, list) else []
             if texts:
                 prompt_text = "".join(texts)
+                turn.prompt = prompt_text.strip()
             continue
-        if method != "session/update":
-            continue
-        update = params.get("update") if isinstance(params.get("update"), dict) else {}
-        kind = update.get("sessionUpdate")
-        if kind == "agent_message_chunk":
-            flush_thought()
-            if said_at is None:
-                said_at = at
-            said.extend(content_texts(update.get("content")))
-        elif kind == "agent_thought_chunk":
-            flush_say()
-            if thought_at is None:
-                thought_at = at
-            thought.extend(content_texts(update.get("content")))
-        elif kind == "tool_call":
-            flush_say()
-            flush_thought()
-            call = dialect.call(update)
-            held = next((e for e in events if e.get("t") == "call" and e.get("id") == call.id), None)
-            if held is not None:
-                held["call"] = call
-            else:
-                events.append({"t": "call", "id": call.id or f"call-{len(events)}", "call": call, "at": at})
-        elif kind == "tool_call_update" and update.get("status") in ("completed", "failed"):
-            outcome = dialect.result(update)
-            events.append(
-                {
-                    "t": "result",
-                    "id": str(update.get("toolCallId") or ""),
-                    "ok": outcome.ok,
-                    "text": outcome.text,
-                    "at": at,
-                }
-            )
-    flush_say()
-    flush_thought()
-    return prompt_text, events
+        if method == PERMISSION_METHOD:
+            turn.permission(params)
+        elif method == "session/update" and isinstance(params.get("update"), dict):
+            turn.apply(params["update"], at)
+    return prompt_text, turn.events
 
 
 def replay(
@@ -144,10 +117,11 @@ def replay(
     session_id: str | None = None,
     start: int | None = None,
     end: int | None = None,
+    handshake_end: int | None = None,
 ) -> list[dict[str, Any]]:
     """The run's conversation as provider messages: what it was asked, what it
     said, what it thought and what it ran, in the order the wire saw them."""
-    prompt, steps = events(path, session_id=session_id, start=start, end=end)
+    prompt, steps = events(path, session_id=session_id, start=start, end=end, handshake_end=handshake_end)
     if prompt:
         steps = [{"t": "user", "text": prompt, "at": steps[0].get("at") if steps else None}, *steps]
     finished: list[dict[str, Any]] = []
