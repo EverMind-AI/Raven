@@ -310,7 +310,11 @@ def record_steps(
                     end = max(end, _utc(result.get("at")) or end)
                 steps.append(("tool.call", "tool", at, end, artifacts, attributes))
         for index, (name, span_type, start, end, artifacts, attributes) in enumerate(steps):
+            # Inside the run, both ends: a journal keeps naive local times, and
+            # one read in another zone, or across a clock step, can fall outside.
+            start = max(start, floor)
             if ended_at is not None:
+                start = min(start, ended_at)
                 end = min(end, ended_at)
             span_id = f"span-{id_seed}-{index}" if id_seed else tracing_context.new_span_id()
             if skip_ids is not None and span_id in skip_ids:

@@ -147,8 +147,14 @@ def backfill(
             continue
         repaired += 1
         if not dry_run:
+            # Closed at the run's end. A step that began after it begins there
+            # too: left where it was, the next pass would find it past the end
+            # again and write it again, every pass.
+            moved = {"endTime": run_end.isoformat()}
             opened = _stamp(record, "startTime")
-            tracing_spans.emit({**record, "endTime": max(opened or run_end, run_end).isoformat()})
+            if opened is not None and opened > run_end:
+                moved["startTime"] = run_end.isoformat()
+            tracing_spans.emit({**record, **moved})
 
     return {
         "runs": len(runs),

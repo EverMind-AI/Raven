@@ -294,6 +294,95 @@ def test_a_step_an_earlier_pass_left_running_past_its_run_is_closed_at_the_runs_
     assert frames_backfill.backfill(state)["repaired"] == 0
 
 
+def _late_step_journal(path: Path) -> None:
+    """A run whose last step is stamped after the run closed: the journal keeps
+    naive local times, and a reader in another zone, or across a clock step,
+    reads one past the span's end."""
+    lines = []
+
+    def frame(at: str, body: dict) -> None:
+        lines.append(json.dumps({"_type": "acp_frame", "timestamp": at, "dir": "in", "frame": body}))
+
+    def update(body: dict) -> dict:
+        return {"method": "session/update", "params": {"sessionId": "s", "update": body}}
+
+    frame(
+        "2026-10-27T09:00:01+00:00",
+        {"method": "session/prompt", "params": {"sessionId": "s", "prompt": [{"type": "text", "text": "do it"}]}},
+    )
+    frame(
+        "2026-10-27T09:00:05+00:00",
+        update({"sessionUpdate": "agent_message_chunk", "content": [{"type": "text", "text": "on it"}]}),
+    )
+    frame(
+        "2026-10-27T09:00:45+00:00",
+        update(
+            {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "c9",
+                "title": "read_file",
+                "kind": "read",
+                "status": "in_progress",
+            }
+        ),
+    )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_a_step_stamped_after_its_run_closed_is_drawn_inside_the_run(tmp_path: Path, monkeypatch):
+    state = _state(tmp_path)
+    journal = tmp_path / "journal.jsonl"
+    _late_step_journal(journal)
+    _timed_run(state, journal)
+    captured = _recording(state, monkeypatch)
+
+    frames_backfill.backfill(state)
+
+    opened, closed = datetime.fromisoformat(RUN_START), datetime.fromisoformat(RUN_END)
+    assert len(captured) == 3
+    for step in captured:
+        start, end = datetime.fromisoformat(step["startTime"]), datetime.fromisoformat(step["endTime"])
+        assert opened <= start <= end <= closed, (step["spanId"], step["startTime"], step["endTime"])
+
+
+def test_a_second_pass_over_a_late_step_writes_nothing(tmp_path: Path, monkeypatch):
+    state = _state(tmp_path)
+    journal = tmp_path / "journal.jsonl"
+    _late_step_journal(journal)
+    _timed_run(state, journal)
+    captured = _recording(state, monkeypatch)
+    frames_backfill.backfill(state)
+    captured.clear()
+
+    again = frames_backfill.backfill(state)
+
+    assert (again["written"], again["repaired"], captured) == (0, 0, [])
+
+
+def test_a_step_an_earlier_pass_wrote_wholly_after_its_run_is_moved_inside_it_once(tmp_path: Path, monkeypatch):
+    state = _state(tmp_path)
+    journal = tmp_path / "journal.jsonl"
+    _late_step_journal(journal)
+    _timed_run(state, journal)
+    captured = _recording(state, monkeypatch)
+    frames_backfill.backfill(state)
+    last = max(captured, key=lambda s: s["spanId"])
+    stray = {**last, "startTime": "2026-10-27T09:00:45+00:00", "endTime": "2026-10-27T09:00:45+00:00"}
+    with (state / "logs" / "audit-spans.log").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(stray) + "\n")
+    captured.clear()
+
+    fixed = frames_backfill.backfill(state)
+
+    assert fixed["repaired"] == 1
+    (moved,) = captured
+    assert datetime.fromisoformat(moved["startTime"]) <= datetime.fromisoformat(moved["endTime"])
+    assert datetime.fromisoformat(moved["endTime"]) == datetime.fromisoformat(RUN_END)
+    captured.clear()
+    assert frames_backfill.backfill(state)["repaired"] == 0
+    assert captured == []
+
+
 def test_a_result_stamped_after_the_run_closed_does_not_stretch_its_step(tmp_path: Path, monkeypatch):
     state = _state(tmp_path)
     journal = tmp_path / "journal.jsonl"
