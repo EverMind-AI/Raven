@@ -208,6 +208,35 @@ def _slice(artifacts_dir: Path, sha1: str, limit: int | None) -> bytes | None:
     return plain[offset : offset + want]
 
 
+def _pack_plaintext_length(artifacts_dir: Path, name: str, lengths: dict[str, int | None]) -> int | None:
+    """A pack's decoded length, or None when it does not decode whole.
+
+    Cached per run: one read and one decompression per distinct pack, however
+    many index entries name it. A store copied incompletely can leave a pack
+    truncated, and the frame header still records the original size then, so
+    the decoded length is what decides whether an entry still resolves.
+    """
+    if name not in lengths:
+        try:
+            plain = read_plaintext((packs_dir(artifacts_dir) / name).read_bytes())
+        except OSError:
+            plain = None
+        lengths[name] = None if plain is None else len(plain)
+    return lengths[name]
+
+
+def _slice_is_readable(artifacts_dir: Path, entry: tuple[str, int, int], lengths: dict[str, int | None]) -> bool:
+    """Whether the pack an index entry names decodes and covers its slice.
+
+    A store can be copied or cleaned outside this module, so an address the
+    index lists may have no readable slice left; the message file is then the
+    only copy and must be kept.
+    """
+    name, offset, length = entry
+    size = _pack_plaintext_length(artifacts_dir, name, lengths)
+    return size is not None and offset + length <= size
+
+
 def read_message(artifacts_dir: Path | str, sha1: str, limit: int | None = None) -> bytes | None:
     """One packed message's plaintext, or None when the index does not hold it."""
     if not _SHA1_RE.match(sha1):
@@ -348,6 +377,7 @@ def pack_messages(
     existing = load_index(artifacts_dir)
     known = dict(existing.messages) if existing is not None else {}
     packs = dict(existing.packs) if existing is not None else {}
+    lengths: dict[str, int | None] = {}
     added: dict[str, tuple[str, int, int]] = {}
     pending: list[tuple[str, bytes]] = []
     pending_bytes = 0
@@ -412,6 +442,9 @@ def pack_messages(
             return result
         for path, sha1 in candidates:
             if sha1 not in known and sha1 not in added:
+                continue
+            entry = known.get(sha1) or added.get(sha1)
+            if entry is not None and not _slice_is_readable(artifacts_dir, entry, lengths):
                 continue
             try:
                 path.unlink()

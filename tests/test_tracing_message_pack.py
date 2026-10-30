@@ -197,3 +197,44 @@ def test_a_pack_over_the_cache_budget_is_streamed(tmp_path: Path, monkeypatch) -
     for ref, message in zip(refs, MESSAGES):
         assert json.loads(message_pack.read_message(artifacts, ref["$msg"])) == message
 
+
+def test_pack_keeps_a_file_whose_pack_is_gone(tmp_path: Path) -> None:
+    refs = _publish(tmp_path)
+    artifacts = tmp_path / "logs" / "audit-artifacts"
+    message_pack.pack_messages(artifacts)
+    kept = artifact_v2.message_path(artifacts, refs[0]["$msg"])
+    for pack in message_pack.packs_dir(artifacts).glob("*.pack.zst"):
+        pack.unlink()
+    kept.parent.mkdir(parents=True, exist_ok=True)
+    kept.write_text(artifact_v2.message_text(MESSAGES[0]), encoding="utf-8")
+    newcomer = {"role": "user", "content": "a message written after the pack was lost"}
+    new_path = artifact_v2.message_path(artifacts, artifact_v2.message_sha1(newcomer))
+    new_path.parent.mkdir(parents=True, exist_ok=True)
+    new_path.write_text(artifact_v2.message_text(newcomer), encoding="utf-8")
+
+    message_pack.pack_messages(artifacts)
+
+    assert kept.is_file()
+    shell = {"artifactFormat": artifact_v2.ARTIFACT_FORMAT, "messages": [refs[0]]}
+    assert artifact_v2.resolve_payload(shell, artifacts)["messages"][0] == MESSAGES[0]
+
+
+def test_pack_keeps_a_file_whose_pack_is_truncated(tmp_path: Path) -> None:
+    refs = _publish(tmp_path)
+    artifacts = tmp_path / "logs" / "audit-artifacts"
+    message_pack.pack_messages(artifacts)
+    kept = artifact_v2.message_path(artifacts, refs[0]["$msg"])
+    pack = next(message_pack.packs_dir(artifacts).glob("*.pack.zst"))
+    pack.write_bytes(pack.read_bytes()[:16])
+    kept.parent.mkdir(parents=True, exist_ok=True)
+    kept.write_text(artifact_v2.message_text(MESSAGES[0]), encoding="utf-8")
+    newcomer = {"role": "user", "content": "a message written after the pack was cut"}
+    new_path = artifact_v2.message_path(artifacts, artifact_v2.message_sha1(newcomer))
+    new_path.parent.mkdir(parents=True, exist_ok=True)
+    new_path.write_text(artifact_v2.message_text(newcomer), encoding="utf-8")
+
+    message_pack.pack_messages(artifacts)
+
+    assert kept.is_file()
+    shell = {"artifactFormat": artifact_v2.ARTIFACT_FORMAT, "messages": [refs[0]]}
+    assert artifact_v2.resolve_payload(shell, artifacts)["messages"][0] == MESSAGES[0]
