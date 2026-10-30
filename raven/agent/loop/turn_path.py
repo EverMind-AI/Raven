@@ -2828,6 +2828,9 @@ class TurnPathMixin:
         ``"silent": True`` for the last of those: a turn the model ended on a
         marker, and that nothing replaced with a reply of its own -- and, when
         that reply had streamed anything first, ``"shown"`` (``LoopOutcome.shown``).
+        It receives ``"delivered_files": True`` for a turn a tool handed the
+        reader files in: those went out with the call, so such a turn answered
+        whatever it ends on, and is never a Silent Turn.
         ``reply_awaited`` keeps a turn whose caller waits on its text out of
         the silence protocol (``_run_agent_loop``).
         """
@@ -3514,8 +3517,11 @@ class TurnPathMixin:
             # A hook composed the reply the reader is sent in place of the marker. A turn the
             # message tool answered sends no reply of its own, so its marker row stays.
             _file_composed_reply(turn_msgs, final_content)
-        if sent_by_tool or _delivered_files(turn_msgs[turn_start_idx:]):
+        delivered_files = _delivered_files(turn_msgs[turn_start_idx:])
+        if sent_by_tool or delivered_files:
             _stamp_replied_via_tool(turn_msgs, turn_start_idx)
+        if delivered_files and silence is not None:
+            silence["delivered_files"] = True
         if len(self.hooks) > 0:
             _stamp_turn_observers(turn_msgs, turn_hook_meta, turn_start_idx)
 
@@ -3575,6 +3581,12 @@ class TurnPathMixin:
                     sender_id,
                     preview,
                 )
+            return None
+
+        if silent and delivered_files:
+            # The files reached the reader with the call that delivered them, so the turn answered,
+            # by the verdict filed above: not a Silent Turn, and the marker is no reply to send.
+            logger.info("Turn for {}:{} delivered files and ended on the silence marker", channel, sender_id)
             return None
 
         if silent:
@@ -4364,6 +4376,7 @@ class TurnPathMixin:
             total_tokens=int(usage_sink.get("total_tokens", 0) or 0),
         )
         # A message-tool reply returns None from _process_message but did reply,
-        # so it counts as an explicit reply too.
-        replied_via_tool = isinstance(message_tool, MessageTool) and message_tool.sent_in_turn
+        # so it counts as an explicit reply too, and so do files a tool delivered.
+        sent_by_tool = isinstance(message_tool, MessageTool) and message_tool.sent_in_turn
+        replied_via_tool = sent_by_tool or silence.get("delivered_files") is True
         return TurnOutcome(usage=usage, explicit_reply=out is not None or replied_via_tool, silent=silent)
