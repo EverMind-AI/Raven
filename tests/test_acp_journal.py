@@ -40,7 +40,7 @@ def test_each_frame_is_one_line_and_the_offset_slices_it(tmp_path: Path) -> None
     # The session log's own grammar: a `_type` on every record and `timestamp`
     # as the time key, so one reader parses this file and the conversation's.
     assert {r["_type"] for r in written} == {FRAME}
-    assert all(r["timestamp"] and "+" not in r["timestamp"] for r in written), "naive local, as the session log is"
+    assert all(datetime.fromisoformat(r["timestamp"]).tzinfo is not None for r in written), "local, with its offset"
     tail = [json.loads(line) for line in body[mark:].decode().splitlines()]
     assert tail[0]["session"] == "s1"
     assert tail[1]["text"] == "provider said no"
@@ -258,3 +258,35 @@ def test_an_empty_identity_writes_no_bind_line(tmp_path: Path) -> None:
     journal.close()
 
     assert not journal.path.exists()
+
+
+@pytest.mark.skipif(not hasattr(__import__("time"), "tzset"), reason="moving the process zone needs time.tzset")
+def test_a_frame_stamp_names_the_same_instant_in_any_zone_that_reads_it(tmp_path: Path) -> None:
+    """A backfill can read a journal on another machine, or after the zone
+    changed: the stamp has to carry its offset for the steps to land in their run."""
+    import os
+    import time
+
+    from raven.agent.subagent.backends.observability import _utc
+
+    before = os.environ.get("TZ")
+    try:
+        os.environ["TZ"] = "Asia/Shanghai"
+        time.tzset()
+        journal = FrameJournal(tmp_path / "a.jsonl")
+        journal.note("in", frame={"method": "session/update"})
+        journal.close()
+        written_at = datetime.now(timezone.utc)
+        stamp = _records(journal.path)[-1]["timestamp"]
+
+        os.environ["TZ"] = "UTC"
+        time.tzset()
+        read = _utc(stamp)
+    finally:
+        if before is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = before
+        time.tzset()
+
+    assert read is not None and abs(read - written_at) < timedelta(minutes=1)
