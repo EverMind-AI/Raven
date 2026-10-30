@@ -3572,6 +3572,63 @@ async def test_the_run_writes_what_its_agent_said_and_ran_as_steps_inside_it(
         assert opened <= start <= end <= closed, (step["name"], step["startTime"], run["startTime"])
 
 
+def _steps_of_the_run(trace_dir: Path) -> tuple[dict, list[dict]]:
+    written = _spans_written(trace_dir)
+    run = next(s for s in written if s.get("name") == "subagent.external")
+    return run, [s for s in written if s.get("parentSpanId") == run["spanId"]]
+
+
+def _said(steps: list[dict]) -> list[str]:
+    return [s["attributes"].get("llm.input_preview") or s["attributes"].get("llm.output_preview") for s in steps]
+
+
+async def test_a_cancelled_run_still_writes_the_steps_it_took(trace_dir, tmp_path: Path) -> None:
+    """A run cut short by its caller writes what its agent said and ran until then.
+
+    The cut-short run is the one a reader opens the trajectory for, and its
+    frames were already kept; the steps that make them readable went only with
+    an answer. The count goes on the run too, so a backfill leaves it alone.
+    """
+    backend = build_third_party_backend(stub_config("a", mode="cancel_aware"))
+    run = asyncio.create_task(backend.run("ping", task_id="t1", workspace=tmp_path, executor=None))
+    await asyncio.sleep(1.0)
+    run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run
+
+    ext, steps = _steps_of_the_run(trace_dir)
+    assert _said(steps) == ["ping", "working"]
+    assert ext["attributes"]["subagent.external.steps"] == len(steps)
+
+
+async def test_a_run_past_its_prompt_deadline_still_writes_the_steps_it_took(trace_dir, tmp_path: Path) -> None:
+    """The prompt's own deadline ends the turn with an error, not a cancel: the
+    frames and the steps are written on that way out as well."""
+    from raven.acp_client.protocol import AcpTimeoutError
+
+    cfg = stub_config("a", mode="cancel_aware")
+    backend = AcpAgentBackend(name="a", command=cfg.command, env=dict(cfg.env), timeout=1)
+    with pytest.raises(AcpTimeoutError):
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    ext, steps = _steps_of_the_run(trace_dir)
+    assert _said(steps) == ["ping", "working"]
+    assert ext["attributes"]["subagent.external.steps"] == len(steps)
+    assert "subagent.external.frames.path" in ext["attributes"]
+
+
+async def test_a_run_whose_agent_died_mid_turn_still_writes_the_steps_it_took(trace_dir, tmp_path: Path) -> None:
+    """The connection going under the prompt is the third way a turn ends
+    without an answer; half an answer is still what the agent said."""
+    backend = build_third_party_backend(stub_config("a", mode="dies_mid_turn"))
+    with pytest.raises(Exception, match="exit 5"):
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    ext, steps = _steps_of_the_run(trace_dir)
+    assert _said(steps) == ["ping", "half"]
+    assert ext["attributes"]["subagent.external.steps"] == len(steps)
+
+
 async def test_a_backfill_after_a_live_run_writes_no_second_copy_of_its_steps(trace_dir, tmp_path: Path) -> None:
     """The run's journal is on disk as well, so the backfill could read the
     same steps out of it again under ids of its own, and every step would be
