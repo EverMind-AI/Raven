@@ -5520,6 +5520,10 @@ export interface SettingsGetResult {
   };
   config_path: string;
   raven_version: string;
+  /**
+   * Whether conversational Skill Hub retrieval is on, read the way the runtime reads the config: an endpoint is required, and enabled=false turns it off.
+   */
+  skill_hub_on: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

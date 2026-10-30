@@ -12,16 +12,9 @@ import * as store from '../store'
 import type { SkillDetail, SkillRow } from '../types'
 import type { JSX } from 'react'
 
-interface ForgeBlock {
-  blocklist?: string[]
-  router?: { hub?: { endpoint?: unknown; enabled?: unknown } }
-}
-
 /* The block as the file spells it: `dig` reads `skillForge` or `skill_forge`. */
-const forge = (raw: Record<string, unknown>): ForgeBlock | undefined => dig(raw, 'skillForge') as ForgeBlock | undefined
-
 export function blocklist(raw: Record<string, unknown>): string[] {
-  const block = forge(raw)
+  const block = dig(raw, 'skillForge') as { blocklist?: string[] } | undefined
   return (block && block.blocklist) || []
 }
 
@@ -35,37 +28,15 @@ const skillDir = (path: unknown): string => String(path || '').replace(/[\\/]SKI
 
 const HUB_SWITCH = 'skillForge.router.hub.enabled'
 
-const TRUE_BOOLS = new Set(['true', '1', 'on', 'yes'])
-const FALSE_BOOLS = new Set(['false', '0', 'off', 'no'])
-
-/* The boolean the loader gives `enabled`: pydantic reads 0, "false", "off"
-   and friends as off, so Python truthiness on the raw JSON would disagree
-   with the runtime. A value the schema would refuse is not consent. */
-function enabledBySchema(value: unknown): boolean {
-  if (typeof value === 'boolean') return value
-  if (typeof value === 'number') return value !== 0
-  if (typeof value === 'string') {
-    const word = value.trim().toLowerCase()
-    if (TRUE_BOOLS.has(word)) return true
-    if (FALSE_BOOLS.has(word)) return false
-  }
-  return false
-}
-
-/* The switch's state is the effective source, not the raw flag: an endpoint
-   is required, and an explicit off keeps a stored URL switched off. */
-function hubOn(raw: Record<string, unknown>): boolean {
-  const hub = forge(raw)?.router?.hub
-  if (!hub || typeof hub.endpoint !== 'string' || !hub.endpoint) return false
-  return hub.enabled === undefined ? true : enabledBySchema(hub.enabled)
-}
-
-function HubCard({ raw }: { raw: Record<string, unknown> }): JSX.Element {
+/* The switch draws settings.get's answer, not the raw file: the runtime reads
+   the file through the loader's migrations (a legacy top-level router, retired
+   keys) and its boolean rules, and a page-side copy of either drifts. */
+function HubCard({ on }: { on: boolean }): JSX.Element {
   const label = t('gui.settings.skills.hub_title')
   return (
     <Card title={t('gui.settings.skills.hub_card')}>
       <Row label={label}>
-        <Switch on={hubOn(raw)} label={label} onChange={(on) => void store.write(HUB_SWITCH, on)} />
+        <Switch on={on} label={label} onChange={(next) => void store.write(HUB_SWITCH, next)} />
       </Row>
     </Card>
   )
@@ -116,7 +87,7 @@ function SkillList(): JSX.Element {
           {t('gui.settings.skills.add')}
         </button>
       </div>
-      <HubCard raw={s.snap.raw} />
+      <HubCard on={s.snap.skillHub.on} />
       {groups.map(([label, rows]) => {
         const onN = rows.filter((r) => !blocked.has(r.name)).length
         const count = onN === rows.length ? String(rows.length) : t('gui.settings.skills.on_of', { on: onN, total: rows.length })

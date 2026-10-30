@@ -8,7 +8,7 @@ import * as store from './store'
 import type { SettingsSnapshot, SettingsSource } from './types'
 
 const snapOf = (model: string): SettingsSnapshot => ({
-  raw: {}, configPath: '', everos: null, providers: [], curProvider: '', model, tools: [], skills: [], mcp: [],
+  raw: {}, configPath: '', skillHub: { on: false }, everos: null, providers: [], curProvider: '', model, tools: [], skills: [], mcp: [],
 })
 
 afterEach(() => {

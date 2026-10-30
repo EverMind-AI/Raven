@@ -61,63 +61,29 @@ describe('skills page', () => {
     expect(calls).toEqual([['set', { key: 'skillForge.router.hub.enabled', value: true }]])
   })
 
-  it('an endpoint turns the Skill Hub switch on; an explicit off keeps it off', async () => {
-    const on = snap()
-    on.raw.skillForge = { blocklist: [], router: { hub: { endpoint: 'https://hub.internal.test' } } }
-    install(on)
-    await mount('skills')
-    expect(screen.getByRole('switch', { name: 'gui.settings.skills.hub_title' }).getAttribute('aria-checked')).toBe('true')
-    cleanup()
-    store._resetForTests()
-
-    const off = snap()
-    off.raw.skillForge = { blocklist: [], router: { hub: { endpoint: 'https://hub.internal.test', enabled: false } } }
+  it('the Skill Hub switch draws the server answer, not the raw file', async () => {
+    /* The raw file is no guide to what the runtime does: here it names an
+       endpoint the server reads as off (a hand-written value the loader
+       refuses), and below it names none while the loader nests a legacy router
+       under skillForge and searches it. */
+    const off = snap({ skillHub: { on: false } })
+    off.raw.skillForge = { blocklist: [], router: { hub: { endpoint: 'https://hub.internal.test', enabled: ' true ' } } }
     install(off)
     await mount('skills')
     expect(screen.getByRole('switch', { name: 'gui.settings.skills.hub_title' }).getAttribute('aria-checked')).toBe('false')
-  })
+    cleanup()
+    store._resetForTests()
 
-  it('reads a hand-written enabled the way the loader does', async () => {
-    const cases: Array<[unknown, string]> = [[0, 'false'], ['false', 'false'], ['off', 'false'], [1, 'true'], ['true', 'true']]
-    for (const [written, checked] of cases) {
-      const snapshot = snap()
-      snapshot.raw.skillForge = {
-        blocklist: [],
-        router: { hub: { endpoint: 'https://hub.internal.test', enabled: written } },
-      }
-      install(snapshot)
-      await mount('skills')
-      expect(
-        screen.getByRole('switch', { name: 'gui.settings.skills.hub_title' }).getAttribute('aria-checked'),
-      ).toBe(checked)
-      cleanup()
-      store._resetForTests()
-    }
-  })
-
-  it('reads the Skill Hub switch from a snake_case skill_forge block', async () => {
-    /* settings.get returns the file as written, and both spellings load, so
-       the harness's camel block has to go or it answers for the snake one. */
-    const on = snap()
-    delete on.raw.skillForge
-    on.raw.skill_forge = { router: { hub: { endpoint: 'https://hub.internal.test' } } }
+    const on = snap({ skillHub: { on: true } })
+    on.raw.skillRouter = { hub: { endpoint: 'https://hub.internal.test' } }
     const { calls } = install(on)
     await mount('skills')
     const hub = screen.getByRole('switch', { name: 'gui.settings.skills.hub_title' })
     expect(hub.getAttribute('aria-checked')).toBe('true')
-    /* Read as off, the switch sends true on every click and the page can never
-       turn the source off. */
+    /* Read as off, the switch would send true on every click and the page
+       could never turn the source off. */
     await act(async () => { fireEvent.click(hub) })
     expect(calls).toEqual([['set', { key: 'skillForge.router.hub.enabled', value: false }]])
-    cleanup()
-    store._resetForTests()
-
-    const off = snap()
-    delete off.raw.skillForge
-    off.raw.skill_forge = { router: { hub: { endpoint: 'https://hub.internal.test', enabled: false } } }
-    install(off)
-    await mount('skills')
-    expect(screen.getByRole('switch', { name: 'gui.settings.skills.hub_title' }).getAttribute('aria-checked')).toBe('false')
   })
 
   it('reads the blocklist from a snake_case skill_forge block', async () => {

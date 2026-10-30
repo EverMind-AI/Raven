@@ -5283,12 +5283,17 @@
             },
             "raven_version": {
               "type": "string"
+            },
+            "skill_hub_on": {
+              "description": "Whether conversational Skill Hub retrieval is on, read the way the runtime reads the config: an endpoint is required, and enabled=false turns it off.",
+              "type": "boolean"
             }
           },
           "required": [
             "settings",
             "config_path",
-            "raven_version"
+            "raven_version",
+            "skill_hub_on"
           ],
           "type": "object"
         }

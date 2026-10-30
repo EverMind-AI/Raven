@@ -151,6 +151,9 @@ export type OauthStart = ResultOf<'model.oauth_login'>
 export interface SettingsSnapshot {
   raw: Record<string, unknown>
   configPath: string
+  /* The Skill Hub source as the runtime reads it, answered by settings.get:
+     the loader's migrations and boolean rules decide it, not the raw file. */
+  skillHub: { on: boolean }
   everos: EverosInfo | null
   everosCloud?: EverosCloudInfo | null
   providers: ProviderRow[]

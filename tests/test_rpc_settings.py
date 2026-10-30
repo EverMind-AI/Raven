@@ -1276,6 +1276,31 @@ async def test_settings_set_blocklist_preserves_invalid_sections(cfg, spelling, 
     assert cfg.read_bytes() == before
 
 
+@pytest.mark.parametrize(
+    ("payload", "on"),
+    [
+        ({}, False),
+        ({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test"}}}}, True),
+        ({"skillForge": {"router": {"hub": {"endpoint": None}}}}, False),
+        ({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test", "enabled": "y"}}}}, True),
+        ({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test", "enabled": " true "}}}}, False),
+        ({"skillRouter": {"hub": {"endpoint": "https://hub.internal.test", "prefetchBodies": 1}}}, True),
+    ],
+)
+async def test_settings_get_reports_the_hub_switch_as_the_runtime_reads_it(cfg, payload, on):
+    """The page draws the Skill Hub switch from this answer instead of from the
+    raw file: the loader migrates legacy shapes in memory and parses lax
+    booleans by its own rules, and a page-side copy of either drifts."""
+    from raven.config.live import LiveConfig, skill_hub_enabled
+
+    cfg.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = await rpc_console.settings_get({})
+
+    assert result["skill_hub_on"] is on
+    assert skill_hub_enabled(LiveConfig(cfg)) is on
+
+
 async def test_settings_set_hub_switch_on_seeds_the_endpoint(cfg):
     from raven.config.raven import load_raven_config
 

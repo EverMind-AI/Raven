@@ -634,6 +634,7 @@ def _mask_secrets(node: Any, key_hint: str = "") -> Any:
 async def settings_get(params: dict, *, agent_loop_factory=None) -> dict:
     from importlib.metadata import version as pkg_version
 
+    from raven.config.live import skill_hub_on
     from raven.config.loader import get_config_path, read_raw_or_raise
 
     path = get_config_path()
@@ -645,7 +646,15 @@ async def settings_get(params: dict, *, agent_loop_factory=None) -> dict:
         ver = pkg_version("raven")
     except Exception:
         ver = "unknown"
-    return {"settings": _mask_secrets(raw), "config_path": str(path), "raven_version": ver}
+    return {
+        "settings": _mask_secrets(raw),
+        "config_path": str(path),
+        "raven_version": ver,
+        # Answered here rather than left to the page: the runtime reads the
+        # file through the loader's migrations and its boolean rules, and a
+        # copy of either in the page drifts from it.
+        "skill_hub_on": skill_hub_on(raw),
+    }
 
 
 async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:

@@ -85,6 +85,7 @@ export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
       providers: { anthropic: { modelOverlay: { 'claude-opus-4-5': { label: 'Opus', description: 'the big one' } } } },
     },
     configPath: '/home/me/.raven/config.json',
+    skillHub: { on: false },
     everos: {
       available: true,
       owned: true,

@@ -138,6 +138,22 @@ describe('settings source', () => {
     expect(chipWrites).toEqual([])
   })
 
+  it('the Skill Hub state is the server answer, not a reading of the raw file', async () => {
+    /* The raw file names no Hub here, yet the loader nests a legacy top-level
+       router under skillForge, so the runtime searches it: only the server can
+       say so, and the snapshot carries its word. */
+    const settings = { skillRouter: { hub: { endpoint: 'https://hub.internal.test' } } }
+    const on = await load({ 'settings.get': { settings, config_path: '/c.json', skill_hub_on: true } })
+    await on.loadSettings()
+    expect(on.settingsSnapshot().skillHub).toEqual({ on: true })
+
+    const off = await load({
+      'settings.get': { settings: { skillForge: { router: { hub: { endpoint: 'https://h.test' } } } }, config_path: '/c.json', skill_hub_on: false },
+    })
+    await off.loadSettings()
+    expect(off.settingsSnapshot().skillHub).toEqual({ on: false })
+  })
+
   it('a draft that picked a mode keeps it when the chip is re-read', async () => {
     /* With no session the read is default-scoped, so its answer is the
        configured default. Painting that over a staged pick made the chip claim
