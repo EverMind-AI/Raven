@@ -712,14 +712,19 @@ export function Waterfall(): JSX.Element {
       if (agent.scope === null) continue
       for (const scope of agent.scopes) if (scope !== null) nameOfScope.set(scope, scopeTitle(agent.door))
     }
-    let llm = 0
-    let tool = 0
+    /* A call writes several entries -- its input, its thinking, its output --
+       under one span, so calls are counted by span. A failed span has one
+       failure entry, which is what the error count reads. */
+    const llmSpans = new Set<string>()
+    const toolSpans = new Set<string>()
     let errors = 0
     for (const entry of shown) {
-      if (entry.kind.startsWith('llm.')) llm += 1
-      else if (entry.kind.startsWith('tool.')) tool += 1
+      if (entry.kind.startsWith('llm.')) llmSpans.add(entry.span_id)
+      else if (entry.kind.startsWith('tool.')) toolSpans.add(entry.span_id)
       if (entry.failure_entry) errors += 1
     }
+    const llm = llmSpans.size
+    const tool = toolSpans.size
     let turnCount = 0
     let sessionStart = Infinity
     let sessionEnd = -Infinity
