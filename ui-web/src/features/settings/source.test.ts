@@ -143,15 +143,22 @@ describe('settings source', () => {
        router under skillForge, so the runtime searches it: only the server can
        say so, and the snapshot carries its word. */
     const settings = { skillRouter: { hub: { endpoint: 'https://hub.internal.test' } } }
-    const on = await load({ 'settings.get': { settings, config_path: '/c.json', skill_hub_on: true } })
+    const on = await load({
+      'settings.get': { settings, config_path: '/c.json', skill_hub_on: true, skill_hub_awaiting_reload: true },
+    })
     await on.loadSettings()
-    expect(on.settingsSnapshot().skillHub).toEqual({ on: true })
+    expect(on.settingsSnapshot().skillHub).toEqual({ on: true, awaitingReload: true })
 
     const off = await load({
-      'settings.get': { settings: { skillForge: { router: { hub: { endpoint: 'https://h.test' } } } }, config_path: '/c.json', skill_hub_on: false },
+      'settings.get': {
+        settings: { skillForge: { router: { hub: { endpoint: 'https://h.test' } } } },
+        config_path: '/c.json',
+        skill_hub_on: false,
+        skill_hub_awaiting_reload: false,
+      },
     })
     await off.loadSettings()
-    expect(off.settingsSnapshot().skillHub).toEqual({ on: false })
+    expect(off.settingsSnapshot().skillHub).toEqual({ on: false, awaitingReload: false })
   })
 
   it('a draft that picked a mode keeps it when the chip is re-read', async () => {

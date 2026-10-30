@@ -615,10 +615,33 @@ async def cron_runs(params: dict, *, agent_loop_factory=None) -> dict:
 # ---------------------------------------------------------------------------
 
 
-# The one write a running gateway cannot pick up: an endpoint seeded after the
-# loop was built has no Hub client to use. Both the settings switch and the web
-# wizard's finish return this, and the page shows it as a toast.
 _SKILL_HUB_RELOAD_WARNING = "Saved. Skill Hub search starts after Raven reloads."
+
+
+def _skill_hub_awaits_reload(on: bool, agent_loop_factory: Any) -> bool:
+    """Whether the source reads on while the loop serving now cannot search.
+
+    A loop builds its Hub client from the endpoint it started with, and only
+    the endpoint is fixed there: ``enabled`` is read live. So the wait is a
+    property of that loop, not of the write that ended it -- a later switch-on
+    finds the endpoint already written and the loop still without a client.
+    No loop at all is no wait, because the first one is built from this file.
+    """
+    if not on or agent_loop_factory is None:
+        return False
+    loop = agent_loop_factory()
+    return loop is not None and getattr(loop, "_skill_hub_client", None) is None
+
+
+def _skill_hub_reply(previous: Any, agent_loop_factory: Any) -> dict[str, Any]:
+    """A Skill Hub write's answer, warning when the serving loop cannot search yet."""
+    from raven.config.live import skill_hub_on
+    from raven.config.loader import get_config_path, read_raw_or_raise
+
+    reply: dict[str, Any] = {"applied": True, "previous": previous}
+    if _skill_hub_awaits_reload(skill_hub_on(read_raw_or_raise(get_config_path())), agent_loop_factory):
+        reply["warning"] = _SKILL_HUB_RELOAD_WARNING
+    return reply
 
 
 def _mask_secrets(node: Any, key_hint: str = "") -> Any:
@@ -646,14 +669,16 @@ async def settings_get(params: dict, *, agent_loop_factory=None) -> dict:
         ver = pkg_version("raven")
     except Exception:
         ver = "unknown"
+    # Answered here rather than left to the page: the runtime reads the file
+    # through the loader's migrations and its boolean rules, and a copy of
+    # either in the page drifts from it.
+    hub_on = skill_hub_on(raw)
     return {
         "settings": _mask_secrets(raw),
         "config_path": str(path),
         "raven_version": ver,
-        # Answered here rather than left to the page: the runtime reads the
-        # file through the loader's migrations and its boolean rules, and a
-        # copy of either in the page drifts from it.
-        "skill_hub_on": skill_hub_on(raw),
+        "skill_hub_on": hub_on,
+        "skill_hub_awaiting_reload": _skill_hub_awaits_reload(hub_on, agent_loop_factory),
     }
 
 
@@ -726,13 +751,7 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
             change = set_skill_hub_enabled(value)
         except ValueError as exc:
             raise ConfigValidationError(str(exc)) from exc
-        reply: dict[str, Any] = {"applied": True, "previous": change.previous}
-        if change.seeded_endpoint:
-            # The running loop was built without an endpoint, so it has no Hub
-            # client to switch back on. Off is live in both directions; this is
-            # the one write that needs a reload, and the page shows the warning.
-            reply["warning"] = _SKILL_HUB_RELOAD_WARNING
-        return reply
+        return _skill_hub_reply(change.previous, agent_loop_factory)
 
     if key == "skillForge.router.hub.init":
         # The web wizard's finish. It seeds the endpoint the way the CLI
@@ -743,16 +762,10 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
         from raven.config.update import initialize_skill_hub_endpoint
 
         try:
-            seeded = initialize_skill_hub_endpoint()
+            initialize_skill_hub_endpoint()
         except ValueError as exc:
             raise ConfigValidationError(str(exc)) from exc
-        reply: dict[str, Any] = {"applied": True, "previous": None}
-        if seeded is not None:
-            # The first-run page may already have a loop without a Hub client;
-            # the wizard surfaces this so the switch does not read on while
-            # retrieval waits for a restart.
-            reply["warning"] = _SKILL_HUB_RELOAD_WARNING
-        return reply
+        return _skill_hub_reply(None, agent_loop_factory)
 
     if key in ("plugins.disabled", "tools.disabledTools", "skillForge.blocklist"):
         if not isinstance(value, list) or not all(isinstance(x, str) for x in value):

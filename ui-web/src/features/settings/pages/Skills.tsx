@@ -31,11 +31,11 @@ const HUB_SWITCH = 'skillForge.router.hub.enabled'
 /* The switch draws settings.get's answer, not the raw file: the runtime reads
    the file through the loader's migrations (a legacy top-level router, retired
    keys) and its boolean rules, and a page-side copy of either drifts. */
-function HubCard({ on }: { on: boolean }): JSX.Element {
+function HubCard({ on, awaitingReload }: { on: boolean; awaitingReload: boolean }): JSX.Element {
   const label = t('gui.settings.skills.hub_title')
   return (
     <Card title={t('gui.settings.skills.hub_card')}>
-      <Row label={label}>
+      <Row label={label} sub={awaitingReload ? t('gui.settings.skills.hub_reload') : undefined}>
         <Switch on={on} label={label} onChange={(next) => void store.write(HUB_SWITCH, next)} />
       </Row>
     </Card>
@@ -87,7 +87,7 @@ function SkillList(): JSX.Element {
           {t('gui.settings.skills.add')}
         </button>
       </div>
-      <HubCard on={s.snap.skillHub.on} />
+      <HubCard on={s.snap.skillHub.on} awaitingReload={s.snap.skillHub.awaitingReload} />
       {groups.map(([label, rows]) => {
         const onN = rows.filter((r) => !blocked.has(r.name)).length
         const count = onN === rows.length ? String(rows.length) : t('gui.settings.skills.on_of', { on: onN, total: rows.length })

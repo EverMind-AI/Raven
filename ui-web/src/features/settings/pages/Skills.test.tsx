@@ -66,7 +66,7 @@ describe('skills page', () => {
        endpoint the server reads as off (a hand-written value the loader
        refuses), and below it names none while the loader nests a legacy router
        under skillForge and searches it. */
-    const off = snap({ skillHub: { on: false } })
+    const off = snap({ skillHub: { on: false, awaitingReload: false } })
     off.raw.skillForge = { blocklist: [], router: { hub: { endpoint: 'https://hub.internal.test', enabled: ' true ' } } }
     install(off)
     await mount('skills')
@@ -74,7 +74,7 @@ describe('skills page', () => {
     cleanup()
     store._resetForTests()
 
-    const on = snap({ skillHub: { on: true } })
+    const on = snap({ skillHub: { on: true, awaitingReload: false } })
     on.raw.skillRouter = { hub: { endpoint: 'https://hub.internal.test' } }
     const { calls } = install(on)
     await mount('skills')
@@ -84,6 +84,21 @@ describe('skills page', () => {
        could never turn the source off. */
     await act(async () => { fireEvent.click(hub) })
     expect(calls).toEqual([['set', { key: 'skillForge.router.hub.enabled', value: false }]])
+  })
+
+  it('the Skill Hub row says so while the serving loop cannot search yet', async () => {
+    /* The switch reads on as soon as the endpoint is written, but a loop that
+       started without one holds no Hub client until a reload; a toast is gone
+       before the reader looks at the switch again. */
+    install(snap({ skillHub: { on: true, awaitingReload: true } }))
+    await mount('skills')
+    expect(screen.getByText('gui.settings.skills.hub_reload')).toBeTruthy()
+    cleanup()
+    store._resetForTests()
+
+    install(snap({ skillHub: { on: true, awaitingReload: false } }))
+    await mount('skills')
+    expect(screen.queryByText('gui.settings.skills.hub_reload')).toBeNull()
   })
 
   it('reads the blocklist from a snake_case skill_forge block', async () => {

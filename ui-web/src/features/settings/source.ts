@@ -43,7 +43,7 @@ import type { AuthField, ProviderOp, SettingsSnapshot, SettingsSource, SkillDeta
 let RAW: Record<string, unknown> = {}
 
 let configPathLive = '~/.raven/config.json'
-let skillHubOn = false
+let skillHub = { on: false, awaitingReload: false }
 let everosLive: ResultOf<'settings.everos'> | null = null
 let everosCloudLive: ResultOf<'settings.everosCloud'> | null = null
 let cloudProbe: Promise<ResultOf<'settings.everosCloud'> | null> = Promise.resolve(null)
@@ -140,7 +140,7 @@ export async function loadSettings(): Promise<void> {
   const r = await gateway().call('settings.get', {})
   RAW = (r.settings || {}) as Record<string, unknown>
   configPathLive = r.config_path || configPathLive
-  skillHubOn = r.skill_hub_on === true
+  skillHub = { on: r.skill_hub_on === true, awaitingReload: r.skill_hub_awaiting_reload === true }
   drawBanner()
   const agents = RAW.agents as { defaults?: { model?: string; provider?: string } } | undefined
   const defaults = (agents && agents.defaults) || {}
@@ -170,7 +170,7 @@ export async function loadSettingsWithProviders(): Promise<void> {
 }
 
 export const settingsSnapshot = (): SettingsSnapshot => ({
-  raw: RAW, configPath: configPathLive, skillHub: { on: skillHubOn }, everos: everosLive, everosCloud: everosCloudLive,
+  raw: RAW, configPath: configPathLive, skillHub, everos: everosLive, everosCloud: everosCloudLive,
   // Both default-scoped on purpose: the settings page describes what new
   // conversations start on, so pairing the default model with the visible
   // session's provider badged the wrong row whenever the two scopes differ.
@@ -472,7 +472,7 @@ export const watchMcp = (onStatus: () => void): (() => void) => gateway().on('mc
 export function _resetForTests(): void {
   RAW = {}
   configPathLive = '~/.raven/config.json'
-  skillHubOn = false
+  skillHub = { on: false, awaitingReload: false }
   everosLive = null
   everosCloudLive = null
   cloudProbe = Promise.resolve(null)

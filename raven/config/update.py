@@ -346,9 +346,8 @@ class SkillHubSwitch:
     """What a switch write changed.
 
     ``previous`` is the effective state before the write, as the runtime reads
-    it. ``seeded_endpoint`` is the one case a running loop cannot pick up: it
-    was built without an endpoint, so no Hub client exists to turn back on
-    until the next reload.
+    it. ``seeded_endpoint`` says whether turning it on had to add the shared
+    URL; whether a running loop can search with it is that loop's question.
     """
 
     previous: bool
@@ -363,9 +362,9 @@ def set_skill_hub_enabled(enabled: bool, *, config_path: Path | None = None) -> 
     endpoint. Off records ``enabled: false`` and leaves the URL in place, so
     turning it back on restores the same one.
 
-    Both directions are read live by the running loop when the endpoint is
-    already there; only a write that had to seed the endpoint needs a reload,
-    and the RPC says so.
+    Both directions are read live by a running loop that started with an
+    endpoint; a loop that started without one has no Hub client until a
+    reload, and the RPC says so.
     """
     path = config_path or get_config_path()
 

@@ -1301,13 +1301,23 @@ async def test_settings_get_reports_the_hub_switch_as_the_runtime_reads_it(cfg, 
     assert skill_hub_enabled(LiveConfig(cfg)) is on
 
 
+class _ServingLoop:
+    """The one attribute the reload notice reads off the serving loop."""
+
+    def __init__(self, client: object | None) -> None:
+        self._skill_hub_client = client
+
+
 async def test_settings_set_hub_switch_on_seeds_the_endpoint(cfg):
     from raven.config.raven import load_raven_config
 
-    result = await rpc_console.settings_set({"key": "skillForge.router.hub.enabled", "value": True})
+    result = await rpc_console.settings_set(
+        {"key": "skillForge.router.hub.enabled", "value": True},
+        agent_loop_factory=lambda: _ServingLoop(None),
+    )
 
-    # Only this write needs a reload: the running loop was built without an
-    # endpoint, so it has no Hub client to switch back on. Off is live.
+    # The serving loop was built without an endpoint, so it has no Hub client
+    # to switch on until a reload. Off is live.
     assert result == {
         "applied": True,
         "previous": False,
@@ -1358,15 +1368,13 @@ async def test_settings_set_hub_init_seeds_without_re_enabling(cfg):
         encoding="utf-8",
     )
 
-    result = await rpc_console.settings_set({"key": "skillForge.router.hub.init", "value": True})
+    result = await rpc_console.settings_set(
+        {"key": "skillForge.router.hub.init", "value": True},
+        agent_loop_factory=lambda: _ServingLoop(None),
+    )
 
-    # The first-run loop may have been built before this seed; the wizard shows
-    # the same reload cost the switch write returns.
-    assert result == {
-        "applied": True,
-        "previous": None,
-        "warning": "Saved. Skill Hub search starts after Raven reloads.",
-    }
+    # The source stays off, so nothing waits for a reload.
+    assert result == {"applied": True, "previous": None}
     assert _read(cfg)["skillForge"]["router"]["hub"] == {
         "enabled": False,
         "endpoint": "https://skillhub.evermind.ai",
@@ -1377,6 +1385,55 @@ async def test_settings_set_hub_init_seeds_without_re_enabling(cfg):
         "enabled": False,
         "endpoint": "https://skillhub.evermind.ai",
     }
+
+
+@pytest.mark.parametrize(
+    ("serving", "warned"),
+    [(None, False), (_ServingLoop(None), True), (_ServingLoop(object()), False)],
+    ids=["no loop yet", "loop without a client", "loop with a client"],
+)
+@pytest.mark.parametrize("key", ["skillForge.router.hub.enabled", "skillForge.router.hub.init"])
+async def test_the_reload_notice_follows_the_serving_loop(cfg, key, serving, warned):
+    """The notice answers "can the loop serving now search?", not "did this
+    write seed the endpoint?": with no loop yet the first one is built from
+    this file, and a loop that started with an endpoint switches live."""
+    result = await rpc_console.settings_set({"key": key, "value": True}, agent_loop_factory=lambda: serving)
+
+    assert ("warning" in result) is warned
+    got = await rpc_console.settings_get({}, agent_loop_factory=lambda: serving)
+    assert (got["skill_hub_on"], got["skill_hub_awaiting_reload"]) == (True, warned)
+
+
+async def test_the_reload_notice_repeats_while_the_loop_still_cannot_search(cfg):
+    """A second switch-on finds the endpoint already written, and the loop is
+    still the one built without it: the wait has not ended, so neither has the
+    notice."""
+    serving = _ServingLoop(None)
+    set_to = [
+        await rpc_console.settings_set(
+            {"key": "skillForge.router.hub.enabled", "value": value}, agent_loop_factory=lambda: serving
+        )
+        for value in (True, False, True)
+    ]
+
+    assert [r.get("warning") for r in set_to] == [
+        "Saved. Skill Hub search starts after Raven reloads.",
+        None,
+        "Saved. Skill Hub search starts after Raven reloads.",
+    ]
+    off = await rpc_console.settings_get({}, agent_loop_factory=lambda: serving)
+    assert off["skill_hub_awaiting_reload"] is True
+
+
+async def test_settings_get_awaits_no_reload_while_the_source_is_off(cfg):
+    cfg.write_text(
+        json.dumps({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test", "enabled": False}}}}),
+        encoding="utf-8",
+    )
+
+    got = await rpc_console.settings_get({}, agent_loop_factory=lambda: _ServingLoop(None))
+
+    assert (got["skill_hub_on"], got["skill_hub_awaiting_reload"]) == (False, False)
 
 
 async def test_settings_set_hub_init_keeps_a_custom_endpoint(cfg):

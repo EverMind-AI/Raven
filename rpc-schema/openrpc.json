@@ -5287,13 +5287,18 @@
             "skill_hub_on": {
               "description": "Whether conversational Skill Hub retrieval is on, read the way the runtime reads the config: an endpoint is required, and enabled=false turns it off.",
               "type": "boolean"
+            },
+            "skill_hub_awaiting_reload": {
+              "description": "skill_hub_on, while the agent loop serving now was built without a Hub client: retrieval starts after a reload.",
+              "type": "boolean"
             }
           },
           "required": [
             "settings",
             "config_path",
             "raven_version",
-            "skill_hub_on"
+            "skill_hub_on",
+            "skill_hub_awaiting_reload"
           ],
           "type": "object"
         }

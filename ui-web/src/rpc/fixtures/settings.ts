@@ -198,6 +198,7 @@ export function createSettings(env: FixtureEnv, ext: ExtFixture): SettingsFixtur
         config_path: '~/.raven/config.json',
         raven_version: '0.1.0',
         skill_hub_on: hubOn(config),
+        skill_hub_awaiting_reload: false,
       }),
       'settings.set': (p) => {
         put(config, p.key, p.value)
