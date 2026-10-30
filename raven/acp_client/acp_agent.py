@@ -1951,6 +1951,24 @@ class AcpAgentBackend:
                         cancelled = self._frames(journal, connection, session_id, frames_start)
                         activity.note_frames(cancelled)
                         record_frames(span, cancelled)
+                        self._write_steps(span, collector, started)
+                        raise
+                    except Exception:
+                        # The prompt ended with no answer of its own -- its
+                        # deadline passed, or the connection went under it. What
+                        # the agent said and ran until then is on the collector
+                        # and its frames are in the journal; both are kept, as on
+                        # a cancel, so the run is not one bar with nothing in it.
+                        # Recording must not replace the error being raised.
+                        try:
+                            failed = self._frames(journal, connection, session_id, frames_start)
+                            activity.note_frames(failed)
+                            record_frames(span, failed)
+                            self._write_steps(span, collector, started)
+                        except Exception:  # noqa: BLE001 - the turn's own error is the one to raise
+                            logger.debug(
+                                "acp agent {!r}: recording a failed turn's steps failed", self.name, exc_info=True
+                            )
                         raise
                     finally:
                         if tracker is not None:
@@ -2603,9 +2621,17 @@ class AcpAgentBackend:
         activity.note_closing(collector.closing_text)
         activity.note_frames(frames)
         record_frames(span, frames)
-        # What the agent said and ran, as the run's own steps: the caller only
-        # ever sees the answer, and the wire journal is not a timeline. The
-        # count on the run is what keeps a later backfill from writing them again.
+        self._write_steps(span, collector, started)
+
+    @staticmethod
+    def _write_steps(span: Any, collector: _TurnCollector, started: float) -> None:
+        """What the agent said and ran, as the run's own steps, however the turn ended.
+
+        The caller only ever sees the answer, and the wire journal is not a
+        timeline. The count on the run is what keeps a later backfill from
+        writing them again.
+        """
+        elapsed_ms = int((time.monotonic() - started) * 1000)
         steps = record_steps(span, prompt=collector.prompt, events=collector.events, elapsed_ms=elapsed_ms)
         span.set(**{STEPS_KEY: len(steps)})
 
