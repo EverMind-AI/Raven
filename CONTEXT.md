@@ -911,10 +911,12 @@ nothing of it, so there such a marker is read with what came before it, on its o
 reply uncut would be. Either way a continuation inside a think block the cut left open is read only
 joined to what came before it. One that comes back as an error, a stream cut off before any new text
 included, ends the turn at once on the partial with the note, as `interrupted`, with no wait and no
-fallback model, and so does one that raises once the stream's own reconnects are spent -- and so
-does a turn that runs out
-of iterations or time while a continuation is still owed, with no wrap-up. On each of those exits
-the reply the turn ends on is the joined parts with their closed think blocks taken out of the whole
+fallback model, and so does a turn that runs out of iterations or time while a continuation is still
+owed, with no wrap-up. One that raises ends on the partial the same way, but not at once: only after
+`stream_llm_call` has spent its reconnects and, on a failure it still reads as transient, waited out
+`llm_error_retry_delays` (15, 30 and 60 seconds by default), with no retry notice shown.
+On each of those exits the reply the turn ends on is the joined parts with their closed think blocks
+taken out of the whole
 -- a cut can split one -- and a block still unclosed left in as text, read for a Silence Marker by
 the turn's rule as a reply with no cut is, and
 one that is a marker ends the turn as a **Silent Turn**: nothing of it shown, its row filed
