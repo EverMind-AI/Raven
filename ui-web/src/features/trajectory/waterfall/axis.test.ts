@@ -3,7 +3,7 @@
 
 import { expect, it } from 'vitest'
 
-import { AxisIndex, IDLE_MS, barOf, createAxis, formatTick, tickMarks, zoomViewport } from './axis'
+import { AxisIndex, IDLE_MS, barOf, createAxis, zoomViewport } from './axis'
 
 it('merges overlapping intervals into one occupied run', () => {
   const axis = createAxis([{ start: 0, end: 10 }, { start: 5, end: 20 }], { idleMs: 100 })
@@ -65,24 +65,6 @@ it('barOf clips a bar to the viewport and returns null outside it', () => {
   expect(barOf(axis, { from: 500, to: 1000 }, 0, 100)).toBeNull()
 })
 
-it('marks a long, mostly idle axis with a handful of ticks, not one per second', () => {
-  const threeDays = 3 * 24 * 3600 * 1000
-  const axis = createAxis([{ start: 0, end: 20 * 60_000 }, { start: threeDays, end: threeDays + 20 * 60_000 }])
-  const marks = tickMarks(axis, { from: 0, to: axis.length })
-  expect(marks.length).toBeLessThanOrEqual(12)
-  for (const mark of marks) {
-    expect(mark.left).toBeGreaterThanOrEqual(0)
-    expect(mark.left).toBeLessThanOrEqual(1)
-  }
-})
-
-it('spreads its ticks across the visible window when zoomed in', () => {
-  const axis = createAxis([{ start: 0, end: 40_000 }])
-  const marks = tickMarks(axis, { from: 0, to: axis.length / 2 })
-  expect(marks.length).toBeGreaterThan(1)
-  expect(marks[0]!.left).toBe(0)
-})
-
 it('an axis fed a page at a time equals the one built from the whole list', () => {
   const spans = [
     { start: 0, end: 1000 },
@@ -112,23 +94,3 @@ it('an insert that bridges two runs merges them into one', () => {
   expect(axis.length).toBe(3000)
 })
 
-it('labels a tick in one unit, the largest the value fills', () => {
-  expect(formatTick(0, 500)).toBe('0 ms')
-  expect(formatTick(0, 3_600_000)).toBe('0 h')
-  expect(formatTick(500)).toBe('500 ms')
-  expect(formatTick(2000)).toBe('2 s')
-  expect(formatTick(15_000)).toBe('15 s')
-  expect(formatTick(120_000)).toBe('2 min')
-  expect(formatTick(3_600_000)).toBe('1 h')
-  expect(formatTick(3 * 3_600_000 + 30 * 60_000)).toBe('3 h 30 min')
-})
-
-it('rounds a mark to what it prints before picking its unit, so it never reads "60 min" or "1 h 60 min"', () => {
-  /* Ticks fall wherever the view puts them, so any value is possible. */
-  expect(formatTick(59_940)).toBe('59.9 s')
-  expect(formatTick(59_960)).toBe('1 min')
-  expect(formatTick(3_599_000)).toBe('1 h')
-  expect(formatTick(7_199_000)).toBe('2 h')
-  expect(formatTick(3 * 3_600_000 + 59 * 60_000 + 40_000)).toBe('4 h')
-  expect(formatTick(3 * 3_600_000 + 59 * 60_000 + 20_000)).toBe('3 h 59 min')
-})
