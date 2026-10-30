@@ -150,7 +150,7 @@ export function Details(): JSX.Element | null {
   const here = value !== null && pin !== null && pin === details.tabOf(entryId)
   const pinLabel = t(here ? 'gui.trajectory.details.unpin' : 'gui.trajectory.details.pin')
   const target = entry ? scopes.openTarget(entry) : null
-  const jump = target === null || entry === null
+  const jump = target === null || entry === null || scopes.landingOf(target) === null
     ? null
     : list.opensOf(entry) !== null
       ? t('gui.trajectory.scope.open')

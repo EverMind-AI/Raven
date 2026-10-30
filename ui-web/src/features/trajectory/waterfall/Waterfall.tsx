@@ -20,7 +20,7 @@ import { formatDuration } from '../../../lib/duration'
 import * as lang from '../../../state/lang'
 import { showBar } from '../../../state/scrollbars'
 import * as details from '../detailStore'
-import { scopeTitle } from '../scopes'
+import { enter as enterScope, scopeTitle } from '../scopes'
 import * as store from '../store'
 import { AxisIndex, TRAIL_PAD, barOf, clampViewport, formatTick, tickMarks, zoomViewport } from './axis'
 import { WaterfallIndex } from './incremental'
@@ -629,14 +629,12 @@ export function Waterfall(): JSX.Element {
     }
   }
 
-  /* The door's arrow brings the worker's own rows into view: the same jump the
-     tab strip used to make, without a strip that no longer changes the page. */
+  /* The door's arrow brings the run it opened into view -- that run, not the
+     first run of the agent it folds into -- landing where the pane's own jump
+     does (scopes.ts). */
   const locate = (entry: TrajectoryEntry): void => {
     const scope = entry.opens_subagent_scope
-    if (scope === null || scope === undefined) return
-    const agent = waterfall.agents.find((candidate) => candidate.scopes.includes(scope))
-    const first = agent?.turns[0]?.rows[0] ?? agent?.loose[0]
-    if (first !== undefined) store.selectAcross(first.entry.entry_id, { source: 'link' })
+    if (scope !== null && scope !== undefined) enterScope(scope)
   }
 
   const pick = (row: WaterfallRow): void => {

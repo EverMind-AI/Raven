@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 /* The reader's moves into a Sub-agent Scope: which scope a row leads to, and
-   an external agent's run entered for the first time landing on its entry and
-   recorded block. */
+   where a move into one lands -- its external agent's entry, open on the
+   recorded block, else its first entry. */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { absorb, resetCapabilities } from '../../rpc/capabilities'
@@ -89,35 +89,43 @@ describe('where a row leads', () => {
     expect(scopes.openTarget(row('r0'))).toBeNull()
   })
 
-  it('opens what a row leads to, and does nothing for a row that leads nowhere', () => {
+  it('goes where a row leads, and does nothing for a row that leads nowhere', () => {
     expect(scopes.openFromEntry(row('m0'))).toBe(false)
-    expect([list.get().scope, list.get().scopes]).toEqual([null, []])
+    expect([list.get().scope, list.get().selectedId]).toEqual([null, null])
     expect(scopes.openFromEntry(row('back'))).toBe(true)
-    expect(list.get().scope).toBe(RUN)
+    /* Every agent is on screen at once: the jump selects, it does not filter. */
+    expect([list.get().scope, list.get().selectedId]).toEqual([null, 'r0'])
   })
 })
 
-describe('entering a tab', () => {
-  it('lands a tab opened just now on its external agent\'s entry, with the pane open on what the agent recorded', () => {
-    scopes.enter(EXT)
+describe('entering a scope', () => {
+  it('lands on its external agent\'s entry, with the pane open on what the agent recorded', () => {
+    expect(scopes.enter(EXT)).toBe(true)
     const s = list.get()
-    expect([s.scope, s.selectedId, s.selectedBy]).toEqual([EXT, 'ext', 'link'])
+    expect([s.scope, s.selectedId, s.selectedBy]).toEqual([null, 'ext', 'link'])
     expect(details.get().open).toBe(true)
     expect(details.get().arrival).toBe('ext')
     expect(details.get().preferred).toEqual({ ext: scopes.EXTERNAL_BLOCKS })
   })
 
-  it('goes back to where the reader was on the way back, not to the external agent\'s entry again', () => {
+  it('lands on the same entry every time, whatever the reader picked since', () => {
     scopes.enter(EXT)
-    list.select('e0', { source: 'click' })
+    list.selectAcross('e0', { source: 'click' })
     scopes.enter(RUN)
     scopes.enter(EXT)
-    expect([list.get().selectedId, list.get().selectedBy]).toEqual(['e0', 'migrate'])
+    expect([list.get().selectedId, list.get().selectedBy]).toEqual(['ext', 'link'])
   })
 
-  it('opens a tab with no external agent on nothing selected and the pane closed', () => {
-    scopes.enter(RUN)
-    expect([list.get().scope, list.get().selectedId, details.get().open]).toEqual([RUN, null, false])
+  it('lands a run with no external agent on its first entry, and opens the pane on it', () => {
+    expect(scopes.enter(RUN)).toBe(true)
+    expect([list.get().scope, list.get().selectedId, details.get().open]).toEqual([null, 'r0', true])
     expect(details.get().preferred).toEqual({})
+  })
+
+  it('has nowhere to land in a scope with no entries yet, and leaves the selection alone', () => {
+    list.selectAcross('m0', { source: 'click' })
+    expect(scopes.landingOf('t:nothing-yet')).toBeNull()
+    expect(scopes.enter('t:nothing-yet')).toBe(false)
+    expect(list.get().selectedId).toBe('m0')
   })
 })

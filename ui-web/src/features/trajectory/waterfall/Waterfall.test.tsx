@@ -497,6 +497,22 @@ it('sends the door’s arrow to the worker’s own first row', async () => {
   expect(store.get().selectedId).toBe('s1')
 })
 
+it('sends a later run’s door to that run, not to the first run of the agent it folds into', async () => {
+  await draw([
+    E('d1', 0, { kind: 'tool.output', opens_subagent_scope: 't:a', meta: { agent: 'claude-code' } }),
+    E('a1', 1, { subagent_scope: 't:a', turn_span_id: 'TA' }),
+    E('d2', 10, { kind: 'tool.output', opens_subagent_scope: 't:b', meta: { agent: 'claude-code' } }),
+    E('b1', 11, { subagent_scope: 't:b', turn_span_id: 'TB' }),
+  ])
+  /* The host and one worker: both runs fold into the agent their name gives. */
+  expect(document.querySelectorAll('[data-row="agent"]')).toHaveLength(2)
+  fireEvent.click(document.querySelector('[data-row="turn"]')!)
+  act(() => { fireEvent.click(document.querySelector('[data-entry="d2"] .trajectory-scope-opens') as HTMLElement) })
+  expect(store.get().selectedId).toBe('b1')
+  act(() => { fireEvent.click(document.querySelector('[data-entry="d1"] .trajectory-scope-opens') as HTMLElement) })
+  expect(store.get().selectedId).toBe('a1')
+})
+
 it('leaves a turn folded when the reader folds it, even with the selection inside', async () => {
   await draw([E('m1', 0), E('m2', 1)])
   fireEvent.click(document.querySelector('[data-row="turn"]')!)
