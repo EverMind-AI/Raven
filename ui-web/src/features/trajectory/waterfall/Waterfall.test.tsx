@@ -687,6 +687,23 @@ it('counts a failed operation once, not once per entry it wrote', async () => {
   expect(document.querySelector('[data-bad]')?.textContent).toBe('1')
 })
 
+it('re-renders a scroll without walking every row of the session', async () => {
+  /* The list re-renders on every scroll event; what it does then must scale
+     with the rows on screen, not with the session. Reading a row's clock is
+     what a walk over the whole session costs, so that is what is counted. */
+  const n = 2000
+  await draw(Array.from({ length: n }, (_, i) => E(`e${i}`, i, { turn_span_id: `T${Math.floor(i / 10)}` })))
+  const box = document.querySelector('.trajectory-list') as HTMLElement
+  const parse = vi.spyOn(Date, 'parse')
+  try {
+    act(() => { box.scrollTop = 300; fireEvent.scroll(box) })
+    expect(parse.mock.calls.length).toBeGreaterThan(0)
+    expect(parse.mock.calls.length).toBeLessThan(n / 2)
+  } finally {
+    parse.mockRestore()
+  }
+})
+
 it('leaves a turn folded when the reader folds it, even with the selection inside', async () => {
   await draw([E('m1', 0), E('m2', 1)])
   fireEvent.click(document.querySelector('[data-row="turn"]')!)
