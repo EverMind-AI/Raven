@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from raven.agent.subagent.backends import observability
+from raven.tracing import config as tracing_config
 from raven.tracing import spans as tracing_spans
 from raven.trajectory import frames_replay
 from raven.trajectory import store as tstore
@@ -79,6 +80,7 @@ def backfill(
     *,
     session_key: str | None = None,
     dry_run: bool = False,
+    force: bool = False,
 ) -> dict[str, int]:
     """Write every replayable run's steps as spans.
 
@@ -90,7 +92,13 @@ def backfill(
     reader's cap -- so nothing was written and nothing is on record) and
     ``repaired`` (steps on record that ended after their run and were closed
     at its end), so a dry run reports the same numbers a real one would write.
+
+    With tracing turned off a real pass writes nothing and reports
+    ``tracing_off``: the switch is a promise that no spans are written, and a
+    backfill writes them through the same store. ``force`` writes anyway.
     """
+    if not dry_run and not force and not tracing_config.enabled():
+        return {"runs": 0, "written": 0, "steps": 0, "already": 0, "unread": 0, "repaired": 0, "tracing_off": 1}
     existing: set[str] = set()
     steps_on_record: dict[str, dict[str, Any]] = {}
     run_ends: dict[str, datetime] = {}

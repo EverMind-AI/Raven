@@ -4,6 +4,8 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from raven.trajectory import frames_backfill
 
 
@@ -609,3 +611,28 @@ def test_a_backfill_reads_a_run_with_the_dialect_its_connections_handshake_chose
 
     results = [p for p in payloads if isinstance(p, dict) and "ok" in p]
     assert results == [{"result": "2 missing keys", "ok": False}]
+
+
+@pytest.fixture(autouse=True)
+def _tracing_on(monkeypatch):
+    """A backfill writes only while tracing is on: pin it on, whatever the shell exports."""
+    monkeypatch.setenv("RAVEN_TRACING", "1")
+
+
+def test_a_backfill_with_tracing_turned_off_writes_nothing_unless_forced(tmp_path: Path, monkeypatch):
+    state = _state(tmp_path)
+    journal = tmp_path / "journal.jsonl"
+    _journal(journal)
+    _spans(state, journal)
+    captured = _recording(state, monkeypatch)
+    monkeypatch.setenv("RAVEN_TRACING", "0")
+
+    off = frames_backfill.backfill(state)
+    assert captured == []
+    assert off["tracing_off"] == 1 and off["written"] == 0
+
+    dry = frames_backfill.backfill(state, dry_run=True)
+    assert dry["written"] == 1 and captured == []
+
+    forced = frames_backfill.backfill(state, force=True)
+    assert forced["written"] == 1 and captured

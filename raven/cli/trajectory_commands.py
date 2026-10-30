@@ -1289,6 +1289,7 @@ def trajectory_list(
 def trajectory_backfill_frames(
     session: str | None = typer.Option(None, "--session", help="Only this session key"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Count what would be written, without writing"),
+    force: bool = typer.Option(False, "--force", help="Write even with tracing turned off"),
 ) -> None:
     """Write an external run's frame journal back as spans.
 
@@ -1301,7 +1302,13 @@ def trajectory_backfill_frames(
     """
     from raven.trajectory import frames_backfill
 
-    result = frames_backfill.backfill(session_key=session, dry_run=dry_run)
+    result = frames_backfill.backfill(session_key=session, dry_run=dry_run, force=force)
+    if result.get("tracing_off"):
+        console.print(
+            "Tracing is off, so nothing was written. Turn it on, or pass --force to write these steps anyway.",
+            highlight=False,
+        )
+        return
     verb = "Would write" if dry_run else "Wrote"
     message = (
         f"{verb} {result['steps']} step span(s) for {result['written']} of {result['runs']} "
