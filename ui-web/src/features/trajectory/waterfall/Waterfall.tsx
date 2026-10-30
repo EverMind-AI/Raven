@@ -393,7 +393,13 @@ export function Waterfall(): JSX.Element {
         return
       }
       event.preventDefault()
-      const rect = scroller.getBoundingClientRect()
+      /* The axis is drawn over the track, not the whole row: the labels take
+         the gutter on its left. So the pointer is read against the ruler, the
+         one element that spans exactly the axis; read against the whole box,
+         a pointer on the track's left edge anchored a third of the way in, and
+         a pan moved by the row's width rather than the axis's. */
+      const ruler = el.querySelector<HTMLElement>('.trajectory-ruler')
+      const rect = (ruler ?? scroller).getBoundingClientRect()
       const at = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0.5
       const current = viewRef.current
       const span = current.to - current.from

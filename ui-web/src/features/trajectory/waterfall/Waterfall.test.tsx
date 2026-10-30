@@ -79,13 +79,22 @@ async function draw(entries: TrajectoryEntry[]): Promise<void> {
 
 const count = (selector: string): number => document.querySelectorAll(selector).length
 
-/* happy-dom drops the modifier keys out of WheelEventInit, so they are written
-   onto the event after construction; a browser sends them itself. */
+/* happy-dom drops the modifier keys and the pointer's position out of
+   WheelEventInit, so they are written onto the event after construction; a
+   browser sends them itself. */
 const wheel = (init: WheelEventInit & { ctrlKey?: boolean; shiftKey?: boolean }): WheelEvent => {
   const event = new WheelEvent('wheel', init)
   if (init.ctrlKey) Object.defineProperty(event, 'ctrlKey', { value: true })
   if (init.shiftKey) Object.defineProperty(event, 'shiftKey', { value: true })
+  if (typeof init.clientX === 'number') Object.defineProperty(event, 'clientX', { value: init.clientX })
   return event
+}
+
+const boxAt = (el: Element, left: number, width: number): void => {
+  Object.defineProperty(el, 'getBoundingClientRect', {
+    value: () => ({ left, top: 0, right: left + width, bottom: 600, width, height: 600, x: left, y: 0, toJSON: () => ({}) }),
+    configurable: true,
+  })
 }
 
 beforeEach(() => {
@@ -350,6 +359,29 @@ describe('the marks', () => {
     fireEvent.click(document.querySelector('[data-row="turn"]')!)
     expect(document.querySelector('[data-entry="m1"] .trajectory-wf-ico')).not.toBeNull()
   })
+})
+
+it('zooms about the instant under the pointer, read against the axis and not the whole row', async () => {
+  await draw([E('m1', 0), E('m2', 30)])
+  const box = document.querySelector('.trajectory-list') as HTMLElement
+  const ruler = document.querySelector('.trajectory-ruler') as HTMLElement
+  /* A 1000px column: the labels take the first 340px, the axis the rest. */
+  boxAt(box, 0, 1000)
+  boxAt(ruler, 340, 660)
+  /* By position, not by index: the zero mark at the left edge carries no label. */
+  const middle = (): string | null =>
+    [...document.querySelectorAll<HTMLElement>('.trajectory-ruler b')].find((b) => b.style.left === '50.0000%')?.textContent ?? null
+  const firstLabel = (): string | null => document.querySelector('.trajectory-ruler b[data-first]')?.textContent ?? null
+  /* On the axis's left edge, the instant there -- the session's start -- stays put. */
+  act(() => { box.dispatchEvent(wheel({ deltaY: -240, clientX: 340, ctrlKey: true, bubbles: true, cancelable: true })) })
+  expect(firstLabel()).toBeNull()
+  act(() => { fireEvent.doubleClick(box) })
+  /* In its middle, the instant at the middle tick keeps its time. */
+  const before = middle()
+  expect(before).not.toBeNull()
+  act(() => { box.dispatchEvent(wheel({ deltaY: -240, clientX: 670, ctrlKey: true, bubbles: true, cancelable: true })) })
+  expect(firstLabel()).not.toBeNull()
+  expect(middle()).toBe(before)
 })
 
 it('leaves a plain wheel to the list, and takes only ctrl+wheel or shift+wheel', async () => {
