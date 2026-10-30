@@ -3,7 +3,9 @@
 The launcher reads one unbuffered byte before starting the configured command.
 Raven sends it only after assigning the launcher to the job. If Raven dies
 before assignment, stdin reaches EOF and the launcher exits without starting
-an agent; afterwards, closing the host's job handle ends the entire tree.
+an agent; afterwards, closing the host's job handle ends the entire tree --
+all but a process started with CREATE_BREAKAWAY_FROM_JOB, which the job
+allows for work handed off to outlive the agent.
 After spawning, the launcher closes its own pipe descriptors so an agent that
 closes stdout still delivers EOF while it remains running.
 """
@@ -19,6 +21,11 @@ import sys
 from typing import Any
 
 _KILL_ON_JOB_CLOSE = 0x2000
+# A process started with CREATE_BREAKAWAY_FROM_JOB may leave the job; without
+# this, that flag makes CreateProcess fail. Nothing leaves by default: an
+# agent's own processes still end with the job. Only work an agent hands off
+# on purpose to outlive it -- a job runner's detached launch -- asks to leave.
+_BREAKAWAY_OK = 0x0800
 _EXTENDED_LIMIT_INFORMATION = 9
 _PROCESS_TERMINATE = 0x0001
 _PROCESS_SET_QUOTA = 0x0100
@@ -94,7 +101,7 @@ class JobObject:
         if not self._handle:
             raise _win_error()
         limits = _ExtendedLimits()
-        limits.BasicLimitInformation.LimitFlags = _KILL_ON_JOB_CLOSE
+        limits.BasicLimitInformation.LimitFlags = _KILL_ON_JOB_CLOSE | _BREAKAWAY_OK
         if not self._api.SetInformationJobObject(
             self._handle, _EXTENDED_LIMIT_INFORMATION, ctypes.byref(limits), ctypes.sizeof(limits)
         ):
