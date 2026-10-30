@@ -20,7 +20,7 @@ import type { DomainManifest } from '../manifests'
 export const manifest: DomainManifest = {
   domain: 'extAgents',
   page: 'extAgentsPage',
-  /* Servers and personal robots each read through their own source. */
+  /* Machines and personal robots each read through their own source. */
   sources: ['extAgents', 'machines', 'robots'],
   root: ExtAgentsApp,
 }

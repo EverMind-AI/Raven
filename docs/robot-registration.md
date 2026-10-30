@@ -1,10 +1,9 @@
 # Personal robot registrations
 
-The Connections hub separates **Servers**, where Raven may run an agent through
+The Connections hub separates **Machines**, where Raven may run an agent through
 its existing SSH/node support, from **Robots**, which are device records without
 an execution node. Existing machine IDs, configuration, SSH credentials, CLI
-commands, and `machines.*` methods are unchanged; only their displayed label is
-now Servers.
+commands, `machines.*` methods, and the Machines label are unchanged.
 
 The Robots tab supports adding, searching, filtering, editing, moving records to
 trash, and restoring them. Registration does not establish a connection.
@@ -17,7 +16,7 @@ mixing their data into the personal registry.
 
 SparkBot and generic HTTP devices can have a status URL. Robot dogs, AGVs, mobile
 manipulators, and other device types support metadata only. No robot is treated
-as a server and no executable node is installed.
+as a Machine and no executable node is installed.
 
 Only **Check status** contacts a device. It sends one GET, without credentials,
 proxies, or redirects, to a literal RFC1918 IPv4 address whose path is `/health`
@@ -51,6 +50,6 @@ limited to 100, including trash. Removal is recoverable; restoring or editing a
 record clears its old health observation. Revisions prevent a stale editor or
 an overlapping health request from overwriting a later edit or removal.
 
-The feature does not modify the server registry or model/provider configuration.
+The feature does not modify the Machine registry or model/provider configuration.
 Reverting the code leaves the separate database intact and stops exposing the
 tab and RPC methods. Reapplying the feature reopens those registrations.

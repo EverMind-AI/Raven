@@ -1,4 +1,4 @@
-/* The connections hub: agents, servers, channels and personal robot registrations, reached
+/* The connections hub: agents, machines, channels and personal robot registrations, reached
  * through one rail row and switched between by the tabs over all four
  * (components/HubHead.tsx).
  *
@@ -37,7 +37,7 @@ export function open(which: HubModule = last): void {
 /* Followed off the page switch rather than set by `open`: the greeting's entry
    opens the channel page through its own store, and the rail should come back
    to where the reader actually was, whichever door they used. The agents page
-   carries agents, servers and robot registrations, which the switch cannot tell apart: the island says
+   carries agents, machines and robot registrations, which the switch cannot tell apart: the island says
    which it shows (`visited`), and a switch onto that page only moves the hub
    off the channels. */
 page.subscribe(() => {

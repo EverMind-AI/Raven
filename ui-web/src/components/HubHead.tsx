@@ -1,7 +1,7 @@
 /* The header the hub's modules share: the module tabs, and one line under
    them on what the module on screen is for.
 
-   Agents, channels, servers and robot registrations are one place on the rail (state/hub.ts), and
+   Agents, channels, machines and robot registrations are one place on the rail (state/hub.ts), and
    the rail row already names it, so the page carries no title of its own: the
    tabs are the top of the page. Underlined rather than filled, so they read as
    the page's parts and the filter pills a module draws under them stay the
