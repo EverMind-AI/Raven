@@ -366,10 +366,18 @@ class TraceStore:
         return refs
 
     def _is_packed(self, sha1: str) -> bool:
-        """Whether the message store's pack index already holds this address."""
+        """Whether a pack still holds this address, so its file is not written again.
+
+        The index alone does not say so: a store copied without its packs keeps
+        an index naming slices that are gone, and writing the file is then how
+        the address heals. One stat per address; a truncated pack is left to
+        ``pack_messages``, which decodes before it deletes anything.
+        """
         from . import message_pack
 
-        return message_pack.message_size(self.artifacts_dir, sha1) is not None
+        index = message_pack.load_index(self.artifacts_dir)
+        located = index.messages.get(sha1) if index is not None else None
+        return located is not None and (message_pack.packs_dir(self.artifacts_dir) / located[0]).is_file()
 
     @staticmethod
     def artifact_attributes(prefix: str, artifact: dict[str, Any] | None) -> dict[str, Any]:

@@ -134,6 +134,22 @@ def test_the_writer_does_not_republish_a_packed_message(tmp_path: Path) -> None:
     assert not any(artifact_v2.message_path(store.artifacts_dir, ref["$msg"]).exists() for ref in refs)
 
 
+def test_the_writer_republishes_a_packed_message_whose_pack_is_gone(tmp_path: Path) -> None:
+    """A missing blob is written again by the next turn that sends it; a
+    packed address whose pack was lost must heal the same way."""
+    store = TraceStore(tmp_path)
+    refs = store.address_items(MESSAGES)
+    message_pack.pack_messages(store.artifacts_dir)
+    for pack in message_pack.packs_dir(store.artifacts_dir).glob("*.pack.zst"):
+        pack.unlink()
+
+    assert store.address_items(MESSAGES) == refs
+
+    assert all(artifact_v2.message_path(store.artifacts_dir, ref["$msg"]).is_file() for ref in refs)
+    shell = {"artifactFormat": artifact_v2.ARTIFACT_FORMAT, "messages": refs}
+    assert artifact_v2.resolve_payload(shell, store.artifacts_dir)["messages"] == MESSAGES
+
+
 def test_a_corrupt_message_file_is_reported_and_not_removed(tmp_path: Path) -> None:
     refs = _publish(tmp_path)
     artifacts = tmp_path / "logs" / "audit-artifacts"
