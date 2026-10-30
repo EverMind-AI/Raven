@@ -37,7 +37,6 @@
   --trajectory-wf-glyph: #b48ce0;
   --trajectory-wf-from-fg: #3f6b2c;        --trajectory-wf-from-bg: #f1f7ee;    --trajectory-wf-from-line: #d9e7d2;
   --trajectory-wf-slow-fg: #c2713a;        --trajectory-wf-slow-bg: #fdf0e3;
-  --trajectory-wf-agentbar: #f4f5f6;       --trajectory-wf-agentbar-line: #d0d5da;
   --trajectory-wf-model-bg: #e9e8fb;       --trajectory-wf-model-line: #c5bdec;
   --trajectory-wf-tool-bg: #e2eef9;        --trajectory-wf-tool-line: #b3d3ee;
   --trajectory-wf-user-bg: #eef0f2;        --trajectory-wf-user-line: #cdd4db;
@@ -46,6 +45,7 @@
   --trajectory-wf-wait-bg: #f4f4f4;        --trajectory-wf-wait-line: #d3d3d3;
   --trajectory-wf-grid: #e9ebee;           --trajectory-wf-guide: #dfe4e9;      --trajectory-wf-ov: #ececf7;
   --trajectory-wf-grid-major: #d5d9de;
+  --trajectory-wf-main: #b8892a;          --trajectory-wf-agent: #66635c;        --trajectory-wf-err: #d0453b;
   --trajectory-crash-bg: #fdf5f4;          --trajectory-crash-line: #f0d7d2;    --trajectory-crash-fg: #8a3a2e;
   --trajectory-ruler-dim: rgba(31, 35, 40, .07);    --trajectory-ruler-pick: rgba(31, 35, 40, .35);
   --trajectory-ruler-grip-line: rgba(31, 35, 40, .30); --trajectory-ruler-grip-line-hover: rgba(31, 35, 40, .55);
@@ -68,7 +68,6 @@ html[data-theme="dark"] {
   --trajectory-wf-glyph: #c9aef2;
   --trajectory-wf-from-fg: #9fd48a;        --trajectory-wf-from-bg: #22301d;    --trajectory-wf-from-line: #34482b;
   --trajectory-wf-slow-fg: #e8a06c;        --trajectory-wf-slow-bg: #3d2a1a;
-  --trajectory-wf-agentbar: #2c2d30;       --trajectory-wf-agentbar-line: #4a4d52;
   --trajectory-wf-model-bg: #2f2b52;       --trajectory-wf-model-line: #514a8c;
   --trajectory-wf-tool-bg: #1e3346;        --trajectory-wf-tool-line: #2f5677;
   --trajectory-wf-user-bg: #2b2f34;        --trajectory-wf-user-line: #4a5159;
@@ -77,6 +76,7 @@ html[data-theme="dark"] {
   --trajectory-wf-wait-bg: #2a2a2a;        --trajectory-wf-wait-line: #4a4a4a;
   --trajectory-wf-grid: #2c2c2e;           --trajectory-wf-guide: #3a3a3d;      --trajectory-wf-ov: #34344a;
   --trajectory-wf-grid-major: #3d3d41;
+  --trajectory-wf-main: #b68a30;          --trajectory-wf-agent: #a8a49a;        --trajectory-wf-err: #ec6b5f;
   --trajectory-crash-bg: #3a2220;          --trajectory-crash-line: #5a302b;    --trajectory-crash-fg: #f0a493;
   --trajectory-ruler-dim: rgba(255, 255, 255, .06); --trajectory-ruler-pick: rgba(255, 255, 255, .35);
   --trajectory-ruler-grip-line: rgba(255, 255, 255, .30); --trajectory-ruler-grip-line-hover: rgba(255, 255, 255, .55);
@@ -100,7 +100,6 @@ html[data-theme="dark"] {
     --trajectory-wf-glyph: #c9aef2;
     --trajectory-wf-from-fg: #9fd48a;        --trajectory-wf-from-bg: #22301d;    --trajectory-wf-from-line: #34482b;
     --trajectory-wf-slow-fg: #e8a06c;        --trajectory-wf-slow-bg: #3d2a1a;
-    --trajectory-wf-agentbar: #2c2d30;       --trajectory-wf-agentbar-line: #4a4d52;
     --trajectory-wf-model-bg: #2f2b52;       --trajectory-wf-model-line: #514a8c;
     --trajectory-wf-tool-bg: #1e3346;        --trajectory-wf-tool-line: #2f5677;
     --trajectory-wf-user-bg: #2b2f34;        --trajectory-wf-user-line: #4a5159;
@@ -109,6 +108,7 @@ html[data-theme="dark"] {
     --trajectory-wf-wait-bg: #2a2a2a;        --trajectory-wf-wait-line: #4a4a4a;
     --trajectory-wf-grid: #2c2c2e;           --trajectory-wf-guide: #3a3a3d;      --trajectory-wf-ov: #34344a;
     --trajectory-wf-grid-major: #3d3d41;
+    --trajectory-wf-main: #b68a30;          --trajectory-wf-agent: #a8a49a;        --trajectory-wf-err: #ec6b5f;
     --trajectory-crash-bg: #3a2220;          --trajectory-crash-line: #5a302b;    --trajectory-crash-fg: #f0a493;
     --trajectory-ruler-dim: rgba(255, 255, 255, .06); --trajectory-ruler-pick: rgba(255, 255, 255, .35);
     --trajectory-ruler-grip-line: rgba(255, 255, 255, .30); --trajectory-ruler-grip-line-hover: rgba(255, 255, 255, .55);
@@ -393,7 +393,6 @@ html[data-theme="dark"] {
   border-radius: 4px; padding: 2px 4px; margin-left: 6px; overflow: hidden; text-overflow: ellipsis }
 .trajectory-wf-track { position: relative; height: 12px; overflow: hidden }
 .trajectory-wf-track i { position: absolute; top: 0; height: 12px; border-radius: 3px; min-width: 2px }
-.trajectory-wf-agentbar { background: var(--raised) }
 .trajectory-wf-span .trajectory-wf-track { height: 8px }
 .trajectory-wf-span .trajectory-wf-track i { height: 8px; border-radius: 2px }
 .trajectory-wf-turn .trajectory-wf-track { height: 10px }
@@ -480,7 +479,6 @@ html[data-theme="dark"] {
 
 .trajectory-wf-track { position: relative; height: 32px }
 .trajectory-wf-track i { top: 50%; transform: translateY(-50%); height: 14px; border-radius: 4px; min-width: 3px }
-.trajectory-wf-agentbar { background: var(--trajectory-wf-agentbar) }
 .trajectory-wf-spanbar.trajectory-wf-kind-model, .trajectory-wf-seg-model { background: var(--trajectory-wf-model-bg) }
 .trajectory-wf-spanbar.trajectory-wf-kind-tool, .trajectory-wf-seg-tool { background: var(--trajectory-wf-tool-bg) }
 .trajectory-wf-spanbar.trajectory-wf-kind-user { background: var(--trajectory-wf-user-bg) }
@@ -536,7 +534,6 @@ html[data-theme="dark"] {
 
 .trajectory-wf-track i { height: 18px; border-radius: 6px; min-width: 4px }
 .trajectory-wf-turn .trajectory-wf-track i { height: 18px }
-.trajectory-wf-agentbar { background: var(--trajectory-wf-agentbar) }
 
 /* The tree's guide: one hairline at the row's own indent, behind the icons. */
 .trajectory-wf-span .trajectory-wf-label::before { content: ''; position: absolute;
@@ -788,7 +785,6 @@ html[data-traj] .trajectory-tabs-wrap { border-bottom-color: var(--traj-line) }
    the pale fill alone sits at almost the same value as the sheet, and the
    edge is what gives a short bar a readable shape without changing its
    colour; border-box keeps the drawn width. */
-.trajectory-wf-agentbar { border: 1px solid var(--trajectory-wf-agentbar-line) }
 .trajectory-wf-spanbar.trajectory-wf-kind-model,
 .trajectory-wf-seg-model { border: 1px solid var(--trajectory-wf-model-line) }
 .trajectory-wf-spanbar.trajectory-wf-kind-tool,
@@ -839,3 +835,26 @@ html[data-traj] .trajectory-tabs-wrap { border-bottom-color: var(--traj-line) }
 .trajectory-wf-headlabel .trajectory-wf-window { flex: 1 1 auto }
 .trajectory-wf-busyhead { flex: none; width: 76px; padding-right: 14px; margin-left: auto; text-align: right;
   font: 500 10.5px/1 var(--sans); letter-spacing: .09em; text-transform: uppercase; color: var(--faint) }
+
+/* ── an agent's row: a capsule per run of work ─────────────────────────
+   The row reads as the agent's day: one capsule per run of work on a faint
+   line from its first to its last, the main agent in gold and every other in
+   one neutral, a diamond where a failure happened, an arrow at an edge the
+   agent's work runs past, and a chip naming when it works next (or last did)
+   when nothing of it is inside the window. */
+.trajectory-wf-track .trajectory-wf-life { top: 50%; height: 2px; min-width: 0; border-radius: 1px; transform: translateY(-50%);
+  background: var(--trajectory-wf-agent); opacity: .3 }
+.trajectory-wf-track .trajectory-wf-cap { top: 50%; height: 12px; min-width: 4px; border-radius: 6px; transform: translateY(-50%);
+  background: var(--trajectory-wf-agent) }
+.trajectory-wf-agent[data-main] .trajectory-wf-track .trajectory-wf-life,
+.trajectory-wf-agent[data-main] .trajectory-wf-track .trajectory-wf-cap { background: var(--trajectory-wf-main) }
+.trajectory-wf-track .trajectory-wf-diamond { top: 50%; width: 8px; height: 8px; min-width: 0; margin-left: -4px; border-radius: 1.5px;
+  background: var(--trajectory-wf-err); transform: translateY(-50%) translateY(-7px) rotate(45deg); box-shadow: 0 0 0 2px var(--paper) }
+.trajectory-wf-track .trajectory-wf-edge { top: 50%; width: 0; height: 0; min-width: 0; border-radius: 0; transform: translateY(-50%);
+  border-top: 4px solid transparent; border-bottom: 4px solid transparent }
+.trajectory-wf-track .trajectory-wf-edge[data-side='start'] { left: 2px; border-right: 6px solid var(--trajectory-wf-quiet) }
+.trajectory-wf-track .trajectory-wf-edge[data-side='end'] { right: 2px; border-left: 6px solid var(--trajectory-wf-quiet) }
+.trajectory-wf-next { position: absolute; top: 50%; transform: translateY(-50%); padding: 2px 8px; border: 1px solid var(--line);
+  border-radius: 999px; background: var(--paper); font: 400 11px/1.3 var(--sans); color: var(--faint); white-space: nowrap }
+.trajectory-wf-next[data-side='end'] { right: 14px }
+.trajectory-wf-next[data-side='start'] { left: 14px }

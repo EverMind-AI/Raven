@@ -23,7 +23,7 @@ import * as details from '../detailStore'
 import { enter as enterScope, scopeTitle } from '../scopes'
 import * as store from '../store'
 import { AxisIndex, TRAIL_PAD, barOf, clampViewport, presetWindow, zoomViewport } from './axis'
-import { lengthOf, spanOf, windowText } from './clock'
+import { clockOf, lengthOf, spanOf, windowText } from './clock'
 import { WaterfallIndex } from './incremental'
 import { busyRuns, entryEnd, entryStart, isLive, turnKey } from './model'
 import { OverviewLanes } from './OverviewLanes'
@@ -95,6 +95,27 @@ const percent = (fraction: number): string => `${(fraction * 100).toFixed(4)}%`
 
 /** A drawn row's id, for the tree's active descendant. */
 const rowId = (at: number): string => `trajectory-wf-row-${at}`
+
+/** The runs that reach into a window. Runs are merged, so their starts and
+ *  their ends both rise: two binary searches find the stretch, and a scroll
+ *  frame never walks an agent's whole history. */
+function within<T extends { start: number; end: number }>(runs: readonly T[], from: number, to: number): readonly T[] {
+  let low = 0
+  let high = runs.length
+  while (low < high) {
+    const middle = (low + high) >>> 1
+    if (runs[middle]!.end < from) low = middle + 1
+    else high = middle
+  }
+  let stop = low
+  let top = runs.length
+  while (stop < top) {
+    const middle = (stop + top) >>> 1
+    if (runs[middle]!.start <= to) stop = middle + 1
+    else top = middle
+  }
+  return runs.slice(low, stop)
+}
 
 /** Who the agents were, as the header's second line: zero counts are left out. */
 function agentSplit(agents: Figures['agents']): string | null {
@@ -344,7 +365,9 @@ function Ticks({ axis, view, pick, onPick, ticks, step, onWidth }: {
 export function Waterfall(): JSX.Element {
   useSyncExternalStore(store.subscribe, store.get)
   useSyncExternalStore(lang.subscribe, lang.get)
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
+  /* What the reader folded or opened, by agent key; an agent they have not
+     touched takes the default below. */
+  const [agentFold, setAgentFold] = useState<ReadonlyMap<string, boolean>>(new Map())
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set())
   const [scrollTop, setScrollTop] = useState(0)
   const [rulerWidth, setRulerWidth] = useState(0)
@@ -471,6 +494,14 @@ export function Waterfall(): JSX.Element {
     tree.current = { index, built: shown.length, now }
     return index.waterfall()
   }, [shown, grownFrom, now])
+
+  /* Agents start folded when there are several -- the session reads as one
+     row per agent -- and a lone agent starts open. */
+  const foldedByDefault = waterfall.agents.length > 1
+  const collapsed = useMemo(
+    () => new Set(waterfall.agents.filter((agent) => !(agentFold.get(agent.key) ?? !foldedByDefault)).map((agent) => agent.key)),
+    [waterfall, agentFold, foldedByDefault],
+  )
 
   const axes = useRef<{ index: AxisIndex; built: number; now: number } | null>(null)
   const axis = useMemo(() => {
@@ -599,17 +630,15 @@ export function Waterfall(): JSX.Element {
     }
     if (owner === null) return
     const group = waterfall.agents[owner.agent]!.key
-    if (phase === 'none' && collapsed.has(group)) {
-      setCollapsed((previous) => {
-        const next = new Set(previous)
-        next.delete(group)
-        return next
-      })
-      return
-    }
     const key = owner.turn === null ? null : turnKey(owner.agent, owner.turn)
-    if (phase === 'none' && key !== null && !open.has(key)) {
-      setOpen((previous) => new Set(previous).add(key))
+    /* Everything that hides the row is opened in the one pass: an agent folded
+       by default and the turn inside it are both closed, and the next pass
+       only scrolls. */
+    const agentShut = collapsed.has(group)
+    const turnShut = key !== null && !open.has(key)
+    if (phase === 'none' && (agentShut || turnShut)) {
+      if (agentShut) setAgentFold((previous) => new Map(previous).set(group, true))
+      if (turnShut) setOpen((previous) => new Set(previous).add(key))
       return
     }
     const at = selectedAt
@@ -648,12 +677,7 @@ export function Waterfall(): JSX.Element {
   }
 
   const toggleAgent = (key: string): void => {
-    setCollapsed((previous) => {
-      const next = new Set(previous)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
+    setAgentFold((previous) => new Map(previous).set(key, collapsed.has(key)))
   }
 
   /* Every entry in the order the page draws them, for the arrow keys. */
@@ -736,14 +760,22 @@ export function Waterfall(): JSX.Element {
         }
       }
     }
-    /* An agent's busy time: its runs of work merged, never its lifetime. */
+    /* An agent's runs of work, merged: its row draws one capsule per run, and
+       its busy time is their total, never its lifetime. Its failures are
+       marked on the row at the instant each one happened. */
+    const runs = new Map<string, Array<{ start: number; end: number }>>()
     const busy = new Map<string, number>()
+    const failures = new Map<string, number[]>()
     for (const agent of waterfall.agents) {
-      busy.set(agent.key, busyRuns(agent, now).reduce((sum, run) => sum + run.end - run.start, 0))
+      const agentRuns = busyRuns(agent, now)
+      runs.set(agent.key, agentRuns)
+      busy.set(agent.key, agentRuns.reduce((sum, run) => sum + run.end - run.start, 0))
+      const failed = [...agent.turns.flatMap((turn) => turn.rows), ...agent.loose].filter((row) => row.entry.failure_entry)
+      failures.set(agent.key, failed.map((row) => entryStart(row.entry)))
     }
-    return { nameOfScope, slowestId, busy, figures: summarize(waterfall, shown, now) }
+    return { nameOfScope, slowestId, runs, busy, failures, figures: summarize(waterfall, shown, now) }
   }, [shown, waterfall, now])
-  const { nameOfScope, slowestId, busy, figures } = summary
+  const { nameOfScope, slowestId, runs, busy, failures, figures } = summary
   const errors = figures.errors
   const jumpToFirstError = (): void => {
     if (figures.firstError === null) return
@@ -765,17 +797,56 @@ export function Waterfall(): JSX.Element {
     [t('gui.trajectory.stat.errors'), String(errors), null],
   ]
 
+  /* The ruler and the rows' grid read the same marks: one per round clock
+     time the ruler's width has room to label. */
+  const room = rulerWidth > 0 ? rulerWidth : 1200
+  const step = stepFor(view, room)
+  const marks = useMemo(() => clockTicks(axis, { from: view.from, to: view.to }, room), [axis, view.from, view.to, room])
+  /* The window the axis shows, named in the head: what ran inside it, from
+     its first instant to its last, and how long a window it is once the
+     reader has narrowed it. The element carries the window itself. */
+  const windowFrom = axis.unproject(view.from)
+  const windowTo = axis.unproject(view.to)
+  const shownFrom = Math.min(Math.max(windowFrom, figures.start), figures.end)
+  const shownTo = Math.min(Math.max(windowTo, shownFrom), figures.end)
+  const named = windowText(shownFrom, shownTo, step < 60_000 ? 'second' : 'minute')
+  const zoomedView = view.from > 0 || view.to < axis.length
+  /* A preset is pressed while the window is that long, however it got there;
+     a window the wheel made matches none. */
+  const activePreset = !zoomedView
+    ? 'fit'
+    : PRESETS.find(([, length]) => length !== null && Math.abs(windowTo - windowFrom - length) <= length * 0.01)?.[0] ?? null
+  const presetLabels = {
+    fit: t('gui.trajectory.zoom.fit'), '3h': t('gui.trajectory.zoom.3h'),
+    '1h': t('gui.trajectory.zoom.1h'), '15m': t('gui.trajectory.zoom.15m'),
+  }
+  const choosePreset = (length: number | null): void => {
+    const next = length === null ? null : presetWindow(axis, view, length)
+    setZoom(next === null ? null : { session: sessionKey, start: next.start, end: next.end })
+    setPicked(null)
+  }
   const painted: JSX.Element[] = []
   for (let at = first; at < last; at++) {
     const row = rows[at]!
     const agent = waterfall.agents[row.agent]!
     const style = { top: at * ROW_HEIGHT, height: ROW_HEIGHT }
     if (row.kind === 'agent') {
-      const bar = barOf(axis, view, agent.start, agent.end)
+      const agentRuns = runs.get(agent.key) ?? []
+      const shownRuns = within(agentRuns, windowFrom, windowTo)
+      const first = agentRuns[0]
+      const last = agentRuns.at(-1)
+      const life = first === undefined || last === undefined ? null : barOf(axis, view, first.start, last.end)
+      /* Nothing of this agent inside the window: say when it works next, or
+         when it last did, at the edge that work lies past. */
+      const next = shownRuns.length === 0 ? agentRuns.find((run) => run.start > windowTo) : undefined
+      /* Runs are merged and in order: with none inside the window and none
+         after it, every one lies before it and the last is the latest. */
+      const previous = shownRuns.length === 0 && next === undefined ? last : undefined
       const agentOpen = !collapsed.has(agent.key)
       const agentName = agent.scope === null ? t('gui.trajectory.scope.main') : scopeTitle(agent.door)
       painted.push(
         <div key={row.key} id={rowId(at)} className="trajectory-wf-row trajectory-wf-agent" data-row="agent" style={style}
+          data-main={agent.scope === null ? '' : undefined}
           role="treeitem" aria-level={1} aria-expanded={agentOpen}
           onClick={() => toggleAgent(agent.key)}>
           <span className="trajectory-wf-label" style={{ paddingLeft: 12 }}>
@@ -794,7 +865,18 @@ export function Waterfall(): JSX.Element {
             <span className="trajectory-wf-busy">{formatDuration(busy.get(agent.key) ?? 0)}</span>
           </span>
           <span className="trajectory-wf-track">
-            {bar ? <i className="trajectory-wf-agentbar" style={{ left: percent(bar.left), width: percent(bar.width) }} /> : null}
+            {life ? <i className="trajectory-wf-life" style={{ left: percent(life.left), width: percent(life.width) }} /> : null}
+            {shownRuns.map((run) => {
+              const cap = barOf(axis, view, run.start, run.end)
+              return cap ? <i key={run.start} className="trajectory-wf-cap" style={{ left: percent(cap.left), width: percent(cap.width) }} /> : null
+            })}
+            {(failures.get(agent.key) ?? []).filter((time) => time >= windowFrom && time <= windowTo).map((time) => (
+              <i key={`fail-${time}`} className="trajectory-wf-diamond" style={{ left: percent((axis.project(time) - view.from) / viewSpan) }} />
+            ))}
+            {first !== undefined && first.start < windowFrom ? <i className="trajectory-wf-edge" data-side="start" /> : null}
+            {last !== undefined && last.end > windowTo ? <i className="trajectory-wf-edge" data-side="end" /> : null}
+            {next === undefined ? null : <span className="trajectory-wf-next" data-side="end">{t('gui.trajectory.next', { time: clockOf(next.start) })}</span>}
+            {previous === undefined ? null : <span className="trajectory-wf-next" data-side="start">{t('gui.trajectory.last', { time: clockOf(previous.end) })}</span>}
           </span>
         </div>,
       )
@@ -860,36 +942,8 @@ export function Waterfall(): JSX.Element {
     )
   }
 
-  /* The ruler and the rows' grid read the same marks: one per round clock
-     time the ruler's width has room to label. */
-  const room = rulerWidth > 0 ? rulerWidth : 1200
-  const step = stepFor(view, room)
-  const marks = useMemo(() => clockTicks(axis, { from: view.from, to: view.to }, room), [axis, view.from, view.to, room])
-  /* The window the axis shows, named in the head: what ran inside it, from
-     its first instant to its last, and how long a window it is once the
-     reader has narrowed it. The element carries the window itself. */
-  const windowFrom = axis.unproject(view.from)
-  const windowTo = axis.unproject(view.to)
-  const shownFrom = Math.min(Math.max(windowFrom, figures.start), figures.end)
-  const shownTo = Math.min(Math.max(windowTo, shownFrom), figures.end)
-  const named = windowText(shownFrom, shownTo, step < 60_000 ? 'second' : 'minute')
-  const zoomedView = view.from > 0 || view.to < axis.length
-  /* A preset is pressed while the window is that long, however it got there;
-     a window the wheel made matches none. */
-  const activePreset = !zoomedView
-    ? 'fit'
-    : PRESETS.find(([, length]) => length !== null && Math.abs(windowTo - windowFrom - length) <= length * 0.01)?.[0] ?? null
-  const presetLabels = {
-    fit: t('gui.trajectory.zoom.fit'), '3h': t('gui.trajectory.zoom.3h'),
-    '1h': t('gui.trajectory.zoom.1h'), '15m': t('gui.trajectory.zoom.15m'),
-  }
-  const choosePreset = (length: number | null): void => {
-    const next = length === null ? null : presetWindow(axis, view, length)
-    setZoom(next === null ? null : { session: sessionKey, start: next.start, end: next.end })
-    setPicked(null)
-  }
   const foldAll = (): void => {
-    setCollapsed(new Set(waterfall.agents.map((agent) => agent.key)))
+    setAgentFold(new Map(waterfall.agents.map((agent) => [agent.key, false])))
     setOpen(new Set())
   }
 
