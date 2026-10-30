@@ -11,12 +11,13 @@ import { entryStart } from './model'
 import { turnSegments } from './segments'
 
 import type { TrajectoryEntry } from '../types'
-import type { Waterfall, WaterfallAgent } from './model'
+import type { Waterfall } from './model'
 
 export interface Figures {
   start: number
   end: number
-  agents: { main: number; external: number; sub: number }
+  /** The main agent, and every worker it sent: an external agent's run is a sub-agent too. */
+  agents: { main: number; sub: number }
   turns: number
   medianTurn: number | null
   llm: number
@@ -30,14 +31,6 @@ export interface Figures {
   firstError: string | null
 }
 
-/** Main, an external agent's run (it recorded a `subagent.external` span), or a worker in the process. */
-export function agentKind(agent: WaterfallAgent): 'main' | 'external' | 'sub' {
-  if (agent.scope === null) return 'main'
-  const external = (rows: readonly { entry: TrajectoryEntry }[]): boolean =>
-    rows.some((row) => row.entry.span_name === 'subagent.external')
-  return agent.turns.some((turn) => external(turn.rows)) || external(agent.loose) ? 'external' : 'sub'
-}
-
 function median(values: number[]): number | null {
   if (!values.length) return null
   const sorted = [...values].sort((a, b) => a - b)
@@ -46,14 +39,15 @@ function median(values: number[]): number | null {
 }
 
 export function summarize(waterfall: Waterfall, shown: readonly TrajectoryEntry[], now: number): Figures {
-  const agents = { main: 0, external: 0, sub: 0 }
+  const agents = { main: 0, sub: 0 }
   const lengths: number[] = []
   let turnTime = 0
   let modelTime = 0
   let start = Infinity
   let end = -Infinity
   for (const agent of waterfall.agents) {
-    agents[agentKind(agent)] += 1
+    if (agent.scope === null) agents.main += 1
+    else agents.sub += 1
     start = Math.min(start, agent.start)
     end = Math.max(end, agent.end)
     for (const turn of agent.turns) {

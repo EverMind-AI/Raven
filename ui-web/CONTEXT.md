@@ -183,8 +183,9 @@ by turn, then by span. A worker's mark is picked by that same recorded name
 (`meta.agent`, else `meta.instance`): an entry carries no preset, so the
 preset key `components/AgentMark.tsx` is built on is not available here.
 A worker's row is named by its task; open, it adds a second line -- the agent
-that ran it, the turn that sent it and how many turns it took -- and a worker
-that ran inside the process is tagged sub-agent.
+that ran it, the turn that sent it and how many turns it took. Every worker is
+a sub-agent, an external agent's run included: the header counts the main
+agent and its sub-agents, and only a worker's mark says who ran it.
 Every agent shares one time axis (`axis.ts`): a stretch
 in which no agent was doing anything collapses to a fixed width. Each row
 prints its busy time in a column at the end of its label -- for an agent, its

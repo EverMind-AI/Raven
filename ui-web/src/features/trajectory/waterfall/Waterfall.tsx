@@ -29,7 +29,7 @@ import { clockOf, lengthOf, spanOf, windowText } from './clock'
 import { WaterfallIndex } from './incremental'
 import { busyRuns, entryEnd, entryStart, isLive, turnKey } from './model'
 import { turnBreakdown, turnSegments } from './segments'
-import { agentKind, summarize } from './summary'
+import { summarize } from './summary'
 import { clockTicks, stepFor, tickLabel } from './ticks'
 
 import type { TrajectoryEntry } from '../types'
@@ -143,7 +143,6 @@ function within<T extends { start: number; end: number }>(runs: readonly T[], fr
 function agentSplit(agents: Figures['agents']): string | null {
   const parts = [
     agents.main > 0 ? t('gui.trajectory.stat.main', { n: agents.main }) : null,
-    agents.external > 0 ? t('gui.trajectory.stat.external', { n: agents.external }) : null,
     agents.sub === 1 ? t('gui.trajectory.stat.sub_one') : agents.sub > 1 ? t('gui.trajectory.stat.sub_n', { n: agents.sub }) : null,
   ].filter((part): part is string => part !== null)
   return parts.length ? parts.join(' \u00b7 ') : null
@@ -659,17 +658,15 @@ export function Waterfall(): JSX.Element {
     const sentFrom = new Map<string, number>()
     /* Where each worker was sent from: the agent holding its door, and when. */
     const dispatch = new Map<string, { holder: number; at: number }>()
-    const kinds = new Map<string, ReturnType<typeof agentKind>>()
     for (const agent of waterfall.agents) {
       const ordinal = agent.door === null ? undefined : turnOfEntry.get(agent.door.entry_id)
       if (ordinal !== undefined) sentFrom.set(agent.key, ordinal)
       const holder = agent.door === null ? undefined : agentOfEntry.get(agent.door.entry_id)
       if (agent.door !== null && holder !== undefined) dispatch.set(agent.key, { holder, at: entryStart(agent.door) })
-      kinds.set(agent.key, agentKind(agent))
     }
-    return { nameOfScope, slowestId, runs, busy, failures, sentFrom, dispatch, kinds, figures: summarize(waterfall, shown, now) }
+    return { nameOfScope, slowestId, runs, busy, failures, sentFrom, dispatch, figures: summarize(waterfall, shown, now) }
   }, [shown, waterfall, now])
-  const { nameOfScope, slowestId, runs, busy, failures, sentFrom, dispatch, kinds, figures } = summary
+  const { nameOfScope, slowestId, runs, busy, failures, sentFrom, dispatch, figures } = summary
 
   /* Once the reader narrows the window, a worker whose work lies wholly before
      it, or wholly after it, steps into one row for each side; the main agent
@@ -998,7 +995,6 @@ export function Waterfall(): JSX.Element {
               <span className="trajectory-wf-name" title={agent.scope === null ? undefined : scopeTitle(agent.door)}>{agentName}</span>
             )}
             {agent.scope === null ? <span className="trajectory-wf-sub">{agentModel(agent)}</span> : null}
-            {kinds.get(agent.key) === 'sub' ? <span className="trajectory-wf-tag">{t('gui.trajectory.tag.sub')}</span> : null}
             <span className="trajectory-wf-busy">{formatDuration(busy.get(agent.key) ?? 0)}</span>
           </span>
           <span className="trajectory-wf-track">
