@@ -178,6 +178,11 @@
   --rail: 264px;
   --wsw: 420px;
   --chat-min: 430px;
+  /* The chat header's band. It floats over the transcript rather than sitting
+     above it (see .top), so the scroller's top inset, the parked copy's inset,
+     the trajectory box's inset and the up pill's drop all read this one
+     number. The desktop shell swaps in the title bar it measured. */
+  --topbar-h: 52px;
   /* In px, not ch: a ch unit resolves against the font of whatever element
      uses it, so the banner (12.5px) and the transcript column (14.5px)
      computed different widths from the same token and their edges never
@@ -570,7 +575,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    the shell, and the fallbacks match a standard macOS title bar. */
 :root[data-shell="1"] .railtop { height: var(--tl-row, 38px); padding-top: 0; padding-bottom: 0;
   padding-left: var(--tl-pad, 78px); }
-:root[data-shell="1"] .top { height: var(--tl-row, 38px); }
+:root[data-shell="1"] { --topbar-h: var(--tl-row, 38px); }
 /* In the shell this band IS the title bar: it drags the window (see the
    pointerdown handler by the popover closers), so its text must not be
    selectable or every drag attempt starts a selection instead. */
@@ -957,11 +962,47 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    sheet; on the wash that ramp is a flat white band across a gradient, which is
    the seam it was put there to hide. The ground is continuous now, so the
    header needs nothing to blend into it.
-   `position: relative; z-index: 2` stays: the header's own popovers anchor
-   against it, and code blocks in the scroller are positioned too. */
+
+   Out of the flow, though, because a band that ENDS where the scroller begins
+   can only clip what reaches it: a message scrolled up was cut at the header's
+   edge. Absolute over the whole column, the transcript travels underneath it
+   and is seen through the frost -- the title bar the design draws. The scroller
+   gives back the same height as top padding, so the resting frame is unchanged
+   and only a scrolled one passes under.
+
+   The tint is ink at 72%, one step lighter than the floating menus, over the
+   same 20px/saturate(1.4) blur: enough smear that a bubble reads as colour and
+   not as glyphs, enough tint that the name and the corner controls stay
+   legible on any theme. `z-index: 2` stays -- the header's own popovers anchor
+   against it, and code blocks in the scroller are positioned too.
+
+   The frost is a layer of its own, one z-step behind the controls: the band's
+   last 20px fade out, so a line crossing the edge smears into sharp text
+   instead of starting at a cut, and a fade on .top itself would take the
+   bottom of the buttons' glyphs with it. The mask fades the FILTERED image, so
+   what shows through the tail is the untouched transcript.
+
+   Where backdrop-filter is unsupported the tint alone cannot stand in for it;
+   the fallback below is the opaque ground the page had before, which hides
+   what passes under rather than showing it washed out. */
 .top {
   display: flex; align-items: center; gap: 10px; padding: 0 16px 0 20px;
-  height: 52px; flex: none; position: relative; z-index: 2;
+  height: var(--topbar-h); position: absolute; top: 0; left: 0; right: 0; z-index: 2;
+}
+.top::before {
+  content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background: color-mix(in oklab, var(--ink) 72%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 20px), transparent);
+  mask-image: linear-gradient(180deg, #000 calc(100% - 20px), transparent);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .top::before {
+    background: var(--page);
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
 }
 /* The name is its own rename control: a text cursor and a quiet frame on
    hover say it can be typed into, and a click swaps it for the field below.
@@ -1176,7 +1217,16 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* The default folder is said, but said quietly: no fill, just the word. */
 .chrome-wd-tag.chrome-wd-default { background: none; color: var(--faint); padding-left: 2px; }
 
-.scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; scroll-behavior: smooth; scrollbar-gutter: stable; }
+/* The header overlays this box now (see .top), so content is free to pass
+   under it. The same height of top padding keeps the first line exactly where
+   it was at rest, and because padding on a scroll container travels with its
+   content, that clearance is gone the moment the reader scrolls -- which is
+   what lets a bubble reach the frost instead of stopping at its edge.
+   scroll-padding is the same number for the scrolls this file does not write
+   by hand: a scrollIntoView that brings a control to the top edge lands it
+   under the band rather than behind it. */
+.scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; scroll-behavior: smooth; scrollbar-gutter: stable;
+  padding-top: var(--topbar-h); scroll-padding-top: var(--topbar-h); }
 /* The transcript stops being painted before it reaches the composer instead of
    sliding under it. The card is opaque (see .dock-in), so a line arriving at
    its top edge was cut mid-glyph, and the 22px of gutter below the card left
@@ -1984,10 +2034,9 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 }
 .backpill[hidden] { display: none; }
 /* The up pill mirrors the other end: same circle, hung under the header instead
-   of above the composer. 52px is .top's height, the number .scroll[data-parked]
-   already insets by; a shell measures its title bar into --tl-row. */
-.chrome-toppill { top: calc(52px + 12px); bottom: auto; }
-:root[data-shell="1"] .chrome-toppill { top: calc(var(--tl-row, 38px) + 12px); }
+   of above the composer. --topbar-h is .top's height, the same number
+   .scroll[data-parked] insets by. */
+.chrome-toppill { top: calc(var(--topbar-h) + 12px); bottom: auto; }
 
 /* mid-turn narration: what the agent said on the way, set between the process
    lines and the answer. It used to sit a step under the reply and a step over
@@ -2846,15 +2895,20 @@ textarea:focus, textarea:focus-visible,
 /* The trajectory view (features/trajectory/). The scroller is parked, not
    removed: out of the flow at the size it had, invisible and deaf to the
    pointer, so its scroll position survives and the transcript keeps streaming
-   into it underneath. The 52px is .top's height, so the parked box still
+   into it underneath. --topbar-h is .top's height, so the parked box still
    starts where the live one did. The trajectory's box takes the flex space
    and reserves --lift below, the same inset .col reserves, so its last row
    clears the composer the way the last message does. The pill and the turn
-   nav belong to the scroller and go with it. */
-.scroll[data-parked] { position: absolute; inset: 52px 0 0; visibility: hidden; pointer-events: none; }
+   nav belong to the scroller and go with it.
+
+   #trajHost carries the header's height as padding because .top no longer
+   takes it out of the column: without it the view's first strip -- the scope
+   tabs -- would start under the frost. */
+.scroll[data-parked] { position: absolute; inset: var(--topbar-h) 0 0; visibility: hidden; pointer-events: none; }
 .scroll[data-parked] ~ .backpill { display: none; }
 .scroll[data-parked] ~ #turnNav { display: none; }
-#trajHost { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-bottom: var(--lift, 96px); }
+#trajHost { flex: 1; min-height: 0; display: flex; flex-direction: column;
+  padding-top: var(--topbar-h); padding-bottom: var(--lift, 96px); }
 #trajHost[hidden] { display: none; }
 /* The header's view toggle is an icon like the panel toggle beside it; the
    pressed state is the only thing it says in colour. */

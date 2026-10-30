@@ -451,3 +451,50 @@ describe('the chat column chrome when a language is applied', () => {
     expect(el('stage').lastElementChild).toBe(live)
   })
 })
+
+/* The header floats over the transcript, so a bubble scrolled to the top
+ * passes under it instead of being cut at its edge, and what it passes under
+ * is frosted glass. happy-dom has no backdrop-filter in its property table and
+ * applies an @supports block without evaluating it, so the blur is read off
+ * the rule's own text while the two layout facts are read as computed styles:
+ * the header out of the flow, and the scroller giving the band's height back
+ * as padding. Only a browser can show the blur itself. */
+describe('the header band', () => {
+  let sheet: HTMLStyleElement | null = null
+
+  function styled(): void {
+    render()
+    sheet = document.createElement('style')
+    sheet.textContent = source('styles/page.css')
+    document.head.append(sheet)
+  }
+
+  afterEach(() => {
+    sheet?.remove()
+    sheet = null
+  })
+
+  it('floats over the transcript instead of ending where it begins', () => {
+    styled()
+    expect(getComputedStyle(top()).position).toBe('absolute')
+  })
+
+  it('gives its height back to the scroller as padding, so the resting frame does not move', () => {
+    styled()
+    const band = getComputedStyle(top()).height
+    expect(band).toBe('52px')
+    const scroll = getComputedStyle(el('scroll'))
+    expect(scroll.paddingTop).toBe(band)
+    expect(scroll.scrollPaddingTop).toBe(band)
+  })
+
+  it('paints the band as frosted glass, over an opaque ground where the blur is unsupported', () => {
+    styled()
+    const rule = (source('styles/page.css').match(/\n\.top::before \{\n([\s\S]*?)\n\}/) as RegExpMatchArray)[1] as string
+    expect(rule).toMatch(/-webkit-backdrop-filter: blur\(20px\) saturate\(1\.4\)/)
+    expect(rule).toMatch(/backdrop-filter: blur\(20px\) saturate\(1\.4\)/)
+    expect(rule).toMatch(/mask-image: linear-gradient\(180deg, #000 calc\(100% - 20px\), transparent\)/)
+    expect(source('styles/page.css'))
+      .toContain('@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)))')
+  })
+})
