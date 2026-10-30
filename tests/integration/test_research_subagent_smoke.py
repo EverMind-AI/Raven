@@ -107,6 +107,9 @@ async def test_the_startup_backfill_measures_statefulness_by_itself(tmp_path: Pa
     snap_path = tmp_path / "subagent_acp_capabilities.json"
     monkeypatch.setattr(capabilities, "default_snapshot_path", lambda: snap_path)
     monkeypatch.setattr(probe, "_SCHEDULED", False)
+    # Nothing here is about the shipped presets: on a machine with Mirasim
+    # installed, leaving them in the backfill would handshake the real host.
+    monkeypatch.setattr(probe, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
 
     # The row discovery would build, resolved by hand: the suite's autouse
     # ``no_discovered_products`` pin points discovery at nothing, deliberately.
