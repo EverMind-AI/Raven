@@ -34,21 +34,24 @@ inside, its spans inside those.
 ## The shape of the page
 
 ```
-┌ status line (index progress, truncation, faults) ─────────────────┐
-├ header: six figures, each with a second line · Fit 3h 1h 15m · fold ┤
-├ activity: calls per bucket, whole session, idle folded · brush ───┤
-├ window name · BUSY · ruler in clock time, idle gaps folded ───────┤
-├ agents ────────────────────────────────────────┬ details pane ────┤
-│ ▸ main · model      1h 55m  ━━  ━━━━   ━━━━   │ selected span's  │
-│ ▸ 2 agents finished earlier · last at 10:51    │ blocks: overview │
-│ ▾ Fix the parser        49m ◂ ───━━━━───━━  ▸  │ input / output  │
-│   coder · from Turn 3 · 4 turns                │ timing / links  │
-│     Turn 1  preview  16m      ▓▓░▓▓▓           │                  │
-│       ■ LLM output  claude   1m   █            │                  │
-│       ■ bash  npm test       5s    ▌           │                  │
-│ ▸ 1 more agent later · from 12:36              │                  │
-└────────────────────────────────────────────────┴─────────────────┘
+┌ status line (index progress, truncation, faults) ────────────────────┐
+├ header: six figures, each with a second line · Fit 3h 1h 15m · fold ─┤
+├ activity: calls per bucket, whole session, idle folded · brush ──────┤
+├ window name · BUSY · ruler in clock time, idle gaps folded ──────────┤
+├ agents ──────────────────────────────────────────────────────────────┤
+│ ▸ main · model      1h 55m  ━━  ━━━━   ━━━━                          │
+│ ▸ 2 agents finished earlier · last at 10:51                          │
+│ ▾ Fix the parser        49m ◂ ───━━━━───━━  ▸                        │
+│   coder · from Turn 3 · 4 turns                                      │
+│     Turn 1  preview  16m      ▓▓░▓▓▓                                 │
+│       ■ LLM output  claude   1m   █                                  │
+│       ■ bash  npm test       5s    ▌                                 │
+│ ▸ 1 more agent later · from 12:36                                    │
+└──────────────────────────────────────────────────────────────────────┘
 ```
+
+Picking a row opens the details pane: a white card floating over the rows'
+right side, below the header, so the rows keep their whole width.
 
 Three levels, one vertical axis of rows and one horizontal axis of time.
 
@@ -201,8 +204,9 @@ everything under a `subagent.external` span.
 These were open, and are now settled here rather than left to the builder.
 
 - **The details pane stays.** `detailStore` is 1400 lines of block loading,
-  cursors, width clamping, narrow-screen overlay and Escape ordering. The pane
-  moves from beside a list to beside a waterfall; nothing inside it changes.
+  cursors, width clamping, narrow-screen overlay and Escape ordering.
+  The pane moves from beside a list to a card over the waterfall; nothing
+  inside it changes.
 - **The Sub-agent Scope strip goes.** The waterfall shows every agent at once,
   so a tab strip has nothing left to switch. Its one remaining job, finding a
   worker, moves onto the rows: the arrow on a dispatching row selects the

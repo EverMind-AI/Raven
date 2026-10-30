@@ -274,12 +274,15 @@ describe('the details pane', () => {
     expect(pane()).toBeNull()
   })
 
-  it('lays the pane over the list under 800px with a back button, and beside it with a grip otherwise', async () => {
+  it('floats the pane over the list with a grip on its own edge, and fills the area under 800px with a back button', async () => {
     await draw()
     await pick('r0')
     await answerDetail(descriptor('r0', [block({ id: 'result' })]))
     act(() => { details.setAreaWidth(1000) })
-    expect(q('.trajectory-grip')).not.toBeNull()
+    /* The grip is the card's own left edge: nothing stands between the list
+       and the pane, which floats over the list rather than beside it. */
+    expect(pane()?.querySelector(':scope > .trajectory-grip')).not.toBeNull()
+    expect([...(q('.trajectory-body')?.children ?? [])].map((el) => el.className.split(' ')[0])).not.toContain('trajectory-grip')
     expect(pane()?.className).toBe('trajectory-details')
     expect(pane()?.style.width).toBe('480px')
     const grip = q('.trajectory-grip') as HTMLElement

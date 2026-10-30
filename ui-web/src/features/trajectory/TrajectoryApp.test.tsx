@@ -82,7 +82,7 @@ afterEach(() => {
 })
 
 describe('the trajectory island', () => {
-  it('draws the agent waterfall under an absent status line, with the pane beside it', async () => {
+  it('draws the agent waterfall under an absent status line', async () => {
     await draw()
     const root = document.querySelector('.trajectory-root') as HTMLElement
     expect([...root.children].map((c) => c.className)).toEqual(['trajectory-body'])

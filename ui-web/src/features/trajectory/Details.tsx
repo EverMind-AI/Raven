@@ -1,12 +1,13 @@
-/* The details pane: what the selected entry is, as a column beside the list
- * -- or over it, when the area is too narrow for two.
+/* The details pane: what the selected entry is, as a white card floating over
+ * the list's right side -- the list keeps its whole width -- or over all of
+ * it, when the area is too narrow for two.
  *
  * Three fixed parts and one that scrolls: a head (the kind's tag, the short
  * name the descriptor gives it, the way to the sub-agent tab the entry leads
  * to when it leads to one, and the way out), the tab strip, and the
- * pane the current tab fills with its own scroll position. The grip on its
- * left edge resizes it, by pointer or by arrow key, within the bounds the
- * store clamps to. Closing keeps the selection; the list gets the focus back
+ * pane the current tab fills with its own scroll position. The grip on the
+ * card's left edge resizes it, by pointer or by arrow key, within the bounds
+ * the store clamps to. Closing keeps the selection; the list gets the focus back
  * so the next key goes where the reader was.
  */
 
@@ -43,8 +44,8 @@ export function shortName(value: TrajectoryDetailResult, entry?: TrajectoryEntry
   return value.span_name
 }
 
-/* The seam between list and pane. Dragging it left widens the pane; so does
-   the left arrow, in steps. The store clamps what is asked for. */
+/* The card's left edge. Dragging it left widens the pane; so does the left
+   arrow, in steps. The store clamps what is asked for. */
 function Grip(): JSX.Element {
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>): void => {
     e.preventDefault()
@@ -162,6 +163,7 @@ export function Details(): JSX.Element | null {
       aria-label={t('gui.trajectory.details.region')}
       style={narrow ? undefined : { width: details.detailsWidthPx(s) }}
     >
+      {narrow ? null : <Grip />}
       <div className="trajectory-head">
         {kind ? <span className={`trajectory-tag ${kindClass(kind)}`}>{kindLabel(kind)}</span> : null}
         <span className="trajectory-head-name" title={value ? shortName(value, entry) : undefined}>{value ? shortName(value, entry) : (entry?.span_name ?? '')}</span>

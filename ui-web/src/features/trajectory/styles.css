@@ -46,6 +46,8 @@
   --trajectory-wf-grid: #e9ebee;           --trajectory-wf-guide: #dfe4e9;
   --trajectory-wf-grid-major: #d5d9de;
   --trajectory-act-veil: rgba(255, 255, 255, .62);
+  --trajectory-card-line: rgba(31, 35, 40, .08);
+  --trajectory-card-shadow: 0 18px 48px -22px rgba(31, 35, 40, .36), 0 2px 8px -4px rgba(31, 35, 40, .12);
   --trajectory-wf-main: #b8892a;          --trajectory-wf-agent: #66635c;        --trajectory-wf-err: #d0453b;
   --trajectory-crash-bg: #fdf5f4;          --trajectory-crash-line: #f0d7d2;    --trajectory-crash-fg: #8a3a2e;
   --trajectory-ruler-dim: rgba(31, 35, 40, .07);    --trajectory-ruler-pick: rgba(31, 35, 40, .35);
@@ -78,6 +80,8 @@ html[data-theme="dark"] {
   --trajectory-wf-grid: #2c2c2e;           --trajectory-wf-guide: #3a3a3d;
   --trajectory-wf-grid-major: #3d3d41;
   --trajectory-act-veil: rgba(32, 32, 32, .62);
+  --trajectory-card-line: rgba(255, 255, 255, .08);
+  --trajectory-card-shadow: 0 18px 48px -18px rgba(0, 0, 0, .66), 0 2px 8px -4px rgba(0, 0, 0, .4);
   --trajectory-wf-main: #b68a30;          --trajectory-wf-agent: #a8a49a;        --trajectory-wf-err: #ec6b5f;
   --trajectory-crash-bg: #3a2220;          --trajectory-crash-line: #5a302b;    --trajectory-crash-fg: #f0a493;
   --trajectory-ruler-dim: rgba(255, 255, 255, .06); --trajectory-ruler-pick: rgba(255, 255, 255, .35);
@@ -111,6 +115,8 @@ html[data-theme="dark"] {
     --trajectory-wf-grid: #2c2c2e;           --trajectory-wf-guide: #3a3a3d;
     --trajectory-wf-grid-major: #3d3d41;
     --trajectory-act-veil: rgba(32, 32, 32, .62);
+    --trajectory-card-line: rgba(255, 255, 255, .08);
+    --trajectory-card-shadow: 0 18px 48px -18px rgba(0, 0, 0, .66), 0 2px 8px -4px rgba(0, 0, 0, .4);
     --trajectory-wf-main: #b68a30;          --trajectory-wf-agent: #a8a49a;        --trajectory-wf-err: #ec6b5f;
     --trajectory-crash-bg: #3a2220;          --trajectory-crash-line: #5a302b;    --trajectory-crash-fg: #f0a493;
     --trajectory-ruler-dim: rgba(255, 255, 255, .06); --trajectory-ruler-pick: rgba(255, 255, 255, .35);
@@ -121,7 +127,9 @@ html[data-theme="dark"] {
 
 /* ── the island ─────────────────────────────────────────────────── */
 
-.trajectory-root { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+.trajectory-root { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0;
+  /* The header's height, which the details card starts below. */
+  --wf-stats-h: 96px; }
 
 /* One quiet line above the list for what the index wants the reader to know:
    a scan still running, a head cut off, a failure. Absent when nothing is. */
@@ -166,19 +174,22 @@ html[data-theme="dark"] {
    for the way back. */
 .trajectory-body { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; }
 .trajectory-body > .trajectory-list { flex: 1; min-width: 0; }
+/* The pane is a card laid over the list's right side: the list keeps its
+   whole width, so opening the pane never moves the axis under the reader.
+   It starts below the header, whose window presets and fold button stay in
+   reach. Plain paper, rounded, lifted by a shadow; under 800px it covers the
+   whole area. */
 .trajectory-details {
-  flex: none; display: flex; flex-direction: column; min-width: 0; min-height: 0;
-  border-left: 1px solid var(--line);
-  /* The same ground as the waterfall beside it: the page's wash behind a
-     transparent pane read as a different surface. */
-  background: var(--paper);
+  position: absolute; top: calc(var(--wf-stats-h) + 10px); right: 10px; bottom: 10px; z-index: 6;
+  display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;
+  border: 1px solid var(--trajectory-card-line); border-radius: 14px;
+  background: var(--paper); box-shadow: var(--trajectory-card-shadow);
 }
-.trajectory-details-over { background: var(--ink); }
-.trajectory-details-over { position: absolute; inset: 0; width: auto; border-left: 0; z-index: 1; }
+.trajectory-details-over { inset: 10px; width: auto; }
 
-/* The seam: a 6px grab area drawn as a hairline, lit while dragged. */
+/* The card's left edge: a 6px grab area drawn as a hairline, lit while dragged. */
 .trajectory-grip {
-  flex: none; width: 6px; margin: 0 -3px; cursor: col-resize; position: relative; z-index: 2; outline: 0;
+  position: absolute; top: 0; bottom: 0; left: 0; z-index: 2; width: 6px; cursor: col-resize; outline: 0;
 }
 .trajectory-grip::after { content: ''; position: absolute; inset: 0 2px; background: transparent; transition: background .12s; }
 .trajectory-grip:hover::after, .trajectory-grip[data-drag]::after, .trajectory-grip:focus-visible::after { background: var(--amber); }
@@ -601,6 +612,8 @@ html[data-theme="dark"] {
 
 /* The header's cells never shrink into each other: the strip scrolls instead. */
 .trajectory-wf-stats { overflow-x: auto; overflow-y: hidden }
+/* A fixed height, so the details card can start just below it (--wf-stats-h). */
+.trajectory-wf-stats { box-sizing: border-box; height: var(--wf-stats-h) }
 .trajectory-wf-stat { flex: 0 0 auto }
 .trajectory-wf-statk, .trajectory-wf-statv { white-space: nowrap }
 
@@ -699,17 +712,15 @@ button.trajectory-wf-chev { border: 0; padding: 0; margin: 0; background: none; 
 
 /* ── inside the sheet ────────────────────────────────────────────────
    The host carries the blur, so the island's own grounds go away and the one
-   sheet shows through. The details pane keeps one step more body than the
-   waterfall: it is the reading surface, and 11px monospace needs the extra
-   white more than the rows do. Hairlines swap paper values for translucent
-   ink, which is what keeps a rule visible on the wash instead of a grey line
-   that only worked on white. */
+   sheet shows through. The details pane is the exception: a card of plain
+   paper over the sheet, since it is the reading surface and 11px monospace
+   reads best on white. Hairlines swap paper values for translucent ink, which
+   is what keeps a rule visible on the wash instead of a grey line that only
+   worked on white. */
 html[data-traj] .trajectory-wf,
 html[data-traj] .trajectory-wf-scroll,
 html[data-traj] .trajectory-wf-head,
 html[data-traj] .trajectory-ruler { background: transparent }
-html[data-traj] .trajectory-details { background: var(--traj-pane); border-left-color: var(--traj-line) }
-html[data-traj] .trajectory-details-over { background: var(--traj-solid) }
 html[data-traj] .trajectory-wf-row:hover { background: var(--traj-hover) }
 /* The selected row: the reader's place, for the eye as aria-selected is for a
    screen reader. It holds over the hover, on the glass and off it. */
