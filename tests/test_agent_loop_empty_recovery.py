@@ -5440,21 +5440,40 @@ class _DeliversAFile(Tool):
 @pytest.mark.asyncio
 async def test_a_silent_runtime_turn_that_delivered_files_is_not_taken_back(workspace, monkeypatch):
     """Files a turn delivered are in front of the reader, as a message the tool sent is: a turn that hands
-    over a file and closes on the marker is kept by the session list and the ACP replay."""
+    over a file and closes on the marker is no Silent Turn live, and the session list and the ACP replay
+    keep it by the same verdict."""
     from raven.acp.replay import replay
     from raven.rpc.methods.session import _map_to_wire
 
     _served(monkeypatch, [_tool_reply("deliver_files", "{}"), _reply("[SILENT]")])
     agent = _litellm_agent(workspace)
     agent.tools.register(_DeliversAFile())
+    silence: dict[str, bool | str] = {}
 
-    await agent._process_message(_turn("check the build", Origin.CRON), session_key="cron:job", origin=Origin.CRON)
+    out = await agent._process_message(
+        _turn("check the build", Origin.CRON), session_key="cron:job", origin=Origin.CRON, silence=silence
+    )
 
+    assert out is None, "the marker is no reply to send"
+    assert silence == {"delivered_files": True}, "the live verdict"
     rows = agent.sessions.get_or_create("cron:job").messages
     assert rows[-1]["silent"] is True and rows[-1].get("replied_via_tool") is True
     assert replay(_map_to_wire(rows, "cron:job"), session_id="cron:job"), "the turn replays"
     [listed] = agent.sessions.list_sessions()
     assert listed["last_message_at"], "and stands in the session list"
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_delivered_files_still_sends_the_words_it_ends_on(workspace, monkeypatch):
+    """The files went out with the call that delivered them, so they are not the turn's reply the way a
+    message the tool sent is: a turn that delivers and then answers in words still sends the words."""
+    _served(monkeypatch, [_tool_reply("deliver_files", "{}"), _reply("Here is the report.")])
+    agent = _litellm_agent(workspace)
+    agent.tools.register(_DeliversAFile())
+
+    out = await agent._process_message(_turn("send me the report"), session_key="s1")
+
+    assert out is not None and out[0] == "Here is the report."
 
 
 @pytest.mark.asyncio

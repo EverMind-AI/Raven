@@ -1997,3 +1997,45 @@ async def test_a_marker_after_the_message_tool_sent_does_not_make_the_turn_silen
     assert [e.delta for e in sink.events if isinstance(e, EvStreamDelta)] == ["here you go"]
     assert not any(isinstance(e, EvNotice) and e.kind is NoticeKind.SILENT_TURN for e in sink.events)
     assert outcome.silent is False and outcome.explicit_reply is True
+
+
+class _DeliversAFile(_FakeTool):
+    """Hands the reader one file, leaving its manifest for the turn stream as ``deliver_files`` does."""
+
+    @property
+    def name(self) -> str:
+        return "deliver_files"
+
+    def take_metadata(self) -> dict:
+        return {"raven_delivery": {"message": "", "files": [{"name": "report.txt", "size": 1024}], "invalid": []}}
+
+
+async def test_a_marker_after_a_file_delivery_does_not_make_the_turn_silent(tmp_path):
+    """The files reached the reader with the call that delivered them, so the turn answered as one the
+    message tool answered does: no notice that it was silent, and the spine is told it replied -- a cron
+    run that delivered is counted against its limit and is not handed to heartbeat as one that said nothing."""
+    provider = _FakeStreamToolProvider(
+        [
+            [
+                ChatDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [
+                            {"index": 0, "id": "d1", "function": {"name": "deliver_files", "arguments": "{}"}}
+                        ]
+                    },
+                )
+            ],
+            [ChatDelta(content="[SILENT]")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_DeliversAFile())
+    sink = _EmitCollector()
+
+    outcome = await loop.run_turn(_req("send me the report"), sink, _drain)
+
+    assert not any(isinstance(e, EvNotice) and e.kind is NoticeKind.SILENT_TURN for e in sink.events)
+    assert not any(isinstance(e, EvText) for e in sink.events), "the marker is no reply to send"
+    assert outcome.silent is False and outcome.explicit_reply is True
