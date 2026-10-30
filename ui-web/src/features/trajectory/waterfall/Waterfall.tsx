@@ -427,15 +427,15 @@ export function Waterfall(): JSX.Element {
 
   /* Closing the pane hands the focus back to the list, as it did when the rows
      were a list: the reader's next key press must land where they left off. */
-  const pane = useSyncExternalStore(details.subscribe, details.get)
+  const paneOpen = useSyncExternalStore(details.subscribe, () => details.get().open)
   const wasOpen = useRef(false)
   useLayoutEffect(() => {
-    const closed = wasOpen.current && !pane.open
-    wasOpen.current = pane.open
+    const closed = wasOpen.current && !paneOpen
+    wasOpen.current = paneOpen
     /* A tab switch also closes the old pane; that keeps the focus on the strip. */
     if (!closed || details.get().swapped) return
     box.current?.focus()
-  }, [pane.open])
+  }, [paneOpen])
 
 
   /* The wheel zooms about the pointer and Shift+wheel pans; a native listener,

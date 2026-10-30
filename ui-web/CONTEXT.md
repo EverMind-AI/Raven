@@ -231,6 +231,9 @@ below 800px
 `trajectory.detail` and block bodies read through `trajectory.block`, each filed
 under its whole identity (session, epoch, entry, revision, block) and shown only
 under the ticket it was asked with.
+The reader moves the card by its head and sizes it by its corner, as they do
+the desk palette: let go near where it opened, it goes back there, and
+wherever it is the store keeps it whole inside the area.
 The pane's head carries a pin for the tab on screen: the conversation's
 **pinned tab**, opened first whenever the pane arrives at an entry whose strip
 has it (a new selection, or the pane reopened) and never while the reader is

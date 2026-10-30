@@ -51,7 +51,8 @@ inside, its spans inside those.
 ```
 
 Picking a row opens the details pane: a white card floating over the rows'
-right side, below the header, so the rows keep their whole width.
+right side, below the header, so the rows keep their whole width. The reader
+moves it by its head and sizes it by its corner, as the desk palette's.
 
 Three levels, one vertical axis of rows and one horizontal axis of time.
 
@@ -204,7 +205,7 @@ everything under a `subagent.external` span.
 These were open, and are now settled here rather than left to the builder.
 
 - **The details pane stays.** `detailStore` is 1400 lines of block loading,
-  cursors, width clamping, narrow-screen overlay and Escape ordering.
+  cursors, size and place clamping, narrow-screen overlay and Escape ordering.
   The pane moves from beside a list to a card over the waterfall; nothing
   inside it changes.
 - **The Sub-agent Scope strip goes.** The waterfall shows every agent at once,

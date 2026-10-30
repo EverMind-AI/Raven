@@ -6,10 +6,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
    with every other worker, so the wall clock is not the thing under test. */
 vi.setConfig({ testTimeout: 20_000 })
 
+/* How often the rows are drawn: the real waterfall, counted. */
+const renders = vi.hoisted(() => ({ waterfall: 0 }))
+vi.mock('./waterfall/Waterfall', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./waterfall/Waterfall')>()
+  return {
+    ...real,
+    Waterfall: () => {
+      renders.waterfall += 1
+      return real.Waterfall()
+    },
+  }
+})
+
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import { absorb, resetCapabilities } from '../../rpc/capabilities'
 import { RpcError } from '../../rpc/transport'
 import { dispatch as escape } from '../../state/escapeOrder'
+import { _resetForTests as resetBars, onShowBar } from '../../state/scrollbars'
 import { _resetFreshForTests, unpitch } from '../../state/session/conversation'
 import { resetSources, setSources } from '../../state/sources'
 import { shortName } from './Details'
@@ -274,25 +288,21 @@ describe('the details pane', () => {
     expect(pane()).toBeNull()
   })
 
-  it('floats the pane over the list with a grip on its own edge, and fills the area under 800px with a back button', async () => {
+  it('floats the pane over the list, sized by its corner alone, and fills the area under 800px with a back button', async () => {
     await draw()
     await pick('r0')
     await answerDetail(descriptor('r0', [block({ id: 'result' })]))
     act(() => { details.setAreaWidth(1000) })
-    /* The grip is the card's own left edge: nothing stands between the list
-       and the pane, which floats over the list rather than beside it. */
-    expect(pane()?.querySelector(':scope > .trajectory-grip')).not.toBeNull()
-    expect([...(q('.trajectory-body')?.children ?? [])].map((el) => el.className.split(' ')[0])).not.toContain('trajectory-grip')
+    /* Nothing stands between the list and the pane, which floats over the
+       list rather than beside it; like the desk palette, it sizes by its
+       corner and has no edge to pull. */
+    expect([...(q('.trajectory-body')?.children ?? [])].map((el) => el.className.split(' ')[0])).toEqual(['trajectory-wf', 'trajectory-details'])
     expect(pane()?.className).toBe('trajectory-details')
     expect(pane()?.style.width).toBe('480px')
-    const grip = q('.trajectory-grip') as HTMLElement
-    act(() => { fireEvent.keyDown(grip, { key: 'ArrowLeft' }) })
-    expect(pane()?.style.width).toBe(`${480 + details.RESIZE_STEP}px`)
-    act(() => { fireEvent.keyDown(grip, { key: 'ArrowRight' }) })
-    act(() => { fireEvent.keyDown(grip, { key: 'ArrowRight' }) })
-    expect(pane()?.style.width).toBe(`${480 - details.RESIZE_STEP}px`)
+    expect(pane()?.querySelector(':scope > .trajectory-corner')).not.toBeNull()
+    expect(pane()?.querySelector('[role="separator"]')).toBeNull()
     act(() => { details.setAreaWidth(700) })
-    expect(q('.trajectory-grip')).toBeNull()
+    expect(q('.trajectory-corner')).toBeNull()
     expect(pane()?.className).toBe('trajectory-details trajectory-details-over')
     expect(q('.trajectory-close')?.textContent).toBe('gui.trajectory.details.back')
     expect(q('.trajectory-body')?.hasAttribute('data-narrow')).toBe(true)
@@ -311,6 +321,184 @@ describe('the details pane', () => {
     await answerDetail(descriptor('r0', [block({ id: 'result' })]))
     expect(q('.trajectory-fault')).toBeNull()
     expect(tabs()).toHaveLength(2)
+  })
+})
+
+/* The head moves the pane once a press travels past its threshold, and the
+   corner sizes it. happy-dom lays nothing out, so the area and the
+   pane are given the rectangles the stylesheet would give them, and the pane
+   the header height it opens under. */
+describe('moving and sizing the pane', () => {
+  const card = (): HTMLElement => pane() as HTMLElement
+  const head = (): HTMLElement => q('.trajectory-head') as HTMLElement
+  const corner = (): HTMLElement | null => q('.trajectory-corner')
+  /* Where the stylesheet opens a 480px pane in a 1200x800 area: against the
+     right side, under the 96px header. */
+  const HOME = { x: 710, y: 106, w: 480, h: 684 }
+  let captured = false
+  const rect = (x: number, y: number, width: number, height: number): DOMRect =>
+    ({ x, y, left: x, top: y, width, height, right: x + width, bottom: y + height, toJSON: () => ({}) }) as DOMRect
+  const lay = (at: { x: number; y: number; w: number; h: number }): void => {
+    q<HTMLElement>('.trajectory-body')!.getBoundingClientRect = () => rect(0, 0, 1200, 800)
+    card().getBoundingClientRect = () => rect(at.x, at.y, at.w, at.h)
+    card().style.setProperty('--wf-stats-h', '96px')
+    for (const el of [head(), corner()]) {
+      if (!el) continue
+      el.setPointerCapture = () => { captured = true }
+      el.hasPointerCapture = () => captured
+      el.releasePointerCapture = () => { captured = false }
+    }
+  }
+  const press = async (on: Element, x: number, y: number): Promise<void> => {
+    captured = false
+    await act(async () => {
+      on.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerId: 1, clientX: x, clientY: y }))
+    })
+  }
+  const to = async (x: number, y: number): Promise<void> => {
+    await act(async () => { window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX: x, clientY: y })) })
+  }
+  const release = async (x: number, y: number): Promise<void> => {
+    await act(async () => { window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: x, clientY: y })) })
+  }
+  const click = async (on: Element): Promise<void> => {
+    await act(async () => { on.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+  }
+  const open = async (): Promise<void> => {
+    await draw()
+    await pick('r0')
+    await answerDetail(descriptor('r0', [block({ id: 'result' })]))
+    act(() => {
+      details.setAreaWidth(1200)
+      details.setAreaHeight(800)
+    })
+  }
+
+  it('moves by its head once the press travels, and the click that ends the drag closes nothing', async () => {
+    await open()
+    lay(HOME)
+    const close = q('.trajectory-close') as HTMLElement
+    await press(close, 900, 120)
+    await to(600, 64)
+    expect(captured).toBe(true)
+    expect(card().style.transform).toBe('translate(-300px, -56px)')
+    await release(600, 64)
+    await click(close)
+    expect(details.get().open).toBe(true)
+    expect(card().style.transform).toBe('')
+    expect([card().style.left, card().style.top, card().style.height]).toEqual(['410px', '50px', '684px'])
+    expect(card().hasAttribute('data-moved')).toBe(true)
+  })
+
+  it('leaves the head\'s buttons their click when the press barely moves', async () => {
+    await open()
+    lay(HOME)
+    const close = q('.trajectory-close') as HTMLElement
+    await press(close, 900, 120)
+    await to(901, 121)
+    await release(901, 121)
+    expect(captured).toBe(false)
+    await click(close)
+    expect(details.get().open).toBe(false)
+  })
+
+  it('goes back where it opens when let go near there, filling the room under the header again', async () => {
+    await open()
+    lay(HOME)
+    const name = q('.trajectory-head-name') as HTMLElement
+    await press(name, 900, 120)
+    await to(600, 64)
+    await release(600, 64)
+    expect(card().style.left).toBe('410px')
+    lay({ x: 410, y: 50, w: 480, h: 684 })
+    await press(name, 600, 64)
+    await to(880, 100)
+    await release(880, 100)
+    expect(card().hasAttribute('data-moved')).toBe(false)
+    expect([card().style.left, card().style.top, card().style.height, card().style.transform]).toEqual(['', '', '', ''])
+  })
+
+  it('sizes by its corner, pulled left where it opens and right once moved, never past the area', async () => {
+    await open()
+    lay(HOME)
+    await press(corner()!, 712, 788)
+    await to(672, 688)
+    await release(672, 688)
+    expect([card().style.width, card().style.height]).toEqual(['520px', '584px'])
+    act(() => { details.dropDetails({ x: 100, y: 100 }, 584, 106) })
+    lay({ x: 100, y: 100, w: 520, h: 584 })
+    await press(corner()!, 618, 682)
+    await to(658, 702)
+    expect([card().style.width, card().style.height]).toEqual(['560px', '604px'])
+    /* Pulled past the bottom, it stops there rather than climbing. */
+    await to(658, 2000)
+    await release(658, 2000)
+    expect([card().style.left, card().style.top, card().style.height]).toEqual(['100px', '100px', '690px'])
+  })
+
+  it('neither moves nor sizes under 800px, where it covers the area', async () => {
+    await open()
+    act(() => { details.setAreaWidth(700) })
+    expect(corner()).toBeNull()
+    lay(HOME)
+    await press(head(), 300, 40)
+    await to(100, 200)
+    /* Watched mid-drag: let go, a narrow area's clamp lands any card on its home. */
+    expect([card().style.transform, captured]).toEqual(['', false])
+    await release(100, 200)
+    expect(details.detailsPlace()).toBeNull()
+  })
+
+  /* The bars are parked in a fixed layer and placed from the scroller's box,
+     so a card that moves or changes size has to ask for its pane's bar again. */
+  it('takes the pane\'s bar along when it moves or changes size', async () => {
+    const asked: HTMLElement[] = []
+    onShowBar((el) => { asked.push(el) })
+    try {
+      await open()
+      lay(HOME)
+      const bars = (): number => asked.filter((el) => el.classList.contains('trajectory-pane')).length
+      let before = bars()
+      await press(head(), 900, 120)
+      await to(880, 130)
+      expect(bars()).toBeGreaterThan(before)
+      /* Let go near where it opened: the place is unchanged, the bar has moved. */
+      before = bars()
+      await release(880, 130)
+      expect(details.detailsPlace()).toBeNull()
+      expect(bars()).toBeGreaterThan(before)
+      before = bars()
+      await press(corner()!, 712, 788)
+      await to(672, 688)
+      await release(672, 688)
+      expect(bars()).toBeGreaterThan(before)
+    } finally {
+      resetBars()
+    }
+  })
+
+  /* The rows do not depend on the card's size, and the card's corner writes the
+     store on every pointer move: redrawing every row each frame was waste. */
+  it('redraws only the card while its corner is pulled, not the rows under it', async () => {
+    await open()
+    lay(HOME)
+    const before = renders.waterfall
+    await press(corner()!, 712, 788)
+    await to(692, 768)
+    await to(672, 748)
+    await release(672, 748)
+    expect(card().style.width).toBe('520px')
+    expect(renders.waterfall).toBe(before)
+  })
+
+  it('lets a drag go when the pane closes under it', async () => {
+    await open()
+    lay(HOME)
+    await press(head(), 900, 120)
+    await to(600, 64)
+    act(() => { details.closeDetails() })
+    await release(600, 64)
+    expect(details.detailsPlace()).toBeNull()
   })
 })
 
