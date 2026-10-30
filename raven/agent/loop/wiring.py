@@ -1119,14 +1119,19 @@ class WiringMixin:
         from raven.playbook.run_record import RunRecordStore
 
         try:
-            harness = resolution.spec
             capture.saved_playbook = resolution.artifact_name if resolution.persisted else None
             if resolution.capture_workflow and capture.dags and not resolution.selected_playbook:
                 from raven.playbook.workflow_compiler import WorkflowCompiler
 
+                evidence = capture.dags[-1]
+                # The evidence's own Harness, when the run extended it with a
+                # derived role, is what the compiled graph names. Falling back to
+                # the resolution's keeps a run that moved nothing compiled against
+                # exactly the Harness the turn was given.
+                harness = evidence.harness if evidence.harness is not None else resolution.spec
                 artifact = await WorkflowCompiler(binding.provider, binding.model).compile(
                     query=capture.query,
-                    dag=capture.dags[-1].spec,
+                    dag=evidence.spec,
                     run_id=capture.run_id,
                     harness=harness,
                     name_hint=resolution.artifact_name,
@@ -1136,8 +1141,13 @@ class WiringMixin:
                 if resolution.persisted:
                     # The compiler parameterizes a proven graph; it does not own
                     # artifact identity. Keep the numeric suffix chosen by the
-                    # atomic Harness save even when the model ignores nameHint.
-                    artifact = artifact.model_copy(update={"name": resolution.artifact_name, "harness": harness})
+                    # atomic Harness save even when the model ignores nameHint,
+                    # and stamp it on the Harness too: a run's frozen table was
+                    # built before a save collision could rename the artifact.
+                    stored_harness = (
+                        harness.model_copy(update={"name": resolution.artifact_name}) if harness is not None else None
+                    )
+                    artifact = artifact.model_copy(update={"name": resolution.artifact_name, "harness": stored_harness})
                     path = store.save(artifact, overwrite=True)
                 else:
                     artifact, path = self._save_generated_artifact(artifact)

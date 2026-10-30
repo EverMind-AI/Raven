@@ -106,6 +106,15 @@ def _collapse_dag_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     decided about the node (``reason``, ``selectedRoutes``, ``routeEvidence``)
     the way a stateless node's own row reports it.
 
+    A reassigned node leaves a link behind on every agent that ran it -- the
+    session that gave up did work on the node too -- so more than one ordinary
+    row can answer to one ``dag-node`` row. There is still one node, and the
+    card is the current agent's row: an old link may keep its own historical
+    detail through ``subagents.instance.history``, but it cannot stand in for
+    the identity the node has now, nor add a second card. When the current
+    attempt is stateless no link of its own exists, and the ``dag-node`` row is
+    the card.
+
     A stateless node runs on no handle and keeps its ``dag-node`` row -- with
     no ordinary row to fall back to, dropping it would take that node off the
     list altogether. This is why the two are paired rather than one ``kind``
@@ -133,7 +142,7 @@ def _collapse_dag_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         same = by_name.get((str(row.get("agent")), str(row.get("handle"))), [])
         return same[0] if len(same) == 1 else None
 
-    claimed: set[tuple[str, str]] = set()
+    linked: dict[tuple[str, str], list[dict[str, Any]]] = {}
     out: list[dict[str, Any]] = []
     for row in rows:
         if row.get("kind") == "dag-node":
@@ -142,18 +151,45 @@ def _collapse_dag_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if node is None:
             out.append(row)
             continue
-        claimed.add((str(node.get("runId")), str(node.get("nodeId"))))
-        out.append(
-            {
-                **row,
-                "status": node.get("status") or row.get("status"),
-                "runId": node.get("runId"),
-                "nodeId": node.get("nodeId"),
-                **{key: node[key] for key in _BRANCH_OUTCOME_KEYS if node.get(key) is not None},
-            }
+        linked.setdefault((str(node.get("runId")), str(node.get("nodeId"))), []).append(row)
+
+    claimed: set[tuple[str, str]] = set()
+    for key, candidates in linked.items():
+        node = by_node[key]
+        claimed.add(key)
+        # Canonicalized on both sides: the rows are written under one name and a
+        # stored reference may still spell a legacy alias, which is the same agent
+        # and must not cost the card its addressable row.
+        current = next(
+            (
+                row
+                for row in candidates
+                if isinstance(row.get("agent"), str)
+                and isinstance(node.get("agent"), str)
+                and canonical_agent_name(row["agent"]) == canonical_agent_name(node["agent"])
+            ),
+            node,
         )
+        out.append(_reported(row=current, node=node))
     out.extend(node for key, node in by_node.items() if key not in claimed)
     return sorted(out, key=lambda r: r.get("updatedAtMs") or 0, reverse=True)
+
+
+def _reported(*, row: dict[str, Any], node: dict[str, Any]) -> dict[str, Any]:
+    """One collapsed row: the addressable row wearing its node's status and outcome.
+
+    The attempt history rides across too, on the same terms as the branch
+    outcome -- it is on the ``dag-node`` row, and a client looking at this card
+    is looking at the node.
+    """
+    return {
+        **row,
+        "status": node.get("status") or row.get("status"),
+        "runId": node.get("runId"),
+        "nodeId": node.get("nodeId"),
+        **{key: node[key] for key in _BRANCH_OUTCOME_KEYS if node.get(key) is not None},
+        **({"attemptAgents": list(node["attemptAgents"])} if isinstance(node.get("attemptAgents"), list) else {}),
+    }
 
 
 _GRAPH_CACHE: dict[Path, tuple[tuple[int, int], dict[str, Any]]] = {}
@@ -468,6 +504,7 @@ async def instances_history(
             nodes_root(session_dir),
             agent,
             handle,
+            assignments=_dag_assignments(str(params.get("session_key") or "")),
         )
 
     # Whatever this instance is doing right now, which no file holds yet: the
@@ -492,6 +529,27 @@ async def instances_history(
         # reader can say so instead of leaving the question hanging.
         turns[-1] = {**turns[-1], "interrupted": True}
     return {"turns": turns}
+
+
+def _dag_assignments(session_key: str) -> dict[tuple[str, str], dict[str, Any]]:
+    """The registry rows of this session's reassigned DAG nodes, by (run, node).
+
+    The same durable record ``subagents.instances`` and ``tasks.list`` resolve a
+    node's current agent from, so one fallback reader cannot disagree with the
+    listings about who ran a node last.
+    """
+    try:
+        rows = get_registry().list_instances(session_key)
+    except Exception:  # noqa: BLE001 - history is an audit trail, not a dependency
+        return {}
+    return {
+        (str(row["runId"]), str(row["nodeId"])): row
+        for row in rows
+        if row.get("kind") == "dag-node"
+        and isinstance(row.get("attemptAgents"), list)
+        and isinstance(row.get("runId"), str)
+        and isinstance(row.get("nodeId"), str)
+    }
 
 
 def _live_turns(activity: Any, offset: int) -> list[dict[str, Any]]:

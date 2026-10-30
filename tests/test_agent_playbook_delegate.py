@@ -256,6 +256,39 @@ async def test_a_dag_worker_resolves_and_carries_its_charter(workspace, monkeypa
     assert backend.calls[0][1] == payload
 
 
+def test_build_table_keeps_a_deep_copy_of_the_source_harness() -> None:
+    """A run outlives the turn that wrote its table, and reassignment reads the
+    authored Harness rather than the rendered charter text. What the table holds
+    therefore has to be a snapshot, not a reference the next turn can edit."""
+    from raven.playbook.agent_spec import DelegateEntry
+
+    spec = AgentPlaybookSpec(
+        name="research-team",
+        description="A focused research team",
+        delegate=[
+            DelegateEntry(
+                **{
+                    "as": "analyst",
+                    "name": "Raven",
+                    "brief": "Collect evidence only",
+                    "playbook": {"memory": {"systemPrompt": "Cite every claim."}},
+                }
+            )
+        ],
+    )
+
+    table = build_table(spec, {})
+
+    assert table.harness is not None
+    assert table.harness == spec
+    assert table.harness is not spec
+    spec.delegate[0].brief = "changed after the table was built"
+    spec.delegate[0].playbook.memory.system_prompt = "changed too"
+    assert table.harness.delegate[0].brief == "Collect evidence only"
+    assert table.harness.delegate[0].playbook.memory.system_prompt == "Cite every claim."
+    assert DelegateTable().harness is None, "a table with no generated Harness carries none"
+
+
 @pytest.mark.asyncio
 async def test_worker_capabilities_follow_the_resolved_roster_agent(workspace, monkeypatch) -> None:
     """A generated label is resolved before the real agent's gates run."""
@@ -797,3 +830,318 @@ def test_the_intake_contract_states_when_it_runs() -> None:
     when = participant_function_guide()["intake"]["when"]
     assert "EVERY inbound user text" in when
     assert "return None" in when
+
+
+@pytest.mark.asyncio
+async def test_a_reassigned_worker_keeps_the_charter_and_payload_frozen_at_admission(workspace, monkeypatch) -> None:
+    """A move decided in a later turn must not read that turn's worker table.
+
+    The charter is enforcement and the payload is what the worker's own process
+    holds it to; both were frozen when the graph was admitted. A label rewritten
+    afterwards -- a different brief, a different payload -- cannot reach the node
+    the move dispatches.
+    """
+    import asyncio
+
+    from raven.agent.subagent.dag_adjudication import ReassignPlan
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.agent.subagent.dag_verdict import Verdict
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+    from tests.test_subagent_dag_runner import _wait_until, draining_dag_runs
+
+    class _Recording:
+        kind = "cli"
+
+        def __init__(self, reply: str) -> None:
+            self.reply = reply
+            self.calls: list[dict] = []
+
+        async def run(self, task: str, **kwargs) -> str:
+            self.calls.append({"task": task, "charter": outbound_charter(), "kwargs": kwargs})
+            return self.reply
+
+    alpha, beta = _Recording("partial"), _Recording("fixed")
+    tool = SubAgentDagTool(
+        workspace=workspace,
+        agents=[
+            ThirdPartyCliSubagentConfig(name="alpha", command="true"),
+            ThirdPartyCliSubagentConfig(name="beta", command="true"),
+        ],
+    )
+    tool.set_context("web", "default", "web:worker")
+    monkeypatch.setattr(tool, "_resolve_node", lambda node: {"alpha": alpha, "beta": beta}[node.subagent])
+    remaining = {"a"}
+
+    async def _judge(*, node, **_kwargs):
+        if node.id in remaining:
+            remaining.discard(node.id)
+            return Verdict(accomplished=False, category="tool_failure", what_is_missing="a parser")
+        return Verdict(accomplished=True)
+
+    tool._judge_node = lambda: _judge
+    payload = {"memory": {"systemPrompt": "only A"}}
+    from raven.playbook.agent_spec import DelegateEntry
+
+    harness = AgentPlaybookSpec(
+        name="one-worker-team",
+        delegate=[DelegateEntry(**{"as": "helper", "name": "alpha", "brief": "only A"})],
+    )
+    admitted = DelegateTable(
+        workers={"helper": Worker("helper", "alpha", "only A", "BRIEF-A\n\n", payload)},
+        harness=harness,
+    )
+
+    async with draining_dag_runs():
+        with delegate_scope(admitted):
+            await tool.execute(
+                task_summary="one worker",
+                nodes=[
+                    {
+                        "id": "a",
+                        "subagent": "helper",
+                        "node_summary": "a step",
+                        "prompt_template": "do it",
+                    }
+                ],
+                background=False,
+            )
+        run_id = next(iter(tool._desks))
+        await _wait_until(lambda: tool._desks[run_id].is_open("a"))
+        assert alpha.calls and alpha.calls[0]["task"].startswith("BRIEF-A\n\n")
+        admission = tool._run_contexts[run_id]
+        assert admission.submission.harness is harness, "the generated Harness is kept for a later capture"
+        assert admission.submission.workers["a"].label == "helper"
+        # The mapping is nested inside a frozen dataclass, so freezing the worker
+        # freezes nothing it carries: an edit in place must not reach the move.
+        payload["memory"]["systemPrompt"] = "changed in place"
+
+        rewritten = DelegateTable(
+            workers={"helper": Worker("helper", "alpha", "changed", "CHANGED\n\n", {"changed": True})}
+        )
+        with delegate_scope(rewritten):
+            prepared = await tool.prepare_reassign(run_id, "a", "beta", "use the parser", "web:worker")
+            assert isinstance(prepared, ReassignPlan), prepared
+            assert tool.commit_reassign(run_id, prepared, "use the parser")
+        event = await asyncio.wait_for(tool.await_run(run_id), timeout=10)
+        assert event is not None
+
+    assert beta.calls, "the moved attempt ran on the target"
+    assert beta.calls[0]["task"].startswith("BRIEF-A\n\n"), "the admitted charter, not the rewritten one"
+    assert beta.calls[0]["charter"] == {"memory": {"systemPrompt": "only A"}}, (
+        "the admitted payload is a snapshot, not the mapping the dispatching turn still holds"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_worker_less_table_still_contributes_its_harness(workspace, monkeypatch) -> None:
+    """An empty table is still a table: the Harness it carries must reach the run.
+
+    ``DelegateTable.__bool__`` is ``bool(self.workers)``, so a table with no
+    workers answers false. The Harness beside them is not a worker and must be
+    read independently of that answer, or a run keeps no role data at all.
+    """
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.agent.subagent.dag_verdict import Verdict
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+    from tests.test_subagent_dag_runner import _wait_until, draining_dag_runs
+
+    class _Backend:
+        kind = "cli"
+
+        async def run(self, task: str, **kwargs) -> str:
+            return "done"
+
+    harness = AgentPlaybookSpec(name="harness-only")
+    tool = SubAgentDagTool(
+        workspace=workspace,
+        agents=[ThirdPartyCliSubagentConfig(name="alpha", command="true")],
+        worker_table_for=lambda: DelegateTable(workers={}, harness=harness),
+    )
+    tool.set_context("web", "default", "web:harness")
+    monkeypatch.setattr(tool, "_resolve_node", lambda node: _Backend())
+    remaining = {"a"}
+
+    async def _judge(*, node, **_kwargs):
+        if node.id in remaining:
+            remaining.discard(node.id)
+            return Verdict(accomplished=False, category="tool_failure", what_is_missing="a parser")
+        return Verdict(accomplished=True)
+
+    tool._judge_node = lambda: _judge
+
+    async with draining_dag_runs():
+        await tool.execute(
+            task_summary="one node",
+            nodes=[{"id": "a", "subagent": "alpha", "node_summary": "a step", "prompt_template": "do it"}],
+            background=False,
+            confirm=False,
+        )
+        run_id = next(iter(tool._desks))
+        await _wait_until(lambda: tool._desks[run_id].is_open("a"))
+
+        assert tool._run_contexts[run_id].submission.harness is harness
+        tool.request_cancel(run_id)
+
+
+# --------------------------------------------------------------------------- #
+# The run record a capture writes                                               #
+# --------------------------------------------------------------------------- #
+
+
+def _capture_submission(workspace: Path) -> tuple[object, object, object]:
+    """A submitted worker graph, plus the frozen carrier the capture reads."""
+    from raven.playbook.agent_spec import AgentPlaybookSpec, DelegateEntry
+    from raven.playbook.run_record import PlaybookRunCapture
+
+    submitted = parse_dag_spec(
+        {
+            "task_summary": "Write the brief",
+            "nodes": [
+                {
+                    "id": "draft",
+                    "subagent": "writer",
+                    "node_summary": "Draft",
+                    "prompt_template": "Write the draft",
+                    "skills": ["notes"],
+                },
+                {
+                    "id": "polish",
+                    "subagent": "writer",
+                    "node_summary": "Polish",
+                    "prompt_template": "Polish the draft",
+                    "depends_on": ["draft"],
+                },
+            ],
+        }
+    )
+    harness = AgentPlaybookSpec(
+        name="research-team",
+        description="A focused research team",
+        delegate=[
+            DelegateEntry(
+                **{
+                    "as": "writer",
+                    "name": "alpha",
+                    "brief": "Write the draft",
+                    "playbook": {"memory": {"systemPrompt": "Write clearly."}},
+                }
+            )
+        ],
+    )
+    table = build_table(harness, {})
+    from raven.agent.subagent.dag_tool import RunSubmission
+
+    submission = RunSubmission(
+        submitted=submitted,
+        harness=table.harness,
+        workers={node.id: table.get("writer") for node in submitted.nodes},
+        named_instance_groups={},
+    )
+    capture = PlaybookRunCapture(query="write the brief", capture_workflow=True)
+    return submission, capture, submitted
+
+
+async def _run_with_capture(tool, submission, capture, submitted, *, reassigned: bool, monkeypatch):
+    """Drive ``_run`` past a stubbed runner and return the recorded evidence."""
+    from raven.agent.subagent import dag_tool as dag_tool_mod
+    from raven.agent.subagent.dag_runner import DagRunResult, ReassignmentState
+    from raven.agent.subagent.dag_tool import _DagOrigin, _RunAdmission, _RunDirs
+    from raven.playbook.run_record import capture_scope
+
+    state = ReassignmentState()
+    state.attempt_agents = {"draft": ["alpha", "beta"]}
+    state.reassigned = {"draft"} if reassigned else set()
+    workspace_dir = Path(tool._workspace)
+
+    async def fake_run_dag(spec, **_kwargs):
+        return DagRunResult(
+            run_id="run-1",
+            dir=str(workspace_dir / "run-1"),
+            files=[{"node": "draft", "status": "completed", "output_file": "draft.out.md"}],
+            summary={"total": 1, "completed": 1, "failed": 0, "cancelled": 0, "skipped": 0},
+            execution_nodes={
+                node.id: node.model_copy(update={"subagent": "beta", "instance": f"{node.id}-minted"})
+                for node in submission.submitted.nodes
+            },
+            instance_assignments={},
+        )
+
+    dirs = _RunDirs(
+        workdir=str(workspace_dir),
+        run_root=str(workspace_dir / "runs"),
+        nodes_root=str(workspace_dir / "nodes"),
+        subagents_root=str(workspace_dir / "subagents"),
+    )
+    origin = _DagOrigin(channel="test", chat_id="capture", conversation="test:capture")
+    admission = _RunAdmission(
+        tool=tool,
+        run_id="run-1",
+        conversation=origin.conversation,
+        dirs=dirs,
+        submission=submission,
+        state=state,
+        capabilities={},
+    )
+    monkeypatch.setattr(dag_tool_mod, "run_dag", fake_run_dag)
+    # The runner normally receives the folded graph: labels resolved, skills in the
+    # prompt. The capture must still see what was submitted.
+    folded = submission.submitted.model_copy(
+        update={
+            "nodes": [
+                node.model_copy(update={"subagent": "alpha", "prompt_template": "FOLDED", "skills": None})
+                for node in submission.submitted.nodes
+            ]
+        }
+    )
+    with capture_scope(capture):
+        await tool._run(
+            folded,
+            "run-1",
+            asyncio.Event(),
+            origin,
+            dirs,
+            None,
+            frozenset(),
+            {},
+            capture=(capture, submitted),
+            admission=admission,
+        )
+    return capture.dags[-1]
+
+
+@pytest.mark.asyncio
+async def test_the_capture_records_the_projection_a_reassigned_run_ended_on(workspace, monkeypatch) -> None:
+    """The run record is projected from the submitted graph, never from the
+    runner's folded prompts or the handle it minted for the new agent."""
+    tool = _loop(workspace, "generate").tools.get("run_subagent_dag")
+    submission, capture, submitted = _capture_submission(workspace)
+
+    evidence = await _run_with_capture(tool, submission, capture, submitted, reassigned=True, monkeypatch=monkeypatch)
+
+    assert evidence.spec.nodes[0].prompt_template == "Write the draft"
+    assert evidence.spec.nodes[0].skills == ["notes"]
+    assert evidence.spec.nodes[0].subagent == "writer--reassign-1"
+    assert evidence.spec.nodes[0].instance is None, "a runtime-minted handle is never captured"
+    assert evidence.spec.nodes[1].subagent == "writer--reassign-1"
+    assert evidence.spec.task_summary == "Write the brief"
+    assert evidence.harness is not None
+    assert [entry.label for entry in evidence.harness.delegate] == ["writer", "writer--reassign-1"]
+    assert evidence.harness.delegate[1].name == "beta"
+    assert evidence.harness.delegate[1].brief == "Write the draft"
+    assert evidence.attempt_agents == {"draft": ["alpha", "beta"]}
+    payload = evidence.as_dict()
+    assert payload["attemptAgents"] == {"draft": ["alpha", "beta"]}
+    assert payload["harness"]["delegate"][1]["as"] == "writer--reassign-1"
+
+
+@pytest.mark.asyncio
+async def test_the_capture_records_the_submitted_graph_when_nothing_moved(workspace, monkeypatch) -> None:
+    tool = _loop(workspace, "generate").tools.get("run_subagent_dag")
+    submission, capture, submitted = _capture_submission(workspace)
+
+    evidence = await _run_with_capture(tool, submission, capture, submitted, reassigned=False, monkeypatch=monkeypatch)
+
+    assert evidence.spec is submitted
+    assert evidence.harness is None
+    assert evidence.attempt_agents is None
+    assert set(evidence.as_dict()) == {"runId", "spec"}

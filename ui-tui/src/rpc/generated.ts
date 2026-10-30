@@ -1035,9 +1035,17 @@ export interface SubagentCall {
    */
   agent?: string;
   /**
-   * The handle sharing one stateful agent session, if any.
+   * The handle sharing one stateful agent session. Null for an agent that keeps no session, which is also how a stateless current attempt of a reassigned node reports itself.
    */
-  instance?: string;
+  instance?: string | null;
+  /**
+   * dag rows only: whether the node's current handle was minted for it rather than named by the graph. Present only for a node that was reassigned.
+   */
+  instance_auto?: boolean;
+  /**
+   * dag rows only: the agent of each attempt of the node, in order. Present only after a reassignment.
+   */
+  attempt_agents?: string[];
   /**
    * ISO 8601; the record stores epoch millis.
    */
@@ -1383,6 +1391,18 @@ export interface InstanceRow {
    * What the graph this instance belongs to was dispatched for. Absent, not empty, for an instance that came from no orchestration, so its presence is what says the row has a source.
    */
   runTitle?: string;
+  /**
+   * The agent of each attempt of this DAG node, in order. Present only on the row of a node that was reassigned, so its presence is what marks one; a run without a move carries no key.
+   */
+  attemptAgents?: string[];
+  /**
+   * The handle of the node's last attempt -- null when that attempt kept no session. Rides beside attemptAgents because the row's own handle is the node's name, not a conversation.
+   */
+  nodeInstance?: string | null;
+  /**
+   * Whether the node's current handle was minted for it rather than named by the graph. Present with attemptAgents; absent on every row of a run that never reassigned a node.
+   */
+  nodeInstanceAuto?: boolean;
   /**
    * When the turn this instance is answering right now began. Absent when it is answering none, so presence is what says the instance is working and the number is what says for how long. Not updatedAtMs, which every registry write stamps: a binding commit and a graph-origin write move it too, so it dates the row and not the turn.
    */
@@ -1993,7 +2013,18 @@ export interface DagSnapshotNode {
   node: string;
   subagent?: string;
   depends_on?: string[];
-  instance?: string;
+  /**
+   * The stateful handle of the node's last attempt. Null for an agent that keeps no session, which is also how a stateless current attempt of a reassigned node reports itself.
+   */
+  instance?: string | null;
+  /**
+   * Whether the node's current handle was minted for it rather than named by the graph. Present only for a node that was reassigned, whose handle may have changed under it.
+   */
+  instance_auto?: boolean;
+  /**
+   * The agent of each attempt of this node, in order. Present only for a node that was reassigned; an empty list on every node would claim a move that never happened.
+   */
+  attempt_agents?: string[];
   status: DagSnapshotNodeStatus;
   started_at?: number;
   ended_at?: number;
@@ -2188,6 +2219,22 @@ export interface DagNodeUpdatedEvent {
      * The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.
      */
     route_evidence?: string;
+    /**
+     * The agent running the node now. Sent with every frame of a reassigned node from its new attempt's running update on, so a client that missed the reassignment still learns who has it.
+     */
+    subagent?: string;
+    /**
+     * The handle that attempt runs on, or null for an agent that keeps no session. A present null clears the handle a client was showing; an absent key means this frame does not speak for it.
+     */
+    instance?: string | null;
+    /**
+     * Whether that handle was minted for the node rather than named by the graph.
+     */
+    instance_auto?: boolean;
+    /**
+     * The agent of each attempt of this node, in order, sent on every frame of a reassigned node. A client uses the length to place a delayed frame in the attempt it belongs to.
+     */
+    attempt_agents?: string[];
   };
 }
 /**
@@ -2273,6 +2320,22 @@ export interface DagRunCompletedEvent {
        * The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.
        */
       route_evidence?: string;
+      /**
+       * The agent the node's last attempt ran on. Sent only for a node that was reassigned: every other node's frame already named it, and an unchanged one would only repeat that.
+       */
+      subagent?: string;
+      /**
+       * The handle that attempt ran on, or null when it kept no session. Sent with subagent.
+       */
+      instance?: string | null;
+      /**
+       * Whether that handle was minted for the node rather than named by the graph. Sent with subagent.
+       */
+      instance_auto?: boolean;
+      /**
+       * The agent of each attempt of this node, in order. Present only on a node that was reassigned.
+       */
+      attempt_agents?: string[];
     }[];
   };
 }
@@ -2871,6 +2934,14 @@ export interface TaskNode {
    * The stateful handle, named or minted. Null for a node of an agent that keeps no session.
    */
   instance?: string | null;
+  /**
+   * Whether the node's current handle was minted for it rather than named by the graph. Present only for a node that was reassigned, whose handle may have changed under it.
+   */
+  instance_auto?: boolean;
+  /**
+   * The agent of each attempt of this node, in order. Present only for a node that was reassigned; an empty list on every node would claim a move that never happened.
+   */
+  attempt_agents?: string[];
   status: DagSnapshotNodeStatus;
   /**
    * May name a node outside this task: node ids are the session's, and a later graph may depend on an earlier run's completed node.

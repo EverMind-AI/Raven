@@ -27,6 +27,10 @@ export interface DagNode {
   id: string
   subagent: string
   instance?: string | null
+  /* The agent of each attempt, in order, once the node has been reassigned.
+     Absent -- not empty -- on a node no reassignment touched, so presence is
+     what says the history exists. */
+  attempt_agents?: string[]
   depends_on: string[]
   status: NodeStatus | string
   started_at: number | null

@@ -40,6 +40,12 @@ interface ArgNode {
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
 
+/* A node's attempt history, as a frame or a snapshot row carries it. Absent and
+   malformed are the same answer: a half-valid list would silently drop or
+   misplace an attempt, so the node keeps whatever history it already had. */
+const attemptsOf = (v: unknown): string[] | undefined =>
+  Array.isArray(v) && v.every((a) => typeof a === 'string' && a) ? [...v] : undefined
+
 const inputsOf = (v: unknown): Record<string, NodeInput> | null => {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null
   const out: Record<string, NodeInput> = {}
@@ -111,6 +117,7 @@ export interface SnapshotRow {
   node?: unknown
   subagent?: unknown
   instance?: unknown
+  attempt_agents?: unknown
   depends_on?: unknown
   status?: unknown
   started_at?: unknown
@@ -128,18 +135,22 @@ export function fromSnapshot(files: unknown): DagNode[] {
   if (!Array.isArray(files)) return []
   return files
     .filter((f): f is SnapshotRow => !!f && typeof f === 'object' && typeof (f as SnapshotRow).node === 'string')
-    .map((f) => ({
-      ...blank(str(f.node)),
-      subagent: str(f.subagent),
-      instance: str(f.instance) || null,
-      depends_on: strs(f.depends_on),
-      status: str(f.status) || 'pending',
-      started_at: num(f.started_at),
-      ended_at: num(f.ended_at),
-      node_summary: str(f.node_summary) || null,
-      prompt_template: str(f.prompt_template) || null,
-      inputs: inputsOf(f.inputs),
-    }))
+    .map((f) => {
+      const attempts = attemptsOf(f.attempt_agents)
+      return {
+        ...blank(str(f.node)),
+        subagent: str(f.subagent),
+        instance: str(f.instance) || null,
+        ...(attempts !== undefined ? { attempt_agents: attempts } : {}),
+        depends_on: strs(f.depends_on),
+        status: str(f.status) || 'pending',
+        started_at: num(f.started_at),
+        ended_at: num(f.ended_at),
+        node_summary: str(f.node_summary) || null,
+        prompt_template: str(f.prompt_template) || null,
+        inputs: inputsOf(f.inputs),
+      }
+    })
 }
 
 /* How far through its life a node is. A node only ever moves forward inside a
@@ -181,10 +192,31 @@ export function merge(have: DagNode[], incoming: DagNode[]): DagNode[] {
     const next = by.get(n.id)
     if (!next) return n
     by.delete(n.id)
+    const held = n.attempt_agents
+    const history = next.attempt_agents
+    /* A read asked for before the reassignment landed answers with the node as
+       it was: no history, or a shorter one than the live frames have already
+       moved. It still knows the request and the branch, so those are taken --
+       the attempt (identity, status, timing) is not. */
+    const stale = held !== undefined && (history === undefined || history.length < held.length)
+    /* A longer history is a later attempt, and it supersedes what the node says
+       however it ended: the old attempt's terminal status, agent and clock all
+       belong to the attempt the node has moved past. */
+    const newer = history !== undefined && (held === undefined || history.length > held.length)
+    if (stale) {
+      return {
+        ...n,
+        depends_on: next.depends_on.length ? next.depends_on : n.depends_on,
+        node_summary: next.node_summary ?? n.node_summary,
+        prompt_template: next.prompt_template ?? n.prompt_template,
+        inputs: next.inputs ?? n.inputs,
+      }
+    }
     return {
       ...n,
       subagent: next.subagent || n.subagent,
-      instance: next.instance ?? n.instance,
+      instance: newer ? (next.instance ?? null) : (next.instance ?? n.instance),
+      ...(history !== undefined ? { attempt_agents: history } : {}),
       depends_on: next.depends_on.length ? next.depends_on : n.depends_on,
       /* Not last-writer-wins, because these sources are not ordered in time. A
          `dag.get` read is issued when the card is opened and answers whenever
@@ -192,9 +224,13 @@ export function merge(have: DagNode[], incoming: DagNode[]): DagNode[] {
          asked -- while the events kept arriving. Letting it win pushed finished
          nodes back to `pending`, where they sat for the rest of the run with a
          clock ticking from the start time this same merge had kept. */
-      status: stage(String(next.status)) >= stage(String(n.status)) ? next.status || n.status : n.status,
-      started_at: next.started_at ?? n.started_at,
-      ended_at: next.ended_at ?? n.ended_at,
+      status: newer
+        ? next.status || n.status
+        : stage(String(next.status)) >= stage(String(n.status))
+          ? next.status || n.status
+          : n.status,
+      started_at: newer ? (next.started_at ?? null) : (next.started_at ?? n.started_at),
+      ended_at: newer ? (next.ended_at ?? null) : (next.ended_at ?? n.ended_at),
       node_summary: next.node_summary ?? n.node_summary,
       prompt_template: next.prompt_template ?? n.prompt_template,
       inputs: next.inputs ?? n.inputs,
@@ -209,17 +245,41 @@ export function merge(have: DagNode[], incoming: DagNode[]): DagNode[] {
    server never described. */
 export function applyUpdate(
   nodes: DagNode[],
-  update: { node?: unknown; status?: unknown; started_at?: unknown; ended_at?: unknown },
+  update: {
+    node?: unknown
+    status?: unknown
+    started_at?: unknown
+    ended_at?: unknown
+    subagent?: unknown
+    instance?: unknown
+    instance_auto?: unknown
+    attempt_agents?: unknown
+  },
 ): DagNode[] {
   const id = str(update.node)
-  if (!id || !nodes.some((n) => n.id === id)) return nodes
+  const at = nodes.findIndex((n) => n.id === id)
+  if (at < 0) return nodes
+  const held = nodes[at]!.attempt_agents
+  const history = attemptsOf(update.attempt_agents)
+  /* A frame that cannot claim a newer attempt than the node holds is from the
+     attempt it has moved past -- the frames of the agent that gave up can still
+     be in flight when the next one starts -- so it changes nothing. */
+  if (held !== undefined && (history === undefined || history.length < held.length)) return nodes
+  const newer = history !== undefined && (held === undefined || history.length > held.length)
+
   return nodes.map((n) =>
     n.id === id
       ? {
           ...n,
+          ...(typeof update.subagent === 'string' && update.subagent ? { subagent: update.subagent } : {}),
+          /* Presence, not value: a present null clears the handle a stateless
+             retry left behind, while an absent key says this frame does not
+             speak for it. */
+          ...(Object.hasOwn(update, 'instance') ? { instance: str(update.instance) || null } : {}),
+          ...(history !== undefined ? { attempt_agents: history } : {}),
           status: str(update.status) || n.status,
-          started_at: num(update.started_at) ?? n.started_at,
-          ended_at: num(update.ended_at) ?? n.ended_at,
+          started_at: newer ? num(update.started_at) : (num(update.started_at) ?? n.started_at),
+          ended_at: newer ? num(update.ended_at) : (num(update.ended_at) ?? n.ended_at),
         }
       : n,
   )

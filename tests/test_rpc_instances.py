@@ -1377,6 +1377,162 @@ async def test_a_stateful_decision_node_reports_its_selection_on_its_addressable
     assert not {"reason", "selectedRoutes", "routeEvidence"} & set(by_handle["reply-h"])
 
 
+async def test_a_moved_node_is_listed_once_under_the_agent_that_ran_it_last(_isolated_registry: Any) -> None:
+    """A reassigned node leaves a link behind on the old agent -- that session did
+    work on it -- so two linked rows now answer to one ``dag-node`` row. Folding
+    both would list the node twice; the view is the current agent's row wearing
+    the node's status and the history it accumulated."""
+    await _isolated_registry.upsert_dag_node("s1", "r1", "fix", "alpha", "exception")
+    await _isolated_registry.link_dag_node("s1", "alpha", "fix-a", "r1", "fix")
+    await _isolated_registry.move_dag_node(
+        "s1",
+        run_id="r1",
+        node_id="fix",
+        old_agent="alpha",
+        new_agent="beta",
+        status="completed",
+        instance="fix-b",
+        instance_auto=True,
+        attempt_agents=["alpha", "beta"],
+    )
+    await _isolated_registry.link_dag_node("s1", "beta", "fix-b", "r1", "fix")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    assert [(r["agent"], r["handle"]) for r in out["instances"]] == [("beta", "fix-b")], (
+        "the old agent's link is kept, but it is not a second node card"
+    )
+    row = out["instances"][0]
+    assert (row["runId"], row["nodeId"], row["status"]) == ("r1", "fix", "completed")
+    assert row["attemptAgents"] == ["alpha", "beta"]
+
+
+async def test_a_moved_stateless_node_reads_back_as_one_row_of_its_new_agent(_isolated_registry: Any) -> None:
+    """With no linked row to wear, a moved node is listed as its own row -- under
+    the agent that last ran it, not the one the graph named."""
+    await _isolated_registry.upsert_dag_node("s1", "r1", "fix", "alpha", "exception")
+    await _isolated_registry.move_dag_node(
+        "s1",
+        run_id="r1",
+        node_id="fix",
+        old_agent="alpha",
+        new_agent="beta",
+        status="completed",
+        instance=None,
+        instance_auto=False,
+        attempt_agents=["alpha", "beta"],
+    )
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    (row,) = out["instances"]
+    assert (row["kind"], row["agent"], row["handle"]) == ("dag-node", "beta", "r1/fix")
+    assert row["attemptAgents"] == ["alpha", "beta"]
+
+
+async def test_the_agent_that_gave_up_can_still_read_the_attempt_it_ran(_isolated_registry: Any, tmp_path) -> None:
+    """The flat pair belongs to whichever attempt wrote it last. While the moved
+    attempt is still running that is the source agent's answer, so reading it for
+    the destination would show the source's work as the destination's own turn.
+    Each agent's history is its own archived attempt."""
+    from raven.agent.subagent.history import dag_root, nodes_root
+
+    session_dir = tmp_path / "sessions" / "s1"
+    (dag_root(session_dir) / "r1").mkdir(parents=True)
+    (dag_root(session_dir) / "r1" / "graph.json").write_text(
+        json.dumps(
+            {
+                "task_summary": "moved",
+                "nodes": [{"id": "fix", "subagent": "alpha", "instance": "fix-a"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    flat = nodes_root(session_dir)
+    flat.mkdir(parents=True)
+    # The stale flat pair: the last *completed* attempt, still the source's while
+    # the moved attempt is in flight.
+    (flat / "fix.prompt.md").write_text("the source's task", encoding="utf-8")
+    (flat / "fix.out.md").write_text("the source's answer", encoding="utf-8")
+    (flat / "fix.attempt-1.prompt.md").write_text("the source's task", encoding="utf-8")
+    (flat / "fix.attempt-1.out.md").write_text("the source's answer", encoding="utf-8")
+    (flat / "fix.attempt-2.prompt.md").write_text("the destination's task", encoding="utf-8")
+    (flat / "fix.attempt-2.out.md").write_text("the destination's answer", encoding="utf-8")
+    await _isolated_registry.move_dag_node(
+        "s1",
+        run_id="r1",
+        node_id="fix",
+        old_agent="alpha",
+        new_agent="beta",
+        status="running",
+        instance="fix-b",
+        instance_auto=True,
+        attempt_agents=["alpha", "beta"],
+    )
+    await _isolated_registry.link_dag_node("s1", "alpha", "fix-a", "r1", "fix")
+    await _isolated_registry.link_dag_node("s1", "beta", "fix-b", "r1", "fix")
+
+    destination = await _history(session_dir, "beta", "fix-b")
+    source = await _history(session_dir, "alpha", "fix-a")
+
+    assert [turn["content"] for turn in destination] == ["the destination's task", "the destination's answer"]
+    assert [turn["content"] for turn in source] == ["the source's task", "the source's answer"]
+
+
+async def test_a_moved_attempt_still_running_shows_its_prompt_and_not_the_stale_answer(
+    _isolated_registry: Any, tmp_path
+) -> None:
+    """Before the moved attempt answers, its prompt is on disk and its output is
+    not. The destination's history says what was asked -- never the source's
+    answer, which is what the flat pair still holds."""
+    from raven.agent.subagent.history import dag_root, nodes_root
+
+    session_dir = tmp_path / "sessions" / "s1"
+    (dag_root(session_dir) / "r1").mkdir(parents=True)
+    (dag_root(session_dir) / "r1" / "graph.json").write_text(
+        json.dumps({"task_summary": "moved", "nodes": [{"id": "fix", "subagent": "alpha"}]}),
+        encoding="utf-8",
+    )
+    flat = nodes_root(session_dir)
+    flat.mkdir(parents=True)
+    (flat / "fix.prompt.md").write_text("the source's task", encoding="utf-8")
+    (flat / "fix.out.md").write_text("the source's answer", encoding="utf-8")
+    (flat / "fix.attempt-2.prompt.md").write_text("the destination's task", encoding="utf-8")
+    await _isolated_registry.move_dag_node(
+        "s1",
+        run_id="r1",
+        node_id="fix",
+        old_agent="alpha",
+        new_agent="beta",
+        status="running",
+        instance=None,
+        instance_auto=False,
+        attempt_agents=["alpha", "beta"],
+    )
+
+    destination = await _history(session_dir, "beta", "fix")
+
+    assert [turn["content"] for turn in destination] == ["the destination's task"]
+
+
+async def test_a_node_that_never_moved_reads_its_attempts_as_it_always_did(_isolated_registry: Any, tmp_path) -> None:
+    from raven.agent.subagent.history import dag_root, nodes_root
+
+    session_dir = tmp_path / "sessions" / "s1"
+    (dag_root(session_dir) / "r1").mkdir(parents=True)
+    (dag_root(session_dir) / "r1" / "graph.json").write_text(
+        json.dumps({"task_summary": "plain", "nodes": [{"id": "fix", "subagent": "alpha", "instance": "fix-a"}]}),
+        encoding="utf-8",
+    )
+    flat = nodes_root(session_dir)
+    flat.mkdir(parents=True)
+    (flat / "fix.prompt.md").write_text("the task", encoding="utf-8")
+    (flat / "fix.out.md").write_text("the answer", encoding="utf-8")
+    await _isolated_registry.upsert_dag_node("s1", "r1", "fix", "alpha", "completed")
+
+    assert [turn["content"] for turn in await _history(session_dir, "alpha", "fix-a")] == ["the task", "the answer"]
+
+
 async def test_a_whole_fan_out_is_one_row_per_node(_isolated_registry: Any) -> None:
     nodes = ["research_a2a", "research_mcp", "research_acp", "synthesize"]
     for node in nodes:

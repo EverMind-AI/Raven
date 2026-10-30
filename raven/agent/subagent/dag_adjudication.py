@@ -57,7 +57,8 @@ async def deliver_report(send: Callable[[], Awaitable[None]], *, what: str) -> E
 CONTINUE = "continue"
 ABANDON = "abandon"
 REPLAN = "replan"
-DECISIONS = (CONTINUE, ABANDON, REPLAN)
+REASSIGN = "reassign"
+DECISIONS = (CONTINUE, ABANDON, REPLAN, REASSIGN)
 
 
 @dataclass(frozen=True)
@@ -89,12 +90,40 @@ class ReplanPlan:
 
 
 @dataclass(frozen=True)
+class ReassignPlan:
+    """A checked move of one node to another agent, on its way to the run.
+
+    Run-local, and never serialized as a tool argument: ``backends`` holds live
+    backend objects and ``waiter`` is the adjudication the move answers. The
+    runner applies the move only after that answer is recorded, and only for
+    the attempt after it -- earlier attempts keep the agent that made them.
+    ``nodes`` is every possible mover the move was approved for, including
+    siblings that were still running when it was decided.
+    """
+
+    node_id: str
+    source_agent: str
+    source_instance: str | None
+    target_agent: str
+    target_stateful: bool
+    target_instance: str | None
+    instance_auto: bool
+    revision: int
+    waiter: asyncio.Event
+    nodes: tuple[DagNodeSpec, ...]
+    backends: dict[str, Any]
+    notices: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Adjudication:
     """What the main agent decided about one suspended node."""
 
     decision: str
     message: str | None = None
     plan: ReplanPlan | None = None
+    agent: str | None = None
+    reassignment: ReassignPlan | None = None
 
 
 class AdjudicationDesk:
@@ -126,7 +155,17 @@ class AdjudicationDesk:
     def open_nodes(self) -> set[str]:
         return set(self._waiting)
 
-    def resolve(self, node_id: str, decision: str, message: str | None, plan: ReplanPlan | None = None) -> bool:
+    def resolve(
+        self,
+        node_id: str,
+        decision: str,
+        message: str | None,
+        plan: ReplanPlan | None = None,
+        *,
+        agent: str | None = None,
+        reassignment: ReassignPlan | None = None,
+        expected_waiter: asyncio.Event | None = None,
+    ) -> bool:
         """Record an answer and wake the waiter. False when nobody was waiting.
 
         The caller reports that False to the model rather than swallowing it: by
@@ -144,19 +183,52 @@ class AdjudicationDesk:
         be dispatched again, and whatever is still running is handed to the next
         round rather than cancelled. Without it the re-dispatch waits out every
         sibling of the round it was suspended from -- nodes it does not depend on
-        and cannot be helped by, for an unbounded time.
+        and cannot be helped by, for an unbounded time. A reassign fires it too:
+        the node goes back to the scheduler, on the prepared target, and never
+        replaces the graph.
+
+        ``expected_waiter`` is for a caller that read the waiter before doing
+        asynchronous work. It must be the node's current waiter, and that waiter
+        must be unanswered: a decision prepared against a closed, replaced or
+        already-answered adjudication is refused instead of landing on whatever
+        now waits under the same node id.
+
+        A reassign is refused before anything is recorded when it carries no
+        target agent or no message, or when a replan has already landed -- the
+        graph is being replaced, so the move could never be applied. A prepared
+        move must also name this node and the waiter it was prepared against, so
+        a stale plan cannot be parked under a newer adjudication.
         """
         event = self._waiting.get(node_id)
         if event is None:
             return False
-        self._answers[node_id] = Adjudication(decision=decision, message=message, plan=plan)
+        if expected_waiter is not None and (event is not expected_waiter or node_id in self._answers):
+            return False
+        if decision == REASSIGN:
+            if not (agent and agent.strip()) or not (message and message.strip()):
+                return False
+            if self.replanned.is_set():
+                return False
+        if reassignment is not None and (reassignment.node_id != node_id or reassignment.waiter is not event):
+            return False
+        self._answers[node_id] = Adjudication(
+            decision=decision,
+            message=message,
+            plan=plan,
+            agent=agent,
+            reassignment=reassignment,
+        )
         if decision == REPLAN:
             self._plan = plan
             self.replanned.set()
-        elif decision == CONTINUE:
+        elif decision in (CONTINUE, REASSIGN):
             self.continued.set()
         event.set()
         return True
+
+    def peek(self, node_id: str) -> Adjudication | None:
+        """The answer that has landed for ``node_id``, without consuming it."""
+        return self._answers.get(node_id)
 
     def take(self, node_id: str) -> Adjudication | None:
         """The answer for ``node_id``, consumed. ``None`` if none landed."""

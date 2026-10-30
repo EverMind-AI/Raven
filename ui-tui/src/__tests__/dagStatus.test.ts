@@ -22,6 +22,7 @@ import {
   dagRunHeadline,
   dagRunTally,
   dagSharedInstances,
+  formatAttemptAgents,
   formatDagNodeDetail,
   hasDagRowDetail
 } from '../lib/dagStatus.js'
@@ -955,5 +956,88 @@ describe('formatDagNodeDetail on a branching run', () => {
 
     expect(out).toHaveLength(before.length + 3)
     expect([out[0], ...out.slice(4)]).toEqual(before)
+  })
+})
+
+// What a reassigned node's history reads as. Consecutive repeats are the same
+// agent continuing, which a reader wants as a count; an agent that came back
+// later is a separate attempt and is named again.
+describe('formatAttemptAgents', () => {
+  it('collapses consecutive equal entries only', () => {
+    expect(formatAttemptAgents(['alpha', 'alpha', 'beta', 'alpha'])).toBe('alpha x2 -> beta -> alpha')
+  })
+
+  it('names a single attempt alone', () => {
+    expect(formatAttemptAgents(['alpha'])).toBe('alpha')
+  })
+
+  it('counts an uninterrupted run through the same agent', () => {
+    expect(formatAttemptAgents(['codex', 'codex', 'codex'])).toBe('codex x3')
+  })
+
+  it('says nothing for no attempt at all', () => {
+    expect(formatAttemptAgents([])).toBe('')
+  })
+
+  it('never folds a return to an earlier agent into the first run', () => {
+    expect(formatAttemptAgents(['a', 'b', 'a', 'a'])).toBe('a -> b -> a x2')
+  })
+})
+
+describe('formatDagNodeDetail for a reassigned node', () => {
+  const detail = (over: Partial<DagNodeDetail> = {}): DagNodeDetail => ({
+    run_id: 'dag-1',
+    node: 'fix',
+    prompt: 'Fix the parser.',
+    output: 'Fixed.',
+    output_chars: 6,
+    output_truncated: false,
+    ...over
+  })
+
+  const page = (branch?: DagNodeBranch, over: Partial<DagNodeDetail> = {}) =>
+    formatDagNodeDetail(detail(over), branch).split('\n')
+
+  it('lists the agents that tried the node, in order', () => {
+    const out = page({ attemptAgents: ['alpha', 'alpha', 'beta'], status: 'completed' })
+
+    expect(out[1]).toBe('attempts: alpha x2 -> beta')
+    expect(out[2]).toBe('prompt:')
+  })
+
+  it('puts the attempt history after what a branch did', () => {
+    const out = page({
+      attemptAgents: ['alpha', 'beta'],
+      routeEvidence: 'a quote',
+      selectedRoutes: ['docs'],
+      status: 'completed',
+      when: 'triage.docs'
+    })
+
+    expect(out.slice(1, 5)).toEqual([
+      'when triage.docs',
+      'selected: docs',
+      'evidence: "a quote"',
+      'attempts: alpha -> beta'
+    ])
+  })
+
+  it('renders a node that never moved exactly as it always did', () => {
+    const plain = formatDagNodeDetail(detail())
+    const noHistory = formatDagNodeDetail(detail(), { attemptAgents: undefined, status: 'completed' })
+
+    expect(noHistory).toBe(plain)
+    expect(plain).not.toContain('attempts')
+  })
+
+  it('says nothing for an empty history', () => {
+    expect(page({ attemptAgents: [], status: 'completed' })[1]).toBe('prompt:')
+  })
+
+  it('keeps a long agent name whole, the page being the place it scrolls', () => {
+    const long = `agent-${'x'.repeat(120)}`
+    const pageText = formatDagNodeDetail(detail(), { attemptAgents: [long, 'beta'], status: 'completed' })
+
+    expect(pageText).toContain(`attempts: ${long} -> beta`)
   })
 })

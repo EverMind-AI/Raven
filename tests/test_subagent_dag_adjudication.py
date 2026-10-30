@@ -661,8 +661,11 @@ from raven.agent.subagent.dag_adjudication import (
     ABANDON,
     CONTINUE,
     DECISIONS,
+    REASSIGN,
     REPLAN,
+    Adjudication,
     AdjudicationDesk,
+    ReassignPlan,
     ReplanPlan,
 )
 
@@ -679,9 +682,197 @@ def _plan(run_id: str = "run-new", from_node: str = "a") -> ReplanPlan:
     )
 
 
+def _move(waiter: asyncio.Event, *, node_id: str = "fix") -> ReassignPlan:
+    return ReassignPlan(
+        node_id=node_id,
+        source_agent="alpha",
+        source_instance=None,
+        target_agent="beta",
+        target_stateful=False,
+        target_instance=None,
+        instance_auto=False,
+        revision=1,
+        waiter=waiter,
+        nodes=(),
+        backends={},
+        notices=(),
+    )
+
+
 def test_replan_is_a_decision() -> None:
     assert REPLAN == "replan"
-    assert DECISIONS == (CONTINUE, ABANDON, REPLAN)
+    assert DECISIONS == (CONTINUE, ABANDON, REPLAN, REASSIGN)
+
+
+def test_reassign_is_a_decision() -> None:
+    assert REASSIGN == "reassign"
+
+
+def test_a_reassign_wakes_the_round_without_requesting_a_replan() -> None:
+    desk = AdjudicationDesk()
+    event = desk.open("fix")
+    assert desk.resolve("fix", REASSIGN, "use the parser", agent="beta", expected_waiter=event)
+    assert desk.continued.is_set()
+    assert not desk.replanned.is_set()
+    answer = desk.take("fix")
+    assert (answer.decision, answer.agent, answer.message) == (REASSIGN, "beta", "use the parser")
+
+
+def test_an_answer_cannot_reach_a_later_adjudication_of_the_same_node() -> None:
+    desk = AdjudicationDesk()
+    old = desk.open("fix")
+    desk.close("fix")
+    current = desk.open("fix")
+    assert not desk.resolve("fix", REASSIGN, "stale", agent="beta", expected_waiter=old)
+    assert not current.is_set()
+    assert desk.is_open("fix")
+
+
+def test_an_unprotected_reassign_keeps_the_old_call_shape_working() -> None:
+    desk = AdjudicationDesk()
+    desk.open("fix")
+
+    assert desk.resolve("fix", REASSIGN, "use the parser", agent="beta")
+
+    assert desk.continued.is_set()
+    answer = desk.take("fix")
+    assert (answer.decision, answer.agent) == (REASSIGN, "beta")
+
+
+def test_an_adjudication_keeps_its_existing_positional_fields() -> None:
+    answer = Adjudication(CONTINUE, "try again", None)
+
+    assert answer.decision == CONTINUE
+    assert answer.message == "try again"
+    assert answer.plan is None
+    assert answer.agent is None
+    assert answer.reassignment is None
+
+
+def test_peek_shows_an_answer_without_consuming_it() -> None:
+    desk = AdjudicationDesk()
+    desk.open("fix")
+    desk.resolve("fix", CONTINUE, "try again")
+
+    answer = desk.peek("fix")
+    assert answer is not None and answer.message == "try again"
+    assert desk.take("fix") is answer
+
+
+def test_a_prepared_move_travels_with_the_answer() -> None:
+    desk = AdjudicationDesk()
+    event = desk.open("fix")
+    move = _move(event)
+
+    assert desk.resolve(
+        "fix",
+        REASSIGN,
+        "use the parser",
+        agent="beta",
+        expected_waiter=event,
+        reassignment=move,
+    )
+
+    answer = desk.take("fix")
+    assert answer.reassignment is move
+    assert answer.agent == "beta"
+
+
+def test_a_second_answer_cannot_replace_the_first_on_the_same_waiter() -> None:
+    desk = AdjudicationDesk()
+    event = desk.open("fix")
+    assert desk.resolve("fix", REASSIGN, "use the parser", agent="beta", expected_waiter=event)
+
+    assert not desk.resolve("fix", REASSIGN, "use the lexer", agent="gamma", expected_waiter=event)
+
+    answer = desk.take("fix")
+    assert (answer.agent, answer.message) == ("beta", "use the parser")
+
+
+@pytest.mark.parametrize("agent", [None, "", "   "])
+def test_a_reassign_without_a_target_agent_is_refused(agent: str | None) -> None:
+    desk = AdjudicationDesk()
+    event = desk.open("fix")
+
+    assert not desk.resolve("fix", REASSIGN, "use the parser", agent=agent, expected_waiter=event)
+
+    assert not event.is_set()
+    assert desk.is_open("fix")
+    assert desk.take("fix") is None
+    assert not desk.continued.is_set()
+
+
+@pytest.mark.parametrize("message", [None, "", "   "])
+def test_a_reassign_without_a_message_is_refused(message: str | None) -> None:
+    desk = AdjudicationDesk()
+    event = desk.open("fix")
+
+    assert not desk.resolve("fix", REASSIGN, message, agent="beta", expected_waiter=event)
+
+    assert not event.is_set()
+    assert desk.is_open("fix")
+    assert desk.take("fix") is None
+    assert not desk.continued.is_set()
+
+
+def test_a_reassign_is_refused_when_a_replan_already_landed() -> None:
+    desk = AdjudicationDesk()
+    desk.open("plan")
+    desk.resolve("plan", REPLAN, "the plan was wrong", plan=_plan())
+    event = desk.open("fix")
+
+    assert not desk.resolve("fix", REASSIGN, "use the parser", agent="beta", expected_waiter=event)
+
+    assert not event.is_set()
+    assert desk.is_open("fix")
+    assert desk.take("fix") is None
+
+
+def test_a_prepared_move_for_another_waiter_is_refused() -> None:
+    desk = AdjudicationDesk()
+    event = desk.open("fix")
+    move = _move(asyncio.Event())
+
+    assert not desk.resolve(
+        "fix",
+        REASSIGN,
+        "use the parser",
+        agent="beta",
+        expected_waiter=event,
+        reassignment=move,
+    )
+
+    assert not event.is_set()
+    assert desk.take("fix") is None
+
+
+def test_a_stale_prepared_move_is_refused_without_a_waiter_claim() -> None:
+    desk = AdjudicationDesk()
+    desk.open("fix")
+    move = _move(asyncio.Event())
+
+    assert not desk.resolve("fix", REASSIGN, "use the parser", agent="beta", reassignment=move)
+
+    assert desk.is_open("fix")
+    assert desk.take("fix") is None
+
+
+def test_a_prepared_move_for_another_node_is_refused() -> None:
+    desk = AdjudicationDesk()
+    event = desk.open("fix")
+    move = _move(event, node_id="other")
+
+    assert not desk.resolve(
+        "fix",
+        REASSIGN,
+        "use the parser",
+        agent="beta",
+        expected_waiter=event,
+        reassignment=move,
+    )
+
+    assert not event.is_set()
+    assert desk.take("fix") is None
 
 
 def test_resolving_a_replan_sets_the_replanned_event() -> None:
