@@ -52,7 +52,8 @@
      is a gradient rather than a flat fill because the column that sits on it is
      a run of white cards -- on one flat tone they read as a stack of paper on a
      desk of the same paper, and the edge of each card is the only thing saying
-     otherwise. Its last layer is --page, so it stands alone as a background. */
+     otherwise. Its last layer is a flat ramp of its own, a shade warmer than
+     --page, so it stands alone as a background. */
   --wash:
     radial-gradient(60% 55% at 85% 0%, rgba(195, 212, 237, .62) 0%, rgba(195, 212, 237, 0) 70%),
     radial-gradient(55% 50% at 20% 100%, rgba(244, 230, 200, .80) 0%, rgba(244, 230, 200, 0) 70%),
@@ -974,8 +975,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    transcript two pixels away stood on the wash, and the join between them read
    as a seam down the middle of the window. One ground under both: the panes are
    transparent over it (`.desk-ready .ws`) and now share the gradient instead of
-   interrupting it. --page is the wash's own last layer, so this is the same
-   colour where no gradient stop reaches. */
+   interrupting it. Where no radial stop reaches, the wash's own last layer
+   shows, a shade warmer than --page; a module page, on flat --page, covers
+   this pane whole rather than meeting it at a seam. */
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0;
   background: var(--wash);
   transition: padding-right .24s ease; }

@@ -162,7 +162,9 @@ _Avoid_: "minimap" -- it marks turns, not a scaled copy of the transcript.
 The chat column's second view: the conversation's trace entries as an agent
 waterfall, in place of the transcript, drawn by `features/trajectory/` into
 `#trajHost` -- the box `src/chrome/ChatTop.tsx` renders beside `#scroll` and
-hands over empty.
+hands over empty. While it is up the page shows the trace and the rail alone:
+`ChatTop.tsx` sets `data-traj` on the document, and the composer dock and the
+desk are hidden under it.
 Switching to it parks the scroller (`#scroll[data-parked]`: out of the flow,
 hidden, its size and scroll position kept) rather than unmounting it, so the
 transcript goes on streaming underneath and comes back exactly where it was.
@@ -177,10 +179,18 @@ folded into one by instance, else by name (`model.ts`'s `agentIdentity`) -- then
 by turn, then by span. Every agent shares one time axis (`axis.ts`): a stretch
 in which no agent was doing anything collapses to a fixed width, and the axis
 leaves room after the last bar for the duration each row prints just past its
-bar. Above the rows sit the overview, one lane per agent, and the ruler; a
-dispatch and a report are drawn as rules between the agents' rows. Agent groups
-start open and turns folded; a plain wheel scrolls, ctrl or cmd with the wheel
-zooms about the pointer, and shift with the wheel pans.
+bar. Above the rows sit the overview, one lane per agent, and the ruler; what
+crosses between agents is marked on rows rather than drawn between them -- a
+dispatching row's door arrow, and the worker's name on the host turn its report
+started. Agent groups start open and turns folded; a plain wheel scrolls, ctrl
+or cmd with the wheel zooms about the pointer (read against the ruler, which
+spans the axis exactly), and shift with the wheel pans. The zoomed window and a
+stretch picked on the ruler are kept in real time for the conversation they
+were made on, so a live session growing past its end does not reset them.
+The rows are a tree for assistive technology: agents, turns and spans at three
+levels, each fold a button with `aria-expanded`, and the selected row
+`aria-selected` and the tree's active descendant. A failed operation is marked
+on its own row and on the turn that holds it.
 Picking a row opens the details pane beside the waterfall
 (`features/trajectory/detailStore.ts`): a descriptor read through
 `trajectory.detail` and block bodies read through `trajectory.block`, each filed
@@ -197,13 +207,13 @@ each file's content read by its own cursor while it is open and in view, kept
 apart from the block pages and let go stalest first when the budget is short.
 The list store also keeps a current Sub-agent Scope and that scope's entries
 (`scope`, `scopes`, `saved` and `visible` in `store.ts`), though no strip shows
-it: `select` on an entry of another scope (a link in the pane) moves it, so does
-the pane's button on an entry that opens a scope or on the first row of a turn
-a sub-agent's report started, and a scope entered for the first time on an
-external agent's run lands the pane on what the agent recorded (`scopes.ts`
-holds the moves that touch both stores). A click on a waterfall row
-selects across scopes without moving it (`selectAcross`), since every agent is
-on screen at once.
+it: `select` on an entry of another scope (a link in the pane) moves it. The
+pane's button on an entry that opens a scope, or on the first row of a turn a
+sub-agent's report started, and a dispatching row's door arrow land on the run
+they name -- its external agent's entry, which opens on what the agent
+recorded, else its first entry (`scopes.ts`'s `landingOf`). Like a click on a
+waterfall row, they select across scopes without moving the current one
+(`selectAcross`), since every agent is on screen at once.
 _Avoid_: "trace view" or "audit view" for this -- the trace is what the runtime
 records, the trajectory is how this page reads it back -- and "sub-agent trace"
 -- a spawned run's steps are in the trace of the turn that dispatched it.
