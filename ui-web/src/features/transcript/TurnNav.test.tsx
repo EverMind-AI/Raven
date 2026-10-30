@@ -228,6 +228,31 @@ describe('the turn nav', () => {
     expect(tail.isStuck()).toBe(false)
   })
 
+  /* The header floats over the scroller (page.css, .top), so the scroller's
+     own top edge is behind the frost: a click has to land the question under
+     the band, or the reader is sent to something they cannot see. */
+  it('puts the question under the frosted header, not at the scroller edge', async () => {
+    await settle(() => {
+      mount.ask('first question')
+      mount.ask('second question')
+    })
+    const scroll = $('#scroll') as HTMLElement
+    const top = document.createElement('div')
+    top.className = 'top'
+    Object.defineProperty(top, 'offsetHeight', { configurable: true, value: 52 })
+    ;(scroll.parentElement as HTMLElement).append(top)
+    const turns = [...stage().querySelectorAll<HTMLElement>('[data-ask]')]
+    vi.spyOn(scroll, 'getBoundingClientRect').mockReturnValue({ top: 0, height: 600 } as DOMRect)
+    vi.spyOn(turns[0]!, 'getBoundingClientRect').mockReturnValue({ top: -300 } as DOMRect)
+    scroll.scrollTop = 900
+    const to = vi.spyOn(scroll, 'scrollTo').mockImplementation(() => {})
+
+    act(() => { fireEvent.click(marks()[0]!) })
+
+    /* 900 + (-300 - 0), less the band and the lead. */
+    expect((to.mock.calls[0]![0] as ScrollToOptions).top).toBe(900 - 300 - 52 - 16)
+  })
+
   it('marks the turn being read as the reader scrolls', async () => {
     await settle(() => {
       mount.ask('first question')
