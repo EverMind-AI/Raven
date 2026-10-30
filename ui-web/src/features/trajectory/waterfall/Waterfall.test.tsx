@@ -690,6 +690,24 @@ it('counts a failed operation once, not once per entry it wrote', async () => {
   expect(document.querySelector('[data-bad]')?.textContent).toBe('1')
 })
 
+it('counts a model or tool call once, not once per entry it wrote', async () => {
+  /* One model call writes its input, its thinking and its output as three
+     entries of one span; one tool call writes two. */
+  await draw([
+    E('ask', 0, { kind: 'llm.input', span_name: 'llm.call', slot: 'llm.input', span_id: 'model-1' }),
+    E('think', 0, { kind: 'llm.thinking', span_name: 'llm.call', slot: 'llm.thinking', span_id: 'model-1' }),
+    E('say', 0, { kind: 'llm.output', span_name: 'llm.call', slot: 'llm.output', span_id: 'model-1' }),
+    E('in', 1, { kind: 'tool.input', span_name: 'tool.call', slot: 'tool.input', span_id: 'tool-1' }),
+    E('out', 1, { kind: 'tool.output', span_name: 'tool.call', slot: 'tool.output', span_id: 'tool-1' }),
+  ])
+  const stat = (key: string) =>
+    [...document.querySelectorAll('.trajectory-wf-stat')]
+      .find((cell) => cell.querySelector('.trajectory-wf-statk')?.textContent === key)
+      ?.querySelector('.trajectory-wf-statv')?.textContent
+  expect(stat('gui.trajectory.stat.llm')).toBe('1')
+  expect(stat('gui.trajectory.stat.tool')).toBe('1')
+})
+
 it('re-renders a scroll without walking every row of the session', async () => {
   /* The list re-renders on every scroll event; what it does then must scale
      with the rows on screen, not with the session. Reading a row's clock is
