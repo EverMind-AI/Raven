@@ -1305,8 +1305,11 @@ def trajectory_backfill_frames(
     verb = "Would write" if dry_run else "Wrote"
     message = (
         f"{verb} {result['steps']} step span(s) for {result['written']} of {result['runs']} "
-        f"external run(s); {result['already']} already on record."
+        f"external run(s); {result['already']} already on record"
     )
+    if result.get("unread"):
+        message += f"; {result['unread']} with nothing left to read in the journal"
+    message += "."
     if result.get("repaired"):
         closing = "Would close" if dry_run else "Closed"
         message += f" {closing} {result['repaired']} step(s) that ran past their run's end."

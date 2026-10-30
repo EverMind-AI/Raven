@@ -2578,3 +2578,17 @@ def test_backfill_frames_reports_what_it_wrote_and_what_it_closed(monkeypatch):
     assert "7 step span(s) for 1 of 3" in r.output
     assert "2 already on record" in r.output
     assert "4 step(s)" in r.output
+
+
+def test_backfill_frames_says_how_many_runs_it_could_not_read(monkeypatch):
+    from raven.trajectory import frames_backfill
+
+    monkeypatch.setattr(
+        frames_backfill,
+        "backfill",
+        lambda **_: {"runs": 3, "written": 1, "steps": 7, "already": 1, "repaired": 0, "unread": 1},
+    )
+    r = runner.invoke(trajectory_app, ["backfill-frames"])
+    assert r.exit_code == 0, r.output
+    assert "1 already on record" in r.output
+    assert "1 already on record; 1 with nothing left to read in the journal." in r.output
