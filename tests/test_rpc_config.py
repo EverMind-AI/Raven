@@ -941,6 +941,27 @@ async def test_language_rejects_a_value_neither_front_end_can_render(fake_home: 
         await config_set({"key": "language", "value": "fr"})
 
 
+async def test_a_language_write_moves_the_text_the_server_composes(fake_home: Path) -> None:
+    """The web picker and the onboarding wizard persist through ``config.set``,
+    and the sentences Raven composes itself (the Skill Hub notice) are rendered
+    in the process language. Only ``settings.set language`` moved it, so a
+    reader who picked Chinese there still got the notice in English. Both
+    entries now leave the file and the process answering alike, and an unset
+    returns to the default."""
+    from raven import i18n
+    from raven.rpc.methods.config import config_set, config_unset
+
+    i18n.set_language("en")
+    try:
+        await config_set({"key": "language", "value": "zh"})
+        assert i18n.current_language() == "zh"
+
+        await config_unset({"key": "language"})
+        assert i18n.current_language() == "en"
+    finally:
+        i18n.set_language("en")
+
+
 # ----------------------------------------------------------------------------
 # The write must leave a config that still starts
 #

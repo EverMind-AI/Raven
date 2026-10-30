@@ -128,6 +128,21 @@ def _validate_language(value: Any) -> str:
     return value
 
 
+def _apply_language(value: Any) -> None:
+    """Move the process language with the file.
+
+    The sentences Raven composes itself -- the Skill Hub notice, the embedding
+    warning -- are rendered through ``raven.i18n`` from process state, and the
+    web picker and the onboarding wizard persist through this method while the
+    settings page goes through ``settings.set``. Only the latter moved that
+    state, so a page picked into Chinese could still be answered with English
+    prose.
+    """
+    from raven import i18n
+
+    i18n.set_language(str(value))
+
+
 _VALIDATORS: dict[str, Callable[[Any], Any]] = {
     "agent.temperature": _validate_temperature,
     "tui.theme": _validate_theme,
@@ -424,6 +439,8 @@ async def config_set(
     previous = _get_nested(payload, path)
     _set_nested(payload, path, validated)
     _save_config(payload)
+    if key == "language":
+        _apply_language(validated)
 
     return {"applied": True, "previous": previous}
 
@@ -467,6 +484,8 @@ async def config_unset(params: dict) -> dict:
     previous = _unset_nested(payload, _STORAGE_PATHS[key])
     if previous is not None:
         _save_config(payload)
+    if key == "language":
+        _apply_language(_DEFAULTS[key])
     return {"removed": previous is not None, "previous": previous, "default": _DEFAULTS[key]}
 
 
