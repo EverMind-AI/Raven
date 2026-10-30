@@ -1,4 +1,4 @@
-"""Personal robot registration, separate from executable server nodes."""
+"""Personal robot registration, separate from the Machine registry."""
 
 from __future__ import annotations
 

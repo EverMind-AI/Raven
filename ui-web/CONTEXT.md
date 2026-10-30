@@ -1,7 +1,7 @@
 # Personal robots in the Connections hub
 
 The Robots tab is an `extAgents` island module reading the `robots` source seam.
-Its records have no execution node and are not server registrations. The form
+Its records have no execution node and are not Machine registrations. The form
 handles personal metadata and optional explicit health checks; it does not
 offer robot control. Its local clock expires displayed observations without
 polling the physical device. The runtime contract and storage boundary are

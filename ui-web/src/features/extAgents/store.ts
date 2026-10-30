@@ -49,7 +49,7 @@ export const disconnects = (p: Pending): boolean => p.op === 'toggle' && p.args.
 
 export interface ExtAgentsState {
   rows: ExtAgentRow[]
-  /* The agents, their execution servers, or non-executable robot registrations. */
+  /* The agents, their execution machines, or non-executable robot registrations. */
   module: 'agents' | 'machines' | 'robots'
   /* The one flag only the page can answer: which card is open. It is about what
      is drawn, so it does not belong to whichever source is answering. */
