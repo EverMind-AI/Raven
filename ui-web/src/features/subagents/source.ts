@@ -82,6 +82,12 @@ export const agentsSource: SubagentsSource = {
   instanceSend: (agent: string, handle: string, text: string) =>
     gateway().call('turn.send', { session_key: openKey(), content: text, target: { agent, handle }, ...mediaOf(text) })
       .then(() => undefined),
+  /* Stop the turn this instance is answering: the same `turn.cancel` the page
+     composer's stop calls, with the `target` that names the instance's own lane
+     -- without it the lookup misses every direct turn. */
+  instanceCancel: (agent: string, handle: string) =>
+    gateway().call('turn.cancel', { session_key: openKey(), target: { agent, handle } })
+      .then(() => undefined),
   instanceCreate: (agent: string, sessionKey: string) =>
     gateway().call('subagents.instance.create', { agent, session_key: sessionKey })
       .then((r) => r && r.instance),

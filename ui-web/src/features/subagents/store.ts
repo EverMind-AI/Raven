@@ -527,6 +527,12 @@ export function canSend(): boolean {
   return !!source().instanceSend
 }
 
+/* Whether this page can stop a direct turn at all: drawn past a no would be a
+   click that goes nowhere, the same rule `canSend` serves for the composer. */
+export function canCancel(): boolean {
+  return !!source().instanceCancel
+}
+
 /* Coalesced: a direct turn streams, so this arrives per token, and each read is
    a whole transcript. One read per window is enough to keep the page moving.
 
@@ -671,6 +677,20 @@ function trimmedKeepingNote(text: string): string {
 export function sendFailOf(agent: string, handle: string): string | null {
   const fail = state.sendFail
   return fail && fail.agent === agent && fail.handle === handle ? fail.why : null
+}
+
+/* Stop the turn this instance is answering. The busy state clears on the
+   cancelled turn's own error frame, which arrives tagged with this target and
+   settles here like a completed turn's -- so a refused cancel (the turn had
+   already ended) needs no local undo. Queued messages stay queued: a stop is
+   the engine coming free, and what waited behind the turn runs next, as the
+   page composer's stop drains its own queue. */
+export function cancelInstanceTurn(agent: string, handle: string): void {
+  const src = source()
+  if (!src.instanceCancel) return
+  src.instanceCancel(agent, handle).catch((e: unknown) => {
+    set({ sendFail: { agent, handle, why: (e as Error)?.message || String(e) } })
+  })
 }
 
 export function forgetInstance(it: InstanceRow): void {
