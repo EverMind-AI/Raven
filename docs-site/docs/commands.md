@@ -37,7 +37,7 @@ lists its subcommands and options.
 | `raven tracing` | Open the local trace dashboard |
 | `raven tracing compact` | Consolidate duplicate trace artifacts to free disk space |
 | `raven tracing compress [--logs]` | Rewrite trace payloads as zstd (with `--logs`, the rotated span and event logs too) to free disk space |
-| `raven tracing pack-messages` | Pack content-addressed message blobs into a few archives to free disk space |
+| `raven tracing pack-messages` | Pack content-addressed message blobs into a few Message Packs to free disk space |
 | `raven trajectory` | Save, replay, redact, label, and preserve execution trajectories for debugging, and run the bug report receiver |
 
 Run `raven --help` for the command list, or `raven <command> --help` for details
