@@ -12007,7 +12007,7 @@
     },
     "gui.trajectory.block.schema": {
       "en": "Schema",
-      "zh": "Schema"
+      "zh": "定义"
     },
     "gui.trajectory.block.result": {
       "en": "Result",
@@ -12151,7 +12151,7 @@
     },
     "gui.trajectory.reason.schema_unproven": {
       "en": "No confirmable historical schema was recorded",
-      "zh": "未记录可确认的历史 Schema"
+      "zh": "未记录可确认的历史定义"
     },
     "gui.trajectory.reason.reasoning_withheld": {
       "en": "The provider counted reasoning tokens but returned no reasoning text; the count is on the Usage tab",
