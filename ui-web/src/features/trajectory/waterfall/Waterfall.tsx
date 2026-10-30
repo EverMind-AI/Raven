@@ -828,7 +828,7 @@ export function Waterfall(): JSX.Element {
         data-failed={entry.failure_entry ? '' : undefined} style={style} onClick={() => pick(row.row!)}>
         <span className="trajectory-wf-guide" style={{ left: GUIDE_X }} />
         <span className="trajectory-wf-guide" style={{ left: TURN_GUIDE_X }} />
-        <span className="trajectory-wf-label" style={{ paddingLeft: 44 + row.row!.depth * 20 }}>
+        <span className="trajectory-wf-label" style={{ paddingLeft: 44 }}>
           <span className="trajectory-wf-ico"><Icon icon={kindIcon(entry.kind)} size={15} /></span>
           <span className="trajectory-wf-name">{entry.preview ?? entry.span_name}</span>
           {entry.failure_entry ? <FailMark /> : null}
@@ -894,5 +894,5 @@ export function Waterfall(): JSX.Element {
   )
 }
 
-/** Rupees of MiB, as the status line words a scan. */
+/** A byte count in MiB, to one decimal, the way the status line words a scan. */
 export const mib = (bytes: number): string => (bytes / (1024 * 1024)).toFixed(1)

@@ -17,7 +17,6 @@ import type { TrajectoryEntry } from '../types'
 
 export interface WaterfallRow {
   entry: TrajectoryEntry
-  depth: number
 }
 
 export interface WaterfallTurn {
@@ -82,23 +81,19 @@ interface Row {
   entry: TrajectoryEntry
   start: number
   end: number
-  depth: number
 }
 
 /* Rows under a turn are siblings, whatever the span tree says: the page draws
    one flat list per turn, so a model call and the tool it triggered sit on the
    same line and read in time order. */
-function rowOf(entry: TrajectoryEntry, bySpan: ReadonlyMap<string, string | null>, now: number): Row {
-  void bySpan
-  return { entry, start: entryStart(entry), end: entryEnd(entry, now), depth: 0 }
+function rowOf(entry: TrajectoryEntry, now: number): Row {
+  return { entry, start: entryStart(entry), end: entryEnd(entry, now) }
 }
 
 /** The rows of one bucket, sorted by start. Exported for the incremental index,
  *  which rebuilds a bucket at a time rather than the whole tree. */
 export function buildRows(entries: readonly TrajectoryEntry[], now: number): WaterfallRow[] {
-  const bySpan = new Map<string, string | null>()
-  for (const entry of entries) if (!bySpan.has(entry.span_id)) bySpan.set(entry.span_id, entry.parent_span_id ?? null)
-  return ordered(entries.map((entry) => rowOf(entry, bySpan, now))).map((row) => ({ entry: row.entry, depth: row.depth }))
+  return ordered(entries.map((entry) => rowOf(entry, now))).map((row) => ({ entry: row.entry }))
 }
 
 function ordered(rows: Row[]): Row[] {
@@ -106,9 +101,7 @@ function ordered(rows: Row[]): Row[] {
 }
 
 export function buildTurn(id: string, entries: readonly TrajectoryEntry[], now: number): WaterfallTurn {
-  const bySpan = new Map<string, string | null>()
-  for (const entry of entries) if (!bySpan.has(entry.span_id)) bySpan.set(entry.span_id, entry.parent_span_id ?? null)
-  const rows = ordered(entries.map((entry) => rowOf(entry, bySpan, now)))
+  const rows = ordered(entries.map((entry) => rowOf(entry, now)))
   const end = entries.find((entry) => entry.slot === 'turn.output')
   const start = rows[0]!.start
   const stop = Math.max(start, end === undefined ? Math.max(...rows.map((row) => row.end)) : entryEnd(end, now))
@@ -122,7 +115,7 @@ export function buildTurn(id: string, entries: readonly TrajectoryEntry[], now: 
     end: stop,
     reportedFrom,
     failure: rows.some((row) => row.entry.failure_entry),
-    rows: rows.map((row) => ({ entry: row.entry, depth: row.depth })),
+    rows: rows.map((row) => ({ entry: row.entry })),
   }
 }
 
