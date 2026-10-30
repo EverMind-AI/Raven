@@ -2548,12 +2548,29 @@ sha1 of `json.dumps(message, ensure_ascii=False, default=str)` — key order
 preserved, since sorting would make resolution hand back a reordered copy. Beside
 `_blobs/` and never inside it: `raven.tracing.compact` sweeps a blob whose link count
 is 1, and a Message Blob's is permanently 1 because a shell references it from its
-JSON text rather than by hard link. `compact` names both stores in
-`_CONTENT_STORES` and walks neither as an artifact tree -- their layout is
+JSON text rather than by hard link. `compact` names the three content stores
+(`_blobs/`, `_messages/`, `_message_packs/`) in `_CONTENT_STORES` and walks none
+of them as an artifact tree -- their layout is
 indistinguishable from `<kind>/<day>/<file>`, so a store left in the walk is rehashed
-whole on every run and hard-linked into `_blobs/`, breaking this boundary. No reclaim path yet; growth is bounded only by use.
+whole on every run and hard-linked into `_blobs/`, breaking this boundary. Its
+reclaim path is Message Pack: `raven tracing pack-messages` moves the files into
+packs; until that runs, growth is bounded only by use.
 _Avoid_: storing one under `_blobs/` — that directory holds whole-artifact
 payloads, and `compact` sweeps any member of it whose link count is 1.
+
+**Message Pack** (`raven/tracing/message_pack.py`):
+Message Blobs concatenated into multi-megabyte zstd frames under
+`_message_packs/<uuid>.pack.zst`, with `index.json` mapping each sha1 to
+`(pack, plaintext offset, length)`. A migration, not a writer change:
+`raven tracing pack-messages` writes the packs, replaces the index atomically, and
+only then deletes the message files, so a never-packed store, a half-packed one,
+and a crash at any step all leave every address readable (a reader that finds no
+file reads its slice). The index travels with an imported store and is untrusted:
+a pack name is a generated basename and the range fields are non-negative
+integers, validated before any path is built. A reader keeps at most 32 MB of
+decompressed packs; a larger pack is streamed per read.
+_Avoid_: "archive" — that names the rotated-log directory; a pack is not a
+whole-store backup.
 
 **Artifact Shell** (`raven/observability/semconv.py`):
 An `llm.input` artifact in `audit.artifact.v2` form: the call's identity plus one
