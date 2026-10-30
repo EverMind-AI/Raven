@@ -10,7 +10,9 @@ from pathlib import Path
 
 import pytest
 
+from raven.tracing.codec import is_compressed
 from raven.tracing.compress import compress_logs
+from raven.tracing.store import TraceStore
 from raven.trajectory import conversation as tconv
 from raven.trajectory import entries as tent
 from raven.trajectory import index as tidx
@@ -66,6 +68,11 @@ def _rotate(state: Path, name: str = "2026-09-01-100000000000") -> Path:
     target = archive / f"audit-spans-{name}.log"
     os.rename(_log(state), target)
     return target
+
+
+def _compress(state: Path, archived: Path) -> None:
+    """Re-encode one rotated log under its own name, as the store does a rotation later."""
+    TraceStore(state)._compress_rotated(archived)
 
 
 def _artifact(state: Path, payload, name: str) -> str:
@@ -211,6 +218,72 @@ def test_compressing_a_consumed_archive_keeps_the_cursor_moving(state, clock):
     _refresh_until_ready(index, clock)
 
     assert {e.span_id for e in index.entries()} == {"before", "after"}
+
+
+def test_a_log_the_store_compresses_after_rotation_is_not_read_again(state, clock):
+    """The store re-encodes a rotated log under a new inode. A record without
+    ids is keyed by its log position, so reading that log again as a new file
+    would list it twice."""
+    store = TraceStore(state, max_bytes=4096)
+    broken = {"name": "memory.enqueue", "startTime": _ts(0), "endTime": _ts(1), "attributes": {"session.key": SESSION}}
+    store.append_span(broken)
+    store.append_span(_turn("t", "a", start=1, end=2))
+    index = _index(state, clock)
+    _refresh_until_ready(index, clock)
+    before = [i for i in _ids(index) if i.startswith("broken:")]
+    assert len(before) == 1
+
+    archive = state / "logs" / "archive"
+    turns = 0
+    while len(list(archive.rglob("audit-spans-*.log"))) < 2:
+        store.append_span(_turn("t", f"b{turns}", start=3 + turns, end=3 + turns))
+        turns += 1
+    oldest = sorted(archive.rglob("audit-spans-*.log"))[0]
+    assert is_compressed(oldest.read_bytes())
+    _refresh_until_ready(index, clock)
+
+    assert [i for i in _ids(index) if i.startswith("broken:")] == before
+    assert len(_ids(index)) == 1 + 2 * (1 + turns)
+
+
+def test_compressing_a_log_mid_scan_keeps_the_epoch(state, clock):
+    _append(state, [_turn("t", f"s{i}", start=i, end=i) for i in range(300)])
+    index = _index(state, clock, budget_bytes=16 * 1024)
+    index.refresh_sync(None)
+    assert index.index_state().phase == tidx.PHASE_SCANNING
+    epoch = index.epoch
+
+    _compress(state, _rotate(state))
+    _append(state, [_turn("t", "after", start=400, end=401)])
+    _refresh_until_ready(index, clock)
+
+    assert index.epoch == epoch
+    assert len(_ids(index)) == 2 * 301
+
+
+def test_a_compressed_log_whose_inode_is_reused_keeps_the_epoch(state, clock):
+    """ext4 hands a freed inode to the next file created, so the active log
+    written right after a compression can carry the old log's key. The key is
+    then present but smaller than the cursor's offset; that is the old log
+    moved, not truncated, when its plaintext turns up under a new key."""
+    _append(state, [_turn("t", f"s{i}", start=i, end=i) for i in range(300)])
+    index = _index(state, clock, budget_bytes=16 * 1024)
+    index.refresh_sync(None)
+    assert index.index_state().phase == tidx.PHASE_SCANNING
+    epoch = index.epoch
+
+    archived = _rotate(state)
+    held = state / "logs" / "held-inode"
+    os.link(archived, held)
+    _compress(state, archived)
+    os.replace(held, _log(state))
+    with _log(state).open("r+b") as fh:
+        fh.truncate(0)
+    _append(state, [_turn("t", "after", start=400, end=401)])
+    _refresh_until_ready(index, clock)
+
+    assert index.epoch == epoch
+    assert len(_ids(index)) == 2 * 301
 
 
 # ── budgets ───────────────────────────────────────────────────────────
@@ -477,6 +550,32 @@ def test_a_spilled_trace_whose_first_file_was_removed_keeps_what_later_files_hol
     assert recovered >= {f"late-{i}" for i in range(6)} | {"s-root"}
     assert not recovered & {f"early-{i}" for i in range(6)}
     assert index.index_state().unresolved_dropped == 1
+    assert index.index_state().recovering_traces == 0 and index.spilled == {}
+
+
+def test_a_spilled_trace_whose_first_file_was_compressed_loses_nothing(state, clock):
+    """A spill records a position in a file; compressing that file moves it to
+    a new inode, and the rescan must follow it rather than count a gap."""
+    _append(state, [_tool("S", f"early-{i}", "s-root", start=1, end=2, session="sub") for i in range(6)])
+    index = _index(state, clock, pending_spans=5)
+    index.refresh_sync(None)
+    assert "S" in index.spilled
+    archived = _rotate(state)
+    _append(state, [_tool("S", f"late-{i}", "s-root", start=1, end=2, session="sub") for i in range(6)])
+    index.refresh_sync(None)
+    _compress(state, archived)
+    attrs = {"trace.dispatched_in_trace_id": "t"}
+    _append(
+        state,
+        [
+            _turn("t", "a", start=0, end=9),
+            _span("S", "s-root", "session.turn", start=0, end=3, session="sub", attrs=attrs),
+        ],
+    )
+    _refresh_until_ready(index, clock)
+    recovered = {e.span_id for e in index.entries() if e.trace_id == "S"}
+    assert recovered == {f"early-{i}" for i in range(6)} | {f"late-{i}" for i in range(6)} | {"s-root"}
+    assert index.index_state().unresolved_dropped == 0
     assert index.index_state().recovering_traces == 0 and index.spilled == {}
 
 

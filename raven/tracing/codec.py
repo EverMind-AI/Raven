@@ -95,6 +95,26 @@ def plaintext_size(path: Path) -> int | None:
     return None if plain is None else len(plain)
 
 
+def read_head(path: Path, size: int) -> bytes | None:
+    """The first ``size`` plaintext bytes of a stored file, decoding no further."""
+    try:
+        with path.open("rb") as handle:
+            if not is_compressed(handle.read(4)):
+                handle.seek(0)
+                return handle.read(size)
+            handle.seek(0)
+            head = b""
+            with zstandard.ZstdDecompressor().stream_reader(handle, read_across_frames=False) as reader:
+                while len(head) < size:
+                    chunk = reader.read(size - len(head))
+                    if not chunk:
+                        break
+                    head += chunk
+            return head
+    except (OSError, zstandard.ZstdError):
+        return None
+
+
 def read_plaintext_file(path: Path, limit: int = MAX_PLAINTEXT_BYTES) -> bytes | None:
     """A stored file's plaintext, or None when it cannot be read or decoded."""
     try:
@@ -140,6 +160,7 @@ __all__ = [
     "is_compressed",
     "open_plaintext",
     "plaintext_size",
+    "read_head",
     "read_plaintext",
     "read_plaintext_file",
 ]
