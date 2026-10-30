@@ -179,6 +179,38 @@ async def test_runner_drives_run_turn_and_stashes_rich_usage():
     assert outcome.explicit_reply is True
 
 
+async def test_a_cron_turn_stashes_its_own_usage_over_the_turn_before():
+    """A wake runs on the session's own conversation, and its
+    ``message.complete`` reports the lane's usage slot. Left unwritten, the slot
+    still held the turn before -- a sub-agent result that does not own the lane
+    and so never cleared it -- and that turn's spend was reported a second time."""
+    earlier = {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "cost_usd": 0.5}
+    own = {"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "cost_usd": 0.01, "context_used": 42}
+    usages: dict[str, dict] = {"tui:c1": dict(earlier)}
+    runner = RpcTurnRunner(_RunTurnLoop(usage=own, reply_text="done"), FakeEmitter(), usages, {})
+    req = TurnRequest(origin=Origin.CRON, source=_src(), text="wake", conversation="tui:c1", turn_id="w1")
+    _events, emit = _collect()
+
+    await runner.run(req, emit, lambda: [])
+
+    assert usages["tui:c1"] == own
+
+    from raven.rpc.spine import RpcOutlet, _make_rpc_sink
+    from raven.spine.delivery import DeliveryHub
+    from raven.spine.events import TurnEnded
+
+    hub, emitter = DeliveryHub(), FakeEmitter()
+    outlet = RpcOutlet("tui", emitter, {})
+    hub.register(outlet)
+    sink = _make_rpc_sink(hub, outlet, "tui", {}, usages, {}, None)
+    await sink(
+        TurnEnded(usage=Usage(0, 0, 0), latency_ms=1.0, explicit_reply=True, conversation_id="tui:c1", turn_id="w1")
+    )
+
+    (complete,) = [e for _k, e in emitter.emitted if e["type"] == "message.complete"]
+    assert complete["payload"]["usage"] == own, "the wake's message.complete reports its own spend"
+
+
 async def test_user_turn_receives_tui_approval_capability(tmp_path):
     executor = _DirectRecordingExecutor()
     tool = ExecTool(executor=executor, working_dir=str(tmp_path))

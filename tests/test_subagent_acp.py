@@ -2614,8 +2614,19 @@ async def test_prompt_usage_is_read_only_where_it_counts_the_turn(
     assert await _counted(tmp_path, **env) == counted
 
 
-async def _booked(tmp_path: Path, runs: int = 1, *, bound: bool = False, **env: str):
-    """What the usage ledger holds for ``runs`` turns on one instance of a stub reporting as ``env`` says."""
+async def _booked(
+    tmp_path: Path,
+    runs: int = 1,
+    *,
+    bound: bool = False,
+    preset: str | None = None,
+    raises: type[Exception] | None = None,
+    **env: str,
+):
+    """What the usage ledger holds for ``runs`` turns on one instance of a stub reporting as ``env`` says.
+
+    ``raises`` is what each turn is expected to fail with.
+    """
     from datetime import datetime, timedelta, timezone
 
     from raven.token_wise import usage_context
@@ -2632,14 +2643,20 @@ async def _booked(tmp_path: Path, runs: int = 1, *, bound: bool = False, **env: 
         env=dict(cfg.env),
         snapshot=_snapshot("a", cfg, can_resume=True, can_load=True),
         registry=registry,
+        preset=preset,
     )
     since = datetime.now(timezone.utc) - timedelta(seconds=1)
     ledger = tmp_path / "telemetry"
     with usage_context.bind("cli:root", {"root_session_key": "cli:root", "telemetry_dir": str(ledger)}):
         for n in range(runs):
-            await backend.run(
+            turn = backend.run(
                 "ping", task_id=f"t{n}", workspace=tmp_path, session_key="cli:root", instance="work", executor=None
             )
+            if raises is None:
+                await turn
+            else:
+                with pytest.raises(raises):
+                    await turn
     return delegated_usage("cli:root", since, telemetry_dir=ledger)
 
 
@@ -2687,6 +2704,34 @@ async def test_a_turn_with_neither_counts_nor_cost_books_nothing(tmp_path: Path)
     got = await _booked(tmp_path)
 
     assert got.calls == 0
+
+
+@pytest.mark.parametrize(
+    ("preset", "failed"),
+    [
+        (None, {"ACP_STUB_EMPTY_PROMPTS": "1"}),
+        ("github_copilot", {"ACP_STUB_REPLY": "Error: 402 Your credit balance is too low. Please add credits."}),
+    ],
+    ids=["empty", "refused"],
+)
+async def test_a_turn_that_answered_nothing_usable_still_books_its_spend(
+    tmp_path: Path, preset: str | None, failed: dict[str, str]
+) -> None:
+    """The turn is booked before the empty-turn and refusal checks fail it: what
+    it answered is unusable, and what it spent was still spent."""
+    from raven.acp_client.acp_agent import AcpEmptyTurnError
+
+    got = await _booked(tmp_path, preset=preset, raises=AcpEmptyTurnError, **_CLAUDE_TURN, **failed)
+
+    assert (got.calls, got.input_tokens, got.output_tokens) == (1, 1200, 34)
+
+
+@pytest.mark.parametrize("amount", [float("inf"), float("nan"), -0.5, True, "0.5"])
+def test_a_reported_cost_that_is_no_finite_amount_is_unknown_and_keeps_the_baseline(amount: Any) -> None:
+    """A baseline of ``inf`` or ``nan`` would leave every later turn of the session unpriced."""
+    from raven.acp_client.acp_agent import _turn_cost
+
+    assert _turn_cost({"cost": {"amount": amount, "currency": "USD"}}, 0.25) == (None, 0.25)
 
 
 async def test_a_sessions_cumulative_cost_is_booked_once(tmp_path: Path) -> None:
