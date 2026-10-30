@@ -63,6 +63,7 @@ root of a turn is a `session.turn` span; everything else nests beneath it.
 | `s.event(name)` | append a timeline event `{time, name}` |
 | `s.error(exc)` | mark `status = ERROR` (done automatically if the block raises) |
 | `s.get(key, default=None)` | the attribute value merged so far, or `default` -- for a value written only once, such as `subagent.outcome` |
+| `s.identity()` | who the span belongs to and when it opened: `trace_id`, `span_id`, `session_key`, `channel`, `chat_id`, `surface`, `start` -- for spans built beside it after the fact, such as the steps an external agent's run reports, written as its children once the run returns. A span from a disabled tracer answers with empty ids, so a caller checks `trace_id` and `span_id` before writing |
 
 Read-only: `s.trace_id`, `s.span_id`, `s.name`.
 

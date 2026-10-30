@@ -35,7 +35,7 @@ inside, its spans inside those.
 
 ```
 ┌ status line (index progress, truncation, faults) ─────────────────┐
-├ overview: one mini lane per agent ────────────────────────────────┤
+├ overview: a row of marks per agent ───────────────────────────────┤
 ├ ruler: shared axis, idle gaps collapsed and labelled ─────────────┤
 ├ agents ────────────────────────────────────────┬ details pane ────┤
 │ ▾ main  · model · 3 turns · tokens            │ selected span's  │
@@ -163,7 +163,12 @@ A step ends where the next begins, and every step is held inside its run.
 Runs recorded before this existed still have their wire journal on disk, and
 `raven trajectory backfill-frames` writes their steps from it, under ids
 derived from the run so a second pass adds nothing; a run that wrote its steps
-while it ran says so (`subagent.external.steps`) and is left alone.
+while it ran says so (`subagent.external.steps`) and is left alone. The journal
+is read by the same reduction the live collector runs (`turn_events.py`), under
+the dialect the connection's handshake chose, and only from the run's
+`session/prompt` on: a resumed session replays its history before that. With
+tracing turned off a real pass writes nothing and says so; `--force` writes
+anyway.
 
 Replay never re-runs an external agent -- the tool that launched it is answered
 from the recording -- so `load_recording` and the cassette minimizer leave out
