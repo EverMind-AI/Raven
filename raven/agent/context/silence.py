@@ -8,15 +8,17 @@ Silence is something the model chooses, by answering with a marker. It is not:
   completed, and a marker never hides a failure;
 * a marker inside a report -- prose that merely mentions one is delivered like any other prose.
 
-The rule depends on who the turn is for, and ``is_silence`` is the one place that picks it, so the
-lanes cannot drift apart. A turn a person started is never taught a marker, so it honours only the
-bracketed ``[SILENT]`` the runtime teaches, as the whole reply: a one-word answer such as ``Silent.``
-or ``No reply.`` is the person's answer. A turn from a proactive origin (cron, sub-agent, sentinel,
-heartbeat) is told to answer ``[SILENT]`` when nothing is new, and models reliably vary the spelling
-and wrap it in a short note on why they stayed quiet, so it reads the whole marker set by two rules:
-the strict one (``is_exact_silence``), a reply that is exactly a marker, and the loose one
-(``is_loose_silence``), where the bracketed ``[SILENT]`` opening the reply, or any marker alone on
-its first or last line, counts too.
+The rule depends on who the turn is for and whether its prompt taught the marker, and
+``is_silence`` is the one place that picks it, so the lanes cannot drift apart. A proactive turn
+whose prompt carries ``SILENCE_INSTRUCTION`` (the cron reminder, a sub-agent's unprompted report) is
+told to answer ``[SILENT]`` when nothing is new, and models reliably vary the spelling and wrap it in
+a short note on why they stayed quiet, so it reads the whole marker set by two rules: the strict one
+(``is_exact_silence``), a reply that is exactly a marker, and the loose one (``is_loose_silence``),
+where the bracketed ``[SILENT]`` opening the reply, or any marker alone on its first or last line,
+counts too. Every other turn honours only the bracketed ``[SILENT]``, as the whole reply: a person's
+turn, and a proactive one whose prompt never named the marker (a heartbeat task, a sub-agent's
+result relayed, a sentinel notice), where a one-word answer such as ``Silent.`` or ``No reply.``,
+or a report that ends on one, is the model's answer.
 """
 
 import unicodedata
@@ -103,14 +105,29 @@ def is_loose_silence(text: object) -> bool:
     return stripped.upper().startswith(SILENT_MARKER)
 
 
-def is_silence(text: object, origin: Origin | None) -> bool:
-    """Whether ``text`` is silence under the rules ``origin`` picks.
+def teaches_silence(prompt: object) -> bool:
+    """Whether a turn's prompt taught the model the marker: it carries ``SILENCE_INSTRUCTION``.
 
-    A turn from a proactive origin reads the loose rule and the strict one: the loose matcher takes a
-    whole-reply marker as written, so ``NO_REPLY.`` needs the strict rule's forgiveness of edge
-    punctuation. Every other origin, and none, honours only ``[SILENT]`` with whitespace around it,
-    so an origin this table does not know delivers a reply rather than swallowing it.
+    Read off the prompt rather than a flag beside it, so an entry that teaches the marker cannot
+    forget to say so, and one that never named it cannot claim the loose rule.
     """
-    if origin in PROACTIVE_ORIGINS:
+    return isinstance(prompt, str) and SILENCE_INSTRUCTION in prompt
+
+
+def reads_loose_silence(origin: Origin | None, *, taught: bool) -> bool:
+    """Whether a turn reads the loose rule: one from a proactive origin whose prompt taught the marker."""
+    return taught and origin in PROACTIVE_ORIGINS
+
+
+def is_silence(text: object, origin: Origin | None, *, taught: bool) -> bool:
+    """Whether ``text`` is silence under the rules ``origin`` and ``taught`` pick.
+
+    A proactive turn whose prompt taught the marker (``teaches_silence``) reads the loose rule and the
+    strict one: the loose matcher takes a whole-reply marker as written, so ``NO_REPLY.`` needs the
+    strict rule's forgiveness of edge punctuation. Every other turn, and one from an origin this
+    table does not know, honours only ``[SILENT]`` with whitespace around it, so a reply it was never
+    asked to shape is delivered rather than swallowed.
+    """
+    if reads_loose_silence(origin, taught=taught):
         return is_loose_silence(text) or is_exact_silence(text)
     return isinstance(text, str) and text.strip() == SILENT_MARKER

@@ -811,11 +811,14 @@ _Avoid_: "shadow git" as the term — Checkpoint is the per-turn snapshot it pro
 **Silence Marker** (`agent/context/silence.py`):
 What a model answers with to say a turn has nothing to report: `[SILENT]`, `SILENT`, `NO_REPLY`
 or `NO REPLY` (`SILENCE_MARKERS`); `SILENCE_INSTRUCTION` is the two sentences that teach the
-bracketed form. The turn's `Origin` picks the rule, in one place (`is_silence`). A `USER` turn, or
-one with no origin, is never taught a marker, so it honours only `[SILENT]` itself with nothing but
-whitespace around it: a one-word answer such as `Silent.` or `No reply.` is the person's answer, and
-is delivered. A turn from a proactive origin -- `SENTINEL`, `CRON`, `HEARTBEAT` or `SUBAGENT` --
-reads the whole set by two rules: the strict one (`is_exact_silence`), a reply that is exactly a
+bracketed form. The turn's `Origin`, and whether its prompt taught the marker, pick the rule, in one
+place (`is_silence`). A turn whose prompt does not carry `SILENCE_INSTRUCTION` (`teaches_silence`)
+honours only `[SILENT]` itself with nothing but whitespace around it: a `USER` turn, one with no
+origin, and a proactive one that was never taught -- a heartbeat task, a sub-agent's relayed result,
+a sentinel notice. There a one-word answer such as `Silent.` or `No reply.`, or a reply ending on
+one, is the model's answer, and is delivered. A turn from a proactive origin (`PROACTIVE_ORIGINS`)
+whose prompt carries it -- the cron reminder and a sub-agent's unprompted report --
+reads the whole set by two rules (`reads_loose_silence`): the strict one (`is_exact_silence`), a reply that is exactly a
 marker, with case, edge whitespace and stray edge punctuation forgiven up to `SILENCE_MAX_CHARS`;
 and the loose one (`is_loose_silence`): nobody is waiting on such a turn and models wrap the marker
 in a note on why they stayed quiet, so a marker alone on the first or last line, or a bracketed
@@ -837,13 +840,16 @@ bracket goes out at once), reads past an inline think block the way the loop doe
 as it arrives, and what follows it is held; a closing tag with no block open is debris, as the loop
 reads it, and does not end the hold), keeps holding across a stream cut while the reply could
 still be the marker, and drops what it held when the loop reads the reply as
-a marker (a turn from a proactive origin, whose marker may close a report, holds the
+a marker (a turn that reads the loose rule, whose marker may close a report, holds the
 whole call instead). An exhausted turn's wrap-up is gated and read the same way. The marker row
-stays in the history holding the model's whole reply -- the marker, or, from a proactive origin,
+stays in the history holding the model's whole reply -- the marker, or, under the loose rule,
 the note around it -- filed with `silent: true` so a reload does not read it as an answer, and it
 carries the turn's Response Meta. The turn reports itself as
 `TurnOutcome.silent` and, for a surface drawing it live, as a closing `NoticeKind.SILENT_TURN`
-notice. The kernel holds no marker rules -- they live in `agent/context/silence.py` -- and the
+notice. Its detail is what that reply had streamed before it was read as the marker -- at most a
+think block the model inlined ahead of it -- counted over the step a reader draws it in (its call and
+a cut answer's continuations, or the wrap-up alone; `LoopOutcome.shown`), so a client takes back
+exactly that suffix of the step's text and keeps the narration before it. The kernel holds no marker rules -- they live in `agent/context/silence.py` -- and the
 spine's `TurnEnded` carries no flag of its own; what the kernel names of silence is the outcome
 (`TurnOutcome.silent`), the notice (`NoticeKind.SILENT_TURN`) and which origins are proactive
 (`PROACTIVE_ORIGINS`).
@@ -852,9 +858,10 @@ The `after_send` hook chain still runs, with
 queued for the next reply, and the personalizer learns nothing; text a hook composes there is
 delivered as the reply, the closing row is filed as that text rather than the marker, and the turn
 is then not silent. A turn the message tool has already answered (`MessageTool.sent_in_turn`: a send
-to the turn's own chat that went out) is not a Silent Turn whatever it ends on -- its answer reached
-the reader, so no
-`SILENT_TURN` notice goes out; a marker it ends on is still filed `silent: true`, so a reload
+that went out, which the tool hands to the turn's own reader whatever chat the call names), or one in
+which a tool delivered files the reader now holds, is not a Silent Turn whatever it ends on -- its
+answer reached the reader, so no `SILENT_TURN` notice goes out and the turn reports an explicit
+reply rather than `TurnOutcome.silent`; a marker it ends on is still filed `silent: true`, so a reload
 draws the muted line after the delivered reply where the live view drew none. The turn's last
 assistant row with text or tool calls -- the marker's row when it ends on one, else, after an empty
 closing reply, which is not stored, its last tool call, not necessarily the send; never a notice the
@@ -862,7 +869,11 @@ runtime files after the turn -- carries that live verdict as `replied_via_tool`,
 surfaces that read a stored turn -- the ACP replay, which draws it, and the session list, which
 orders sessions by it -- read the flag from
 one place (`session/turn_shape.py`) rather than guess it from the calls they can see, where a send
-that failed or went to another chat would look like an answer.
+that failed would look like an answer. Which turns they take back whole is one rule in the same
+module (`TakeBack`), read by both and by the live turn: a turn the runtime opened that ends on a
+marker no tool answered goes, the marker's row closing it. Such a turn files no unanswered-question
+notice after its marker, so none is left behind as an orphan; a person's Silent Turn, which they
+keep, still files it.
 Distinct from a `no_output` failure. A Silent Turn is the model saying nothing on purpose, so it
 succeeds; `no_output` is what a turn is failed with when its last reply was empty -- no text, no
 tool call, no reasoning -- once every retry was spent, or, with recovery switched off, when its
@@ -893,13 +904,18 @@ continued rather than taken for silence, and a stream that had already received 
 keeps it, so the refusal is handled as one rather than continued. The model is asked to go on, and
 the parts are joined, up to `MAX_CONTINUATIONS` times,
 after which the partial is delivered with `PARTIAL_STREAM_NOTE` as an `interrupted` turn. A
-continuation that comes back empty leaves what streamed as the answer, and so does one that is a
-marker on its own, unless the cut left a think block open, when it is read only joined to what came
-before it; one that comes back as an
-error, a stream cut off before any new text included, ends the turn at once on the partial with
-the note, as `interrupted`, with no wait and no fallback model -- and so does a turn that runs out
-of iterations or time while a continuation is still owed, with no wrap-up. On each of those exits
-the reply the turn ends on is the joined parts with their closed think blocks taken out of the whole
+continuation that comes back empty leaves what streamed as the answer, and on a person's turn, which
+showed what streamed, so does one that is a marker on its own; a turn that reads the loose rule showed
+nothing of it, so there such a marker is read with what came before it, on its own line, as the
+reply uncut would be. Either way a continuation inside a think block the cut left open is read only
+joined to what came before it. One that comes back as an error, a stream cut off before any new text
+included, ends the turn at once on the partial with the note, as `interrupted`, with no wait and no
+fallback model, and so does a turn that runs out of iterations or time while a continuation is still
+owed, with no wrap-up. One that raises ends on the partial the same way, but not at once: only after
+`stream_llm_call` has spent its reconnects and, on a failure it still reads as transient, waited out
+`llm_error_retry_delays` (15, 30 and 60 seconds by default), with no retry notice shown.
+On each of those exits the reply the turn ends on is the joined parts with their closed think blocks
+taken out of the whole
 -- a cut can split one -- and a block still unclosed left in as text, read for a Silence Marker by
 the turn's rule as a reply with no cut is, and
 one that is a marker ends the turn as a **Silent Turn**: nothing of it shown, its row filed

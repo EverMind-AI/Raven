@@ -1880,9 +1880,25 @@ async def test_a_silent_turn_emits_its_notice_and_reports_itself_silent(tmp_path
 
     assert not any(isinstance(e, EvStreamDelta) for e in sink.events), "no delta carried any of the marker"
     assert not any(isinstance(e, EvText) for e in sink.events)
-    assert [e.kind for e in sink.events if isinstance(e, EvNotice)] == [NoticeKind.SILENT_TURN]
+    assert [(e.kind, e.detail) for e in sink.events if isinstance(e, EvNotice)] == [(NoticeKind.SILENT_TURN, None)]
     assert outcome.silent is True
     assert outcome.explicit_reply is False
+
+
+async def test_a_silent_turns_notice_names_what_its_reply_showed(tmp_path):
+    """The marker is held back, but a think block the model inlined before it streams as it comes. The
+    notice names exactly that text, so a client takes back what the closing reply drew and nothing else."""
+    chunks = [ChatDelta(content="<think>nothing new</think>"), ChatDelta(content="\n[SIL"), ChatDelta(content="ENT]")]
+    loop = AgentLoop(provider=_FakeStreamProvider(chunks), workspace=tmp_path)
+    _stub_edges(loop)
+    sink = _EmitCollector()
+
+    outcome = await loop.run_turn(_req("anything new?"), sink, _drain)
+
+    shown = "".join(e.delta for e in sink.events if isinstance(e, EvStreamDelta))
+    assert shown == "<think>nothing new</think>"
+    assert [(e.kind, e.detail) for e in sink.events if isinstance(e, EvNotice)] == [(NoticeKind.SILENT_TURN, shown)]
+    assert outcome.silent is True
 
 
 async def test_a_turn_that_replied_emits_no_silent_notice(tmp_path):
@@ -1980,4 +1996,46 @@ async def test_a_marker_after_the_message_tool_sent_does_not_make_the_turn_silen
 
     assert [e.delta for e in sink.events if isinstance(e, EvStreamDelta)] == ["here you go"]
     assert not any(isinstance(e, EvNotice) and e.kind is NoticeKind.SILENT_TURN for e in sink.events)
+    assert outcome.silent is False and outcome.explicit_reply is True
+
+
+class _DeliversAFile(_FakeTool):
+    """Hands the reader one file, leaving its manifest for the turn stream as ``deliver_files`` does."""
+
+    @property
+    def name(self) -> str:
+        return "deliver_files"
+
+    def take_metadata(self) -> dict:
+        return {"raven_delivery": {"message": "", "files": [{"name": "report.txt", "size": 1024}], "invalid": []}}
+
+
+async def test_a_marker_after_a_file_delivery_does_not_make_the_turn_silent(tmp_path):
+    """The files reached the reader with the call that delivered them, so the turn answered as one the
+    message tool answered does: no notice that it was silent, and the spine is told it replied -- a cron
+    run that delivered is counted against its limit and is not handed to heartbeat as one that said nothing."""
+    provider = _FakeStreamToolProvider(
+        [
+            [
+                ChatDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [
+                            {"index": 0, "id": "d1", "function": {"name": "deliver_files", "arguments": "{}"}}
+                        ]
+                    },
+                )
+            ],
+            [ChatDelta(content="[SILENT]")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_DeliversAFile())
+    sink = _EmitCollector()
+
+    outcome = await loop.run_turn(_req("send me the report"), sink, _drain)
+
+    assert not any(isinstance(e, EvNotice) and e.kind is NoticeKind.SILENT_TURN for e in sink.events)
+    assert not any(isinstance(e, EvText) for e in sink.events), "the marker is no reply to send"
     assert outcome.silent is False and outcome.explicit_reply is True

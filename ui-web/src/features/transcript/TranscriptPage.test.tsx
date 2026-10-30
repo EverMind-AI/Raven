@@ -2904,12 +2904,13 @@ describe('transcript island, a turn the model chose not to answer', () => {
   const labels = (): Array<string | null | undefined> => quiet().map((n) => n.querySelector('.tx')?.textContent)
 
   /* What the stage does on the notice, in its order: the open step is sealed
-     and its reply taken back, then the quiet row is drawn; the turn lands
-     flagged silent after. The notice has let go of the open step by then, so
-     finishTurn is handed none -- only the list of steps the turn ran. */
-  const hush = (open: ReturnType<typeof mount.step> | null): void => {
+     and what the notice says the reply showed is taken back, then the quiet row
+     is drawn; the turn lands flagged silent after. The notice has let go of the
+     open step by then, so finishTurn is handed none -- only the list of steps
+     the turn ran. */
+  const hush = (open: ReturnType<typeof mount.step> | null, shown = ''): void => {
     act(() => {
-      if (open) { open.seal(); open.dropReply() }
+      if (open) { open.seal(); open.dropReply(shown) }
       mount.note(LABEL, '', { quiet: true })
     })
   }
@@ -2959,13 +2960,68 @@ describe('transcript island, a turn the model chose not to answer', () => {
     act(() => { rafQ.forEach((cb) => cb(0)) })
     expect($('.say')?.textContent).toContain('abc')
 
-    hush(st)
+    hush(st, 'abc')
     act(() => { mount.finishTurn(null, [st], '3s', true) })
     openFolds()
 
     expect(document.body.textContent).not.toContain('abc')
     expect($$('.answer')).toHaveLength(0)
     expect(labels()).toEqual([LABEL])
+  })
+
+  /* An exhausted turn's wrap-up streams into the last call's step, after that
+     call's narration, and a call whose only tool was a message that went
+     nowhere drew no tool row to mark where the narration ends. Only what the
+     notice names is the wrap-up's. */
+  it('takes back only what the closing reply showed, and keeps the narration before it', () => {
+    act(() => { mount.ask('anything new?') })
+    let st!: ReturnType<typeof mount.step>
+    act(() => {
+      st = mount.step()
+      st.sayDelta('Let me check the queue.')
+      st.sayDelta('<think>still nothing</think>')
+    })
+
+    hush(st, '<think>still nothing</think>')
+
+    expect(st.seg.say).toBe('Let me check the queue.')
+  })
+
+  it('keeps everything a step said when the closing reply showed nothing', () => {
+    act(() => { mount.ask('anything new?') })
+    let st!: ReturnType<typeof mount.step>
+    act(() => {
+      st = mount.step()
+      st.sayDelta('Checking the logs.')
+      st.tool('read_file', { path: '/tmp/a.log' }, null).done(true, 'quiet', 9)
+      st.sayDelta('Sent the summary.')
+    })
+
+    hush(st)
+
+    expect(st.seg.say).toBe('Checking the logs.Sent the summary.')
+  })
+
+  /* A page that joined the turn part-way holds only the end of what the reply
+     showed: all of what it holds is the reply's, so all of it goes. */
+  it('takes back a reply it saw only the end of', () => {
+    act(() => { mount.ask('anything new?') })
+    let st!: ReturnType<typeof mount.step>
+    act(() => { st = mount.step(); st.sayDelta('nothing</think>') })
+
+    hush(st, '<think>still nothing</think>')
+
+    expect(st.seg.say).toBe('')
+  })
+
+  it('leaves a step alone when what it holds does not end on what the reply showed', () => {
+    act(() => { mount.ask('anything new?') })
+    let st!: ReturnType<typeof mount.step>
+    act(() => { st = mount.step(); st.sayDelta('Checking the logs.') })
+
+    hush(st, '<think>still nothing</think>')
+
+    expect(st.seg.say).toBe('Checking the logs.')
   })
 
   it('keeps what the turn said on the way as narration, never as its answer', () => {

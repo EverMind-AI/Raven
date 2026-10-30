@@ -16,7 +16,7 @@ from loguru import logger
 
 from raven.contracts.context import SessionRevision
 from raven.session.title import TITLE_STORAGE_MAX, collapse_to_line
-from raven.session.turn_shape import replied_via_message_tool
+from raven.session.turn_shape import TakeBack, TakeBackStep
 from raven.utils.atomic_io import atomic_replace, locked_append, write_transaction
 from raven.utils.paths import ensure_dir, safe_filename, safe_path_segment
 
@@ -75,7 +75,10 @@ def _stored_key(path: Path) -> str | None:
     treats the two differently.
     """
     try:
-        with open(path, encoding="utf-8") as f:
+        # utf-8-sig, as every reader of a transcript: a byte order mark in front of the metadata line
+        # would leave it unparsed, and a file claiming no key goes to a session of any channel with
+        # the same chat id.
+        with open(path, encoding="utf-8-sig") as f:
             head = f.readline()
     except OSError:
         return None
@@ -533,7 +536,9 @@ def read_session_file(path: Path, key: str) -> Session | None:
         revision: tuple[str, int, str | None] | None = None
         created_raw = None
 
-        with open(path, encoding="utf-8") as f:
+        # utf-8-sig, as the session list reads it: a byte order mark in front of the metadata line
+        # would leave it unparsed, and the session would open without its title or archive flag.
+        with open(path, encoding="utf-8-sig") as f:
             # Of the file this read, taken before reading it: a write that lands
             # while the file is read (or replaces it) leaves the stamp behind the
             # file, so the next save re-reads and merges rather than writing over
@@ -825,7 +830,7 @@ class SessionManager:
         else:
             candidates = self.sessions_dir.glob("*/*.jsonl")
         for p in candidates:
-            meta, count, _last, _first, _preview = self._scan_file(p)
+            meta, count, _last, _first, _preview = self._scan_listed(p)
             if meta is None:
                 continue
             key_val = meta.get("key", "")
@@ -885,13 +890,13 @@ class SessionManager:
         tool calls the run made on the way delivered nothing either. A person's
         own message still counts when the model answers it with silence.
 
-        A turn the message tool answered is the exception: the tool is what
-        delivers a reply to the reader, so such a turn answered whatever the
-        model ended it on, and it stays the activity the session is ordered by.
-        Its marker's row carries the live turn's verdict, read from one place
-        (``raven/session/turn_shape.py``), the same one the ACP replay reads the
-        turn with, so the two surfaces cannot come to disagree about which turn
-        answered.
+        A turn a tool answered is the exception: the tool is what delivers a
+        reply to the reader, so such a turn answered whatever the model ended it
+        on, and it stays the activity the session is ordered by. Its marker's
+        row carries the live turn's verdict. Which turns go is read from one
+        place (``TakeBack`` in ``raven/session/turn_shape.py``), the one the ACP
+        replay and the live turn read it from, so the surfaces cannot come to
+        disagree about which turn is taken back.
 
         The first user message is what session pickers title an untitled
         session with, so its text (flattened to one line, capped) rides along.
@@ -906,9 +911,12 @@ class SessionManager:
         latest_preview = ""
         # The preview and the clock as they stood before the runtime-opened turn now under way, for a
         # turn that ends silent to be taken back whole.
-        before_runtime_turn: tuple[str, str] | None = None
+        before_runtime_turn: tuple[str, str] = ("", "")
+        take_back = TakeBack()
         try:
-            with path.open(encoding="utf-8") as f:
+            # utf-8-sig: a Windows editor that saves UTF-8 with a byte order mark puts it in front of the
+            # metadata line, which would then fail to parse and take the session off the list.
+            with path.open(encoding="utf-8-sig") as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -922,26 +930,37 @@ class SessionManager:
                     else:
                         count += 1
                         if isinstance(data, dict):
+                            step = take_back.read(data)
+                            if step is TakeBackStep.OPENS:
+                                before_runtime_turn = (latest_preview, last_ts)
+                            elif step is TakeBackStep.TAKES_BACK:
+                                latest_preview, last_ts = before_runtime_turn
                             role = data.get("role")
-                            if role == "user":
-                                # Only a turn the runtime opened can be taken back: a person's message
-                                # counts even when the model answers it with silence.
-                                before_runtime_turn = (latest_preview, last_ts) if data.get("origin") else None
-                                if not first_user:
-                                    first_user = _message_text(data.get("content"))
-                            if role in {"user", "assistant"}:
-                                if data.get("silent") is not True:
-                                    text = _message_text(data.get("content"))
-                                    if text:
-                                        latest_preview = text
-                                    ts = data.get("timestamp")
-                                    if isinstance(ts, str) and ts > last_ts:
-                                        last_ts = ts
-                                elif before_runtime_turn is not None and not replied_via_message_tool(data):
-                                    latest_preview, last_ts = before_runtime_turn
+                            if role == "user" and not first_user:
+                                first_user = _message_text(data.get("content"))
+                            if role in {"user", "assistant"} and data.get("silent") is not True:
+                                text = _message_text(data.get("content"))
+                                if text:
+                                    latest_preview = text
+                                ts = data.get("timestamp")
+                                if isinstance(ts, str) and ts > last_ts:
+                                    last_ts = ts
         except OSError:
             return None, 0, "", "", ""
         return meta, count, last_ts, first_user, latest_preview
+
+    def _scan_listed(self, path: Path) -> tuple[dict[str, Any] | None, int, str, str, str]:
+        """``_scan_file`` for a reader that only lists: a transcript that is not UTF-8 (one saved in a
+        Windows code page) is left out as an unreadable one is, rather than its decoding error escaping
+        the whole scan.
+
+        Only for such a reader. A save reading it that way would take the file for an empty one and
+        append UTF-8 lines no reader can open, so on the way to a write the error still stops it.
+        """
+        try:
+            return self._scan_file(path)
+        except UnicodeDecodeError:
+            return None, 0, "", "", ""
 
     def get_or_create(self, key: str) -> Session:
         """
@@ -1362,7 +1381,7 @@ class SessionManager:
         sessions = []
 
         for path in self.sessions_dir.glob("*/*.jsonl"):
-            data, message_count, last_ts, first_user, latest_preview = self._scan_file(path)
+            data, message_count, last_ts, first_user, latest_preview = self._scan_listed(path)
             if data is None:
                 continue
             key = data.get("key") or self.key_from_path(path)
