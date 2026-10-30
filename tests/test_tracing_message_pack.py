@@ -167,3 +167,33 @@ def test_a_budget_that_splits_a_character_resolves_to_the_placeholder(tmp_path: 
     assert resolved["messages"][0] == messages[0]
     assert "missing" in resolved["messages"][1]["content"]
 
+
+def test_a_streamed_slice_refuses_an_offset_past_the_decode_bound(tmp_path: Path, monkeypatch) -> None:
+    refs = _publish(tmp_path)
+    artifacts = tmp_path / "logs" / "audit-artifacts"
+    message_pack.pack_messages(artifacts)
+    index_file = message_pack.index_path(artifacts)
+    index = json.loads(index_file.read_text(encoding="utf-8"))
+    entry = index["messages"][refs[0]["$msg"]]
+    index["messages"][refs[0]["$msg"]] = [entry[0], message_pack.MAX_PLAINTEXT_BYTES, 1]
+    index_file.write_text(json.dumps(index), encoding="utf-8")
+
+    monkeypatch.setattr(message_pack, "_cached_pack", lambda path: None)
+    calls: list[tuple] = []
+    monkeypatch.setattr(message_pack, "_stream_slice", lambda *args: calls.append(args) or None)
+
+    assert message_pack.read_message(artifacts, refs[0]["$msg"]) is None
+    assert calls == []
+
+
+def test_a_pack_over_the_cache_budget_is_streamed(tmp_path: Path, monkeypatch) -> None:
+    refs = _publish(tmp_path)
+    artifacts = tmp_path / "logs" / "audit-artifacts"
+    message_pack.pack_messages(artifacts)
+    pack = next(message_pack.packs_dir(artifacts).glob("*.pack.zst"))
+    monkeypatch.setattr(message_pack, "CACHE_BYTES", 1)
+
+    assert message_pack._cached_pack(pack) is None
+    for ref, message in zip(refs, MESSAGES):
+        assert json.loads(message_pack.read_message(artifacts, ref["$msg"])) == message
+

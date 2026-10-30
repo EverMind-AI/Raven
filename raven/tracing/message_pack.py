@@ -34,7 +34,7 @@ from typing import Iterator
 
 import zstandard
 
-from .codec import MAX_PLAINTEXT_BYTES, compress_bytes, read_plaintext
+from .codec import MAX_PLAINTEXT_BYTES, compress_bytes, plaintext_size, read_plaintext
 
 PACKS_DIR_NAME = "_message_packs"
 MESSAGES_DIR_NAME = "_messages"
@@ -133,26 +133,34 @@ def load_index(artifacts_dir: Path | str) -> _Index | None:
 
 
 def _cached_pack(path: Path) -> bytes | None:
+    """A pack's plaintext when it fits the cache budget, else None to stream it.
+
+    A pack larger than the whole budget is never decoded here: the caller
+    streams to the slice it needs instead, which is the memory the budget
+    exists to save.
+    """
     global _PACK_CACHE_BYTES
     with _PACK_LOCK:
         cached = _PACK_CACHE.get(path)
         if cached is not None:
             _PACK_CACHE.move_to_end(path)
             return cached
+    size = plaintext_size(path)
+    if size is None or size > CACHE_BYTES:
+        return None
     try:
         data = path.read_bytes()
-        plain = read_plaintext(data)
+        plain = read_plaintext(data, CACHE_BYTES + 1)
     except OSError:
         return None
-    if plain is None:
+    if plain is None or len(plain) > CACHE_BYTES:
         return None
     with _PACK_LOCK:
-        if len(plain) <= CACHE_BYTES:
-            _PACK_CACHE[path] = plain
-            _PACK_CACHE_BYTES += len(plain)
-            while _PACK_CACHE_BYTES > CACHE_BYTES and len(_PACK_CACHE) > 1:
-                _, dropped = _PACK_CACHE.popitem(last=False)
-                _PACK_CACHE_BYTES -= len(dropped)
+        _PACK_CACHE[path] = plain
+        _PACK_CACHE_BYTES += len(plain)
+        while _PACK_CACHE_BYTES > CACHE_BYTES and len(_PACK_CACHE) > 1:
+            _, dropped = _PACK_CACHE.popitem(last=False)
+            _PACK_CACHE_BYTES -= len(dropped)
     return plain
 
 
@@ -183,8 +191,11 @@ def _slice(artifacts_dir: Path, sha1: str, limit: int | None) -> bytes | None:
     name, offset, length = located
     want = length if limit is None else min(length, limit)
     # The index can be imported with the store; an offset and length pair that
-    # asks for gigabytes is refused rather than allocated.
+    # asks for gigabytes is refused rather than allocated. The bound covers
+    # the skip too: the streaming reader decompresses up to offset + want.
     want = min(want, MAX_PLAINTEXT_BYTES)
+    if offset < 0 or length < 0 or offset + want > MAX_PLAINTEXT_BYTES:
+        return None
     pack = packs_dir(artifacts_dir) / name
     plain = _cached_pack(pack)
     if plain is None:
