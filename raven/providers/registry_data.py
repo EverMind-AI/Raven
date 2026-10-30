@@ -252,6 +252,7 @@ def _index() -> dict[tuple[str, str], RegistryRow]:
 #: model under one wrong filter; it cannot shape a request.
 _RERANK_NAME = re.compile(r"rerank", re.I)
 _EMBEDDING_NAME = re.compile(r"(?:^|[-_/])(?:bge|gte|e5|m3e|text2vec|uae|jina-clip)(?:[-_.]|$)|embed", re.I)
+_GPT_IMAGE_NAME = re.compile(r"^gpt-image(?:-|$)", re.I)
 
 
 def inferred_tags(model_id: str) -> tuple[str, ...]:
@@ -260,6 +261,9 @@ def inferred_tags(model_id: str) -> tuple[str, ...]:
     Reranking is asked first: a reranker is often named after the embedding
     family it reranks for (``bge-reranker-v2-m3``), so testing the other way
     round would file every one of them as an embedder.
+
+    GPT Image variants identify their output family even before a catalogue
+    refresh has described that particular version.
 
     Only ever consulted where the catalogue is silent -- see
     ``catalog.describe``. A model the registry describes is described, and a
@@ -270,6 +274,8 @@ def inferred_tags(model_id: str) -> tuple[str, ...]:
         return ("rerank",)
     if _EMBEDDING_NAME.search(bare):
         return ("embedding",)
+    if _GPT_IMAGE_NAME.search(bare):
+        return ("image-generation",)
     return ()
 
 
