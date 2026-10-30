@@ -208,20 +208,56 @@ def _slice(artifacts_dir: Path, sha1: str, limit: int | None) -> bytes | None:
     return plain[offset : offset + want]
 
 
+_LENGTH_CACHE: dict[Path, tuple[tuple[int, int], int | None]] = {}
+_LENGTH_LOCK = threading.Lock()
+
+
+def _decoded_length(path: Path) -> int | None:
+    """A pack's decoded plaintext length, or None when it does not decode.
+
+    Streamed, so the plaintext is never held, and cached per process because a
+    pack is written once under a generated name; the stamp changes only when
+    the file is replaced. A frame cut short decodes to a shorter length
+    instead of raising, which is what tells an entry past the cut from one
+    before it.
+    """
+    try:
+        stat_result = path.stat()
+    except OSError:
+        return None
+    stamp = (stat_result.st_mtime_ns, stat_result.st_size)
+    with _LENGTH_LOCK:
+        cached = _LENGTH_CACHE.get(path)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+    length: int | None = None
+    try:
+        with (
+            path.open("rb") as handle,
+            zstandard.ZstdDecompressor().stream_reader(handle, read_across_frames=False) as reader,
+        ):
+            total = 0
+            for chunk in iter(lambda: reader.read(1 << 20), b""):
+                total += len(chunk)
+        length = total
+    except (OSError, zstandard.ZstdError):
+        length = None
+    with _LENGTH_LOCK:
+        _LENGTH_CACHE[path] = (stamp, length)
+    return length
+
+
 def _pack_plaintext_length(artifacts_dir: Path, name: str, lengths: dict[str, int | None]) -> int | None:
     """A pack's decoded length, or None when it does not decode whole.
 
-    Cached per run: one read and one decompression per distinct pack, however
-    many index entries name it. A store copied incompletely can leave a pack
-    truncated, and the frame header still records the original size then, so
-    the decoded length is what decides whether an entry still resolves.
+    ``lengths`` memoizes one run, so several index entries naming a pack share
+    a check; ``_decoded_length`` keeps it across runs. A store copied
+    incompletely can leave a pack truncated, and the frame header still records
+    the original size then, so the decoded length is what decides whether an
+    entry still resolves.
     """
     if name not in lengths:
-        try:
-            plain = read_plaintext((packs_dir(artifacts_dir) / name).read_bytes())
-        except OSError:
-            plain = None
-        lengths[name] = None if plain is None else len(plain)
+        lengths[name] = _decoded_length(packs_dir(artifacts_dir) / name)
     return lengths[name]
 
 
@@ -234,6 +270,21 @@ def _slice_is_readable(artifacts_dir: Path, entry: tuple[str, int, int], lengths
     """
     name, offset, length = entry
     size = _pack_plaintext_length(artifacts_dir, name, lengths)
+    return size is not None and offset + length <= size
+
+
+def slice_readable(artifacts_dir: Path | str, sha1: str) -> bool:
+    """Whether the pack a stored index names still decodes and covers this address.
+
+    A store copied incompletely can leave the index naming a pack that is gone
+    or cut short; the address then has no readable copy in the packs.
+    """
+    index = load_index(artifacts_dir)
+    located = index.messages.get(sha1) if index is not None else None
+    if located is None:
+        return False
+    name, offset, length = located
+    size = _decoded_length(packs_dir(artifacts_dir) / name)
     return size is not None and offset + length <= size
 
 
@@ -478,4 +529,5 @@ __all__ = [
     "read_path",
     "sha1_from_path",
     "size_path",
+    "slice_readable",
 ]

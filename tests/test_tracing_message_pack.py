@@ -150,6 +150,23 @@ def test_the_writer_republishes_a_packed_message_whose_pack_is_gone(tmp_path: Pa
     assert artifact_v2.resolve_payload(shell, store.artifacts_dir)["messages"] == MESSAGES
 
 
+def test_the_writer_republishes_a_packed_message_whose_pack_is_truncated(tmp_path: Path) -> None:
+    """An interrupted copy can leave a pack short of its frame. The addresses
+    whose slice no longer decodes must heal like a missing pack, since the
+    message files were deleted when the pack was written."""
+    store = TraceStore(tmp_path)
+    refs = store.address_items(MESSAGES)
+    message_pack.pack_messages(store.artifacts_dir)
+    pack = next(message_pack.packs_dir(store.artifacts_dir).glob("*.pack.zst"))
+    pack.write_bytes(pack.read_bytes()[:8])
+
+    assert store.address_items(MESSAGES) == refs
+
+    assert all(artifact_v2.message_path(store.artifacts_dir, ref["$msg"]).is_file() for ref in refs)
+    shell = {"artifactFormat": artifact_v2.ARTIFACT_FORMAT, "messages": refs}
+    assert artifact_v2.resolve_payload(shell, store.artifacts_dir)["messages"] == MESSAGES
+
+
 def test_a_corrupt_message_file_is_reported_and_not_removed(tmp_path: Path) -> None:
     refs = _publish(tmp_path)
     artifacts = tmp_path / "logs" / "audit-artifacts"
