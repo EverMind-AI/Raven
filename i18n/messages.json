@@ -12673,6 +12673,38 @@
       "en": "sub-agent",
       "zh": "子智能体"
     },
+    "gui.trajectory.tip.head": {
+      "en": "{turn} · {from} – {to} · {length}",
+      "zh": "{turn} · {from} – {to} · {length}"
+    },
+    "gui.trajectory.tip.model": {
+      "en": "LLM {calls} · {time} · {percent}%",
+      "zh": "模型 {calls} · {time} · {percent}%"
+    },
+    "gui.trajectory.tip.tool": {
+      "en": "Tools {calls} · {time} · {percent}%",
+      "zh": "工具 {calls} · {time} · {percent}%"
+    },
+    "gui.trajectory.tip.subagent": {
+      "en": "Sub-agents {time} · {percent}%",
+      "zh": "子智能体 {time} · {percent}%"
+    },
+    "gui.trajectory.tip.failure": {
+      "en": "Failed {time} · {percent}%",
+      "zh": "失败 {time} · {percent}%"
+    },
+    "gui.trajectory.tip.waiting": {
+      "en": "Waiting {time} · {percent}%",
+      "zh": "等待 {time} · {percent}%"
+    },
+    "gui.trajectory.tip.calls_one": {
+      "en": "1 call",
+      "zh": "1 次"
+    },
+    "gui.trajectory.tip.calls_n": {
+      "en": "{n} calls",
+      "zh": "{n} 次"
+    },
     "gui.trajectory.busy": {
       "en": "BUSY",
       "zh": "忙碌"

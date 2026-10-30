@@ -215,7 +215,10 @@ levels, each fold a button with `aria-expanded`, and the selected row
 on its own row and on the turn that holds it. A call row is keyed by a square
 in its kind's colour -- the model's violet, a tool's teal, anything else
 neutral, as the turn's bar paints it -- and named by its tool, or by the part
-of a model call it is, beside what the call worked on.
+of a model call it is, beside what the call worked on. A turn row under the
+pointer shows what its time went on (`segments.ts`'s `turnBreakdown`): its
+model and tool calls, each counted once per call, their time and share of
+the turn, and the waiting.
 Picking a row opens the details pane beside the waterfall
 (`features/trajectory/detailStore.ts`): a descriptor read through
 `trajectory.detail` and block bodies read through `trajectory.block`, each filed

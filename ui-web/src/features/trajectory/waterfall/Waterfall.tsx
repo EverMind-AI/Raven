@@ -28,7 +28,7 @@ import { clockOf, lengthOf, spanOf, windowText } from './clock'
 import { WaterfallIndex } from './incremental'
 import { busyRuns, entryEnd, entryStart, isLive, turnKey } from './model'
 import { OverviewLanes } from './OverviewLanes'
-import { turnSegments } from './segments'
+import { turnBreakdown, turnSegments } from './segments'
 import { agentKind, summarize } from './summary'
 import { clockTicks, stepFor, tickLabel } from './ticks'
 
@@ -268,6 +268,9 @@ function scrollsAt(root: HTMLElement, target: Node | null, deltaY: number): bool
   }
   return false
 }
+
+/** The hovered turn's tooltip, which its row names as its description. */
+const TIP_ID = 'trajectory-wf-tip'
 
 /** The windows the header offers, after the whole session: a length in real time. */
 const PRESETS: ReadonlyArray<readonly ['fit' | '3h' | '1h' | '15m', number | null]> = [
@@ -680,6 +683,8 @@ export function Waterfall(): JSX.Element {
      it, or wholly after it, steps into one row for each side; the main agent
      always keeps its own. */
   const [foldOpen, setFoldOpen] = useState<ReadonlySet<FoldSide>>(new Set())
+  /* The turn row under the pointer, whose breakdown the tooltip shows. */
+  const [hoverTurn, setHoverTurn] = useState<{ key: string; at: number } | null>(null)
   const outside = useMemo(() => {
     /* The whole session's window holds every agent, so nothing folds until
        the reader narrows it. */
@@ -1032,6 +1037,9 @@ export function Waterfall(): JSX.Element {
           role="treeitem" aria-level={2} aria-expanded={openTurn}
           data-open={openTurn ? '' : undefined} data-failed={turn.failure ? '' : undefined}
           data-from={turn.reportedFrom === null ? undefined : turn.reportedFrom}
+          aria-describedby={hoverTurn?.key === row.key ? TIP_ID : undefined}
+          onPointerEnter={() => setHoverTurn({ key: row.key, at })}
+          onPointerLeave={() => setHoverTurn((current) => (current?.key === row.key ? null : current))}
           onClick={() => toggleTurn(turnKey(row.agent, turn.id))}>
           <span className="trajectory-wf-guide" style={{ left: GUIDE_X }} />
           <span className="trajectory-wf-label" style={{ paddingLeft: 26 }}>
@@ -1086,6 +1094,46 @@ export function Waterfall(): JSX.Element {
     setAgentFold(new Map(waterfall.agents.map((agent) => [agent.key, false])))
     setOpen(new Set())
   }
+
+  /* The hovered turn's breakdown, just under its row and from where its bar
+     starts: what its time went on, each share of the turn's length. */
+  const tip = (() => {
+    /* Read by the index it was hovered at, never by a walk over the rows; a
+       row that has moved since (a fold above it) no longer matches. */
+    const at = hoverTurn === null || rows[hoverTurn.at]?.key !== hoverTurn.key ? -1 : hoverTurn.at
+    const turn = at < 0 ? null : rows[at]!.turnRow
+    if (turn === null) return null
+    const parts = turnBreakdown(turn, now)
+    const share = (ms: number): number => (parts.total > 0 ? Math.round((ms / parts.total) * 100) : 0)
+    const calls = (n: number): string => (n === 1 ? t('gui.trajectory.tip.calls_one') : t('gui.trajectory.tip.calls_n', { n }))
+    const precision = parts.total < 120_000 ? 'second' : 'minute'
+    const left = Math.min(0.72, Math.max(0, barOf(axis, view, turn.start, turn.end)?.left ?? 0))
+    return (
+      <div id={TIP_ID} className="trajectory-wf-tip" role="tooltip"
+        style={{ top: (at + 1) * ROW_HEIGHT + 4, left: `calc(var(--wf-gutter) + (100% - var(--wf-gutter)) * ${left.toFixed(4)})` }}>
+        <div data-part="head">
+          {t('gui.trajectory.tip.head', {
+            turn: t('gui.trajectory.turn.ordinal', { n: turn.ordinal }),
+            from: clockOf(turn.start, precision), to: clockOf(turn.end, precision), length: formatDuration(parts.total),
+          })}
+        </div>
+        <div data-part="model"><i className="trajectory-wf-key trajectory-wf-kind-model" />
+          {t('gui.trajectory.tip.model', { calls: calls(parts.model.calls), time: formatDuration(parts.model.ms), percent: share(parts.model.ms) })}</div>
+        <div data-part="tool"><i className="trajectory-wf-key trajectory-wf-kind-tool" />
+          {t('gui.trajectory.tip.tool', { calls: calls(parts.tool.calls), time: formatDuration(parts.tool.ms), percent: share(parts.tool.ms) })}</div>
+        {parts.subagent > 0 ? (
+          <div data-part="subagent"><i className="trajectory-wf-key" />
+            {t('gui.trajectory.tip.subagent', { time: formatDuration(parts.subagent), percent: share(parts.subagent) })}</div>
+        ) : null}
+        {parts.failure > 0 ? (
+          <div data-part="failure"><i className="trajectory-wf-key trajectory-wf-kind-failure" />
+            {t('gui.trajectory.tip.failure', { time: formatDuration(parts.failure), percent: share(parts.failure) })}</div>
+        ) : null}
+        <div data-part="waiting"><i className="trajectory-wf-key" />
+          {t('gui.trajectory.tip.waiting', { time: formatDuration(parts.waiting), percent: share(parts.waiting) })}</div>
+      </div>
+    )
+  })()
 
   return (
     <div className="trajectory-wf" ref={island}>
@@ -1152,6 +1200,7 @@ export function Waterfall(): JSX.Element {
             ))}
           </div>
           {painted}
+          {tip}
         </div>
       </div>
     </div>

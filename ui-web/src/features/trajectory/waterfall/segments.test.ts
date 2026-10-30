@@ -4,7 +4,7 @@
 
 import { expect, it } from 'vitest'
 
-import { segmentOf, turnSegments } from './segments'
+import { segmentOf, turnBreakdown, turnSegments } from './segments'
 
 import type { TrajectoryEntry } from '../types'
 import type { WaterfallRow, WaterfallTurn } from './model'
@@ -136,4 +136,21 @@ it('paints every stretch the way a stretch-by-stretch reading of the rows would'
       expect(got, `round ${round}, second ${s}`).toBe(want)
     }
   }
+})
+
+it('breaks a turn down into its model calls, its tool calls and the waiting, each counted once per call', () => {
+  /* 100 s: one model call of 30 s written as two entries, one tool call of 50 s, 20 s nobody claimed. */
+  const parts = turnBreakdown(turn([
+    row({ entry_id: 'ask', span_id: 'llm-1', kind: 'llm.input', operation_start: at(0), operation_end: at(30) }),
+    row({ entry_id: 'say', span_id: 'llm-1', kind: 'llm.output', operation_start: at(0), operation_end: at(30) }),
+    row({ entry_id: 'run', span_id: 'tool-1', kind: 'tool.output', operation_start: at(30), operation_end: at(80) }),
+  ], sec(0), sec(100)), sec(200))
+  expect(parts).toEqual({
+    total: 100_000,
+    model: { calls: 1, ms: 30_000 },
+    tool: { calls: 1, ms: 50_000 },
+    subagent: 0,
+    failure: 0,
+    waiting: 20_000,
+  })
 })

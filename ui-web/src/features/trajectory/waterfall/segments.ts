@@ -81,3 +81,34 @@ function sweep(turn: WaterfallTurn, now: number): Segment[] {
   paint(turn.end)
   return segments
 }
+
+export interface TurnBreakdown {
+  total: number
+  model: { calls: number; ms: number }
+  tool: { calls: number; ms: number }
+  subagent: number
+  failure: number
+  waiting: number
+}
+
+/** What a turn's time went on, read off its bar: the stretches of each kind,
+ *  so the shares add up to the turn, and the calls behind the model's and the
+ *  tools' stretches counted once per call (one span, however many entries). */
+export function turnBreakdown(turn: WaterfallTurn, now: number): TurnBreakdown {
+  const time = { failure: 0, subagent: 0, model: 0, tool: 0, waiting: 0, input: 0 }
+  for (const segment of turnSegments(turn, now)) time[segment.kind] += segment.end - segment.start
+  const models = new Set<string>()
+  const tools = new Set<string>()
+  for (const row of turn.rows) {
+    if (row.entry.kind.startsWith('llm.')) models.add(row.entry.span_id)
+    else if (row.entry.kind.startsWith('tool.')) tools.add(row.entry.span_id)
+  }
+  return {
+    total: Math.max(0, turn.end - turn.start),
+    model: { calls: models.size, ms: time.model },
+    tool: { calls: tools.size, ms: time.tool },
+    subagent: time.subagent,
+    failure: time.failure,
+    waiting: time.waiting,
+  }
+}
