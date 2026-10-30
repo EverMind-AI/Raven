@@ -17,14 +17,21 @@ service, run `raven web --stop`.
 Once a conversation has content, a trajectory toggle appears in the chat
 header, to the left of the workspace panel button. The trajectory view draws
 every recorded step of that conversation (inputs, model calls, tool calls,
-replies) on one timeline: the main agent and each sub-agent in a group of its
-own, their turns inside, and each step as a bar with its duration beside it,
-so you can see what ran at the same time as what. Click a step to open its
-details. Hold Ctrl (Cmd on macOS) and scroll to zoom the timeline, or hold
-Shift and scroll to move along it. A step that failed carries a red dot, and
-so does the turn that holds it. While the trajectory view is open the message
-box is hidden; switch back to the chat to send a message. An approval or a
-question the conversation raises still shows over the trajectory.
+replies) on one clock-time timeline. The header sums the session up -- its
+span, agents, turns, model and tool calls, and errors, with a link to the
+first error -- and an activity strip shows its calls across the whole
+session, with idle stretches folded. Below, each agent is one row: a capsule
+for each stretch it worked, and how long it was busy. Open an agent to see
+its turns, and a turn to see its steps; hover a turn to see what its time
+went on, and click a step to open its details. Pick Fit, 3h, 1h or 15m to set
+the window, drag across the activity strip to choose one, or drag its frame
+to move it; hold Ctrl (Cmd on macOS) and scroll to zoom, or hold Shift and
+scroll to move along the timeline. Agents with nothing in the window fold
+into one row before it and one after. A step that failed carries a red mark,
+and so do the turn and the agent that hold it. While the trajectory view is
+open the message box is hidden; switch back to the chat to send a message.
+An approval or a question the conversation raises still shows over the
+trajectory.
 
 ## Export and report a problem
 
