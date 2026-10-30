@@ -12561,14 +12561,6 @@
       "en": "Try again",
       "zh": "重试"
     },
-    "gui.trajectory.agents_fewer": {
-      "en": "Show fewer agents",
-      "zh": "收起部分智能体"
-    },
-    "gui.trajectory.agents_more": {
-      "en": "+{n} more agents",
-      "zh": "另有 {n} 个智能体"
-    },
     "gui.trajectory.stat.duration": {
       "en": "DURATION",
       "zh": "时长"
@@ -12704,6 +12696,26 @@
     "gui.trajectory.tip.calls_n": {
       "en": "{n} calls",
       "zh": "{n} 次"
+    },
+    "gui.trajectory.activity.title": {
+      "en": "ACTIVITY",
+      "zh": "活动"
+    },
+    "gui.trajectory.activity.per": {
+      "en": "calls per {length} · idle time folded",
+      "zh": "每 {length} 调用数 · 空闲已折叠"
+    },
+    "gui.trajectory.activity.llm": {
+      "en": "LLM call",
+      "zh": "模型调用"
+    },
+    "gui.trajectory.activity.tool": {
+      "en": "Tool call",
+      "zh": "工具调用"
+    },
+    "gui.trajectory.activity.error": {
+      "en": "Error",
+      "zh": "错误"
     },
     "gui.trajectory.busy": {
       "en": "BUSY",

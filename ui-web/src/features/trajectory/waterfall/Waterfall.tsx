@@ -23,11 +23,11 @@ import * as details from '../detailStore'
 import { kindLabel } from '../palette'
 import { enter as enterScope, scopeTitle } from '../scopes'
 import * as store from '../store'
+import { ActivityStrip } from './ActivityStrip'
 import { AxisIndex, TRAIL_PAD, barOf, clampViewport, presetWindow, zoomViewport } from './axis'
 import { clockOf, lengthOf, spanOf, windowText } from './clock'
 import { WaterfallIndex } from './incremental'
 import { busyRuns, entryEnd, entryStart, isLive, turnKey } from './model'
-import { OverviewLanes } from './OverviewLanes'
 import { turnBreakdown, turnSegments } from './segments'
 import { agentKind, summarize } from './summary'
 import { clockTicks, stepFor, tickLabel } from './ticks'
@@ -253,22 +253,6 @@ function FailMark(): JSX.Element {
   return <span className="trajectory-wf-fail" role="img" aria-label={label} title={label} />
 }
 
-/** Whether the wheel's target stands in a scroller on the island that can
- *  still move the way the wheel points: the overview's lanes, once the reader
- *  has opened past the strip's height. The island's own list is the caller's
- *  to check; everything else here is furniture with nowhere to go. */
-function scrollsAt(root: HTMLElement, target: Node | null, deltaY: number): boolean {
-  let node = target instanceof Element ? target : null
-  for (; node && node !== root; node = node.parentElement) {
-    const style = getComputedStyle(node)
-    if (style.overflowY !== 'auto' && style.overflowY !== 'scroll') continue
-    const max = node.scrollHeight - node.clientHeight
-    if (max <= 1) continue
-    if (deltaY < 0 ? node.scrollTop > 0 : node.scrollTop < max) return true
-  }
-  return false
-}
-
 /** The hovered turn's tooltip, which its row names as its description. */
 const TIP_ID = 'trajectory-wf-tip'
 
@@ -471,13 +455,10 @@ export function Waterfall(): JSX.Element {
       const zooming = event.ctrlKey || event.metaKey
       const panning = event.shiftKey && !zooming
       if (!zooming && !panning) {
-        /* Over the list the browser scrolls it. Another scroller standing on
-           the island -- the overview's lanes once the reader has opened them
-           all -- takes the wheel while it can still move this way; everything
-           else (the header, the ruler, a strip with nowhere to go) forwards it
-           to the list, so the page scrolls wherever the pointer happens to be. */
+        /* Over the list the browser scrolls it; everywhere else on the island
+           -- the header, the strip, the ruler -- the wheel is forwarded to the
+           list, so the page scrolls wherever the pointer happens to be. */
         if (scroller.contains(event.target as Node)) return
-        if (scrollsAt(el, event.target as Node | null, event.deltaY)) return
         event.preventDefault()
         scroller.scrollTop += event.deltaY
         return
@@ -1090,6 +1071,13 @@ export function Waterfall(): JSX.Element {
     )
   }
 
+  /* A window taken on the activity strip, in real time; one that covers the
+     whole axis is the whole session again. */
+  const takeWindow = useCallback((next: { start: number; end: number }): void => {
+    const whole = next.start <= axis.start && next.end >= axis.unproject(axis.length)
+    setZoom(whole || !(next.end > next.start) ? null : { session: sessionKey, start: next.start, end: next.end })
+    setPicked(null)
+  }, [axis, sessionKey])
   const foldAll = (): void => {
     setAgentFold(new Map(waterfall.agents.map((agent) => [agent.key, false])))
     setOpen(new Set())
@@ -1166,7 +1154,9 @@ export function Waterfall(): JSX.Element {
           </button>
         </div>
       </div>
-      <OverviewLanes waterfall={waterfall} axis={axis} viewport={view} />
+      {waterfall.agents.length === 0 ? null : (
+        <ActivityStrip axis={axis} entries={shown} start={windowFrom} end={windowTo} zoomed={zoomedView} onWindow={takeWindow} />
+      )}
       <div className="trajectory-wf-head">
         <div className="trajectory-wf-headlabel">
           {waterfall.agents.length === 0 ? null : (

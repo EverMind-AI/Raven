@@ -12,12 +12,19 @@ import { _resetFreshForTests, unpitch } from '../../../state/session/conversatio
 import { resetSources, setSources } from '../../../state/sources'
 import * as details from '../detailStore'
 import * as store from '../store'
+import { bucketWidth } from './activity'
 import { dayOf, spanOf } from './clock'
 import { buildWaterfall } from './model'
-import { MAX_LANES } from './OverviewLanes'
 import { GUIDE_X, ROW_HEIGHT, TURN_GUIDE_X, Waterfall, displayRows } from './Waterfall'
 
 import type { TrajectoryEntry, TrajectoryIndexState, TrajectoryListResult, TrajectorySource } from '../types'
+
+/* The strip's bucket width, watched: it is worked out once per drawing of the
+   strip, so its calls count how often the strip was drawn. */
+vi.mock('./activity', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./activity')>()
+  return { ...real, bucketWidth: vi.fn(real.bucketWidth) }
+})
 
 const READY: TrajectoryIndexState = {
   phase: 'ready', scanned_bytes: 10, total_bytes: 10, head_truncated: 0, recovering_traces: 0,
@@ -601,33 +608,6 @@ it('keeps only what was running inside the picked interval', async () => {
   expect(count('[data-row="turn"]')).toBe(3)
 })
 
-it('lets the opened overview take the wheel while it still has lanes to show', async () => {
-  const entries = [E('m', 0)]
-  for (let i = 0; i < MAX_LANES + 2; i += 1) {
-    entries.push(E(`s${i}`, 10 + i, { subagent_scope: `t:s${i}`, turn_span_id: `S${i}` }))
-  }
-  await draw(entries)
-  fireEvent.click(document.querySelector('[data-lane-more]')!)
-  const ov = document.querySelector('.trajectory-ov') as HTMLElement
-  /* The sheet states the overflow; happy-dom applies no stylesheet. */
-  ov.style.overflowY = 'auto'
-  Object.defineProperty(ov, 'clientHeight', { value: 100, configurable: true })
-  Object.defineProperty(ov, 'scrollHeight', { value: 300, configurable: true })
-  let top = 0
-  Object.defineProperty(ov, 'scrollTop', { get: () => top, set: (value: number) => { top = value }, configurable: true })
-  const lane = ov.querySelector('[data-lane]') as HTMLElement
-  const down = wheel({ deltaY: 120, bubbles: true, cancelable: true })
-  lane.dispatchEvent(down)
-  expect(down.defaultPrevented).toBe(false)
-  /* At the end of its own scroll, the wheel goes on to the list below. */
-  top = 200
-  const box = document.querySelector('.trajectory-list') as HTMLElement
-  const end = wheel({ deltaY: 120, bubbles: true, cancelable: true })
-  lane.dispatchEvent(end)
-  expect(end.defaultPrevented).toBe(true)
-  expect(box.scrollTop).toBe(120)
-})
-
 it('sends the door’s arrow to the worker’s own first row', async () => {
   await draw([
     E('door', 0, { kind: 'tool.output', opens_subagent_scope: 't:sub', meta: { agent: 'coder' } }),
@@ -778,6 +758,16 @@ it('re-renders a scroll without walking every row of the session', async () => {
   } finally {
     parse.mockRestore()
   }
+})
+
+it('leaves the activity strip alone when the rows scroll under it', async () => {
+  await draw(Array.from({ length: 200 }, (_, i) => E(`e${i}`, i, { turn_span_id: `T${Math.floor(i / 10)}` })))
+  const box = document.querySelector('.trajectory-list') as HTMLElement
+  const drawn = vi.mocked(bucketWidth).mock.calls.length
+  expect(drawn).toBeGreaterThan(0)
+  act(() => { box.scrollTop = 300; fireEvent.scroll(box) })
+  act(() => { box.scrollTop = 600; fireEvent.scroll(box) })
+  expect(vi.mocked(bucketWidth).mock.calls.length).toBe(drawn)
 })
 
 it('brings a selected row that belongs to no turn into view, opening its agent', async () => {
@@ -1168,5 +1158,67 @@ describe('a turn’s summary on hover', () => {
     act(() => { fireEvent.pointerLeave(turnRow) })
     expect(document.querySelector('.trajectory-wf-tip')).toBeNull()
     expect(turnRow.hasAttribute('aria-describedby')).toBe(false)
+  })
+})
+
+describe('the activity strip', () => {
+  const local = (h: number, m = 0): string => new Date(2026, 9, 28, h, m).toISOString()
+  /* A call every ten minutes from 09:00 to 13:00, the main agent busy throughout. */
+  const session = (): TrajectoryEntry[] => [
+    E('m', 0, { kind: 'turn.output', span_name: 'session.turn', slot: 'turn.output', operation_start: local(9), operation_end: local(13) }),
+    ...Array.from({ length: 24 }, (_, i) => E(`c${i}`, i, {
+      operation_start: local(9, i * 10), operation_end: local(9, i * 10 + 2),
+      ...(i % 2 ? { kind: 'tool.output', span_name: 'tool.call', slot: 'tool.output' } : {}),
+    })),
+  ]
+  const plot = (): HTMLElement => document.querySelector<HTMLElement>('.trajectory-act-plot')!
+  const preset = (name: string): HTMLButtonElement =>
+    [...document.querySelectorAll<HTMLButtonElement>('.trajectory-wf-zoom button')].find((b) => b.textContent === `gui.trajectory.zoom.${name}`)!
+
+  it('draws the whole session whatever the window, and frames the window in a brush', async () => {
+    await draw(session())
+    const bars = count('.trajectory-act-bar')
+    expect(bars).toBeGreaterThan(5)
+    expect(document.querySelector('.trajectory-act-brush')).toBeNull()
+    act(() => { fireEvent.click(preset('1h')) })
+    expect(count('.trajectory-act-bar')).toBe(bars)
+    const brush = document.querySelector<HTMLElement>('.trajectory-act-brush')!
+    /* An hour of a 4 h 4.8 min axis: a quarter of the strip, less its scale. */
+    expect(Number.parseFloat(brush.style.width)).toBeCloseTo(100 / 4.08, 1)
+  })
+
+  it('takes a window dragged across the strip', async () => {
+    await draw(session())
+    boxAt(plot(), 100, 400)
+    const whole = shownWindow()
+    fireEvent.pointerDown(plot(), { clientX: 150, clientY: 10, button: 0, pointerId: 1 })
+    fireEvent.pointerMove(plot(), { clientX: 250, clientY: 10, pointerId: 1 })
+    fireEvent.pointerUp(plot(), { clientX: 250, clientY: 10, pointerId: 1 })
+    const span = whole.to - whole.from
+    expect(shownWindow().from).toBeCloseTo(whole.from + span * 0.125, -3)
+    expect(shownWindow().to).toBeCloseTo(whole.from + span * 0.375, -3)
+  })
+
+  it('moves the window by its brush, keeping its length', async () => {
+    await draw(session())
+    act(() => { fireEvent.click(preset('1h')) })
+    boxAt(plot(), 100, 400)
+    const before = shownWindow()
+    const brush = document.querySelector<HTMLElement>('.trajectory-act-brush')!
+    const left = 100 + 400 * Number.parseFloat(brush.style.left) / 100
+    fireEvent.pointerDown(brush, { clientX: left + 10, clientY: 10, button: 0, pointerId: 1 })
+    fireEvent.pointerMove(plot(), { clientX: left - 30, clientY: 10, pointerId: 1 })
+    fireEvent.pointerUp(plot(), { clientX: left - 30, clientY: 10, pointerId: 1 })
+    const after = shownWindow()
+    expect(after.to - after.from).toBeCloseTo(before.to - before.from, -2)
+    expect(after.from).toBeLessThan(before.from)
+  })
+
+  it('names how long a folded idle stretch was', async () => {
+    await draw([
+      E('a', 0, { operation_start: local(9), operation_end: local(9, 30) }),
+      E('b', 1, { turn_span_id: 'T2', operation_start: local(14, 30), operation_end: local(15) }),
+    ])
+    expect(document.querySelector('.trajectory-act-fold')?.textContent).toBe('5h')
   })
 })
