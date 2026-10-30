@@ -31,31 +31,53 @@ export function segmentOf(row: WaterfallRow): ActivityKind {
   return 'waiting'
 }
 
+/* One bar per turn and clock: the list re-renders on every scroll frame, and a
+   turn whose rows and clock have not moved has the same bar it had. Keyed by the
+   turn object, which the model rebuilds whenever its rows change. */
+const painted = new WeakMap<WaterfallTurn, { now: number; segments: Segment[] }>()
+
 export function turnSegments(turn: WaterfallTurn, now: number): Segment[] {
+  const held = painted.get(turn)
+  if (held !== undefined && held.now === now) return held.segments
+  const segments = sweep(turn, now)
+  painted.set(turn, { now, segments })
+  return segments
+}
+
+/* Every row's start and end as an edge, in time order, and one open count per
+   kind: each stretch between two edges is painted by the highest-priority kind
+   open across it. Sorting the edges is the whole cost, so a turn of k rows is
+   k log k rather than a scan of every row for every stretch. */
+function sweep(turn: WaterfallTurn, now: number): Segment[] {
   if (turn.end <= turn.start) return []
-  const parts: Segment[] = []
+  const edges: Array<{ at: number; delta: number; rank: number }> = []
   for (const row of turn.rows) {
     const kind = segmentOf(row)
     if (kind === 'input' || kind === 'waiting') continue
     const from = Math.max(turn.start, entryStart(row.entry))
     const to = Math.min(turn.end, entryEnd(row.entry, now))
-    if (to > from) parts.push({ start: from, end: to, kind })
+    if (to <= from) continue
+    const rank = PRIORITY.indexOf(kind)
+    edges.push({ at: from, delta: 1, rank }, { at: to, delta: -1, rank })
   }
-  const points = [...new Set([turn.start, turn.end, ...parts.flatMap((part) => [part.start, part.end])])].sort((a, b) => a - b)
-  const starts = [...parts].sort((a, b) => a.start - b.start)
+  edges.sort((a, b) => a.at - b.at)
+  const open = PRIORITY.map(() => 0)
   const segments: Segment[] = []
-  for (let at = 0; at < points.length - 1; at++) {
-    const from = points[at]!
-    const to = points[at + 1]!
-    const active = new Set<ActivityKind>()
-    for (const part of starts) {
-      if (part.start > from) break
-      if (part.end > from) active.add(part.kind)
-    }
-    const kind = PRIORITY.find((candidate) => active.has(candidate)) ?? 'waiting'
+  let from = turn.start
+  const paint = (to: number): void => {
+    if (to <= from) return
+    const rank = open.findIndex((count) => count > 0)
+    const kind = rank < 0 ? 'waiting' : PRIORITY[rank]!
     const last = segments.at(-1)
     if (last && last.kind === kind && last.end === from) last.end = to
     else segments.push({ start: from, end: to, kind })
+    from = to
   }
+  for (let i = 0; i < edges.length; ) {
+    const at = edges[i]!.at
+    paint(at)
+    for (; i < edges.length && edges[i]!.at === at; i++) open[edges[i]!.rank]! += edges[i]!.delta
+  }
+  paint(turn.end)
   return segments
 }

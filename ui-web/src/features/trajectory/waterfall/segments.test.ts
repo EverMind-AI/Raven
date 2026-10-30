@@ -99,3 +99,41 @@ it('rows are clipped to the turn window', () => {
 it('a turn with no timed rows is one waiting segment', () => {
   expect(turnSegments(turn([], sec(0), sec(5)), sec(5))).toEqual([{ start: sec(0), end: sec(5), kind: 'waiting' }])
 })
+
+it('hands back the same bar for the same turn and clock, so a scroll frame computes nothing', () => {
+  const t = turn([row({ entry_id: 'm', kind: 'llm.output', operation_start: at(0), operation_end: at(1) })], sec(0), sec(2))
+  const first = turnSegments(t, sec(2))
+  expect(turnSegments(t, sec(2))).toBe(first)
+  expect(turnSegments(t, sec(3))).not.toBe(first)
+})
+
+it('paints every stretch the way a stretch-by-stretch reading of the rows would', () => {
+  /* The reading the sweep must agree with: at each instant, the
+     highest-priority kind of the rows open there, else waiting. */
+  const kinds = ['llm.output', 'tool.output', 'subagent.run', 'failure'] as const
+  let seed = 7
+  const next = (): number => (seed = (seed * 16807) % 2147483647) / 2147483647
+  for (let round = 0; round < 40; round++) {
+    const rows = Array.from({ length: 1 + Math.floor(next() * 12) }, (_, i) => {
+      const kind = kinds[Math.floor(next() * kinds.length)]!
+      const from = Math.floor(next() * 20)
+      const to = from + Math.floor(next() * 6)
+      return row({
+        entry_id: `r${i}`,
+        kind: kind === 'failure' ? 'tool.output' : kind,
+        failure_entry: kind === 'failure',
+        opens_subagent_scope: kind === 'subagent.run' ? 't:sub' : null,
+        operation_start: at(from),
+        operation_end: at(to),
+      })
+    })
+    const t = turn(rows, sec(0), sec(24))
+    const bar = turnSegments(t, sec(24))
+    for (let s = 0; s < 24; s++) {
+      const open = rows.filter((r) => Date.parse(r.entry.operation_start!) <= sec(s) && Date.parse(r.entry.operation_end!) > sec(s))
+      const want = (['failure', 'subagent', 'model', 'tool'] as const).find((k) => open.some((r) => segmentOf(r) === k)) ?? 'waiting'
+      const got = bar.find((part) => part.start <= sec(s) && part.end > sec(s))?.kind
+      expect(got, `round ${round}, second ${s}`).toBe(want)
+    }
+  }
+})
