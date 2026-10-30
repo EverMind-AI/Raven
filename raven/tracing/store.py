@@ -120,24 +120,45 @@ class TraceStore:
         base = _KIND_FILES[kind].replace(".log", "")
         rotated = day_dir / f"{base}-{current_day}-{suffix}.log"
         path.rename(rotated)
-        self._compress_rotated(rotated)
+        self._compress_previous_archive(base, rotated)
         return path
 
-    def _compress_rotated(self, path: Path) -> None:
-        """Store a just-rotated log compressed under the name it already has.
+    def _compress_previous_archive(self, base: str, rotated: Path) -> None:
+        """Compress the log this kind's previous rotation archived.
 
-        Rotation is the safe moment: the file is closed and never appended to
-        again, so rewriting it cannot race the writer. A failure leaves it
-        plain, which every reader accepts.
+        Not ``rotated`` itself: another writer may have opened the active log
+        just before the rename and still write into that inode, and a rewrite
+        would drop the line. Every append opens and closes the file, so nothing
+        holds a log one rotation older. One file per rotation bounds the cost
+        here; an older plain backlog is left to ``raven tracing compress --logs``.
         """
         try:
-            data = path.read_bytes()
-            if is_compressed(data):
-                return
+            archived = [p for p in self.archive_dir.glob(f"*/{base}-*.log") if p != rotated]
+            previous = max(archived, key=lambda p: p.stat().st_mtime_ns, default=None)
+        except OSError:
+            return
+        if previous is not None:
+            self._compress_rotated(previous)
+
+    def _compress_rotated(self, path: Path) -> None:
+        """Store a rotated log compressed under the name it already has.
+
+        The mtime is kept: the viewer orders logs by it, and a re-encoded
+        archive must not sort after the logs written later. A failure leaves
+        the log plain, which every reader accepts.
+        """
+        try:
+            with path.open("rb") as handle:
+                if is_compressed(handle.read(4)):
+                    return
+                handle.seek(0)
+                data = handle.read()
+                stat = os.fstat(handle.fileno())
             packed = compress_bytes(data)
             tmp = path.parent / f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.compress.tmp"
             try:
                 tmp.write_bytes(packed)
+                os.utime(tmp, ns=(stat.st_atime_ns, stat.st_mtime_ns))
                 os.replace(tmp, path)
             finally:
                 tmp.unlink(missing_ok=True)

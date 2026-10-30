@@ -298,13 +298,36 @@ def test_compress_logs_is_idempotent_and_dry_run_writes_nothing(tmp_path: Path) 
     assert again.already == 1
 
 
-def test_rotation_compresses_the_rotated_file(tmp_path: Path) -> None:
+def test_rotation_compresses_the_previous_archive_and_keeps_its_mtime(tmp_path: Path) -> None:
+    """The viewer orders logs by mtime, so a re-encoded archive keeps the one
+    it had; the log just rotated stays plain until the next rotation."""
     store = TraceStore(tmp_path, max_bytes=1)
-
     store.append_span(_span_record("t1", "s1"))
     store.append_span(_span_record("t2", "s2"))
+    archive = tmp_path / "logs" / "archive"
+    first = next(archive.rglob("audit-spans-*.log"))
+    assert not is_compressed(first.read_bytes())
+    mtime = first.stat().st_mtime_ns
 
-    archives = list((tmp_path / "logs" / "archive").rglob("audit-spans-*.log"))
-    assert len(archives) == 1
-    assert is_compressed(archives[0].read_bytes())
-    assert [span["spanId"] for span in iter_spans(tmp_path)] == ["s1", "s2"]
+    store.append_span(_span_record("t3", "s3"))
+
+    second = next(path for path in archive.rglob("audit-spans-*.log") if path != first)
+    assert is_compressed(first.read_bytes())
+    assert first.stat().st_mtime_ns == mtime
+    assert not is_compressed(second.read_bytes())
+    assert [span["spanId"] for span in iter_spans(tmp_path)] == ["s1", "s2", "s3"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows refuses to rename a log another handle holds open")
+def test_a_writer_holding_the_active_log_across_rotation_keeps_its_span(tmp_path: Path) -> None:
+    """Another writer can open the active log just before a rotation renames
+    it and write a moment later; that line lands in the rotated inode."""
+    store = TraceStore(tmp_path, max_bytes=1)
+    store.append_span(_span_record("t1", "s1"))
+    held = (tmp_path / "logs" / "audit-spans.log").open("a", encoding="utf-8")
+
+    store.append_span(_span_record("t2", "s2"))
+    held.write(json.dumps(_span_record("t3", "late")) + "\n")
+    held.close()
+
+    assert {span["spanId"] for span in iter_spans(tmp_path)} == {"s1", "s2", "late"}
