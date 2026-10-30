@@ -54,10 +54,13 @@ MAX_BYTES = 64 * 1024 * 1024
 truncated one answers fewer questions than a large one; bounded because a
 long-lived connection would otherwise grow without limit."""
 
-KEEP_DAYS = 7
+KEEP_DAYS = 90
 """How many days of journals survive. The existing artifact store has no reclaim
 policy at all and had grown to gigabytes on a developer machine, so this one
-states a policy rather than inheriting that."""
+states a policy rather than inheriting that. Ninety days keeps a quarter of
+history for replay at roughly ten megabytes a day; the wire journal is the only
+record that can reconstruct what an external run actually saw, and a converted
+step span cannot replace it."""
 
 _TRUNCATED = "truncated"
 _DIR_NAME = "acp-frames"
