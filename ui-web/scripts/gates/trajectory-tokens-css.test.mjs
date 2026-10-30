@@ -9,7 +9,6 @@
  */
 
 import { readFileSync } from 'node:fs'
-
 import { describe, expect, it } from 'vitest'
 
 const sheet = readFileSync(new URL('../../src/features/trajectory/styles.css', import.meta.url), 'utf8')
