@@ -513,6 +513,36 @@ it('sends a later run’s door to that run, not to the first run of the agent it
   expect(store.get().selectedId).toBe('a1')
 })
 
+it('marks a failed span, and the turn that holds it while it is folded', async () => {
+  await draw([
+    E('ok1', 0),
+    E('bad', 2, { kind: 'error', span_name: 'tool.call', slot: 'error', failure_entry: true, operation_status: 'error' }),
+    E('ok2', 4, { turn_span_id: 'T2' }),
+  ])
+  const turns = [...document.querySelectorAll<HTMLElement>('[data-row="turn"]')]
+  expect(turns.map((turn) => turn.hasAttribute('data-failed'))).toEqual([true, false])
+  expect(turns[0]!.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('gui.trajectory.status.error')
+  act(() => { fireEvent.click(turns[0]!) })
+  const bad = document.querySelector('[data-entry="bad"]') as HTMLElement
+  const ok = document.querySelector('[data-entry="ok1"]') as HTMLElement
+  expect(bad.hasAttribute('data-failed')).toBe(true)
+  expect(bad.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('gui.trajectory.status.error')
+  expect(bad.querySelector('.trajectory-wf-spanbar')?.classList.contains('trajectory-wf-kind-failure')).toBe(true)
+  expect(ok.hasAttribute('data-failed')).toBe(false)
+  expect(ok.querySelector('[role="img"]')).toBeNull()
+})
+
+it('counts a failed operation once, not once per entry it wrote', async () => {
+  /* A failed call writes its input and output under the failed status, and the
+     index marks one entry of the span as the failure. */
+  await draw([
+    E('in', 0, { kind: 'tool.input', span_name: 'tool.call', slot: 'tool.input', span_id: 'call', operation_status: 'error' }),
+    E('out', 0, { kind: 'tool.output', span_name: 'tool.call', slot: 'tool.output', span_id: 'call', operation_status: 'error' }),
+    E('err', 0, { kind: 'error', span_name: 'tool.call', slot: 'error', span_id: 'call', operation_status: 'error', failure_entry: true }),
+  ])
+  expect(document.querySelector('[data-bad]')?.textContent).toBe('1')
+})
+
 it('leaves a turn folded when the reader folds it, even with the selection inside', async () => {
   await draw([E('m1', 0), E('m2', 1)])
   fireEvent.click(document.querySelector('[data-row="turn"]')!)
