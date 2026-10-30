@@ -68,6 +68,7 @@ export function entryStart(entry: TrajectoryEntry): number {
 
 /** The instant a row ends; a row still running ends at `now`. */
 export function entryEnd(entry: TrajectoryEntry, now: number): number {
+  if (entry.operation_status === 'running' && isLive(entry, now)) return now
   return stamp(entry.operation_end) ?? now
 }
 
@@ -222,12 +223,17 @@ export function buildWaterfall(entries: readonly TrajectoryEntry[], now: number)
   return { agents: foldAgents([...groups].map(([scope, rows]) => scopeOf(scope, rows, now, scope === null ? null : (doors.get(scope) ?? null)))) }
 }
 
-/** Whether a row is still running: no end recorded, and recent enough that the
- *  session can plausibly still be writing it. A historical span that never
- *  wrote an end must not keep the page's clock ticking forever. */
+/** Whether a row is still running: the index says so, or no end was recorded
+ *  -- and either way recent enough that the session can plausibly still be
+ *  writing it. A running span carries its snapshot's end, which is when it was
+ *  last heard from; a historical span that never wrote an end, or one whose
+ *  snapshots stopped, must not keep the page's clock ticking forever. */
 export const LIVE_WINDOW_MS = 30 * 60_000
 
 export function isLive(entry: TrajectoryEntry, now: number): boolean {
+  if (entry.operation_status === 'running') {
+    return now - (stamp(entry.operation_end) ?? entryStart(entry)) <= LIVE_WINDOW_MS
+  }
   if (entry.operation_end !== null && entry.operation_end !== undefined) return false
   return now - entryStart(entry) <= LIVE_WINDOW_MS
 }

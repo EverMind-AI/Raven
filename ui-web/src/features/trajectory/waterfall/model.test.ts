@@ -4,7 +4,7 @@
 
 import { expect, it } from 'vitest'
 
-import { buildWaterfall, isLive } from './model'
+import { buildWaterfall, entryEnd, isLive } from './model'
 
 import type { TrajectoryEntry } from '../types'
 
@@ -105,6 +105,24 @@ it('treats a span that never wrote an end as running only while it is recent', (
   expect(isLive(recent, NOW)).toBe(true)
   expect(isLive(stale, NOW)).toBe(false)
   expect(isLive(E({ operation_end: new Date(NOW).toISOString() }), NOW)).toBe(false)
+})
+
+it('treats a span the index reports running as running, though it carries a snapshot end', () => {
+  const running = E({
+    operation_status: 'running',
+    operation_start: new Date(NOW - 60_000).toISOString(),
+    operation_end: new Date(NOW - 50_000).toISOString(),
+  })
+  expect(isLive(running, NOW)).toBe(true)
+  expect(entryEnd(running, NOW)).toBe(NOW)
+  /* A run whose snapshot stopped arriving long ago is not kept ticking. */
+  const abandoned = E({
+    operation_status: 'running',
+    operation_start: new Date(NOW - 5 * 60 * 60_000).toISOString(),
+    operation_end: new Date(NOW - 4 * 60 * 60_000).toISOString(),
+  })
+  expect(isLive(abandoned, NOW)).toBe(false)
+  expect(entryEnd(abandoned, NOW)).toBe(NOW - 4 * 60 * 60_000)
 })
 
 it('a turn previews the row that opened it, not whichever row started first', () => {
