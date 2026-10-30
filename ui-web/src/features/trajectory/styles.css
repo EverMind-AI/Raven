@@ -43,8 +43,9 @@
   --trajectory-wf-sub-bg: #e7f1e7;         --trajectory-wf-sub-line: #bcdabc;
   --trajectory-wf-fail-bg: #fae3e1;        --trajectory-wf-fail-line: #e9b6ae;
   --trajectory-wf-wait-bg: #f4f4f4;        --trajectory-wf-wait-line: #d3d3d3;
-  --trajectory-wf-grid: #e9ebee;           --trajectory-wf-guide: #dfe4e9;      --trajectory-wf-ov: #ececf7;
+  --trajectory-wf-grid: #e9ebee;           --trajectory-wf-guide: #dfe4e9;
   --trajectory-wf-grid-major: #d5d9de;
+  --trajectory-act-veil: rgba(255, 255, 255, .62);
   --trajectory-wf-main: #b8892a;          --trajectory-wf-agent: #66635c;        --trajectory-wf-err: #d0453b;
   --trajectory-crash-bg: #fdf5f4;          --trajectory-crash-line: #f0d7d2;    --trajectory-crash-fg: #8a3a2e;
   --trajectory-ruler-dim: rgba(31, 35, 40, .07);    --trajectory-ruler-pick: rgba(31, 35, 40, .35);
@@ -74,8 +75,9 @@ html[data-theme="dark"] {
   --trajectory-wf-sub-bg: #22331f;         --trajectory-wf-sub-line: #3b5933;
   --trajectory-wf-fail-bg: #45221f;        --trajectory-wf-fail-line: #7a3a33;
   --trajectory-wf-wait-bg: #2a2a2a;        --trajectory-wf-wait-line: #4a4a4a;
-  --trajectory-wf-grid: #2c2c2e;           --trajectory-wf-guide: #3a3a3d;      --trajectory-wf-ov: #34344a;
+  --trajectory-wf-grid: #2c2c2e;           --trajectory-wf-guide: #3a3a3d;
   --trajectory-wf-grid-major: #3d3d41;
+  --trajectory-act-veil: rgba(32, 32, 32, .62);
   --trajectory-wf-main: #b68a30;          --trajectory-wf-agent: #a8a49a;        --trajectory-wf-err: #ec6b5f;
   --trajectory-crash-bg: #3a2220;          --trajectory-crash-line: #5a302b;    --trajectory-crash-fg: #f0a493;
   --trajectory-ruler-dim: rgba(255, 255, 255, .06); --trajectory-ruler-pick: rgba(255, 255, 255, .35);
@@ -106,8 +108,9 @@ html[data-theme="dark"] {
     --trajectory-wf-sub-bg: #22331f;         --trajectory-wf-sub-line: #3b5933;
     --trajectory-wf-fail-bg: #45221f;        --trajectory-wf-fail-line: #7a3a33;
     --trajectory-wf-wait-bg: #2a2a2a;        --trajectory-wf-wait-line: #4a4a4a;
-    --trajectory-wf-grid: #2c2c2e;           --trajectory-wf-guide: #3a3a3d;      --trajectory-wf-ov: #34344a;
+    --trajectory-wf-grid: #2c2c2e;           --trajectory-wf-guide: #3a3a3d;
     --trajectory-wf-grid-major: #3d3d41;
+    --trajectory-act-veil: rgba(32, 32, 32, .62);
     --trajectory-wf-main: #b68a30;          --trajectory-wf-agent: #a8a49a;        --trajectory-wf-err: #ec6b5f;
     --trajectory-crash-bg: #3a2220;          --trajectory-crash-line: #5a302b;    --trajectory-crash-fg: #f0a493;
     --trajectory-ruler-dim: rgba(255, 255, 255, .06); --trajectory-ruler-pick: rgba(255, 255, 255, .35);
@@ -409,13 +412,6 @@ html[data-theme="dark"] {
 /* A failed operation's mark, beside its name and its turn's. */
 .trajectory-wf-fail { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--chat-danger) }
 
-.trajectory-ov { padding: 6px 8px 4px 0; border-bottom: 1px solid var(--line); flex: none }
-.trajectory-ov-lane { display: grid; grid-template-columns: 188px minmax(0, 1fr); gap: 8px; align-items: center; height: 13px }
-.trajectory-ov-name { font: 9.5px/1 var(--mono); color: var(--faint); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
-.trajectory-ov-track { position: relative; height: 6px }
-.trajectory-ov-track i { position: absolute; top: 0; height: 6px; min-width: 2px; border-radius: 2px;
-  background: var(--trajectory-c-llm-output-bg) }
-
 .trajectory-wf-links { position: absolute; top: 0; bottom: 0; left: 196px; right: 0; pointer-events: none }
 .trajectory-wf-seg { position: absolute; top: 0; height: 10px; border-radius: 3px; min-width: 2px }
 .trajectory-wf-spanbar { position: absolute; top: 0; height: 8px; border-radius: 2px; min-width: 2px }
@@ -488,11 +484,6 @@ html[data-theme="dark"] {
 .trajectory-wf-links { left: var(--wf-gutter) }
 .trajectory-wf-grid { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--trajectory-wf-grid) }
 .trajectory-wf-links { pointer-events: none }
-
-.trajectory-ov { padding: 8px 16px 6px; border-bottom: 1px solid var(--line-soft) }
-.trajectory-ov-lane { grid-template-columns: 180px minmax(0, 1fr); gap: 16px; height: 16px }
-.trajectory-ov-name { font: 10px/1 var(--sans); color: var(--faint) }
-.trajectory-ov-track i { background: var(--trajectory-wf-ov); border-radius: 3px }
 .trajectory-ruler-idle { font: 9px/1 var(--mono); color: var(--trajectory-wf-quiet); white-space: nowrap; overflow: hidden }
 
 /* ── type and air, matched to the reference card ──────────────────────
@@ -535,18 +526,6 @@ html[data-theme="dark"] {
 .trajectory-wf-span .trajectory-wf-label::before { content: ''; position: absolute;
   left: calc(var(--indent, 44px) - 14px); top: -14px; bottom: -14px; width: 1px; background: var(--trajectory-wf-soft) }
 
-.trajectory-ov { padding: 12px 20px 10px }
-.trajectory-ov-lane { grid-template-columns: 280px minmax(0, 1fr); gap: 20px; height: 22px }
-.trajectory-ov-name { font: 400 12px/1 var(--sans); color: var(--faint) }
-.trajectory-ov-track { height: 9px }
-.trajectory-ov-track i { height: 9px; border-radius: 5px; background: var(--trajectory-wf-ov) }
-
-/* The overview shares the rows' gutter, so a lane's bar is the same column as
-   the bar under it. */
-.trajectory-ov { padding: 12px 0 10px 0 }
-.trajectory-ov-lane { grid-template-columns: var(--wf-gutter) minmax(0, 1fr); gap: 0 }
-.trajectory-ov-name { padding-left: 20px; text-align: left }
-
 /* A fixed word never gives way to a preview: the preview truncates first. */
 .trajectory-wf-name { flex: none }
 .trajectory-wf-chev, .trajectory-wf-tile { flex: none }
@@ -566,7 +545,6 @@ html[data-theme="dark"] {
 .trajectory-wf-tile { width: 24px; height: 24px }
 .trajectory-wf-tile img { width: 16px; height: 16px }
 .trajectory-wf-span .trajectory-wf-label::before { top: -10px; bottom: -10px }
-.trajectory-ov-lane { height: 20px }
 
 /* The icon fills its box: a 15px drawing in a 24px cell, the reference's
    proportion, rather than a text glyph's own small em box. */
@@ -583,7 +561,6 @@ html[data-theme="dark"] {
 .trajectory-wf-glyph svg { width: 14px; height: 14px }
 .trajectory-wf-tile img { width: 16px; height: 16px }
 .trajectory-wf-span .trajectory-wf-label::before { top: -8px; bottom: -8px }
-.trajectory-ov-lane { height: 18px }
 
 /* 30px rows, and the tree's guide becomes one continuous line: each row draws
    half a row above and half below, so consecutive siblings meet exactly. */
@@ -594,7 +571,6 @@ html[data-theme="dark"] {
 .trajectory-wf-glyph svg { width: 13px; height: 13px }
 .trajectory-wf-tile img { width: 15px; height: 15px }
 .trajectory-wf-span .trajectory-wf-label::before { content: none }
-.trajectory-ov-lane { height: 16px }
 
 /* The guide is a trunk plus one branch per depth: every row draws its own
    column and its ancestors'. A line runs exactly the row's height -- rows are
@@ -612,10 +588,6 @@ html[data-theme="dark"] {
 .trajectory-wf-tile { width: 22px; height: 22px }
 .trajectory-wf-glyph svg { width: 15px; height: 15px }
 .trajectory-wf-tile img { width: 17px; height: 17px }
-
-/* The overview is a strip: a handful of lanes, never taller than a few rows. */
-.trajectory-ov { max-height: 160px; overflow: hidden }
-.trajectory-ov-more .trajectory-ov-name { color: var(--trajectory-wf-quiet) }
 
 /* The header is allowed to shrink: its six cells at their old size set a
    min-content width wider than the column, which pushed the details pane off
@@ -673,17 +645,6 @@ button.trajectory-wf-chev { border: 0; padding: 0; margin: 0; background: none; 
    own -- the overlay thumb is opted out on the element, the native one here. */
 .trajectory-tabs { scrollbar-width: none }
 .trajectory-tabs::-webkit-scrollbar { display: none }
-
-/* The overview folds past a shape, and the count itself is the control: the
-   reader says when the rest of the roster is worth the room. Drawn as a lane,
-   so the toggle stands in the column the lanes use; expanded, the strip may
-   grow to a share of the window rather than pushing the rows off it. */
-.trajectory-ov-more, .trajectory-ov-fewer {
-  width: 100%; background: none; border: 0; padding: 0; font: inherit; text-align: left; cursor: pointer;
-}
-.trajectory-ov-fewer .trajectory-ov-name { color: var(--trajectory-wf-quiet) }
-.trajectory-ov-more:hover .trajectory-ov-name, .trajectory-ov-fewer:hover .trajectory-ov-name { color: var(--faint) }
-.trajectory-ov[data-expanded] { max-height: min(70vh, 640px); overflow-y: auto }
 
 /* The way into a sub-agent's own trace stands at the end of the label column,
    not out on the axis: which agent ran this row is a property of the row, not
@@ -759,10 +720,7 @@ html[data-traj] .trajectory-wf-span[aria-selected="true"]:hover { background: va
 html[data-traj] .trajectory-wf-guide,
 html[data-traj] .trajectory-ruler-tick,
 html[data-traj] .trajectory-wf-grid { background: var(--traj-rule) }
-html[data-traj] .trajectory-wf-head,
-html[data-traj] .trajectory-wf-stats,
-html[data-traj] .trajectory-ov,
-html[data-traj] .trajectory-tabs-wrap { border-bottom-color: var(--traj-line) }
+html[data-traj] .trajectory-wf-head, html[data-traj] .trajectory-wf-stats, html[data-traj] .trajectory-tabs-wrap { border-bottom-color: var(--traj-line) }
 
 /* The track holds the duration label as well as the bar now, so it is the
    row's full height. The per-kind heights further up (8px for a span, 10px
@@ -844,8 +802,13 @@ html[data-traj] .trajectory-tabs-wrap { border-bottom-color: var(--traj-line) }
   background: var(--trajectory-wf-err); transform: translateY(-50%) translateY(-7px) rotate(45deg); box-shadow: 0 0 0 2px var(--paper) }
 .trajectory-wf-track .trajectory-wf-edge { top: 50%; width: 0; height: 0; min-width: 0; border-radius: 0; transform: translateY(-50%);
   border-top: 4px solid transparent; border-bottom: 4px solid transparent }
-.trajectory-wf-track .trajectory-wf-edge[data-side='start'] { left: 2px; border-right: 6px solid var(--trajectory-wf-quiet) }
-.trajectory-wf-track .trajectory-wf-edge[data-side='end'] { right: 2px; border-left: 6px solid var(--trajectory-wf-quiet) }
+/* The start arrow stands just outside the track, in the busy column's spare
+   edge, so it never sits on a capsule that runs off the window; the end arrow
+   has no such room before the scroller's edge, so it wears a halo instead. */
+.trajectory-wf-agent .trajectory-wf-track, .trajectory-wf-fold .trajectory-wf-track { overflow: visible }
+.trajectory-wf-track .trajectory-wf-edge[data-side='start'] { left: -11px; border-right: 6px solid var(--trajectory-wf-quiet) }
+.trajectory-wf-track .trajectory-wf-edge[data-side='end'] { right: 2px; border-left: 6px solid var(--trajectory-wf-quiet);
+  filter: drop-shadow(0 0 1.5px var(--paper)) }
 .trajectory-wf-next { position: absolute; top: 50%; transform: translateY(-50%); padding: 2px 8px; border: 1px solid var(--line);
   border-radius: 999px; background: var(--paper); font: 400 11px/1.3 var(--sans); color: var(--faint); white-space: nowrap }
 .trajectory-wf-next[data-side='end'] { right: 14px }
@@ -883,3 +846,49 @@ html[data-traj] .trajectory-tabs-wrap { border-bottom-color: var(--traj-line) }
   font-variant-numeric: tabular-nums }
 .trajectory-wf-tip [data-part] { display: flex; align-items: center; gap: 6px; white-space: nowrap }
 .trajectory-wf-tip [data-part='head'] { font-weight: 600 }
+
+/* ── the activity strip ────────────────────────────────────────────────
+   The whole session's calls on the folded axis, in the rows' own columns: the
+   key in the label gutter, the bars over the track. Each bar stacks the
+   model's calls under the tools' with a hairline between; a diamond rides a
+   bar that holds a failure; a folded idle stretch is a quiet band carrying
+   how long it was. The window is a framed brush, the rest of the strip under
+   a veil, with a grip on each edge. */
+.trajectory-act { flex: none; display: grid; grid-template-columns: var(--wf-gutter) minmax(0, 1fr); height: 92px;
+  border-bottom: 1px solid var(--line) }
+.trajectory-act-key { display: flex; flex-direction: column; justify-content: center; gap: 6px; min-width: 0; padding: 0 16px 0 24px }
+.trajectory-act-key b { font: 500 10.5px/1 var(--sans); letter-spacing: .09em; text-transform: uppercase; color: var(--faint) }
+.trajectory-act-key i { font: 400 12px/1 var(--sans); font-style: normal; color: var(--faint); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis }
+.trajectory-act-legend { font: 400 11.5px/1 var(--sans); color: var(--muted); white-space: nowrap; overflow: hidden }
+.trajectory-act-legend em { display: inline-block; width: 9px; height: 9px; margin: 0 5px 0 12px; border-radius: 2px; vertical-align: -1px }
+.trajectory-act-legend em:first-child { margin-left: 0 }
+.trajectory-act-legend em[data-kind='llm'] { background: var(--trajectory-wf-model-bg) }
+.trajectory-act-legend em[data-kind='tool'] { background: var(--trajectory-wf-tool-bg) }
+.trajectory-act-legend em[data-kind='error'] { width: 7px; height: 7px; background: var(--trajectory-wf-err); transform: rotate(45deg) }
+.trajectory-act-plot { position: relative; cursor: crosshair; touch-action: none; user-select: none }
+.trajectory-act-plot::after { content: ''; position: absolute; left: 0; right: 0; bottom: 26px; height: 1px; background: var(--line); pointer-events: none }
+.trajectory-act-bar { position: absolute; bottom: 26px; height: 48px; display: flex; flex-direction: column-reverse; padding: 0 1px;
+  pointer-events: none }
+.trajectory-act-bar i { display: block; flex: none; width: 100% }
+.trajectory-act-bar i + i { margin-bottom: 1px }
+.trajectory-act-bar i[data-kind='llm'] { background: var(--trajectory-wf-model-bg) }
+.trajectory-act-bar i[data-kind='tool'] { background: var(--trajectory-wf-tool-bg); border-radius: 1.5px 1.5px 0 0 }
+.trajectory-act-err { position: absolute; left: 50%; width: 6px; height: 6px; margin: 0 0 4px -3px; background: var(--trajectory-wf-err);
+  transform: rotate(45deg) }
+.trajectory-act-fold { position: absolute; top: 12px; bottom: 26px; display: flex; align-items: flex-end; justify-content: center;
+  padding-bottom: 4px; border-radius: 5px; background: var(--trajectory-wf-soft); font: 400 10.5px/1 var(--sans);
+  color: var(--faint); pointer-events: none; overflow: hidden }
+.trajectory-act-day { position: absolute; top: 0; padding-left: 2px; font: 600 10.5px/1 var(--sans); color: var(--text);
+  white-space: nowrap; pointer-events: none }
+.trajectory-act-end { position: absolute; bottom: 9px; font: 500 10.5px/1 var(--sans); color: var(--muted); pointer-events: none;
+  font-variant-numeric: tabular-nums }
+.trajectory-act-end[data-side='start'] { left: 0 }
+.trajectory-act-end[data-side='end'] { right: 0 }
+.trajectory-act-dim { position: absolute; top: 12px; bottom: 26px; background: var(--trajectory-act-veil); pointer-events: none }
+.trajectory-act-brush { position: absolute; top: 12px; bottom: 26px; border: 1px solid var(--text); border-radius: 4px; cursor: grab }
+.trajectory-act-grip { position: absolute; top: 50%; width: 6px; height: 18px; margin: -9px 0 0 -3px; border: 1px solid var(--text);
+  border-radius: 3px; background: var(--paper); cursor: ew-resize }
+.trajectory-act-grip[data-edge='lo'] { left: 0 }
+.trajectory-act-grip[data-edge='hi'] { left: 100% }
+html[data-traj] .trajectory-act { background: transparent }

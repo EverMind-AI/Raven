@@ -189,8 +189,11 @@ Every agent shares one time axis (`axis.ts`): a stretch
 in which no agent was doing anything collapses to a fixed width. Each row
 prints its busy time in a column at the end of its label -- for an agent, its
 turns and loose rows merged (`model.ts`'s `busyRuns`), never its lifetime.
-Above the rows sit the overview, one row of activity marks per agent, and the ruler,
-marked on round clock times (`ticks.ts`) beside the name of the window it shows; what
+Above the rows sit the activity strip -- the whole session's calls per bucket of
+real time, its idle stretches folded wide enough to say how long they were, and
+the window as a brush a drag takes, moves or stretches (`ActivityStrip.tsx`) --
+and the ruler, marked on round clock times (`ticks.ts`) beside the name of the
+window it shows; what
 crosses between agents is marked on rows rather than drawn between them -- a
 dispatching row's door arrow, and the worker's name on the host turn its report
 started. Agents start folded when there are several, one row each: a capsule
