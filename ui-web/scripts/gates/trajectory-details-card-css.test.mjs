@@ -63,6 +63,22 @@ describe('the details pane', () => {
     expect(effective(['.trajectory-corner'], 'touch-action')).toBe('none')
   })
 
+  /* The sheet under the card is frosted nearly white, so the card's own paper
+     cannot tell it apart: the edge has to. It is the desk palette's -- the
+     page's line, and a shadow on every side, none of it tucked under the
+     card by a negative spread. */
+  it('stands apart from the frosted sheet by its edge, the way the desk palette does', () => {
+    expect(effective(['.trajectory-details'], 'border')).toBe('1px solid var(--line)')
+    const shadows = [...sheet.matchAll(/--trajectory-card-shadow\s*:\s*([^;]+);/g)].map((m) => m[1])
+    expect(shadows).toHaveLength(3)
+    for (const shadow of shadows) {
+      for (const layer of shadow.split(/,(?![^(]*\))/)) {
+        const lengths = layer.replace(/rgba?\([^)]*\)|#[0-9a-f]+/gi, '').trim().split(/\s+/)
+        expect(Number.parseFloat(lengths[3] ?? '0'), layer).toBeGreaterThanOrEqual(0)
+      }
+    }
+  })
+
   /* The narrow pane carries both classes, and is the same card over the whole area. */
   for (const pane of [['.trajectory-details'], ['.trajectory-details', '.trajectory-details-over']]) {
     it(`is a white card with rounded corners (${pane.join(' ')})`, () => {
