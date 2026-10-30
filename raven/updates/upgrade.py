@@ -1343,6 +1343,18 @@ def editable_checkout_status() -> tuple[Path, int, int]:
     return checkout, ahead, behind
 
 
+def install_script(*, windows: bool | None = None) -> str:
+    """The install command a source checkout reruns to update itself.
+
+    install.sh refuses to run on Windows, so every surface that names the
+    checkout's update command -- the CLI's refusal and the page's -- picks the
+    script by platform from this one definition and cannot drift apart again.
+    """
+    if windows is None:
+        windows = os.name == "nt"
+    return ".\\install.ps1" if windows else "./install.sh"
+
+
 def _uv_tool_target() -> ToolInstallTarget | None:
     prefix = Path(sys.prefix)
     if not prefix.is_absolute():

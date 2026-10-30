@@ -51,7 +51,9 @@ def register(app: typer.Typer) -> None:
                     console.print(f"[red]Unable to check source status:[/red] {_upgrade._sentence(exc)}")
                     raise typer.Exit(1) from exc
                 finally:
-                    console.print("To update, run [cyan]git pull && ./install.sh[/cyan] in the source checkout.")
+                    console.print(
+                        f"To update, run [cyan]git pull && {_upgrade.install_script()}[/cyan] in the source checkout."
+                    )
                 if not check:
                     raise typer.Exit(1)
                 return
