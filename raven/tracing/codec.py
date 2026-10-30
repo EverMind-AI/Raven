@@ -86,6 +86,8 @@ def plaintext_size(path: Path) -> int | None:
                 return int(size)
             # A frame written without a content size is only measurable by
             # decoding it; the store's own writer always records the size.
+            # `read(18)` above consumed the header, so rewind before decoding.
+            handle.seek(0)
             data = handle.read()
     except OSError:
         return None

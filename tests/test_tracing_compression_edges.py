@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import zstandard
+
 from raven.tracing import artifact_v2, message_pack
 from raven.tracing import codec as trace_codec
 from raven.tracing.store import TraceStore
@@ -309,3 +311,28 @@ def test_turn_input_degrades_on_an_oversized_plain_artifact(tmp_path: Path) -> N
     artifact.write_text("x" * (selection._INPUT_READ_LIMIT + 1), encoding="utf-8")
 
     assert selection._turn_input(_turn(tmp_path, artifact), state) is None
+
+
+def test_plaintext_size_decodes_a_frame_without_a_content_size(tmp_path: Path) -> None:
+    payload = b"x" * 4096
+    path = tmp_path / "audit-spans-2026-01-01-1.log"
+    path.write_bytes(zstandard.ZstdCompressor(write_content_size=False).compress(payload))
+
+    assert trace_codec.plaintext_size(path) == len(payload)
+
+
+def test_a_frame_without_a_content_size_does_not_reset_the_scanner(tmp_path: Path) -> None:
+    archive = tmp_path / "logs" / "archive" / "2026-01-01" / "audit-spans-2026-01-01-1.log"
+    archive.parent.mkdir(parents=True)
+    record = {"traceId": "t", "spanId": "s", "name": "tool.call", "attributes": {}}
+    archive.write_bytes(
+        zstandard.ZstdCompressor(write_content_size=False).compress(json.dumps(record).encode() + b"\n")
+    )
+
+    scanner = tidx.SpanLogScanner(tmp_path)
+    first = scanner.scan(tidx.ScanBudget(max_bytes=10_000, deadline=None))
+    second = scanner.scan(tidx.ScanBudget(max_bytes=10_000, deadline=None))
+
+    assert [raw.span["spanId"] for raw in first.records] == ["s"]
+    assert second.generation_changed is False
+    assert second.done is True
