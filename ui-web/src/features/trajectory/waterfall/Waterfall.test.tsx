@@ -826,6 +826,20 @@ it('prints a second line under the header’s figures', async () => {
   expect(sub('gui.trajectory.stat.tool')).toBe('gui.trajectory.stat.tool_share {"name":"bash","percent":100}')
 })
 
+it('names an external agent’s tool kinds in the page’s language, in the header and on the call rows', async () => {
+  await draw([
+    E('run', 0, { kind: 'tool.output', span_name: 'tool.call', slot: 'tool.output', meta: { tool: 'execute' }, preview: 'execute: ok' }),
+    E('change', 1, { kind: 'tool.output', span_name: 'tool.call', slot: 'tool.output', span_id: 'change', meta: { tool: 'edit' } }),
+  ])
+  const sub = [...document.querySelectorAll('.trajectory-wf-stat')]
+    .find((cell) => cell.querySelector('.trajectory-wf-statk')?.textContent === 'gui.trajectory.stat.tool')
+    ?.querySelector('.trajectory-wf-statsub')?.textContent
+  expect(sub).toBe('gui.trajectory.stat.tool_share {"name":"gui.trajectory.tool.edit","percent":50} \u00b7 gui.trajectory.stat.tool_share {"name":"gui.trajectory.tool.execute","percent":50}')
+  fireEvent.click(document.querySelector('[data-row="turn"]')!)
+  expect(document.querySelector('[data-entry="run"] .trajectory-wf-name')?.textContent).toBe('gui.trajectory.tool.execute')
+  expect(document.querySelector('[data-entry="run"] .trajectory-wf-sub')?.textContent).toBe('ok')
+})
+
 it('jumps from the error count to the earliest failure, opening what holds it', async () => {
   await draw([
     E('ok', 0),

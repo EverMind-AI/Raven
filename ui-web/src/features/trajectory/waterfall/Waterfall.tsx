@@ -20,7 +20,7 @@ import { formatDuration } from '../../../lib/duration'
 import * as lang from '../../../state/lang'
 import { showBar } from '../../../state/scrollbars'
 import * as details from '../detailStore'
-import { kindLabel } from '../palette'
+import { kindLabel, toolLabel } from '../palette'
 import { enter as enterScope, scopeTitle } from '../scopes'
 import * as store from '../store'
 import { ActivityStrip } from './ActivityStrip'
@@ -213,7 +213,7 @@ function agentMark(agent: WaterfallAgent): JSX.Element {
  *  answer), anything else by what it says. */
 function callName(entry: TrajectoryEntry): string {
   const tool = entry.meta?.tool
-  if (entry.kind.startsWith('tool.') && typeof tool === 'string' && tool !== '') return tool
+  if (entry.kind.startsWith('tool.') && typeof tool === 'string' && tool !== '') return toolLabel(tool)
   if (entry.kind.startsWith('llm.')) return kindLabel(entry.kind)
   return entry.preview ?? entry.span_name
 }
@@ -890,7 +890,7 @@ export function Waterfall(): JSX.Element {
       figures.modelShare === null ? null : t('gui.trajectory.stat.model_share', { percent: Math.round(figures.modelShare * 100) })],
     [t('gui.trajectory.stat.tool'), String(figures.tool),
       figures.topTools.length
-        ? figures.topTools.map(({ name, share }) => t('gui.trajectory.stat.tool_share', { name, percent: Math.round(share * 100) })).join(' \u00b7 ')
+        ? figures.topTools.map(({ name, share }) => t('gui.trajectory.stat.tool_share', { name: toolLabel(name), percent: Math.round(share * 100) })).join(' \u00b7 ')
         : null],
     [t('gui.trajectory.stat.errors'), String(errors), null],
   ]
