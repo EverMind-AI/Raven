@@ -60,6 +60,18 @@ it('re-cuts a running row when the clock moves, and only that row’s turn', () 
   expect(index.waterfall().agents[0]!.turns[0]!.end).toBe(T0 + 90_000)
 })
 
+it('re-cuts a running row that carries its snapshot’s end when the clock moves', () => {
+  /* A running span's record carries the time it was last written as its end;
+     while that is fresh the row runs to the present, so the clock moving must
+     move it here exactly as it moves it in the one-shot tree. */
+  const running = E('live', { operation_status: 'running', operation_start: at(1), operation_end: at(5) })
+  const index = new WaterfallIndex(T0 + 10_000)
+  index.add([running])
+  index.waterfall()
+  index.setNow(T0 + 90_000)
+  expect(index.waterfall()).toEqual(buildWaterfall([running], T0 + 90_000))
+})
+
 it('folds two pages of runs of one instance into the same agent', () => {
   const door = (id: string, scope: string, at2: number): TrajectoryEntry => E(id, {
     kind: 'tool.output', opens_subagent_scope: scope, meta: { instance: 'raven-design-1' },

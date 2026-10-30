@@ -70,7 +70,9 @@ export class WaterfallIndex {
     }
   }
 
-  /** The clock a running row is cut at. Only rows without an end are re-cut. */
+  /** The clock a running row is cut at. Only the turns of rows whose end reads
+   *  the clock are re-cut: a row without an end, and a running one, which runs
+   *  to the present while its last snapshot is fresh (`entryEnd`). */
   setNow(now: number): void {
     if (now === this.now) return
     this.now = now
@@ -78,7 +80,7 @@ export class WaterfallIndex {
       let end = -Infinity
       for (const bucket of agent.turns.values()) {
         for (const entry of bucket.entries) {
-          if (entry.operation_end === null || entry.operation_end === undefined) bucket.dirty = true
+          if (entry.operation_end === null || entry.operation_end === undefined || entry.operation_status === 'running') bucket.dirty = true
           end = Math.max(end, entryEnd(entry, now))
         }
       }
