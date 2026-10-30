@@ -2008,6 +2008,11 @@ def test_replay_will_not_follow_a_link_out_of_this_stores_journals(state, tmp_pa
     elsewhere = _frames(tmp_path / "elsewhere" / "agent-1.jsonl")
     link = state / "logs" / "acp-frames" / "2026-09-01" / "agent-1.jsonl"
     link.parent.mkdir(parents=True)
-    link.symlink_to(elsewhere)
+    try:
+        link.symlink_to(elsewhere)
+    except OSError as exc:
+        # A Windows account without SeCreateSymbolicLinkPrivilege cannot make
+        # the link this test is about; say so rather than fail on the setup.
+        pytest.skip(f"this account cannot create a symbolic link: {exc}")
     body = _replay(_external_run(state, link), state)
     assert body.availability == tdet.NOT_RECORDED
