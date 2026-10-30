@@ -152,6 +152,14 @@ describe('the eye beside a connected provider\'s key', () => {
     expect(screen.getByRole('alert').textContent).toBe(UNCHANGED)
   })
 
+  it('the head says the key is rejected once the vendor refused the stored one', async () => {
+    install(snap(), { fetchModels: async () => ({ models: [], status: 'invalid_key', error: 'HTTP 401', refused: true }) })
+    await open('openrouter')
+    expect(document.querySelector('.settings-tp-state')!.textContent).toBe('gui.settings.providers.connected')
+    await act(async () => { await store.recheck('openrouter') })
+    expect(document.querySelector('.settings-tp-state')!.textContent).toBe('gui.settings.providers.key_rejected')
+  })
+
   it('saves an edited revealed key as the new key', async () => {
     const { calls } = install(snap(), { revealKey: answering('sk-or-saved') })
     await open('openrouter')
@@ -315,8 +323,8 @@ describe('provider detail', () => {
     const box = screen.getByLabelText('gui.settings.providers.api_key') as HTMLInputElement
     await act(async () => { fireEvent.change(box, { target: { value: 'sk-new' } }) })
     await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
-    /* The save, then the test it kicks off on the side. */
-    expect(calls).toEqual([['provider', { op: 'save_key', slug: 'openai', api_key: 'sk-new' }], ['fetchModels:verify', 'openai']])
+    /* The vendor is asked first; it did not refuse, so the save follows. */
+    expect(calls).toEqual([['checkKey', { slug: 'openai', api_key: 'sk-new' }], ['provider', { op: 'save_key', slug: 'openai', api_key: 'sk-new' }]])
   })
 
   it('a key-only vendor connects with its key alone, whatever address it was handed', async () => {
@@ -335,7 +343,7 @@ describe('provider detail', () => {
     const box = screen.getByLabelText('gui.settings.providers.api_key') as HTMLInputElement
     await act(async () => { fireEvent.change(box, { target: { value: 'AIza-new' } }) })
     await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
-    expect(calls).toEqual([['provider', { op: 'save_key', slug: 'gemini', api_key: 'AIza-new' }], ['fetchModels:verify', 'gemini']])
+    expect(calls).toEqual([['checkKey', { slug: 'gemini', api_key: 'AIza-new' }], ['provider', { op: 'save_key', slug: 'gemini', api_key: 'AIza-new' }]])
   })
 
   it('a local provider connects by address alone and refuses an empty one', async () => {
@@ -347,7 +355,7 @@ describe('provider detail', () => {
     expect(calls).toEqual([])
     await act(async () => { fireEvent.change(box, { target: { value: 'http://localhost:11434' } }) })
     await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
-    expect(calls).toEqual([['provider', { op: 'save_key', slug: 'ollama', api_base: 'http://localhost:11434' }], ['fetchModels:verify', 'ollama']])
+    expect(calls).toEqual([['checkKey', { slug: 'ollama', api_base: 'http://localhost:11434' }], ['provider', { op: 'save_key', slug: 'ollama', api_base: 'http://localhost:11434' }]])
   })
 
   it('sends the address from the field it draws alone for a vendor that takes no key', async () => {
@@ -367,7 +375,7 @@ describe('provider detail', () => {
     const box = boxes[0] as HTMLInputElement
     await act(async () => { fireEvent.change(box, { target: { value: 'https://keyless.test/v1' } }) })
     await act(async () => { fireEvent.click(box.parentElement!.querySelector('button')!) })
-    expect(calls).toEqual([['provider', { op: 'save_key', slug: 'keyless', api_base: 'https://keyless.test/v1' }], ['fetchModels:verify', 'keyless']])
+    expect(calls).toEqual([['checkKey', { slug: 'keyless', api_base: 'https://keyless.test/v1' }], ['provider', { op: 'save_key', slug: 'keyless', api_base: 'https://keyless.test/v1' }]])
   })
 
   it('a header is added as a one-name patch and removed as a one-name null', async () => {

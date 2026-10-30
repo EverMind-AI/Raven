@@ -2202,6 +2202,45 @@ class ModelDisconnectResult(_Strict):
     disconnected: bool
 
 
+class ModelCheckKeyParams(_Strict):
+    """Ask the vendor about a credential before it is stored."""
+
+    slug: str
+    # The key a form holds; empty for a local deployment, which is reached by
+    # address and has no key.
+    api_key: str = ""
+    api_base: str | None = None
+
+
+class ModelCheckKeyResult(_Strict):
+    """What the vendor said about the credential, and whether that refuses it.
+
+    ``refused`` is the one verdict that holds a key back from being stored: the
+    vendor itself answered this key with 401, or named it invalid. Every other
+    answer -- a catalogue that checks no keys, a vendor that cannot be reached,
+    a code nobody mapped -- is reported here and leaves the key worth storing.
+    """
+
+    ok: bool
+    status: str = Field(
+        description=(
+            "The probe's word: `valid`, `invalid_key`, `key_unchecked`, `no_credits`, `rate_limited`, "
+            "`network_error`, `proxy_unreachable`, `certificate_untrusted`, `no_probe_endpoint`, "
+            "`not_configured`, `unknown_provider`, `oauth_token_missing`, `http_NNN`; `unknown` when the probe "
+            "gave no word."
+        )
+    )
+    http_status: int | None = Field(None, description="The HTTP status the probe met, when it met one.")
+    models_count: int | None = Field(None, description="How many models the vendor listed, when it listed any.")
+    error: str | None = Field(None, description="What went wrong, when something did.")
+    refused: bool = Field(
+        description=(
+            "The vendor itself refused this key -- answered it with 401, or named it invalid -- so storing it "
+            "would store a key that cannot work. Every other answer leaves the key worth storing."
+        )
+    )
+
+
 class ModelRevealKeyParams(_Strict):
     slug: str
 
@@ -2261,6 +2300,14 @@ class ModelFetchModelsResult(_Strict):
     models: list[ModelCandidate]
     status: str
     error: str | None = None
+    refused: bool = Field(
+        default=False,
+        description=(
+            "With `verify`: the vendor itself refused the stored key -- answered it with 401, or named it invalid. "
+            "`invalid_key` alone is broader (a 403 maps to it too, and a 403 can mean a region, a plan or a proxy), "
+            "so a surface that says a key was rejected reads this, not the status."
+        ),
+    )
 
 
 class ModelAddModelParams(_Strict):
@@ -7069,6 +7116,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "model.save_key": (ModelSaveKeyParams, ModelSaveKeyResult),
     "model.disconnect": (ModelDisconnectParams, ModelDisconnectResult),
     "model.reveal_key": (ModelRevealKeyParams, ModelRevealKeyResult),
+    "model.check_key": (ModelCheckKeyParams, ModelCheckKeyResult),
     "model.add_model": (ModelAddModelParams, ModelAddModelResult),
     "model.add_models": (ModelAddModelsParams, ModelAddModelsResult),
     "model.set_fields": (ModelSetFieldsParams, ModelSetFieldsResult),

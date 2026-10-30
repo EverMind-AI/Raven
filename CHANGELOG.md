@@ -505,6 +505,19 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- A key the vendor refuses is no longer called connected. The settings page
+  and the first-run wizard ask the vendor about a key before storing it
+  (`model.check_key`): a key answered with 401, or named invalid, is refused
+  with the reason in the form and nothing is written, where before it was
+  stored, marked **Connected** and reported as rejected on the same row. A
+  stored key the vendor refuses when it is checked again (the row's Check or
+  Retry, or a connect) reads **Key rejected** on its row.
+  `raven onboard` and `raven provider test` confirm the key itself at the
+  vendor's key endpoint where the model list answers anyone (OpenRouter),
+  instead of reporting "Connected! (468 models available)" for a key the
+  vendor has never issued; a list that cannot confirm a key says so instead
+  of claiming it valid.
+
 - On native Windows a DAG node can read files by reference: `{{ ref:... }}`,
   `{{ ref_path:... }}` and a `{"file": ...}` input naming a file in the
   session's working directory or its sub-agent history. They were resolved by

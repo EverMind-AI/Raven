@@ -491,13 +491,15 @@ def _register_config_commands(app: typer.Typer) -> None:
 
         Does NOT consume inference quota — hits the provider's models metadata
         endpoint, which is free, fast, and tells you whether the key is valid,
-        has credit, and isn't rate-limited.
+        has credit, and isn't rate-limited. A vendor whose list answers anyone
+        (OpenRouter) is asked at its own key endpoint as well, so a 200 from
+        the list alone is never read as a valid key.
         """
         from raven.config.update_providers import test_provider as probe
 
         console.print(f"[dim]Pinging {name}/v1/models ...[/dim]")
         try:
-            result = probe(name, timeout_s=timeout)
+            result = probe(name, timeout_s=timeout, check_credential=True)
         except KeyError as exc:
             console.print(f"[red]✗[/red] {exc}")
             raise typer.Exit(1)
@@ -524,6 +526,12 @@ def _register_config_commands(app: typer.Typer) -> None:
                 "for another host, is the server's to fix"
             ),
         }
+        if result["status"] == "key_unchecked":
+            # Reached, but the list says nothing about the key and the vendor
+            # has no path that would: reported as that, not as valid.
+            console.print(f"[yellow]?[/yellow] {name} reached, key not confirmed: {result['error']}")
+            console.print("  [dim]Credentials are set; run a turn to exercise them.[/dim]")
+            return
         if result["status"] == "no_probe_endpoint":
             # Not a failure: this probe pings `/models`, and these vendors do not
             # publish one at an address we hold. Saying "failed" here told seven

@@ -244,6 +244,8 @@ MESSAGES: dict[str, str] = {
     "Importing...": "导入中...",
     "  [dim]This provider has no model list to fetch - offering the ones we know.[/dim]": "  [dim]该服务商没有可拉取的模型列表,先列出已知的。[/dim]",
     "  [dim]Couldn't reach the provider for its model list - offering the ones we know.[/dim]": "  [dim]未能向服务商拉取模型列表,先列出已知的。[/dim]",
+    "  [dim]Reached the provider; its model list answers without checking the key, so the key is not confirmed; connectivity is not tested (--skip-test).[/dim]": "  [dim]已连上服务商；它的模型列表不校验 Key，所以 Key 未经确认；连通性未测试（--skip-test）。[/dim]",
+    "  [dim]Reached the provider; its model list answers without checking the key, so the test message below is what confirms it.[/dim]": "  [dim]已连上服务商；它的模型列表不校验 Key，下面的测试消息才是确认它的一步。[/dim]",
     "Switch provider": "更换服务商",
     "Continue anyway": "仍然继续",
     "Pick a provider to manage:": "选择要管理的服务商:",

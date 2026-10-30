@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import typing
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Union
 from urllib.parse import urlparse
@@ -1167,6 +1168,41 @@ def list_provider_endpoints(name: str, *, config_path: Path | None = None) -> li
 # ---------------------------------------------------------------------------
 
 
+def _with_override(raw_section: dict[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
+    """``raw_section`` with ``override``'s fields in place of the stored ones.
+
+    The stored spelling is dropped as well as the schema's: the section model
+    reads both, and when both are present the serialized one (``apiKey``) wins
+    over the field name (``api_key``) -- so laying ``api_key`` over a section
+    that already holds ``apiKey`` would have judged the stored key, not the one
+    being tried. A ``None`` leaves the stored value alone, the way a form that
+    draws no field for it does.
+    """
+    merged = dict(raw_section)
+    for field, value in override.items():
+        if value is None:
+            continue
+        merged.pop(field, None)
+        merged.pop(to_camel(field), None)
+        merged[field] = value
+    return merged
+
+
+def credential_refused(result: Mapping[str, Any]) -> bool:
+    """Whether the vendor itself refused the credential this probe carried.
+
+    The one verdict that may hold a key back from being stored. A check can be
+    wrong in every other way -- a public catalogue answers anyone, a proxy or a
+    vendor that is down answers nothing -- and none of those is the key's
+    fault, so none of them refuses it. 401 is the vendor's own word for "not
+    this credential", and the 400 that `_refuses_the_key` reads is the vendor
+    naming the key. 403 is left out on purpose: vendors answer it for a
+    region, a plan or a permission as well, and a proxy answers it for
+    anything, so a key refused on 403 is reported and stored, not withheld.
+    """
+    return result.get("status") == "invalid_key" and result.get("http_status") in (400, 401)
+
+
 # Maps HTTP status → user-facing status keyword used by the CLI hint table.
 _HTTP_STATUS_MAP: dict[int, str] = {
     200: "valid",
@@ -1351,8 +1387,15 @@ def test_provider(
     transport: httpx.BaseTransport | None = None,
     full_catalogue: bool = False,
     check_credential: bool = False,
+    section_override: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Verify a provider's credentials via a free GET request to ``/v1/models``.
+
+    ``section_override`` lays the given fields (schema spellings: ``api_key``,
+    ``api_base``) over the stored section before anything is read off it, so a
+    credential a form holds and has not saved yet is judged exactly as the
+    stored one would be -- same address, same relay headers. A read either
+    way: nothing is written.
 
     ``full_catalogue`` asks for everything the provider serves rather than just
     enough to check the credential: some file their embedding and image models
@@ -1412,6 +1455,8 @@ def test_provider(
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
     raw_section = _raw_section(data, name)
+    if section_override:
+        raw_section = _with_override(raw_section, section_override)
     try:
         instance = cls.model_validate(raw_section)
     except ValidationError:

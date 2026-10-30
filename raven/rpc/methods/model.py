@@ -67,6 +67,7 @@ from raven.rpc.models import (
     ModelAddEndpointParams,
     ModelAddModelParams,
     ModelAddModelsParams,
+    ModelCheckKeyParams,
     ModelDisconnectParams,
     ModelEndpointsParams,
     ModelFetchModelsParams,
@@ -741,50 +742,81 @@ def _stated_overlay(parsed: "ModelAddModelParams") -> dict[str, object]:
     return stated
 
 
-async def model_fetch_models(params: dict) -> dict:
-    """What this provider can serve: the bundled catalogue, plus whatever it says.
+#: How long a credential check may take before the form gives up on a verdict.
+#: Shorter than a catalogue fetch: the person is holding a button, and a vendor
+#: that takes this long to answer has answered "cannot be reached" already.
+_CHECK_TIMEOUT_S = 10
 
-    Two sources, unioned, because they answer the same question with different
-    weaknesses. The registry ships with Raven and needs no credential, so there
-    is a list to pick from before a key is entered -- and something to show when
-    the vendor cannot be reached, where an empty list would claim it serves
-    nothing. The live call is current, and carries the models a registry refresh
-    has not caught up with.
 
-    The asking is ``config.update_providers.test_provider``, which is already
-    the one place that knows where each vendor's catalogue lives and what opens
-    it -- a Codex account's entitlements, a Copilot seat's exchanged token, an
-    OAuth resource URL, Anthropic's and Google's own header shapes, and the
-    OpenAI-compatible GET everything else answers. A second implementation here
-    would be a second set of addresses to keep current.
+async def model_check_key(params: dict) -> dict:
+    """What the vendor says about a credential before it is stored.
 
-    Not reaching the vendor is not an error to this method: no key configured is
-    the ordinary state of a provider a person is still setting up, and the
-    catalogue is exactly what they want to see. ``status`` says what happened so
-    a surface can word its note, and every row says which source it came from.
+    The same probe `model_fetch_models` runs with ``verify`` on a saved key,
+    run on the key a form holds: the stored section with these fields laid
+    over it, so a relay's headers and a stored address still apply. The config
+    is read and not written, whatever the answer; what the vendor said it
+    serves is remembered (``raven.providers.served_models``), as every ask is,
+    because this is the one ask a connect makes -- without it a valid connect
+    left the pickers on the bundled catalogue until an add-model sheet was
+    opened.
 
-    A read throughout -- nothing is written until a row is added.
+    ``refused`` is the vendor's own refusal (`credential_refused`), and it is
+    the only answer the page holds a key back on. Everything else -- a
+    catalogue that answers anyone, a vendor that is down, a code nobody mapped
+    -- is reported beside the key, which is stored: those are things that can
+    be wrong about the check, not about the key.
+    """
+    from raven.config.update_providers import credential_refused, test_provider
+
+    parsed = _parse(ModelCheckKeyParams, params)
+    slug = canonical_provider_name(parsed.slug)
+    override: dict[str, Any] = {}
+    if parsed.api_key:
+        override["api_key"] = parsed.api_key
+    if parsed.api_base:
+        override["api_base"] = parsed.api_base
+    # Off-thread, like the fetch: a round trip to the vendor while the loop
+    # may be carrying a token stream.
+    probe = await asyncio.to_thread(
+        test_provider,
+        slug,
+        timeout_s=_CHECK_TIMEOUT_S,
+        full_catalogue=True,
+        check_credential=True,
+        section_override=override,
+    )
+    if probe.get("ok"):
+        await _remember_served(slug, _served_rows(slug, probe))
+    http_status = probe.get("http_status")
+    models_count = probe.get("models_count")
+    error = probe.get("error")
+    return {
+        "ok": bool(probe.get("ok")),
+        "status": str(probe.get("status") or "unknown"),
+        "http_status": http_status if isinstance(http_status, int) else None,
+        "models_count": models_count if isinstance(models_count, int) else None,
+        "error": str(error) if error else None,
+        "refused": credential_refused(probe),
+    }
+
+
+def _served_rows(slug: str, probe: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """What ``slug`` can serve, as the picker's rows, from one probe's answer.
+
+    The vendor's live list unioned with the bundled catalogue (except for a
+    gateway that renames what it resells, which answers to its own spelling
+    alone), keyed by identity so the two spellings of one model are one row.
+    Shared by the catalogue read and the connect's check, which ask the vendor
+    the same question.
     """
     from raven.config.loader import load_config
-    from raven.config.update_providers import test_provider
     from raven.providers.catalog import describe
     from raven.providers.rates import resolve_context_window
     from raven.providers.registry import find_by_name
     from raven.providers.registry_data import catalogue_for, kind_of
     from raven.providers.wire import merge_key
 
-    parsed = _parse(ModelFetchModelsParams, params)
-    slug = canonical_provider_name(parsed.slug)
-
-    # Off-thread: this is a network round trip to somebody else's server, and
-    # the gateway's loop is carrying a token stream while it happens. Cheap when
-    # there is no credential to send -- the probe refuses before any socket.
-    probe = await asyncio.to_thread(
-        test_provider, slug, timeout_s=_FETCH_TIMEOUT_S, full_catalogue=True, check_credential=parsed.verify
-    )
-    asked = bool(probe.get("ok"))
     live = [m for m in (probe.get("model_ids") or []) if isinstance(m, str) and m]
-
     try:
         section = load_config().providers.get(slug)
     except Exception:
@@ -838,10 +870,60 @@ async def model_fetch_models(params: dict) -> dict:
             entry["context_window"] = window
         rows[key] = entry
 
-    if asked:
-        from raven.providers.served_models import remember
+    return rows
 
-        await asyncio.to_thread(remember, slug, {r["id"]: r["kind"] for r in rows.values() if r["source"] == "live"})
+
+async def _remember_served(slug: str, rows: dict[str, dict[str, Any]]) -> None:
+    """Record what the vendor just said it serves (``raven.providers.served_models``).
+
+    Every ask writes it -- the catalogue read, the connect's check -- so the
+    pickers list the live catalogue right after a connect without asking
+    again. Only the rows the vendor listed: the bundled ones are not its word.
+    """
+    from raven.providers.served_models import remember
+
+    await asyncio.to_thread(remember, slug, {r["id"]: r["kind"] for r in rows.values() if r["source"] == "live"})
+
+
+async def model_fetch_models(params: dict) -> dict:
+    """What this provider can serve: the bundled catalogue, plus whatever it says.
+
+    Two sources, unioned, because they answer the same question with different
+    weaknesses. The registry ships with Raven and needs no credential, so there
+    is a list to pick from before a key is entered -- and something to show when
+    the vendor cannot be reached, where an empty list would claim it serves
+    nothing. The live call is current, and carries the models a registry refresh
+    has not caught up with.
+
+    The asking is ``config.update_providers.test_provider``, which is already
+    the one place that knows where each vendor's catalogue lives and what opens
+    it -- a Codex account's entitlements, a Copilot seat's exchanged token, an
+    OAuth resource URL, Anthropic's and Google's own header shapes, and the
+    OpenAI-compatible GET everything else answers. A second implementation here
+    would be a second set of addresses to keep current.
+
+    Not reaching the vendor is not an error to this method: no key configured is
+    the ordinary state of a provider a person is still setting up, and the
+    catalogue is exactly what they want to see. ``status`` says what happened so
+    a surface can word its note, and every row says which source it came from.
+
+    A read throughout -- nothing is written until a row is added.
+    """
+    from raven.config.update_providers import credential_refused, test_provider
+
+    parsed = _parse(ModelFetchModelsParams, params)
+    slug = canonical_provider_name(parsed.slug)
+
+    # Off-thread: this is a network round trip to somebody else's server, and
+    # the gateway's loop is carrying a token stream while it happens. Cheap when
+    # there is no credential to send -- the probe refuses before any socket.
+    probe = await asyncio.to_thread(
+        test_provider, slug, timeout_s=_FETCH_TIMEOUT_S, full_catalogue=True, check_credential=parsed.verify
+    )
+    asked = bool(probe.get("ok"))
+    rows = _served_rows(slug, probe)
+    if asked:
+        await _remember_served(slug, rows)
 
     # By name, and stably: the order a vendor lists its catalogue in is not an
     # order anybody reads, and it changes between calls for some of them.
@@ -850,6 +932,9 @@ async def model_fetch_models(params: dict) -> dict:
         "models": ordered,
         "status": "ok" if asked else str(probe.get("status") or "not_asked"),
         "error": None if asked else (str(probe.get("error") or "") or None),
+        # The vendor's own refusal, the one verdict a surface may call "rejected";
+        # `invalid_key` alone also covers a 403, which is not that.
+        "refused": False if asked else credential_refused(probe),
     }
 
 
@@ -1031,6 +1116,7 @@ def register_model_methods(dispatcher: "Dispatcher", *, agent_loop_factory: "Age
     dispatcher.register("model.save_key", partial(model_save_key, agent_loop_factory=agent_loop_factory))
     dispatcher.register("model.disconnect", partial(model_disconnect, agent_loop_factory=agent_loop_factory))
     dispatcher.register("model.reveal_key", model_reveal_key)
+    dispatcher.register("model.check_key", model_check_key)
     dispatcher.register("model.fetch_models", model_fetch_models)
     dispatcher.register("model.add_model", model_add_model)
     dispatcher.register("model.add_models", model_add_models)
@@ -1044,6 +1130,7 @@ def register_model_methods(dispatcher: "Dispatcher", *, agent_loop_factory: "Age
 
 __all__ = [
     "model_options",
+    "model_check_key",
     "model_set_protocol",
     "model_save_key",
     "model_disconnect",

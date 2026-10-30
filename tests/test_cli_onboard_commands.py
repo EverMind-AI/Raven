@@ -4548,7 +4548,7 @@ def test_a_certificate_the_machine_does_not_trust_points_at_the_certificate_stor
     monkeypatch.setattr(
         update_providers,
         "test_provider",
-        lambda provider: {
+        lambda provider, **_: {
             "ok": False,
             "status": "certificate_untrusted",
             "error": "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate",
@@ -4576,7 +4576,7 @@ def test_a_refused_certificate_names_the_refusals_a_ca_does_not_fix(monkeypatch,
     monkeypatch.setattr(
         update_providers,
         "test_provider",
-        lambda provider: {
+        lambda provider, **_: {
             "ok": False,
             "status": "certificate_untrusted",
             "error": '"api.deepseek.com" certificate is not standards compliant',
@@ -8591,3 +8591,57 @@ def test_a_narrower_embedding_model_still_fails_the_wizard_check(monkeypatch: py
     monkeypatch.setattr(onboard_everos, "_probe_embedding_dim", lambda url, headers, model: 768)
 
     assert not onboard_everos._verify_embedding_dim(model="m", api_key="k", base_url="http://p", non_interactive=True)
+
+
+# ---------------------------------------------------------------------------
+# Step 1: the key itself is confirmed, not only the model list
+# ---------------------------------------------------------------------------
+
+
+def test_verify_provider_confirms_the_key_itself(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OpenRouter's list answers anyone; the probe is asked to check the key too."""
+    seen: dict[str, Any] = {}
+
+    def probe(name: str, **kwargs: Any) -> dict[str, Any]:
+        seen.update(kwargs)
+        return {"ok": True, "status": "valid", "models_count": 2, "model_ids": ["a", "b"], "elapsed_ms": 1}
+
+    monkeypatch.setattr("raven.config.update_providers.test_provider", probe)
+
+    assert onboard_commands._verify_provider("openrouter") == (True, "valid", ["a", "b"])
+    assert seen["check_credential"] is True
+
+
+def test_verify_provider_says_an_unconfirmed_key_is_unconfirmed(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A catalogue that checks no keys, on a vendor with no path that would.
+
+    Not a failure -- the list is real and the wizard goes on with it -- and not
+    "Connected!" either: the test message is the check that remains, and the
+    line says so. With ``--skip-test`` there is no such message, and the line
+    says that instead.
+    """
+
+    def probe(name: str, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "status": "key_unchecked",
+            "models_count": 2,
+            "model_ids": ["a", "b"],
+            "error": "this vendor's models endpoint answers without checking the key",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("raven.config.update_providers.test_provider", probe)
+
+    assert onboard_commands._verify_provider("custom") == (True, "unchecked", ["a", "b"])
+    out = " ".join(capsys.readouterr().out.split())
+    assert "Connected" not in out
+    assert "without checking the key" in out
+    assert "test message" in out
+
+    assert onboard_commands._verify_provider("custom", skip_test=True) == (True, "unchecked", ["a", "b"])
+    out = " ".join(capsys.readouterr().out.split())
+    assert "Connected" not in out
+    assert "--skip-test" in out
