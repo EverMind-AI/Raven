@@ -336,7 +336,18 @@ export function Waterfall(): JSX.Element {
   const [scrollTop, setScrollTop] = useState(0)
   const [rulerWidth, setRulerWidth] = useState(0)
   const [height, setHeight] = useState(0)
-  const [zoom, setZoom] = useState<{ axis: number; view: Viewport } | null>(null)
+  /* The reader's window and picked stretch, both in real time and both owned
+     by the conversation they were made on. A live session's axis grows with
+     every step that lands past its end, and a window kept in the axis's own
+     positions (or as fractions of the view) went stale with each one -- so it
+     was dropped, every few seconds, while the session the reader was watching
+     ran. In milliseconds they mean the same stretch on every axis of the same
+     conversation, and only a change of conversation, or the reader, drops them. */
+  const [zoom, setZoom] = useState<{ session: string | null; start: number; end: number } | null>(null)
+  const [picked, setPicked] = useState<{ a: number; b: number } | null>(null)
+  const sessionKey = store.get().sessionKey
+  const sessionRef = useRef(sessionKey)
+  sessionRef.current = sessionKey
   const observer = useRef<ResizeObserver | null>(null)
   const box = useRef<HTMLDivElement | null>(null)
   const island = useRef<HTMLDivElement | null>(null)
@@ -358,6 +369,7 @@ export function Waterfall(): JSX.Element {
      because React's own is passive and could not keep the page from scrolling. */
   const viewRef = useRef<Viewport>({ from: 0, to: 0 })
   const fullRef = useRef(0)
+  const axisRef = useRef<TimeAxis | null>(null)
   useEffect(() => {
     const el = island.current
     const scroller = box.current
@@ -386,19 +398,23 @@ export function Waterfall(): JSX.Element {
       const current = viewRef.current
       const span = current.to - current.from
       /* Keep the ref current as we go: a trackpad delivers several wheel events
-         per frame, and each must build on the one before it. */
+         per frame, and each must build on the one before it. The window is
+         kept in real time (above); a zoom or a pan drops the picked stretch. */
+      const keep = (view: Viewport): void => {
+        const axisNow = axisRef.current
+        viewRef.current = view
+        if (axisNow === null) return
+        setZoom({ session: sessionRef.current, start: axisNow.unproject(view.from), end: axisNow.unproject(view.to) })
+        setPicked(null)
+      }
       if (panning) {
         const shift = (span * event.deltaY) / Math.max(1, rect.width)
-        const view = clampViewport({ from: current.from + shift, to: current.to + shift }, fullRef.current)
-        viewRef.current = view
-        setZoom({ axis: fullRef.current, view })
+        keep(clampViewport({ from: current.from + shift, to: current.to + shift }, fullRef.current))
         return
       }
       const anchor = current.from + span * Math.min(1, Math.max(0, at))
       const factor = Math.max(0.5, Math.min(2, Math.exp(-event.deltaY * 0.0015)))
-      const view = zoomViewport(current, factor, anchor, fullRef.current)
-      viewRef.current = view
-      setZoom({ axis: fullRef.current, view })
+      keep(zoomViewport(current, factor, anchor, fullRef.current))
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
@@ -457,21 +473,34 @@ export function Waterfall(): JSX.Element {
     axes.current = { index, built: shown.length, now }
     return index.axis()
   }, [shown, grownFrom, now, live])
-  /* A window belongs to the axis it was cut from; a different conversation has
-     a different length, and the old window means nothing on it. */
-  const view: Viewport = zoom !== null && zoom.axis === axis.length && zoom.view.to > zoom.view.from
-    ? zoom.view
-    : { from: 0, to: axis.length }
+  /* The window, projected onto this axis: a different conversation's window
+     means nothing here, and is not used. */
+  const view: Viewport = (() => {
+    if (zoom === null || zoom.session !== sessionKey) return { from: 0, to: axis.length }
+    const from = axis.project(zoom.start)
+    const to = axis.project(zoom.end)
+    return to > from ? clampViewport({ from, to }, axis.length) : { from: 0, to: axis.length }
+  })()
   viewRef.current = view
   fullRef.current = axis.length
-  /* A different conversation has a different axis; the old window means nothing. */
-
-  useEffect(() => { setZoom(null) }, [axis.length])
+  axisRef.current = axis
+  useEffect(() => {
+    setZoom(null)
+    setPicked(null)
+  }, [sessionKey])
   /* The picked stretch is owned here: the axis draws it, and the rows below
-     are filtered to it. It is a fraction of the viewport it was drawn on, so a
-     zoom or a pan drops it, and Escape drops it too. */
-  const [picked, setPicked] = useState<Pick | null>(null)
-  useEffect(() => { setPicked(null) }, [view.from, view.to])
+     are filtered to it. The ruler speaks in fractions of the view it is drawn
+     over, so the stretch is handed to it that way and taken back in real time;
+     Escape drops it too. */
+  const viewSpan = view.to - view.from
+  const pickOnView: Pick | null = picked === null || !(viewSpan > 0)
+    ? null
+    : { from: (axis.project(picked.a) - view.from) / viewSpan, to: (axis.project(picked.b) - view.from) / viewSpan }
+  const pickFromView = (next: Pick | null): void => {
+    setPicked(next === null || !(viewSpan > 0)
+      ? null
+      : { a: axis.unproject(view.from + viewSpan * next.from), b: axis.unproject(view.from + viewSpan * next.to) })
+  }
   const held = picked !== null
   useEffect(() => {
     if (!held) return
@@ -479,13 +508,10 @@ export function Waterfall(): JSX.Element {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [held])
-  const range = useMemo(() => {
-    if (picked === null) return null
-    const span = view.to - view.from
-    const a = axis.unproject(view.from + span * Math.min(picked.from, picked.to))
-    const b = axis.unproject(view.from + span * Math.max(picked.from, picked.to))
-    return { start: Math.min(a, b), end: Math.max(a, b) }
-  }, [picked, view.from, view.to, axis])
+  const range = useMemo(
+    () => (picked === null ? null : { start: Math.min(picked.a, picked.b), end: Math.max(picked.a, picked.b) }),
+    [picked],
+  )
   /* A filtered list is a new list: it starts at its own beginning, not at
      whatever scroll offset the full one happened to be at. */
   useEffect(() => {
@@ -814,7 +840,7 @@ export function Waterfall(): JSX.Element {
       </div>
       <OverviewLanes waterfall={waterfall} axis={axis} viewport={view} />
       <div className="trajectory-wf-head">
-        <Ticks axis={axis} view={view} pick={picked} onPick={setPicked} count={tickCount} onWidth={setRulerWidth} />
+        <Ticks axis={axis} view={view} pick={pickOnView} onPick={pickFromView} count={tickCount} onWidth={setRulerWidth} />
       </div>
       {/* A tree, as the old list was a listbox: the box holds the focus, the
           arrows move the selection, and the selected row is its active
@@ -822,7 +848,7 @@ export function Waterfall(): JSX.Element {
       <div className="trajectory-list trajectory-wf-scroll" data-thumb="keep" tabIndex={0} ref={attach}
         onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
         onKeyDown={onKeyDown}
-        onDoubleClick={() => setZoom(null)}
+        onDoubleClick={() => { setZoom(null); setPicked(null) }}
         role="tree" aria-label={t('gui.trajectory.agents')}
         aria-activedescendant={selectedAt >= first && selectedAt < last ? rowId(selectedAt) : undefined}>
         <div className="trajectory-wf-rows" role="none" style={{ height: rows.length * ROW_HEIGHT }}>

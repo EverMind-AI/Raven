@@ -434,6 +434,70 @@ it('moves one edge of the picked interval from its handle', async () => {
   expect(count('[data-row="turn"]')).toBe(1)
 })
 
+describe('a live session growing under the reader', () => {
+  const grow = (entry: TrajectoryEntry): void => {
+    act(() => {
+      store.applyChanges({
+        epoch: 'e1', from_revision: 100, to_revision: 101, upserts: [entry], removed: [], has_more: false,
+        reset_required: false, index_state: READY,
+      })
+    })
+  }
+  const firstLabel = (): string | null => document.querySelector('.trajectory-ruler b[data-first]')?.textContent ?? null
+  const zoomIn = (): void => {
+    const box = document.querySelector('.trajectory-list') as HTMLElement
+    act(() => { box.dispatchEvent(wheel({ deltaY: -240, clientX: 100, ctrlKey: true, bubbles: true, cancelable: true })) })
+  }
+  const pickOnRuler = (): void => {
+    const ruler = document.querySelector('.trajectory-ruler') as HTMLElement
+    Object.defineProperty(ruler, 'getBoundingClientRect', {
+      value: () => ({ left: 100, top: 0, right: 500, bottom: 56, width: 400, height: 56, x: 100, y: 0, toJSON: () => ({}) }),
+      configurable: true,
+    })
+    fireEvent.pointerDown(ruler, { clientX: 200, clientY: 10, button: 0, pointerId: 1 })
+    fireEvent.pointerMove(ruler, { clientX: 350, clientY: 10, pointerId: 1 })
+    fireEvent.pointerUp(ruler, { clientX: 350, clientY: 10, pointerId: 1 })
+  }
+
+  it('keeps the reader’s zoom when a step lands past the session’s end', async () => {
+    await draw([E('m1', 0), E('m2', 30)])
+    zoomIn()
+    const zoomed = firstLabel()
+    expect(zoomed).not.toBeNull()
+    grow(E('m3', 40))
+    expect(store.get().entries).toHaveLength(3)
+    expect(firstLabel()).toBe(zoomed)
+  })
+
+  it('keeps the picked interval when a step lands past the session’s end', async () => {
+    await draw([E('m1', 0), E('m2', 30)])
+    pickOnRuler()
+    expect(document.querySelectorAll('.trajectory-ruler-pick')).toHaveLength(1)
+    grow(E('m3', 40))
+    expect(document.querySelectorAll('.trajectory-ruler-pick')).toHaveLength(1)
+  })
+
+  it('drops the picked interval when the reader zooms', async () => {
+    await draw([E('m1', 0), E('m2', 30)])
+    pickOnRuler()
+    zoomIn()
+    expect(document.querySelectorAll('.trajectory-ruler-pick')).toHaveLength(0)
+  })
+
+  it('drops the zoom and the pick when the conversation changes', async () => {
+    await draw([E('m1', 0), E('m2', 30)])
+    zoomIn()
+    pickOnRuler()
+    rows = [E('n1', 0), E('n2', 30)]
+    await act(async () => {
+      store.sessionChanged('gui:b')
+      await store.load()
+    })
+    expect(firstLabel()).toBeNull()
+    expect(document.querySelectorAll('.trajectory-ruler-pick')).toHaveLength(0)
+  })
+})
+
 it('keeps only what was running inside the picked interval', async () => {
   await draw([
     E('a', 0, { turn_span_id: 'T1' }),
