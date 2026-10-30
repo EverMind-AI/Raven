@@ -204,9 +204,11 @@ def _stop_viewer() -> None:
 def _resolve_node() -> str:
     from raven.cli.tui_commands import find_node
 
-    node, version = find_node()
-    # find_node returns the best node it saw even below the minimum, so the
-    # version check is the caller's -- the TUI's own launch does the same.
+    # The viewer's floor is stricter than the TUI's, so the search has to use
+    # it: a PATH node the TUI accepts would otherwise hide a zstd-capable one
+    # later in the order. find_node still returns the best node it saw when
+    # none qualifies, so the version check stays the caller's.
+    node, version = find_node(_node_supports_zstd)
     if not node or version is None or not _node_supports_zstd(version):
         console.print(
             "[red]Node with zstd support not found (22.15+, or 23.8+).[/red] The tracing dashboard reads "

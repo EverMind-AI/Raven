@@ -401,10 +401,10 @@ def test_a_below_minimum_node_is_refused(monkeypatch):
 
     import raven.cli.tracing_commands as tc
 
-    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda: ("/usr/bin/node", (22, 14, 0)))
+    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda *_accept: ("/usr/bin/node", (22, 14, 0)))
     with pytest.raises(typer.Exit):
         tc._resolve_node()
-    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda: ("/usr/bin/node", (22, 15, 0)))
+    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda *_accept: ("/usr/bin/node", (22, 15, 0)))
     assert tc._resolve_node() == "/usr/bin/node"
 
 
@@ -415,11 +415,39 @@ def test_node_23_before_23_8_is_refused(monkeypatch):
 
     import raven.cli.tracing_commands as tc
 
-    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda: ("/usr/bin/node", (23, 0, 0)))
+    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda *_accept: ("/usr/bin/node", (23, 0, 0)))
     with pytest.raises(typer.Exit):
         tc._resolve_node()
-    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda: ("/usr/bin/node", (23, 8, 0)))
+    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda *_accept: ("/usr/bin/node", (23, 8, 0)))
     assert tc._resolve_node() == "/usr/bin/node"
+
+
+def test_a_zstd_node_behind_an_older_node_on_path_is_chosen(tmp_path, monkeypatch):
+    """find_node stops at the first node the TUI accepts (22.0); a PATH node
+    without zstd must not hide the installer's newer private runtime."""
+    import subprocess
+
+    from raven.cli import tui_commands
+
+    exe = "node.exe" if tui_commands._is_windows() else "node"
+    on_path = tmp_path / "bin" / exe
+    runtime_dir = tmp_path / "home" / "runtime" / "node-v22.20.0"
+    managed = runtime_dir / exe if tui_commands._is_windows() else runtime_dir / "bin" / exe
+    for binary in (on_path, managed):
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        binary.write_text("")
+    versions = {str(on_path): "v22.12.0", str(managed): "v22.20.0"}
+
+    def fake_run(argv, **_kwargs):
+        return subprocess.CompletedProcess(argv, 0, stdout=f"{versions[argv[0]]}\n", stderr="")
+
+    monkeypatch.setattr(tui_commands.subprocess, "run", fake_run)
+    monkeypatch.delenv("RAVEN_NODE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setenv("PATH", str(on_path.parent))
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+
+    assert tc._resolve_node() == str(managed)
 
 
 def _plain_blob_with_link(state_dir: Path, text: str) -> tuple[Path, Path]:

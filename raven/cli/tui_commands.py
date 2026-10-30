@@ -23,7 +23,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 import typer
 
@@ -128,8 +128,17 @@ def _is_windows() -> bool:
     return os.name == "nt"
 
 
-def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
-    """Find a usable node executable (>= 22).
+def _meets_tui_floor(version: Tuple[int, int, int]) -> bool:
+    return version >= _MIN_NODE_VERSION
+
+
+def find_node(
+    accept: Callable[[Tuple[int, int, int]], bool] = _meets_tui_floor,
+) -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
+    """Find a usable node executable (>= 22, or whatever ``accept`` says).
+
+    ``accept`` lets a caller with a stricter floor keep searching past a node
+    the TUI would take, instead of being handed that one and refusing it.
 
     Returns (path, version_tuple) or (None, None) if not found.
     """
@@ -208,7 +217,7 @@ def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
             version = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
         except (subprocess.SubprocessError, FileNotFoundError, OSError):
             continue
-        if version >= _MIN_NODE_VERSION:
+        if accept(version):
             return (node_path, version)
         if best_below_min is None or version > best_below_min[1]:
             best_below_min = (node_path, version)
