@@ -166,6 +166,20 @@ def test_prune_drops_only_directories_past_the_window(tmp_path: Path) -> None:
     assert (recent / "a.jsonl").is_file()
 
 
+def test_the_default_retention_is_ninety_days(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    inside = tmp_path / (now - timedelta(days=89)).strftime("%Y-%m-%d")
+    outside = tmp_path / (now - timedelta(days=91)).strftime("%Y-%m-%d")
+    for day in (inside, outside):
+        day.mkdir(parents=True)
+        (day / "a.jsonl").write_text("{}\n", encoding="utf-8")
+
+    prune(tmp_path)
+
+    assert (inside / "a.jsonl").is_file()
+    assert not outside.exists()
+
+
 def test_prune_survives_a_missing_root(tmp_path: Path) -> None:
     prune(tmp_path / "never-created")
 
@@ -173,7 +187,7 @@ def test_prune_survives_a_missing_root(tmp_path: Path) -> None:
 def test_opening_a_journal_prunes_the_old_ones(tmp_path: Path) -> None:
     """The prune runs where a new connection is opened, because that is the one
     moment the code is guaranteed to reach on a long-running host."""
-    stale = tmp_path / (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+    stale = tmp_path / (datetime.now(timezone.utc) - timedelta(days=91)).strftime("%Y-%m-%d")
     stale.mkdir(parents=True)
     (stale / "a.jsonl").write_text("{}\n", encoding="utf-8")
 
