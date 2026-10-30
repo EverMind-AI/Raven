@@ -31,6 +31,10 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                      and still reports ``stopReason: end_turn``, with the real
                      reason on stderr. This is the shape measured on a live
                      ``hermes acp`` whose provider rejected the credential.
+- ``empty_turn_no_tokens`` - like ``empty_turn``, but the answer also reports
+                     zero tokens and says nothing on stderr: the shape measured
+                     on a live ``opencode acp`` whose inference endpoint refused
+                     the call and whose agent swallowed the refusal.
 - ``failed_call``  - like ``ok``, but the tool call answers ``status: "failed"``
                      and the turn goes on to say something after it. A run that
                      failed a call and still finished, which is the shape a
@@ -671,6 +675,12 @@ def handle_prompt(request_id, params) -> None:
     if MODE == "empty_turn":
         print("provider rejected the credential: HTTP 401", file=sys.stderr, flush=True)
         ok(request_id, {"stopReason": "end_turn"})
+        return
+    if MODE == "empty_turn_no_tokens":
+        # The shape measured on a live opencode: the turn comes back empty and
+        # reports zero tokens, which says the model call never ran -- where the
+        # refusal was swallowed by the agent, nothing on stderr said so.
+        ok(request_id, {"stopReason": "end_turn", "usage": {"totalTokens": 0, "inputTokens": 0, "outputTokens": 0}})
         return
     update(session_id, {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "thinking"}})
     # The shape measured on claude-agent-acp and opencode alike: the opening

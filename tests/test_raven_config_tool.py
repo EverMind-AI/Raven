@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -1128,6 +1129,65 @@ async def test_an_agent_that_does_not_answer_its_test_is_reported_with_what_to_d
         and "Never read, copy or test a key yourself" in reply
         and "three have not told you why" in reply
     )
+
+
+def _run_command(lines: list[str]) -> list[str]:
+    """The command in a "Run `...`" guidance line, split as the reader's host splits it.
+
+    The hint is built with ``command_quote``, which leaves a safe id bare on
+    POSIX and wraps it in double quotes on Windows; asserting the argv is the
+    only form both spellings satisfy.
+    """
+    line = next(line for line in lines if line.startswith("- Run `"))
+    return shlex.split(line.split("`")[1])
+
+
+def test_the_next_step_for_an_opencode_row_runs_the_model_its_row_names() -> None:
+    """``DIAGNOSE_HINTS`` is a template, and raven_config read it as a finished command.
+
+    The settings page expands the table through ``diagnose_hint_for``; this
+    reader took the raw string, so an OpenCode row that ended its turn empty
+    was told to run ``opencode run{model} hi`` -- no command at all.
+    """
+    from raven.agent.tools.raven_config import _what_it_needs
+
+    pinned = _what_it_needs(
+        "opencode",
+        {"model": "opencode/big-pickle"},
+        remedy=None,
+        detail="acp agent 'OpenCode' ended its turn with no content",
+        model="add again",
+    )
+    joined = "\n".join(pinned)
+    assert "{" not in joined
+    assert _run_command(pinned) == ["opencode", "run", "--model", "opencode/big-pickle", "hi"]
+
+    plain = _what_it_needs("opencode", {}, remedy=None, detail="ended its turn with no content", model="add again")
+    assert _run_command(plain) == ["opencode", "run", "hi"]
+
+
+@pytest.mark.asyncio
+async def test_adding_an_opencode_row_with_a_model_names_that_model_in_the_next_step(config_file):
+    """The row is not in the roster yet, so the model exists only in add's params.
+
+    Dropping it told the model to run the agent's default turn -- a different
+    question from the one the failed add asked, and one whose answer can hide
+    the cause.
+    """
+    refusal = RuntimeError(
+        "sub-agent 'OpenCode' did not answer a test message, so it was not added: acp agent 'OpenCode' ended "
+        "its turn with no content; stderr tail: <empty>"
+    )
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"subagents.add": refusal, "subagents.list": _roster()}))
+    reply = await _run(
+        tool,
+        action="add",
+        path="subagents",
+        value='{"preset": "opencode", "model": "opencode/big-pickle"}',
+    )
+    assert "opencode run{model} hi" not in reply
+    assert _run_command(reply.splitlines()) == ["opencode", "run", "--model", "opencode/big-pickle", "hi"]
 
 
 class _Refused(RuntimeError):

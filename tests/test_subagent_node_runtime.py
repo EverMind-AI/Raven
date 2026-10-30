@@ -216,7 +216,14 @@ async def test_the_test_button_names_an_old_node_the_way_the_connect_does(tmp_pa
 
     async def _refused(cfg: object) -> object:
         detail = f"handshake failed: {_DIED}; stderr: at async ModuleJob.run"
-        return SimpleNamespace(usable=False, needs_auth=False, unfetched=False, detail=detail, available_models=[])
+        return SimpleNamespace(
+            usable=False,
+            needs_auth=False,
+            unfetched=False,
+            detail=detail,
+            available_models=[],
+            agent_version="",
+        )
 
     monkeypatch.setattr(probe_mod, "record_capabilities", _refused)
     result = await probe_mod.run_test(_qwen(_installed(tmp_path, "18.20.8")), source="config")

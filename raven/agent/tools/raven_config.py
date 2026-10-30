@@ -32,6 +32,7 @@ import difflib
 import json
 import re
 from collections.abc import Awaitable, Callable
+from types import SimpleNamespace
 from typing import Any
 
 from loguru import logger
@@ -258,7 +259,7 @@ def _what_it_needs(
     machine's id -- but a sign-in or an install is the user's, in a terminal of
     their own on it.
     """
-    from raven.agent.subagent.presets import DIAGNOSE_HINTS
+    from raven.agent.subagent.presets import diagnose_hint_for
 
     if machine:
         lines = [
@@ -293,7 +294,7 @@ def _what_it_needs(
             "one; the user confirms. Then retry."
         ]
     else:
-        run = DIAGNOSE_HINTS.get(preset)
+        run = diagnose_hint_for(SimpleNamespace(preset=preset, model=row.get("model")))
         lines = [
             f"- Run `{run}` with exec; it prints the answer its model provider gave."
             if run
@@ -1282,7 +1283,7 @@ class RavenConfigTool(Tool):
                     row = row | {"model_choices": [{"value": m} for m in refusal["models"]]}
                 needs = _what_it_needs(
                     str(params.get("preset") or ""),
-                    row,
+                    row | {"model": params.get("model") or row.get("model")},
                     remedy=remedy if isinstance(remedy, dict) else None,
                     detail=text,
                     model=f"add with {json.dumps(again, ensure_ascii=False)}",

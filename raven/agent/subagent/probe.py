@@ -47,6 +47,7 @@ from raven.agent.subagent.presets import (
     sign_in_hint_for,
     third_party_subagent_presets,
     upgrade_hint_for,
+    version_gap_for,
 )
 from raven.agent.subagent.probe_state import LastTest, Remedy
 from raven.utils.commands import command_argv
@@ -461,15 +462,38 @@ _EMPTY_TURN = re.compile(r"ended its turn with no content")
 
 
 def _silent_detail(said: str, run: str) -> str:
-    """The sentence for an agent that outlasted the wait saying nothing -- and how to make it talk."""
-    return (
-        f"{said}: it kept working and said nothing, which is how it waits out a model provider that "
+    """The sentence for an agent that outlasted the wait saying nothing -- and how to make it talk.
+
+    The tail is composed first and ``said`` gets what is left of the cap, so the
+    command a reader has to run is never what the cap cuts off.
+    """
+    tail = (
+        ": it kept working and said nothing, which is how it waits out a model provider that "
         f"keeps refusing it (a spent quota, a rate limit, an unreachable host); run `{run}` in a terminal, "
-        f"which prints the reason within a few minutes"
-    )[:_DETAIL_CAP]
+        "which prints the reason within a few minutes"
+    )
+    return said[: max(_DETAIL_CAP - len(tail), 0)].rstrip() + tail
 
 
-def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy | None] | None:
+def _floor_note(cfg: Any, version: str) -> str:
+    """What this row's agent is too old for, when the build that answered is under a floor.
+
+    Empty when there is no floor for this agent, or when the build is at or above
+    it. What it states is a fact about the build, not the cause of the refusal:
+    only the agent's own provider can say what refused the turn, and the command
+    beside this note runs that turn.
+    """
+    gap = version_gap_for(cfg, version)
+    if gap is None:
+        return ""
+    name = str(getattr(cfg, "name", "") or "this agent")
+    return (
+        f"; {name} is {version}, and {gap.what} ({gap.measured}), so upgrade it (`{gap.upgrade}`) "
+        f"and connect again if that is what refused the turn"
+    )
+
+
+def _process_refusal(cfg: Any, shown: str, version: str = "") -> tuple[str, Remedy | None] | None:
     """A launch or a wait that failed without the agent answering, when there is evidence of which.
 
     An exit carries the agent's own last words on stderr; a flag it does not know
@@ -520,11 +544,18 @@ def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy | None] | None:
         if run:
             return _silent_detail(shown, run), Remedy("silent", run)
     if _EMPTY_TURN.search(shown) and (run := diagnose_hint_for(cfg)):
-        return (
-            f"{shown}: it ended the turn without a reply, which is how it relays a model call its provider "
-            f"refused (a key, a model, a quota), and its stderr warnings are usually unrelated; run `{run}`, "
-            f"which prints the provider's answer"
-        )[:_DETAIL_CAP], Remedy("silent", run)
+        # The credential check, as its own clause: an agent that defers its
+        # credential to the first model call opens a session happily and fails
+        # afterwards, so this is the one class Raven cannot see and the one the
+        # agent's own command settles.
+        hint = sign_in_hint_for(cfg)
+        checked = f"; `{hint.check}` shows whether it is signed in" if hint and hint.check else ""
+        tail = (
+            ": it ended the turn without a reply, which is how it relays a model call its provider "
+            "refused (a key, a model, a quota), and its stderr warnings are usually unrelated"
+            f"{_floor_note(cfg, version)}{checked}; run `{run}`, which prints the provider's answer"
+        )
+        return (shown[: max(_DETAIL_CAP - len(tail), 0)].rstrip() + tail), Remedy("silent", run)
     if getattr(cfg, "preset", None) in {"grok", "github_copilot"} and "initialize timed out" in shown:
         return (f"its ACP server did not start; connect again. It said: {shown}")[:_DETAIL_CAP], None
     return None
@@ -996,6 +1027,24 @@ def remote_check_handle() -> str:
     return remote.CHECK_HANDLE
 
 
+def _version_in_chain(exc: BaseException) -> str:
+    """The handshake version on ``exc`` or the first of its causes that carries one.
+
+    A wrapper states its own reason and re-raises the failure under it
+    (``McpDispatchError`` for a withheld MCP grant), so the version sits one
+    level down and a top-level read finds nothing.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        version = str(getattr(current, "agent_version", "") or "")
+        if version:
+            return version
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return ""
+
+
 def _ping_refusal(cfg: Any, exc: BaseException) -> tuple[str, Remedy | None]:
     """What a ping that raised is reported as, and the fix when one is known.
 
@@ -1012,7 +1061,10 @@ def _ping_refusal(cfg: Any, exc: BaseException) -> tuple[str, Remedy | None]:
         text, remedy = _refusal(cfg, *_said(exc))
         if remedy is not None:
             return text, remedy
-        return _process_refusal(cfg, str(exc)) or (text, None)
+        # The version the agent answered the handshake with, when the failure
+        # carried one: it is the build that was asked, and a floor is about a
+        # build.
+        return _process_refusal(cfg, str(exc), _version_in_chain(exc)) or (text, None)
     shipped = _shipped_command(cfg)
     run = f"`{shipped}`" if shipped else "this agent's launch command"
     advice = f"connect again, or run {run} once in a terminal to fetch it with no time limit"
@@ -1273,7 +1325,10 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
         elif snapshot.unfetched:
             detail, remedy = snapshot.detail, Remedy("download", _shipped_command(cfg))
         else:
-            read = await asyncio.to_thread(_process_refusal, cfg, snapshot.detail)
+            # The snapshot's version is the one this handshake measured, so it
+            # is the build that was asked -- the same fact the connect reads off
+            # the failure it raises.
+            read = await asyncio.to_thread(_process_refusal, cfg, snapshot.detail, snapshot.agent_version)
             detail, remedy = read or (snapshot.detail, None)
         return TestResult(cfg.name, source, "acp", False, detail, reply, elapsed(), remedy)
     answered = await ping_agent(cfg)
