@@ -2204,6 +2204,24 @@ def test_a_span_that_only_thought_has_no_empty_output_row(state):
     assert "llm.output" not in kinds
 
 
+def test_a_span_that_only_thought_is_still_charged_its_time(state):
+    """With no output row, the thinking row carries the span's duration.
+
+    Otherwise the call's time is charged to no entry and every row of it reads
+    as unknown timing -- for a main-loop call that reasoned and answered
+    nothing, which is exactly the call an empty reply is debugged from.
+    """
+    attrs = _llm_attrs(state, "think-only", _messages("q"), {"content": "", "reasoning_content": "hmm"})
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=10),
+        _span("t", "think-only", "llm.call", parent="turn", start=1, end=6, attrs=attrs),
+    ]
+    entries = [e for e in tent.project_entries(spans, state=state, read=True).entries if e.span_id == "think-only"]
+    thinking = next(e for e in entries if e.kind == "llm.thinking")
+    assert (thinking.charged_ms, thinking.timing_basis) == (5000, "span_full")
+    assert {e.duration_owner for e in entries} == {thinking.entry_id}
+
+
 def test_a_call_that_reasoned_without_returning_the_words_says_so():
     """The responses protocol counts reasoning tokens and hands back no text."""
     from raven.trajectory import details
