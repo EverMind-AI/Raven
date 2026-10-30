@@ -480,6 +480,10 @@ def _owner_slot(records: Sequence[dict[str, Any]]) -> str | None:
             return slot
     if SLOT_ERROR in slots:
         return SLOT_ERROR
+    # A call that only thought writes no output row (conversation._emit_llm):
+    # its thinking is all it produced, so it carries the call's time.
+    if SLOT_THINKING in slots:
+        return SLOT_THINKING
     single = [slot for slot in slots if slot in _SINGLE_EVENT_SLOTS]
     if single:
         return single[0]
