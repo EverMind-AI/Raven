@@ -295,6 +295,55 @@ class TestTheHubSwitch:
         live = self._live(tmp_path, {"skillForge": {"router": {"hub": {"endpoint": 7}}}})
         assert skill_hub_enabled(live) is False
 
+    @pytest.mark.parametrize(
+        ("payload", "on"),
+        [
+            ({"skillForge": {"router": {"hub": {"endpoint": "https://hub.test", "prefetchBodies": 1}}}}, True),
+            ({"skill_forge": {"router": {"hub": {"endpoint": "https://hub.test", "prefetch_bodies": 1}}}}, True),
+            ({"skillRouter": {"hub": {"endpoint": "https://legacy.test", "prefetchBodies": 1}}}, True),
+            ({"skill_router": {"hub": {"endpoint": "https://legacy.test"}}}, True),
+            ({"skillRouter": {"hub": {"endpoint": "https://legacy.test", "enabled": False}}}, False),
+            (
+                {
+                    "skillRouter": {"hub": {"endpoint": "https://legacy.test"}},
+                    "skillForge": {"router": {"hub": {"enabled": False}}},
+                },
+                False,
+            ),
+        ],
+    )
+    def test_a_shape_the_loader_migrates_reads_like_the_loader(self, tmp_path: Path, payload: dict, on: bool) -> None:
+        """The loader rewrites these shapes in memory only -- ``_persist_migrations``
+        never writes them back -- so the file keeps them for good, and a reader
+        of the raw file that skips the migration turns off a Hub the runtime built."""
+        from raven.config.raven import load_raven_config
+
+        path = tmp_path / "config.json"
+        _write(path, payload)
+        hub = load_raven_config(path).skill_forge.router.hub
+
+        assert (bool(hub.endpoint) and hub.enabled) is on
+        assert skill_hub_enabled(LiveConfig(path)) is on
+
+    def test_the_migration_runs_once_per_change_of_the_file(self, tmp_path: Path, monkeypatch) -> None:
+        """Asked before every Hub search and tool call: the copy-and-migrate is
+        paid when the bytes change, not per ask."""
+        import raven.config.loader as loader
+
+        real = loader._migrate_config
+        calls: list[int] = []
+        monkeypatch.setattr(loader, "_migrate_config", lambda data, **kw: calls.append(1) or real(data, **kw))
+        path = tmp_path / "config.json"
+        _write(path, {"skillRouter": {"hub": {"endpoint": "https://legacy.test"}}})
+        live = LiveConfig(path)
+
+        assert [skill_hub_enabled(live) for _ in range(3)] == [True, True, True]
+        assert len(calls) == 1
+
+        _write(path, {"skillRouter": {"hub": {"endpoint": "https://legacy.test", "enabled": False}}})
+        assert skill_hub_enabled(live) is False
+        assert len(calls) == 2
+
 
 class TestThePlaybookSwitch:
     """``playbooks.disabled`` has one spelling and one reader, and is read live

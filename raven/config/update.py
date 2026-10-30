@@ -20,7 +20,7 @@ from loguru import logger
 from pydantic.alias_generators import to_camel
 
 from raven.config.keys import key_as_written
-from raven.config.live import hub_source_on
+from raven.config.live import skill_hub_on
 from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import CronConfig
 from raven.utils.atomic_io import atomic_update
@@ -276,30 +276,39 @@ def set_skill_blocked(
 
 
 def _skill_hub_block(data: dict[str, Any]) -> dict[str, Any]:
-    """The ``hub`` table under ``skillForge.router``, creating missing levels.
+    """The ``hub`` table the loader reads the Skill Hub from, creating missing levels.
 
     Every skill-hub writer goes through this so they agree on the two edge
     cases: a null top-level block means "unset" (the loader drops it), while a
     null ``router`` or ``hub`` is a schema violation and is refused rather
     than repaired. A file spelling the block ``skill_forge`` is updated in
     place rather than gaining a second camelCase block beside it.
+
+    A legacy top-level ``skillRouter`` is the router while the ``skillForge``
+    block has none of its own: the loader nests it there in memory and never
+    writes the move back, so creating ``skillForge.router`` instead would hide
+    it -- endpoint and key included -- from the next load.
     """
     sf_key = key_as_written(data, "skillForge", top_level=True)
     section = data.get(sf_key)
-    if section is None:
-        section = data[sf_key] = {}
-    elif not isinstance(section, dict):
+    if section is not None and not isinstance(section, dict):
         raise ValueError(f"{sf_key} must be an object or null")
-    if "router" not in section:
-        section["router"] = {}
-    router = section["router"]
+    legacy_key = key_as_written(data, "skillRouter", top_level=True)
+    if data.get(legacy_key) is not None and (section is None or "router" not in section):
+        router, where = data[legacy_key], legacy_key
+    else:
+        if section is None:
+            section = data[sf_key] = {}
+        if "router" not in section:
+            section["router"] = {}
+        router, where = section["router"], f"{sf_key}.router"
     if not isinstance(router, dict):
-        raise ValueError(f"{sf_key}.router must be an object")
+        raise ValueError(f"{where} must be an object")
     if "hub" not in router:
         router["hub"] = {}
     hub = router["hub"]
     if not isinstance(hub, dict):
-        raise ValueError(f"{sf_key}.router.hub must be an object")
+        raise ValueError(f"{where}.hub must be an object")
     return hub
 
 
@@ -362,9 +371,9 @@ def set_skill_hub_enabled(enabled: bool, *, config_path: Path | None = None) -> 
 
     def _apply(_text: str | None) -> tuple[str, SkillHubSwitch]:
         data = read_raw_or_raise(path)
+        previous = skill_hub_on(data)
         hub = _skill_hub_block(data)
         endpoint = hub.get("endpoint")
-        previous = hub_source_on(hub)
         seeded = enabled and not (isinstance(endpoint, str) and endpoint)
         hub["enabled"] = enabled
         if seeded:

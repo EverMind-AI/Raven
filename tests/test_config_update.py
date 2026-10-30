@@ -23,6 +23,7 @@ from raven.config.update import (
     set_memory_backend,
     set_playbook_disabled,
     set_sandbox_backend,
+    SkillHubSwitch,
     set_sentinel_nudge_quota,
     set_skill_blocked,
     set_skill_hub_enabled,
@@ -832,6 +833,77 @@ def test_skill_hub_switch_previous_reads_like_the_loader(cfg_path: Path, written
     change = set_skill_hub_enabled(False, config_path=cfg_path)
 
     assert change.previous is previous
+
+
+@pytest.mark.parametrize("legacy", ["skillRouter", "skill_router"])
+@pytest.mark.parametrize("enabled", [True, False])
+def test_skill_hub_switch_writes_the_legacy_router_the_loader_reads(cfg_path: Path, legacy: str, enabled: bool) -> None:
+    """A top-level router block is nested under ``skillForge`` by the loader
+    whenever that block has no router of its own. A switch write that created
+    one would hide the legacy block, endpoint and key included, behind the
+    shared URL on the next reload."""
+    from raven.config.live import LiveConfig, skill_hub_enabled
+    from raven.config.raven import load_raven_config
+
+    cfg_path.write_text(
+        json.dumps({legacy: {"hub": {"endpoint": "https://hub.internal.test", "apiKey": "k"}}}),
+        encoding="utf-8",
+    )
+
+    change = set_skill_hub_enabled(enabled, config_path=cfg_path)
+
+    assert change == SkillHubSwitch(previous=True, seeded_endpoint=False)
+    data = _read(cfg_path)
+    assert "skillForge" not in data
+    assert data[legacy]["hub"] == {"endpoint": "https://hub.internal.test", "apiKey": "k", "enabled": enabled}
+    hub = load_raven_config(cfg_path).skill_forge.router.hub
+    assert (hub.endpoint, hub.api_key, hub.enabled) == ("https://hub.internal.test", "k", enabled)
+    assert skill_hub_enabled(LiveConfig(cfg_path)) is enabled
+
+
+def test_skill_hub_switch_ignores_a_legacy_router_the_loader_ignores(cfg_path: Path) -> None:
+    """An explicit ``skillForge.router`` wins over the legacy block, so that is
+    the one the switch writes."""
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "skillRouter": {"hub": {"endpoint": "https://legacy.test"}},
+                "skillForge": {"router": {"topK": 4}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    change = set_skill_hub_enabled(True, config_path=cfg_path)
+
+    assert change == SkillHubSwitch(previous=False, seeded_endpoint=True)
+    data = _read(cfg_path)
+    assert data["skillRouter"] == {"hub": {"endpoint": "https://legacy.test"}}
+    assert data["skillForge"]["router"] == {"topK": 4, "hub": {"enabled": True, "endpoint": _HUB_ENDPOINT}}
+
+
+def test_skill_hub_endpoint_keeps_a_legacy_router_endpoint(cfg_path: Path) -> None:
+    cfg_path.write_text(json.dumps({"skillRouter": {"hub": {"endpoint": "https://hub.internal.test"}}}), encoding="utf-8")
+    before = cfg_path.read_bytes()
+
+    assert initialize_skill_hub_endpoint(config_path=cfg_path) is None
+    assert cfg_path.read_bytes() == before
+
+
+def test_skill_hub_switch_previous_counts_a_retired_hub_key_like_the_loader(cfg_path: Path) -> None:
+    """``prefetchBodies`` is dropped by the loader in memory; the Hub it sits in
+    was on, and turning it off from the page has to report that."""
+    from raven.config.live import LiveConfig, skill_hub_enabled
+
+    cfg_path.write_text(
+        json.dumps({"skillForge": {"router": {"hub": {"endpoint": _HUB_ENDPOINT, "prefetchBodies": 1}}}}),
+        encoding="utf-8",
+    )
+
+    assert set_skill_hub_enabled(False, config_path=cfg_path).previous is True
+    assert skill_hub_enabled(LiveConfig(cfg_path)) is False
+    assert set_skill_hub_enabled(True, config_path=cfg_path).previous is False
+    assert skill_hub_enabled(LiveConfig(cfg_path)) is True
 
 
 class TestTheWidthGateIsEverosOnly:

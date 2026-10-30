@@ -30,6 +30,7 @@ visible at the call site.
 
 from __future__ import annotations
 
+import copy
 import json
 import weakref
 from contextlib import contextmanager
@@ -692,17 +693,26 @@ def hub_source_on(hub: Any) -> bool:
     return bool(cfg.endpoint) and cfg.enabled
 
 
-def skill_hub_enabled(live: LiveConfig) -> bool:
-    """Whether the conversational Skill Hub source may run, read on every ask.
+def skill_hub_on(raw: Any) -> bool:
+    """Whether a config, as the file writes it, leaves the conversational Skill Hub source on.
 
-    Both top-level spellings are accepted, the same way the page and the writer
-    resolve them; a file carrying both non-null spellings is refused by the
-    loader, so it is off here too. Read live rather than captured at loop start
-    so switching the source off stops the next query, not the next process.
+    The loader's migrations run first, on a copy. Some of them are never written
+    back to the file -- a legacy top-level ``skillRouter`` nested under
+    ``skillForge``, the retired ``hub.prefetchBodies`` dropped -- so a file keeps
+    those shapes for good, and reading it without them turns off a Hub the
+    runtime built from the same bytes.
+
+    Both top-level spellings are accepted, the way the writer resolves them; a
+    file carrying both non-null spellings is refused by the loader, so it is off
+    here too.
     """
-    raw = live.raw()
-    camel = raw.get("skillForge")
-    snake = raw.get("skill_forge")
+    from raven.config.loader import _migrate_config
+
+    if not isinstance(raw, dict):
+        return False
+    data = _migrate_config(copy.deepcopy(raw), pop_extension_keys=False)
+    camel = data.get("skillForge")
+    snake = data.get("skill_forge")
     if camel is not None and snake is not None:
         return False
     block = camel if camel is not None else snake
@@ -711,6 +721,26 @@ def skill_hub_enabled(live: LiveConfig) -> bool:
     router = block.get("router")
     hub = router.get("hub") if isinstance(router, dict) else None
     return hub_source_on(hub)
+
+
+_HUB_ANSWERS: "weakref.WeakKeyDictionary[LiveConfig, tuple[dict[str, Any], bool]]" = weakref.WeakKeyDictionary()
+
+
+def skill_hub_enabled(live: LiveConfig) -> bool:
+    """Whether the conversational Skill Hub source may run, read on every ask.
+
+    Read live rather than captured at loop start so switching the source off
+    stops the next query, not the next process. The answer is kept per parsed
+    file, so the migration in :func:`skill_hub_on` runs once per change of the
+    bytes rather than once per search.
+    """
+    raw = live.raw()
+    kept = _HUB_ANSWERS.get(live)
+    if kept is not None and kept[0] is raw:
+        return kept[1]
+    answer = skill_hub_on(raw)
+    _HUB_ANSWERS[live] = (raw, answer)
+    return answer
 
 
 _LAST_VALID_PERMISSIONS: "weakref.WeakKeyDictionary[LiveConfig, Any]" = weakref.WeakKeyDictionary()
