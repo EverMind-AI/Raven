@@ -82,6 +82,10 @@ def events(
     The events are ``{"t": say|thought|user|call|result, "at": <journal time>}``
     -- the same list ``_TurnCollector`` builds live, so a backfill writes spans
     with the same code the recorder does.
+
+    Nothing before the run's ``session/prompt`` is the run's: a resumed session
+    replays its history as ``session/update`` frames while ``session/load`` is
+    answered, and the live collector is attached only after that.
     """
     try:
         raw = _slice(Path(path), start, end)
@@ -89,7 +93,7 @@ def events(
     except OSError:
         return None, []
     prompt_text: str | None = None
-    turn = TurnEvents(dialect)
+    turn: TurnEvents | None = None
     for record in _records(raw):
         frame = record["frame"]
         params = frame.get("params") if isinstance(frame.get("params"), dict) else {}
@@ -98,17 +102,19 @@ def events(
         at = record.get("timestamp") if isinstance(record.get("timestamp"), str) else None
         method = frame.get("method")
         if method == "session/prompt":
-            prompt = params.get("prompt")
-            texts = content_texts(prompt) if isinstance(prompt, list) else []
-            if texts:
-                prompt_text = "".join(texts)
-                turn.prompt = prompt_text.strip()
+            if turn is None:
+                prompt = params.get("prompt")
+                texts = content_texts(prompt) if isinstance(prompt, list) else []
+                prompt_text = "".join(texts) if texts else None
+                turn = TurnEvents(dialect, prompt_text)
+            continue
+        if turn is None:
             continue
         if method == PERMISSION_METHOD:
             turn.permission(params)
         elif method == "session/update" and isinstance(params.get("update"), dict):
             turn.apply(params["update"], at)
-    return prompt_text, turn.events
+    return prompt_text, turn.events if turn is not None else []
 
 
 def replay(

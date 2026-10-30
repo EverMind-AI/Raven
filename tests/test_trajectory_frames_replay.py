@@ -329,3 +329,45 @@ def test_a_replayed_run_reads_the_way_the_live_collector_read_it(tmp_path: Path,
 
     assert prompt == _PROMPT
     assert _without_times(replayed) == _without_times(collector.events)
+
+
+def test_a_resumed_run_replays_only_the_turn_it_was_prompted_for(tmp_path: Path):
+    history = [
+        {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "old1",
+            "title": "ls",
+            "kind": "execute",
+            "status": "in_progress",
+            "rawInput": {"command": "ls"},
+        },
+        {"sessionUpdate": "tool_call_update", "toolCallId": "old1", "status": "completed", "rawOutput": "a.py"},
+        _say("earlier turn"),
+    ]
+    frames = [
+        _update(
+            "s",
+            {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "new1",
+                "title": "Read",
+                "kind": "read",
+                "status": "in_progress",
+                "rawInput": {"file_path": "a.py"},
+            },
+        ),
+        _update(
+            "s", {"sessionUpdate": "tool_call_update", "toolCallId": "new1", "status": "completed", "rawOutput": "x"}
+        ),
+        _update("s", _say("this turn done")),
+    ]
+    path, handshake_end = _run_journal(tmp_path, "claude-agent-acp", frames, history=history)
+
+    prompt, replayed = frames_replay.events(path, session_id="s", start=handshake_end, handshake_end=handshake_end)
+
+    assert prompt == _PROMPT
+    assert [(e["t"], e.get("id") or e.get("text")) for e in replayed] == [
+        ("call", "new1"),
+        ("result", "new1"),
+        ("say", "this turn done"),
+    ]

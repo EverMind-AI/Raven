@@ -2047,6 +2047,14 @@ def test_replay_reads_the_runs_journal_from_this_stores_own_journals(state):
     assert body.data["items"][0] == {"key": "llm.input", "value": "do it", "source": "replay"}
 
 
+def test_replay_leaves_out_the_history_a_resumed_session_replayed_before_the_prompt(state):
+    journal, handshake_end = _resumed_codex_frames(state / "logs" / "acp-frames" / "2026-09-01" / "agent-2.jsonl")
+    body = _replay(_external_run(state, journal, handshake_end=handshake_end), state)
+    values = [row["value"] for row in body.data["items"]]
+    assert values[0] == "run the i18n gate"
+    assert not any("earlier turn" in value for value in values)
+
+
 def test_replay_reads_a_command_with_the_dialect_the_connections_handshake_chose(state):
     journal, handshake_end = _resumed_codex_frames(state / "logs" / "acp-frames" / "2026-09-01" / "agent-2.jsonl")
     body = _replay(_external_run(state, journal, handshake_end=handshake_end), state)
