@@ -12641,6 +12641,22 @@
       "en": "‹ last at {time}",
       "zh": "‹ 上次 {time}"
     },
+    "gui.trajectory.fold.earlier_one": {
+      "en": "1 agent finished earlier · last at {time}",
+      "zh": "1 个智能体更早结束 · 最后在 {time}"
+    },
+    "gui.trajectory.fold.earlier_n": {
+      "en": "{n} agents finished earlier · last at {time}",
+      "zh": "{n} 个智能体更早结束 · 最后在 {time}"
+    },
+    "gui.trajectory.fold.later_one": {
+      "en": "1 more agent later · from {time}",
+      "zh": "之后还有 1 个智能体 · 从 {time} 开始"
+    },
+    "gui.trajectory.fold.later_n": {
+      "en": "{n} more agents later · from {time}",
+      "zh": "之后还有 {n} 个智能体 · 从 {time} 开始"
+    },
     "gui.trajectory.busy": {
       "en": "BUSY",
       "zh": "忙碌"

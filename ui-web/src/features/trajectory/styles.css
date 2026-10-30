@@ -858,3 +858,10 @@ html[data-traj] .trajectory-tabs-wrap { border-bottom-color: var(--traj-line) }
   border-radius: 999px; background: var(--paper); font: 400 11px/1.3 var(--sans); color: var(--faint); white-space: nowrap }
 .trajectory-wf-next[data-side='end'] { right: 14px }
 .trajectory-wf-next[data-side='start'] { left: 14px }
+
+/* A fold row: the agents wholly before or after the window, as one row with
+   their marks stacked and an arrow at the edge their work lies past. */
+.trajectory-wf-fold .trajectory-wf-name { font-weight: 500; color: var(--muted) }
+.trajectory-wf-stack { flex: none; display: flex }
+.trajectory-wf-stack .trajectory-wf-tile { margin-left: -6px; box-shadow: 0 0 0 2px var(--paper) }
+.trajectory-wf-stack .trajectory-wf-tile:first-child { margin-left: 0 }
