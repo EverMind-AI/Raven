@@ -1602,9 +1602,10 @@ const FoldView = memo(function FoldView({ lane, seg }: { lane: Lane; seg: FoldDa
           session built 7361 nodes of which 6400 sat in shut fold bodies. On the
           conversation's lane the runtime opens a turn only when its work holds
           a message of two or more rendered lines or a spawn/dag call
-          (`foldKeepsOpen`); every other finished turn shuts its own and a
-          replayed one arrives shut, so the bodies built are the reader's and
-          those few.
+          (`foldKeepsOpen`); every other finished turn shuts its own. The
+          protected turns are not free: on a 443-turn session 182 of 287 folds
+          arrived open, building 77,194 nodes against 57,141 before the rule
+          (+35.1%).
 
           A delegated pane opens every turn's, and is a different size of thing:
           measured on the two largest instance records on hand, 55 messages in

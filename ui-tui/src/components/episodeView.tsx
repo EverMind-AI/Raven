@@ -957,8 +957,9 @@ export const EpisodeView = memo(function EpisodeView({
     // `keepOpen` is the message rule: a multi-call stretch introduced by an
     // agent message of two or more rendered lines opens on its own, so the rows
     // the message led to are readable beside it (see `keepsWorkOpen`). A solo
-    // call is already one visible row, so the rule has nothing to reveal there
-    // and leaves its detail block folded.
+    // call is already one visible row, so the rule leaves its detail block to
+    // the card's own predicate (`detailDefaultOpen`): a call with content opens
+    // its detail, one without a block opens nothing.
     const detailDefaultOpen =
       seg.tools.length === 1
         ? !hasPanel && Boolean(seg.tools[0]!.done) && cardDefaultOpen(seg.tools[0]!)

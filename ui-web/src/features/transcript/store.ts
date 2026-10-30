@@ -1088,7 +1088,13 @@ function newCallData(
    and how far its graph got -- so the default-open rules read this predicate
    rather than restating it. The reader's own toggle still decides either way:
    this answers "what does an untouched step do", never "may the reader shut
-   it". */
+   it".
+
+   `load_playbook` is classified `dag` by name even when it runs in prompt mode
+   and starts no run (see `DAG_CALLS` in `newStep`), so such a turn opens here
+   too: the card it draws still names the playbook. The TUI has no card for a
+   call with no run and leaves the same turn folded; that is the one place the
+   two clients disagree about this rule. */
 const callKeepsOpen = (c: CallData): boolean => c.kind === 'spawn' || c.kind === 'dag'
 
 /* The row-fold transitions: a step that just outgrew a single call folds its
