@@ -631,6 +631,86 @@ class TestRunning:
         assert "nothing left to take up" in await driver.resume(record.stint_id, "web:stint")
         assert tool.submitted == []
 
+    @staticmethod
+    def _approved_once_spec() -> PlaybookSpec:
+        return _spec(
+            confirm=True,
+            roles=[
+                {"as": "planner", "name": "echo", "promptTemplate": "plan"},
+                {"as": "builder", "name": "echo", "dependsOn": ["planner"], "promptTemplate": "build"},
+            ],
+        )
+
+    @staticmethod
+    def _awaiting_approval(tool: "_FakeTool") -> asyncio.Event:
+        """Make the fake's first-round approval a real question that nobody answers.
+
+        Asked through the real broker, so a cancellation reaches the driver the
+        way a stopped turn's does; the event is set once the question is out.
+        """
+        from raven.rpc.question_broker import QuestionBroker
+
+        asked = asyncio.Event()
+
+        async def send_frame(frame: dict) -> None:
+            asked.set()
+
+        broker = QuestionBroker(send_frame)
+        real = tool.run_round
+
+        async def run_round(nodes: list[dict[str, Any]], **kwargs: Any) -> str:
+            if kwargs.get("confirm"):
+                await broker.await_question("web:stint", prompt="Run it?", choices=["Run it", "Not now"])
+            return await real(nodes, **kwargs)
+
+        tool.run_round = run_round  # type: ignore[method-assign]
+        return asked
+
+    async def test_a_first_round_stopped_while_its_approval_waits_closes_the_stint(self, tmp_path: Path) -> None:
+        """A stopped turn no longer reads its open question as "not answered":
+        the cancellation leaves the approval wait. Left `running` with round one
+        on it, the record refused the next request for the same playbook, and
+        once stale was taken up through `resume`, which asks nobody -- a round
+        nobody approved then ran."""
+        tool = _FakeTool(tmp_path / "stints")
+        asked = self._awaiting_approval(tool)
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+
+        starting = asyncio.create_task(driver.start(spec))
+        await asyncio.wait_for(asked.wait(), 1.0)
+        starting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await starting
+
+        [record] = StintStore(tool.stints_root("web:stint")).list()
+        assert record.status == "stopped"
+        assert record.stop_reason == "the first round was stopped before it was approved"
+        assert tool.submitted == []
+        assert "nothing left to take up" in await driver.resume(record.stint_id, "web:stint")
+        assert tool.submitted == []
+
+    async def test_a_first_round_whose_approval_outlives_a_tool_ceiling_closes_the_stint(self, tmp_path: Path) -> None:
+        """`load_playbook` runs under the registry's `wait_for` ceiling, which
+        cancels the same task when it runs out; the record is closed as it is
+        for a stop, and asking again starts afresh rather than taking it up."""
+        tool = _FakeTool(tmp_path / "stints")
+        self._awaiting_approval(tool)
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(driver.start(spec), timeout=0.2)
+
+        [record] = StintStore(tool.stints_root("web:stint")).list()
+        assert record.status == "stopped"
+        assert tool.submitted == []
+
+        tool.run_round = type(tool).run_round.__get__(tool)  # type: ignore[method-assign]
+        receipt = await driver.start(spec)
+        assert receipt.startswith("DAG run run-1 started")
+        assert "taken up" not in receipt
+
     async def test_a_round_no_role_finished_pauses_the_stint_instead_of_costing_a_round(self, tmp_path: Path) -> None:
         """Every node failed, so the round left nothing to build on, and the
         next would hit the same fault. Counted, a stint ran three rounds in two

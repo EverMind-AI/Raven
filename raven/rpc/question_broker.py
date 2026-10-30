@@ -9,10 +9,11 @@ the notification so a frontend that prefers to answer by request_id can.
 
 Like ConfirmBroker it is transport-agnostic: constructed with a notification
 emit callable (bound to ``RpcServer.send_frame`` in production), and every
-fail-safe path (timeout, cancel, internal error, connection EOF via
-:meth:`cancel_all`, and a surface that reports the question as undeliverable)
-resolves to the prompt's ``default`` rather than raising — the agent loop must
-always get a string back.
+fail-safe path (timeout, internal error, connection EOF via :meth:`cancel_all`,
+and a surface that reports the question as undeliverable) resolves to the
+prompt's ``default`` rather than raising — the agent loop must always get a
+string back. The one exit that raises is the caller's own cancellation: a turn
+that was stopped has no loop left to hand a string to.
 
 A batch answer is a separate concern from a single question's answer: a page
 that renders a whole ``ask_user`` batch as one stepped form answers it in one
@@ -125,9 +126,10 @@ class QuestionBroker:
     ) -> str:
         """Emit a ``clarify.request`` and await the matching answer.
 
-        Returns ``default`` on timeout, cancellation, EOF
-        (:meth:`cancel_all`), an undeliverable question, or any internal
-        error — never raises.
+        Returns ``default`` on timeout, EOF (:meth:`cancel_all`), an
+        undeliverable question, or any internal error. Raises only
+        ``CancelledError``, and only when the calling task itself is being
+        cancelled.
 
         ``timeout_s`` of ``None`` takes :attr:`default_timeout_s`, and is echoed
         in the notification so a surface can show how long the question
@@ -217,7 +219,19 @@ class QuestionBroker:
             answer = await asyncio.wait_for(future, timeout_s)
             answered = True
             return answer
-        except (asyncio.TimeoutError, asyncio.CancelledError):
+        except asyncio.TimeoutError:
+            return default
+        except asyncio.CancelledError:
+            # A stopped turn is not an unanswered question. Answered with the
+            # default, the cancellation ended here and the turn went on: the
+            # model read "the user did not answer" and carried on with its own
+            # recommendation -- or asked again -- while the person who pressed
+            # stop believed it had stopped. Only a cancellation
+            # aimed at this task propagates; the future being cancelled by
+            # someone else is still a question that went unanswered.
+            task = asyncio.current_task()
+            if task is not None and task.cancelling():
+                raise
             return default
         except QuestionUndeliverableError as exc:
             # Expected, not exceptional: the conversation has no live surface.

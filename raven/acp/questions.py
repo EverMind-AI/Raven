@@ -237,8 +237,9 @@ class AcpQuestions:
             self._count("error")
         if not self._broker.reply(request_id, answer or ""):
             # Already resolved: the broker timed out, or the turn was cancelled
-            # and it fail-safed. Not an error, and worth a line only because a
-            # steady stream of these means the deadline here is too long.
+            # and took the question with it. Not an error, and worth a line
+            # only because a steady stream of these means the deadline here is
+            # too long.
             logger.debug("acp: the question was already resolved when the answer arrived")
 
     async def _via_elicitation(self, session_id: str, question: str, choices: list[str]) -> str | None:

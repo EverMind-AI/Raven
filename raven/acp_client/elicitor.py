@@ -32,11 +32,11 @@ cut off while that answer is on its way.
 def _retracted() -> bool:
     """Whether this task carries a cancellation something has already swallowed.
 
-    `QuestionBroker.await_question` answers a cancellation with the question's
-    default rather than propagating one, so a retracted call arrives in `_one` as
-    an empty answer -- indistinguishable from a user's skip. Nothing calls
-    `uncancel`, so the request count outlives that catch and is the only trace
-    left that the call was cancelled at all.
+    A layer between here and the user that answers a cancellation with a default
+    rather than propagating it hands a retracted call to `_one` as an empty
+    answer -- indistinguishable from a user's skip. Nothing calls `uncancel`, so
+    the request count outlives that catch and is the only trace left that the
+    call was cancelled at all.
     """
     task = asyncio.current_task()
     return task is not None and task.cancelling() > 0
@@ -97,11 +97,10 @@ class Elicitor:
         Both halves do different work. The cancel is what stops the waiting: a
         question already put to the user stands for the broker's whole budget,
         and nothing else in a turn's teardown reaches the task it waits on. The
-        flag is what stops the *form*: `QuestionBroker.await_question` answers a
-        cancellation with the question's default rather than propagating one, so
-        the cancel alone arrives in `_one` as an empty answer -- a user's skip --
-        and the form would go on to put its next field to a user whose run is
-        gone.
+        flag is what stops the *form*: a cancel that something on the way down
+        answers with a default arrives in `_one` as an empty answer -- a user's
+        skip -- and the form would go on to put its next field to a user whose
+        run is gone.
         """
         self._cancelled = True
         for task in list(self._tasks):
