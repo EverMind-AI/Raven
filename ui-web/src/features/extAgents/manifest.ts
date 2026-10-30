@@ -20,7 +20,7 @@ import type { DomainManifest } from '../manifests'
 export const manifest: DomainManifest = {
   domain: 'extAgents',
   page: 'extAgentsPage',
-  /* The machines tab reads the registry through its own seam key. */
-  sources: ['extAgents', 'machines'],
+  /* Machines and personal robots each read through their own source. */
+  sources: ['extAgents', 'machines', 'robots'],
   root: ExtAgentsApp,
 }

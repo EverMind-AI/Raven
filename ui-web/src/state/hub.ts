@@ -1,5 +1,5 @@
-/* The connections hub: the agents, the machines and the channels, reached
- * through one rail row and switched between by the tabs over all three
+/* The connections hub: agents, machines, channels and personal robot registrations, reached
+ * through one rail row and switched between by the tabs over all four
  * (components/HubHead.tsx).
  *
  * Agents and channels stay two module pages, each its own domain's island,
@@ -7,7 +7,7 @@
  * are the agents island's other module -- the same page, drawn by the same
  * store (features/extAgents/store.ts) -- since a machine is where an agent
  * row runs and the two share their cards, sheets and drawer. What makes the
- * three one place is a shared rail button (state/pages.ts), a header, and
+ * four one place is a shared rail button (state/pages.ts), a header, and
  * this: the module the reader was last on, so the rail row goes back to it.
  *
  * Each domain registers what opening its module costs at its own module
@@ -18,7 +18,7 @@
 
 import * as page from './page'
 
-export type HubModule = 'agents' | 'channels' | 'machines'
+export type HubModule = 'agents' | 'channels' | 'machines' | 'robots'
 
 const openers = new Map<HubModule, () => void>()
 
@@ -37,7 +37,7 @@ export function open(which: HubModule = last): void {
 /* Followed off the page switch rather than set by `open`: the greeting's entry
    opens the channel page through its own store, and the rail should come back
    to where the reader actually was, whichever door they used. The agents page
-   carries two modules, which the switch cannot tell apart: the island says
+   carries agents, machines and robot registrations, which the switch cannot tell apart: the island says
    which it shows (`visited`), and a switch onto that page only moves the hub
    off the channels. */
 page.subscribe(() => {

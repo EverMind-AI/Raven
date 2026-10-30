@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 248 methods, 138 component schemas.
+// 253 methods, 141 component schemas.
 
 /* eslint-disable */
 /**
@@ -2805,6 +2805,55 @@ export interface MachineRow {
    * The agent entries on the machine that are switched off, by name: they still hold the machine for the add, so the card says so instead of counting them nowhere.
    */
   agents_off_here: string[];
+}
+export interface RobotObservation {
+  status: 'reachable' | 'not_connected' | 'unknown' | 'error';
+  checked_at: string;
+  checked_epoch: number;
+  http_status: number | null;
+  detail: string;
+  observed: {
+    [k: string]: JsonValue;
+  };
+}
+export interface RobotRow {
+  domain: 'personal';
+  name: string;
+  type: 'sparkbot' | 'http_device' | 'robot_dog' | 'agv' | 'mobile_manipulator' | 'other';
+  connection_mode: 'metadata' | 'http_status';
+  model: string;
+  location: string;
+  note: string;
+  status_url: string;
+  expected_project: string;
+  id: string;
+  revision: number;
+  status: 'reachable' | 'not_connected' | 'unknown' | 'error';
+  observation: {
+    status: 'reachable' | 'not_connected' | 'unknown' | 'error';
+    checked_at: string;
+    checked_epoch: number;
+    http_status: number | null;
+    detail: string;
+    observed: {
+      [k: string]: JsonValue;
+    };
+  } | null;
+  stale: boolean;
+  deleted_at: string | null;
+  updated_at: string;
+}
+export interface RobotDraft {
+  domain: 'personal';
+  confirm_personal: boolean;
+  name: string;
+  type: 'sparkbot' | 'http_device' | 'robot_dog' | 'agv' | 'mobile_manipulator' | 'other';
+  connection_mode?: 'metadata' | 'http_status';
+  model?: string;
+  location?: string;
+  note?: string;
+  status_url?: string;
+  expected_project?: string;
 }
 export interface SessionListParams {
   /**
@@ -6438,6 +6487,39 @@ export interface ImportedUploadResult {
    */
   imported_at: string;
 }
+export interface RobotsListParams {
+  trash?: boolean;
+}
+export interface RobotsListResult {
+  devices: RobotRow[];
+  status_ttl_seconds: number;
+}
+export interface RobotsSaveParams {
+  device: RobotDraft;
+  id?: string | null;
+  revision?: number | null;
+}
+export interface RobotsSaveResult {
+  device: RobotRow;
+}
+export interface RobotsRemoveParams {
+  id: string;
+}
+export interface RobotsRemoveResult {
+  ok: boolean;
+}
+export interface RobotsRestoreParams {
+  id: string;
+}
+export interface RobotsRestoreResult {
+  device: RobotRow;
+}
+export interface RobotsCheckParams {
+  id: string;
+}
+export interface RobotsCheckResult {
+  device: RobotRow;
+}
 
 // ---------------------------------------------------------------------------
 // Method map -- generated from the contract's method list.
@@ -6693,6 +6775,11 @@ export interface RpcMethods {
   'bugreport.retry_upload': { params: BugreportRetryUploadParams; result: BugreportRetryUploadResult };
   'bugreport.cancel': { params: BugreportCancelParams; result: BugreportCancelResult };
   'imported.upload': { params: ImportedUploadParams; result: ImportedUploadResult };
+  'robots.list': { params: RobotsListParams; result: RobotsListResult };
+  'robots.save': { params: RobotsSaveParams; result: RobotsSaveResult };
+  'robots.remove': { params: RobotsRemoveParams; result: RobotsRemoveResult };
+  'robots.restore': { params: RobotsRestoreParams; result: RobotsRestoreResult };
+  'robots.check': { params: RobotsCheckParams; result: RobotsCheckResult };
 }
 
 /** The literal union of callable method names. */
@@ -6856,6 +6943,11 @@ export const RPC_METHODS = [
   "prompt.submit",
   "reload.env",
   "reload.mcp",
+  "robots.check",
+  "robots.list",
+  "robots.remove",
+  "robots.restore",
+  "robots.save",
   "rollback.diff",
   "rollback.list",
   "rollback.restore",

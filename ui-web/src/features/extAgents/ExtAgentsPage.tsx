@@ -15,6 +15,7 @@ import { byOf, familyOf, installOf, isOwnRow } from './catalogue'
 import { badOf, healthOf, kindOf, ledClass, pendingLabel, refusedWrite, shownOf } from './health'
 import { MachineConnectSheet, MachineSheet, MachinesGrid, RegisterSheet, WhereField } from './MachineCards'
 import * as machines from './machines'
+import { Robots } from './Robots'
 import { CardGrid, Spin, Tile, WaitGrid, connect, oneLine, ordered, refusedLabel, whyOf } from './Rows'
 import { gridEntries, hasEntry, sectionOf, stageOf } from './source'
 import * as store from './store'
@@ -972,6 +973,7 @@ export function ExtAgentsApp(): JSX.Element {
       {s.picking ? <FamilyPicker family={s.picking} key={s.picking} s={s} /> : null}
     </>
   )
+  if (s.module === 'robots') return <><HubHead current="robots" /><Robots /></>
   if (s.module === 'machines') {
     /* Where the agents may run besides this computer: the registered
        machines, their links and nodes. The hub's own tab, beside the agents

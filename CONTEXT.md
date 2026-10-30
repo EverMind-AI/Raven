@@ -1,3 +1,13 @@
+# Personal robot registration
+
+A non-executable record in the profile-scoped store implemented by
+`raven.ops.robots.RobotStore`, exposed through `robots.*` RPC methods. It is
+separate from the machine registry and its SSH/Raven nodes. Only confirmed
+personal records are supported; optional status checks are explicit, bounded
+GET requests and expire after 60 seconds. Registration or a reachable status
+endpoint is not acceptance of physical robot capabilities. See
+`docs/robot-registration.md` for the storage and network boundaries.
+
 # Raven Runtime
 
 The Python agent runtime: receives messages from chat channels, runs the agent loop

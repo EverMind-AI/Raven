@@ -8,6 +8,8 @@
  * reads as broken, or a missing binary reads as switched off.
  */
 
+import type { ParamsOf, ResultOf } from '../../rpc/generated'
+
 export type ExtAgentKind = 'builtin' | 'cli' | 'acp' | 'openai'
 
 export type ExtAgentProbe = 'ready' | 'attention' | 'unknown' | 'missing'
@@ -274,4 +276,15 @@ export interface MachinesSource {
   /* The private keys this computer has, as `~/.ssh/<name>` paths, ssh's own
      first: what the register form fills in instead of a placeholder. */
   localKeys(): Promise<string[]>
+}
+
+export type RobotRow = ResultOf<'robots.list'>['devices'][number]
+export type RobotDraft = ParamsOf<'robots.save'>['device']
+
+export interface RobotsSource {
+  list(trash: boolean): Promise<RobotRow[]>
+  save(device: RobotDraft, id?: string, revision?: number): Promise<RobotRow>
+  remove(id: string): Promise<void>
+  restore(id: string): Promise<RobotRow>
+  check(id: string): Promise<RobotRow>
 }
