@@ -253,10 +253,12 @@ def test_the_web_assets_rebuild_when_the_frontend_moved_on() -> None:
 
 
 def test_the_page_staleness_covers_the_shared_catalogue() -> None:
-    """ui-web/build.py inlines i18n/messages.json, so a catalogue-only change
-    is a page change -- watching ui-web alone would miss it."""
+    """The page bundle imports i18n/messages.json and ui-shared/*.json, so a
+    catalogue-only change is a page change -- watching ui-web alone would miss
+    it. The pin is the whole call: a substring pin keeps passing when a source
+    is appended, which is how the shared catalogues were missed."""
     text = INSTALL_SH.read_text(encoding="utf-8")
-    assert 'is_stale "$src/ui-web/dist/index.html" "$src/ui-web" "$src/i18n"' in text
+    assert 'is_stale "$src/ui-web/dist/index.html" "$src/ui-web" "$src/i18n" "$src/ui-shared"' in text
 
 
 def test_the_staleness_walk_prunes_what_the_build_itself_writes() -> None:
@@ -276,16 +278,17 @@ def test_is_stale_answers_each_case_it_exists_for(tmp_path: Path) -> None:
     assert body is not None
     harness = tmp_path / "harness.sh"
     harness.write_text(
-        body.group(0) + '\nif is_stale "$1" "$2" "$3"; then echo STALE; else echo FRESH; fi\n',
+        body.group(0) + '\nif is_stale "$@"; then echo STALE; else echo FRESH; fi\n',
         encoding="utf-8",
     )
 
-    web, catalog = tmp_path / "ui-web", tmp_path / "i18n"
+    web, catalog, shared = tmp_path / "ui-web", tmp_path / "i18n", tmp_path / "ui-shared"
     (web / "src").mkdir(parents=True)
     (web / "node_modules").mkdir()
     (web / ".modern").mkdir()
     (web / "dist").mkdir()
     catalog.mkdir()
+    shared.mkdir()
     artifact = web / "dist" / "index.html"
 
     # An explicit clock, not sleeps: every step stamps a second further out than
@@ -298,7 +301,7 @@ def test_is_stale_answers_each_case_it_exists_for(tmp_path: Path) -> None:
 
     def verdict() -> str:
         r = subprocess.run(
-            ["sh", str(harness), str(artifact), str(web), str(catalog)],
+            ["sh", str(harness), str(artifact), str(web), str(catalog), str(shared)],
             capture_output=True,
             text=True,
             check=True,
@@ -320,8 +323,12 @@ def test_is_stale_answers_each_case_it_exists_for(tmp_path: Path) -> None:
     assert verdict() == "STALE", "a touched catalogue must rebuild"
 
     stamp(artifact, 6)
+    stamp(shared / "verbs.json", 7)
+    assert verdict() == "STALE", "a touched shared catalogue must rebuild"
+
+    stamp(artifact, 8)
     for junk in (web / "node_modules" / "x", web / ".modern" / "modern.iife.js", web / "dist" / "extra.css"):
-        stamp(junk, 7)
+        stamp(junk, 9)
     assert verdict() == "FRESH", "the build's own output must not count as a source change"
 
 
@@ -1074,12 +1081,14 @@ def test_the_windows_office_offer_needs_a_real_console() -> None:
 
 def test_the_windows_web_assets_rebuild_when_the_frontend_moved_on() -> None:
     """Same decision as install.sh: compare the artifacts against their
-    sources, and give the page the shared catalogue it inlines."""
+    sources, and give the page every shared catalogue it inlines -- the pin is
+    each source directory by name, since membership is what was missed."""
     text = INSTALL_PS1.read_text(encoding="utf-8")
     assert "function Test-AssetStale" in text
     assert "$needTui = Test-AssetStale" in text
     assert "$needPage = Test-AssetStale" in text
     assert '(Join-Path $ScriptDir "i18n")' in text
+    assert '(Join-Path $ScriptDir "ui-shared")' in text
     assert "$needTui = -not (Test-Path" not in text
 
 

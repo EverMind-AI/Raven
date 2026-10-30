@@ -2,7 +2,7 @@
 // Run `npm run gen:shared` after changing the catalogue.
 
 export const LONG_RUN_CHARMS = [
-  'still cooking…',
-  'polishing edges…',
-  'asking the void nicely…'
+  "still cooking…",
+  "polishing edges…",
+  "asking the void nicely…"
 ]
