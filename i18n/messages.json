@@ -12657,6 +12657,22 @@
       "en": "{n} more agents later · from {time}",
       "zh": "之后还有 {n} 个智能体 · 从 {time} 开始"
     },
+    "gui.trajectory.agent.from_turn": {
+      "en": "from Turn {n}",
+      "zh": "来自第 {n} 轮"
+    },
+    "gui.trajectory.agent.turns_one": {
+      "en": "1 turn",
+      "zh": "1 轮"
+    },
+    "gui.trajectory.agent.turns_n": {
+      "en": "{n} turns",
+      "zh": "{n} 轮"
+    },
+    "gui.trajectory.tag.sub": {
+      "en": "sub-agent",
+      "zh": "子智能体"
+    },
     "gui.trajectory.busy": {
       "en": "BUSY",
       "zh": "忙碌"

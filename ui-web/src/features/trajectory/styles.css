@@ -865,3 +865,12 @@ html[data-traj] .trajectory-tabs-wrap { border-bottom-color: var(--traj-line) }
 .trajectory-wf-stack { flex: none; display: flex }
 .trajectory-wf-stack .trajectory-wf-tile { margin-left: -6px; box-shadow: 0 0 0 2px var(--paper) }
 .trajectory-wf-stack .trajectory-wf-tile:first-child { margin-left: 0 }
+
+/* An open worker's label is two lines: its task, then who ran it, the turn
+   that sent it and how many turns it took. A worker that ran inside the
+   process carries a quiet tag. */
+.trajectory-wf-two { flex: 0 1 auto; display: flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 0 }
+.trajectory-wf-two .trajectory-wf-name { line-height: 1.15 }
+.trajectory-wf-agentsub { font: 400 11px/1.15 var(--sans); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.trajectory-wf-tag { flex: none; padding: 2px 6px; border-radius: 5px; background: var(--trajectory-wf-soft);
+  font: 500 10.5px/1.2 var(--sans); color: var(--muted); white-space: nowrap }
