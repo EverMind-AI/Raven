@@ -982,6 +982,8 @@ describe('a folded agent', () => {
     ])
     const preset = [...document.querySelectorAll<HTMLButtonElement>('.trajectory-wf-zoom button')].find((b) => b.textContent === 'gui.trajectory.zoom.1h')!
     act(() => { fireEvent.click(preset) })
+    /* Wholly before the window, the worker waits in the earlier fold. */
+    act(() => { fireEvent.click(document.querySelector('[data-row="fold"]')!) })
     const chip = agentRow(1).querySelector('.trajectory-wf-next[data-side="start"]')
     expect(chip?.textContent).toBe('gui.trajectory.last {"time":"09:10"}')
   })
@@ -1003,5 +1005,67 @@ describe('a folded agent', () => {
     expect(row.querySelector('.trajectory-wf-edge[data-side="end"]')).not.toBeNull()
     expect(row.querySelectorAll('.trajectory-wf-cap')).toHaveLength(0)
     expect(row.querySelector('.trajectory-wf-next')?.textContent).toBe('gui.trajectory.next {"time":"16:00"}')
+  })
+})
+
+describe('the agents outside the window', () => {
+  const local = (h: number, m = 0): string => new Date(2026, 9, 28, h, m).toISOString()
+  const step = (id: string, from: string, to: string, over: Partial<TrajectoryEntry> = {}): TrajectoryEntry =>
+    E(id, 0, { operation_start: from, operation_end: to, ...over })
+  const worker = (scope: string, from: string, to: string, name: string): TrajectoryEntry[] => [
+    step(`door-${scope}`, from, from, { opens_subagent_scope: scope, meta: { instance: name, agent: name } }),
+    step(`${scope}-1`, from, to, { subagent_scope: scope, turn_span_id: `${scope}-T` }),
+  ]
+  /* Main works all day; one worker early, one in the hour the preset picks
+     (12:34 to 13:34, the axis's middle), one late. */
+  const session = (): TrajectoryEntry[] => [
+    step('m', local(9), local(17)),
+    ...worker('a', local(9), local(9, 10), 'early'),
+    ...worker('b', local(12, 40), local(13), 'inside'),
+    ...worker('c', local(16), local(16, 20), 'late'),
+  ]
+  const preset = (name: string): HTMLButtonElement =>
+    [...document.querySelectorAll<HTMLButtonElement>('.trajectory-wf-zoom button')].find((b) => b.textContent === `gui.trajectory.zoom.${name}`)!
+  const folds = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('[data-row="fold"]')]
+
+  it('folds the agents wholly before the window into one row, and those after it into another', async () => {
+    await draw(session())
+    expect(folds()).toHaveLength(0)
+    act(() => { fireEvent.click(preset('1h')) })
+    expect(folds().map((row) => row.textContent)).toEqual([
+      'gui.trajectory.fold.earlier_one {"time":"09:10"}',
+      'gui.trajectory.fold.later_one {"time":"16:00"}',
+    ])
+    expect(count('[data-row="agent"]')).toBe(2)
+    /* The earlier row stands after the main agent, the later one at the end. */
+    expect([...document.querySelectorAll('[data-row]')].map((row) => row.getAttribute('data-row'))).toEqual(['agent', 'fold', 'agent', 'fold'])
+  })
+
+  it('opens a fold in place, its agents beneath it', async () => {
+    await draw(session())
+    act(() => { fireEvent.click(preset('1h')) })
+    const earlier = folds()[0]!
+    expect(earlier.getAttribute('aria-expanded')).toBe('false')
+    act(() => { fireEvent.click(earlier) })
+    expect(folds()[0]!.getAttribute('aria-expanded')).toBe('true')
+    expect(count('[data-row="agent"]')).toBe(3)
+    expect([...document.querySelectorAll('[data-row]')].map((row) => row.getAttribute('data-row'))).toEqual(['agent', 'fold', 'agent', 'agent', 'fold'])
+  })
+
+  it('keeps the main agent in a row of its own, even with all of its work outside the window', async () => {
+    await draw([
+      step('m', local(9), local(9, 30)),
+      ...worker('b', local(12), local(17), 'afternoon'),
+    ])
+    act(() => { fireEvent.click(preset('1h')) })
+    expect(folds()).toHaveLength(0)
+    expect(document.querySelector('[data-row="agent"][data-main]')).not.toBeNull()
+  })
+
+  it('opens the fold that holds a row selected from elsewhere', async () => {
+    await draw(session())
+    act(() => { fireEvent.click(preset('1h')) })
+    act(() => { store.selectAcross('c-1', { source: 'link' }) })
+    expect(document.querySelector('[data-entry="c-1"]')).not.toBeNull()
   })
 })

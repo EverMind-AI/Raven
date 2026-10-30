@@ -56,20 +56,27 @@ export const TURN_GUIDE_X = 35
 const OVERSCAN = 8
 const DEFAULT_ROWS = 20
 
+/** Which side of the window a folded group of agents lies on. */
+export type FoldSide = 'earlier' | 'later'
+
 export interface DisplayRow {
-  kind: 'agent' | 'turn' | 'span'
+  kind: 'agent' | 'turn' | 'span' | 'fold'
   key: string
   agent: number
   turn: string | null
   row: WaterfallRow | null
   turnRow: WaterfallTurn | null
+  /** A fold row's side and the agents it holds, by index. */
+  fold?: { side: FoldSide; agents: readonly number[] }
 }
 
 export function displayRows(
   waterfall: Waterfall, collapsedAgents: ReadonlySet<string>, openTurns: ReadonlySet<string>,
+  outside: ReadonlyMap<number, FoldSide> = new Map(), openFolds: ReadonlySet<FoldSide> = new Set(),
 ): DisplayRow[] {
   const rows: DisplayRow[] = []
-  waterfall.agents.forEach((agent, at) => {
+  const agentRows = (at: number): void => {
+    const agent = waterfall.agents[at]!
     rows.push({ kind: 'agent', key: `agent:${agent.key}`, agent: at, turn: null, row: null, turnRow: null })
     if (collapsedAgents.has(agent.key)) return
     for (const turn of agent.turns) {
@@ -80,7 +87,21 @@ export function displayRows(
     for (const row of agent.loose) {
       rows.push({ kind: 'span', key: `loose:${row.entry.entry_id}`, agent: at, turn: null, row, turnRow: null })
     }
-  })
+  }
+  /* The earlier group follows the main agent, the later one closes the list;
+     an open group lists its agents beneath its own row. */
+  const group = (side: FoldSide): void => {
+    const agents = [...outside].filter(([, where]) => where === side).map(([at]) => at).sort((a, b) => a - b)
+    if (!agents.length) return
+    rows.push({ kind: 'fold', key: `fold:${side}`, agent: -1, turn: null, row: null, turnRow: null, fold: { side, agents } })
+    if (openFolds.has(side)) agents.forEach(agentRows)
+  }
+  const inside = waterfall.agents.map((_, at) => at).filter((at) => !outside.has(at))
+  const main = inside.filter((at) => waterfall.agents[at]!.scope === null)
+  main.forEach(agentRows)
+  group('earlier')
+  inside.filter((at) => waterfall.agents[at]!.scope !== null).forEach(agentRows)
+  group('later')
   return rows
 }
 
@@ -170,6 +191,13 @@ function ownOf(agent: WaterfallAgent): boolean {
   const meta = agent.door?.meta ?? {}
   const raw = typeof meta.agent === 'string' ? meta.agent : typeof meta.instance === 'string' ? meta.instance : ''
   return /^raven([^a-z0-9]|$)/i.test(raw.trim())
+}
+
+/** An agent's mark: Raven's own tile, its vendor's mark, or a plain glyph. */
+function agentMark(agent: WaterfallAgent): JSX.Element {
+  if (agent.scope === null || ownOf(agent)) return <AgentMark own />
+  const preset = presetOf(agent)
+  return preset === null ? <span className="trajectory-wf-glyph"><Icon icon={BotIcon} size={15} /></span> : <AgentMark preset={preset} />
 }
 
 /** The line icon a row wears: the reference draws a real icon in its box, not a
@@ -530,6 +558,10 @@ export function Waterfall(): JSX.Element {
     return to > from ? clampViewport({ from, to }, axis.length) : { from: 0, to: axis.length }
   })()
   viewRef.current = view
+  /* The window in real time, and whether the reader has narrowed it. */
+  const windowFrom = axis.unproject(view.from)
+  const windowTo = axis.unproject(view.to)
+  const zoomedView = view.from > 0 || view.to < axis.length
   fullRef.current = axis.length
   axisRef.current = axis
   useEffect(() => {
@@ -567,13 +599,79 @@ export function Waterfall(): JSX.Element {
     const el = box.current
     if (el) el.scrollTop = 0
   }, [range])
+  /* What the header and the badges say, from every row of the session. The
+     list re-renders on every scroll event, and each of these walks the whole
+     session, so they are worked out when the rows or the clock change, never
+     per frame. */
+  const summary = useMemo(() => {
+    /* A scope id is `trace:span`; the badge must say who the worker is. */
+    const nameOfScope = new Map<string, string>()
+    for (const agent of waterfall.agents) {
+      if (agent.scope === null) continue
+      for (const scope of agent.scopes) if (scope !== null) nameOfScope.set(scope, scopeTitle(agent.door))
+    }
+    /* The slowest single span wears the badge, as the reference does. */
+    let slowestId: string | null = null
+    let slowestMs = 0
+    for (const agent of waterfall.agents) {
+      for (const turn of agent.turns) {
+        for (const row of turn.rows) {
+          const ms = entryEnd(row.entry, now) - entryStart(row.entry)
+          if (ms > slowestMs) { slowestMs = ms; slowestId = row.entry.entry_id }
+        }
+      }
+    }
+    /* An agent's runs of work, merged: its row draws one capsule per run, and
+       its busy time is their total, never its lifetime. Its failures are
+       marked on the row at the instant each one happened. */
+    const runs = new Map<string, Array<{ start: number; end: number }>>()
+    const busy = new Map<string, number>()
+    const failures = new Map<string, number[]>()
+    for (const agent of waterfall.agents) {
+      const agentRuns = busyRuns(agent, now)
+      runs.set(agent.key, agentRuns)
+      busy.set(agent.key, agentRuns.reduce((sum, run) => sum + run.end - run.start, 0))
+      const failed = [...agent.turns.flatMap((turn) => turn.rows), ...agent.loose].filter((row) => row.entry.failure_entry)
+      failures.set(agent.key, failed.map((row) => entryStart(row.entry)))
+    }
+    return { nameOfScope, slowestId, runs, busy, failures, figures: summarize(waterfall, shown, now) }
+  }, [shown, waterfall, now])
+  const { nameOfScope, slowestId, runs, busy, failures, figures } = summary
+
+  /* Once the reader narrows the window, a worker whose work lies wholly before
+     it, or wholly after it, steps into one row for each side; the main agent
+     always keeps its own. */
+  const [foldOpen, setFoldOpen] = useState<ReadonlySet<FoldSide>>(new Set())
+  const outside = useMemo(() => {
+    /* The whole session's window holds every agent, so nothing folds until
+       the reader narrows it. */
+    const side = new Map<number, FoldSide>()
+    waterfall.agents.forEach((agent, index) => {
+      const agentRuns = runs.get(agent.key) ?? []
+      const first = agentRuns[0]
+      const last = agentRuns.at(-1)
+      if (agent.scope === null || first === undefined || last === undefined) return
+      if (last.end < windowFrom) side.set(index, 'earlier')
+      else if (first.start > windowTo) side.set(index, 'later')
+    })
+    return side
+  }, [waterfall, runs, windowFrom, windowTo])
+  const toggleFold = (side: FoldSide): void => {
+    setFoldOpen((previous) => {
+      const next = new Set(previous)
+      if (next.has(side)) next.delete(side)
+      else next.add(side)
+      return next
+    })
+  }
   const rows = useMemo(() => {
-    const drawn = displayRows(waterfall, collapsed, open)
+    const drawn = displayRows(waterfall, collapsed, open, outside, foldOpen)
     if (range === null) return drawn
     /* Only what was running inside the picked stretch stays: an agent, a turn
        and a row are in it when their own stretch of time meets it. */
     const overlaps = (start: number, end: number): boolean => end >= range.start && start <= range.end
     return drawn.filter((row) => {
+      if (row.kind === 'fold') return true
       if (row.kind === 'agent') {
         const agent = waterfall.agents[row.agent]
         return agent !== undefined && overlaps(agent.start, agent.end)
@@ -582,7 +680,7 @@ export function Waterfall(): JSX.Element {
       const entry = row.row?.entry
       return entry !== undefined && overlaps(entryStart(entry), entryEnd(entry, now))
     })
-  }, [waterfall, collapsed, open, range, now])
+  }, [waterfall, collapsed, open, outside, foldOpen, range, now])
   const { first, last } = windowOf(scrollTop, height, rows.length)
 
   /* The rows' bar stays, so it is placed again whenever the list it stands
@@ -636,9 +734,12 @@ export function Waterfall(): JSX.Element {
        only scrolls. */
     const agentShut = collapsed.has(group)
     const turnShut = key !== null && !open.has(key)
-    if (phase === 'none' && (agentShut || turnShut)) {
+    const side = outside.get(owner.agent)
+    const foldShut = side !== undefined && !foldOpen.has(side)
+    if (phase === 'none' && (agentShut || turnShut || foldShut)) {
       if (agentShut) setAgentFold((previous) => new Map(previous).set(group, true))
       if (turnShut) setOpen((previous) => new Set(previous).add(key))
+      if (foldShut) setFoldOpen((previous) => new Set(previous).add(side))
       return
     }
     const at = selectedAt
@@ -648,7 +749,7 @@ export function Waterfall(): JSX.Element {
     if (top < scroller.scrollTop || top + ROW_HEIGHT > scroller.scrollTop + scroller.clientHeight) scroller.scrollTop = top
     revealed.current = { id: selectedId, tick: selections, phase: 'done' }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, selections, rows, open, collapsed])
+  }, [selectedId, selections, rows, open, collapsed, foldOpen])
 
   const attach = useCallback((el: HTMLDivElement | null): void => {
     box.current = el
@@ -738,44 +839,6 @@ export function Waterfall(): JSX.Element {
     details.openDetails()
   }
 
-  /* What the header and the badges say, from every row of the session. The
-     list re-renders on every scroll event, and each of these walks the whole
-     session, so they are worked out when the rows or the clock change, never
-     per frame. */
-  const summary = useMemo(() => {
-    /* A scope id is `trace:span`; the badge must say who the worker is. */
-    const nameOfScope = new Map<string, string>()
-    for (const agent of waterfall.agents) {
-      if (agent.scope === null) continue
-      for (const scope of agent.scopes) if (scope !== null) nameOfScope.set(scope, scopeTitle(agent.door))
-    }
-    /* The slowest single span wears the badge, as the reference does. */
-    let slowestId: string | null = null
-    let slowestMs = 0
-    for (const agent of waterfall.agents) {
-      for (const turn of agent.turns) {
-        for (const row of turn.rows) {
-          const ms = entryEnd(row.entry, now) - entryStart(row.entry)
-          if (ms > slowestMs) { slowestMs = ms; slowestId = row.entry.entry_id }
-        }
-      }
-    }
-    /* An agent's runs of work, merged: its row draws one capsule per run, and
-       its busy time is their total, never its lifetime. Its failures are
-       marked on the row at the instant each one happened. */
-    const runs = new Map<string, Array<{ start: number; end: number }>>()
-    const busy = new Map<string, number>()
-    const failures = new Map<string, number[]>()
-    for (const agent of waterfall.agents) {
-      const agentRuns = busyRuns(agent, now)
-      runs.set(agent.key, agentRuns)
-      busy.set(agent.key, agentRuns.reduce((sum, run) => sum + run.end - run.start, 0))
-      const failed = [...agent.turns.flatMap((turn) => turn.rows), ...agent.loose].filter((row) => row.entry.failure_entry)
-      failures.set(agent.key, failed.map((row) => entryStart(row.entry)))
-    }
-    return { nameOfScope, slowestId, runs, busy, failures, figures: summarize(waterfall, shown, now) }
-  }, [shown, waterfall, now])
-  const { nameOfScope, slowestId, runs, busy, failures, figures } = summary
   const errors = figures.errors
   const jumpToFirstError = (): void => {
     if (figures.firstError === null) return
@@ -805,12 +868,9 @@ export function Waterfall(): JSX.Element {
   /* The window the axis shows, named in the head: what ran inside it, from
      its first instant to its last, and how long a window it is once the
      reader has narrowed it. The element carries the window itself. */
-  const windowFrom = axis.unproject(view.from)
-  const windowTo = axis.unproject(view.to)
   const shownFrom = Math.min(Math.max(windowFrom, figures.start), figures.end)
   const shownTo = Math.min(Math.max(windowTo, shownFrom), figures.end)
   const named = windowText(shownFrom, shownTo, step < 60_000 ? 'second' : 'minute')
-  const zoomedView = view.from > 0 || view.to < axis.length
   /* A preset is pressed while the window is that long, however it got there;
      a window the wheel made matches none. */
   const activePreset = !zoomedView
@@ -828,8 +888,37 @@ export function Waterfall(): JSX.Element {
   const painted: JSX.Element[] = []
   for (let at = first; at < last; at++) {
     const row = rows[at]!
-    const agent = waterfall.agents[row.agent]!
     const style = { top: at * ROW_HEIGHT, height: ROW_HEIGHT }
+    if (row.kind === 'fold') {
+      const { side, agents: held } = row.fold!
+      const members = held.map((index) => waterfall.agents[index]!)
+      const edges = members.flatMap((member) => runs.get(member.key) ?? [])
+      const time = clockOf(side === 'earlier' ? Math.max(...edges.map((run) => run.end)) : Math.min(...edges.map((run) => run.start)))
+      const one = members.length === 1
+      const label = side === 'earlier'
+        ? one ? t('gui.trajectory.fold.earlier_one', { time }) : t('gui.trajectory.fold.earlier_n', { n: members.length, time })
+        : one ? t('gui.trajectory.fold.later_one', { time }) : t('gui.trajectory.fold.later_n', { n: members.length, time })
+      const foldOpened = foldOpen.has(side)
+      painted.push(
+        <div key={row.key} id={rowId(at)} className="trajectory-wf-row trajectory-wf-fold" data-row="fold" data-side={side} style={style}
+          role="treeitem" aria-level={1} aria-expanded={foldOpened} onClick={() => toggleFold(side)}>
+          <span className="trajectory-wf-label" style={{ paddingLeft: 12 }}>
+            <button type="button" className="trajectory-wf-chev" aria-expanded={foldOpened} aria-label={label}>
+              <Icon icon={foldOpened ? ArrowDown01Icon : ArrowRight01Icon} size={14} />
+            </button>
+            <span className="trajectory-wf-stack" aria-hidden="true">
+              {members.slice(0, 4).map((member) => <span key={member.key} className="trajectory-wf-tile">{agentMark(member)}</span>)}
+            </span>
+            <span className="trajectory-wf-name">{label}</span>
+          </span>
+          <span className="trajectory-wf-track">
+            <i className="trajectory-wf-edge" data-side={side === 'earlier' ? 'start' : 'end'} />
+          </span>
+        </div>,
+      )
+      continue
+    }
+    const agent = waterfall.agents[row.agent]!
     if (row.kind === 'agent') {
       const agentRuns = runs.get(agent.key) ?? []
       const shownRuns = within(agentRuns, windowFrom, windowTo)
@@ -855,11 +944,7 @@ export function Waterfall(): JSX.Element {
             <button type="button" className="trajectory-wf-chev" aria-expanded={agentOpen} aria-label={agentName}>
               <Icon icon={agentOpen ? ArrowDown01Icon : ArrowRight01Icon} size={14} />
             </button>
-            <span className="trajectory-wf-tile" data-tone={row.agent % 4}>
-              {agent.scope === null || ownOf(agent)
-                ? <AgentMark own />
-                : presetOf(agent) === null ? <span className="trajectory-wf-glyph"><Icon icon={BotIcon} size={15} /></span> : <AgentMark preset={presetOf(agent)} />}
-            </span>
+            <span className="trajectory-wf-tile" data-tone={row.agent % 4}>{agentMark(agent)}</span>
             <span className="trajectory-wf-name">{agentName}</span>
             <span className="trajectory-wf-sub">{agentModel(agent)}</span>
             <span className="trajectory-wf-busy">{formatDuration(busy.get(agent.key) ?? 0)}</span>

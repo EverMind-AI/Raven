@@ -200,6 +200,9 @@ spans the axis exactly), and shift with the wheel pans. The header's presets
 set a window of three hours, one hour or fifteen minutes about the middle of
 the one on screen -- a middle in an idle fold moves to the work beside it --
 and Fit gives the whole session back; Collapse all folds every agent and turn.
+Once the window is narrowed, the workers whose work lies wholly before it, or
+wholly after it, step into one fold row for each side ("2 agents finished
+earlier"), which opens in place; the main agent always keeps its own row.
 The zoomed window and a
 stretch picked on the ruler are kept in real time for the conversation they
 were made on, so a live session growing past its end does not reset them.
