@@ -646,19 +646,30 @@ export function Waterfall(): JSX.Element {
     /* The turn that sent each worker: the turn, on whichever agent, that holds
        the worker's door. */
     const turnOfEntry = new Map<string, number>()
-    for (const agent of waterfall.agents) {
-      for (const turn of agent.turns) for (const row of turn.rows) turnOfEntry.set(row.entry.entry_id, turn.ordinal)
-    }
+    const agentOfEntry = new Map<string, number>()
+    waterfall.agents.forEach((agent, index) => {
+      for (const turn of agent.turns) {
+        for (const row of turn.rows) {
+          turnOfEntry.set(row.entry.entry_id, turn.ordinal)
+          agentOfEntry.set(row.entry.entry_id, index)
+        }
+      }
+      for (const row of agent.loose) agentOfEntry.set(row.entry.entry_id, index)
+    })
     const sentFrom = new Map<string, number>()
+    /* Where each worker was sent from: the agent holding its door, and when. */
+    const dispatch = new Map<string, { holder: number; at: number }>()
     const kinds = new Map<string, ReturnType<typeof agentKind>>()
     for (const agent of waterfall.agents) {
       const ordinal = agent.door === null ? undefined : turnOfEntry.get(agent.door.entry_id)
       if (ordinal !== undefined) sentFrom.set(agent.key, ordinal)
+      const holder = agent.door === null ? undefined : agentOfEntry.get(agent.door.entry_id)
+      if (agent.door !== null && holder !== undefined) dispatch.set(agent.key, { holder, at: entryStart(agent.door) })
       kinds.set(agent.key, agentKind(agent))
     }
-    return { nameOfScope, slowestId, runs, busy, failures, sentFrom, kinds, figures: summarize(waterfall, shown, now) }
+    return { nameOfScope, slowestId, runs, busy, failures, sentFrom, dispatch, kinds, figures: summarize(waterfall, shown, now) }
   }, [shown, waterfall, now])
-  const { nameOfScope, slowestId, runs, busy, failures, sentFrom, kinds, figures } = summary
+  const { nameOfScope, slowestId, runs, busy, failures, sentFrom, dispatch, kinds, figures } = summary
 
   /* Once the reader narrows the window, a worker whose work lies wholly before
      it, or wholly after it, steps into one row for each side; the main agent
@@ -1083,6 +1094,34 @@ export function Waterfall(): JSX.Element {
     setOpen(new Set())
   }
 
+  /* A line from the instant an open worker was sent, on its dispatcher's row,
+     to where the worker's work begins: the one handoff the rows draw between
+     agents rather than mark on one. Worked out when the rows or the window
+     change, never per scroll frame. */
+  const links = useMemo(() => {
+    const span = view.to - view.from
+    const rowOfAgent = new Map<number, number>()
+    rows.forEach((row, index) => { if (row.kind === 'agent') rowOfAgent.set(row.agent, index) })
+    const drawn: Array<{ key: string; main: boolean; x1: number; x2: number; y1: number; y2: number }> = []
+    for (const [index, at] of rowOfAgent) {
+      const agent = waterfall.agents[index]!
+      const sent = dispatch.get(agent.key)
+      const start = (runs.get(agent.key) ?? [])[0]
+      const from = sent === undefined ? undefined : rowOfAgent.get(sent.holder)
+      if (agent.scope === null || collapsed.has(agent.key) || sent === undefined || start === undefined || from === undefined) continue
+      if (!(span > 0) || sent.at < windowFrom || sent.at > windowTo) continue
+      drawn.push({
+        key: agent.key,
+        main: waterfall.agents[sent.holder]!.scope === null,
+        x1: (axis.project(sent.at) - view.from) / span,
+        x2: Math.min(1, Math.max(0, (axis.project(start.start) - view.from) / span)),
+        y1: from * ROW_HEIGHT + ROW_HEIGHT / 2,
+        y2: at * ROW_HEIGHT + ROW_HEIGHT / 2,
+      })
+    }
+    return drawn
+  }, [rows, waterfall, dispatch, runs, collapsed, axis, view.from, view.to, windowFrom, windowTo])
+
   /* The hovered turn's breakdown, just under its row and from where its bar
      starts: what its time went on, each share of the turn's length. */
   const tip = (() => {
@@ -1189,6 +1228,24 @@ export function Waterfall(): JSX.Element {
                 style={{ left: lineLeft(tick.left) }} />
             ))}
           </div>
+          {links.length === 0 ? null : (
+            <svg className="trajectory-wf-dispatch" aria-hidden="true" preserveAspectRatio="none"
+              viewBox={`0 0 1000 ${rows.length * ROW_HEIGHT}`} style={{ height: rows.length * ROW_HEIGHT }}>
+              {links.map((link) => {
+                const middle = (link.y1 + link.y2) / 2
+                const x1 = (link.x1 * 1000).toFixed(2)
+                const x2 = (link.x2 * 1000).toFixed(2)
+                return (
+                  <path key={link.key} data-main={link.main ? '' : undefined} vectorEffect="non-scaling-stroke"
+                    d={`M ${x1} ${link.y1} C ${x1} ${middle}, ${x2} ${middle}, ${x2} ${link.y2}`} />
+                )
+              })}
+            </svg>
+          )}
+          {links.map((link) => (
+            <i key={`dot-${link.key}`} className="trajectory-wf-dispatch-dot" data-main={link.main ? '' : undefined} aria-hidden="true"
+              style={{ top: link.y1, left: `calc(var(--wf-gutter) + (100% - var(--wf-gutter)) * ${link.x1.toFixed(4)})` }} />
+          ))}
           {painted}
           {tip}
         </div>

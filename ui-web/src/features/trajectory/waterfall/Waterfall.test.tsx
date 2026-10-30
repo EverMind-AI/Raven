@@ -1222,3 +1222,32 @@ describe('the activity strip', () => {
     expect(document.querySelector('.trajectory-act-fold')?.textContent).toBe('5h')
   })
 })
+
+describe('the dispatch line', () => {
+  const session = (): TrajectoryEntry[] => [
+    E('m', 0, { operation_end: new Date(Date.parse('2026-10-28T10:00:00.000Z') + 60_000).toISOString() }),
+    E('door', 10, { kind: 'tool.output', opens_subagent_scope: 'x', meta: { agent: 'coder', label: 'Fix it' } }),
+    E('x1', 20, { subagent_scope: 'x', turn_span_id: 'X1' }),
+  ]
+  const agentRow = (index: number): HTMLElement => document.querySelectorAll<HTMLElement>('[data-row="agent"]')[index]!
+
+  it('draws from the door on its dispatcher to the worker once the worker is open', async () => {
+    await draw(session())
+    expect(document.querySelector('.trajectory-wf-dispatch path')).toBeNull()
+    act(() => { fireEvent.click(agentRow(1)) })
+    const path = document.querySelector<SVGPathElement>('.trajectory-wf-dispatch path')!
+    expect(path.hasAttribute('data-main')).toBe(true)
+    /* From the main agent's row, the first, down to the worker's, the second. */
+    const [, , y1] = path.getAttribute('d')!.split(/[ ,]+/)
+    expect(Number(y1)).toBe(ROW_HEIGHT / 2)
+    expect(path.getAttribute('d')!.trim().endsWith(String(ROW_HEIGHT * 1.5))).toBe(true)
+    expect(document.querySelectorAll('.trajectory-wf-dispatch-dot')).toHaveLength(1)
+  })
+
+  it('takes the line away when the worker folds again', async () => {
+    await draw(session())
+    act(() => { fireEvent.click(agentRow(1)) })
+    act(() => { fireEvent.click(agentRow(1)) })
+    expect(document.querySelector('.trajectory-wf-dispatch path')).toBeNull()
+  })
+})

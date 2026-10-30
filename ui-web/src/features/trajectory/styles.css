@@ -892,3 +892,15 @@ html[data-traj] .trajectory-wf-head, html[data-traj] .trajectory-wf-stats, html[
 .trajectory-act-grip[data-edge='lo'] { left: 0 }
 .trajectory-act-grip[data-edge='hi'] { left: 100% }
 html[data-traj] .trajectory-act { background: transparent }
+
+/* The dispatch line: from the instant an open worker was sent, on its
+   dispatcher's row, to where its work begins -- gold from the main agent,
+   the agents' neutral otherwise -- with a dot where it leaves. Behind the
+   rows, so it never covers a label or a bar it passes. */
+.trajectory-wf-dispatch { position: absolute; top: 0; left: var(--wf-gutter); right: 0; width: calc(100% - var(--wf-gutter));
+  overflow: visible; pointer-events: none }
+.trajectory-wf-dispatch path { fill: none; stroke: var(--trajectory-wf-agent); stroke-width: 1.2; opacity: .7 }
+.trajectory-wf-dispatch path[data-main] { stroke: var(--trajectory-wf-main) }
+.trajectory-wf-dispatch-dot { position: absolute; z-index: 1; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%;
+  background: var(--paper); border: 1.5px solid var(--trajectory-wf-agent); pointer-events: none }
+.trajectory-wf-dispatch-dot[data-main] { border-color: var(--trajectory-wf-main) }
