@@ -1069,3 +1069,47 @@ describe('the agents outside the window', () => {
     expect(document.querySelector('[data-entry="c-1"]')).not.toBeNull()
   })
 })
+
+describe('an agent’s name', () => {
+  const door = (id: string, scope: string, meta: Record<string, string>): TrajectoryEntry =>
+    E(id, 0, { kind: 'tool.output', opens_subagent_scope: scope, meta })
+  const agentRow = (index: number): HTMLElement => document.querySelectorAll<HTMLElement>('[data-row="agent"]')[index]!
+
+  it('names a folded worker by its task, and leaves its runner to the mark and the hover', async () => {
+    await draw([door('d', 'x', { agent: 'Claude Code', label: 'Fix the parser' }), E('x1', 1, { subagent_scope: 'x', turn_span_id: 'X1' })])
+    const name = agentRow(1).querySelector<HTMLElement>('.trajectory-wf-name')!
+    expect(name.textContent).toBe('Fix the parser')
+    expect(name.title).toBe('Claude Code \u00b7 Fix the parser')
+    expect(agentRow(1).querySelector('.trajectory-wf-sub')).toBeNull()
+  })
+
+  it('gives an open worker a second line: its runner, the turn that sent it, and how many turns it took', async () => {
+    await draw([
+      E('m0', 0),
+      E('m1', 5, { turn_span_id: 'T2' }),
+      door('d', 'x', { agent: 'Claude Code', label: 'Fix the parser' }),
+      E('x1', 6, { subagent_scope: 'x', turn_span_id: 'X1' }),
+      E('x2', 8, { subagent_scope: 'x', turn_span_id: 'X2' }),
+    ].map((entry) => (entry.entry_id === 'd' ? { ...entry, turn_span_id: 'T2', operation_start: E('m1', 5).operation_start } : entry)))
+    act(() => { fireEvent.click(agentRow(1)) })
+    expect(agentRow(1).querySelector('.trajectory-wf-agentsub')?.textContent)
+      .toBe('Claude Code \u00b7 gui.trajectory.agent.from_turn {"n":2} \u00b7 gui.trajectory.agent.turns_n {"n":2}')
+  })
+
+  it('tags a worker that ran inside the process as a sub-agent, and an external one not', async () => {
+    await draw([
+      door('d1', 'x', { label: 'Look it up' }), E('x1', 1, { subagent_scope: 'x', turn_span_id: 'X1' }),
+      door('d2', 'y', { agent: 'Codex', label: 'Review it', instance: 'codex-1' }),
+      E('y1', 2, { subagent_scope: 'y', turn_span_id: 'Y1', span_name: 'subagent.external', kind: 'subagent.external' }),
+    ])
+    expect([agentRow(1), agentRow(2)].map((row) => row.querySelector('.trajectory-wf-tag')?.textContent ?? null))
+      .toEqual(['gui.trajectory.tag.sub', null])
+  })
+
+  it('keeps the main agent’s name and its model on one line', async () => {
+    await draw([E('m', 0, { meta: { model: 'deepseek/deepseek-flash' } })])
+    expect(agentRow(0).querySelector('.trajectory-wf-name')?.textContent).toBe('gui.trajectory.scope.main')
+    expect(agentRow(0).querySelector('.trajectory-wf-sub')?.textContent).toBe('deepseek/deepseek-flash')
+    expect(agentRow(0).querySelector('.trajectory-wf-agentsub')).toBeNull()
+  })
+})

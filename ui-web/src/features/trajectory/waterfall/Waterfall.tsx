@@ -28,7 +28,7 @@ import { WaterfallIndex } from './incremental'
 import { busyRuns, entryEnd, entryStart, isLive, turnKey } from './model'
 import { OverviewLanes } from './OverviewLanes'
 import { turnSegments } from './segments'
-import { summarize } from './summary'
+import { agentKind, summarize } from './summary'
 import { clockTicks, stepFor, tickLabel } from './ticks'
 
 import type { TrajectoryEntry } from '../types'
@@ -146,6 +146,13 @@ function agentSplit(agents: Figures['agents']): string | null {
     agents.sub === 1 ? t('gui.trajectory.stat.sub_one') : agents.sub > 1 ? t('gui.trajectory.stat.sub_n', { n: agents.sub }) : null,
   ].filter((part): part is string => part !== null)
   return parts.length ? parts.join(' \u00b7 ') : null
+}
+
+/** What a worker was asked to do, the row's name: its task when the door
+ *  names one, else whatever names the run. */
+function taskOf(agent: WaterfallAgent): string {
+  const label = agent.door?.meta?.label
+  return typeof label === 'string' && label.trim() !== '' ? label : scopeTitle(agent.door)
 }
 
 /** The model an agent ran on: the first model call's, as a label. */
@@ -634,9 +641,22 @@ export function Waterfall(): JSX.Element {
       const failed = [...agent.turns.flatMap((turn) => turn.rows), ...agent.loose].filter((row) => row.entry.failure_entry)
       failures.set(agent.key, failed.map((row) => entryStart(row.entry)))
     }
-    return { nameOfScope, slowestId, runs, busy, failures, figures: summarize(waterfall, shown, now) }
+    /* The turn that sent each worker: the turn, on whichever agent, that holds
+       the worker's door. */
+    const turnOfEntry = new Map<string, number>()
+    for (const agent of waterfall.agents) {
+      for (const turn of agent.turns) for (const row of turn.rows) turnOfEntry.set(row.entry.entry_id, turn.ordinal)
+    }
+    const sentFrom = new Map<string, number>()
+    const kinds = new Map<string, ReturnType<typeof agentKind>>()
+    for (const agent of waterfall.agents) {
+      const ordinal = agent.door === null ? undefined : turnOfEntry.get(agent.door.entry_id)
+      if (ordinal !== undefined) sentFrom.set(agent.key, ordinal)
+      kinds.set(agent.key, agentKind(agent))
+    }
+    return { nameOfScope, slowestId, runs, busy, failures, sentFrom, kinds, figures: summarize(waterfall, shown, now) }
   }, [shown, waterfall, now])
-  const { nameOfScope, slowestId, runs, busy, failures, figures } = summary
+  const { nameOfScope, slowestId, runs, busy, failures, sentFrom, kinds, figures } = summary
 
   /* Once the reader narrows the window, a worker whose work lies wholly before
      it, or wholly after it, steps into one row for each side; the main agent
@@ -932,7 +952,16 @@ export function Waterfall(): JSX.Element {
          after it, every one lies before it and the last is the latest. */
       const previous = shownRuns.length === 0 && next === undefined ? last : undefined
       const agentOpen = !collapsed.has(agent.key)
-      const agentName = agent.scope === null ? t('gui.trajectory.scope.main') : scopeTitle(agent.door)
+      const agentName = agent.scope === null ? t('gui.trajectory.scope.main') : taskOf(agent)
+      /* An open worker's second line: who ran it, the turn that sent it, and
+         how many turns it took. */
+      const runner = typeof agent.door?.meta?.agent === 'string' && agent.door.meta.agent.trim() !== '' ? agent.door.meta.agent : null
+      const sent = sentFrom.get(agent.key)
+      const secondLine = [
+        runner,
+        sent === undefined ? null : t('gui.trajectory.agent.from_turn', { n: sent }),
+        agent.turns.length === 1 ? t('gui.trajectory.agent.turns_one') : t('gui.trajectory.agent.turns_n', { n: agent.turns.length }),
+      ].filter((part): part is string => part !== null).join(' \u00b7 ')
       painted.push(
         <div key={row.key} id={rowId(at)} className="trajectory-wf-row trajectory-wf-agent" data-row="agent" style={style}
           data-main={agent.scope === null ? '' : undefined}
@@ -945,8 +974,16 @@ export function Waterfall(): JSX.Element {
               <Icon icon={agentOpen ? ArrowDown01Icon : ArrowRight01Icon} size={14} />
             </button>
             <span className="trajectory-wf-tile" data-tone={row.agent % 4}>{agentMark(agent)}</span>
-            <span className="trajectory-wf-name">{agentName}</span>
-            <span className="trajectory-wf-sub">{agentModel(agent)}</span>
+            {agent.scope !== null && agentOpen ? (
+              <span className="trajectory-wf-two">
+                <span className="trajectory-wf-name" title={scopeTitle(agent.door)}>{agentName}</span>
+                <span className="trajectory-wf-agentsub">{secondLine}</span>
+              </span>
+            ) : (
+              <span className="trajectory-wf-name" title={agent.scope === null ? undefined : scopeTitle(agent.door)}>{agentName}</span>
+            )}
+            {agent.scope === null ? <span className="trajectory-wf-sub">{agentModel(agent)}</span> : null}
+            {kinds.get(agent.key) === 'sub' ? <span className="trajectory-wf-tag">{t('gui.trajectory.tag.sub')}</span> : null}
             <span className="trajectory-wf-busy">{formatDuration(busy.get(agent.key) ?? 0)}</span>
           </span>
           <span className="trajectory-wf-track">
