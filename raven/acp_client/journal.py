@@ -147,6 +147,10 @@ def prune(root: Path, keep_days: int = KEEP_DAYS) -> None:
                 logger.debug("acp journal: could not prune {}: {}", day, exc)
 
 
+def _stamp() -> str:
+    return datetime.now().astimezone().isoformat()
+
+
 class FrameJournal:
     """One connection's wire log. Append-only, newest last, never raises."""
 
@@ -196,11 +200,12 @@ class FrameJournal:
         """
         if self._closed or self._full:
             return
-        # `timestamp`, naive and local, because that is what the session log and
-        # `transcript.jsonl` beside it both use -- an audit file would rather
-        # have UTC, but a reader that has to branch on two time formats is the
-        # worse trade.
-        record: dict[str, Any] = {"_type": FRAME, "timestamp": datetime.now().isoformat(), "dir": direction}
+        # `timestamp`, local like the session log and `transcript.jsonl` beside
+        # it, but with its offset: a backfill reads the journal later, possibly
+        # in another zone, and a naive stamp read there lands its steps hours
+        # outside their run. An ISO stamp with an offset parses with the same
+        # call as a naive one, so a reader does not branch on the format.
+        record: dict[str, Any] = {"_type": FRAME, "timestamp": _stamp(), "dir": direction}
         if session:
             record["session"] = session
         if frame is not None:
@@ -223,7 +228,7 @@ class FrameJournal:
         join has no other side.
         """
         if identity:
-            self._write({"_type": CALL, "timestamp": datetime.now().isoformat(), **dict(identity)})
+            self._write({"_type": CALL, "timestamp": _stamp(), **dict(identity)})
 
     def _write(self, record: dict[str, Any]) -> None:
         from raven.config.held_secrets import scrub_held_secrets

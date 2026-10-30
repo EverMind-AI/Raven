@@ -138,7 +138,8 @@ _PREVIEW_CHARS = 240
 
 
 def _utc(at: object) -> datetime | None:
-    """The collector stamps naive local times; spans are UTC."""
+    """The collector stamps naive local times, the journal local times with their
+    offset (naive in a journal written before it carried one); spans are UTC."""
     if not isinstance(at, str) or not at:
         return None
     try:
@@ -317,8 +318,9 @@ def record_steps(
                     end = max(end, _utc(result.get("at")) or end)
                 steps.append(("tool.call", "tool", at, end, artifacts, attributes))
         for index, (name, span_type, start, end, artifacts, attributes) in enumerate(steps):
-            # Inside the run, both ends: a journal keeps naive local times, and
-            # one read in another zone, or across a clock step, can fall outside.
+            # Inside the run, both ends: a journal written before its stamps
+            # carried an offset keeps naive local times, and one read in another
+            # zone, or across a clock step, can fall outside.
             start = max(start, floor)
             if ended_at is not None:
                 start = min(start, ended_at)
