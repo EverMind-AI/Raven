@@ -3,13 +3,17 @@
  * edge. Geometry is defined rather than measured -- happy-dom lays nothing out
  * -- so the number asserted here is the scrollTop the pill would write. */
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
 import { previousUserTop } from './userjump'
 
 const rect = (top: number): DOMRect => ({
   top, bottom: top, left: 0, right: 0, width: 0, height: 0, x: 0, y: top,
 } as DOMRect)
+
+afterEach(() => {
+  document.body.innerHTML = ''
+})
 
 function scroller(scrollTop: number): HTMLElement {
   const sc = document.createElement('div')
@@ -73,5 +77,34 @@ describe('the previous user turn', () => {
     outside.getBoundingClientRect = () => rect(-700)
     document.body.appendChild(outside)
     expect(previousUserTop(sc)).toBe(20)
+  })
+
+  /* The header floats over the scroller (page.css, .top), so a question just
+     below the scroller's own edge is still behind the frost and is the one the
+     pill should go back to -- and it must land below the band, not on it. */
+  describe('under the frosted header', () => {
+    function banded(sc: HTMLElement, height: number): void {
+      const chat = document.createElement('div')
+      chat.className = 'chat'
+      const top = document.createElement('div')
+      top.className = 'top'
+      Object.defineProperty(top, 'offsetHeight', { configurable: true, value: height })
+      document.body.appendChild(chat)
+      chat.append(top, sc)
+    }
+
+    it('counts a question hidden behind the header as not reached yet', () => {
+      const sc = scroller(200)
+      banded(sc, 52)
+      turn(sc, 'me', 20)
+      expect(previousUserTop(sc)).toBe(200 + 20 - 52)
+    })
+
+    it('lands the question below the band rather than at the scroller edge', () => {
+      const sc = scroller(200)
+      banded(sc, 52)
+      turn(sc, 'me', -50)
+      expect(previousUserTop(sc)).toBe(200 - 50 - 52)
+    })
   })
 })
