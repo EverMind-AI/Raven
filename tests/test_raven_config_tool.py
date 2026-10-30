@@ -115,6 +115,38 @@ async def test_the_skill_hub_switch_reads_with_what_is_in_effect(config_file):
 
 
 @pytest.mark.asyncio
+async def test_the_skill_hub_switch_is_not_reported_as_waiting_for_a_reload(config_file):
+    """Switching the source off stops the next search and switching it on is
+    live too while the endpoint is present, so the write does not owe a reload;
+    only a first enable that had to add the endpoint can wait, and the settings
+    service says so in that write's own answer."""
+    calls = Calls({"settings.set": {"applied": True, "previous": True}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+
+    reply = await _run(tool, action="set", path="skillForge.router.hub.enabled", value="false")
+
+    assert "at once" in reply
+    assert "Pending" not in reply
+    assert _pending(await _run(tool, action="describe")) is None
+
+
+@pytest.mark.asyncio
+async def test_a_settings_write_that_waits_for_a_reload_reaches_the_model(config_file):
+    """The switch-on that had to seed the endpoint cannot be searched with
+    until a reload. That cost arrives as the settings service's ``warning``; a
+    tool that drops it tells the model a change is already serving."""
+    warning = "Saved. Skill Hub search starts after Raven reloads."
+    calls = Calls({"settings.set": {"applied": True, "previous": False, "warning": warning}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+
+    reply = await _run(tool, action="set", path="skillForge.router.hub.enabled", value="true")
+
+    assert warning in reply
+
+
+@pytest.mark.asyncio
 async def test_a_section_or_instance_read_expands_to_what_is_configured(config_file):
     """A wildcard entry is read once per configured instance; an empty answer reads as "none configured"."""
     tool = RavenConfigTool()

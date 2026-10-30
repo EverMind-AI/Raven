@@ -561,12 +561,12 @@ SECTIONS: tuple[Section, ...] = (
                 "skillForge.router.hub.enabled",
                 "Search the shared Skill Hub during conversations",
                 "bool",
-                _E.RELOAD,
+                _E.IMMEDIATE,
                 writer="settings",
                 sensitive=("turning it back on resumes sending the turn's message text to the Skill Hub"),
                 note=(
                     "on only while skillForge.router.hub.endpoint is set, which a read shows as in_effect; "
-                    "switching it off applies at once; turning it on may wait for a reload"
+                    "switching it off applies at once; turning it on may wait for a reload, and the write says so"
                 ),
                 in_effect=_skill_hub_in_effect,
             ),

@@ -974,8 +974,8 @@ class RavenConfigTool(Tool):
             present, _ = surface.lookup(await asyncio.to_thread(surface.read_raw), instance)
             if not present:
                 raise LookupError(f"{instance} is not configured; describe {setting.path.split('.*')[0]} first")
-        previous = await self._write(setting, path, bound, value)
-        return self._report(path, setting.effect, previous, value) + self._unknown_tools(path, value)
+        previous, warning = await self._write(setting, path, bound, value)
+        return self._report(path, setting.effect, previous, value, warning=warning) + self._unknown_tools(path, value)
 
     async def _set_many(self, changes: dict[str, Any]) -> str:
         """Several settings under the one confirmation the user already gave.
@@ -1026,8 +1026,11 @@ class RavenConfigTool(Tool):
                 if setting.secret:
                     lines.append(await self._secret_outcome(path, setting, value))
                     continue
-                previous = await self._write(setting, path, bound, value)
-                lines.append(self._report(path, setting.effect, previous, value) + self._unknown_tools(path, value))
+                previous, warning = await self._write(setting, path, bound, value)
+                lines.append(
+                    self._report(path, setting.effect, previous, value, warning=warning)
+                    + self._unknown_tools(path, value)
+                )
             for name, fields in channels.items():
                 lines.append(await self._set_channel_fields(name, fields))
             for path, value in agents:
@@ -1073,13 +1076,21 @@ class RavenConfigTool(Tool):
         model, own = self._session_model(conversation)
         return model if own else f"{model} (the default)"
 
-    async def _write(self, setting: Setting, path: str, bound: list[str], value: Any) -> Any:
+    async def _write(self, setting: Setting, path: str, bound: list[str], value: Any) -> tuple[Any, str]:
+        """Write through the setting's owner: ``(previous, warning)``.
+
+        The warning is the owner's own sentence for a write that costs more than
+        the value -- a reload the serving process still owes -- and is empty
+        when it has nothing to add.
+        """
         writer = setting.writer
         if writer == "raw":
-            return await asyncio.to_thread(surface.write_value, path, value)
+            return await asyncio.to_thread(surface.write_value, path, value), ""
         if writer == "settings":
             result = await self._rpc("settings.set", {"key": path, "value": value})
-            return result.get("previous") if isinstance(result, dict) else None
+            previous = result.get("previous") if isinstance(result, dict) else None
+            warning = result.get("warning") if isinstance(result, dict) else None
+            return previous, str(warning) if warning else ""
         if writer == "config.model":
             model, provider = self._model_ref(value)
             if not provider:
@@ -1091,7 +1102,7 @@ class RavenConfigTool(Tool):
                     raise ValueError("session.model needs a conversation; this call is not part of one")
                 params |= {"scope": "session", "session_id": conversation}
             result = await self._rpc("config.set", params)
-            return result.get("previous") if isinstance(result, dict) else None
+            return (result.get("previous") if isinstance(result, dict) else None), ""
         if writer == "everos":
             model, provider = self._model_ref(value)
             if not provider:
@@ -1100,11 +1111,11 @@ class RavenConfigTool(Tool):
             await self._rpc(
                 "settings.everos_set", {"section": path.rsplit(".", 1)[1], "model": model, "provider": provider}
             )
-            return previous
+            return previous, ""
         if writer == "model.fields":
             result = await self._rpc("model.set_fields", {"slug": bound[0], "fields": {"api_base": value}})
             previous = result.get("previous") if isinstance(result, dict) else None
-            return previous.get("api_base") if isinstance(previous, dict) else previous
+            return (previous.get("api_base") if isinstance(previous, dict) else previous), ""
         raise ValueError(f"{path} has no writer in this process")
 
     async def _unset(self, path: str) -> str:
@@ -1377,7 +1388,7 @@ class RavenConfigTool(Tool):
 
     # -- helpers ---------------------------------------------------------------
 
-    def _report(self, path: str, effect: Effect, previous: Any, value: Any) -> str:
+    def _report(self, path: str, effect: Effect, previous: Any, value: Any, *, warning: str = "") -> str:
         line = (
             f"Set {path}: {json.dumps(previous, ensure_ascii=False, default=str)} -> "
             f"{json.dumps(value, ensure_ascii=False, default=str)}. It {EFFECT_TEXT[effect]}."
@@ -1388,6 +1399,8 @@ class RavenConfigTool(Tool):
                 f" Pending until {'a restart' if effect is Effect.RESTART else 'a reload'}: "
                 f"{sorted(self._pending)}. Batch further changes first, then call restart once."
             )
+        if warning:
+            line += f" {warning}"
         return line
 
     def _unknown_tools(self, path: str, value: Any) -> str:
