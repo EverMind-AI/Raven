@@ -6,6 +6,18 @@ All notable changes to Raven are documented here.
 
 ### Added
 
+- DeepSeek joins the `web_search` and `web_fetch` vendors:
+  `tools.web.search.provider: deepseek` and `tools.web.fetch.provider:
+  deepseek`. Its first-party endpoints run on the account its chat API uses,
+  so `tools.web.providers.deepseek.apiKey` is optional: an empty slot borrows
+  `providers.deepseek.apiKey`, and only while that section resolves to
+  `api.deepseek.com` -- a gateway or another host lends nothing, and an
+  endpoint's own key replaces the flat one it supersedes. Search sends the
+  query and count and renders the vendor's `summary`; a query over DeepSeek's
+  128-character limit is refused before the request with the limit and the
+  query's length. The research product, the deck launcher, the sub-agent fetch
+  lane and the onboarding wizard resolve the same borrowed key.
+
 - The settings dialog's **Skills** and **Plugins** pages have an **Add**
   button. Neither page can install anything -- a skill is fetched from Skill
   Hub by `use_skill` and an MCP server is connected from the PlugHub catalogue

@@ -1123,6 +1123,24 @@ def test_the_settings_page_borrows_exactly_the_schemas_borrowing_vendors() -> No
     assert _tsx_borrowed_vendors() == set(WEB_VENDOR_BORROWED_KEYS)
 
 
+def _tsx_own_web_hosts() -> dict[str, str]:
+    body = _SETTINGS_PAGE.read_text(encoding="utf-8")
+    found = re.search(r"const OWN_WEB_HOST[^=]*= \{([^}]*)\}", body, re.S)
+    assert found, f"OWN_WEB_HOST is gone from {_SETTINGS_PAGE.name}"
+    return dict(re.findall(r"(\w+):\s*['\"]([^'\"]+)['\"]", found.group(1)))
+
+
+def test_the_settings_page_checks_the_borrow_against_the_schemas_hosts() -> None:
+    """The page decides the "needs setup" badge from the host rule as well, so
+    its host table is the fourth copy of the borrow rule. Held to the schema's
+    copy here: a drifted host makes the page claim a key the server refuses --
+    the tool is withheld with nothing on the page saying why -- or hide one the
+    server grants."""
+    from raven.config.schema import WEB_VENDOR_WEB_HOSTS
+
+    assert _tsx_own_web_hosts() == dict(WEB_VENDOR_WEB_HOSTS)
+
+
 # --------------------------------------------------------------------------- #
 # The credential table as a hand-edited file reaches it
 # --------------------------------------------------------------------------- #
