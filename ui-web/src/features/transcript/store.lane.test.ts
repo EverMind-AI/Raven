@@ -682,3 +682,40 @@ describe('a merged run of silent steps', () => {
     expect(mergedOf(lane)?.wkOpen).toBe(false)
   })
 })
+
+/* The fold rule reads narration, not the answer. `finishTurn` promotes the
+   last thing the model said into the answer row before `collapse` builds the
+   fold, so a long answer cannot open the work over it. The answer-only shape
+   leaves no step in the fold at all; the shape that proves the clearing is an
+   answer sharing its step with a call, which keeps the step inside the fold. */
+describe('the turn answer is not what the fold rule reads', () => {
+  const folds = (lane: Lane): FoldData[] =>
+    lane.segs.filter((s): s is FoldData => s.kind === 'fold')
+
+  it('does not open over a long answer alone', () => {
+    const lane = store.newLane('main:answer', true)
+    store.askText(lane, 'Q')
+    const work = store.newStep(lane)
+    work.tool('read_file', {}, 'read_file', 'c1').done(true, 'ok', 5)
+    const last = store.newStep(lane)
+    last.sayDelta('A'.repeat(store.FOLD_KEEP_OPEN_CHARS + 60))
+    store.finishTurn(lane, last, [work.seg, last.seg], '5s')
+
+    const [fold] = folds(lane)
+    expect(fold?.open).toBe(false)
+    expect(fold?.steps.some((s: StepData) => s.say.length >= store.FOLD_KEEP_OPEN_CHARS)).toBe(false)
+  })
+
+  it('does not open when a long answer shares its step with a call', () => {
+    const lane = store.newLane('main:answer-with-call', true)
+    store.askText(lane, 'Q')
+    const st = store.newStep(lane)
+    st.setSay('B'.repeat(store.FOLD_KEEP_OPEN_CHARS + 60))
+    st.tool('read_file', {}, 'read_file', 'c1').done(true, 'ok', 5)
+    store.finishTurn(lane, st, [st.seg], '5s')
+
+    const [fold] = folds(lane)
+    expect(fold?.open).toBe(false)
+    expect(fold?.steps[0]?.say).toBe('')
+  })
+})
