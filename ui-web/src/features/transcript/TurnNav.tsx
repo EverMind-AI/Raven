@@ -18,9 +18,9 @@
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
-import { headerBand } from '../../chrome/behaviour/headerBand'
 import { t } from '../../i18n/t'
 import { ago } from '../../lib/ago'
+import { headerBand } from '../../lib/dom'
 import { shownLane } from './mount'
 import * as store from './store'
 import * as tail from './tail'
@@ -77,8 +77,8 @@ function goTo(seg: AskData): void {
   if (!scroll || !question) return
   tail.setStuck(false)
   /* The header floats over the scroller, so the question is put under its
-     lower edge rather than at the scroller's own top
-     (chrome/behaviour/headerBand). */
+     lower edge rather than at the scroller's own top (lib/dom.ts,
+     headerBand). */
   const top = scroll.scrollTop + question.getBoundingClientRect().top - scroll.getBoundingClientRect().top
     - headerBand() - LEAD
   scroll.scrollTo({ top: Math.max(0, top) })
