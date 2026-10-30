@@ -88,6 +88,9 @@ function windowOf(scrollTop: number, height: number, count: number): { first: nu
 
 const percent = (fraction: number): string => `${(fraction * 100).toFixed(4)}%`
 
+/** A drawn row's id, for the tree's active descendant. */
+const rowId = (at: number): string => `trajectory-wf-row-${at}`
+
 /* The duration stands just past the bar it belongs to; a bar that runs into
    the track's end would push it out, so it stops where the label still fits.
    A row whose bar is off the visible stretch keeps the label at the edge. */
@@ -526,6 +529,12 @@ export function Waterfall(): JSX.Element {
      lands somewhere the reader can see. */
   const selectedId = store.get().selectedId
   const selections = store.get().selections
+  /* Where the selection is drawn. The tree names it as its active descendant
+     only while it is mounted: an id the page does not hold is no descendant. */
+  const selectedAt = useMemo(
+    () => (selectedId === null ? -1 : rows.findIndex((row) => row.kind === 'span' && row.row?.entry.entry_id === selectedId)),
+    [rows, selectedId],
+  )
   useEffect(() => {
     if (selectedId === null) return
     const same = revealed.current.id === selectedId && revealed.current.tick === selections
@@ -611,6 +620,10 @@ export function Waterfall(): JSX.Element {
   )
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    /* A key pressed on a control inside a row -- a fold button, a door's
+       arrow -- is that control's: Enter there must not also act on the row
+       that holds the selection. */
+    if (event.target !== event.currentTarget) return
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End') {
       event.preventDefault()
       const selected = store.get().selectedId
@@ -695,19 +708,24 @@ export function Waterfall(): JSX.Element {
     const style = { top: at * ROW_HEIGHT, height: ROW_HEIGHT }
     if (row.kind === 'agent') {
       const bar = barOf(axis, view, agent.start, agent.end)
+      const agentOpen = !collapsed.has(agent.key)
+      const agentName = agent.scope === null ? t('gui.trajectory.scope.main') : scopeTitle(agent.door)
       painted.push(
-        <div key={row.key} className="trajectory-wf-row trajectory-wf-agent" data-row="agent" style={style}
+        <div key={row.key} id={rowId(at)} className="trajectory-wf-row trajectory-wf-agent" data-row="agent" style={style}
+          role="treeitem" aria-level={1} aria-expanded={agentOpen}
           onClick={() => toggleAgent(agent.key)}>
           <span className="trajectory-wf-label" style={{ paddingLeft: 12 }}>
-            <span className="trajectory-wf-chev" aria-hidden="true">
-              <Icon icon={collapsed.has(agent.key) ? ArrowRight01Icon : ArrowDown01Icon} size={14} />
-            </span>
+            {/* The fold control is a button, so the keyboard reaches it; its
+                click is the row's, which does the folding. */}
+            <button type="button" className="trajectory-wf-chev" aria-expanded={agentOpen} aria-label={agentName}>
+              <Icon icon={agentOpen ? ArrowDown01Icon : ArrowRight01Icon} size={14} />
+            </button>
             <span className="trajectory-wf-tile" data-tone={row.agent % 4}>
               {agent.scope === null || ownOf(agent)
                 ? <AgentMark own />
                 : presetOf(agent) === null ? <span className="trajectory-wf-glyph"><Icon icon={BotIcon} size={15} /></span> : <AgentMark preset={presetOf(agent)} />}
             </span>
-            <span className="trajectory-wf-name">{agent.scope === null ? t('gui.trajectory.scope.main') : scopeTitle(agent.door)}</span>
+            <span className="trajectory-wf-name">{agentName}</span>
             <span className="trajectory-wf-sub">{agentModel(agent)}</span>
           </span>
           <span className="trajectory-wf-track">
@@ -723,17 +741,19 @@ export function Waterfall(): JSX.Element {
       const parts = turnSegments(turn, now)
       const turnBar = barOf(axis, view, turn.start, turn.end)
       const openTurn = open.has(turnKey(row.agent, turn.id))
+      const turnName = t('gui.trajectory.turn.ordinal', { n: turn.ordinal })
       painted.push(
-        <div key={row.key} className="trajectory-wf-row trajectory-wf-turn" data-row="turn" style={style}
+        <div key={row.key} id={rowId(at)} className="trajectory-wf-row trajectory-wf-turn" data-row="turn" style={style}
+          role="treeitem" aria-level={2} aria-expanded={openTurn}
           data-open={openTurn ? '' : undefined} data-failed={turn.failure ? '' : undefined}
           data-from={turn.reportedFrom === null ? undefined : turn.reportedFrom}
           onClick={() => toggleTurn(turnKey(row.agent, turn.id))}>
           <span className="trajectory-wf-guide" style={{ left: GUIDE_X }} />
           <span className="trajectory-wf-label" style={{ paddingLeft: 26 }}>
-            <span className="trajectory-wf-chev" aria-hidden="true">
+            <button type="button" className="trajectory-wf-chev" aria-expanded={openTurn} aria-label={turnName}>
               <Icon icon={openTurn ? ArrowDown01Icon : ArrowRight01Icon} size={14} />
-            </span>
-            <span className="trajectory-wf-name">{t('gui.trajectory.turn.ordinal', { n: turn.ordinal })}</span>
+            </button>
+            <span className="trajectory-wf-name">{turnName}</span>
             {turn.failure ? <FailMark /> : null}
             {turn.preview === null ? null : <span className="trajectory-wf-sub">{turn.preview}</span>}
             {turn.reportedFrom === null ? null : <span className="trajectory-wf-from">{t('gui.trajectory.turn.from_report', { name: nameOfScope.get(turn.reportedFrom) ?? turn.reportedFrom })}</span>}
@@ -752,7 +772,8 @@ export function Waterfall(): JSX.Element {
     const entry = row.row!.entry
     const bar = barOf(axis, view, entryStart(entry), entryEnd(entry, now))
     painted.push(
-      <div key={row.key} className="trajectory-wf-row trajectory-wf-span" data-row="span" data-entry={entry.entry_id}
+      <div key={row.key} id={rowId(at)} className="trajectory-wf-row trajectory-wf-span" data-row="span" data-entry={entry.entry_id}
+        role="treeitem" aria-level={row.turn === null ? 2 : 3} aria-selected={entry.entry_id === selectedId}
         data-failed={entry.failure_entry ? '' : undefined} style={style} onClick={() => pick(row.row!)}>
         <span className="trajectory-wf-guide" style={{ left: GUIDE_X }} />
         <span className="trajectory-wf-guide" style={{ left: TURN_GUIDE_X }} />
@@ -795,13 +816,17 @@ export function Waterfall(): JSX.Element {
       <div className="trajectory-wf-head">
         <Ticks axis={axis} view={view} pick={picked} onPick={setPicked} count={tickCount} onWidth={setRulerWidth} />
       </div>
-      <div className="trajectory-list trajectory-wf-scroll" data-thumb="keep" tabIndex={-1} ref={attach}
+      {/* A tree, as the old list was a listbox: the box holds the focus, the
+          arrows move the selection, and the selected row is its active
+          descendant, so a screen reader follows the keys. */}
+      <div className="trajectory-list trajectory-wf-scroll" data-thumb="keep" tabIndex={0} ref={attach}
         onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
         onKeyDown={onKeyDown}
         onDoubleClick={() => setZoom(null)}
-        role="list" aria-label={t('gui.trajectory.agents')}>
-        <div className="trajectory-wf-rows" style={{ height: rows.length * ROW_HEIGHT }}>
-          <div className="trajectory-wf-links">
+        role="tree" aria-label={t('gui.trajectory.agents')}
+        aria-activedescendant={selectedAt >= first && selectedAt < last ? rowId(selectedAt) : undefined}>
+        <div className="trajectory-wf-rows" role="none" style={{ height: rows.length * ROW_HEIGHT }}>
+          <div className="trajectory-wf-links" aria-hidden="true">
             {tickMarks(axis, view, tickCount * 2).map((tick, index, marks) => (
               /* The last line keeps its pixel inside the track, the way the
                  ruler's does: a 1px box on the right edge makes the scroll
