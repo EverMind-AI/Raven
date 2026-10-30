@@ -122,3 +122,13 @@ it('labels a tick in one unit, the largest the value fills', () => {
   expect(formatTick(3_600_000)).toBe('1 h')
   expect(formatTick(3 * 3_600_000 + 30 * 60_000)).toBe('3 h 30 min')
 })
+
+it('rounds a mark to what it prints before picking its unit, so it never reads "60 min" or "1 h 60 min"', () => {
+  /* Ticks fall wherever the view puts them, so any value is possible. */
+  expect(formatTick(59_940)).toBe('59.9 s')
+  expect(formatTick(59_960)).toBe('1 min')
+  expect(formatTick(3_599_000)).toBe('1 h')
+  expect(formatTick(7_199_000)).toBe('2 h')
+  expect(formatTick(3 * 3_600_000 + 59 * 60_000 + 40_000)).toBe('4 h')
+  expect(formatTick(3 * 3_600_000 + 59 * 60_000 + 20_000)).toBe('3 h 59 min')
+})

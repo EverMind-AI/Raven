@@ -233,18 +233,20 @@ export function formatTick(ms: number, step = 1): string {
     return '0 ms'
   }
   if (at < 1000) return `${at} ms`
-  if (at < 60_000) {
-    const seconds = at / 1000
-    return Number.isInteger(seconds) ? `${seconds} s` : `${seconds.toFixed(1)} s`
-  }
-  if (at < 3_600_000) {
-    const minutes = at / 60_000
-    return Number.isInteger(minutes) ? `${minutes} min` : `${minutes.toFixed(1)} min`
-  }
-  const hours = Math.floor(at / 3_600_000)
-  const rest = Math.round((at % 3_600_000) / 60_000)
+  /* Each unit is chosen on the value as it will print, rounded to its one
+     decimal: chosen on the raw value, 59.96 s printed as "60.0 s" and 3 h
+     59 min 40 s as "3 h 60 min". */
+  const tenthsOfSecond = Math.round(at / 100)
+  if (tenthsOfSecond < 600) return `${trimmed(tenthsOfSecond / 10)} s`
+  const tenthsOfMinute = Math.round(at / 6000)
+  if (tenthsOfMinute < 600) return `${trimmed(tenthsOfMinute / 10)} min`
+  const minutes = Math.round(at / 60_000)
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
   return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`
 }
+
+const trimmed = (value: number): string => (Number.isInteger(value) ? String(value) : value.toFixed(1))
 
 /** The ruler's marks: a handful of positions across the viewport, labelled with
  *  the real elapsed time at that point. Positions come from the viewport (so a
