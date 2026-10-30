@@ -176,23 +176,37 @@ html[data-theme="dark"] {
 .trajectory-body > .trajectory-list { flex: 1; min-width: 0; }
 /* The pane is a card laid over the list's right side: the list keeps its
    whole width, so opening the pane never moves the axis under the reader.
-   It starts below the header, whose window presets and fold button stay in
-   reach. Plain paper, rounded, lifted by a shadow; under 800px it covers the
-   whole area. */
+   It opens below the header, whose window presets and fold button stay in
+   reach, and a height the reader gives it stops at the bottom of the room
+   there. Plain paper, rounded, lifted by a shadow; under 800px it covers the
+   whole area. The 10px is the store's CARD_GAP, which a moved card keeps. */
 .trajectory-details {
   position: absolute; top: calc(var(--wf-stats-h) + 10px); right: 10px; bottom: 10px; z-index: 6;
+  max-height: calc(100% - var(--wf-stats-h) - 20px);
   display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;
   border: 1px solid var(--trajectory-card-line); border-radius: 14px;
   background: var(--paper); box-shadow: var(--trajectory-card-shadow);
 }
 .trajectory-details-over { inset: 10px; width: auto; }
+/* A moved card is placed and sized by the store, which holds it inside the
+   area; the narrow one covers the area. */
+.trajectory-details[data-moved], .trajectory-details-over { max-height: none; }
 
-/* The card's left edge: a 6px grab area drawn as a hairline, lit while dragged. */
-.trajectory-grip {
-  position: absolute; top: 0; bottom: 0; left: 0; z-index: 2; width: 6px; cursor: col-resize; outline: 0;
+/* The size handle, on the corner that is free: bottom-left where the card
+   opens, its right edge pinned there, and bottom-right once moved -- the desk
+   palette's own handle and hatch, set in from the rounded corner. */
+.trajectory-corner {
+  position: absolute; left: 0; bottom: 0; z-index: 3; width: 18px; height: 18px; cursor: nesw-resize; touch-action: none;
 }
-.trajectory-grip::after { content: ''; position: absolute; inset: 0 2px; background: transparent; transition: background .12s; }
-.trajectory-grip:hover::after, .trajectory-grip[data-drag]::after, .trajectory-grip:focus-visible::after { background: var(--amber); }
+.trajectory-corner::after {
+  content: ''; position: absolute; left: 5px; bottom: 5px; width: 9px; height: 9px; opacity: .55; pointer-events: none;
+  background: linear-gradient(45deg, transparent 48%, var(--faint) 50%, var(--faint) 57%, transparent 59%, transparent 70%, var(--faint) 72%, var(--faint) 79%, transparent 81%);
+}
+.trajectory-details[data-moved] .trajectory-corner { left: auto; right: 0; cursor: nwse-resize; }
+.trajectory-details[data-moved] .trajectory-corner::after {
+  left: auto; right: 5px;
+  background: linear-gradient(135deg, transparent 48%, var(--faint) 50%, var(--faint) 57%, transparent 59%, transparent 70%, var(--faint) 72%, var(--faint) 79%, transparent 81%);
+}
 
 /* ── the pane's head and tabs ───────────────────────────────────── */
 
@@ -200,6 +214,9 @@ html[data-theme="dark"] {
   flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 14px; min-height: 40px;
   border-bottom: 1px solid var(--line-soft);
 }
+/* What the card moves by, wherever it can move. */
+.trajectory-details:not(.trajectory-details-over) > .trajectory-head { cursor: grab; touch-action: none; user-select: none; }
+.trajectory-head[data-dragging] { cursor: grabbing; }
 .trajectory-head-name { flex: 1; min-width: 0; font-size: 12.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .trajectory-close {
   flex: none; height: 26px; min-width: 26px; padding: 0 8px; border-radius: 7px; color: var(--muted);

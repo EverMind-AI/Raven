@@ -9,6 +9,7 @@ import { absorb, resetCapabilities } from '../../rpc/capabilities'
 import { RpcError } from '../../rpc/transport'
 import { _resetFreshForTests, unpitch } from '../../state/session/conversation'
 import { resetSources, setSources } from '../../state/sources'
+import * as details from './detailStore'
 import * as store from './store'
 import { CrashBoundary, TrajectoryApp } from './TrajectoryApp'
 
@@ -76,6 +77,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  vi.restoreAllMocks()
   resetSources()
   resetTranslator()
   document.body.innerHTML = ''
@@ -102,6 +104,14 @@ describe('the trajectory island', () => {
     ])
     act(() => { store.liveFailed(new RpcError(-32603, 'internal')) })
     expect(status()).toContain('gui.trajectory.fault {"detail":"internal"}')
+  })
+
+  it('measures the area the pane floats in, across and down', async () => {
+    details._resetForTests()
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1200)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(800)
+    await draw()
+    expect([details.get().areaWidth, details.get().areaHeight]).toEqual([1200, 800])
   })
 
   it('subscribes to the language, like every island', () => {

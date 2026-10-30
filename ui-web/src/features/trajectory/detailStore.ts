@@ -150,12 +150,20 @@ export interface FileBody {
 
 export type Tab = 'overview' | string
 
+export interface Place { x: number; y: number }
+
 export interface DetailsState {
   open: boolean
   /** The reader's own width in pixels, or null for the default. */
   width: number | null
+  /** The reader's own height in pixels, or null for all the room under the header. */
+  height: number | null
+  /** Where the reader moved the pane, its top-left corner in the area's pixels; null while it sits where it opens. */
+  place: Place | null
   /** The trajectory area's width, as the island measured it. */
   areaWidth: number
+  /** The trajectory area's height, as the island measured it. */
+  areaHeight: number
   /** The identity of the descriptor the pane is showing, once one was accepted. */
   current: Identity | null
   /** The list says the selected entry moved on; the descriptor is to be read again. */
@@ -201,7 +209,15 @@ export interface DetailsState {
 export const DEFAULT_WIDTH = 480
 export const MIN_WIDTH = 320
 export const NARROW_BELOW = 800
-export const RESIZE_STEP = 16
+export const MIN_HEIGHT = 240
+/** The pane's margin from the area's edges wherever it is: the stylesheet's own 10px where it opens. */
+export const CARD_GAP = 10
+/* How far a press on the head travels before it moves the pane, and how near
+   where the pane opens a drop has to land to put it back there: the desk
+   palette's own numbers (features/desk/geometry.ts), so the two floating
+   cards answer the hand alike. */
+export const DRAG_THRESHOLD = 4
+export const SNAP_DISTANCE = 34
 /** Bytes of descriptors and block bodies kept at once. */
 export const BUDGET = 8 * 1024 * 1024
 /** Pages of one block kept at once; the earliest go as more arrive. */
@@ -217,7 +233,10 @@ export const REVISION_RETRIES = 3
 const initial: DetailsState = {
   open: false,
   width: null,
+  height: null,
+  place: null,
   areaWidth: 0,
+  areaHeight: 0,
   current: null,
   stale: false,
   unstable: false,
@@ -379,6 +398,27 @@ export const detailsWidthPx = (s: DetailsState = store.get()): number => {
 
 export const narrow = (s: DetailsState = store.get()): boolean => s.areaWidth > 0 && s.areaWidth < NARROW_BELOW
 
+/* A height the reader set, held between the minimum and the area; null while
+   the pane fills the room under the header, which the stylesheet sizes. */
+export const detailsHeightPx = (s: DetailsState = store.get()): number | null => {
+  if (s.height === null) return null
+  const ceiling = s.areaHeight > 0 ? s.areaHeight - 2 * CARD_GAP : Number.POSITIVE_INFINITY
+  return Math.max(MIN_HEIGHT, Math.min(s.height, Math.max(MIN_HEIGHT, ceiling)))
+}
+
+/* Where a pane drawn `height` tall goes with its corner at `at`: wholly
+   inside the area, a gap from each edge. */
+export const holdPlace = (at: Place, height: number, s: DetailsState = store.get()): Place => {
+  const along = (value: number, size: number, area: number): number =>
+    Math.round(area > 0 ? Math.max(CARD_GAP, Math.min(value, area - size - CARD_GAP)) : value)
+  return { x: along(at.x, detailsWidthPx(s), s.areaWidth), y: along(at.y, height, s.areaHeight) }
+}
+
+/* Where a moved pane is drawn, held against the area as it is now: the
+   reader's own place comes back once the area grows again. */
+export const detailsPlace = (s: DetailsState = store.get()): Place | null =>
+  s.place === null ? null : holdPlace(s.place, detailsHeightPx(s) ?? MIN_HEIGHT, s)
+
 export function openDetails(): void {
   if (store.get().open) return
   bump()
@@ -400,13 +440,37 @@ export function closeDetails(): void {
   patch({ open: false, swapped: false, arrival: null })
 }
 
-export function setWidth(px: number): void {
-  patch({ width: Math.round(px) })
-}
-
 export function setAreaWidth(px: number): void {
   if (store.get().areaWidth === px) return
   patch({ areaWidth: px })
+}
+
+export function setAreaHeight(px: number): void {
+  if (store.get().areaHeight === px) return
+  patch({ areaHeight: px })
+}
+
+/** The reader's pull on the pane's corner. */
+export function resizeDetails(width: number, height: number): void {
+  patch({ width: Math.round(width), height: Math.round(height) })
+}
+
+/* Where a moved pane comes to rest: back where it opens when let go within
+   SNAP_DISTANCE of there -- as tall as the room there again,
+   unless the reader made it shorter -- and where it was let go otherwise.
+   `height` is the pane's drawn height, which a pane leaving its place keeps;
+   `homeTop` is that place's top, NaN when it is not known. */
+export function dropDetails(at: Place, height: number, homeTop: number): void {
+  const s = store.get()
+  const kept = s.height ?? Math.round(height)
+  const held = holdPlace(at, detailsHeightPx({ ...s, height: kept }) ?? kept, s)
+  const homeX = s.areaWidth - CARD_GAP - detailsWidthPx(s)
+  if (Math.abs(held.x - homeX) <= SNAP_DISTANCE && Math.abs(held.y - homeTop) <= SNAP_DISTANCE) {
+    const room = s.areaHeight - homeTop - CARD_GAP
+    patch({ place: null, height: kept < room - 1 ? kept : null })
+    return
+  }
+  patch({ place: held, height: kept })
 }
 
 export const tabOf = (entryId: string): Tab => store.get().tabByEntry[entryId] ?? 'overview'
@@ -1304,7 +1368,10 @@ function follow(): void {
     inflight.clear()
     revisionHops = 0
     const d = store.get()
-    store.set({ ...initial, paused: !now.permitted, width: d.width, areaWidth: d.areaWidth, pins: withPinOf(d.pins, now.sessionKey) })
+    store.set({
+      ...initial, paused: !now.permitted, width: d.width, height: d.height, place: d.place,
+      areaWidth: d.areaWidth, areaHeight: d.areaHeight, pins: withPinOf(d.pins, now.sessionKey),
+    })
     return
   }
   /* The view left or came back, the switch flipped, the snapshot was let go:

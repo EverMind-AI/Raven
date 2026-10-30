@@ -42,6 +42,27 @@ describe('the details pane', () => {
     expect(effective(['.trajectory-details'], 'top')).toMatch(/^calc\(var\(--wf-stats-h\) \+ \d+px\)$/)
   })
 
+  it('stops a pane the reader made taller at the bottom of the room under the header, and lifts that once moved or narrow', () => {
+    expect(effective(['.trajectory-details'], 'max-height')).toBe('calc(100% - var(--wf-stats-h) - 20px)')
+    expect(effective(['.trajectory-details', '.trajectory-details[data-moved]'], 'max-height')).toBe('none')
+    expect(effective(['.trajectory-details', '.trajectory-details-over'], 'max-height')).toBe('none')
+  })
+
+  it('puts the size handle on the free corner: bottom-left where the pane opens, bottom-right once moved', () => {
+    const moved = ['.trajectory-corner', '.trajectory-details[data-moved] .trajectory-corner']
+    expect(['position', 'left', 'bottom'].map((side) => effective(['.trajectory-corner'], side))).toEqual(['absolute', '0', '0'])
+    expect(['left', 'right', 'bottom'].map((side) => effective(moved, side))).toEqual(['auto', '0', '0'])
+  })
+
+  /* A touch drag on either would scroll the page, and a mouse drag on the head
+     would select its name. */
+  it('lets the head and the size handle be dragged by touch as well as by mouse', () => {
+    const head = ['.trajectory-details:not(.trajectory-details-over) > .trajectory-head']
+    expect(effective(head, 'touch-action')).toBe('none')
+    expect(effective(head, 'user-select')).toBe('none')
+    expect(effective(['.trajectory-corner'], 'touch-action')).toBe('none')
+  })
+
   /* The narrow pane carries both classes, and is the same card over the whole area. */
   for (const pane of [['.trajectory-details'], ['.trajectory-details', '.trajectory-details-over']]) {
     it(`is a white card with rounded corners (${pane.join(' ')})`, () => {

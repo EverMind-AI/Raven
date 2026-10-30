@@ -23,8 +23,9 @@ first error -- and an activity strip shows its calls across the whole
 session, with idle stretches folded. Below, each agent is one row: a capsule
 for each stretch it worked, and how long it was busy. Open an agent to see
 its turns, and a turn to see its steps; hover a turn to see what its time
-went on, and click a step to open its details. Pick Fit, 3h, 1h or 15m to set
-the window, drag across the activity strip to choose one, or drag its frame
+went on, and click a step to open its details in a card you can move by its
+top bar and resize from its corner. Pick Fit, 3h, 1h or 15m to set the
+window, drag across the activity strip to choose one, or drag its frame
 to move it; hold Ctrl (Cmd on macOS) and scroll to zoom, or hold Shift and
 scroll to move along the timeline. Agents with nothing in the window fold
 into one row before it and one after. A step that failed carries a red mark,

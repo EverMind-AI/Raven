@@ -5,8 +5,9 @@
  * The root subscribes to the language itself, like every island, and to the
  * store for the few facts the status line reads; the waterfall and the pane
  * have their own subscriptions so a scroll in one does not redraw the other. The
- * root also measures its own width for the pane: how wide the card may be,
- * and whether the area is too narrow to leave the list any of its width.
+ * root also measures its own size for the pane: how wide the card may be,
+ * whether the area is too narrow to leave the list any of its width, and the
+ * bounds the card is moved and sized within.
  */
 
 import { Component, useCallback, useRef, useSyncExternalStore } from 'react'
@@ -46,25 +47,31 @@ function Status(): JSX.Element | null {
 
 /* The list at its whole width, the pane floating over its right side -- or
    over all of it when the area is narrow. Open or not is the details store's;
-   the card's width is the store's clamp of the reader's own number against
-   the area measured here. */
+   the card's size and place are the store's clamp of the reader's own numbers
+   against the area measured here. */
 function Body(): JSX.Element {
-  const d = useSyncExternalStore(details.subscribe, details.get)
+  /* Only what the body itself says: the card's size and place are the card's,
+     and the corner writes them on every pointer move -- read whole, the store
+     redrew every row under the card each frame. */
+  const open = useSyncExternalStore(details.subscribe, () => details.get().open)
+  const narrow = useSyncExternalStore(details.subscribe, () => details.narrow())
   const observer = useRef<ResizeObserver | null>(null)
   const attach = useCallback((el: HTMLDivElement | null): void => {
     observer.current?.disconnect()
     observer.current = null
     if (!el) return
-    const measure = (): void => { details.setAreaWidth(el.clientWidth) }
+    const measure = (): void => {
+      details.setAreaWidth(el.clientWidth)
+      details.setAreaHeight(el.clientHeight)
+    }
     measure()
     if (typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(measure)
     ro.observe(el)
     observer.current = ro
   }, [])
-  const narrow = details.narrow(d)
   return (
-    <div className="trajectory-body" ref={attach} data-details={d.open ? '' : undefined} data-narrow={narrow ? '' : undefined}>
+    <div className="trajectory-body" ref={attach} data-details={open ? '' : undefined} data-narrow={narrow ? '' : undefined}>
       <Waterfall />
       <Details />
     </div>
