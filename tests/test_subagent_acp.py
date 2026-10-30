@@ -3629,6 +3629,29 @@ async def test_a_run_whose_agent_died_mid_turn_still_writes_the_steps_it_took(tr
     assert ext["attributes"]["subagent.external.steps"] == len(steps)
 
 
+async def test_a_prompt_that_never_went_out_writes_no_steps(trace_dir, tmp_path: Path, monkeypatch) -> None:
+    """A turn that failed before its prompt was sent records no step: a prompt
+    step there would say the agent was asked what it never received."""
+    from raven.acp_client import client as client_mod
+    from raven.acp_client.protocol import AcpConnectionError
+
+    real = client_mod.AcpClient.request
+
+    async def refuse_prompt(self, method, params=None, **kwargs):
+        if method == "session/prompt":
+            raise AcpConnectionError("acp agent 'a': connection is not open")
+        return await real(self, method, params, **kwargs)
+
+    monkeypatch.setattr(client_mod.AcpClient, "request", refuse_prompt)
+    backend = build_third_party_backend(stub_config("a", mode="two_messages"))
+    with pytest.raises(AcpConnectionError):
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    ext, steps = _steps_of_the_run(trace_dir)
+    assert steps == []
+    assert "subagent.external.steps" not in ext["attributes"]
+
+
 async def test_a_backfill_after_a_live_run_writes_no_second_copy_of_its_steps(trace_dir, tmp_path: Path) -> None:
     """The run's journal is on disk as well, so the backfill could read the
     same steps out of it again under ids of its own, and every step would be

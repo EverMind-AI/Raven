@@ -234,8 +234,8 @@ export function formatTick(ms: number, step = 1): string {
   }
   if (at < 1000) return `${at} ms`
   /* Each unit is chosen on the value as it will print, rounded to its one
-     decimal: chosen on the raw value, 59.96 s printed as "60.0 s" and 3 h
-     59 min 40 s as "3 h 60 min". */
+     decimal: chosen on the raw value, 59.96 s would print as "60.0 s" and
+     3 h 59 min 40 s as "3 h 60 min". */
   const tenthsOfSecond = Math.round(at / 100)
   if (tenthsOfSecond < 600) return `${trimmed(tenthsOfSecond / 10)} s`
   const tenthsOfMinute = Math.round(at / 6000)
