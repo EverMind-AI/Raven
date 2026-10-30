@@ -25,7 +25,7 @@ import * as store from '../store'
 import { AxisIndex, TRAIL_PAD, barOf, clampViewport, presetWindow, zoomViewport } from './axis'
 import { lengthOf, spanOf, windowText } from './clock'
 import { WaterfallIndex } from './incremental'
-import { entryEnd, entryStart, isLive, turnKey } from './model'
+import { busyRuns, entryEnd, entryStart, isLive, turnKey } from './model'
 import { OverviewLanes } from './OverviewLanes'
 import { turnSegments } from './segments'
 import { summarize } from './summary'
@@ -95,15 +95,6 @@ const percent = (fraction: number): string => `${(fraction * 100).toFixed(4)}%`
 
 /** A drawn row's id, for the tree's active descendant. */
 const rowId = (at: number): string => `trajectory-wf-row-${at}`
-
-/* The duration stands just past the bar it belongs to; a bar that runs into
-   the track's end would push it out, so it stops where the label still fits.
-   A row whose bar is off the visible stretch keeps the label at the edge. */
-const TIME_RESERVE = 104
-const timeStyle = (bar: { left: number; width: number } | null): { left?: string; right?: number } =>
-  bar === null
-    ? { right: 12 }
-    : { left: `min(calc(${percent(bar.left + bar.width)} + 8px), calc(100% - ${TIME_RESERVE}px))` }
 
 /** Who the agents were, as the header's second line: zero counts are left out. */
 function agentSplit(agents: Figures['agents']): string | null {
@@ -745,9 +736,14 @@ export function Waterfall(): JSX.Element {
         }
       }
     }
-    return { nameOfScope, slowestId, figures: summarize(waterfall, shown, now) }
+    /* An agent's busy time: its runs of work merged, never its lifetime. */
+    const busy = new Map<string, number>()
+    for (const agent of waterfall.agents) {
+      busy.set(agent.key, busyRuns(agent, now).reduce((sum, run) => sum + run.end - run.start, 0))
+    }
+    return { nameOfScope, slowestId, busy, figures: summarize(waterfall, shown, now) }
   }, [shown, waterfall, now])
-  const { nameOfScope, slowestId, figures } = summary
+  const { nameOfScope, slowestId, busy, figures } = summary
   const errors = figures.errors
   const jumpToFirstError = (): void => {
     if (figures.firstError === null) return
@@ -795,10 +791,10 @@ export function Waterfall(): JSX.Element {
             </span>
             <span className="trajectory-wf-name">{agentName}</span>
             <span className="trajectory-wf-sub">{agentModel(agent)}</span>
+            <span className="trajectory-wf-busy">{formatDuration(busy.get(agent.key) ?? 0)}</span>
           </span>
           <span className="trajectory-wf-track">
             {bar ? <i className="trajectory-wf-agentbar" style={{ left: percent(bar.left), width: percent(bar.width) }} /> : null}
-            <span className="trajectory-wf-time" style={timeStyle(bar)}>{formatDuration(agent.end - agent.start)}</span>
           </span>
         </div>,
       )
@@ -807,7 +803,6 @@ export function Waterfall(): JSX.Element {
     if (row.kind === 'turn') {
       const turn = row.turnRow!
       const parts = turnSegments(turn, now)
-      const turnBar = barOf(axis, view, turn.start, turn.end)
       const openTurn = open.has(turnKey(row.agent, turn.id))
       const turnName = t('gui.trajectory.turn.ordinal', { n: turn.ordinal })
       painted.push(
@@ -825,13 +820,13 @@ export function Waterfall(): JSX.Element {
             {turn.failure ? <FailMark /> : null}
             {turn.preview === null ? null : <span className="trajectory-wf-sub">{turn.preview}</span>}
             {turn.reportedFrom === null ? null : <span className="trajectory-wf-from">{t('gui.trajectory.turn.from_report', { name: nameOfScope.get(turn.reportedFrom) ?? turn.reportedFrom })}</span>}
+            <span className="trajectory-wf-busy">{formatDuration(turn.end - turn.start)}</span>
           </span>
           <span className="trajectory-wf-track">
             {parts.map((part, index) => {
               const slice = barOf(axis, view, part.start, part.end)
               return slice ? <i key={index} className={`trajectory-wf-seg trajectory-wf-seg-${part.kind}`} style={{ left: percent(slice.left), width: percent(slice.width) }} /> : null
             })}
-            <span className="trajectory-wf-time" style={timeStyle(turnBar)}>{formatDuration(turn.end - turn.start)}</span>
           </span>
         </div>,
       )
@@ -856,10 +851,10 @@ export function Waterfall(): JSX.Element {
               title={t('gui.trajectory.scope.opens')}
               onClick={(event) => { event.stopPropagation(); locate(entry) }}>{'\u2197'}</button>
           )}
+          <span className="trajectory-wf-busy">{formatDuration(entryEnd(entry, now) - entryStart(entry))}</span>
         </span>
         <span className="trajectory-wf-track">
           {bar ? <i className={`trajectory-wf-spanbar ${spanClass(entry)}`} style={{ left: percent(bar.left), width: percent(bar.width) }} /> : null}
-          <span className="trajectory-wf-time" style={timeStyle(bar)}>{formatDuration(entryEnd(entry, now) - entryStart(entry))}</span>
         </span>
       </div>,
     )
@@ -931,16 +926,19 @@ export function Waterfall(): JSX.Element {
       </div>
       <OverviewLanes waterfall={waterfall} axis={axis} viewport={view} />
       <div className="trajectory-wf-head">
-        {waterfall.agents.length === 0 ? <div /> : (
-          <div className="trajectory-wf-window" data-start={windowFrom} data-end={windowTo}>
-            <b>{named.day}</b>
-            <span>
-              {zoomedView
-                ? t('gui.trajectory.window.zoomed', { from: named.from, to: named.to, length: lengthOf(windowTo - windowFrom) })
-                : t('gui.trajectory.window.whole', { from: named.from, to: named.to })}
-            </span>
-          </div>
-        )}
+        <div className="trajectory-wf-headlabel">
+          {waterfall.agents.length === 0 ? null : (
+            <div className="trajectory-wf-window" data-start={windowFrom} data-end={windowTo}>
+              <b>{named.day}</b>
+              <span>
+                {zoomedView
+                  ? t('gui.trajectory.window.zoomed', { from: named.from, to: named.to, length: lengthOf(windowTo - windowFrom) })
+                  : t('gui.trajectory.window.whole', { from: named.from, to: named.to })}
+              </span>
+            </div>
+          )}
+          <span className="trajectory-wf-busyhead">{t('gui.trajectory.busy')}</span>
+        </div>
         <Ticks axis={axis} view={view} pick={pickOnView} onPick={pickFromView} ticks={marks} step={step} onWidth={setRulerWidth} />
       </div>
       {/* A tree, as the old list was a listbox: the box holds the focus, the

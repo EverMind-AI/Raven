@@ -62,9 +62,9 @@ function merge(intervals: readonly Interval[]): Interval[] {
 }
 
 /** The empty scale left after the last bar, as a fraction of the projected
- *  length: the rows draw their duration just past the bar, and the longest
- *  bar has to end before the track's edge for that label to have a place. */
-export const TRAIL_PAD = 0.15
+ *  length: a row's durations stand in a column of their own, so this only
+ *  keeps the session's end off the track's edge, where a row's arrow sits. */
+export const TRAIL_PAD = 0.02
 
 /** The pieces and the closures over them, from runs that are already merged. */
 function axisOf(runs: readonly Interval[], options: { idleMs?: number; gapWidth?: number; pad?: number }): TimeAxis {

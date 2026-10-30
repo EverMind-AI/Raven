@@ -804,18 +804,20 @@ it('offers no jump when nothing failed', async () => {
 
 describe('the clock ruler', () => {
   const local = (h: number, m = 0): string => new Date(2026, 9, 28, h, m).toISOString()
-  const session = (): TrajectoryEntry[] => [E('long', 0, { operation_start: local(10), operation_end: local(13) })]
+  const session = (): TrajectoryEntry[] => [E('long', 0, { operation_start: local(10), operation_end: local(13, 10) })]
 
   it('labels the ruler in clock time, the whole hours major', async () => {
     await draw(session())
     const labels = [...document.querySelectorAll<HTMLElement>('.trajectory-ruler b')]
-    expect(labels.map((b) => b.textContent)).toEqual(['10:30', '11:00', '11:30', '12:00', '12:30', '13:00'])
+    expect(labels.map((b) => b.textContent)).toEqual([
+      '10:15', '10:30', '10:45', '11:00', '11:15', '11:30', '11:45', '12:00', '12:15', '12:30', '12:45', '13:00',
+    ])
     expect(labels.filter((b) => b.hasAttribute('data-major')).map((b) => b.textContent)).toEqual(['11:00', '12:00', '13:00'])
   })
 
   it('draws a grid line under every mark, the major ones set apart', async () => {
     await draw(session())
-    expect(count('.trajectory-wf-grid')).toBe(7)
+    expect(count('.trajectory-wf-grid')).toBe(13)
     expect(count('.trajectory-wf-grid[data-major]')).toBe(4)
   })
 
@@ -823,7 +825,7 @@ describe('the clock ruler', () => {
     await draw(session())
     const label = document.querySelector<HTMLElement>('.trajectory-wf-window')!
     expect(label.querySelector('b')?.textContent).toBe(dayOf(Date.parse(local(10)), { weekday: true }))
-    expect(label.textContent).toContain('gui.trajectory.window.whole {"from":"10:00","to":"13:00"}')
+    expect(label.textContent).toContain('gui.trajectory.window.whole {"from":"10:00","to":"13:10"}')
   })
 
   it('names a zoomed window by its length', async () => {
@@ -832,7 +834,7 @@ describe('the clock ruler', () => {
     act(() => { box.dispatchEvent(wheel({ deltaY: -240, clientX: 100, ctrlKey: true, bubbles: true, cancelable: true })) })
     const label = document.querySelector<HTMLElement>('.trajectory-wf-window')!
     expect(label.textContent).toMatch(/gui\.trajectory\.window\.zoomed \{"from":"\d\d:\d\d","to":"\d\d:\d\d","length":"[^"]+"\}/)
-    expect(shownWindow().to - shownWindow().from).toBeLessThan(Date.parse(local(13)) - Date.parse(local(10)))
+    expect(shownWindow().to - shownWindow().from).toBeLessThan(Date.parse(local(13, 10)) - Date.parse(local(10)))
   })
 })
 
@@ -849,8 +851,9 @@ describe('the window presets and the fold-all button', () => {
     act(() => { fireEvent.click(preset('1h')) })
     const narrowed = shownWindow()
     expect(narrowed.to - narrowed.from).toBe(3_600_000)
-    /* The middle of 09:00 to the axis's end, its trailing scale included. */
-    expect(narrowed.from).toBe(Date.parse(local(14, 15)))
+    /* The middle of 09:00 to the axis's end, its 2% trailing scale included:
+       14:06, so the hour opens at 13:36. */
+    expect(narrowed.from).toBe(Date.parse(local(13, 36)))
     expect(pressed()).toEqual(['gui.trajectory.zoom.1h'])
     act(() => { fireEvent.click(preset('fit')) })
     expect(pressed()).toEqual(['gui.trajectory.zoom.fit'])
@@ -880,5 +883,29 @@ describe('the window presets and the fold-all button', () => {
     act(() => { fireEvent.click(document.querySelector('[data-row="agent"]')!) })
     expect(count('[data-row="turn"]')).toBeGreaterThan(0)
     expect(count('[data-row="span"]')).toBe(0)
+  })
+})
+
+describe('the busy column', () => {
+  const base = Date.parse('2026-10-28T10:00:00.000Z')
+  const at2 = (seconds: number): string => new Date(base + seconds * 1000).toISOString()
+  const busy = (row: Element | null | undefined): string | null | undefined => row?.querySelector('.trajectory-wf-busy')?.textContent
+
+  it('prints each row’s busy time in a column of its own, not beside its bar', async () => {
+    await draw([
+      E('a', 0, { operation_start: at2(0), operation_end: at2(3) }),
+      E('b', 10, { turn_span_id: 'T2', operation_start: at2(10), operation_end: at2(11) }),
+    ])
+    /* The agent worked 3 s and then 1 s; it was alive for 11. */
+    expect(busy(document.querySelector('[data-row="agent"]'))).toBe('4s')
+    expect([...document.querySelectorAll('[data-row="turn"]')].map(busy)).toEqual(['3s', '1s'])
+    act(() => { fireEvent.click(document.querySelector('[data-row="turn"]')!) })
+    expect(busy(document.querySelector('[data-entry="a"]'))).toBe('3s')
+    expect(count('.trajectory-wf-time')).toBe(0)
+  })
+
+  it('heads the column above the rows', async () => {
+    await draw([E('a', 0)])
+    expect(document.querySelector('.trajectory-wf-head .trajectory-wf-busyhead')?.textContent).toBe('gui.trajectory.busy')
   })
 })

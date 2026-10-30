@@ -4,7 +4,7 @@
 
 import { expect, it } from 'vitest'
 
-import { buildWaterfall, entryEnd, isLive } from './model'
+import { buildWaterfall, busyRuns, entryEnd, isLive } from './model'
 
 import type { TrajectoryEntry } from '../types'
 
@@ -178,4 +178,19 @@ it('keeps runs of differently named agents apart', () => {
     E({ entry_id: 'b1', span_id: 'b1', subagent_scope: 't:b', turn_span_id: 'B1', operation_start: at(6), operation_end: at(7) }),
   ], NOW)
   expect(w.agents).toHaveLength(3)
+})
+
+it('reads an agent’s busy time as its turns and loose rows merged, not its lifetime', () => {
+  const T0 = Date.parse('2026-10-28T10:00:00.000Z')
+  const at = (seconds: number): string => new Date(T0 + seconds * 1000).toISOString()
+  const waterfall = buildWaterfall([
+    E({ entry_id: 'a', span_id: 'a', turn_span_id: 'T1', operation_start: at(0), operation_end: at(3) }),
+    E({ entry_id: 'b', span_id: 'b', turn_span_id: 'T2', operation_start: at(2), operation_end: at(5) }),
+    E({ entry_id: 'c', span_id: 'c', turn_span_id: 'T3', operation_start: at(10), operation_end: at(11) }),
+    E({ entry_id: 'd', span_id: 'd', turn_span_id: null, operation_start: at(20), operation_end: at(22) }),
+  ], T0 + 60_000)
+  const runs = busyRuns(waterfall.agents[0]!, T0 + 60_000)
+  expect(runs).toEqual([
+    { start: T0, end: T0 + 5000 }, { start: T0 + 10_000, end: T0 + 11_000 }, { start: T0 + 20_000, end: T0 + 22_000 },
+  ])
 })
