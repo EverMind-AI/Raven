@@ -180,6 +180,8 @@ def _step_span(
             surface=identity["surface"],
             start_time=start.isoformat(),
             end_time=max(start, end).isoformat(),
+            status_code="ERROR" if attributes.get("tool.error") else "OK",
+            status_message=str(attributes.get("tool.error") or ""),
             attributes=attributes,
         )
     )
@@ -307,6 +309,11 @@ def record_steps(
                     text = str(result.get("text") or "")
                     artifacts.append(("tool.output", {"result": text, "ok": result.get("ok")}))
                     attributes["tool.result_preview"] = text[:_PREVIEW_CHARS]
+                    if result.get("ok") is False:
+                        # Marked the way the main loop marks a failed call, so the
+                        # trajectory reads it as one: the artifact's `ok` is not
+                        # something it looks at.
+                        attributes["tool.error"] = text[:_PREVIEW_CHARS] or "failed"
                     end = max(end, _utc(result.get("at")) or end)
                 steps.append(("tool.call", "tool", at, end, artifacts, attributes))
         for index, (name, span_type, start, end, artifacts, attributes) in enumerate(steps):
