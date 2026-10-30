@@ -71,6 +71,7 @@ from raven.agent.subagent.backends.observability import (
 )
 from raven.agent.subagent.instances import InstanceRegistry, get_registry
 from raven.agent.subagent.mcp_grant import McpDispatchError, McpGrant, McpSource, acp_target, resolve_grant
+from raven.agent.subagent.mirasim_presets import MIRASIM_SHIM_PRESETS
 from raven.agent.tools.removals import RemovalWatch
 from raven.agent.tools.snapshot import take as take_snapshot
 from raven.contracts.subagent_backend import SubagentActionAbortedError
@@ -1505,7 +1506,12 @@ class AcpAgentBackend:
                 )
         if self._session_mcp_refused and grant.granted:
             names = ", ".join(repr(server.name) for server in grant.granted)
-            if not self.session_mcp:
+            if not self.session_mcp and self.preset in MIRASIM_SHIM_PRESETS:
+                notes.append(
+                    f"MCP servers {names} were withheld because acp agent {self.name!r} runs on Mirasim's host, "
+                    f"which takes no per-session servers: nothing handed over could reach the agent"
+                )
+            elif not self.session_mcp:
                 notes.append(
                     f"MCP servers {names} were withheld because acp agent {self.name!r} is configured as not "
                     f"keeping one session's servers to that session (sessionMcp: false); raven pools one "

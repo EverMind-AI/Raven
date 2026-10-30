@@ -159,8 +159,9 @@ Raven-Code 的 `code-flow` 提供的不只是身份 prompt。每个任务都应�
 | `mirasim_<agent>` | Raven 自带的 ACP 适配器，经 Mirasim host 的协议调用 | 本机装了 Mirasim 且正在运行，该 Agent 已在 Mirasim 中安装。Raven 找到 Mirasim 就会列出这些行：有能连上的 host（桌面应用的端口且令牌已写出，或 Mirasim 经 ssh 在本机跑的服务器的套接字，二者都要真的应答），否则看 Mirasim 写在自己目录下的启动器（`~/.mirasim/bin/mirasim`，它不会把这个目录放进 PATH）、登录 shell PATH 上的 `mirasim`，或某个 Mirasim 经 ssh 装到本机的服务器（`~/.mirasim-remote`）；装了但没在运行时，这一行会提示打开 Mirasim 应用，或让另一台电脑上的 Mirasim 应用重新连到本机。以 `sessionMcp: false` 阻止每会话 MCP 下发 |
 
 GitHub Copilot、Qwen Code、CodeBuddy、Qoder、Grok Build、Kimi Code 和 Pi 也有预设。
-适配器版本与精确命令维护在 `raven/agent/subagent/presets.py` 和
-`raven/agent/subagent/acp_registry_presets.py`，优先使用已安装版本的预设，不要自行猜 flags。
+适配器版本与精确命令维护在 `raven/agent/subagent/presets.py`、
+`raven/agent/subagent/acp_registry_presets.py` 和
+`raven/agent/subagent/mirasim_presets.py`，优先使用已安装版本的预设，不要自行猜 flags。
 
 `mirasim_*` 预设接入 Mirasim 运行的 Agent，每个 Agent 一行：
 Claude Code、Codex、Kimi Code、Antigravity、Qwen Code、Grok Build、DSH、Pi 和 ZCode CLI，
