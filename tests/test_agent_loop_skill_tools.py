@@ -95,7 +95,9 @@ def test_find_skill_offers_the_hub_library_only_while_the_switch_is_on(tmp_path:
     )
 
     def described() -> str:
-        return next(d["function"]["description"] for d in loop.tools.get_definitions() if d["function"]["name"] == "find_skill")
+        return next(
+            d["function"]["description"] for d in loop.tools.get_definitions() if d["function"]["name"] == "find_skill"
+        )
 
     try:
         assert loop._skill_hub_client is not None

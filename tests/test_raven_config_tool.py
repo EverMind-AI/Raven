@@ -96,6 +96,25 @@ async def test_get_reports_values_defaults_and_hides_secrets(config_file):
 
 
 @pytest.mark.asyncio
+async def test_the_skill_hub_switch_reads_with_what_is_in_effect(config_file):
+    """``enabled`` defaults to true, but the source runs only with an endpoint:
+    the flag alone tells the model the Hub is searched when it is not."""
+    tool = RavenConfigTool()
+    path = "skillForge.router.hub.enabled"
+
+    assert json.loads(await _run(tool, action="get", path=path)) == {path: {"default": True, "in_effect": False}}
+
+    config_file.write_text(json.dumps({"skillForge": {"router": {"hub": {"endpoint": None, "enabled": True}}}}))
+    assert json.loads(await _run(tool, action="get", path=path)) == {path: {"value": True, "in_effect": False}}
+
+    config_file.write_text(json.dumps({"skillRouter": {"hub": {"endpoint": "https://hub.internal.test"}}}))
+    assert json.loads(await _run(tool, action="get", path=path)) == {path: {"default": True, "in_effect": True}}
+    assert f"  {path} = true (default), in effect: true [bool," in await _run(tool, action="describe")
+    config_file.write_text(json.dumps({"skillForge": {"router": {"hub": {"enabled": True}}}}))
+    assert f"  {path} = true, in effect: false [bool," in await _run(tool, action="describe")
+
+
+@pytest.mark.asyncio
 async def test_a_section_or_instance_read_expands_to_what_is_configured(config_file):
     """A wildcard entry is read once per configured instance; an empty answer reads as "none configured"."""
     tool = RavenConfigTool()

@@ -639,7 +639,7 @@ class RavenConfigTool(Tool):
     def _setting_line(
         self, raw: dict[str, Any], setting: Setting, path: str, roles: dict[str, Any] | None, *, detail: bool
     ) -> str:
-        value = self._value_view(raw, setting, path, roles)
+        value = self._stored_view(raw, setting, path, roles)
         if isinstance(value, dict) and set(value) == {"default"}:
             default = value["default"]
             if default in (None, "", [], {}) and setting.unset_means:
@@ -650,6 +650,8 @@ class RavenConfigTool(Tool):
                 shown = f"{_compact(default)} (default)"
         else:
             shown = _compact(value)
+        if setting.in_effect is not None:
+            shown += f", in effect: {_compact(setting.in_effect(raw))}"
         line = f"  {path} = {shown} [{self._meta(setting)}] {setting.summary}"
         if shown.startswith("not set") and (missing := _media_needs(raw, path)):
             line += f"; {missing}"
@@ -882,6 +884,13 @@ class RavenConfigTool(Tool):
         return _dump({path: self._value_view(raw, found[0], path, roles)})
 
     def _value_view(self, raw: dict[str, Any], setting: Setting, path: str, roles: dict[str, Any] | None = None) -> Any:
+        view = self._stored_view(raw, setting, path, roles)
+        if setting.in_effect is None:
+            return view
+        stored = view if isinstance(view, dict) and set(view) == {"default"} else {"value": view}
+        return stored | {"in_effect": setting.in_effect(raw)}
+
+    def _stored_view(self, raw: dict[str, Any], setting: Setting, path: str, roles: dict[str, Any] | None) -> Any:
         if setting.session:
             now = self._conversation_model()
             return now if now is not None else "unknown outside a conversation"

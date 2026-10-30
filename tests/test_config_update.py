@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from raven.config.update import (
+    SkillHubSwitch,
     allow_exec_pattern,
     initialize_a2a_server,
     initialize_skill_hub_endpoint,
@@ -23,7 +24,6 @@ from raven.config.update import (
     set_memory_backend,
     set_playbook_disabled,
     set_sandbox_backend,
-    SkillHubSwitch,
     set_sentinel_nudge_quota,
     set_skill_blocked,
     set_skill_hub_enabled,
@@ -883,7 +883,9 @@ def test_skill_hub_switch_ignores_a_legacy_router_the_loader_ignores(cfg_path: P
 
 
 def test_skill_hub_endpoint_keeps_a_legacy_router_endpoint(cfg_path: Path) -> None:
-    cfg_path.write_text(json.dumps({"skillRouter": {"hub": {"endpoint": "https://hub.internal.test"}}}), encoding="utf-8")
+    cfg_path.write_text(
+        json.dumps({"skillRouter": {"hub": {"endpoint": "https://hub.internal.test"}}}), encoding="utf-8"
+    )
     before = cfg_path.read_bytes()
 
     assert initialize_skill_hub_endpoint(config_path=cfg_path) is None
