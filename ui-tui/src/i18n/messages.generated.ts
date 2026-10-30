@@ -3471,6 +3471,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.trajectory.avail.unsupported': 'Not supported for this entry',
     'gui.trajectory.reason.not_loaded': 'Not loaded in the overview pass; open the tab to read it',
     'gui.trajectory.reason.schema_unproven': 'No confirmable historical schema was recorded',
+    'gui.trajectory.reason.reasoning_withheld':
+      'The provider counted reasoning tokens but returned no reasoning text; the count is on the Usage tab',
     'gui.trajectory.reason.preview_dropped': 'Preview omitted to keep the overview small',
     'gui.trajectory.reason.not_recorded': 'Not recorded',
     'gui.trajectory.reason.artifact_missing': 'The recorded file is missing',
@@ -6801,6 +6803,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.trajectory.avail.unsupported': '此条目不支持',
     'gui.trajectory.reason.not_loaded': '概述未加载，打开标签页读取',
     'gui.trajectory.reason.schema_unproven': '未记录可确认的历史 Schema',
+    'gui.trajectory.reason.reasoning_withheld': '服务商计了推理 token，但没有返回推理内容，数量见“用量”标签',
     'gui.trajectory.reason.preview_dropped': '为控制概述大小已省略预览',
     'gui.trajectory.reason.not_recorded': '未记录',
     'gui.trajectory.reason.artifact_missing': '记录文件缺失',

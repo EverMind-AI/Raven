@@ -121,6 +121,7 @@ const REASON: Record<string, string> = {
   artifact_unreadable: 'gui.trajectory.reason.artifact_unreadable',
   artifact_outside_store: 'gui.trajectory.reason.artifact_outside_store',
   artifact_truncated: 'gui.trajectory.reason.artifact_truncated',
+  reasoning_withheld: 'gui.trajectory.reason.reasoning_withheld',
 }
 
 export const reasonKey = (code: string): string | null => REASON[code] ?? null

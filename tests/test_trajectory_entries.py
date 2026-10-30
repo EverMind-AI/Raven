@@ -2224,6 +2224,8 @@ def test_a_span_that_only_thought_is_still_charged_its_time(state):
 
 def test_a_call_that_reasoned_without_returning_the_words_says_so():
     """The responses protocol counts reasoning tokens and hands back no text."""
+    from types import SimpleNamespace
+
     from raven.trajectory import details
 
     class Loaded:
@@ -2237,9 +2239,14 @@ def test_a_call_that_reasoned_without_returning_the_words_says_so():
     class WithText(Loaded):
         payload = {"content": "ok", "reasoning_content": "hmm"}
 
-    availability, data, _, _ = details._d_llm_reasoning(None, {}, lambda _key: Loaded())
-    assert availability == "available"
-    assert "593 reasoning tokens" in (data or {})["text"]
+    # Said by a reason code the page words in the reader's language, not by an
+    # English sentence built here; the count itself is on the usage block.
+    availability, data, _, reason = details._d_llm_reasoning(None, {}, lambda _key: Loaded())
+    assert (availability, data, reason) == ("empty", None, "reasoning_withheld")
+    spec = next(s for s in details._REGISTRY["llm.output"] if s.id == "reasoning")
+    evaluated = details._evaluate(spec, SimpleNamespace(span={}), None, lambda _key: Loaded())
+    assert evaluated is not None, "an optional block that says why it is empty is still shown"
+    assert (evaluated.availability, evaluated.reason) == ("empty", "reasoning_withheld")
 
     availability, data, _, _ = details._d_llm_reasoning(None, {}, lambda _key: WithText())
     assert availability == "available"

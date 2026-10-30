@@ -86,6 +86,7 @@ READ_BLOCK_BYTES_LIMIT = 16 * 1024 * 1024
 REASON_NOT_LOADED = "not_loaded"
 REASON_SCHEMA_UNPROVEN = "schema_unproven"
 REASON_PREVIEW_DROPPED = "preview_dropped"
+REASON_REASONING_WITHHELD = "reasoning_withheld"
 
 NOTE_OUTER_ONLY = "outer_only"
 NOTE_IN_PROGRESS = "in_progress_snapshot"
@@ -806,8 +807,9 @@ def _d_llm_reasoning(view: EntryView, attrs: dict[str, Any], loaded: _Loader) ->
 
     Some providers count reasoning tokens and hand back no text -- the
     responses protocol does exactly that. A tab that says so beats one that
-    silently is not there, and it is the only place the token count and the
-    missing text can be read side by side.
+    silently is not there. It says so with a reason code the page words in the
+    reader's language, not a sentence written here; the count itself is on the
+    usage block beside it.
     """
     out = loaded("llm.output")
     if not out.loaded:
@@ -823,14 +825,7 @@ def _d_llm_reasoning(view: EntryView, attrs: dict[str, Any], loaded: _Loader) ->
     if not isinstance(tokens, int) or tokens <= 0:
         tokens = attrs.get("llm.usage.reasoning_tokens")
     if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens > 0:
-        return (
-            AVAILABLE,
-            {
-                "text": f"The provider reported {tokens} reasoning tokens for this call but returned no reasoning text.",
-            },
-            (),
-            None,
-        )
+        return EMPTY, None, (), REASON_REASONING_WITHHELD
     return NOT_RECORDED, None, (), None
 
 
