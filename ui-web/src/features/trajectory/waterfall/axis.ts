@@ -219,3 +219,16 @@ export function barOf(axis: TimeAxis, viewport: Viewport, start: number, end: nu
   const right = (Math.min(b, viewport.to) - viewport.from) / span
   return { left, width: Math.max(0, right - left) }
 }
+
+/** A window `length` real milliseconds long about the middle of the one on
+ *  screen, kept inside the session; null when the session is no longer than
+ *  that, so the whole of it is the window. A middle that falls in an idle fold
+ *  moves to the nearer side of it, so the window opens on work. */
+export function presetWindow(axis: TimeAxis, view: Viewport, length: number): Interval | null {
+  if (axis.end - axis.start <= length) return null
+  let middle = axis.unproject((view.from + view.to) / 2)
+  const fold = axis.gaps.find((gap) => gap.start < middle && middle < gap.end)
+  if (fold !== undefined) middle = middle - fold.start < fold.end - middle ? fold.start : fold.end
+  const start = Math.min(Math.max(middle - length / 2, axis.start), axis.end - length)
+  return { start, end: start + length }
+}

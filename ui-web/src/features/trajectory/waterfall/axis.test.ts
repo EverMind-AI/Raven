@@ -1,9 +1,9 @@
 /* The axis's arithmetic, as properties: gaps collapse, occupied time does not,
  * and a projection round-trips inside an occupied run. */
 
-import { expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
-import { AxisIndex, IDLE_MS, barOf, createAxis, zoomViewport } from './axis'
+import { AxisIndex, IDLE_MS, barOf, createAxis, presetWindow, zoomViewport } from './axis'
 
 it('merges overlapping intervals into one occupied run', () => {
   const axis = createAxis([{ start: 0, end: 10 }, { start: 5, end: 20 }], { idleMs: 100 })
@@ -94,3 +94,33 @@ it('an insert that bridges two runs merges them into one', () => {
   expect(axis.length).toBe(3000)
 })
 
+describe('a preset window', () => {
+  const HOUR = 3_600_000
+
+  it('takes its length about the middle of the window on screen', () => {
+    const axis = createAxis([{ start: 0, end: 10 * HOUR }])
+    expect(presetWindow(axis, { from: 0, to: axis.length }, HOUR)).toEqual({ start: 4.5 * HOUR, end: 5.5 * HOUR })
+  })
+
+  it('stays inside the session, against whichever end it would cross', () => {
+    const axis = createAxis([{ start: 0, end: 10 * HOUR }])
+    expect(presetWindow(axis, { from: 0, to: axis.project(HOUR) }, 3 * HOUR)).toEqual({ start: 0, end: 3 * HOUR })
+    expect(presetWindow(axis, { from: axis.project(9 * HOUR), to: axis.length }, 3 * HOUR)).toEqual({ start: 7 * HOUR, end: 10 * HOUR })
+  })
+
+  it('moves a middle that falls in an idle fold onto the nearer side of it', () => {
+    const axis = createAxis([{ start: 0, end: HOUR }, { start: 6 * HOUR, end: 7 * HOUR }])
+    const fold = axis.gaps[0]!
+    /* Both middles land inside the 15 s the fold is drawn as: 1.5 h into the
+       idle five, then 3.5 h. */
+    const early = { from: fold.from - 10_000, to: fold.to + 4000 }
+    expect(presetWindow(axis, early, HOUR)).toEqual({ start: 0.5 * HOUR, end: 1.5 * HOUR })
+    const late = { from: fold.from - 4000, to: fold.to + 10_000 }
+    expect(presetWindow(axis, late, HOUR)).toEqual({ start: 5.5 * HOUR, end: 6.5 * HOUR })
+  })
+
+  it('is the whole session when the session is no longer than the preset', () => {
+    const axis = createAxis([{ start: 0, end: HOUR }])
+    expect(presetWindow(axis, { from: 0, to: axis.length }, 3 * HOUR)).toBeNull()
+  })
+})

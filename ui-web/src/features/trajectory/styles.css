@@ -816,3 +816,15 @@ html[data-traj] .trajectory-tabs-wrap { border-bottom-color: var(--traj-line) }
   font: 400 12.5px/1 var(--sans); color: var(--faint); white-space: nowrap; overflow: hidden }
 .trajectory-wf-window b { flex: none; color: var(--text); font-weight: 600 }
 .trajectory-wf-window span { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums }
+
+/* The header's tools, at its right end: the window presets as one segmented
+   control -- the pressed one inverted -- and the fold-all button beside it. */
+.trajectory-wf-tools { flex: none; display: flex; align-items: center; gap: 8px; margin-left: auto; padding-left: 16px }
+.trajectory-wf-zoom { display: flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: var(--paper) }
+.trajectory-wf-zoom button { padding: 6px 11px; border: 0; border-left: 1px solid var(--line); background: none;
+  font: 500 12px/1 var(--sans); color: var(--muted); cursor: pointer; white-space: nowrap }
+.trajectory-wf-zoom button:first-child { border-left: 0 }
+.trajectory-wf-zoom button:hover { color: var(--text) }
+.trajectory-wf-zoom button[aria-pressed='true'] { background: var(--text); color: var(--paper) }
+.trajectory-wf-zoom button:focus-visible, .trajectory-wf-foldall:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px }
+.trajectory-wf-foldall { white-space: nowrap }

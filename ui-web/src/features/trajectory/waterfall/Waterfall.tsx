@@ -22,7 +22,7 @@ import { showBar } from '../../../state/scrollbars'
 import * as details from '../detailStore'
 import { enter as enterScope, scopeTitle } from '../scopes'
 import * as store from '../store'
-import { AxisIndex, TRAIL_PAD, barOf, clampViewport, zoomViewport } from './axis'
+import { AxisIndex, TRAIL_PAD, barOf, clampViewport, presetWindow, zoomViewport } from './axis'
 import { lengthOf, spanOf, windowText } from './clock'
 import { WaterfallIndex } from './incremental'
 import { entryEnd, entryStart, isLive, turnKey } from './model'
@@ -203,6 +203,11 @@ function scrollsAt(root: HTMLElement, target: Node | null, deltaY: number): bool
   }
   return false
 }
+
+/** The windows the header offers, after the whole session: a length in real time. */
+const PRESETS: ReadonlyArray<readonly ['fit' | '3h' | '1h' | '15m', number | null]> = [
+  ['fit', null], ['3h', 3 * 3_600_000], ['1h', 3_600_000], ['15m', 15 * 60_000],
+]
 
 /* A label closer than this to either end of the ruler would hang past it; its
    tick still draws. */
@@ -874,6 +879,24 @@ export function Waterfall(): JSX.Element {
   const shownTo = Math.min(Math.max(windowTo, shownFrom), figures.end)
   const named = windowText(shownFrom, shownTo, step < 60_000 ? 'second' : 'minute')
   const zoomedView = view.from > 0 || view.to < axis.length
+  /* A preset is pressed while the window is that long, however it got there;
+     a window the wheel made matches none. */
+  const activePreset = !zoomedView
+    ? 'fit'
+    : PRESETS.find(([, length]) => length !== null && Math.abs(windowTo - windowFrom - length) <= length * 0.01)?.[0] ?? null
+  const presetLabels = {
+    fit: t('gui.trajectory.zoom.fit'), '3h': t('gui.trajectory.zoom.3h'),
+    '1h': t('gui.trajectory.zoom.1h'), '15m': t('gui.trajectory.zoom.15m'),
+  }
+  const choosePreset = (length: number | null): void => {
+    const next = length === null ? null : presetWindow(axis, view, length)
+    setZoom(next === null ? null : { session: sessionKey, start: next.start, end: next.end })
+    setPicked(null)
+  }
+  const foldAll = (): void => {
+    setCollapsed(new Set(waterfall.agents.map((agent) => agent.key)))
+    setOpen(new Set())
+  }
 
   return (
     <div className="trajectory-wf" ref={island}>
@@ -893,6 +916,18 @@ export function Waterfall(): JSX.Element {
             </div>
           )
         })}
+        <div className="trajectory-wf-tools">
+          <div className="trajectory-wf-zoom" role="group" aria-label={t('gui.trajectory.zoom.label')}>
+            {PRESETS.map(([name, length]) => (
+              <button key={name} type="button" aria-pressed={activePreset === name} onClick={() => choosePreset(length)}>
+                {presetLabels[name]}
+              </button>
+            ))}
+          </div>
+          <button type="button" className="trajectory-wf-tool trajectory-wf-foldall" onClick={foldAll}>
+            {t('gui.trajectory.fold_all')}
+          </button>
+        </div>
       </div>
       <OverviewLanes waterfall={waterfall} axis={axis} viewport={view} />
       <div className="trajectory-wf-head">
