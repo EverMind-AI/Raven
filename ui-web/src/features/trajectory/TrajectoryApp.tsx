@@ -1,19 +1,19 @@
 /* The trajectory island: what `#trajHost` shows while the trajectory view is
  * up. A status line for what the index wants said, then the agent waterfall
- * with the details pane beside it.
+ * with the details pane floating over it.
  *
  * The root subscribes to the language itself, like every island, and to the
  * store for the few facts the status line reads; the waterfall and the pane
  * have their own subscriptions so a scroll in one does not redraw the other. The
- * root also measures its own width for the pane: how wide the pane may be,
- * and whether the area is too narrow for two columns at all.
+ * root also measures its own width for the pane: how wide the card may be,
+ * and whether the area is too narrow to leave the list any of its width.
  */
 
 import { Component, useCallback, useRef, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
-import { Details, Grip } from './Details'
+import { Details } from './Details'
 import * as details from './detailStore'
 import * as store from './store'
 import { Waterfall, mib } from './waterfall/Waterfall'
@@ -44,10 +44,10 @@ function Status(): JSX.Element | null {
   return <div className="trajectory-status" role="status">{lines}</div>
 }
 
-/* The list and the pane side by side, or the pane over the list when the
-   area is narrow. Open or not is the details store's; the width it is given
-   is the store's clamp of the reader's own number against the area measured
-   here. */
+/* The list at its whole width, the pane floating over its right side -- or
+   over all of it when the area is narrow. Open or not is the details store's;
+   the card's width is the store's clamp of the reader's own number against
+   the area measured here. */
 function Body(): JSX.Element {
   const d = useSyncExternalStore(details.subscribe, details.get)
   const observer = useRef<ResizeObserver | null>(null)
@@ -66,7 +66,6 @@ function Body(): JSX.Element {
   return (
     <div className="trajectory-body" ref={attach} data-details={d.open ? '' : undefined} data-narrow={narrow ? '' : undefined}>
       <Waterfall />
-      {d.open && !narrow ? <Grip /> : null}
       <Details />
     </div>
   )

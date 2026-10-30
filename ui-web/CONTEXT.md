@@ -224,7 +224,9 @@ of a model call it is, beside what the call worked on. A turn row under the
 pointer shows what its time went on (`segments.ts`'s `turnBreakdown`): its
 model and tool calls, each counted once per call, their time and share of
 the turn, and the waiting.
-Picking a row opens the details pane beside the waterfall
+Picking a row opens the details pane, a white card floating over the
+waterfall's right side -- the rows keep their whole width -- and over all of it
+below 800px
 (`features/trajectory/detailStore.ts`): a descriptor read through
 `trajectory.detail` and block bodies read through `trajectory.block`, each filed
 under its whole identity (session, epoch, entry, revision, block) and shown only
