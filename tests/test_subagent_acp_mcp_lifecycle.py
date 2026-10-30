@@ -228,7 +228,7 @@ def _snapshot(*, agent_name: str, session_mcp: bool) -> CapabilitySnapshot:
 
 
 def _measured_backend(
-    shim: Path, *, agent_name: str, session_mcp: bool, declared_isolating: bool = True
+    shim: Path, *, agent_name: str, session_mcp: bool, declared_isolating: bool = True, preset: str | None = None
 ) -> AcpAgentBackend:
     """The same dispatch as ``_backend``, with a handshake already on record.
 
@@ -244,6 +244,7 @@ def _measured_backend(
         mcps=["echo"],
         snapshot=_snapshot(agent_name=agent_name, session_mcp=session_mcp),
         session_mcp=declared_isolating,
+        preset=preset,
     )
     backend.set_mcp_source(_Source({"echo": _idle_config()}))
     return backend
@@ -333,6 +334,27 @@ async def test_an_agent_declared_as_not_isolating_is_withheld_and_told_why(
     # Not the other branch's reason: this peer declares no promise either, and
     # naming that one would send the reader to upgrade a raven it is not.
     assert SESSION_MCP_CAPABILITY not in reply
+
+
+@pytest.mark.asyncio
+async def test_a_mirasim_row_is_told_the_host_takes_no_per_session_servers(
+    tmp_path: Path, monkeypatch, raven_on_the_adapter_path: Path
+) -> None:
+    """The declaration is false because Mirasim's host takes none, not because raven pools them."""
+    backend = _measured_backend(
+        raven_on_the_adapter_path,
+        agent_name="mirasim",
+        session_mcp=False,
+        declared_isolating=False,
+        preset="mirasim_claude",
+    )
+
+    handed, reply = await _dispatch(backend, monkeypatch, tmp_path, "node-mirasim-row")
+
+    assert handed == []
+    assert "'echo'" in reply and "withheld" in reply
+    assert "Mirasim's host" in reply and "no per-session servers" in reply
+    assert "Set sessionMcp: true" not in reply
 
 
 @pytest.mark.asyncio
