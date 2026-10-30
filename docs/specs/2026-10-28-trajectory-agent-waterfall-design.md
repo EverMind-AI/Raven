@@ -82,11 +82,10 @@ colour ramp so a reader can tell, at a glance, whether a bar belongs to the
 host or to a worker. Within an agent, colours keep the existing
 `--trajectory-c-*` kinds.
 
-**Links are drawn at the dispatch instant.** A dispatch is a vertical rule at
-the x of the spawning span, running from the parent row down to the child
-agent's header. A report is a vertical rule at the child's end, running up to
-the host turn that it started. These two rules are the only cross-agent
-decoration; everything else is position.
+**Cross-agent links are marks on rows.** A dispatching row carries a door
+arrow that brings the run it started into view, and the host turn a report
+started carries a marker naming the worker. No rule is drawn between the
+agents' rows; everything else is position.
 
 ## The time axis
 
@@ -198,7 +197,7 @@ These were open, and are now settled here rather than left to the builder.
   replaces did; a 387-step session must not mount 387 rows × 3 levels.
 - **Agents are a flat list.** A group per scope, ordered by first event, the
   host first. If a worker ever dispatches another, the child group is a
-  sibling and the dispatch rule points at it; group nesting is not attempted.
+  sibling, reached from its door arrow; group nesting is not attempted.
 - **A turn's label comes from its own rows.** The turn's input preview is the
   `preview` of its `turn_start` entry, and its duration is the span of its rows
   on the axis. No extra fetch is introduced for a turn summary.
@@ -230,9 +229,9 @@ behaviour are the starting point.
 
 - **Cross-trace ancestry.** A sub-agent's spans live in their own trace, so
   `parent_span_id` does not reach the dispatching span. Agent membership comes
-  from `subagent_scope`; the dispatch rule comes from the spawing row's own
-  interval plus the child's `scope_id`. Depth inside an agent is still
-  `parent_span_id`.
+  from `subagent_scope`, and the door arrow reaches the child through the
+  spawning row's own `opens_subagent_scope`. Rows inside a turn are one flat
+  list in time order, whatever `parent_span_id` says.
 - **Entries with no resolvable turn.** `turn_span_id` is nullable and the index
   reports `turn_unknown` in `integrity`. These rows must land somewhere
   truthful — under the agent, outside any turn — rather than being dropped.
