@@ -355,6 +355,30 @@ def test_a_transcript_saved_with_a_byte_order_mark_is_still_listed(tmp_path: Pat
     assert rows[0]["first_user_message"] == "hello"
 
 
+def test_a_transcript_saved_with_a_byte_order_mark_opens_with_what_the_list_shows(tmp_path: Path):
+    """Opening reads the metadata line the list reads. Read as plain UTF-8 it did not parse: the session
+    opened without its title and archive flag, the next save wrote over both, and the file claimed no key."""
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create("tui:bom02")
+    session.add_message("user", "hello")
+    session.metadata.update(title="My Title", archived=True)
+    mgr.save(session)
+    path = tmp_path / "sessions" / "tui" / "bom02.jsonl"
+    path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+
+    assert manager_mod._stored_key(path) == "tui:bom02"
+    fresh = SessionManager(tmp_path)
+    opened = fresh.get_or_create("tui:bom02")
+    assert opened.metadata.get("title") == "My Title"
+    assert opened.metadata.get("archived") is True
+    opened.add_message("user", "again")
+    fresh.save(opened)
+
+    rows = [info for info in SessionManager(tmp_path).list_sessions() if info["key"] == "tui:bom02"]
+    assert rows[0]["metadata"].get("title") == "My Title"
+    assert rows[0]["metadata"].get("archived") is True
+
+
 def _in_a_legacy_code_page(path: Path) -> None:
     path.write_bytes(path.read_text(encoding="utf-8").replace("\\u4f60\\u597d", "\u4f60\u597d").encode("cp936"))
 

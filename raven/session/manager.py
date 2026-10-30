@@ -75,7 +75,10 @@ def _stored_key(path: Path) -> str | None:
     treats the two differently.
     """
     try:
-        with open(path, encoding="utf-8") as f:
+        # utf-8-sig, as every reader of a transcript: a byte order mark in front of the metadata line
+        # would leave it unparsed, and a file claiming no key goes to a session of any channel with
+        # the same chat id.
+        with open(path, encoding="utf-8-sig") as f:
             head = f.readline()
     except OSError:
         return None
@@ -533,7 +536,9 @@ def read_session_file(path: Path, key: str) -> Session | None:
         revision: tuple[str, int, str | None] | None = None
         created_raw = None
 
-        with open(path, encoding="utf-8") as f:
+        # utf-8-sig, as the session list reads it: a byte order mark in front of the metadata line
+        # would leave it unparsed, and the session would open without its title or archive flag.
+        with open(path, encoding="utf-8-sig") as f:
             # Of the file this read, taken before reading it: a write that lands
             # while the file is read (or replaces it) leaves the stamp behind the
             # file, so the next save re-reads and merges rather than writing over
