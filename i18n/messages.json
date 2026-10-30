@@ -12593,10 +12593,6 @@
       "en": "{n} main",
       "zh": "主会话 {n}"
     },
-    "gui.trajectory.stat.external": {
-      "en": "{n} external",
-      "zh": "外部代理 {n}"
-    },
     "gui.trajectory.stat.sub_one": {
       "en": "1 sub-agent",
       "zh": "子智能体 1"
@@ -12660,10 +12656,6 @@
     "gui.trajectory.agent.turns_n": {
       "en": "{n} turns",
       "zh": "{n} 轮"
-    },
-    "gui.trajectory.tag.sub": {
-      "en": "sub-agent",
-      "zh": "子智能体"
     },
     "gui.trajectory.tip.head": {
       "en": "{turn} · {from} – {to} · {length}",

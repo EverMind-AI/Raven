@@ -822,13 +822,10 @@ html[data-traj] .trajectory-wf-head, html[data-traj] .trajectory-wf-stats, html[
 .trajectory-wf-stack .trajectory-wf-tile:first-child { margin-left: 0 }
 
 /* An open worker's label is two lines: its task, then who ran it, the turn
-   that sent it and how many turns it took. A worker that ran inside the
-   process carries a quiet tag. */
+   that sent it and how many turns it took. */
 .trajectory-wf-two { flex: 0 1 auto; display: flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 0 }
 .trajectory-wf-two .trajectory-wf-name { line-height: 1.15 }
 .trajectory-wf-agentsub { font: 400 11px/1.15 var(--sans); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
-.trajectory-wf-tag { flex: none; padding: 2px 6px; border-radius: 5px; background: var(--trajectory-wf-soft);
-  font: 500 10.5px/1.2 var(--sans); color: var(--muted); white-space: nowrap }
 
 /* A call row is keyed by a small square in its kind's colour -- the same ink
    as its bar and as the turn's stretch of that kind -- in place of an icon. */

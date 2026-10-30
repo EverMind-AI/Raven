@@ -819,7 +819,8 @@ it('prints a second line under the header’s figures', async () => {
   const start = Date.parse('2026-10-28T10:00:00.000Z')
   const span = spanOf(start, start + 4000)
   expect(sub('gui.trajectory.stat.duration')).toBe(`gui.trajectory.stat.span ${JSON.stringify(span)}`)
-  expect(sub('gui.trajectory.stat.agents')).toBe('gui.trajectory.stat.main {"n":1} · gui.trajectory.stat.external {"n":1}')
+  /* An external agent's run is a sub-agent like any other. */
+  expect(sub('gui.trajectory.stat.agents')).toBe('gui.trajectory.stat.main {"n":1} \u00b7 gui.trajectory.stat.sub_one')
   /* The main turn runs 3 s and the worker's 1 s: the middle pair, averaged. */
   expect(sub('gui.trajectory.stat.turns')).toBe('gui.trajectory.stat.median {"duration":"2s"}')
   expect(sub('gui.trajectory.stat.llm')).toMatch(/^gui\.trajectory\.stat\.model_share \{"percent":\d+\}$/)
@@ -1129,14 +1130,13 @@ describe('an agent’s name', () => {
       .toBe('Claude Code \u00b7 gui.trajectory.agent.from_turn {"n":2} \u00b7 gui.trajectory.agent.turns_n {"n":2}')
   })
 
-  it('tags a worker that ran inside the process as a sub-agent, and an external one not', async () => {
+  it('sets no worker apart: an external agent’s run is a sub-agent like one run in the process', async () => {
     await draw([
       door('d1', 'x', { label: 'Look it up' }), E('x1', 1, { subagent_scope: 'x', turn_span_id: 'X1' }),
       door('d2', 'y', { agent: 'Codex', label: 'Review it', instance: 'codex-1' }),
       E('y1', 2, { subagent_scope: 'y', turn_span_id: 'Y1', span_name: 'subagent.external', kind: 'subagent.external' }),
     ])
-    expect([agentRow(1), agentRow(2)].map((row) => row.querySelector('.trajectory-wf-tag')?.textContent ?? null))
-      .toEqual(['gui.trajectory.tag.sub', null])
+    expect([agentRow(1), agentRow(2)].map((row) => row.querySelector('.trajectory-wf-tag'))).toEqual([null, null])
   })
 
   it('keeps the main agent’s name and its model on one line', async () => {

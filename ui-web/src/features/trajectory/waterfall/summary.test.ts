@@ -57,7 +57,7 @@ describe('the header figures', () => {
     expect([figures.start, figures.end]).toEqual([T0, T0 + 70_000])
   })
 
-  it('splits the agents into the main one, external runs and in-process workers', () => {
+  it('counts the main agent apart from its sub-agents, an external agent’s run among them', () => {
     const figures = figuresOf([
       E('m', 0, 100),
       E('door-x', 1, 2, { opens_subagent_scope: 'x' }),
@@ -65,7 +65,7 @@ describe('the header figures', () => {
       E('x1', 5, 9, { subagent_scope: 'x', span_name: 'subagent.external', kind: 'subagent.external', meta: { agent: 'Claude Code' } }),
       E('y1', 5, 9, { subagent_scope: 'y' }),
     ])
-    expect(figures.agents).toEqual({ main: 1, external: 1, sub: 1 })
+    expect(figures.agents).toEqual({ main: 1, sub: 2 })
   })
 
   it('takes the median turn length, the middle pair averaged', () => {
