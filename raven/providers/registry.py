@@ -425,7 +425,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         renames_models=True,
     ),
     # === Resale gateways reached through OpenAI's driver ===================
-    # Fourteen shelves that resell other vendors' models over an
+    # Fifteen shelves that resell other vendors' models over an
     # OpenAI-compatible endpoint. LiteLLM routes none of them, so each borrows
     # OpenAI's driver and states the address that distinguishes it -- the same
     # shape as SiliconFlow above, and a gateway for the same reason: a model id
@@ -637,6 +637,21 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         is_gateway=True,
         detect_by_base_keyword="opper.ai",
         default_api_base="https://api.opper.ai/v3/compat",
+        strip_model_prefix=False,
+    ),
+    # Runcrate: open models under their makers' "vendor/model" ids, so the
+    # prefix is part of the id and stays.
+    ProviderSpec(
+        name="runcrate",
+        key_url="https://www.runcrate.ai/dashboard/api-keys",
+        keywords=("runcrate",),
+        env_key="OPENAI_API_KEY",
+        display_name="Runcrate",
+        homepage="https://www.runcrate.ai",
+        via_driver="openai",
+        is_gateway=True,
+        detect_by_base_keyword="runcrate.ai",
+        default_api_base="https://api.runcrate.ai/v1",
         strip_model_prefix=False,
     ),
     # === CN vendors reached through OpenAI's driver ========================
@@ -1530,7 +1545,7 @@ def _tables() -> "tuple[dict[str, ProviderSpec], dict[str, str]]":
 
     Both used to scan every spec per call, and between them they were reached
     some 22,000 times while one ``model.options`` answered -- a fifth of that
-    answer's time went into normalizing the same fifty-six names over and
+    answer's time went into normalizing the same fifty-seven names over and
     over. Keyed on the tuple's identity so a registry a test installs is read
     rather than remembered.
     """

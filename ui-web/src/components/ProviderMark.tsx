@@ -62,6 +62,7 @@ const ICONS: Record<string, string> = {
   poe: 'poe',
   ppio: 'ppio',
   qiniu: 'qiniu',
+  runcrate: 'runcrate',
   siliconflow: 'siliconcloud',
   sophnet: 'sophnet',
   stepfun: 'stepfun',
@@ -179,6 +180,7 @@ const TONES: Record<string, 'mono' | 'hybrid' | 'mono-white'> = {
   anthropic: 'hybrid',
   mineru: 'hybrid',
   opper: 'mono',
+  runcrate: 'mono',
   vllm: 'mono',
 }
 

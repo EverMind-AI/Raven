@@ -314,7 +314,7 @@ export function RolePill({ role, setup }: { role: Role; setup?: boolean }): JSX.
              names it into the state the switch is about to wipe.
              A media role's default is OpenRouter, the one provider every media
              tool runs on, so open that row rather than leaving the reader to
-             find it among fifty-six. */
+             find it among fifty-seven. */
           store.setTab('provider')
           if (role.media) store.set({ provider: MEDIA_PROVIDER, provAdd: MEDIA_PROVIDER })
         }}>
