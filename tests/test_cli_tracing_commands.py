@@ -408,6 +408,20 @@ def test_a_below_minimum_node_is_refused(monkeypatch):
     assert tc._resolve_node() == "/usr/bin/node"
 
 
+def test_node_23_before_23_8_is_refused(monkeypatch):
+    """zstd landed in Node 22.15 and 23.8, so a 23.x below 23.8 cannot decode."""
+    import pytest
+    import typer
+
+    import raven.cli.tracing_commands as tc
+
+    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda: ("/usr/bin/node", (23, 0, 0)))
+    with pytest.raises(typer.Exit):
+        tc._resolve_node()
+    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda: ("/usr/bin/node", (23, 8, 0)))
+    assert tc._resolve_node() == "/usr/bin/node"
+
+
 def _plain_blob_with_link(state_dir: Path, text: str) -> tuple[Path, Path]:
     sha1 = hashlib.sha1(text.encode("utf-8")).hexdigest()
     blob = state_dir / "logs" / "audit-artifacts" / "_blobs" / sha1[:2] / f"{sha1}.json"

@@ -42,9 +42,17 @@ from raven.tracing import config as tracing_config
 
 console = Console()
 
-#: zstd decoding landed in Node's zlib in 22.15, and the viewer reads payloads
-#: compressed by default. Its floor is therefore higher than the TUI's.
+#: zstd decoding landed in Node's zlib in 22.15 and 23.8, and the viewer reads
+#: payloads compressed by default. Its floor is therefore higher than the TUI's.
 _MIN_VIEWER_NODE_VERSION = (22, 15, 0)
+_FIRST_VIEWER_NODE_23_VERSION = (23, 8, 0)
+
+
+def _node_supports_zstd(version: tuple[int, ...]) -> bool:
+    """Whether this Node has zlib zstd: 22.15+, 23.8+, or any later major."""
+    if version[0] == 23:
+        return version >= _FIRST_VIEWER_NODE_23_VERSION
+    return version >= _MIN_VIEWER_NODE_VERSION
 
 
 def _viewer_dir() -> Path:
@@ -199,10 +207,10 @@ def _resolve_node() -> str:
     node, version = find_node()
     # find_node returns the best node it saw even below the minimum, so the
     # version check is the caller's -- the TUI's own launch does the same.
-    if not node or version is None or version < _MIN_VIEWER_NODE_VERSION:
+    if not node or version is None or not _node_supports_zstd(version):
         console.print(
-            "[red]Node (>= 22.15) not found.[/red] The tracing dashboard reads zstd-compressed "
-            "payloads and needs a Node with zlib zstd support.\n"
+            "[red]Node with zstd support not found (22.15+, or 23.8+).[/red] The tracing dashboard reads "
+            "zstd-compressed payloads and needs a Node with zlib zstd support.\n"
             "Install: https://nodejs.org/  or  brew install node@22  or  nvm install 22"
         )
         raise typer.Exit(1)
