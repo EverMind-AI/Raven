@@ -243,7 +243,7 @@ def record_steps(
             steps.append(
                 (
                     "llm.call",
-                    "llm",
+                    "model",
                     floor,
                     first,
                     [("llm.input", {"messages": [{"role": "user", "content": prompt}]})],
@@ -261,7 +261,7 @@ def record_steps(
                 steps.append(
                     (
                         "llm.call",
-                        "llm",
+                        "model",
                         at,
                         end,
                         [("llm.output", {"content": text})],
@@ -273,7 +273,7 @@ def record_steps(
                 steps.append(
                     (
                         "llm.call",
-                        "llm",
+                        "model",
                         at,
                         end,
                         [("llm.output", {"content": "", "reasoning_content": text})],
@@ -285,7 +285,7 @@ def record_steps(
                 steps.append(
                     (
                         "llm.call",
-                        "llm",
+                        "model",
                         at,
                         end,
                         [("llm.input", {"messages": [{"role": "user", "content": text}]})],

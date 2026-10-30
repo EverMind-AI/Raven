@@ -2260,6 +2260,14 @@ def test_a_failed_external_tool_call_is_a_failed_step(state, monkeypatch):
     assert sum(1 for e in rows if e.failure_entry) == 1
 
 
+def test_an_external_runs_model_steps_are_typed_the_way_the_main_loop_types_them(state, monkeypatch):
+    from datetime import datetime, timedelta
+
+    events = [{"t": "say", "text": "done", "at": (datetime.now() - timedelta(seconds=5)).isoformat()}]
+    captured = _external_steps(state, monkeypatch, events)
+    assert {s["attributes"]["span.type"] for s in captured if s["name"] == "llm.call"} == {"model"}
+
+
 def test_a_span_that_only_thought_has_no_empty_output_row(state):
     attrs = _llm_attrs(state, "think-only", _messages("q"), {"content": "", "reasoning_content": "hmm"})
     spans = [
