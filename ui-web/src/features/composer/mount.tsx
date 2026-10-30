@@ -240,6 +240,8 @@ export function install(): void {
       store.goClick()
     }
   }
+  const grip = document.getElementById('composerGrip')
+  if (grip) store.gripDrag(grip)
   /* The drop target exists only where a dropped file has somewhere to go: the
      demo canvas offers no upload, so it must not light up the field either. */
   const fieldBox = ta.closest('.field')
