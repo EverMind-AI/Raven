@@ -432,7 +432,7 @@ export function Waterfall(): JSX.Element {
      on every scroll frame, which is what a 500-turn session cannot afford. */
   const shown = store.get().shown
   const [now, setNow] = useState(() => Date.now())
-  const live = shown.some((entry) => isLive(entry, now))
+  const live = useMemo(() => shown.some((entry) => isLive(entry, now)), [shown, now])
   useEffect(() => {
     if (!live) return
     const timer = setInterval(() => setNow(Date.now()), 1000)
@@ -700,38 +700,54 @@ export function Waterfall(): JSX.Element {
     details.openDetails()
   }
 
-  /* A scope id is `trace:span`; the badge must say who the worker is. */
-  const nameOfScope = new Map<string, string>()
-  for (const agent of waterfall.agents) {
-    if (agent.scope === null) continue
-    for (const scope of agent.scopes) if (scope !== null) nameOfScope.set(scope, scopeTitle(agent.door))
-  }
-
-  /* The header's numbers, from the rows the page draws. */
-  const countOf = (prefix: string): number => shown.filter((entry) => entry.kind.startsWith(prefix)).length
-  const errors = shown.filter((entry) => entry.failure_entry).length
-  const turnCount = waterfall.agents.reduce((total, agent) => total + agent.turns.length, 0)
-  const sessionStart = waterfall.agents.length ? Math.min(...waterfall.agents.map((agent) => agent.start)) : 0
-  const sessionEnd = waterfall.agents.length ? Math.max(...waterfall.agents.map((agent) => agent.end)) : 0
-  const stats: Array<[string, string]> = [
-    [t('gui.trajectory.stat.duration'), formatDuration(sessionEnd - sessionStart)],
-    [t('gui.trajectory.stat.agents'), String(waterfall.agents.length)],
-    [t('gui.trajectory.stat.turns'), String(turnCount)],
-    [t('gui.trajectory.stat.llm'), String(countOf('llm.'))],
-    [t('gui.trajectory.stat.tool'), String(countOf('tool.'))],
-    [t('gui.trajectory.stat.errors'), String(errors)],
-  ]
-  /* The slowest single span wears the badge, as the reference does. */
-  let slowestId: string | null = null
-  let slowestMs = 0
-  for (const agent of waterfall.agents) {
-    for (const turn of agent.turns) {
-      for (const row of turn.rows) {
-        const ms = entryEnd(row.entry, now) - entryStart(row.entry)
-        if (ms > slowestMs) { slowestMs = ms; slowestId = row.entry.entry_id }
+  /* What the header and the badges say, from every row of the session. The
+     list re-renders on every scroll event, and each of these walks the whole
+     session, so they are worked out when the rows or the clock change, never
+     per frame. */
+  const summary = useMemo(() => {
+    /* A scope id is `trace:span`; the badge must say who the worker is. */
+    const nameOfScope = new Map<string, string>()
+    for (const agent of waterfall.agents) {
+      if (agent.scope === null) continue
+      for (const scope of agent.scopes) if (scope !== null) nameOfScope.set(scope, scopeTitle(agent.door))
+    }
+    let llm = 0
+    let tool = 0
+    let errors = 0
+    for (const entry of shown) {
+      if (entry.kind.startsWith('llm.')) llm += 1
+      else if (entry.kind.startsWith('tool.')) tool += 1
+      if (entry.failure_entry) errors += 1
+    }
+    let turnCount = 0
+    let sessionStart = Infinity
+    let sessionEnd = -Infinity
+    /* The slowest single span wears the badge, as the reference does. */
+    let slowestId: string | null = null
+    let slowestMs = 0
+    for (const agent of waterfall.agents) {
+      turnCount += agent.turns.length
+      sessionStart = Math.min(sessionStart, agent.start)
+      sessionEnd = Math.max(sessionEnd, agent.end)
+      for (const turn of agent.turns) {
+        for (const row of turn.rows) {
+          const ms = entryEnd(row.entry, now) - entryStart(row.entry)
+          if (ms > slowestMs) { slowestMs = ms; slowestId = row.entry.entry_id }
+        }
       }
     }
-  }
+    const duration = waterfall.agents.length ? sessionEnd - sessionStart : 0
+    return { nameOfScope, llm, tool, errors, turnCount, duration, slowestId }
+  }, [shown, waterfall, now])
+  const { nameOfScope, errors, slowestId } = summary
+  const stats: Array<[string, string]> = [
+    [t('gui.trajectory.stat.duration'), formatDuration(summary.duration)],
+    [t('gui.trajectory.stat.agents'), String(waterfall.agents.length)],
+    [t('gui.trajectory.stat.turns'), String(summary.turnCount)],
+    [t('gui.trajectory.stat.llm'), String(summary.llm)],
+    [t('gui.trajectory.stat.tool'), String(summary.tool)],
+    [t('gui.trajectory.stat.errors'), String(errors)],
+  ]
 
   const painted: JSX.Element[] = []
   for (let at = first; at < last; at++) {
