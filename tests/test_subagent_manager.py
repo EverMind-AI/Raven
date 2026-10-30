@@ -5902,6 +5902,204 @@ def test_session_model_for_is_none_for_a_builtin_or_cli_row() -> None:
     assert mgr.session_model_for(None, "Coder", None) is None
 
 
+# ---- session_effort_for against an instance's mode override ----------------
+
+
+def _mode_effort_snapshot(cfg: Any) -> Any:
+    """A handshake whose mode menu is its effort menu: the Pi / Grok / Kimi / DSH shape."""
+    from raven.acp_client.capabilities import AcpMode, CapabilitySnapshot
+
+    return CapabilitySnapshot(
+        agent=cfg.name,
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        can_load=True,
+        available_modes=(AcpMode("low", "Low"), AcpMode("medium", "Medium"), AcpMode("high", "High")),
+    )
+
+
+def _thought_level_snapshot(cfg: Any) -> Any:
+    """A handshake with a real thought_level option beside a mode menu of its own."""
+    from raven.acp_client.capabilities import AcpEffortChoice, AcpMode, CapabilitySnapshot
+
+    return CapabilitySnapshot(
+        agent=cfg.name,
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        can_load=True,
+        available_modes=(AcpMode("fast", "Fast"), AcpMode("deep", "Deep")),
+        effort_choices=(AcpEffortChoice("low", "Low"), AcpEffortChoice("high", "High")),
+        effort_option="effort",
+    )
+
+
+def _effort_row_manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, snapshot_for: Any) -> SubagentManager:
+    """A manager over one acp row with ``effort="low"``, measured as ``snapshot_for`` says."""
+    monkeypatch.setattr("raven.agent.subagent.registry.acp_snapshot_for", snapshot_for)
+    return _third_party_manager(
+        tmp_path, monkeypatch, agents=[ThirdPartyAcpSubagentConfig(name="Pi", command="pi --acp", effort="low")]
+    )
+
+
+class _DispatchRecordingBackend:
+    """Keeps the mode and the reasoning effort each dispatch was handed."""
+
+    streams = False
+
+    def __init__(self) -> None:
+        self.seen: list[tuple[str | None, str | None]] = []
+
+    async def run(
+        self,
+        task: str,
+        *,
+        mode: str | None = None,
+        session_model: str | None = None,
+        session_effort: str | None = None,
+        **kwargs: Any,
+    ) -> str:
+        self.seen.append((mode, session_effort))
+        return "done"
+
+
+def test_an_instance_mode_override_outranks_the_row_effort_on_a_mode_menu(tmp_path, monkeypatch) -> None:
+    """Where the mode menu is the effort menu, the row's effort and an instance's
+    mode override go out on one channel and only one of them can stand. The
+    person's standing override on a named instance outranks the row, the order
+    ``resolve_mode`` and ``session_model_for`` already keep."""
+    mgr = _effort_row_manager(tmp_path, monkeypatch, _mode_effort_snapshot)
+    assert mgr.session_effort_for("cli", "Pi", "h1") == "low", "no override yet, so the row's effort goes"
+
+    mgr.set_instance_mode("cli", "Pi", "h1", "high")
+
+    assert mgr.resolve_mode("cli", "Pi", "h1") == "high"
+    assert mgr.session_effort_for("cli", "Pi", "h1") is None
+    assert mgr.session_effort_for("cli", "Pi", "h2") == "low", "another instance keeps the row's"
+    assert mgr.session_effort_for("cli", "Pi", None) == "low", "no instance named, no override to find"
+
+    mgr.set_instance_mode("cli", "Pi", "h1", None)
+    assert mgr.session_effort_for("cli", "Pi", "h1") == "low", "cleared, the row's effort is back"
+
+
+def test_an_instance_mode_override_leaves_a_thought_level_effort_alone(tmp_path, monkeypatch) -> None:
+    """A real thought_level option is a second channel: the mode override and the
+    row's effort both reach the session, so neither gives way."""
+    mgr = _effort_row_manager(tmp_path, monkeypatch, _thought_level_snapshot)
+    mgr.set_instance_mode("cli", "Pi", "h1", "deep")
+
+    assert mgr.resolve_mode("cli", "Pi", "h1") == "deep"
+    assert mgr.session_effort_for("cli", "Pi", "h1") == "low"
+
+
+def test_a_session_tier_does_not_hold_back_the_row_effort(tmp_path, monkeypatch) -> None:
+    """The row's effort outranks the Session Tier, which it is sent after; only a
+    person's override on the instance outranks the row."""
+    from raven.agent.subagent.instances import InstanceRegistry
+
+    monkeypatch.setattr("raven.agent.subagent.registry.acp_snapshot_for", _mode_effort_snapshot)
+    monkeypatch.setattr(manager_mod, "get_registry", lambda: InstanceRegistry(tmp_path / "reg.json"))
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=tmp_path,
+        agents=[ThirdPartyAcpSubagentConfig(name="Pi", command="pi --acp", effort="low")],
+        session_tier=lambda _key: "high",
+    )
+
+    assert mgr.resolve_mode("cli", "Pi", "h1") == "high"
+    assert mgr.session_effort_for("cli", "Pi", "h1") == "low"
+
+
+async def test_a_direct_chat_carries_the_clamped_session_tier(tmp_path, monkeypatch) -> None:
+    """The chat lane resolves its mode through the same `resolve_mode` a spawn
+    does, and the tier is clamped to the rungs the agent offers before it is
+    sent. Only the spawn lane had a tier test, so a chat lane that stopped
+    falling back to the tier would have dispatched at the agent's own default
+    with nothing failing."""
+    from raven.agent.subagent.instances import InstanceRegistry
+
+    monkeypatch.setattr("raven.agent.subagent.registry.acp_snapshot_for", _mode_effort_snapshot)
+    monkeypatch.setattr(manager_mod, "get_registry", lambda: InstanceRegistry(tmp_path / "reg.json"))
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=tmp_path,
+        agents=[ThirdPartyAcpSubagentConfig(name="Pi", command="pi --acp", effort="low")],
+        session_tier=lambda _key: "max",
+    )
+    backend = _DispatchRecordingBackend()
+    mgr.registry._backends["Pi"] = backend
+
+    await mgr.chat(session_key="cli", agent="Pi", handle="h1", text="go")
+
+    assert [mode for mode, _ in backend.seen] == ["high"], "max clamps to the highest rung Pi offers"
+
+
+async def test_a_direct_chat_sends_the_instance_override_and_not_the_row_effort(tmp_path, monkeypatch) -> None:
+    mgr = _effort_row_manager(tmp_path, monkeypatch, _mode_effort_snapshot)
+    backend = _DispatchRecordingBackend()
+    mgr.registry._backends["Pi"] = backend
+    mgr.set_instance_mode("cli", "Pi", "h1", "high")
+
+    await mgr.chat(session_key="cli", agent="Pi", handle="h1", text="go")
+
+    assert backend.seen == [("high", None)]
+
+
+async def test_a_spawn_onto_an_overridden_instance_sends_the_override_and_not_the_row_effort(
+    tmp_path, monkeypatch
+) -> None:
+    mgr = _effort_row_manager(tmp_path, monkeypatch, _mode_effort_snapshot)
+    backend = _DispatchRecordingBackend()
+    mgr.registry._backends["Pi"] = backend
+    mgr.set_submit(lambda req: None)
+    mgr.set_instance_mode("cli", "Pi", "h1", "high")
+    origin = {"channel": "cli", "chat_id": "direct", "session_key": "cli", "agent": "Pi"}
+
+    await mgr._run_subagent_inner(
+        "task-a", "go", "go", {**origin, "instance": "h1"}, _DummyExecutor(), mgr.provider, mgr.model
+    )
+    await mgr._run_subagent_inner("task-b", "go", "go", origin, _DummyExecutor(), mgr.provider, mgr.model)
+
+    assert backend.seen == [("high", None), (None, "low")]
+
+
+def test_an_agent_that_advertises_no_modes_takes_no_tier_and_no_mode_override(tmp_path, monkeypatch) -> None:
+    """The Mirasim adapter's shape, as its handshake is measured: effort as a
+    thought_level option and no session modes. The Session Tier has no rung to
+    land on, an instance mode override is refused naming the empty menu, and
+    the row's effort is what reaches the session -- as CONTEXT.md states."""
+    from raven.acp_client.capabilities import AcpEffortChoice, CapabilitySnapshot
+    from raven.agent.subagent.instances import InstanceRegistry
+
+    snapshot = CapabilitySnapshot(
+        agent="Claude Code-Mirasim",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        agent_name="mirasim-claude",
+        can_load=True,
+        effort_choices=(AcpEffortChoice("low", "Low"), AcpEffortChoice("high", "High")),
+        effort_option="effort",
+    )
+    monkeypatch.setattr("raven.agent.subagent.registry.acp_snapshot_for", lambda cfg: snapshot)
+    monkeypatch.setattr(manager_mod, "get_registry", lambda: InstanceRegistry(tmp_path / "reg.json"))
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=tmp_path,
+        agents=[ThirdPartyAcpSubagentConfig(name="Claude Code-Mirasim", command="mirasim --acp", effort="low")],
+        session_tier=lambda _key: "high",
+    )
+
+    assert mgr.resolve_mode("cli", "Claude Code-Mirasim", "h1") is None
+    with pytest.raises(ValueError, match="offers none"):
+        mgr.set_instance_mode("cli", "Claude Code-Mirasim", "h1", "high")
+    assert mgr.session_effort_for("cli", "Claude Code-Mirasim", "h1") == "low"
+
+
 def test_file_change_counts_fall_back_to_the_contents_when_the_tool_kept_no_diff() -> None:
     from types import SimpleNamespace
 

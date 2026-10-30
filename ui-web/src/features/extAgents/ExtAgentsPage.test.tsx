@@ -90,6 +90,7 @@ function install(
   const acts: Array<[string, string, ExtAgentActArgs]> = []
   const loads: boolean[] = []
   const rescans: boolean[] = []
+  const refreshes: Array<[string, boolean]> = []
   const { refuse, machines: machineRows = [], machinesOver = {}, ...rest } = over
   /* The machines tab's source: the rows given, every write accepted, and
      what was asked of it, so a test reads the call rather than the paint. */
@@ -152,6 +153,12 @@ function install(
       acts.push(['cancel_run', name, {}])
       return true
     },
+    refreshMenus: async (r, force) => {
+      refreshes.push([r.name, !!force])
+      const why = refuse ? refuse('refresh_menus') : null
+      if (why) throw { data: { detail: why } }
+      return { ok: true, detail: '', models: r.model_choices || [], effortChoices: [] }
+    },
     ...rest,
   }
   const toasts: string[] = []
@@ -168,7 +175,7 @@ function install(
     '<section id="extAgentsPage"><div id="extAgentsBody"></div></section>' +
     '<aside id="detail" data-open="false"><b id="dTitle">—</b><div id="dBody"></div></aside>' +
     '<div id="menu" data-open="false"></div>'
-  return { source, acts, loads, rescans, toasts, confirms, mcalls }
+  return { source, acts, loads, rescans, refreshes, toasts, confirms, mcalls }
 }
 
 async function mount() {
@@ -566,6 +573,36 @@ describe('the Mirasim family card', () => {
   /* The same for a model picker the reader has open: a reload -- any write's
      refetch, or the poll while some agent builds -- does not shut it under the
      cursor. */
+  it('re-reads a preset member menu when its picker opens, and on its button', async () => {
+    const calls: Array<[string, boolean]> = []
+    const all = withChoices(members(), 'codex-Mirasim', CODEX_CHOICES)
+    install(all, {
+      refreshMenus: async (r, force) => {
+        calls.push([r.name, !!force])
+        return {
+          ok: true,
+          detail: '',
+          models: [...CODEX_CHOICES, { value: 'profile:x', name: 'deepseek-flash', group: 'Own key' }],
+          effortChoices: [],
+        }
+      },
+    })
+    await mount()
+    await click(family())
+    const row = (): HTMLElement => pickNamed('codex-Mirasim')
+
+    await click(row().querySelector<HTMLElement>('.extAgents-pm')!)
+    await act(async () => {})
+
+    expect(calls).toEqual([['codex-Mirasim', false]])
+    expect(document.querySelector('.model-picker')!.textContent).toContain('Own key')
+
+    await click(row().querySelector<HTMLElement>('.extAgents-mrf')!)
+    await act(async () => {})
+
+    expect(calls).toEqual([['codex-Mirasim', false], ['codex-Mirasim', true]])
+  })
+
   it('keeps a model picker open across a reload', async () => {
     install(withChoices(members(), 'codex-Mirasim', CODEX_CHOICES))
     await mount()
@@ -2057,6 +2094,167 @@ describe('the model pill', () => {
     await click(modelButton('Sonnet'))
     expect(picker()).toBeNull()
     expect(acts).toEqual([['model', 'claude_code', { model: 'v/sonnet' }]])
+  })
+
+  /* An acp agent's menu moves without its launch config moving -- Mirasim adds
+     the reader's provider profiles to its catalog -- and the row carries only
+     the menu its last handshake measured. Opening the picker is the reader
+     looking, so that is when it is read again. */
+  it('re-reads the menu when the picker opens, and fills in a group it did not have', async () => {
+    const calls: Array<[string, boolean]> = []
+    const r = row({ model_source: 'agent', model_choices: choices })
+    install([r], {
+      refreshMenus: async (row, force) => {
+        calls.push([row.name, !!force])
+        return {
+          ok: true,
+          detail: '',
+          models: [...choices, { value: 'profile:x', name: 'deepseek-flash', group: 'Own key' }],
+          effortChoices: [],
+        }
+      },
+    })
+    await mount()
+    await openSheet('claude_code')
+
+    await click(pill())
+    await act(async () => {})
+
+    expect(calls).toEqual([['claude_code', false]])
+    expect(picker()!.textContent).toContain('Anthropic')
+    expect(picker()!.textContent).toContain('Own key')
+  })
+
+  it('re-reads on the card-corner button too, forced, without opening the picker', async () => {
+    const calls: boolean[] = []
+    const r = row({ model_source: 'agent', model_choices: choices })
+    install([r], {
+      refreshMenus: async (_row, force) => {
+        calls.push(!!force)
+        return {
+          ok: true,
+          detail: '',
+          models: [...choices, { value: 'profile:x', name: 'deepseek-flash', group: 'Own key' }],
+          effortChoices: [],
+        }
+      },
+    })
+    await mount()
+    await openSheet('claude_code')
+
+    /* The card keeps this action at its top-right corner, not beside the
+       field: the model pill's line holds the picker and its clear only. */
+    const refresh = sheet()!.querySelector('.extAgents-head .extAgents-mrf')
+    expect(refresh).toBeTruthy()
+    expect(sheet()!.querySelector('.extAgents-fld .extAgents-mrf')).toBeNull()
+    await click(refresh)
+    await act(async () => {})
+
+    expect(calls).toEqual([true])
+    await click(pill())
+    expect(picker()!.textContent).toContain('Own key')
+  })
+
+  it('keeps the recorded menu when the re-read fails, and says why', async () => {
+    const r = row({ model_source: 'agent', model_choices: choices })
+    install([r], {
+      refreshMenus: async () => ({
+        ok: false,
+        detail: 'the Mirasim host is down',
+        models: choices,
+        effortChoices: [],
+      }),
+    })
+    await mount()
+    await openSheet('claude_code')
+
+    await click(sheet()!.querySelector('.extAgents-mrf'))
+    await act(async () => {})
+
+    expect(sheet()!.textContent).toContain(
+      'gui.agent.model_refresh_failed ' + JSON.stringify({ detail: 'the Mirasim host is down' }),
+    )
+    await click(pill())
+    expect(picker()!.textContent).toContain('Anthropic')
+  })
+
+  it('offers the agent\'s reasoning effort as its own field, and writes the pick or the clear', async () => {
+    const { acts } = install([
+      row({
+        model_source: 'agent',
+        model_choices: choices,
+        effort: 'low',
+        effort_choices: [
+          { value: 'low', name: 'Low' },
+          { value: 'high', name: 'High' },
+          { value: 'default', name: 'Default' },
+        ],
+      }),
+    ])
+    await mount()
+    await openSheet('claude_code')
+
+    const select = sheet()!.querySelector<HTMLSelectElement>('.extAgents-effort')!
+    expect(select).toBeTruthy()
+    expect(select.value).toBe('low')
+    expect([...select.options].map((o) => o.textContent)).toEqual([
+      'gui.agent.effort_default',
+      'Low',
+      'High',
+      'Default',
+    ])
+
+    const pick = async (value: string): Promise<void> => {
+      const box = sheet()!.querySelector<HTMLSelectElement>('.extAgents-effort')!
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(box, value)
+        box.dispatchEvent(new Event('change', { bubbles: true }))
+      })
+    }
+    await pick('high')
+    await pick('')
+    expect(acts).toEqual([
+      ['effort', 'claude_code', { effort: 'high' }],
+      ['effort', 'claude_code', { clear_effort: true }],
+    ])
+  })
+
+  it('leaves effort to the row Connect writes, not to the preset', async () => {
+    install([
+      row({
+        configured: false,
+        model_source: 'agent',
+        model_choices: choices,
+        effort_choices: [{ value: 'high', name: 'High' }],
+      }),
+    ])
+    await mount()
+    await openSheet('claude_code')
+    expect(sheet()!.querySelector('.extAgents-effort')).toBeNull()
+  })
+
+  it('draws no effort field for an agent that advertises none', async () => {
+    install([row({ model_source: 'agent', model_choices: choices })])
+    await mount()
+    await openSheet('claude_code')
+    expect(sheet()!.querySelector('.extAgents-effort')).toBeNull()
+  })
+
+  it('a menuless row can still be re-read, and the pill opens once it has a menu', async () => {
+    const r = row({ model_source: 'agent', model_choices: [] })
+    install([r], {
+      refreshMenus: async () => ({ ok: true, detail: '', models: choices, effortChoices: [] }),
+    })
+    await mount()
+    await openSheet('claude_code')
+    expect(pill()!.disabled).toBe(true)
+
+    await click(sheet()!.querySelector('.extAgents-mrf'))
+    await act(async () => {})
+
+    expect(pill()!.disabled).toBe(false)
+    await click(pill())
+    expect(picker()!.textContent).toContain('Anthropic')
   })
 
   it('shows the chosen model by the name the agent gave it, and clears back to the default', async () => {

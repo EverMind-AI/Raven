@@ -258,10 +258,11 @@ const UNSENT = new Set([
   'settings.set.warning',
   // settings.usage: 3
   'settings.usage.session_key', 'settings.usage.session_titles', 'settings.usage.sessions',
-  // subagents.list: 5
-  'subagents.list.rows[].building', 'subagents.list.rows[].last_test_remedy.found', 'subagents.list.rows[].last_test_remedy.needs', 'subagents.list.rows[].stateful', 'subagents.list.rows[].upgrade_to',
-  // subagents.probe: 4
-  'subagents.probe.rows[].last_test_remedy.found', 'subagents.probe.rows[].last_test_remedy.needs', 'subagents.probe.rows[].stateful', 'subagents.probe.rows[].upgrade_to',
+  // subagents.list: 6 -- no fixture row carries a reasoning effort, so that
+  // optional field is null (read as unsent) while its menu is sent as [].
+  'subagents.list.rows[].building', 'subagents.list.rows[].effort', 'subagents.list.rows[].last_test_remedy.found', 'subagents.list.rows[].last_test_remedy.needs', 'subagents.list.rows[].stateful', 'subagents.list.rows[].upgrade_to',
+  // subagents.probe: 5
+  'subagents.probe.rows[].effort', 'subagents.probe.rows[].last_test_remedy.found', 'subagents.probe.rows[].last_test_remedy.needs', 'subagents.probe.rows[].stateful', 'subagents.probe.rows[].upgrade_to',
   // subagents.test: 2
   'subagents.test.cancelled', 'subagents.test.reply',
   // system.hello: 1

@@ -248,8 +248,14 @@ the stable schema.
 **Session Tier** (`medium`/`high`/`max`; `TIER_LADDER` in `config/schema.py`):
 What the shipped built-in Session Mode catalogue moves in place of an iteration cap or an
 overlay: a session's current mode id (`session_policy(key).mode`, falling through to the
-catalogue's default) is offered to every sub-agent that session dispatches, as the effort
-level to run it at. `clamp_tier` (`agent/subagent/mode_tiers.py`) is the clamp that lands
+catalogue's default) is offered to every sub-agent that session dispatches whose handshake
+advertised a mode menu, as the effort level to run it at. An agent that advertises no modes
+is offered no tier and runs on its own default (`TierDecline.NO_SHARED_RUNG`), and its
+instances take no mode override: `subagents.instance.set_mode` refuses, naming the empty
+menu. The Mirasim adapter is such an agent: it advertises its effort rungs as a
+`thought_level` config option rather than as session modes, so once its capability snapshot
+is measured the tier does not reach a Mirasim agent, and a Mirasim turn runs on the
+**Row Effort**, else on Mirasim's own default. `clamp_tier` (`agent/subagent/mode_tiers.py`) is the clamp that lands
 it on one sub-agent: the nearest rung at or below on that agent's own probed menu, or
 `None` -- leave the agent on its own default -- in three cases. A tier outside the ladder
 (another vocabulary, "nearest" undefined); a menu sharing no rung with it at all; and a menu
@@ -257,8 +263,10 @@ carrying a rung the ladder cannot rank at the point where raising the effort is 
 move left, since the cheapest rung the ladder can *see* may not be the cheapest the agent
 has. An agent that converges on the ladder plus an id of its own still clamps on the real
 overlap, and an exact hit is honoured in any vocabulary that spells the rung the same way.
-Exactly one thing outranks it, and a person sets it: a standing override on a named instance
-(`subagents.instance.set_mode`). There is no per-dispatch mode -- the model composing a
+Two things outrank it. A person's standing override on a named instance
+(`subagents.instance.set_mode`), which `resolve_mode` sends in its place; and, on an agent
+whose mode menu is its effort menu, the **Row Effort**, sent after it on the same channel.
+Of those two the instance override ranks first. There is no per-dispatch mode -- the model composing a
 `spawn` cannot know what the operator chose, so `resolve_mode` takes no such argument and
 the spawn schema offers none.
 The three built-in descriptions are `raven.i18n` message ids resolved in
@@ -273,6 +281,22 @@ exactly what it declines to guess at.
 _Avoid_: putting the scope of the control on the rungs. Each row says only what
 distinguishes it; that raven's own effort is unchanged is stated once by whichever surface
 draws the control.
+
+**Row Effort** (`effort` on an acp entry in `subagents.agents[]`; `SubagentManager.session_effort_for`):
+The reasoning effort an operator sets on one acp row, sent to every session that row's
+dispatches open; a spawn, a direct chat and a DAG node all resolve it through
+`session_effort_for`. It travels on the channel the agent advertises effort on: its
+`thought_level` config option (OpenCode 1.19.4, the Mirasim adapter), or, on an agent whose
+mode menu is made only of level names (Pi, Grok, Kimi, DSH; `mode_efforts`),
+`session/set_mode`, where it is sent after the **Session Tier** and so outranks it. On that
+shared channel a person's standing mode override on a named instance outranks the Row
+Effort in turn, and the row's value is withheld for that instance; on a `thought_level`
+agent the two are separate channels and both are sent. The menu it is picked from is the
+one the probe measured on the row's own model (`verify_agent` puts the row's model on its
+throwaway session first), and moving a row to another model re-measures it there
+(`subagents.update`); the menu a live session reports after a model switch belongs to that
+session and never rewrites the row's. A cleared Row Effort sends the session back to
+what it would otherwise be on, from a record held per connection (`_SESSION_STATE`).
 
 **Subagent** (`agent/subagent/`):
 A background agent task spawned by `SubagentManager`. Runs with its own tool set; its result

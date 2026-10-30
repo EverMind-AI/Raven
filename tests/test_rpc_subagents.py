@@ -22,6 +22,7 @@ from raven.rpc.methods.subagents import (
     subagents_list,
     subagents_presets,
     subagents_probe,
+    subagents_refresh_models,
     subagents_test,
     subagents_test_cancel,
 )
@@ -2498,6 +2499,733 @@ async def test_an_acp_test_without_a_live_loop_still_reports(config_path: Path, 
     assert (await subagents_test({"name": "Coder", "source": "config"}))["ok"] is True
     out = await subagents_test({"name": "Coder", "source": "config"}, agent_loop_factory=lambda: None)
     assert out["ok"] is True
+
+
+@pytest.fixture
+def menu_reads(monkeypatch: pytest.MonkeyPatch):
+    """The refresh handler's process-wide read tables, empty for one test.
+
+    ``_MENU_READ_AT`` is a cooldown that outlives a test and would otherwise make
+    the next test's automatic read answer the previous test's menu.
+    """
+    from raven.rpc.methods import subagents as subagents_mod
+
+    subagents_mod._MENU_TASKS.clear()
+    subagents_mod._MENU_READ_AT.clear()
+    return subagents_mod
+
+
+def _menu_snapshot(**over):
+    from types import SimpleNamespace
+
+    values = {
+        "usable": True,
+        "model_menu_measured": True,
+        "detail": "connected; models: 2",
+        "model_choices": (
+            SimpleNamespace(value="m1", name="One", group="Group"),
+            SimpleNamespace(value="m2", name="Two", group="Group"),
+        ),
+        "effort_choices": (
+            SimpleNamespace(value="low", name="Low"),
+            SimpleNamespace(value="high", name="High"),
+        ),
+    }
+    values.update(over)
+    return SimpleNamespace(**values)
+
+
+async def test_refresh_models_reads_the_handshake_and_returns_that_menu(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """An acp row's menu moves without its launch config moving: this is the free
+    handshake, and the menu it read is what the caller must draw."""
+    seen: list[str] = []
+
+    async def fake_record(cfg):
+        seen.append(cfg.name)
+        return _menu_snapshot()
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    out = await subagents_refresh_models({"name": "OpenCode", "source": "preset"})
+
+    assert seen == ["OpenCode"]
+    assert out == {
+        "ok": True,
+        "detail": "connected; models: 2",
+        "models": [
+            {"value": "m1", "name": "One", "group": "Group"},
+            {"value": "m2", "name": "Two", "group": "Group"},
+        ],
+        "effort_choices": [
+            {"value": "low", "name": "Low"},
+            {"value": "high", "name": "High"},
+        ],
+    }
+
+
+async def test_refresh_models_refuses_a_row_with_no_menu_to_read(config_path: Path, menu_reads) -> None:
+    from raven.rpc.errors import ConfigFieldReadonlyError
+
+    with pytest.raises(ConfigFieldReadonlyError, match="no model menu"):
+        await subagents_refresh_models({"name": "Coder", "source": "config"})
+
+
+async def test_a_failed_menu_read_answers_the_recorded_menu(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """The picker must not go empty because the agent did not answer: the previous
+    menu is still the best evidence there is, and the reason travels beside it."""
+    from types import SimpleNamespace
+
+    async def fake_record(cfg):
+        return _menu_snapshot(
+            usable=False, model_menu_measured=True, detail="connected, but no session could be opened"
+        )
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    monkeypatch.setattr(menu_reads, "acp_snapshot_for", lambda cfg: object())
+    monkeypatch.setattr(
+        menu_reads,
+        "agent_meta",
+        lambda cfg, snapshot=None: SimpleNamespace(
+            model_choices=(SimpleNamespace(value="old", name="Old", group="Kept"),)
+        ),
+    )
+
+    out = await subagents_refresh_models({"name": "OpenCode", "source": "preset"})
+
+    assert out["ok"] is False
+    assert out["detail"] == "connected, but no session could be opened"
+    assert out["models"] == [{"value": "old", "name": "Old", "group": "Kept"}]
+
+
+async def test_an_unread_menu_is_not_reported_as_a_successful_refresh(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """Mirasim marks a catalog read that failed; answering ok for it would tell a
+    picker the old menu was just measured."""
+
+    async def fake_record(cfg):
+        return _menu_snapshot(model_menu_measured=False)
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    monkeypatch.setattr(menu_reads, "acp_snapshot_for", lambda cfg: None)
+    monkeypatch.setattr(menu_reads, "agent_meta", lambda cfg, snapshot=None: type("M", (), {"model_choices": ()})())
+
+    out = await subagents_refresh_models({"name": "OpenCode", "source": "preset"})
+    assert out["ok"] is False
+
+
+async def test_concurrent_menu_reads_share_one_handshake(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """Opening the picker and pressing refresh is one reader looking, not two launches."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def fake_record(cfg):
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        return _menu_snapshot()
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    first = asyncio.ensure_future(subagents_refresh_models({"name": "OpenCode", "source": "preset", "force": True}))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    second = asyncio.ensure_future(subagents_refresh_models({"name": "OpenCode", "source": "preset", "force": True}))
+    await asyncio.sleep(0)
+    release.set()
+
+    out = await asyncio.gather(first, second)
+    assert calls == 1
+    assert [o["models"] for o in out] == [out[0]["models"], out[0]["models"]]
+
+
+async def test_a_config_row_and_a_preset_sharing_a_name_read_separately(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """A name is not an identity across the two pools: the config row and the
+    preset it shadows have different launch commands, so sharing one in-flight
+    read would answer one of them with the other's menu."""
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {
+                            "name": "OpenCode",
+                            "preset": "opencode",
+                            "kind": "acp",
+                            "command": "configured --acp",
+                            "enabled": True,
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    commands: list[str] = []
+
+    async def fake_record(cfg):
+        commands.append(cfg.command)
+        started.set()
+        await release.wait()
+        return _menu_snapshot()
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    first = asyncio.ensure_future(subagents_refresh_models({"name": "OpenCode", "source": "config", "force": True}))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    second = asyncio.ensure_future(subagents_refresh_models({"name": "OpenCode", "source": "preset", "force": True}))
+    await asyncio.sleep(0)
+    release.set()
+
+    await asyncio.gather(first, second)
+    assert len(commands) == 2
+    assert commands[0] != commands[1]
+
+
+async def test_an_automatic_read_reuses_a_menu_read_moments_ago(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """A picker opened, closed and opened again is one look: no second launch."""
+    calls = 0
+
+    async def fake_record(cfg):
+        nonlocal calls
+        calls += 1
+        return _menu_snapshot()
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    # The cooldown answer comes from the recorded snapshot, which the fake read
+    # does not write; stand the store in with the menu the fake measured.
+    monkeypatch.setattr(menu_reads, "acp_snapshot_for", lambda cfg: object())
+    monkeypatch.setattr(
+        menu_reads,
+        "agent_meta",
+        lambda cfg, snapshot=None: type("M", (), {"model_choices": _menu_snapshot().model_choices})(),
+    )
+
+    first = await subagents_refresh_models({"name": "OpenCode", "source": "preset"})
+    again = await subagents_refresh_models({"name": "OpenCode", "source": "preset"})
+    forced = await subagents_refresh_models({"name": "OpenCode", "source": "preset", "force": True})
+
+    assert calls == 2, "the automatic second read must not launch; the forced one must"
+    assert first["models"] == again["models"] == forced["models"]
+
+
+async def test_a_menu_read_that_never_answers_reports_the_timeout(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    monkeypatch.setattr(menu_reads, "_MENU_REFRESH_TIMEOUT_S", 0.01)
+
+    async def hang(cfg):
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", hang)
+    out = await subagents_refresh_models({"name": "OpenCode", "source": "preset"})
+    assert out["ok"] is False
+    assert "did not report its menu" in out["detail"]
+
+
+async def test_a_menu_read_that_raises_returns_the_reason(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    async def boom(cfg):
+        raise RuntimeError("host down")
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", boom)
+    out = await subagents_refresh_models({"name": "OpenCode", "source": "preset"})
+    assert out["ok"] is False
+    assert out["detail"] == "host down"
+
+
+async def test_a_failed_hot_apply_still_answers_the_measured_menu(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {"name": "Helped", "kind": "acp", "command": "helper --acp", "enabled": True},
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+
+    async def fake_record(cfg):
+        return _menu_snapshot()
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+
+    class _Loop:
+        def apply_agents(self, configs: list) -> None:
+            raise RuntimeError("no table")
+
+    out = await subagents_refresh_models({"name": "Helped", "source": "config"}, agent_loop_factory=lambda: _Loop())
+    assert out["ok"] is True
+    assert out["models"][0]["value"] == "m1"
+
+
+async def test_a_mode_derived_effort_menu_travels_with_the_refreshed_models(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    from types import SimpleNamespace
+
+    snapshot = _menu_snapshot(effort_choices=())
+    snapshot.mode_efforts = lambda: (SimpleNamespace(value="high", name="High"),)
+
+    async def fake_record(cfg):
+        return snapshot
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    out = await subagents_refresh_models({"name": "OpenCode", "source": "preset"})
+    assert out["effort_choices"] == [{"value": "high", "name": "High"}]
+
+
+async def test_an_asker_that_times_out_leaves_the_shared_read_to_the_others(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """Concurrent asks share one read, so the first asker's own budget running
+    out must not cancel it for the rest: the asker that joined later would get
+    no answer at all and its row would stay busy until a reload."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fake_record(cfg):
+        started.set()
+        await release.wait()
+        return _menu_snapshot()
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    monkeypatch.setattr(menu_reads, "_MENU_REFRESH_TIMEOUT_S", 0.05)
+    first = asyncio.ensure_future(subagents_refresh_models({"name": "OpenCode", "source": "preset", "force": True}))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    monkeypatch.setattr(menu_reads, "_MENU_REFRESH_TIMEOUT_S", 5.0)
+    second = asyncio.ensure_future(subagents_refresh_models({"name": "OpenCode", "source": "preset", "force": True}))
+    await asyncio.sleep(0)
+
+    assert (await asyncio.wait_for(first, timeout=5))["ok"] is False
+    release.set()
+    out = await asyncio.wait_for(second, timeout=5)
+    assert out["ok"] is True and out["models"][0]["value"] == "m1"
+
+
+async def test_an_asker_that_goes_away_leaves_the_shared_read_to_the_others(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """The same for an asker whose connection closed: its request is cancelled,
+    and that cancellation is its own, not the read's."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fake_record(cfg):
+        started.set()
+        await release.wait()
+        return _menu_snapshot()
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    first = asyncio.ensure_future(subagents_refresh_models({"name": "OpenCode", "source": "preset", "force": True}))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    second = asyncio.ensure_future(subagents_refresh_models({"name": "OpenCode", "source": "preset", "force": True}))
+    await asyncio.sleep(0)
+    first.cancel()
+    await asyncio.gather(first, return_exceptions=True)
+
+    release.set()
+    out = await asyncio.wait_for(second, timeout=5)
+    assert out["ok"] is True and out["models"][0]["value"] == "m1"
+
+
+@pytest.mark.parametrize("shape", ["thought_level", "mode_menu", "ravens_own_tiers", "no_menu"])
+async def test_a_refreshed_menu_and_the_recorded_one_are_derived_alike(
+    shape: str, config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """A refresh reads the menus off the snapshot it just measured; its failure
+    path, ``subagents.list`` and the update validator read them through
+    ``agent_meta``. Both go through one derivation, so the picker a refresh
+    redraws and the list that follows it cannot disagree."""
+    from raven.acp_client.capabilities import AcpEffortChoice, AcpMode, AcpModelChoice, CapabilitySnapshot
+
+    levels = (AcpMode("low", "Low"), AcpMode("high", "High"))
+    snapshot = CapabilitySnapshot(
+        agent="OpenCode",
+        fingerprint="fp",
+        status="ready",
+        detail="connected",
+        measured_at_ms=1,
+        agent_name="raven" if shape == "ravens_own_tiers" else "opencode",
+        model_choices=() if shape == "no_menu" else (AcpModelChoice("m1", "One", "G"),),
+        available_modes=() if shape == "no_menu" else levels,
+        effort_choices=(AcpEffortChoice("max", "Max"),) if shape == "thought_level" else (),
+        effort_option="effort" if shape == "thought_level" else "",
+    )
+
+    async def fake_record(cfg):
+        return snapshot
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    monkeypatch.setattr(menu_reads, "acp_snapshot_for", lambda cfg: snapshot)
+
+    out = await subagents_refresh_models({"name": "OpenCode", "source": "preset"})
+
+    assert out["ok"] is True
+    recorded = menu_reads._recorded_menu(menu_reads._find("OpenCode", "preset"))
+    assert {"models": out["models"], "effort_choices": out["effort_choices"]} == recorded
+
+
+async def test_refreshing_a_configured_agents_menu_recomposes_the_agent_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """The instance picker reads the table, not the snapshot file: without this it
+    keeps the menu the table was built with."""
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {"name": "Helped", "kind": "acp", "command": "helper --acp", "enabled": True},
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+
+    async def fake_record(cfg):
+        return _menu_snapshot()
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    applied: list[list] = []
+
+    class _Loop:
+        def apply_agents(self, configs: list) -> None:
+            applied.append(configs)
+
+    await subagents_refresh_models({"name": "Helped", "source": "config"}, agent_loop_factory=lambda: _Loop())
+
+    assert len(applied) == 1
+    assert "Helped" in [c.name for c in applied[0]]
+
+
+async def test_refreshing_a_preset_leaves_the_agent_table_alone(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    async def fake_record(cfg):
+        return _menu_snapshot()
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    applied: list[list] = []
+
+    class _Loop:
+        def apply_agents(self, configs: list) -> None:
+            applied.append(configs)
+
+    await subagents_refresh_models({"name": "OpenCode", "source": "preset"}, agent_loop_factory=lambda: _Loop())
+    assert applied == []
+
+
+async def test_an_orphaned_menu_read_still_recomposes_the_agent_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """The read is shared and shielded, so it outlives every asker that timed out
+    or disconnected -- and the store still gets the menu it measured. The table
+    sync has to live in the read itself, or `subagents.list` and the composed
+    table disagree until the next apply."""
+    from types import SimpleNamespace
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {"name": "Helped", "kind": "acp", "command": "helper --acp", "enabled": True},
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+
+    release = asyncio.Event()
+
+    async def fake_record(cfg):
+        await release.wait()
+        return _menu_snapshot()
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    monkeypatch.setattr(menu_reads, "_MENU_REFRESH_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(menu_reads, "acp_snapshot_for", lambda cfg: None)
+    monkeypatch.setattr(
+        menu_reads,
+        "agent_meta",
+        lambda cfg, snapshot=None: SimpleNamespace(model_choices=(), effort_choices=()),
+    )
+    applied: list[list] = []
+
+    class _Loop:
+        def apply_agents(self, configs: list) -> None:
+            applied.append(configs)
+
+    for _ in range(2):
+        out = await subagents_refresh_models(
+            {"name": "Helped", "source": "config", "force": True}, agent_loop_factory=lambda: _Loop()
+        )
+        assert out["ok"] is False, "the asker is told the read did not answer within its budget"
+
+    key = ("config", "Helped")
+    task = menu_reads._MENU_TASKS[key]
+    assert applied == [], "both askers left without the read finishing"
+
+    release.set()
+    await task
+
+    assert applied, "the read that finished with no asker still syncs the table"
+    assert key in menu_reads._MENU_READ_AT
+
+
+async def test_an_orphaned_menu_read_syncs_a_moved_menu_and_leaves_an_unchanged_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """The shielded read finishes with no asker left, so the sync cannot live in
+    one of them: the store gets the measured row either way, and the table has
+    to follow or `subagents.list` and the picker disagree until the next apply.
+
+    The second half is a read that measured what the row already held: an orphan
+    sync that always recomposed would replace every backend for nothing."""
+    from dataclasses import replace
+
+    from raven.acp_client.capabilities import (
+        AcpModelChoice,
+        CapabilitySnapshot,
+        SnapshotStore,
+        snapshot_fingerprint,
+    )
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {"name": "Helped", "kind": "acp", "command": "helper --acp", "enabled": True},
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+    monkeypatch.setattr(menu_reads, "_MENU_REFRESH_TIMEOUT_S", 0.01)
+
+    cfg = menu_reads._find("Helped", "config")
+
+    def snapshot_for(measured_at_ms: int, models: tuple[str, ...]) -> CapabilitySnapshot:
+        return CapabilitySnapshot(
+            agent="Helped",
+            fingerprint=snapshot_fingerprint(cfg),
+            status="ready",
+            detail="",
+            measured_at_ms=measured_at_ms,
+            can_load=True,
+            model_choices=tuple(AcpModelChoice(value=value, name=value, group="") for value in models),
+        )
+
+    SnapshotStore().record(snapshot_for(1, ("m1",)))
+
+    release = asyncio.Event()
+    measured = {"snapshot": snapshot_for(2, ("m1", "m2"))}
+
+    async def fake_record(cfg):
+        await release.wait()
+        SnapshotStore().record(measured["snapshot"])
+        return measured["snapshot"]
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    applied: list[list] = []
+
+    class _Loop:
+        def apply_agents(self, configs: list) -> None:
+            applied.append(configs)
+
+    key = ("config", "Helped")
+    for _ in range(2):
+        out = await subagents_refresh_models(
+            {"name": "Helped", "source": "config", "force": True}, agent_loop_factory=lambda: _Loop()
+        )
+        assert out["ok"] is False, "the asker is told the read did not answer within its budget"
+    task = menu_reads._MENU_TASKS[key]
+    assert applied == [], "both askers left without the read finishing"
+
+    release.set()
+    await task
+
+    assert len(applied) == 1, "the read that finished with no asker still syncs a menu that moved"
+    stored = SnapshotStore().load([cfg], allow_stale=True)["Helped"]
+    assert stored.model_choices == measured["snapshot"].model_choices
+
+    # The same shape, with a read that measured what the row now holds.
+    release.clear()
+    measured["snapshot"] = replace(measured["snapshot"], measured_at_ms=3)
+    for _ in range(2):
+        out = await subagents_refresh_models(
+            {"name": "Helped", "source": "config", "force": True}, agent_loop_factory=lambda: _Loop()
+        )
+        assert out["ok"] is False
+    task = menu_reads._MENU_TASKS[key]
+    release.set()
+    await task
+
+    assert len(applied) == 1, "an orphaned read that measured nothing new leaves the table alone"
+
+
+async def test_a_menu_read_that_measured_the_same_capabilities_leaves_the_agent_table_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """The picker asks for this read every time it opens, and recomposing the
+    table replaces every backend instance. A read that reports exactly what the
+    row already held has nothing to sync -- rebuilding for it is what used to
+    drop a live session's model record."""
+    from dataclasses import replace
+
+    from raven.acp_client.capabilities import (
+        AcpEffortChoice,
+        AcpModelChoice,
+        CapabilitySnapshot,
+        SnapshotStore,
+        snapshot_fingerprint,
+    )
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {"name": "Helped", "kind": "acp", "command": "helper --acp", "enabled": True},
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+
+    cfg = menu_reads._find("Helped", "config")
+    recorded = CapabilitySnapshot(
+        agent="Helped",
+        fingerprint=snapshot_fingerprint(cfg),
+        status="ready",
+        detail="connected",
+        measured_at_ms=1,
+        model_choices=(AcpModelChoice(value="m1", name="One", group="Group"),),
+        effort_choices=(AcpEffortChoice(value="low", name="Low"),),
+        effort_option="effort",
+    )
+    SnapshotStore().record(recorded)
+
+    async def same_record(cfg):
+        return replace(recorded, measured_at_ms=2)
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", same_record)
+    applied: list[list] = []
+
+    class _Loop:
+        def apply_agents(self, configs: list) -> None:
+            applied.append(configs)
+
+    out = await subagents_refresh_models(
+        {"name": "Helped", "source": "config", "force": True}, agent_loop_factory=lambda: _Loop()
+    )
+    assert out["ok"] is True
+    assert applied == [], "the same capabilities, so there is nothing to recompose"
+
+    async def moved_record(cfg):
+        return replace(
+            recorded,
+            measured_at_ms=3,
+            model_choices=(AcpModelChoice(value="m2", name="Two", group="Group"),),
+        )
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", moved_record)
+    await subagents_refresh_models(
+        {"name": "Helped", "source": "config", "force": True}, agent_loop_factory=lambda: _Loop()
+    )
+    assert len(applied) == 1, "a menu that moved still reaches the composed table"
+
+
+async def test_the_menu_refresh_wrapper_carries_the_live_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """Registering the bare handler would leave every call the web UI makes on no table at all.
+
+    A preset would not tell the two apart -- no preset is on the table -- so this
+    dispatches a configured row, the one case whose rebuild is observable.
+    """
+    from raven.rpc.dispatcher import Dispatcher
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {"name": "Helped", "kind": "acp", "command": "helper --acp", "enabled": True},
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+
+    async def fake_record(cfg):
+        return _menu_snapshot()
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
+    applied: list[list] = []
+
+    class _Loop:
+        def apply_agents(self, configs: list) -> None:
+            applied.append(configs)
+
+    dispatcher = Dispatcher()
+    register_subagents_methods(dispatcher, agent_loop_factory=lambda: _Loop())
+    frame = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "subagents.refresh_models",
+            "params": {"name": "Helped", "source": "config"},
+        }
+    )
+    assert "error" not in frame, frame
+    assert frame["result"]["ok"] is True
+    assert applied and "Helped" in [c.name for c in applied[0]]
 
 
 async def test_cancel_stops_a_running_test(config_path: Path, monkeypatch) -> None:
