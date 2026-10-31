@@ -210,6 +210,8 @@ export const DEFAULT_WIDTH = 480
 export const MIN_WIDTH = 320
 export const NARROW_BELOW = 800
 export const MIN_HEIGHT = 240
+/** How far one arrow press on the pane's corner moves an edge. */
+export const RESIZE_STEP = 16
 /** The pane's margin from the area's edges wherever it is: the stylesheet's own 10px where it opens. */
 export const CARD_GAP = 10
 /* How far a press on the head travels before it moves the pane, and how near

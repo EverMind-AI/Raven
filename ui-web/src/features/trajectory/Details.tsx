@@ -26,7 +26,7 @@ import * as list from './store'
 import { panelId, tabId, Tabs } from './Tabs'
 
 import type { TrajectoryDetailResult, TrajectoryEntry } from './types'
-import type { JSX, PointerEvent as ReactPointerEvent } from 'react'
+import type { JSX, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 
 /* The name under the tag: the tool's from the row's own meta, else a
    skill's, a model's or an agent's when the descriptor's blocks carry it in
@@ -98,7 +98,34 @@ function Corner({ moved }: { moved: boolean }): JSX.Element {
     window.addEventListener('pointercancel', finish, { signal: controller.signal })
     el.addEventListener('lostpointercapture', finish, { signal: controller.signal })
   }
-  return <div className="trajectory-corner" aria-hidden="true" onPointerDown={onPointerDown} />
+  /* The arrows move the free edges a step at a time, under the same rule as
+     the hand: the left edge where the pane opens, the right one once moved,
+     and the bottom, never past the room to the area's edge. */
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
+    const card = e.currentTarget.parentElement
+    const box = card?.parentElement?.getBoundingClientRect()
+    const rect = card?.getBoundingClientRect()
+    if (!box || !rect) return
+    const step = details.RESIZE_STEP
+    const wider = moved ? 'ArrowRight' : 'ArrowLeft'
+    const narrower = moved ? 'ArrowLeft' : 'ArrowRight'
+    const dw = e.key === wider ? step : e.key === narrower ? -step : 0
+    const dh = e.key === 'ArrowDown' ? step : e.key === 'ArrowUp' ? -step : 0
+    if (dw === 0 && dh === 0) return
+    e.preventDefault()
+    e.stopPropagation()
+    /* The size the store gives the card, not the box: a press can follow the
+       last one before the card has been laid out again. */
+    const width = details.detailsWidthPx() + dw
+    const height = (details.detailsHeightPx() ?? rect.height) + dh
+    const right = box.right - rect.left - details.CARD_GAP
+    const down = box.bottom - rect.top - details.CARD_GAP
+    details.resizeDetails(moved ? Math.min(width, right) : width, Math.min(height, down))
+  }
+  return (
+    <div className="trajectory-corner" role="separator" aria-label={t('gui.trajectory.details.resize')} tabIndex={0}
+      onPointerDown={onPointerDown} onKeyDown={onKeyDown} />
+  )
 }
 
 function Pane({ entryId, value }: { entryId: string; value: TrajectoryDetailResult }): JSX.Element {
