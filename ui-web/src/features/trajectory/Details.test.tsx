@@ -333,15 +333,16 @@ describe('moving and sizing the pane', () => {
   const head = (): HTMLElement => q('.trajectory-head') as HTMLElement
   const corner = (): HTMLElement | null => q('.trajectory-corner')
   /* Where the stylesheet opens a 480px pane in a 1200x800 area: against the
-     right side, under the 96px header. */
-  const HOME = { x: 710, y: 106, w: 480, h: 684 }
+     right side, below the whole header -- the 96px stats, the 92px activity
+     strip and the 56px ruler, then the 10px gap (`--wf-card-top`, 254px). */
+  const HOME = { x: 710, y: 254, w: 480, h: 536 }
   let captured = false
   const rect = (x: number, y: number, width: number, height: number): DOMRect =>
     ({ x, y, left: x, top: y, width, height, right: x + width, bottom: y + height, toJSON: () => ({}) }) as DOMRect
   const lay = (at: { x: number; y: number; w: number; h: number }): void => {
     q<HTMLElement>('.trajectory-body')!.getBoundingClientRect = () => rect(0, 0, 1200, 800)
     card().getBoundingClientRect = () => rect(at.x, at.y, at.w, at.h)
-    card().style.setProperty('--wf-stats-h', '96px')
+    card().style.setProperty('--wf-card-top', '254px')
     for (const el of [head(), corner()]) {
       if (!el) continue
       el.setPointerCapture = () => { captured = true }
@@ -378,7 +379,9 @@ describe('moving and sizing the pane', () => {
     await open()
     lay(HOME)
     const close = q('.trajectory-close') as HTMLElement
-    await press(close, 900, 120)
+    /* The drag starts on the head's name: a press on one of its buttons belongs
+       to that button. */
+    await press(q('.trajectory-head-name') as HTMLElement, 900, 120)
     await to(600, 64)
     expect(captured).toBe(true)
     expect(card().style.transform).toBe('translate(-300px, -56px)')
@@ -386,8 +389,23 @@ describe('moving and sizing the pane', () => {
     await click(close)
     expect(details.get().open).toBe(true)
     expect(card().style.transform).toBe('')
-    expect([card().style.left, card().style.top, card().style.height]).toEqual(['410px', '50px', '684px'])
+    expect([card().style.left, card().style.top, card().style.height]).toEqual(['410px', '198px', '536px'])
     expect(card().hasAttribute('data-moved')).toBe(true)
+  })
+
+  /* A drag that ended without a click leaves its swallow flag set; the next
+     press on a button must clear it, or that button's click is eaten. */
+  it('gives the next button its click after a drag that ended without one', async () => {
+    await open()
+    lay(HOME)
+    await press(q('.trajectory-head-name') as HTMLElement, 900, 120)
+    await to(600, 64)
+    await release(600, 64)
+    expect(card().hasAttribute('data-moved')).toBe(true)
+    const close = q('.trajectory-close') as HTMLElement
+    await press(close, 900, 120)
+    await click(close)
+    expect(details.get().open).toBe(false)
   })
 
   it('leaves the head\'s buttons their click when the press barely moves', async () => {
@@ -410,7 +428,7 @@ describe('moving and sizing the pane', () => {
     await to(600, 64)
     await release(600, 64)
     expect(card().style.left).toBe('410px')
-    lay({ x: 410, y: 50, w: 480, h: 684 })
+    lay({ x: 410, y: 198, w: 480, h: 536 })
     await press(name, 600, 64)
     await to(880, 100)
     await release(880, 100)
@@ -424,12 +442,12 @@ describe('moving and sizing the pane', () => {
     await press(corner()!, 712, 788)
     await to(672, 688)
     await release(672, 688)
-    expect([card().style.width, card().style.height]).toEqual(['520px', '584px'])
-    act(() => { details.dropDetails({ x: 100, y: 100 }, 584, 106) })
-    lay({ x: 100, y: 100, w: 520, h: 584 })
+    expect([card().style.width, card().style.height]).toEqual(['520px', '436px'])
+    act(() => { details.dropDetails({ x: 100, y: 100 }, 436, 254) })
+    lay({ x: 100, y: 100, w: 520, h: 436 })
     await press(corner()!, 618, 682)
     await to(658, 702)
-    expect([card().style.width, card().style.height]).toEqual(['560px', '604px'])
+    expect([card().style.width, card().style.height]).toEqual(['560px', '456px'])
     /* Pulled past the bottom, it stops there rather than climbing. */
     await to(658, 2000)
     await release(658, 2000)
@@ -449,13 +467,13 @@ describe('moving and sizing the pane', () => {
        meets the area, so the pane grows left and only shrinks upward. */
     await key('ArrowLeft')
     await key('ArrowUp')
-    expect([card().style.width, card().style.height]).toEqual(['496px', '668px'])
-    act(() => { details.dropDetails({ x: 100, y: 100 }, 668, 106) })
-    lay({ x: 100, y: 100, w: 496, h: 668 })
+    expect([card().style.width, card().style.height]).toEqual(['496px', '520px'])
+    act(() => { details.dropDetails({ x: 100, y: 100 }, 520, 254) })
+    lay({ x: 100, y: 100, w: 496, h: 520 })
     /* Moved, the right edge is the free one. */
     await key('ArrowRight')
     await key('ArrowDown')
-    expect([card().style.width, card().style.height]).toEqual(['512px', '684px'])
+    expect([card().style.width, card().style.height]).toEqual(['512px', '536px'])
   })
 
   it('tells assistive technology both sizes the corner sets, as a control rather than a one-way range', async () => {
@@ -474,10 +492,10 @@ describe('moving and sizing the pane', () => {
     await to(702, 778)
     await release(702, 778)
     expect(spoken()).toBe('')
-    lay({ ...HOME, x: 700, w: 490, h: 674 })
+    lay({ ...HOME, x: 700, w: 490, h: 526 })
     await act(async () => { fireEvent.keyDown(grip, { key: 'ArrowUp' }) })
-    expect(described()).toBe('gui.trajectory.details.size {"width":490,"height":658} gui.trajectory.details.resize_keys')
-    expect(spoken()).toBe('gui.trajectory.details.size {"width":490,"height":658}')
+    expect(described()).toBe('gui.trajectory.details.size {"width":490,"height":510} gui.trajectory.details.resize_keys')
+    expect(spoken()).toBe('gui.trajectory.details.size {"width":490,"height":510}')
   })
 
   it('neither moves nor sizes under 800px, where it covers the area', async () => {
@@ -543,6 +561,68 @@ describe('moving and sizing the pane', () => {
     act(() => { details.closeDetails() })
     await release(600, 64)
     expect(details.detailsPlace()).toBeNull()
+  })
+
+  /* A press on one of the head's buttons belongs to that button, not to the
+     drag: it must not be canceled -- canceling a pointerdown suppresses the
+     mousedown that focuses the button -- and the pane has to hold the focus, or
+     Escape falls past it to the turn behind. */
+  it('leaves the focus on a head button when it is pressed, so Escape takes back the pane', async () => {
+    await open()
+    lay(HOME)
+    const pin = q('.trajectory-pin') as HTMLElement
+    await press(pin, 900, 130)
+    expect(document.activeElement).toBe(pin)
+    expect(details.hasFocus()).toBe(true)
+    act(() => { expect(escape()).toBe(true) })
+    expect(details.get().open).toBe(false)
+  })
+
+  it('takes the focus itself when its head background is pressed, so Escape reaches it there too', async () => {
+    await open()
+    lay(HOME)
+    await press(head(), 300, 270)
+    expect(document.activeElement).toBe(card())
+    expect(details.hasFocus()).toBe(true)
+    act(() => { expect(escape()).toBe(true) })
+    expect(details.get().open).toBe(false)
+  })
+
+  it('takes the focus when its corner is pressed, so the arrows land on the handle', async () => {
+    await open()
+    lay(HOME)
+    await press(corner()!, 712, 788)
+    expect(document.activeElement).toBe(corner())
+    expect(details.hasFocus()).toBe(true)
+  })
+
+  /* A pull that only moves the width must not freeze the height the card was
+     filling: a stored number reads as the reader's own, and the card would stop
+     growing with the room under the header. */
+  it('keeps an auto height through a pull that only moves its width', async () => {
+    await open()
+    lay(HOME)
+    await press(corner()!, 712, 788)
+    await to(672, 788)
+    await release(672, 788)
+    expect(card().style.width).toBe('520px')
+    expect(details.detailsHeightPx()).toBeNull()
+    expect(card().style.height).toBe('')
+    act(() => { details.setAreaHeight(1000) })
+    expect(details.detailsHeightPx()).toBeNull()
+    expect(card().style.height).toBe('')
+  })
+
+  it('keeps an auto height through an arrow that only moves its width', async () => {
+    await open()
+    lay(HOME)
+    const grip = corner()!
+    await act(async () => { fireEvent.keyDown(grip, { key: 'ArrowLeft' }) })
+    expect(card().style.width).toBe('496px')
+    expect(details.detailsHeightPx()).toBeNull()
+    act(() => { details.setAreaHeight(1000) })
+    expect(details.detailsHeightPx()).toBeNull()
+    expect(card().style.height).toBe('')
   })
 })
 

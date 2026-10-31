@@ -125,8 +125,15 @@ html[data-theme="dark"] {
 /* ── the island ─────────────────────────────────────────────────── */
 
 .trajectory-root { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0;
-  /* The header's height, which the details card starts below. */
+  /* The header the details card starts below: the stats, the activity strip
+     under them, and the ruler under that, each sized by one variable. */
   --wf-stats-h: 96px;
+  --wf-act-h: 92px;
+  --wf-ruler-h: 56px;
+  /* Where the card opens: under the whole header, a gap below the ruler. A top
+     measured from the stats alone (106px) covered the strip and its right
+     brush handle; the card floats over the rows, not the header. */
+  --wf-card-top: calc(var(--wf-stats-h) + var(--wf-act-h) + var(--wf-ruler-h) + 10px);
   /* The details card's size handle, and the strip at its foot the pane leaves it. */
   --wf-corner: 18px; }
 
@@ -175,15 +182,16 @@ html[data-theme="dark"] {
 .trajectory-body > .trajectory-list { flex: 1; min-width: 0; }
 /* The pane is a card laid over the list's right side: the list keeps its
    whole width, so opening the pane never moves the axis under the reader.
-   It opens below the header, whose window presets and fold button stay in
-   reach, and a height the reader gives it stops at the bottom of the room
-   there. Plain paper, rounded, with the desk palette's edge -- the page's line
-   and a shadow on every side: the frosted sheet under it is nearly white, so
-   the edge is what sets the card apart. Under 800px it covers the whole area.
+   It opens below the whole header -- the stats, the activity strip and the
+   ruler, whose window presets, brush handles and fold button stay in reach --
+   and a height the reader gives it stops at the bottom of the room there.
+   Plain paper, rounded, with the desk palette's edge -- the page's line and a
+   shadow on every side: the frosted sheet under it is nearly white, so the
+   edge is what sets the card apart. Under 800px it covers the whole area.
    The 10px is the store's CARD_GAP, which a moved card keeps. */
 .trajectory-details {
-  position: absolute; top: calc(var(--wf-stats-h) + 10px); right: 10px; bottom: 10px; z-index: 6;
-  max-height: calc(100% - var(--wf-stats-h) - 20px);
+  position: absolute; top: var(--wf-card-top); right: 10px; bottom: 10px; z-index: 6;
+  max-height: calc(100% - var(--wf-card-top) - 10px);
   display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;
   border: 1px solid var(--line); border-radius: 14px;
   background: var(--paper); box-shadow: var(--trajectory-card-shadow);
@@ -542,8 +550,8 @@ html[data-theme="dark"] {
 .trajectory-wf-tool { font: 500 11px/1 var(--sans); padding: 6px 11px; border-radius: 9px }
 
 .trajectory-wf-head { border-bottom: 1px solid var(--line) }
-.trajectory-ruler { height: 56px; font: 400 14px/56px var(--sans); color: var(--faint);
-  font-variant-numeric: tabular-nums }
+.trajectory-ruler { height: var(--wf-ruler-h); font: 400 14px var(--sans); line-height: var(--wf-ruler-h);
+  color: var(--faint); font-variant-numeric: tabular-nums }
 
 .trajectory-wf-row { height: 48px }
 .trajectory-wf-track { height: 48px }
@@ -891,7 +899,7 @@ html[data-traj] .trajectory-wf-head, html[data-traj] .trajectory-wf-stats, html[
    bar that holds a failure; a folded idle stretch is a quiet band carrying
    how long it was. The window is a framed brush, the rest of the strip under
    a veil, with a grip on each edge. */
-.trajectory-act { flex: none; display: grid; grid-template-columns: var(--wf-gutter) minmax(0, 1fr); height: 92px;
+.trajectory-act { flex: none; display: grid; grid-template-columns: var(--wf-gutter) minmax(0, 1fr); height: var(--wf-act-h);
   border-bottom: 1px solid var(--line) }
 .trajectory-act-key { display: flex; flex-direction: column; justify-content: center; gap: 6px; min-width: 0; padding: 0 16px 0 24px }
 .trajectory-act-key b { font: 500 10.5px/1 var(--sans); letter-spacing: .09em; text-transform: uppercase; color: var(--faint) }

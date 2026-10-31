@@ -176,6 +176,16 @@ describe('the pane', () => {
     expect(details.detailsHeightPx()).toBe(600 - 2 * details.CARD_GAP)
   })
 
+  it('keeps an auto height when only the width is set', async () => {
+    await ready()
+    details.setAreaHeight(900)
+    details.resizeDetails(520, null)
+    expect(details.detailsWidthPx()).toBe(520)
+    expect(details.detailsHeightPx()).toBeNull()
+    details.resizeDetails(540, 300)
+    expect(details.detailsHeightPx()).toBe(300)
+  })
+
   it('keeps a moved pane whole inside the area as the area changes', async () => {
     await ready()
     details.setAreaWidth(1200)

@@ -452,9 +452,11 @@ export function setAreaHeight(px: number): void {
   patch({ areaHeight: px })
 }
 
-/** The reader's pull on the pane's corner. */
-export function resizeDetails(width: number, height: number): void {
-  patch({ width: Math.round(width), height: Math.round(height) })
+/* The reader's pull on the pane's corner. A pull that only moves the width
+   keeps an auto height -- null -- so the card still fills the room under the
+   header rather than freezing the height it happened to have. */
+export function resizeDetails(width: number, height: number | null): void {
+  patch({ width: Math.round(width), height: height === null ? null : Math.round(height) })
 }
 
 /* Where a moved pane comes to rest: back where it opens when let go within

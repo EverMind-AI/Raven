@@ -52,9 +52,20 @@ const followBar = (card: Element | null): void => {
 }
 
 /* The top of where the pane opens, from the stylesheet that puts it there: a
-   gap under the header. NaN when the sheet does not say. */
-const homeTop = (card: Element): number =>
-  Number.parseFloat(getComputedStyle(card).getPropertyValue('--wf-stats-h')) + details.CARD_GAP
+   gap under the stats, the activity strip and the ruler. `--wf-card-top` is the
+   sheet's own formula; a browser may hand the calc() back as written, so the
+   three bands are summed when it cannot be read as one number. Absent bands
+   leave the old top under the stats and the gap, and a sheet that says nothing
+   gives NaN. */
+const homeTop = (card: Element): number => {
+  const style = getComputedStyle(card)
+  const top = Number.parseFloat(style.getPropertyValue('--wf-card-top'))
+  if (Number.isFinite(top)) return top
+  const px = (name: string): number => Number.parseFloat(style.getPropertyValue(name))
+  const act = px('--wf-act-h')
+  const ruler = px('--wf-ruler-h')
+  return px('--wf-stats-h') + details.CARD_GAP + (Number.isFinite(act) ? act : 0) + (Number.isFinite(ruler) ? ruler : 0)
+}
 
 /* The card's corner, which sizes it from the edges that are free: where the
    pane opens its right edge is pinned, so the hand goes left to widen it, and
@@ -65,6 +76,13 @@ const homeTop = (card: Element): number =>
    fills the room under the header, which the stylesheet sizes. */
 const sizeText = (width: number, height: number | null): string =>
   height === null ? t('gui.trajectory.details.size_full', { width }) : t('gui.trajectory.details.size', { width, height })
+
+/* The head's own controls: a press on one belongs to that control, not to the
+   drag, so the drag must neither start there nor cancel the default -- canceling
+   a pointerdown suppresses the mousedown that would focus the button. */
+const CONTROL = 'button, a, input, select, textarea, [role="button"]'
+const controlOf = (target: EventTarget | null): HTMLElement | null =>
+  target instanceof Element ? target.closest<HTMLElement>(CONTROL) : null
 
 function Corner({ moved, width, height }: { moved: boolean; width: number; height: number | null }): JSX.Element {
   const gesture = useRef<AbortController | null>(null)
@@ -80,6 +98,9 @@ function Corner({ moved, width, height }: { moved: boolean; width: number; heigh
     const box = card?.parentElement?.getBoundingClientRect()
     const rect = card?.getBoundingClientRect()
     if (e.button !== 0 || !box || !rect) return
+    /* The handle takes the focus itself, since it cancels the default that
+       would give it one, so the arrows land on it after a press. */
+    el.focus()
     e.preventDefault()
     e.stopPropagation()
     const start = { x: e.clientX, y: e.clientY }
@@ -98,7 +119,11 @@ function Corner({ moved, width, height }: { moved: boolean; width: number; heigh
     const move = (ev: PointerEvent): void => {
       if (ev.pointerId !== pointerId) return
       const dx = ev.clientX - start.x
-      details.resizeDetails(moved ? Math.min(rect.width + dx, right) : rect.width - dx, Math.min(rect.height + ev.clientY - start.y, down))
+      const dy = ev.clientY - start.y
+      /* A pull with no vertical travel changes only the width: an auto height
+         stays auto, or the card would stop filling the room it sits in. */
+      const height = details.detailsHeightPx() === null && dy === 0 ? null : Math.min(rect.height + dy, down)
+      details.resizeDetails(moved ? Math.min(rect.width + dx, right) : rect.width - dx, height)
     }
     const finish = (ev: PointerEvent): void => {
       if (ev.pointerId === pointerId) controller.abort()
@@ -127,10 +152,13 @@ function Corner({ moved, width, height }: { moved: boolean; width: number; heigh
     /* The size the store gives the card, not the box: a press can follow the
        last one before the card has been laid out again. */
     const nextWidth = details.detailsWidthPx() + dw
-    const nextHeight = (details.detailsHeightPx() ?? rect.height) + dh
     const right = box.right - rect.left - details.CARD_GAP
     const down = box.bottom - rect.top - details.CARD_GAP
-    details.resizeDetails(moved ? Math.min(nextWidth, right) : nextWidth, Math.min(nextHeight, down))
+    const current = details.detailsHeightPx()
+    /* An arrow that only moves the width leaves an auto height auto, as the
+       hand's own width-only pull does. */
+    const nextHeight = current === null && dh === 0 ? null : Math.min((current ?? rect.height) + dh, down)
+    details.resizeDetails(moved ? Math.min(nextWidth, right) : nextWidth, nextHeight)
     setSpoken(sizeText(details.detailsWidthPx(), details.detailsHeightPx()))
   }
   /* A button, not a separator: a focusable separator is a range along one axis, and this handle
@@ -229,13 +257,27 @@ export function Details(): JSX.Element | null {
      move would redraw them every frame for a card that only changed place. */
   const drag = (e: ReactPointerEvent<HTMLDivElement>): void => {
     const handle = e.currentTarget
+    if (e.button !== 0) return
+    /* A new press starts a new gesture: a drag that ended without a click must
+       not swallow the next button's click. */
+    dragged.current = false
+    /* A press on one of the head's buttons is the button's: no drag starts, no
+       default is canceled, and the control takes the focus -- explicitly, so the
+       pane holds it in every environment, not only where a mousedown follows. */
+    const control = controlOf(e.target)
+    if (control !== null && handle.contains(control)) {
+      control.focus()
+      return
+    }
     const el = handle.parentElement
     const box = el?.parentElement?.getBoundingClientRect()
     const rect = el?.getBoundingClientRect()
-    if (e.button !== 0 || !el || !box || !rect) return
+    if (!el || !box || !rect) return
+    /* The head's background becomes the drag hand, so the pane itself takes the
+       focus: Escape pressed after the press must find the pane, not the list. */
+    el.focus()
     e.preventDefault()
     e.stopPropagation()
-    dragged.current = false
     const from = { x: rect.left - box.left, y: rect.top - box.top }
     const start = { x: e.clientX, y: e.clientY }
     const pointerId = e.pointerId
@@ -287,12 +329,15 @@ export function Details(): JSX.Element | null {
     : list.opensOf(entry) !== null
       ? t('gui.trajectory.scope.open')
       : t('gui.trajectory.scope.from', { title: scopes.scopeTitle(scopes.scopeDoor(l, target)) })
+  /* The pane is focusable by script, not by Tab: a press on the head's
+     background gives it the focus, which is what Escape's layer asks for. */
   return (
     <aside
       className={narrow ? 'trajectory-details trajectory-details-over' : 'trajectory-details'}
       role="region"
       aria-label={t('gui.trajectory.details.region')}
       ref={card}
+      tabIndex={-1}
       style={narrow ? undefined : { width, height: height ?? undefined, left: place?.x, top: place?.y }}
       data-moved={narrow || place === null ? undefined : ''}
     >

@@ -231,7 +231,9 @@ pointer shows what its time went on (`segments.ts`'s `turnBreakdown`): its
 model and tool calls, each counted once per call, their time and share of
 the turn, and the waiting.
 Picking a row opens the details pane, a white card floating over the
-waterfall's right side -- the rows keep their whole width -- and over all of it
+waterfall's right side -- the rows keep their whole width, and the card starts
+below the whole header, the stats, the activity strip and the ruler
+(`--wf-card-top`), so their handles stay in reach -- and over all of it
 below 800px
 (`features/trajectory/detailStore.ts`): a descriptor read through
 `trajectory.detail` and block bodies read through `trajectory.block`, each filed
@@ -239,10 +241,15 @@ under its whole identity (session, epoch, entry, revision, block) and shown only
 under the ticket it was asked with.
 The reader moves the card by its head and sizes it by its corner, as they do
 the desk palette: let go near where it opened, it goes back there, and
-wherever it is the store keeps it whole inside the area. The corner also takes
-the focus, and each arrow moves a free edge 16px (`RESIZE_STEP`). It is a button
-rather than a separator, which is a range along one axis: its description says
-both sizes, and a keyboard step reads out the new one.
+wherever it is the store keeps it whole inside the area. A pull or arrow that
+moves only the width leaves an auto height auto, so the card keeps filling the
+room under the header instead of freezing the height it had. The corner takes
+the focus on a press, and each arrow moves a free edge 16px (`RESIZE_STEP`). It
+is a button rather than a separator, which is a range along one axis: its
+description says both sizes, and a keyboard step reads out the new one. A press
+on the head's background focuses the card, and a press on one of the head's
+buttons focuses that button, so Escape pressed after either closes the pane
+rather than falling through to the turn behind it.
 The pane's head carries a pin for the tab on screen: the conversation's
 **pinned tab**, opened first whenever the pane arrives at an entry whose strip
 has it (a new selection, or the pane reopened) and never while the reader is

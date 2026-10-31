@@ -36,14 +36,24 @@ describe('the details pane', () => {
     expect(effective(['.trajectory-details'], 'position')).toBe('absolute')
   })
 
-  it('starts below the header, so the window presets and the fold button stay in reach', () => {
-    /* One variable sizes the header and places the card: the two cannot drift. */
+  it('starts below the whole header -- stats, activity strip and ruler -- not over them', () => {
+    /* Each band is sized by one variable and one formula places the card below
+       all three, so the card cannot drift up over the strip and its handles. */
     expect(effective(['.trajectory-wf-stats'], 'height')).toBe('var(--wf-stats-h)')
-    expect(effective(['.trajectory-details'], 'top')).toMatch(/^calc\(var\(--wf-stats-h\) \+ \d+px\)$/)
+    expect(effective(['.trajectory-act'], 'height')).toBe('var(--wf-act-h)')
+    expect(effective(['.trajectory-ruler'], 'height')).toBe('var(--wf-ruler-h)')
+    expect(effective(['.trajectory-details'], 'top')).toBe('var(--wf-card-top)')
+    expect(sheet).toMatch(/--wf-card-top:\s*calc\(var\(--wf-stats-h\) \+ var\(--wf-act-h\) \+ var\(--wf-ruler-h\) \+ \d+px\)/)
+    expect(sheet).toMatch(/--wf-stats-h:\s*\d+px/)
+    expect(sheet).toMatch(/--wf-act-h:\s*\d+px/)
+    expect(sheet).toMatch(/--wf-ruler-h:\s*\d+px/)
+    /* A top measured from the stats alone covers the activity strip, and the
+       strip's right brush handle with it. */
+    expect(effective(['.trajectory-details'], 'top')).not.toMatch(/^calc\(var\(--wf-stats-h\)/)
   })
 
   it('stops a pane the reader made taller at the bottom of the room under the header, and lifts that once moved or narrow', () => {
-    expect(effective(['.trajectory-details'], 'max-height')).toBe('calc(100% - var(--wf-stats-h) - 20px)')
+    expect(effective(['.trajectory-details'], 'max-height')).toBe('calc(100% - var(--wf-card-top) - 10px)')
     expect(effective(['.trajectory-details', '.trajectory-details[data-moved]'], 'max-height')).toBe('none')
     expect(effective(['.trajectory-details', '.trajectory-details-over'], 'max-height')).toBe('none')
   })
