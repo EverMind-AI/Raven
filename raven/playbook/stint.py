@@ -336,10 +336,8 @@ class StintDriver:
                 while True:
                     await asyncio.sleep(HEARTBEAT_EVERY_SEC)
                     try:
-                        current = store.read(stint_id)
-                        if current is None or current.status != RUNNING:
+                        if not store.touch(stint_id, holder_pid=record.holder_pid):
                             return
-                        store.write(current)
                     except Exception as exc:  # noqa: BLE001 - a missed beat is not a failed round
                         logger.debug("stint {} could not be touched: {}", stint_id, exc)
             finally:
@@ -469,33 +467,78 @@ class StintDriver:
             return problem
         if problem := self._open_tree(spec, record, layout):
             return problem
+        # Claimed before the question, not only when the round opens: the
+        # approval can stand for the broker's whole budget, and a second
+        # request must see a live holder rather than a stamp that went stale
+        # while nobody was advancing a round.
+        record.claim()
         store.write(record)
+        # The approval can stand for the broker's whole budget, and no round is
+        # open to beat for yet. Keep the stamp fresh so a second request reads
+        # a holder that is still asking, not one that went quiet.
+        self._start_beat(record, store)
         try:
             receipt = await self._submit(spec, record, store, index=1, confirm=spec.confirm, layout=layout)
-        except BaseException:
+        except BaseException as exc:
             # Out with no receipt -- the turn stopped, or a tool ceiling ran
-            # out, while the first round's approval was still on screen. Closed
-            # for the reason a refusal is: left running, the record blocked a
-            # second request for the same playbook, and once its stamp went
-            # stale the next request took it up through `resume`, which asks
-            # nobody, so a round nobody approved ran. A round already opened has
-            # its run and its beat, and is left to them.
-            if record.round(1) is None:
-                record.status = STOPPED
-                record.stop_reason = "the first round was stopped before it was approved"
-                store.write(record)
+            # out, while the first round's approval was still on screen. Left
+            # running, the record blocked a second request for the same
+            # playbook, and once its stamp went stale the next request took it
+            # up through `resume` and ran the round unasked. A round already
+            # opened has its run and its beat, and is left to them.
+            self._close_first_round(record, store, reason=self._first_round_stop_reason(spec, exc))
             raise
         if receipt.startswith("Error"):
             # Closed, not left running: a denied round left the record open
-            # with round one on it, and the next `resume` -- which asks nobody,
-            # the stint having been "approved" -- ran the graph the person had
-            # just refused.
-            record.status = STOPPED
-            record.stop_reason = (
-                "the first round was not approved" if receipt == _NOT_APPROVED else "the first round was refused"
+            # with round one on it, and the next `resume` -- which asks nobody
+            # for a round that was already approved, but this one was not --
+            # ran the graph the person had just refused.
+            self._close_first_round(
+                record,
+                store,
+                reason=(
+                    "the first round was not approved" if receipt == _NOT_APPROVED else "the first round was refused"
+                ),
             )
-            store.write(record)
         return receipt
+
+    def _first_round_stop_reason(self, spec: PlaybookSpec, exc: BaseException) -> str:
+        """Why a first round that never opened was closed, in the record's words."""
+        if isinstance(exc, (asyncio.CancelledError, TimeoutError)):
+            return (
+                "the first round was stopped before it was approved"
+                if spec.confirm
+                else "the first round was stopped before it opened"
+            )
+        return f"the first round could not start ({exc})"
+
+    def _close_first_round(self, record: StintRecord, store: StintStore, *, reason: str) -> None:
+        """Close the record after a first round that never opened.
+
+        Re-read before writing: a question can stand for the broker's whole
+        budget, and a `pause`, `stop` or `extend` from another process can land
+        while it does. Writing the snapshot the caller built would undo it.
+        Only a record still running with no round one is ours to close;
+        anything else has already been said by whoever changed it.
+
+        A write that fails is logged rather than raised. The caller is on its
+        way out with a cancellation or a refusal, and a cleanup error must not
+        become the exception the turn reads instead.
+        """
+        self._stop_beat(record.stint_id)
+        fresh = store.read(record.stint_id)
+        if fresh is None or _first_round_opened(fresh) or fresh.status != RUNNING:
+            return
+        if fresh.holder_pid not in (0, record.holder_pid):
+            # Another process claimed it while our question was up. Its claim
+            # is newer than ours; do not stop the record under it.
+            return
+        fresh.status = STOPPED
+        fresh.stop_reason = reason
+        try:
+            store.write(fresh)
+        except Exception as exc:  # noqa: BLE001 - the exit must not be replaced by a failed cleanup
+            logger.warning("stint {} could not be closed after its first round: {}", record.stint_id, exc)
 
     async def _report(self, spec: PlaybookSpec, record: StintRecord, finished: Any) -> None:
         """Say a round is done, for a person who cannot otherwise tell.
@@ -874,9 +917,13 @@ class StintDriver:
         nothing extra: no round is opened, because one is already in flight and
         ``advance`` reads the budget from the file when it lands.
 
-        The round opens without asking again. The one approval a stint gets named
-        a round count, and this is a person changing that count deliberately --
-        asking them to approve what they just typed is not a second opinion.
+        The round opens without asking again -- for a stint whose first round
+        was approved. The one approval a stint gets named a round count, and
+        this is a person changing that count deliberately; asking them to
+        approve what they just typed is not a second opinion. A stint whose
+        first round never opened is not one of those: there is no count to
+        change and no approval to change it under, so it is refused and sent
+        back to starting it again, which asks.
         """
         store = self.store_for(session_key)
         record = store.read(stint_id)
@@ -921,6 +968,14 @@ class StintDriver:
                 f"Error: {stint_id} cannot open another round on {project}: {already.stint_id} is {already.status} "
                 f"there and has been since this one ended. End that one first, or give it the rounds instead."
             )
+        if not _first_round_opened(record):
+            # Nothing was ever approved here, so there is no round count to
+            # change. Opening one would run exactly what the first round's
+            # missing approval kept from running.
+            return (
+                f"Error: {stint_id} never ran its first round, so there is nothing to extend. "
+                f"Ask for {record.playbook} again to start it; that asks for approval."
+            )
         # The round it last ran, plus one -- except where it never finished one,
         # as a stint whose first round was refused never did. Then this is that
         # round, taken up the way `resume` takes one up: under a new attempt,
@@ -958,6 +1013,11 @@ class StintDriver:
         disk. The finished nodes are named as dependencies of the new graph
         instead, which is legal and keeps their output readable -- a dependency
         an earlier run of the session completed is already met.
+
+        A first round that never opened is the one exception to taking a stint
+        up without asking: it was never approved, so it is put to the person
+        before it runs, and closed rather than left running if that wait ends
+        without an answer.
         """
         store = self.store_for(session_key)
         record = store.read(stint_id)
@@ -1010,14 +1070,40 @@ class StintDriver:
             previous = record.round(index)
             attempt = (previous.attempt if previous is not None else 0) + 1
             satisfied = await self._completed_of(record, spec, index, previous)
+        # A first round that never opened was never approved. `resume` asks
+        # nobody for a round that was approved, but this one still has to be
+        # put to the person before it runs. Claimed here as `start` does: the
+        # question can stand for the broker's whole budget.
+        confirm = spec.confirm if not _first_round_opened(record) else False
         record.status = RUNNING
+        record.claim()
         store.write(record)
-        receipt = await self._submit(
-            spec, record, store, index=index, confirm=False, attempt=attempt, satisfied=satisfied
-        )
+        if confirm:
+            # Same reason as `start`: the question stands before any round is
+            # open to beat for.
+            self._start_beat(record, store)
+        try:
+            receipt = await self._submit(
+                spec, record, store, index=index, confirm=confirm, attempt=attempt, satisfied=satisfied
+            )
+        except BaseException as exc:
+            if confirm:
+                self._close_first_round(record, store, reason=self._first_round_stop_reason(spec, exc))
+            raise
         if receipt.startswith("Error"):
-            record.status = INTERRUPTED
-            store.write(record)
+            if confirm:
+                self._close_first_round(
+                    record,
+                    store,
+                    reason=(
+                        "the first round was not approved"
+                        if receipt == _NOT_APPROVED
+                        else "the first round was refused"
+                    ),
+                )
+            else:
+                record.status = INTERRUPTED
+                store.write(record)
         return receipt
 
     async def _completed_of(self, record: StintRecord, spec: PlaybookSpec, index: int, previous: Any) -> dict[str, str]:
@@ -1533,6 +1619,17 @@ def _about_this_project(layout: Layout | None) -> list[str]:
     if layout.backlog >= 0:
         lines.append(f"  {layout.backlog} task(s) in the backlog")
     return lines
+
+
+def _first_round_opened(record: StintRecord) -> bool:
+    """Round one carries a run id, so it was put to the person and started.
+
+    A round record without one is an attempt that never opened -- a refusal,
+    a crash, or a record from before the run id was written. It is not an
+    approval, so a first round in that state still has to ask.
+    """
+    entry = record.round(1)
+    return entry is not None and bool(entry.run_id)
 
 
 def _round_done(record: StintRecord) -> bool:

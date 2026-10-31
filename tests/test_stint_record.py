@@ -70,6 +70,45 @@ def test_one_unreadable_stint_does_not_take_the_listing_with_it(tmp_path: Path, 
     assert store.read("stint-bad") is None
 
 
+def test_touching_a_stint_moves_only_its_stamp(tmp_path: Path) -> None:
+    """A beat is a stamp, not a whole-record rewrite: moving the stamp must not
+    write back a snapshot that undoes a `pause` or an `extend` that landed
+    between the beat's read and its write."""
+    store = StintStore(tmp_path)
+    path = _written(store, "stint-live")
+    before = json.loads(path.read_text(encoding="utf-8"))
+    before["holder_pid"] = 1234
+    before["touched_at_ms"] = 1
+    path.write_text(json.dumps(before), encoding="utf-8")
+
+    assert store.touch("stint-live", holder_pid=1234) is True
+
+    after = json.loads(path.read_text(encoding="utf-8"))
+    assert after["touched_at_ms"] > 1
+    assert {key: value for key, value in after.items() if key != "touched_at_ms"} == {
+        key: value for key, value in before.items() if key != "touched_at_ms"
+    }
+
+
+def test_touching_does_nothing_for_a_stint_that_ended_or_is_held_elsewhere(tmp_path: Path) -> None:
+    store = StintStore(tmp_path)
+    path = _written(store, "stint-ended")
+    ended = json.loads(path.read_text(encoding="utf-8"))
+    ended.update(status="stopped", touched_at_ms=1, holder_pid=1234)
+    path.write_text(json.dumps(ended), encoding="utf-8")
+
+    assert store.touch("stint-ended", holder_pid=1234) is False
+    assert json.loads(path.read_text(encoding="utf-8"))["touched_at_ms"] == 1
+
+    path = _written(store, "stint-other")
+    other = json.loads(path.read_text(encoding="utf-8"))
+    other.update(holder_pid=999, touched_at_ms=1)
+    path.write_text(json.dumps(other), encoding="utf-8")
+
+    assert store.touch("stint-other", holder_pid=1234) is False
+    assert json.loads(path.read_text(encoding="utf-8"))["touched_at_ms"] == 1
+
+
 def test_every_status_a_stint_can_be_in_has_a_word_for_a_reader() -> None:
     """The pill asks the catalog for `gui.pb.stint_status_<status>` using the
     record's own vocabulary, and a miss falls back to the key. `finished` -- the

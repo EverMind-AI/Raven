@@ -30,7 +30,7 @@ from typing import Any
 
 from loguru import logger
 
-from raven.utils.atomic_io import atomic_replace
+from raven.utils.atomic_io import atomic_replace, atomic_update
 
 __all__ = [
     "HEARTBEAT_EVERY_SEC",
@@ -373,7 +373,12 @@ class StintRecord:
         return self.stale(now_ms) or self.holder_gone()
 
     def claim(self) -> None:
-        """Say that this process holds a round of this stint."""
+        """Say that this process is holding this stint.
+
+        Claimed before the first round opens as well as when one does: an
+        approval can stand for the broker's whole budget, and a second request
+        must see a live holder rather than a stale stamp.
+        """
         self.holder_pid = os.getpid()
         self.holder_host = socket.gethostname()
 
@@ -480,6 +485,33 @@ class StintStore:
         # torn file read as "no such stint", which a `stop` could not reach.
         atomic_replace(path, json.dumps(record.to_dict(), indent=2, ensure_ascii=False) + "\n")
         return path
+
+    def touch(self, stint_id: str, *, holder_pid: int | None = None) -> bool:
+        """Move the record's stamp without rewriting its state.
+
+        The beat used to read and write the whole record, so a stop or a pause
+        that landed between its read and its write could be undone by the beat
+        writing the snapshot back. This updates only the stamp, under the same
+        lock that serializes writers, and leaves every other field as the file
+        has it. False when the record is gone, not running, or held by another
+        process: the caller's beat should then stop.
+        """
+
+        def update(text: str | None) -> tuple[str | None, bool]:
+            if text is None:
+                return None, False
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                return None, False
+            if not isinstance(data, dict) or data.get("status") != RUNNING:
+                return None, False
+            if holder_pid is not None and data.get("holder_pid") not in (0, holder_pid):
+                return None, False
+            data["touched_at_ms"] = int(time.time() * 1000)
+            return json.dumps(data, indent=2, ensure_ascii=False) + "\n", True
+
+        return atomic_update(self.path_for(stint_id), update)
 
     def read(self, stint_id: str) -> StintRecord | None:
         path = self.path_for(stint_id)
