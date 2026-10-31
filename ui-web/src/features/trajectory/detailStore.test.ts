@@ -226,6 +226,14 @@ describe('the pane', () => {
     expect(details.detailsHeightPx()).toBe(400)
     expect(details.detailsWidthPx()).toBe(520)
   })
+
+  it('forgets where each tab was scrolled when the conversation changes', async () => {
+    await ready()
+    details.setTabScroll('a', 'overview', 120)
+    expect(details.tabScroll('a', 'overview')).toBe(120)
+    list.sessionChanged('gui:b')
+    expect(details.tabScroll('a', 'overview')).toBe(0)
+  })
 })
 
 describe('the Escape layer', () => {
