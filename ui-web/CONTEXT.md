@@ -236,7 +236,9 @@ under the ticket it was asked with.
 The reader moves the card by its head and sizes it by its corner, as they do
 the desk palette: let go near where it opened, it goes back there, and
 wherever it is the store keeps it whole inside the area. The corner also takes
-the focus, and each arrow moves a free edge 16px (`RESIZE_STEP`).
+the focus, and each arrow moves a free edge 16px (`RESIZE_STEP`). It is a button
+rather than a separator, which is a range along one axis: its description says
+both sizes, and a keyboard step reads out the new one.
 The pane's head carries a pin for the tab on screen: the conversation's
 **pinned tab**, opened first whenever the pane arrives at an entry whose strip
 has it (a new selection, or the pane reopened) and never while the reader is

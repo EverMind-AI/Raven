@@ -203,6 +203,10 @@ html[data-theme="dark"] {
   content: ''; position: absolute; left: 5px; bottom: 5px; width: 9px; height: 9px; opacity: .55; pointer-events: none;
   background: linear-gradient(45deg, transparent 48%, var(--faint) 50%, var(--faint) 57%, transparent 59%, transparent 70%, var(--faint) 72%, var(--faint) 79%, transparent 81%);
 }
+/* Read by a screen reader and drawn nowhere: what a keyboard step left the card at. */
+.trajectory-sr {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
 .trajectory-details[data-moved] .trajectory-corner { left: auto; right: 0; cursor: nwse-resize; }
 .trajectory-details[data-moved] .trajectory-corner::after {
   left: auto; right: 5px;
