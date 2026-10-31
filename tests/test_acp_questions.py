@@ -426,7 +426,7 @@ class TestFailurePaths:
         assert broker.answers == [("q1", "")]
 
     async def test_a_broker_that_already_resolved_is_not_an_error(self):
-        """It timed out, or the turn was cancelled and it fail-safed."""
+        """It timed out, or the turn was cancelled and took the question with it."""
         _, broker, questions = _rig(
             lambda f: {"result": {"action": "accept", "content": {ANSWER_FIELD: "postgres"}}},
             capabilities=FORM,

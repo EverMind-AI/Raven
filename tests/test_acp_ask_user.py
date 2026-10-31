@@ -618,8 +618,9 @@ async def test_an_answered_question_does_not_answer_for_a_run_that_ended() -> No
     skips the lock, so it needs a check of its own.
 
     The swallow below is what leaves the flag as the only trace: `cancel` marks
-    the run and cancels the waiting task, and an absorbed cancellation -- what
-    `QuestionBroker` does to the one on the asking side -- takes the other half.
+    the run and cancels the waiting task, and an absorbed cancellation -- the
+    autofill below suppresses one, and `_answer` still turns one into an empty
+    answer -- takes the other half.
     """
     import contextlib
 
