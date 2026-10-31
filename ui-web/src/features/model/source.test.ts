@@ -328,6 +328,54 @@ describe('the live model persist', () => {
     expect(h.overrides.staged.model).toEqual({ model: 'm2', provider: 'minimax' })
     expect(h.calls).toEqual([])
   })
+
+  /* The composer chip's pick: one write moves this conversation and the
+     default a new one starts on. Two calls would leave a partial failure --
+     a session binding written and a default refused, or the reverse -- with
+     the picker unable to roll either half back. */
+  it('a composer pick writes the conversation and the default in one call', async () => {
+    const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: true, scope: 'both', applies_to_session: true } } })
+    await expect(h.settings.persistModel('m2', 'minimax', 'both')).resolves.toBeUndefined()
+    expect(h.calls[0]).toEqual([
+      'config.set',
+      { key: 'model', value: 'm2', provider: 'minimax', scope: 'both', session_id: 'sess-1' },
+    ])
+    expect([h.settings.defaultModelLive, h.settings.defaultProviderLive]).toEqual(['m2', 'minimax'])
+  })
+
+  it('a composer pick on a draft writes the default and holds the pick for its new session', async () => {
+    const h = await live({ answers: { 'config.set': { applied: true } } })
+    const out = await h.settings.persistModel('m2', 'minimax', 'both')
+    expect(out).toBe('staged')
+    /* No session_id: the default is what a conversation minted from this
+       draft reads, and the staged pair re-states it on that session. */
+    expect(h.calls[0]).toEqual(['config.set', { key: 'model', value: 'm2', provider: 'minimax', scope: 'both' }])
+    expect(h.overrides.staged.model).toEqual({ model: 'm2', provider: 'minimax' })
+    expect([h.settings.defaultModelLive, h.settings.defaultProviderLive]).toEqual(['m2', 'minimax'])
+  })
+
+  it('a draft composer pick reaches the session its first message mints', async () => {
+    const h = await live({ answers: { 'config.set': { applied: true } } })
+    await h.settings.persistModel('m2', 'minimax', 'both')
+    const applied = h.overrides.applyStagedModel('new-session', h.gen())
+    await applied
+    /* The default write is what the minted session reads; the staged pair is
+       also bound to it before the first turn, so a default moved elsewhere in
+       between cannot take the draft's pick. */
+    expect(h.calls).toContainEqual([
+      'config.set',
+      { key: 'model', value: 'm2', provider: 'minimax', session_id: 'new-session' },
+    ])
+  })
+
+  it('rejects a refused composer pick so the chip rolls back', async () => {
+    const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: false, previous: null, scope: 'both' } } })
+    const { t } = await import('../../i18n/t')
+    await expect(h.settings.persistModel('m2', 'minimax', 'both')).rejects.toMatchObject({
+      data: { detail: t('gui.model.refused') },
+    })
+    expect([h.settings.defaultModelLive, h.settings.defaultProviderLive]).toEqual(['', ''])
+  })
 })
 
 describe('the live settings snapshot', () => {

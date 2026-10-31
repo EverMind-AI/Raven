@@ -252,12 +252,13 @@ export interface ModelSource {
   /* Send it. The provider is required: a model id does not name whose
      credential serves it, so the backend refuses a switch without one -- the
      column the model was chosen from is that answer. ``scope`` says whether the
-     switch is for this conversation or the global default, carried from the
-     opener rather than guessed from whether a conversation is open. Rejecting is
-     meaningful: the picker rolls the local pick back. Resolving to ``'staged'``
-     means the pick was held rather than applied (a draft has no session yet),
-     and the picker words its toast accordingly. */
-  persist(m: string, provider: string, scope: 'session' | 'default'): Promise<void | 'staged' | 'needs_restart'>
+     switch is for this conversation, the global default, or both at once (the
+     composer chip), carried from the opener rather than guessed from whether a
+     conversation is open. Rejecting is meaningful: the picker rolls the local
+     pick back. Resolving to ``'staged'`` means the pick was held rather than
+     applied (a draft has no session yet), and the picker words its toast
+     accordingly. */
+  persist(m: string, provider: string, scope: 'session' | 'default' | 'both'): Promise<void | 'staged' | 'needs_restart'>
   /* Add a model to a provider's list. The picker's typed-id row calls it
      before the switch, so a conversation never names a model its provider does
      not list. `kind` states what the person said it is, for an id no catalogue

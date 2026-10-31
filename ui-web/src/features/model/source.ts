@@ -264,17 +264,24 @@ export async function loadProviders(sid?: string | null, gen?: number): Promise<
 
 /* provider is required -- a bare model id does not name whose credential serves
    it. scope comes from the opener, matching the TUI's `/model` with or without
-   --default:
+   --default, plus the web composer's two-at-once pick:
    - 'default' changes agents.defaults (the settings control). The visible
      session rides along so the server can say whether that conversation follows
      the default; when it does (`applies_to_session`), its chip is re-read, or
      the conversation would run the new default under a chip showing the old.
-   - 'session' changes the open conversation; while it is still a draft there is
-     no session to scope to, so the pick is staged (writing it would move the
-     global default) and applied to the session the first message mints. Staging
-     is said back to the caller: it is not an applied switch yet. */
+   - 'session' changes the open conversation only; while it is still a draft
+     there is no session to scope to, so the pick is staged (writing it would
+     move the global default) and applied to the session the first message
+     mints. Staging is said back to the caller: it is not an applied switch yet.
+   - 'both' is the composer chip's pick: one write moves this conversation and
+     the default a new one starts on. One write rather than two calls, because a
+     client cannot roll back half of a pick -- a session binding written and a
+     default refused would leave the chip rolling back to a model the session no
+     longer runs. On a draft the default is what the minted session reads, and
+     the pick is staged too so a default moved elsewhere in between cannot take
+     it. */
 export async function persistModel(
-  m: string, provider: string, scope: 'session' | 'default',
+  m: string, provider: string, scope: 'session' | 'default' | 'both',
 ): Promise<void | 'staged' | 'needs_restart'> {
   const sid = sessionCurrent()
   // Captured with sid, before the write: the repaint below must prove the page
@@ -309,6 +316,22 @@ export async function persistModel(
        back so the onboarding wizard can tell the reader, instead of the next
        send answering with the startup error. */
     return r && r.needs_restart ? 'needs_restart' : undefined
+  }
+  if (scope === 'both') {
+    const p: ParamsOf<'config.set'> = { key: 'model', value: m, provider, scope: 'both' }
+    if (sid) p.session_id = sid
+    const r = await gateway().call('config.set', p)
+    /* A refusal RESOLVES. Thrown here so the rollback `choose` already does is
+       the one that runs: the chip must not stay on a pair neither half took. */
+    if (r && r.applied === false) throw { data: { detail: t('gui.model.refused') } }
+    // The default moved, so the settings row's pair is this one now.
+    setDefaultPair(m, provider)
+    if (sid) return
+    /* No session yet: the default is what the conversation minted from this
+       draft reads, and the staged pair re-states it against that session, so a
+       default moved elsewhere before the first message cannot take the pick. */
+    staging().model = { model: m, provider }
+    return r && r.needs_restart ? 'needs_restart' : 'staged'
   }
   if (sid) {
     const r = await gateway().call('config.set', { key: 'model', value: m, provider, session_id: sid })
