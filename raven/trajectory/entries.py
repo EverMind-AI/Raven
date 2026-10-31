@@ -101,7 +101,9 @@ _OUTER_ONLY_PREFIXES = ("memory.feedback", "memory.enqueue", "personalize.")
 _TOOL_RESULT_SPANS = ("tool.call", "skill.read")
 _TOOL_RESULT_SLOTS = ("tool.output", "skill.read")
 
-IN_PROGRESS_KEYS = ("turn.in_progress", "subagent.in_progress")
+# `subagent.external.in_progress` marks an external agent's run, and each step of
+# it, written while the run is still going; the settled record carries no `True`.
+IN_PROGRESS_KEYS = ("turn.in_progress", "subagent.in_progress", "subagent.external.in_progress")
 # A spawned run reports its own failures and returns, so its span status is OK
 # whatever happened; how it ended is on `subagent.outcome`. A DAG node attempt
 # that did not complete is an ERROR span instead, which the status check above
@@ -458,6 +460,8 @@ def _status_of(info: _conv._SpanInfo, records: list[dict[str, Any]]) -> tuple[st
         return STATUS_ERROR, tuple(evidence)
     if info.name == "session.turn" and info.attrs.get("turn.in_progress") is True:
         return STATUS_RUNNING, ("turn_in_progress",)
+    if info.attrs.get("subagent.external.in_progress") is True:
+        return STATUS_RUNNING, ("external_in_progress",)
     if info.name == "subagent.run":
         if info.attrs.get("subagent.in_progress") is True:
             return STATUS_RUNNING, ("subagent_in_progress",)
@@ -480,6 +484,10 @@ def _owner_slot(records: Sequence[dict[str, Any]]) -> str | None:
             return slot
     if SLOT_ERROR in slots:
         return SLOT_ERROR
+    # A call that only thought writes no output row (conversation._emit_llm):
+    # its thinking is all it produced, so it carries the call's time.
+    if SLOT_THINKING in slots:
+        return SLOT_THINKING
     single = [slot for slot in slots if slot in _SINGLE_EVENT_SLOTS]
     if single:
         return single[0]

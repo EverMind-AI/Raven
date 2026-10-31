@@ -153,9 +153,9 @@ describe('the pane', () => {
     await ready()
     expect(details.detailsWidthPx()).toBe(details.DEFAULT_WIDTH)
     details.setAreaWidth(1200)
-    details.setWidth(100)
+    details.resizeDetails(100, details.MIN_HEIGHT)
     expect(details.detailsWidthPx()).toBe(details.MIN_WIDTH)
-    details.setWidth(900)
+    details.resizeDetails(900, details.MIN_HEIGHT)
     expect(details.detailsWidthPx()).toBe(600)
     details.setAreaWidth(700)
     expect(details.narrow()).toBe(true)
@@ -163,10 +163,81 @@ describe('the pane', () => {
     details.setAreaWidth(800)
     expect(details.narrow()).toBe(false)
   })
+
+  it('fills the room under the header until the reader sets a height, then holds theirs between 240px and the area', async () => {
+    await ready()
+    expect(details.detailsHeightPx()).toBeNull()
+    details.setAreaHeight(900)
+    details.resizeDetails(details.DEFAULT_WIDTH, 100)
+    expect(details.detailsHeightPx()).toBe(details.MIN_HEIGHT)
+    details.resizeDetails(details.DEFAULT_WIDTH, 2000)
+    expect(details.detailsHeightPx()).toBe(900 - 2 * details.CARD_GAP)
+    details.setAreaHeight(600)
+    expect(details.detailsHeightPx()).toBe(600 - 2 * details.CARD_GAP)
+  })
+
+  it('keeps a moved pane whole inside the area as the area changes', async () => {
+    await ready()
+    details.setAreaWidth(1200)
+    details.setAreaHeight(800)
+    expect(details.detailsPlace()).toBeNull()
+    details.dropDetails({ x: -50, y: 5000 }, 400, 106)
+    expect(details.detailsPlace()).toEqual({ x: details.CARD_GAP, y: 800 - 400 - details.CARD_GAP })
+    expect(details.detailsHeightPx()).toBe(400)
+    /* A shrinking area carries the pane with it; growing back returns it. */
+    details.setAreaHeight(600)
+    expect(details.detailsPlace()).toEqual({ x: details.CARD_GAP, y: 600 - 400 - details.CARD_GAP })
+    details.setAreaHeight(800)
+    expect(details.detailsPlace()).toEqual({ x: details.CARD_GAP, y: 800 - 400 - details.CARD_GAP })
+  })
+
+  it('goes back where it opens when let go near there, as tall as the room there again unless the reader made it shorter', async () => {
+    await ready()
+    details.setAreaWidth(1200)
+    details.setAreaHeight(800)
+    const home = { x: 1200 - details.CARD_GAP - details.DEFAULT_WIDTH, y: 106 }
+    const room = 800 - home.y - details.CARD_GAP
+    details.dropDetails({ x: 400, y: 60 }, room, home.y)
+    expect(details.detailsPlace()).toEqual({ x: 400, y: 60 })
+    details.dropDetails({ x: home.x - 20, y: home.y - 20 }, room, home.y)
+    expect(details.detailsPlace()).toBeNull()
+    expect(details.detailsHeightPx()).toBeNull()
+    details.resizeDetails(details.DEFAULT_WIDTH, 300)
+    details.dropDetails({ x: 400, y: 200 }, 300, home.y)
+    details.dropDetails({ x: home.x + 30, y: home.y - 30 }, 300, home.y)
+    expect(details.detailsPlace()).toBeNull()
+    expect(details.detailsHeightPx()).toBe(300)
+    /* Past the snap distance it stays where it was let go. */
+    details.dropDetails({ x: home.x - 40, y: home.y }, 300, home.y)
+    expect(details.detailsPlace()).toEqual({ x: home.x - 40, y: home.y })
+    /* With no known home there is nothing to go back to. */
+    details.dropDetails({ x: home.x, y: home.y }, 300, Number.NaN)
+    expect(details.detailsPlace()).toEqual({ x: home.x, y: home.y })
+  })
+
+  it('keeps the pane where the reader put it, at their size, across a conversation switch', async () => {
+    await ready()
+    details.setAreaWidth(1200)
+    details.setAreaHeight(800)
+    details.resizeDetails(520, 400)
+    details.dropDetails({ x: 300, y: 100 }, 400, 106)
+    list.sessionChanged('gui:b')
+    expect(details.detailsPlace()).toEqual({ x: 300, y: 100 })
+    expect(details.detailsHeightPx()).toBe(400)
+    expect(details.detailsWidthPx()).toBe(520)
+  })
+
+  it('forgets where each tab was scrolled when the conversation changes', async () => {
+    await ready()
+    details.setTabScroll('a', 'overview', 120)
+    expect(details.tabScroll('a', 'overview')).toBe(120)
+    list.sessionChanged('gui:b')
+    expect(details.tabScroll('a', 'overview')).toBe(0)
+  })
 })
 
 describe('the Escape layer', () => {
-  it('answers for an open pick list first, then for the pane while it holds the focus', async () => {
+  it('answers for the pane while it holds the focus', async () => {
     await ready()
     const { ESCAPE_ORDER } = await import('../../state/escapeOrder')
     const layer = ESCAPE_ORDER.find((l) => l.id === 'trajectory.escapeOpen()')!
@@ -176,10 +247,6 @@ describe('the Escape layer', () => {
     expect(layer.isOpen()).toBe(false)
     document.getElementById('f')!.focus()
     expect(layer.isOpen()).toBe(true)
-    list.openBucket(['r0'], 0)
-    layer.close()
-    expect(list.get().timeline.bucket).toBeNull()
-    expect(details.get().open).toBe(true)
     layer.close()
     expect(details.get().open).toBe(false)
     expect(layer.isOpen()).toBe(false)
@@ -1120,9 +1187,9 @@ describe('the pinned tab', () => {
   })
 })
 
-/* ── the pane per Scope Tab ───────────────────────────────────────── */
+/* ── the pane per scope ───────────────────────────────────────────── */
 
-describe('the pane per Scope Tab', () => {
+describe('the pane per scope', () => {
   const A = 't:runA'
   const X = 't:runX'
   const scoped = (id: string, at: number, scope: string, over: Partial<TrajectoryEntry> = {}): TrajectoryEntry =>

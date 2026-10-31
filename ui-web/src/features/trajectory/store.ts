@@ -26,12 +26,12 @@
  *   - a batch of changes is one `set`. The feed may carry hundreds of upserts,
  *     and the list repaints once per batch rather than once per row.
  *
- * The rows the list and the bar draw are one Scope Tab's: the main session's,
- * or one sub-agent run's that the reader opened. `entries`, `index` and
- * `spanIndex` still hold every row, since links and the feed cross tabs. A tab
- * is another filter over the same picture, so moving between tabs leaves the
- * generation alone, and `select` on a row of another tab moves to that tab. A
- * tab coming back brings its own selection back under the `migrate` door.
+ * The page draws every agent's rows at once, straight from `entries`; the
+ * store also keeps a current Sub-agent Scope -- the main session, or one
+ * sub-agent run. `entries`, `index` and `spanIndex` hold every row, since links
+ * and the feed cross scopes. Moving between scopes leaves the generation alone,
+ * and `select` on a row of another scope moves to that scope. A scope coming
+ * back brings its own selection back under the `migrate` door.
  */
 
 import { current as sessionCurrent } from '../../lib/session'
@@ -39,7 +39,6 @@ import { has, servesTrajectory } from '../../rpc/capabilities'
 import { isFresh, onFresh } from '../../state/session/conversation'
 import { sources } from '../../state/sources'
 import { makeStore } from '../../state/store'
-import { snapThreshold } from './geometry'
 import { indexOf, insertSorted, removeIds } from './order'
 import { isAbsent, isCursorExpired, isDisabled } from './source'
 
@@ -48,47 +47,22 @@ import type {
   TrajectorySource, View,
 } from './types'
 
-/* Where the reader was in the list when they were not following its tail:
-   the entry at the top of the viewport and how far into it they had scrolled.
-   An id rather than an index, because the feed inserts above as well as below. */
-export interface Anchor {
-  id: string
-  offset: number
-}
-
-/* The duration bar's view of the entries: how far it is zoomed, where it is
-   scrolled to, whether it still fits the bar (and so re-fits as rows
-   arrive), the fit's unit it froze on the first zoom, the place at its left
-   edge, and the dense block the reader has opened a pick list for. */
-export interface Timeline {
-  scale: number
-  offset: number
-  fit: boolean
-  frozenUnit: number | null
-  /** The fit's equal share frozen with it when the rows had no duration (geometry.ts). */
-  frozenMark: number | null
-  anchor: { id: string; frac: number } | null
-  bucket: { ids: string[]; x: number } | null
-  /** The duration filter's popover is up. */
-  threshold: boolean
-}
-
-export const initialTimeline: Timeline = {
-  scale: 1, offset: 0, fit: true, frozenUnit: null, frozenMark: null, anchor: null, bucket: null, threshold: false,
-}
-
-/** What a Scope Tab keeps while another is on screen. */
+/** What a scope keeps while another is the current one. */
 export interface ScopeView {
   selectedId: string | null
-  follow: boolean
-  anchor: Anchor | null
-  timeline: Timeline
 }
 
 /** An open sub-agent tab: its Sub-agent Scope and the entry that opened it, as it was then. */
 export interface OpenScope {
   id: string
   door: TrajectoryEntry | null
+}
+
+/** The stretch the reader picked on the ruler: its two ends in real time, so a
+ *  live axis growing past them leaves the stretch where it was picked. */
+export interface RulerPick {
+  a: number
+  b: number
 }
 
 export interface TrajectoryState {
@@ -127,84 +101,24 @@ export interface TrajectoryState {
   selectedBy: SelectSource | null
   /** Bumped by every selection `select` makes, so a surface that answers each one once tells it from a re-render. */
   selections: number
-  /** Within reach of the tail, so new rows pull the viewport down. */
-  follow: boolean
-  anchor: Anchor | null
-  timeline: Timeline
-  /** The reader's two switches for the list and the bar, kept in the browser. */
-  prefs: Prefs
-  /** Hidden rows shown for now because something pointed at them; cleared with the conversation. */
-  revealed: string[]
-  /** The Scope Tab on screen: a Sub-agent Scope's id, or null for the main session. */
+  /** The stretch picked on the ruler, in real time; the rows show only what ran
+   *  inside it. Kept beside the selection so Escape can take it back from the
+   *  one ordered table (`state/escapeOrder.ts`). */
+  picked: RulerPick | null
+  /** The current scope: a Sub-agent Scope's id, or null for the main session. */
   scope: string | null
   /** The sub-agent tabs the reader opened, in the order they were opened. */
   scopes: OpenScope[]
   /** The tabs not on screen, by scope id (`scopeKey`). */
   saved: Record<string, ScopeView>
-  /** The rows the list draws: the tab's entries less the hidden ones, unless the switch or `revealed` says otherwise. */
-  visible: TrajectoryEntry[]
-  /** `entry_id` to position in `visible`, rebuilt with it. */
-  visibleIndex: Record<string, number>
+  /** The length `entries` had before the last purely-appending change, or -1
+   *  when that change rewrote the list. A surface that caches a tree over
+   *  `entries` reads this to know it may extend rather than rebuild. */
+  grownFrom: number
   /** `trace_id:span_id` to the first entry of that span, for the links a detail carries. */
   spanIndex: Record<string, string>
-  /** A turn's whole charged time, from its reply entry, by `turn_span_id`. */
-  turnTotals: Record<string, number>
   /** A Sub-agent Scope's id to the first entry that opens it. */
   doors: Record<string, string>
-  /** A Sub-agent Scope's id to how many entries belong to it. */
-  scopeSizes: Record<string, number>
-  /** How many of the tab's entries the index marked hidden. */
-  hiddenCount: number
-  /** The tab's turns whose reply the list leaves out, by turn number, with the reply's charged time. */
-  hiddenTurns: Record<number, number>
-}
-
-/** What the reader can set: the bar's duration threshold (0 filters nothing), and showing the entries the list hides. */
-export interface Prefs {
-  minChargedMs: number
-  showHidden: boolean
-}
-
-export const PREFS_KEY = 'raven.gui.trajectory.prefs'
-const DEFAULT_PREFS: Prefs = { minChargedMs: 20, showHidden: false }
-
-/** The switches as the browser last kept them; the defaults where it kept nothing readable. */
-export function readPrefs(): Prefs {
-  return loadPrefs()
-}
-
-function loadPrefs(): Prefs {
-  try {
-    const raw: unknown = typeof localStorage === 'undefined' ? null : JSON.parse(localStorage.getItem(PREFS_KEY) || 'null')
-    if (raw && typeof raw === 'object') {
-      /* The switches an earlier build kept (`hideShort`, `showInternal`) are read into the current two. */
-      const value = raw as Partial<Prefs> & { hideShort?: unknown; showInternal?: unknown }
-      const minChargedMs = typeof value.minChargedMs === 'number'
-        ? snapThreshold(value.minChargedMs)
-        : typeof value.hideShort === 'boolean' ? (value.hideShort ? 20 : 0) : DEFAULT_PREFS.minChargedMs
-      const showHidden = typeof value.showHidden === 'boolean'
-        ? value.showHidden
-        : typeof value.showInternal === 'boolean' ? value.showInternal : DEFAULT_PREFS.showHidden
-      return { minChargedMs, showHidden }
-    }
-  } catch {
-    /* Storage may be unavailable or hold something else; the defaults stand. */
-  }
-  return { ...DEFAULT_PREFS }
-}
-
-function savePrefs(prefs: Prefs): void {
-  try {
-    if (typeof localStorage !== 'undefined') localStorage.setItem(PREFS_KEY, JSON.stringify(prefs))
-  } catch {
-    /* Private mode or quota: the switch still holds for this page. */
-  }
-}
-
-/** The index's reason for leaving a row out of the list, or null for a row it shows. */
-export const hiddenOf = (entry: TrajectoryEntry): string | null => {
-  const value = entry.meta?.hidden
-  return typeof value === 'string' ? value : null
 }
 
 /** The Sub-agent Scope the entry belongs to; null for the main session. */
@@ -220,39 +134,18 @@ export const scopeKey = (scope: string | null): string => scope ?? MAIN_KEY
 
 const spanKey = (trace: string, span: string): string => `${trace}:${span}`
 
-/* Everything the list and the bar read that follows from `entries`: the
-   tab's visible rows and their positions, the span lookup, the turn totals,
-   and what the tab strip and the bar need to know about every scope. */
-function derived(entries: TrajectoryEntry[], prefs: Prefs, revealed: string[], scope: string | null) {
-  const visible: TrajectoryEntry[] = []
+/* Everything the page reads that follows from `entries`: their positions,
+   the span lookup, and the entry that opens each scope. */
+function derived(entries: TrajectoryEntry[]) {
   const spanIndex: Record<string, string> = {}
-  const turnTotals: Record<string, number> = {}
   const doors: Record<string, string> = {}
-  const scopeSizes: Record<string, number> = {}
-  const hiddenTurns: Record<number, number> = {}
-  let hiddenCount = 0
   for (const entry of entries) {
     const key = spanKey(entry.trace_id, entry.span_id)
     if (!(key in spanIndex)) spanIndex[key] = entry.entry_id
-    if (entry.slot === 'turn.output' && entry.turn_span_id && typeof entry.charged_ms === 'number') {
-      turnTotals[entry.turn_span_id] = entry.charged_ms
-    }
-    const own = scopeOf(entry)
-    if (own !== null) scopeSizes[own] = (scopeSizes[own] ?? 0) + 1
     const opens = opensOf(entry)
     if (opens !== null && !(opens in doors)) doors[opens] = entry.entry_id
-    if (own !== scope) continue
-    const hidden = hiddenOf(entry) !== null
-    if (hidden) hiddenCount += 1
-    if (!hidden || prefs.showHidden || revealed.includes(entry.entry_id)) visible.push(entry)
-    else if (entry.slot === 'turn.output' && typeof entry.turn_number === 'number' && typeof entry.charged_ms === 'number') {
-      hiddenTurns[entry.turn_number] = entry.charged_ms
-    }
   }
-  return {
-    entries, index: indexOf(entries), visible, visibleIndex: indexOf(visible), spanIndex, turnTotals,
-    doors, scopeSizes, hiddenCount, hiddenTurns,
-  }
+  return { entries, index: indexOf(entries), spanIndex, doors }
 }
 
 const initial: TrajectoryState = {
@@ -275,22 +168,13 @@ const initial: TrajectoryState = {
   selectedId: null,
   selectedBy: null,
   selections: 0,
-  follow: true,
-  anchor: null,
-  timeline: initialTimeline,
-  prefs: loadPrefs(),
-  revealed: [],
+  picked: null,
   scope: null,
   scopes: [],
   saved: {},
-  visible: [],
-  visibleIndex: {},
+  grownFrom: -1,
   spanIndex: {},
-  turnTotals: {},
   doors: {},
-  scopeSizes: {},
-  hiddenCount: 0,
-  hiddenTurns: {},
 }
 
 const store = makeStore<TrajectoryState>(initial)
@@ -299,22 +183,19 @@ export const { get, set, subscribe } = store
 
 const patch = (p: Partial<TrajectoryState>): void => { store.set({ ...store.get(), ...p }) }
 
-/** The fields that change together with the rows: the whole set, its positions, the visible set and the lookups. */
-export const rowsOf = (entries: TrajectoryEntry[], s: TrajectoryState = store.get()) => derived(entries, s.prefs, s.revealed, s.scope)
+/** The fields that change together with the rows: the whole set, its positions and the lookups. */
+export const rowsOf = (entries: TrajectoryEntry[]) => derived(entries)
 const rows = rowsOf
 
 export const source = (): TrajectorySource | null => sources.trajectory ?? null
 
-/* What a conversation keeps while another is on screen: its view, its
-   selection and where its list was scrolled to. Light on purpose -- the
-   entries themselves are read back from the gateway on return, which is what
-   keeps a page that visits many conversations from holding all of them. */
+/* What a conversation keeps while another is on screen: its view and its
+   selection. Light on purpose -- the entries themselves are read back from
+   the gateway on return, which is what keeps a page that visits many
+   conversations from holding all of them. */
 interface Remembered {
   view: View
   selectedId: string | null
-  follow: boolean
-  anchor: Anchor | null
-  timeline: Timeline
 }
 
 /** How many conversations' places are kept; the oldest goes when a new one arrives. */
@@ -370,20 +251,8 @@ export function handshake(): void {
 function leaveView(): void {
   if (store.get().view === 'trajectory') {
     bump()
-    const s = store.get()
-    patch({ view: 'chat', listing: false, timeline: { ...s.timeline, bucket: null, threshold: false }, revealed: [], ...rows(s.entries, { ...s, revealed: [] }) })
+    patch({ view: 'chat', listing: false, picked: null })
   }
-}
-
-/* ── the reader's switches ────────────────────────────────────────────── */
-
-/** Change a setting: kept in the browser for the next visit, and the rows reconsidered now. */
-export function setPrefs(next: Partial<Prefs>): void {
-  const s = store.get()
-  const prefs = { ...s.prefs, ...next, minChargedMs: snapThreshold(next.minChargedMs ?? s.prefs.minChargedMs) }
-  if (prefs.minChargedMs === s.prefs.minChargedMs && prefs.showHidden === s.prefs.showHidden) return
-  savePrefs(prefs)
-  patch({ prefs, revealed: [], ...derived(s.entries, prefs, [], s.scope) })
 }
 
 /** The surface is switched off for this process; the toggle goes, the data stays. */
@@ -446,11 +315,8 @@ export function setView(view: View): void {
   if (s.view === view) return
   if (view === 'trajectory' && !available(s)) return
   bump()
-  const revealed = view === 'chat' ? [] : s.revealed
-  patch({
-    view, listing: false, timeline: view === 'chat' ? { ...s.timeline, bucket: null, threshold: false } : s.timeline,
-    revealed, ...rows(s.entries, { ...s, revealed }),
-  })
+  /* A pick belongs to the ruler it was made on; leaving the view drops it. */
+  patch({ view, listing: false, picked: view === 'trajectory' ? s.picked : null })
 }
 
 export const toggleView = (): void => { setView(store.get().view === 'trajectory' ? 'chat' : 'trajectory') }
@@ -465,31 +331,34 @@ export function select(entryId: string | null, opts: { source: SelectSource }): 
     const target = scopeOf(s.entries[s.index[entryId]!]!)
     if (target !== s.scope) { enter(target, { select: { id: entryId, source: opts.source } }); return }
   }
-  /* A hidden row that something pointed at is shown for now, so the selection has a row to land on --
-     also when it was the selection already and a switch has since hidden it. */
-  const reveal = entryId !== null && !(entryId in s.visibleIndex)
-  if (s.selectedId === entryId && !reveal) return
-  const revealed = reveal ? [...s.revealed, entryId as string] : s.revealed
-  patch({
-    selectedId: entryId, selectedBy: entryId === null ? null : opts.source, selections: s.selections + 1,
-    ...(reveal ? { revealed, ...rows(s.entries, { ...s, revealed }) } : {}),
-  })
+  if (s.selectedId === entryId) return
+  patch({ selectedId: entryId, selectedBy: entryId === null ? null : opts.source, selections: s.selections + 1 })
 }
 
-/** The list reports where the reader is: at the tail, or anchored to a row. */
-export function setPlace(follow: boolean, anchor: Anchor | null): void {
+/** Selects an entry whichever tab it belongs to, without moving the tab: the
+ *  waterfall draws every agent at once, so a click on a worker's row must not
+ *  filter the page down to that worker. */
+export function selectAcross(entryId: string | null, opts: { source: SelectSource }): void {
   const s = store.get()
-  if (s.follow === follow && s.anchor?.id === anchor?.id && s.anchor?.offset === anchor?.offset) return
-  patch({ follow, anchor })
+  if (entryId !== null && !(entryId in s.index)) return
+  if (s.selectedId === entryId) return
+  patch({ selectedId: entryId, selectedBy: entryId === null ? null : opts.source, selections: s.selections + 1 })
 }
 
-/* ── the Scope Tabs ───────────────────────────────────────────────────── */
+/** The stretch picked on the ruler; the rows are filtered to it. A pick of the
+ *  same stretch is not a change, so a pointer that never moved writes nothing. */
+export function setPicked(pick: RulerPick | null): void {
+  const held = store.get().picked
+  if (held === pick) return
+  if (held !== null && pick !== null && held.a === pick.a && held.b === pick.b) return
+  patch({ picked: pick })
+}
 
-const freshView = (): ScopeView => ({ selectedId: null, follow: true, anchor: null, timeline: initialTimeline })
+/* ── the scopes ───────────────────────────────────────────────────────── */
 
-const viewOf = (s: TrajectoryState): ScopeView => ({
-  selectedId: s.selectedId, follow: s.follow, anchor: s.anchor, timeline: { ...s.timeline, bucket: null, threshold: false },
-})
+const freshView = (): ScopeView => ({ selectedId: null })
+
+const viewOf = (s: TrajectoryState): ScopeView => ({ selectedId: s.selectedId })
 
 const doorOf = (s: TrajectoryState, id: string): TrajectoryEntry | null => {
   const door = s.doors[id]
@@ -506,7 +375,7 @@ const doorOf = (s: TrajectoryState, id: string): TrajectoryEntry | null => {
 function enter(target: string | null, how: {
   select?: { id: string; source: SelectSource }
   discard?: boolean
-  base?: Pick<TrajectoryState, 'scopes' | 'saved' | 'revealed'>
+  base?: Pick<TrajectoryState, 'scopes' | 'saved'>
 } = {}): void {
   const s: TrajectoryState = { ...store.get(), ...how.base }
   const saved = { ...s.saved }
@@ -516,16 +385,9 @@ function enter(target: string | null, how: {
   const scopes = target === null || s.scopes.some((o) => o.id === target) ? s.scopes : [...s.scopes, { id: target, door: doorOf(s, target) }]
   let selectedId = how.select ? how.select.id : back.selectedId
   if (selectedId !== null && !(selectedId in s.index)) selectedId = null
-  let revealed = s.revealed
-  let next = derived(s.entries, s.prefs, revealed, target)
-  if (how.select && !(how.select.id in next.visibleIndex)) {
-    revealed = [...revealed, how.select.id]
-    next = derived(s.entries, s.prefs, revealed, target)
-  }
   const moved = how.select !== undefined || selectedId !== s.selectedId
   patch({
-    scope: target, scopes, saved, revealed, ...next,
-    follow: back.follow, anchor: back.anchor, timeline: back.timeline,
+    scope: target, scopes, saved,
     selectedId, selectedBy: selectedId === null ? null : (how.select ? how.select.source : 'migrate'),
     selections: moved ? s.selections + 1 : s.selections,
   })
@@ -546,11 +408,9 @@ export function switchScope(id: string | null): void {
   enter(id)
 }
 
-/* Closes a sub-agent tab and forgets everything it kept, the hidden rows a
-   link showed in it included, so it opens afresh next time. A shown row is
-   the tab's where the row is now: one whose scope the feed has since changed
-   is shown in its new tab and stays. The tab on screen being closed hands
-   over to its right-hand neighbour, else its left, else the main session. */
+/* Closes a sub-agent tab and forgets what it kept, so it opens afresh next
+   time. The tab on screen being closed hands over to its right-hand
+   neighbour, else its left, else the main session. */
 export function closeScope(id: string): void {
   const s = store.get()
   const at = s.scopes.findIndex((o) => o.id === id)
@@ -558,72 +418,24 @@ export function closeScope(id: string): void {
   const scopes = s.scopes.filter((o) => o.id !== id)
   const saved = { ...s.saved }
   delete saved[scopeKey(id)]
-  const revealed = s.revealed.filter((rid) => {
-    const i = s.index[rid]
-    return i === undefined || scopeOf(s.entries[i]!) !== id
-  })
   if (s.scope === id) {
     const neighbour = s.scopes[at + 1]?.id ?? s.scopes[at - 1]?.id ?? null
-    enter(neighbour, { discard: true, base: { scopes, saved, revealed } })
+    enter(neighbour, { discard: true, base: { scopes, saved } })
     return
   }
-  const shown = revealed.length !== s.revealed.length
-  patch({ scopes, saved, revealed, ...(shown ? rows(s.entries, { ...s, revealed }) : {}) })
+  patch({ scopes, saved })
 }
 
-/* The rows before and after a change, what the change replaced, and which
-   rows the list draws under the reader's switches, for carrying a tab's
-   place across it. */
+/* The rows after a change and what the change replaced, for carrying a
+   saved scope's selection across it. */
 interface Change {
-  before: TrajectoryEntry[]
-  beforeIndex: Record<string, number>
-  after: TrajectoryEntry[]
   afterIndex: Record<string, number>
   replaced: ReadonlyMap<string, string | null>
-  drawn: (entry: TrajectoryEntry) => boolean
 }
 
-const drawnUnder = (prefs: Prefs, revealed: string[]) => (entry: TrajectoryEntry): boolean =>
-  hiddenOf(entry) === null || prefs.showHidden || revealed.includes(entry.entry_id)
-
-/* A tab's place after the rows changed under it, worked out in the same
-   write as the change: once the change is past, a gone anchor has nothing
-   left to be found by and its replacement is forgotten, and a tab left in
-   the meantime would keep it. An anchor holds while it is a row of the tab
-   that the list can still put on screen -- itself drawn, or a drawn row of
-   the tab after it, which is where the list puts a hidden anchor. Else its
-   replacement on the same terms, else the first drawn row of the tab after
-   where it was; with none the tab follows the tail -- with neither an
-   anchor nor the tail, the list would keep the scroll position the previous
-   tab left, which says nothing about this one. */
-function carryPlace(place: Pick<ScopeView, 'follow' | 'anchor'>, scope: string | null, c: Change): Pick<ScopeView, 'follow' | 'anchor'> {
-  const { follow, anchor } = place
-  if (anchor === null) return { follow, anchor }
-  const shown = (e: TrajectoryEntry): boolean => scopeOf(e) === scope && c.drawn(e)
-  const placeable = (id: string): boolean => {
-    const at = c.afterIndex[id]
-    if (at === undefined || scopeOf(c.after[at]!) !== scope) return false
-    for (let k = at; k < c.after.length; k += 1) if (shown(c.after[k]!)) return true
-    return false
-  }
-  if (placeable(anchor.id)) return { follow, anchor }
-  const by = c.replaced.get(anchor.id)
-  if (by && placeable(by)) return { follow, anchor: { id: by, offset: anchor.offset } }
-  const from = c.beforeIndex[anchor.id]
-  if (from !== undefined) {
-    for (let k = from + 1; k < c.before.length; k += 1) {
-      const at = c.afterIndex[c.before[k]!.entry_id]
-      const now = at === undefined ? undefined : c.after[at]
-      if (now && shown(now)) return { follow, anchor: { id: now.entry_id, offset: 0 } }
-    }
-  }
-  return { follow: true, anchor: null }
-}
-
-/* The saved tabs after a change: each one's place, and its selection --
-   kept while the index has it or its replacement, whichever tab it is in
-   now, the way the tab on screen keeps its own. Answers the same object
-   when nothing moved. */
+/* The saved scopes after a change: each one's selection, kept while the index
+   has it or its replacement, whichever scope it is in now, the way the
+   current scope keeps its own. Answers the same object when nothing moved. */
 function carry(saved: Record<string, ScopeView>, c: Change): Record<string, ScopeView> {
   let out: Record<string, ScopeView> | null = null
   for (const [key, view] of Object.entries(saved)) {
@@ -632,42 +444,20 @@ function carry(saved: Record<string, ScopeView>, c: Change): Record<string, Scop
       const by = c.replaced.get(selectedId)
       selectedId = by && by in c.afterIndex ? by : null
     }
-    const place = carryPlace(view, key === MAIN_KEY ? null : key, c)
-    if (selectedId === view.selectedId && place.anchor === view.anchor && place.follow === view.follow) continue
+    if (selectedId === view.selectedId) continue
     out ??= { ...saved }
-    out[key] = { ...view, ...place, selectedId }
+    out[key] = { ...view, selectedId }
   }
   return out ?? saved
 }
 
 const NOTHING_REPLACED: ReadonlyMap<string, string | null> = new Map()
 
-/* ── the duration bar's view ──────────────────────────────────────────── */
-
-/** The bar's zoom and scroll, written by the bar after every move. */
-export function setTimeline(next: Partial<Timeline>): void {
-  patch({ timeline: { ...store.get().timeline, ...next } })
-}
-
-/** A dense block's pick list is up, for these entries, at this content x. */
-export function openBucket(ids: string[], x: number): void {
-  if (!ids.length) return
-  setTimeline({ bucket: { ids, x } })
-}
-
-export function closeBucket(): void {
-  if (store.get().timeline.bucket !== null) setTimeline({ bucket: null })
-}
-
-/** The duration filter's popover, opened or closed by its button, Escape or a click elsewhere. */
-export function setThresholdOpen(open: boolean): void {
-  if (store.get().timeline.threshold !== open) setTimeline({ threshold: open })
-}
-
 /* ── the conversation on screen ───────────────────────────────────────── */
 
-/* What is kept of a conversation is its main session's place: the sub-agent
-   tabs are let go with it, so one of theirs would be a place nobody can return to. */
+/* What is kept of a conversation is its main session's selection: the
+   sub-agent tabs are let go with it, so one of theirs would be a selection
+   nobody can return to. */
 function remember(key: string): void {
   const s = store.get()
   const main = s.scope === null ? viewOf(s) : (s.saved[MAIN_KEY] ?? freshView())
@@ -703,21 +493,12 @@ export function sessionChanged(key: string | null = sessionCurrent()): void {
     fault: null,
     selectedId: back?.selectedId ?? null,
     selectedBy: back?.selectedId ? 'migrate' : null,
-    follow: back?.follow ?? true,
-    anchor: back?.anchor ?? null,
-    timeline: back?.timeline ?? initialTimeline,
-    revealed: [],
+    picked: null,
     scope: null,
     scopes: [],
     saved: {},
-    visible: [],
-    visibleIndex: {},
     spanIndex: {},
-    turnTotals: {},
     doors: {},
-    scopeSizes: {},
-    hiddenCount: 0,
-    hiddenTurns: {},
   })
   if (back?.view === 'trajectory' && !available()) patch({ view: 'chat' })
 }
@@ -734,15 +515,21 @@ interface Walked {
    preview, so a long conversation starts to read before its last page is in;
    nothing about the commitment moves until the walk returns. Answers null
    when the walk was overtaken. */
-async function pages(src: TrajectorySource, key: string, g: number, progressive: boolean): Promise<Walked | null> {
+async function pages(src: TrajectorySource, key: string, g: number, stream: boolean): Promise<Walked | null> {
   let cursor: string | null = null
   let entries: TrajectoryEntry[] = []
   for (;;) {
     const page: TrajectoryListResult = await src.list(key, cursor)
     if (g !== generation || store.get().sessionKey !== key) return null
+    const before = entries.length
     entries = cursor === null ? [...page.entries] : [...entries, ...page.entries]
     cursor = page.next_cursor ?? null
-    if (progressive) patch({ ...rows(entries), indexState: page.index_state })
+    /* Every page goes on screen as it lands, whether or not a picture is
+       already up: a walk over a session the reader has seen before used to
+       wait for the whole snapshot, which is the one case large files hurt.
+       A walk restarted after its cursor expired is not streamed -- its pages
+       belong to a different snapshot, and half of one is not a picture. */
+    if (stream) patch({ ...rows(entries), grownFrom: cursor === null ? -1 : before, indexState: page.index_state })
     if (cursor === null) return { entries, last: page }
   }
 }
@@ -757,24 +544,24 @@ export async function load(): Promise<void> {
   const src = source()
   const key = store.get().sessionKey
   if (!src || !key) return
-  let progressive = store.get().entries.length === 0
   let restarts = 0
+  let stream = true
   for (;;) {
     const g = bump()
     patch({ listing: true })
     try {
-      const got = await pages(src, key, g, progressive)
+      const got = await pages(src, key, g, stream)
       if (got === null) return
       const { entries, last } = got
       const was = store.get()
-      const next = rows(entries)
-      const change: Change = {
-        before: was.entries, beforeIndex: was.index, after: entries, afterIndex: next.index, replaced: NOTHING_REPLACED,
-        drawn: drawnUnder(was.prefs, was.revealed),
-      }
+      /* The pages already put this exact list on screen; re-deriving it would
+         only throw away the tree the reader is looking at. */
+      const whole = was.entries === entries
+      const next = whole ? null : rows(entries)
+      const change: Change = { afterIndex: next?.index ?? was.index, replaced: NOTHING_REPLACED }
       patch({
-        ...next,
-        ...carryPlace(was, was.scope, change),
+        ...(next ?? {}),
+        grownFrom: -1,
         saved: carry(was.saved, change),
         epoch: last.epoch,
         revision: last.snapshot_revision,
@@ -794,7 +581,7 @@ export async function load(): Promise<void> {
          one whole: pages of the old snapshot may already be on screen. */
       if (isCursorExpired(e) && restarts < WALK_RETRIES) {
         restarts += 1
-        progressive = false
+        stream = false
         continue
       }
       patch({ listing: false })
@@ -819,7 +606,9 @@ export function snapshotStale(): void {
    sitting out of order. */
 export function applyChanges(batch: TrajectoryChangesResult): void {
   const s = store.get()
-  if (!s.snapshotReady || batch.epoch !== s.epoch) return
+  /* A walk in progress is replacing the list page by page; a batch merged into
+     that half-old picture would belong to neither snapshot. */
+  if (!s.snapshotReady || s.listing || batch.epoch !== s.epoch) return
   let entries = removeIds(s.entries, batch.removed.map((r) => r.entry_id))
   for (const entry of batch.upserts) entries = insertSorted(entries, entry)
   const index = indexOf(entries)
@@ -830,13 +619,12 @@ export function applyChanges(batch: TrajectoryChangesResult): void {
     else if (!(selectedId in index)) selectedId = null
   }
   const change: Change = {
-    before: s.entries, beforeIndex: s.index, after: entries, afterIndex: index,
+    afterIndex: index,
     replaced: new Map(batch.removed.map((r) => [r.entry_id, r.replaced_by ?? null])),
-    drawn: drawnUnder(s.prefs, s.revealed),
   }
   patch({
-    ...rows(entries, s),
-    ...carryPlace(s, s.scope, change),
+    ...rows(entries),
+    grownFrom: -1,
     saved: carry(s.saved, change),
     revision: Math.max(s.revision, batch.to_revision),
     indexState: batch.index_state,

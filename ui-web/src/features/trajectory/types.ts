@@ -41,9 +41,9 @@ export type OperationStatus = TrajectoryDetailResult['operation_status']
 export type View = 'chat' | 'trajectory'
 
 /* Where a selection was made. Every door goes through the store's one
-   `select`, and the door is recorded so a later surface (the duration bar, a
-   detail link) can tell its own selection from the reader's click. */
-export type SelectSource = 'click' | 'keyboard' | 'bar' | 'link' | 'migrate'
+   `select`, and the door is recorded so a surface (a detail link, the
+   waterfall's jump to a worker) can tell its own selection from the reader's click. */
+export type SelectSource = 'click' | 'keyboard' | 'link' | 'migrate'
 
 /* The seam the island reads. Five reads and nothing else: the view is a
    mirror of the session's trace store and writes nothing back. */

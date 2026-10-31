@@ -18,7 +18,7 @@
  * whose page the cache let go folds again until the reader asks for it.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
 import * as details from './detailStore'
@@ -76,6 +76,30 @@ function FoldedRow({ item, onOpen }: { item: OutlineItem; onOpen: () => void }):
     </button>
   )
 }
+
+/* An open row is the expensive part of this list: its body is a whole prompt.
+   The view is re-read on every scroll event, so a row that redrew with its
+   parent would draw every visible prompt once a frame. Memoised on what the
+   row is -- its index, its body, the label -- it redraws when one of those
+   changes, which is the only time its content can differ. */
+const OpenRow = memo(function OpenRow({ index, body, label, onClose, render }: {
+  index: number
+  body: unknown
+  label: string
+  onClose: (index: number) => void
+  render: (message: unknown) => ReactNode
+}): JSX.Element {
+  return (
+    <div className="trajectory-msg-open" data-index={index}>
+      <button className="trajectory-msg-close" aria-label={label} onClick={() => onClose(index)}>
+        {'−'}
+      </button>
+      {body === undefined
+        ? <div className="trajectory-skel-line" aria-busy="true" />
+        : render(body)}
+    </div>
+  )
+})
 
 /* Where the pane's viewport stands over the list: its scroll offset, its
    height, and the list's own offset inside the scrolled content. */
@@ -181,9 +205,17 @@ export function MessagesView({ block, entryId, render }: {
      body opened or folded, the pane's width reflowing it -- is caught by the list's resize. */
   const [, remeasured] = useState(0)
   const drawnKey = shown.map((item) => `${item.index}${drawnOpen(item) ? (record && details.pageHolding(record, item.index) ? 'b' : 'o') : 'f'}`).join(',')
-  const measureRows = useCallback((): void => {
+  const lastMeasure = useRef(0)
+  const measureRows = useCallback((force = false): void => {
     const el = box.current
     if (!el) return
+    /* Scroll-driven passes are throttled to 60ms: a drag on the scrollbar fires
+       scroll events far faster than rows need re-measuring, and each pass that
+       rewrites a height moves the thumb the reader is holding. A row that
+       resized by itself is measured at once -- that is a fact, not a frame. */
+    const at = Date.now()
+    if (!force && lastMeasure.current !== 0 && at - lastMeasure.current < 60) return
+    lastMeasure.current = at
     let changed = false
     const seenOpen: number[] = []
     const seenFold: number[] = []
@@ -197,20 +229,35 @@ export function MessagesView({ block, entryId, render }: {
         changed = true
       }
     }
-    const median = (xs: number[]): number | null => (xs.length ? [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]! : null)
-    const open = median(seenOpen) ?? estimates.current.open
-    const fold = median(seenFold) ?? estimates.current.fold
-    if (open !== estimates.current.open || fold !== estimates.current.fold) {
-      estimates.current = { open, fold }
-      changed = true
+    /* The estimate settles on the first screenful and then stops moving: if it
+       kept following the median, every measurement of one row would resize
+       every unmeasured row, changing the list's total height -- and with it
+       the thumb under a drag. */
+    if (heights.current.size <= 40) {
+      const saw = seenOpen.length + seenFold.length
+      /* While the estimate settles, a pass over an empty list (nothing drawn
+         yet) is not a measurement: it must not spend the throttle the first
+         real one needs. */
+      if (saw === 0) lastMeasure.current = 0
+      const median = (xs: number[]): number | null => (xs.length ? [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]! : null)
+      const open = median(seenOpen) ?? estimates.current.open
+      const fold = median(seenFold) ?? estimates.current.fold
+      if (open !== estimates.current.open || fold !== estimates.current.fold) {
+        estimates.current = { open, fold }
+        changed = true
+      }
     }
     if (changed) remeasured((n) => n + 1)
   }, [])
-  useLayoutEffect(() => { measureRows() }, [drawnKey, measureRows])
+  /* Measured after paint, never during the commit: a state write in a layout
+     effect is the one shape that can nest -- write, render, write -- and React
+     ends a cascade like that by unmounting the tree (React #185). Estimates
+     are already what the window is drawn from, so one frame of them is free. */
+  useEffect(() => { measureRows() }, [drawnKey, measureRows])
   useEffect(() => {
     const el = box.current
     if (!el || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => { measureRows() })
+    const ro = new ResizeObserver(() => { measureRows(true) })
     ro.observe(el)
     return () => ro.disconnect()
   }, [identityKey, measureRows])
@@ -232,21 +279,29 @@ export function MessagesView({ block, entryId, render }: {
     wanted.current.add(page.cursor)
     void details.loadPageAt(block.id, page.cursor, page.index).finally(() => wanted.current.delete(page.cursor))
   }
+
   /* Open rows in the window read their bodies; nothing beyond the window is asked for,
      and a page that failed waits for the reader's retry rather than being asked again. */
   const pageFault = details.fault({ blockId: block.id, more: true }, s) ?? details.fault({ blockId: block.id }, s)
   const faulted = pageFault !== null
+  /* Only when what is drawn changed. Running on every render let an open row
+     whose page never arrives ask again and again -- a write, a render, a write
+     -- until React gave up and unmounted the island (React #185). The key
+     carries the rows, their open/folded state and whether their page is held,
+     so a genuine change still asks and a scroll alone does not. */
   useEffect(() => {
     if (!permitted || faulted) return
     for (const item of shown) {
       if (drawnOpen(item) && (!record || details.pageHolding(record, item.index) === null)) ask(item)
     }
-  })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drawnKey, permitted, faulted])
 
   const open = (item: OutlineItem): void => {
     setChoices((c) => ({ ...c, [item.index]: true }))
     if (permitted) ask(item)
   }
+  const closeRow = useCallback((index: number) => setChoices((c) => ({ ...c, [index]: false })), [])
 
   const note = delta.state === 'unknown'
     ? t('gui.trajectory.details.delta_unknown')
@@ -286,16 +341,11 @@ export function MessagesView({ block, entryId, render }: {
           if (!drawnOpen(item)) {
             return <FoldedRow key={item.index} item={item} onOpen={() => open(item)} />
           }
-          const body = record ? details.messageAt(record, item.index) : undefined
           return (
-            <div key={item.index} className="trajectory-msg-open" data-index={item.index}>
-              <button className="trajectory-msg-close" aria-label={t('gui.trajectory.details.collapse_one')} onClick={() => setChoices((c) => ({ ...c, [item.index]: false }))}>
-                {'−'}
-              </button>
-              {body === undefined
-                ? <div className="trajectory-skel-line" aria-busy="true" />
-                : render(body)}
-            </div>
+            <OpenRow key={item.index} index={item.index}
+              body={record ? details.messageAt(record, item.index) : undefined}
+              label={t('gui.trajectory.details.collapse_one')}
+              onClose={closeRow} render={render} />
           )
         })}
         {bottomPad > 0 ? <div className="trajectory-msg-space" style={{ height: bottomPad - ROW_GAP }} aria-hidden="true" /> : null}

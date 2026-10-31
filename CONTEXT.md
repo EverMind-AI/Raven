@@ -2948,7 +2948,9 @@ slot, else its `summary`. Inputs and turn markers are charged zero
 the record), other artifact slots of the same span are `"shared"`, and a span
 without a trustworthy end time charges `None` (`"unknown"`, never zero). A span's
 time is therefore counted at most once, while parent and child spans each keep
-their own, so the duration bar sums charged time, not wall-clock time.
+their own, so a sum of charged time is the work done, not wall-clock time. The
+details pane shows the charge; the waterfall draws each span's real extent
+(`operation_start` to `operation_end`) instead, since it shows who was busy when.
 _Avoid_: reading `tool.duration_ms` or usage fields as the owner's charge — they
 are diagnostics, not the span clock.
 

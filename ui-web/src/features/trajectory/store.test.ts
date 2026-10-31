@@ -542,7 +542,7 @@ describe('sessionChanged', () => {
     await store.refreshState()
   })
 
-  it('keeps each conversation\'s place, up to twenty of them', async () => {
+  it('keeps each conversation\'s view and selection, up to twenty of them', async () => {
     store.sessionChanged('gui:a')
     store.setView('trajectory')
     const walk = store.load()
@@ -550,7 +550,6 @@ describe('sessionChanged', () => {
     await answerAll(3, 3)
     await walk
     store.select('r1', { source: 'click' })
-    store.setPlace(false, { id: 'r1', offset: 4 })
     store.sessionChanged('gui:b')
     expect(store.get().view).toBe('chat')
     expect(store.get().entries).toEqual([])
@@ -559,7 +558,7 @@ describe('sessionChanged', () => {
     expect(store.get().selectedId).toBeNull()
     for (let i = 0; i < store.REMEMBERED_MAX; i += 1) store.sessionChanged(`gui:x${i}`)
     store.sessionChanged('gui:a')
-    /* Twenty-one conversations later, the first one's place is gone. */
+    /* Twenty-one conversations later, the first one's view and selection are gone. */
     expect(store.get().view).toBe('chat')
     expect(store.get().selectedId).toBeNull()
     store.sessionChanged('gui:x5')
@@ -568,39 +567,7 @@ describe('sessionChanged', () => {
     store.sessionChanged('gui:x6')
     store.sessionChanged('gui:x5')
     expect(store.get().view).toBe('trajectory')
-    expect(store.get().anchor).toBeNull()
-  })
-
-  it('keeps the bar\'s zoom per conversation, but never an open pick list', async () => {
-    store.sessionChanged('gui:a')
-    store.setView('trajectory')
-    const walk = store.load()
-    await flush()
-    await answerAll(3, 3)
-    await walk
-    store.setTimeline({ scale: 4, offset: 120, fit: false, frozenUnit: 0.5, frozenMark: 30, anchor: { id: 'r1', frac: 0.25 } })
-    store.openBucket(['r0', 'r1'], 10)
-    store.setThresholdOpen(true)
-    expect(store.get().timeline.bucket).toEqual({ ids: ['r0', 'r1'], x: 10 })
-    store.sessionChanged('gui:b')
-    expect(store.get().timeline).toEqual(store.initialTimeline)
-    store.sessionChanged('gui:a')
-    expect(store.get().timeline).toEqual({
-      scale: 4, offset: 120, fit: false, frozenUnit: 0.5, frozenMark: 30, anchor: { id: 'r1', frac: 0.25 }, bucket: null, threshold: false,
-    })
-    /* Leaving the view, or losing it, closes the list and the threshold's popover too. */
-    store.setView('trajectory')
-    store.openBucket(['r0'], 0)
-    store.setThresholdOpen(true)
-    store.setView('chat')
-    expect(store.get().timeline.bucket).toBeNull()
-    expect(store.get().timeline.threshold).toBe(false)
-    store.setView('trajectory')
-    store.openBucket(['r0'], 0)
-    store.disabledByServer()
-    expect(store.get().timeline.bucket).toBeNull()
-    store.openBucket([], 0)
-    expect(store.get().timeline.bucket).toBeNull()
+    expect(store.get().selectedId).toBeNull()
   })
 
   it('comes back to the conversation view only while the toggle may show', () => {
@@ -613,9 +580,9 @@ describe('sessionChanged', () => {
   })
 })
 
-describe('the switches and the rows they hide', () => {
+describe('the rows the list draws', () => {
   const rowsOf = (list: TrajectoryEntry[]): void => { store.set({ ...store.get(), ...store.rowsOf(list), snapshotReady: true, epoch: 'e1' }) }
-  const hidden = (id: string, at: number, reason: string, over: Partial<TrajectoryEntry> = {}): TrajectoryEntry =>
+  const marked = (id: string, at: number, reason: string, over: Partial<TrajectoryEntry> = {}): TrajectoryEntry =>
     entry(id, at, { meta: { hidden: reason }, ...over })
 
   beforeEach(() => {
@@ -624,39 +591,11 @@ describe('the switches and the rows they hide', () => {
     store.sessionChanged('gui:a')
   })
 
-  it('keeps every row but shows the ones the index did not hide, and remembers the switch in the browser', () => {
-    rowsOf([entry('a', 0), hidden('reply', 1, 'redundant_reply', { slot: 'turn.output', turn_span_id: 'turn', charged_ms: 7000 }), hidden('enq', 2, 'empty_internal'), entry('b', 3)])
+  it('draws every entry, including the ones the index marked hidden', () => {
+    rowsOf([entry('a', 0), marked('reply', 1, 'redundant_reply', { slot: 'turn.output', turn_span_id: 'turn', charged_ms: 7000 }), marked('enq', 2, 'empty_internal'), entry('b', 3)])
     const s = store.get()
     expect(s.entries.map((e) => e.entry_id)).toEqual(['a', 'reply', 'enq', 'b'])
-    expect(s.visible.map((e) => e.entry_id)).toEqual(['a', 'b'])
-    expect(s.visibleIndex).toEqual({ a: 0, b: 1 })
     expect(s.index.b).toBe(3)
-    expect(s.turnTotals).toEqual({ turn: 7000 })
-    expect(store.hiddenOf(s.entries[1]!)).toBe('redundant_reply')
-    store.setPrefs({ showHidden: true })
-    expect(store.get().visible).toHaveLength(4)
-    expect(JSON.parse(localStorage.getItem(store.PREFS_KEY) as string)).toEqual({ minChargedMs: 20, showHidden: true })
-    store.setPrefs({ showHidden: false })
-    expect(store.get().visible).toHaveLength(2)
-  })
-
-  it('shows a hidden row for now when it is selected, and forgets that with the conversation, the view or a switch', () => {
-    rowsOf([entry('a', 0), hidden('reply', 1, 'redundant_reply'), entry('b', 2)])
-    store.select('reply', { source: 'link' })
-    expect(store.get().selectedId).toBe('reply')
-    expect(store.get().revealed).toEqual(['reply'])
-    expect(store.get().visible.map((e) => e.entry_id)).toEqual(['a', 'reply', 'b'])
-    store.setPrefs({ minChargedMs: 0 })
-    expect(store.get().revealed).toEqual([])
-    expect(store.get().visible.map((e) => e.entry_id)).toEqual(['a', 'b'])
-    store.select('reply', { source: 'link' })
-    expect(store.get().revealed).toEqual(['reply'])
-    store.set({ ...store.get(), view: 'trajectory' })
-    store.setView('chat')
-    expect(store.get().revealed).toEqual([])
-    store.select('reply', { source: 'bar' })
-    store.sessionChanged('gui:b')
-    expect(store.get().revealed).toEqual([])
   })
 
   it('finds the first row of a span by trace and span id, and nothing for a span it does not hold', () => {
@@ -674,41 +613,11 @@ describe('the switches and the rows they hide', () => {
     })
     expect(store.entryOfSpan('x', '1')).toBe('x:1:out')
   })
-
-  it('reads the settings back from the browser on a fresh start, an earlier build\'s switches included', () => {
-    localStorage.setItem(store.PREFS_KEY, JSON.stringify({ minChargedMs: 200, showHidden: true }))
-    expect(store.readPrefs()).toEqual({ minChargedMs: 200, showHidden: true })
-    /* A threshold off the scale lands on the nearest detent. */
-    localStorage.setItem(store.PREFS_KEY, JSON.stringify({ minChargedMs: 37, showHidden: false }))
-    expect(store.readPrefs()).toEqual({ minChargedMs: 50, showHidden: false })
-    /* The two switches an earlier build kept. */
-    localStorage.setItem(store.PREFS_KEY, JSON.stringify({ hideShort: false, showInternal: true }))
-    expect(store.readPrefs()).toEqual({ minChargedMs: 0, showHidden: true })
-    localStorage.setItem(store.PREFS_KEY, JSON.stringify({ hideShort: true, showInternal: false }))
-    expect(store.readPrefs()).toEqual({ minChargedMs: 20, showHidden: false })
-    localStorage.setItem(store.PREFS_KEY, 'not json')
-    expect(store.readPrefs()).toEqual({ minChargedMs: 20, showHidden: false })
-    localStorage.removeItem(store.PREFS_KEY)
-  })
-
-  it('saves a migrated setting in the current shape, which reads back without the old switches', () => {
-    localStorage.setItem(store.PREFS_KEY, JSON.stringify({ hideShort: false, showInternal: true }))
-    store.set({ ...store.get(), prefs: store.readPrefs() })
-    store.setPrefs({ minChargedMs: 100 })
-    const kept = JSON.parse(localStorage.getItem(store.PREFS_KEY) as string) as Record<string, unknown>
-    expect(kept).toEqual({ minChargedMs: 100, showHidden: true })
-    expect(Object.keys(kept).sort()).toEqual(['minChargedMs', 'showHidden'])
-    expect(store.readPrefs()).toEqual({ minChargedMs: 100, showHidden: true })
-    /* Setting an off-scale value snaps it, and the same value twice writes nothing new. */
-    store.setPrefs({ minChargedMs: 480 })
-    expect(store.get().prefs.minChargedMs).toBe(500)
-    localStorage.removeItem(store.PREFS_KEY)
-  })
 })
 
-/* ── the Scope Tabs ───────────────────────────────────────────────── */
+/* ── the scopes ─────────────────────────────────────────────────────── */
 
-describe('Scope Tabs', () => {
+describe('scopes', () => {
   const A = 't:runA'
   const B = 't:runB'
   const G = 't:dag'
@@ -733,7 +642,6 @@ describe('Scope Tabs', () => {
     step('g0', 13, G),
     entry('reply', 14, { kind: 'turn.end', slot: 'turn.output', charged_ms: 5000, meta: { hidden: 'redundant_reply' } }),
   ]
-  const ids = (rows: TrajectoryEntry[]): string[] => rows.map((e) => e.entry_id)
   const open = (): string[] => store.get().scopes.map((o) => o.id)
 
   async function loaded(rows: TrajectoryEntry[] = ROWS()): Promise<void> {
@@ -749,26 +657,17 @@ describe('Scope Tabs', () => {
     await walk
   }
 
-  it('draws the main session alone at first and knows every scope\'s first door and size', async () => {
+  it('starts on the main session and knows every scope\'s first door', async () => {
     await loaded()
     const s = store.get()
     expect(s.scope).toBeNull()
-    expect(ids(s.visible)).toEqual(['m0', 'doorA', 'doorB', 'm1', 'gIn', 'gOut'])
     expect(s.doors).toEqual({ [A]: 'doorA', [B]: 'doorB', [G]: 'gIn' })
-    expect(s.scopeSizes).toEqual({ [A]: 5, [B]: 2, [G]: 1 })
-    expect(s.hiddenCount).toBe(1)
-    expect(s.hiddenTurns).toEqual({ 1: 5000 })
     store.openScope(A)
     const a = store.get()
-    expect(ids(a.visible)).toEqual(['a0', 'a1', 'a2', 'a3'])
-    expect(a.visibleIndex).toEqual({ a0: 0, a1: 1, a2: 2, a3: 3 })
-    expect(a.hiddenCount).toBe(1)
-    /* The steps carry the dispatching turn's number, and the turn's reply is hidden, yet the tab has no band. */
-    expect(a.hiddenTurns).toEqual({})
+    expect(a.scope).toBe(A)
     /* The whole set stays for links and the feed. */
     expect(a.index.m0).toBe(0)
     expect(store.entryOfSpan('t', 'b0')).toBe('b0')
-    expect(a.turnTotals).toEqual({ turn: 5000 })
   })
 
   it('opens a tab at the end, says whether it opened it just now, and keeps the door it was opened from', async () => {
@@ -819,43 +718,29 @@ describe('Scope Tabs', () => {
     await loaded()
     store.openScope(A)
     store.select('a1', { source: 'click' })
-    store.setPlace(false, { id: 'a1', offset: 3 })
-    store.setTimeline({ scale: 4, fit: false })
     store.switchScope(null)
     store.closeScope(A)
     expect(store.get().saved[A]).toBeUndefined()
     store.openScope(A)
-    const s = store.get()
-    expect([s.selectedId, s.follow, s.anchor]).toEqual([null, true, null])
-    expect(s.timeline).toEqual(store.initialTimeline)
+    expect(store.get().selectedId).toBeNull()
   })
 
-  it('keeps each tab\'s selection, place and zoom, but never an open pick list or popover', async () => {
+  it('keeps each tab\'s selection', async () => {
     await loaded()
     store.select('m1', { source: 'click' })
-    store.setPlace(false, { id: 'm1', offset: 2 })
-    store.setTimeline({ scale: 2, fit: false })
-    store.openBucket(['m1'], 10)
-    store.setThresholdOpen(true)
     store.openScope(A)
-    expect([store.get().selectedId, store.get().follow, store.get().anchor]).toEqual([null, true, null])
-    expect(store.get().timeline).toEqual(store.initialTimeline)
+    expect(store.get().selectedId).toBeNull()
     store.select('a2', { source: 'keyboard' })
-    store.setPlace(false, { id: 'a2', offset: 4 })
-    store.setTimeline({ scale: 3, fit: false })
     store.openScope(B)
     store.select('b0', { source: 'click' })
-    store.setPlace(true, null)
     store.switchScope(null)
     let s = store.get()
-    expect([s.selectedId, s.selectedBy, s.follow, s.anchor]).toEqual(['m1', 'migrate', false, { id: 'm1', offset: 2 }])
-    expect([s.timeline.scale, s.timeline.bucket, s.timeline.threshold]).toEqual([2, null, false])
+    expect([s.selectedId, s.selectedBy]).toEqual(['m1', 'migrate'])
     store.switchScope(A)
-    s = store.get()
-    expect([s.selectedId, s.follow, s.anchor, s.timeline.scale]).toEqual(['a2', false, { id: 'a2', offset: 4 }, 3])
+    expect(store.get().selectedId).toBe('a2')
     store.switchScope(B)
     s = store.get()
-    expect([s.selectedId, s.follow, s.anchor, s.timeline.scale]).toEqual(['b0', true, null, 1])
+    expect(s.selectedId).toBe('b0')
     expect(Object.keys(s.saved).sort()).toEqual(['', A])
   })
 
@@ -868,24 +753,23 @@ describe('Scope Tabs', () => {
     expect([s.scope, s.selectedId, s.selectedBy]).toEqual([A, 'a1', 'link'])
     expect(s.selections).toBe(before + 1)
     expect(s.saved['']?.selectedId).toBe('m1')
-    store.select('b0', { source: 'bar' })
+    store.select('b0', { source: 'click' })
     s = store.get()
-    expect([s.scope, s.selectedId, s.selectedBy]).toEqual([B, 'b0', 'bar'])
+    expect([s.scope, s.selectedId, s.selectedBy]).toEqual([B, 'b0', 'click'])
     expect(open()).toEqual([A, B])
     store.select('m0', { source: 'keyboard' })
     s = store.get()
     expect([s.scope, s.selectedId, s.selectedBy]).toEqual([null, 'm0', 'keyboard'])
-    /* A row the new tab hides is shown there for now, as in the tab it was asked from. */
+    /* A row the index marked hidden is an ordinary row of its tab. */
     store.select('ah', { source: 'link' })
     s = store.get()
     expect(s.scope).toBe(A)
-    expect(s.revealed).toEqual(['ah'])
-    expect(ids(s.visible)).toEqual(['a0', 'a1', 'a2', 'a3', 'ah'])
+    expect(s.selectedId).toBe('ah')
   })
 
   it('selects within the tab as it always did, whichever the door', async () => {
     await loaded()
-    const sources = ['click', 'keyboard', 'bar', 'link', 'migrate'] as const
+    const sources = ['click', 'keyboard', 'link', 'migrate'] as const
     const wrong: string[] = []
     sources.forEach((source, k) => {
       const id = k % 2 ? 'm0' : 'm1'
@@ -897,30 +781,20 @@ describe('Scope Tabs', () => {
     expect(wrong).toEqual([])
     store.select('reply', { source: 'link' })
     expect(store.get().scope).toBeNull()
-    expect(store.get().revealed).toEqual(['reply'])
+    expect(store.get().selectedId).toBe('reply')
     store.select('nope', { source: 'click' })
     expect(store.get().selectedId).toBe('reply')
   })
 
-  it('forgets the rows a link showed in a tab when the tab closes, and only those', async () => {
+  it('moves a row to the scope the feed gives it', async () => {
     await loaded()
-    store.select('ah', { source: 'link' })
-    store.select('bh', { source: 'link' })
-    expect(store.get().revealed).toEqual(['ah', 'bh'])
-    const prefs = store.get().prefs
-    store.closeScope(A)
-    expect(store.get().revealed).toEqual(['bh'])
-    expect(ids(store.get().visible)).toEqual(['b0', 'bh'])
-    expect(store.get().prefs).toEqual(prefs)
     store.openScope(A)
-    expect(ids(store.get().visible)).toEqual(['a0', 'a1', 'a2', 'a3'])
-    /* A shown row the feed moved to another tab is that tab's now. */
-    store.select('ah', { source: 'link' })
-    store.applyChanges(batch({ upserts: [step('ah', 7, B, { meta: { hidden: 'empty_internal' } })] }))
+    store.openScope(B)
+    store.switchScope(A)
+    store.applyChanges(batch({ upserts: [step('ah', 7, B)] }))
+    expect(store.scopeOf(store.entry('ah')!)).toBe(B)
     store.closeScope(A)
-    expect(store.get().revealed).toEqual(['bh', 'ah'])
     expect(store.get().scope).toBe(B)
-    expect(ids(store.get().visible)).toEqual(['ah', 'b0', 'bh'])
   })
 
   it('leaves the generation alone, so a snapshot read in progress still lands', async () => {
@@ -931,126 +805,40 @@ describe('Scope Tabs', () => {
     const g = store.gen()
     store.openScope(A)
     store.switchScope(null)
-    store.select('b0', { source: 'link' })
+    /* b0's row may still be on its way in a streamed walk, so the scope is
+       opened by its id rather than through its row. */
+    store.openScope(B)
     store.closeScope(A)
     expect(store.gen()).toBe(g)
     await answer(page(ROWS().slice(6), null, { snapshot_revision: 200 }))
     await walk
     const s = store.get()
     expect([s.revision, s.snapshotReady, s.listing, s.scope]).toEqual([200, true, false, B])
-    expect(ids(s.visible)).toEqual(['b0'])
   })
 
-  it('carries a saved tab\'s selection and anchor across the feed', async () => {
+  it('carries a saved tab\'s selection across the feed', async () => {
     await loaded()
     store.openScope(A)
     store.select('a1', { source: 'click' })
-    store.setPlace(false, { id: 'a1', offset: 5 })
     store.switchScope(null)
     store.applyChanges(batch({ removed: [{ entry_id: 'a1', revision: 101, replaced_by: 'a1b' }], upserts: [step('a1b', 4, A)] }))
-    expect(store.get().saved[A]).toMatchObject({ selectedId: 'a1b', anchor: { id: 'a1b', offset: 5 }, follow: false })
+    expect(store.get().saved[A]).toEqual({ selectedId: 'a1b' })
     store.applyChanges(batch({ removed: [{ entry_id: 'a1b', revision: 102, replaced_by: null }], from_revision: 101, to_revision: 102 }))
-    expect(store.get().saved[A]).toMatchObject({ selectedId: null, anchor: { id: 'a2', offset: 0 }, follow: false })
-    /* An anchor the feed moved to another tab is no longer this tab's row. */
-    store.applyChanges(batch({ upserts: [step('a2', 5, B)], from_revision: 102, to_revision: 103 }))
-    expect(store.get().saved[A]?.anchor).toEqual({ id: 'a3', offset: 0 })
-    store.applyChanges(batch({
-      removed: [{ entry_id: 'a3', revision: 104, replaced_by: null }, { entry_id: 'ah', revision: 104, replaced_by: null }],
-      from_revision: 103, to_revision: 104,
-    }))
-    expect(store.get().saved[A]).toMatchObject({ anchor: null, follow: true })
+    expect(store.get().saved[A]).toEqual({ selectedId: null })
   })
 
-  describe('the place of the tab on screen, carried in the same write as the change', () => {
-    /* Anchored in A, the feed takes the anchor away, and the reader goes to B and back without scrolling. */
-    async function away(
-      anchor: string, removed: TrajectoryChangesResult['removed'], upserts: TrajectoryEntry[] = [], first = (): void => {},
-    ): Promise<void> {
-      await loaded()
-      store.openScope(A)
-      first()
-      store.setPlace(false, { id: anchor, offset: 7 })
-      store.applyChanges(batch({ removed, upserts }))
-      store.openScope(B)
-      store.switchScope(A)
-    }
-
-    it('to the replacement, at the same offset', async () => {
-      await away('a1', [{ entry_id: 'a1', revision: 101, replaced_by: 'a1b' }], [step('a1b', 4, A)])
-      expect([store.get().follow, store.get().anchor]).toEqual([false, { id: 'a1b', offset: 7 }])
-    })
-
-    it('to the first row after it in the tab', async () => {
-      await away('a1', [{ entry_id: 'a1', revision: 101, replaced_by: null }])
-      expect([store.get().follow, store.get().anchor]).toEqual([false, { id: 'a2', offset: 0 }])
-    })
-
-    it('to the tail when no row of the tab is left after it', async () => {
-      await away('a3', [{ entry_id: 'a3', revision: 101, replaced_by: null }, { entry_id: 'ah', revision: 101, replaced_by: null }])
-      expect([store.get().follow, store.get().anchor]).toEqual([true, null])
-    })
-
-    it('to the tail when the rows of the tab left after it are all hidden', async () => {
-      await away('a3', [{ entry_id: 'a3', revision: 101, replaced_by: null }])
-      expect(store.entry('ah')).not.toBeNull()
-      expect([store.get().follow, store.get().anchor]).toEqual([true, null])
-    })
-
-    it('to a hidden row after it that the switch shows', async () => {
-      await away('a3', [{ entry_id: 'a3', revision: 101, replaced_by: null }], [], () => { store.setPrefs({ showHidden: true }) })
-      expect([store.get().follow, store.get().anchor]).toEqual([false, { id: 'ah', offset: 0 }])
-      store.setPrefs({ showHidden: false })
-      localStorage.removeItem(store.PREFS_KEY)
-    })
-
-    it('to a hidden row after it that a link showed', async () => {
-      await away('a3', [{ entry_id: 'a3', revision: 101, replaced_by: null }], [], () => { store.select('ah', { source: 'link' }) })
-      expect([store.get().follow, store.get().anchor]).toEqual([false, { id: 'ah', offset: 0 }])
-    })
-
-    it('nowhere while a hidden anchor still has a drawn row of its tab after it', async () => {
-      await loaded([step('a0', 0, A), step('ah0', 1, A, { meta: { hidden: 'empty_internal' } }), step('a1', 2, A), entry('m0', 3)])
-      store.openScope(A)
-      store.setPlace(false, { id: 'ah0', offset: 3 })
-      store.applyChanges(batch({ upserts: [entry('m0', 3, { preview: 'changed' })] }))
-      expect([store.get().follow, store.get().anchor]).toEqual([false, { id: 'ah0', offset: 3 }])
-      store.applyChanges(batch({ removed: [{ entry_id: 'a1', revision: 102, replaced_by: null }], from_revision: 101, to_revision: 102 }))
-      expect([store.get().follow, store.get().anchor]).toEqual([true, null])
-    })
-
-    it('across a snapshot read again, for the tab on screen and the saved ones', async () => {
-      await loaded()
-      store.select('m1', { source: 'click' })
-      store.setPlace(false, { id: 'm1', offset: 1 })
-      store.openScope(A)
-      store.setPlace(false, { id: 'a1', offset: 3 })
-      const walk = store.load()
-      await flush()
-      await answer(page(ROWS().filter((e) => e.entry_id !== 'a1' && e.entry_id !== 'm1'), null, { snapshot_revision: 200 }))
-      await walk
-      expect(store.get().anchor).toEqual({ id: 'a2', offset: 0 })
-      expect(store.get().saved['']).toMatchObject({ selectedId: null, anchor: { id: 'gIn', offset: 0 }, follow: false })
-      store.openScope(B)
-      store.switchScope(A)
-      expect(store.get().anchor).toEqual({ id: 'a2', offset: 0 })
-      expect(open()).toEqual([A, B])
-    })
-
-    it('keeps the selection where the feed moved it, and the tab with it', async () => {
-      await loaded()
-      store.openScope(A)
-      store.select('a2', { source: 'click' })
-      store.applyChanges(batch({ upserts: [step('a2', 5, B)] }))
-      const s = store.get()
-      expect([s.scope, s.selectedId]).toEqual([A, 'a2'])
-      expect(s.visibleIndex.a2).toBeUndefined()
-    })
+  it('keeps the selection where the feed moved it, and the tab with it', async () => {
+    await loaded()
+    store.openScope(A)
+    store.select('a2', { source: 'click' })
+    store.applyChanges(batch({ upserts: [step('a2', 5, B)] }))
+    const s = store.get()
+    expect([s.scope, s.selectedId]).toEqual([A, 'a2'])
   })
 
-  it('starts every conversation on the main session alone, keeps its main place, and keeps the tabs across the view', async () => {
+  it('starts every conversation on the main session alone, keeps its main selection, and keeps the tabs across the view', async () => {
     await loaded()
     store.select('m1', { source: 'click' })
-    store.setPlace(false, { id: 'm1', offset: 2 })
     store.openScope(A)
     store.select('a1', { source: 'click' })
     store.setView('chat')
@@ -1058,13 +846,13 @@ describe('Scope Tabs', () => {
     expect([store.get().scope, open(), store.get().selectedId]).toEqual([A, [A], 'a1'])
     store.sessionChanged('gui:b')
     let s = store.get()
-    expect([s.scope, s.scopes, s.saved, s.doors, s.scopeSizes, s.hiddenCount]).toEqual([null, [], {}, {}, {}, 0])
+    expect([s.scope, s.scopes, s.saved, s.doors]).toEqual([null, [], {}, {}])
     store.sessionChanged('gui:a')
     s = store.get()
-    expect([s.scope, s.scopes, s.selectedId, s.anchor]).toEqual([null, [], 'm1', { id: 'm1', offset: 2 }])
+    expect([s.scope, s.scopes, s.selectedId]).toEqual([null, [], 'm1'])
   })
 
-  it('filters fifty thousand rows by tab and counts every scope', () => {
+  it('finds every scope\'s first door among fifty thousand rows', () => {
     const scopes = Array.from({ length: 20 }, (_, k) => `t:run${k}`)
     const rows: TrajectoryEntry[] = []
     for (let i = 0; i < 50_000; i += 1) {
@@ -1074,15 +862,146 @@ describe('Scope Tabs', () => {
       else rows.push(entry(`s${i}`, i, { subagent_scope: scope }))
     }
     const wrong: string[] = []
-    const main = store.rowsOf(rows, { ...store.get(), scope: null })
-    if (main.visible.length !== 20_000) wrong.push(`main ${main.visible.length}`)
+    const main = store.rowsOf(rows)
     if (Object.keys(main.doors).length !== 20) wrong.push(`doors ${Object.keys(main.doors).length}`)
     scopes.forEach((scope, k) => {
       if (main.doors[scope] !== `d${k * 10}`) wrong.push(`door ${scope} ${main.doors[scope]}`)
-      if (main.scopeSizes[scope] !== 1500) wrong.push(`size ${scope} ${main.scopeSizes[scope]}`)
     })
-    const one = store.rowsOf(rows, { ...store.get(), scope: scopes[3]! })
-    if (one.visible.length !== 1500 || one.visible.some((e) => e.subagent_scope !== scopes[3])) wrong.push(`tab ${one.visible.length}`)
     expect(wrong).toEqual([])
+  })
+})
+
+/* ── selecting across scopes ──────────────────────────────────────── */
+
+describe('selectAcross', () => {
+  const load = async (rows: TrajectoryEntry[]): Promise<void> => {
+    serve()
+    store.install()
+    unpitch()
+    store.sessionChanged('gui:a')
+    await store.refreshState()
+    const walk = store.load()
+    await flush()
+    await answer(page(rows, null))
+    await walk
+  }
+
+  it('selectAcross selects another scope without switching tabs', async () => {
+    await load([entry('main1', 0), entry('sub1', 1, { subagent_scope: 't:sub' })])
+    store.selectAcross('sub1', { source: 'link' })
+    expect(store.get().selectedId).toBe('sub1')
+    expect(store.get().scope).toBe(null)
+  })
+
+  it('selectAcross selects a row the index marked hidden like any other', async () => {
+    await load([entry('main1', 0), entry('hidden1', 1, { meta: { hidden: 'folded' } })])
+    expect(store.get().entries.map((e) => e.entry_id)).toContain('hidden1')
+    store.selectAcross('hidden1', { source: 'link' })
+    expect(store.get().selectedId).toBe('hidden1')
+  })
+})
+
+/* ── the stretch picked on the ruler ──────────────────────────────── */
+
+describe('setPicked', () => {
+  const load = async (rows: TrajectoryEntry[]): Promise<void> => {
+    serve()
+    store.install()
+    unpitch()
+    store.sessionChanged('gui:a')
+    await store.refreshState()
+    const walk = store.load()
+    await flush()
+    await answer(page(rows, null))
+    await walk
+  }
+
+  it('keeps the stretch in real time, and drops it with the conversation', async () => {
+    await load([entry('main1', 0)])
+    store.setPicked({ a: 1000, b: 2000 })
+    expect(store.get().picked).toEqual({ a: 1000, b: 2000 })
+    store.sessionChanged('gui:b')
+    expect(store.get().picked).toBeNull()
+  })
+
+  it('drops the stretch when the reader leaves the view', async () => {
+    await load([entry('main1', 0)])
+    store.setView('trajectory')
+    store.setPicked({ a: 1000, b: 2000 })
+    store.setView('chat')
+    expect(store.get().picked).toBeNull()
+  })
+
+  it('writes nothing when the same stretch is picked again', async () => {
+    await load([entry('main1', 0)])
+    store.setPicked({ a: 1000, b: 2000 })
+    const before = store.get()
+    store.setPicked({ a: 1000, b: 2000 })
+    expect(store.get()).toBe(before)
+  })
+})
+
+/* ── a conversation change leaves nothing of the last one behind ──── */
+
+describe('sessionChanged', () => {
+  it('empties the waterfall’s drawn set with the rest of the picture', async () => {
+    serve()
+    store.install()
+    unpitch()
+    store.sessionChanged('gui:a')
+    await store.refreshState()
+    const walk = store.load()
+    await flush()
+    await answer(page([entry('a', 0), entry('b', 1)], null))
+    await walk
+    expect(store.get().entries).toHaveLength(2)
+    store.sessionChanged('gui:b')
+    expect(store.get().entries).toEqual([])
+  })
+})
+
+describe('a walk over a picture already up', () => {
+  const ROWS = (): TrajectoryEntry[] => [
+    entry('one', 0), entry('two', 1), entry('three', 2), entry('four', 3),
+    entry('five', 4), entry('six', 5), entry('seven', 6), entry('eight', 7),
+  ]
+
+  async function loaded(): Promise<void> {
+    serve()
+    store.install()
+    unpitch()
+    store.sessionChanged('gui:a')
+    await store.refreshState()
+    store.setView('trajectory')
+    const walk = store.load()
+    await flush()
+    await answer(page(ROWS(), null))
+    await walk
+  }
+
+  it('streams its pages instead of waiting for the whole snapshot', async () => {
+    await loaded()
+    const walk = store.load()
+    await flush()
+    await answer(page(ROWS().slice(0, 4), 'c4', { snapshot_revision: 300 }))
+    /* The first page is on screen while the walk is still running. */
+    expect(store.get().entries).toHaveLength(4)
+    expect(store.get().listing).toBe(true)
+    await answer(page(ROWS().slice(4), null, { snapshot_revision: 300 }))
+    await walk
+    expect(store.get().entries).toHaveLength(ROWS().length)
+    expect(store.get().snapshotReady).toBe(true)
+    expect(store.get().listing).toBe(false)
+  })
+
+  it('marks where an appending page started, and clears it when a batch rewrites the list', async () => {
+    await loaded()
+    const walk = store.load()
+    await flush()
+    await answer(page(ROWS().slice(0, 4), 'c4', { snapshot_revision: 300 }))
+    expect(store.get().grownFrom).toBe(0)
+    await answer(page(ROWS().slice(4), null, { snapshot_revision: 300 }))
+    await walk
+    expect(store.get().grownFrom).toBe(-1)
   })
 })
