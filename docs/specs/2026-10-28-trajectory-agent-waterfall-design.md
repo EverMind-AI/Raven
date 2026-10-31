@@ -185,6 +185,11 @@ thought and ran as child spans of that run, shaped like the main loop's
 (`llm.call` with `llm.input` / `llm.output`, `tool.call` with `tool.input` /
 `tool.output`), so the index and the page read them with no code of their own.
 A step ends where the next begins, and every step is held inside its run.
+The run is on record from the moment it opens, and each step reaches the log
+as soon as it is known, so the waterfall shows a worker's work while the run
+lasts: the step still going -- the last one, or a call awaiting its result --
+is written running (`subagent.external.in_progress`) and written again when it
+settles, under an id the run owns, and the turn's end only settles what is left.
 
 Runs recorded before this existed still have their wire journal on disk, and
 `raven trajectory backfill-frames` writes their steps from it, under ids

@@ -653,6 +653,50 @@ def test_a_running_subagent_run_has_its_entry_and_its_steps_their_turn(state):
     assert all("turn_unknown" in e.integrity for e in orphaned if e.span_id == "child")
 
 
+def _external_live(state, *, settled):
+    """An external run under a spawned run, and one step of it, written live or settled."""
+    live = {"subagent.external.in_progress": True}
+    ext = _span(
+        "t",
+        "ext",
+        "subagent.external",
+        parent="run",
+        start=3,
+        end=9 if settled else 4,
+        attrs={"subagent.external.agent": "a", "subagent.external.in_progress": False}
+        if settled
+        else {
+            "subagent.external.agent": "a",
+            **live,
+        },
+    )
+    step = _span(
+        "t",
+        "step",
+        "llm.call",
+        parent="ext",
+        start=3,
+        end=6 if settled else 4,
+        attrs={**_llm_attrs(state, "step", _messages("ping"), {"content": "working"}), **({} if settled else live)},
+    )
+    return [ext, step]
+
+
+@pytest.mark.parametrize("settled_first", [False, True], ids=["live_then_settled", "settled_then_live"])
+def test_an_external_run_and_its_step_read_running_until_their_settled_records(state, settled_first):
+    base = _spawned_run(state, _checkpoint())
+    live = tent.project_entries([*base, *_external_live(state, settled=False)], state=state, read=True).entries
+    assert _one(live, "ext", "summary").operation_status == "running"
+    assert {e.operation_status for e in live if e.span_id == "step"} == {"running"}
+
+    records = _external_live(state, settled=True) + _external_live(state, settled=False)
+    if not settled_first:
+        records = records[2:] + records[:2]
+    done = tent.project_entries([*base, *records], state=state, read=True).entries
+    assert _one(done, "ext", "summary").operation_status != "running"
+    assert "running" not in {e.operation_status for e in done if e.span_id == "step"}
+
+
 @pytest.mark.parametrize("final_first", [False, True], ids=["checkpoint_then_final", "final_then_checkpoint"])
 def test_a_finished_subagent_run_replaces_its_checkpoint_in_either_order(state, final_first):
     records = (_final(), _checkpoint()) if final_first else (_checkpoint(), _final())

@@ -29,6 +29,7 @@ import pytest
 from loguru import logger
 
 from raven.acp_client.acp_agent import AcpAgentBackend, AcpEmptyTurnError
+from raven.acp_client.acp_dialects import ToolCall
 from raven.acp_client.capabilities import (
     AcpMode,
     AcpModelChoice,
@@ -3497,10 +3498,15 @@ def trace_dir(tmp_path, monkeypatch):
 
 
 def _spans_written(trace_dir: Path) -> list[dict]:
+    """The spans on record as the trajectory reads them: a span written more than once
+    -- a run on record while it runs, a step written running and then settled -- is
+    its last record (``merge_snapshots``)."""
+    from raven.trajectory.entries import merge_snapshots
+
     log = trace_dir / "logs" / "audit-spans.log"
     if not log.exists():
         return []
-    return [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
+    return merge_snapshots(json.loads(line) for line in log.read_text().splitlines() if line.strip())
 
 
 async def test_dispatch_records_its_own_span_under_the_calling_span(trace_dir, tmp_path: Path) -> None:
@@ -3623,6 +3629,65 @@ async def test_a_long_run_writes_its_steps_without_holding_the_event_loop(
     marks = [tick for parent, tick in at_emit if parent == run["spanId"]]
     longest = max(sum(1 for _ in group) for _, group in itertools.groupby(marks))
     assert longest <= 50, f"{longest} steps written without the loop turning"
+
+
+async def test_a_running_external_run_shows_its_steps_while_it_runs(trace_dir, tmp_path: Path) -> None:
+    """The trajectory reads only the span log, so a step that waits for the turn
+    to end is invisible for as long as the agent works -- minutes, on a real
+    run. The run is on record from the moment it opens, each step reaches the
+    log as soon as it is known, and the one still going is marked running; the
+    turn's end only settles what is left."""
+    backend = build_third_party_backend(stub_config("a", mode="cancel_aware"))
+    run = asyncio.create_task(backend.run("ping", task_id="t1", workspace=tmp_path, executor=None))
+
+    def live() -> tuple[dict | None, list[dict]]:
+        written = _spans_written(trace_dir)
+        ext = next((s for s in written if s.get("name") == "subagent.external"), None)
+        if ext is None:
+            return None, []
+        return ext, [s for s in written if s.get("parentSpanId") == ext["spanId"]]
+
+    for _ in range(100):
+        ext, steps = live()
+        if ext is not None and len({s["spanId"] for s in steps}) >= 2:
+            break
+        await asyncio.sleep(0.05)
+    assert not run.done(), "the agent is still working"
+    assert ext is not None and ext["attributes"].get("subagent.external.in_progress") is True
+    by_id = {s["spanId"]: s for s in steps}
+    assert _said(list(by_id.values())) == ["ping", "working"]
+    assert [s["attributes"].get("subagent.external.in_progress") for s in by_id.values()] == [None, True]
+
+    run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run
+    final, settled = _steps_of_the_run(trace_dir)
+    last = {s["spanId"]: s for s in settled}
+    assert _said(list(last.values())) == ["ping", "working"]
+    assert all(s["attributes"].get("subagent.external.in_progress") is None for s in last.values())
+    closed = [s for s in _spans_written(trace_dir) if s.get("spanId") == final["spanId"]][-1]
+    assert closed["attributes"].get("subagent.external.in_progress") is False
+    assert closed["attributes"]["subagent.external.steps"] == 2
+
+
+async def test_a_turn_that_fails_before_settling_its_steps_writes_none_after_it_ended(
+    trace_dir, tmp_path: Path, monkeypatch
+) -> None:
+    """A write the live writer was still waiting to make, when the turn fails before
+    settling its steps, must not land after the turn: it would leave a step marked
+    running under a run that is over."""
+
+    def unreadable(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("the journal cannot be read")
+
+    monkeypatch.setattr(AcpAgentBackend, "_frames", staticmethod(unreadable))
+    backend = build_third_party_backend(stub_config("a", mode="two_messages"))
+    with pytest.raises(RuntimeError, match="journal cannot be read"):
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    log = trace_dir / "logs" / "audit-spans.log"
+    written = log.read_text().count("\n")
+    await asyncio.sleep(1.3)
+    assert log.read_text().count("\n") == written
 
 
 async def test_a_cancelled_run_still_writes_the_steps_it_took(trace_dir, tmp_path: Path) -> None:
@@ -3800,6 +3865,125 @@ async def test_a_cancel_while_the_turn_books_its_spend_still_writes_its_steps(
     assert ext["attributes"]["subagent.external.steps"] == 202
 
 
+class _LiveRun:
+    """A run span for the live step writer: who it is, when it opened, what it was set."""
+
+    def __init__(self) -> None:
+        self.attrs: dict[str, Any] = {}
+
+    def identity(self) -> dict[str, Any]:
+        return {
+            "trace_id": "t",
+            "span_id": "ext",
+            "session_key": None,
+            "channel": None,
+            "chat_id": None,
+            "surface": None,
+            "start": "2026-10-31T09:00:00+00:00",
+        }
+
+    def set(self, **attrs: Any) -> "_LiveRun":
+        self.attrs.update(attrs)
+        return self
+
+
+def _live_writes(monkeypatch) -> list[dict]:
+    from raven.tracing import spans as tracing_spans
+
+    emitted: list[dict] = []
+    monkeypatch.setattr(tracing_spans, "persist_artifact", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tracing_spans, "emit", emitted.append)
+    return emitted
+
+
+def _marks(emitted: list[dict]) -> list[tuple[str, bool]]:
+    """Each write as (step id, whether it was written as still running)."""
+    return [(r["spanId"], r["attributes"].get("subagent.external.in_progress") is True) for r in emitted]
+
+
+def _at(seconds: int) -> str:
+    return f"2026-10-31T09:00:{seconds:02d}+00:00"
+
+
+async def test_live_steps_write_a_settled_step_once_and_the_last_one_running_until_it_settles(monkeypatch) -> None:
+    from raven.agent.subagent.backends.observability import LiveSteps
+
+    emitted = _live_writes(monkeypatch)
+    steps = LiveSteps(_LiveRun(), prompt="do it", interval=0)
+    events: list[dict] = [{"t": "say", "text": "first", "at": _at(5)}]
+    steps.touch(events)
+    assert _marks(emitted) == [("ext.0", False), ("ext.1", True)]
+    steps.touch(events)
+    assert len(emitted) == 2, "nothing moved, so nothing is written again"
+    events.append({"t": "say", "text": "second", "at": _at(9)})
+    steps.touch(events)
+    assert _marks(emitted)[2:] == [("ext.1", False), ("ext.2", True)]
+
+
+async def test_live_steps_keep_a_call_running_until_its_result_lands(monkeypatch) -> None:
+    from raven.agent.subagent.backends.observability import LiveSteps
+
+    emitted = _live_writes(monkeypatch)
+    steps = LiveSteps(_LiveRun(), prompt="do it", interval=0)
+    ls = ToolCall(id="c1", name="ls", argument=".", title="ls", raw_input={"path": "."})
+    events: list[dict] = [
+        {"t": "call", "id": "c1", "call": ls, "at": _at(5)},
+        {"t": "say", "text": "while it runs", "at": _at(6)},
+    ]
+    steps.touch(events)
+    assert dict(_marks(emitted))["ext.1"] is True, "no result yet, though a later step has begun"
+    events.append({"t": "result", "id": "c1", "ok": True, "text": "a.py", "at": _at(8)})
+    steps.touch(events)
+    settled = [r for r in emitted if r["spanId"] == "ext.1"][-1]
+    assert settled["attributes"].get("subagent.external.in_progress") is None
+    assert settled["attributes"]["tool.result_preview"] == "a.py"
+
+
+async def test_live_steps_fold_touches_inside_the_interval_into_one_later_write(monkeypatch) -> None:
+    from raven.agent.subagent.backends.observability import LiveSteps
+
+    emitted = _live_writes(monkeypatch)
+    steps = LiveSteps(_LiveRun(), prompt="do it", interval=0.2)
+    events: list[dict] = [{"t": "say", "text": "first", "at": _at(5)}]
+    steps.touch(events)
+    written = len(emitted)
+    events.append({"t": "say", "text": "second", "at": _at(6)})
+    steps.touch(events)
+    events.append({"t": "say", "text": "third", "at": _at(7)})
+    steps.touch(events)
+    assert len(emitted) == written, "inside the interval, the touches wait"
+    await asyncio.sleep(0.4)
+    assert _marks(emitted)[written:] == [("ext.1", False), ("ext.2", False), ("ext.3", True)]
+
+
+async def test_live_steps_closed_with_a_write_still_waiting_write_nothing_after_the_turn(monkeypatch) -> None:
+    from raven.agent.subagent.backends.observability import LiveSteps
+
+    emitted = _live_writes(monkeypatch)
+    steps = LiveSteps(_LiveRun(), prompt="do it", interval=0.2)
+    events: list[dict] = [{"t": "say", "text": "first", "at": _at(5)}]
+    steps.touch(events)
+    events.append({"t": "say", "text": "second", "at": _at(6)})
+    steps.touch(events)
+    written = len(emitted)
+    steps.close()
+    await asyncio.sleep(0.4)
+    assert len(emitted) == written
+
+
+async def test_live_steps_finish_settles_the_running_step_and_counts_every_step_first(monkeypatch) -> None:
+    from raven.agent.subagent.backends.observability import STEPS_KEY, LiveSteps
+
+    emitted = _live_writes(monkeypatch)
+    run = _LiveRun()
+    steps = LiveSteps(run, prompt="do it", interval=0)
+    events: list[dict] = [{"t": "say", "text": "done", "at": _at(5)}]
+    steps.touch(events)
+    await steps.finish(events, elapsed_ms=10)
+    assert _marks(emitted) == [("ext.0", False), ("ext.1", True), ("ext.1", False)]
+    assert run.attrs[STEPS_KEY] == 2
+
+
 async def test_a_step_the_store_cannot_write_never_fails_the_run(monkeypatch) -> None:
     """The steps are an audit trail, written after the answer is settled: a store
     that refuses one stops the writing there and the run goes on, its count on
@@ -3835,14 +4019,14 @@ async def test_a_step_the_store_cannot_write_never_fails_the_run(monkeypatch) ->
     monkeypatch.setattr(tracing_spans, "persist_artifact", lambda *args, **kwargs: None)
     monkeypatch.setattr(tracing_spans, "emit", refuse_after_the_first)
     full = Run()
-    await observability.record_steps_async(
-        full, prompt="do it", events=[{"t": "say", "text": f"said {i}", "at": None} for i in range(3)], elapsed_ms=10
+    await observability.LiveSteps(full, prompt="do it").finish(
+        [{"t": "say", "text": f"said {i}", "at": None} for i in range(3)], elapsed_ms=10
     )
     assert len(emitted) == 1
     assert full.attrs[observability.STEPS_KEY] == 4
 
     unreadable = Run()
-    await observability.record_steps_async(unreadable, prompt="do it", events=[None], elapsed_ms=10)  # type: ignore[list-item]
+    await observability.LiveSteps(unreadable, prompt="do it").finish([None], elapsed_ms=10)  # type: ignore[list-item]
     assert unreadable.attrs[observability.STEPS_KEY] == 0
 
 

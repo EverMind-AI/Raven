@@ -12240,7 +12240,9 @@ async def test_an_external_agent_s_span_nests_under_the_attempt_that_ran_it(tmp_
 
     spans = _recorded(tmp_path / "traces")
     (final,) = _attempts(spans, "a")
-    (external,) = [s for s in spans if s["name"] == "subagent.external"]
+    # The run is on record from the moment it opens, so its last record is the settled one.
+    (external,) = {s["spanId"]: s for s in spans if s["name"] == "subagent.external"}.values()
+    assert external["attributes"]["subagent.external.in_progress"] is False
     assert external["parentSpanId"] == final["spanId"]
     assert external["attributes"]["subagent.external.task_id"] == final["attributes"]["subagent.task_id"]
 
