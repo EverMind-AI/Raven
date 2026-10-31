@@ -504,7 +504,7 @@ describe('the header band', () => {
     const scroll = getComputedStyle(el('scroll'))
     expect(scroll.paddingTop).toBe(row)
     /* Not the row: scrollIntoView has to clear the fade below it as well. */
-    expect(token('--topbar-fade-tail')).toBe('36px')
+    expect(token('--topbar-fade-tail')).toBe('56px')
     expect(scroll.scrollPaddingTop).toBe(token('--topbar-fade-h'))
     expect(scroll.scrollPaddingTop).not.toBe(row)
   })
@@ -518,7 +518,7 @@ describe('the header band', () => {
       .toBe(`${token('--topbar-h')} 0 0`)
   })
 
-  it('splits the blur from the tint, over an opaque ground where the blur is unsupported', () => {
+  it('splits a translucent tint from the blur, over an opaque ground where the blur is unsupported', () => {
     styled()
     const css = source('styles/page.css')
 
@@ -530,17 +530,34 @@ describe('the header band', () => {
     expect(blur).toMatch(/height: var\(--topbar-fade-h\)/)
     expect(blur).not.toMatch(/background:/)
     /* The ramp lands at the element's lower edge, not 20px above it. */
-    expect(blur).toMatch(/transparent 100%\)/)
+    expect(blur).toMatch(/rgba\(0, 0, 0, 0\) 100%\)/)
 
     const tint = (css.match(/\.chat > \.top::after\s*\{([\s\S]*?)\}/) as RegExpMatchArray)[1] as string
     expect(tint).toMatch(/height: var\(--topbar-fade-h\)/)
-    expect(tint).toMatch(/background: var\(--page\)/)
-    expect(tint).toMatch(/mask-image: linear-gradient\(180deg, rgba\(0, 0, 0, \.94\) 0/)
+    expect(tint).toMatch(/background: var\(--topbar-tint\)/)
+    expect(tint).toMatch(/mask-image: linear-gradient\(180deg, #000 0/)
     expect(tint).toMatch(/rgba\(0, 0, 0, 0\) 100%\)/)
     /* Neither layer may depend on color-mix: engines with backdrop-filter but
        without it would lose the ground and leave the title on a bare blur. */
     expect(blur).not.toMatch(/color-mix/)
     expect(tint).not.toMatch(/color-mix/)
+
+    /* The band is glass, not paint: the tint token's alpha has to stay low
+       enough that the bubble under it is still read as colour and shape. An
+       opaque --page here is the regression this guards. */
+    const tintValue = token('--topbar-tint')
+    const alpha = Number(tintValue.slice(tintValue.lastIndexOf(',') + 1).replace(')', '').trim())
+    expect(alpha).toBeGreaterThan(0)
+    expect(alpha).toBeLessThanOrEqual(0.35)
+    expect(token('--topbar-halo')).toMatch(/rgba\(/)
+    expect(token('--topbar-plate')).toMatch(/rgba\(/)
+    /* Legibility over a dark bubble is the halo's and the plates' job, not a
+       heavier tint: both rules have to stay in the sheet. The plate comes
+       through --ghost-bg so .ghost-ic:hover still wins at its own weight. */
+    expect(css).toMatch(/\.chat > \.top h1,\n\.chat > \.top \.chrome-wd-tag \{ text-shadow: 0 0 2px var\(--topbar-halo\), 0 0 9px var\(--topbar-halo\); \}/)
+    expect(css).toMatch(/\.chat > \.top \{[^}]*--ghost-bg: var\(--topbar-plate\);/)
+    expect(css).toMatch(/\.ghost-ic \{[^}]*background: var\(--ghost-bg, transparent\);/)
+    expect(css).toMatch(/\.ghost-ic:hover \{[^}]*background: var\(--hover\)/ )
 
     const fallback = (css.match(
       /@supports not \(\(backdrop-filter: blur\(1px\)\) or \(-webkit-backdrop-filter: blur\(1px\)\)\) \{([\s\S]*?)\n\}/,
