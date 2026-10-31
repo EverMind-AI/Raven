@@ -551,6 +551,18 @@ describe('the header band', () => {
     expect(alpha).toBeLessThanOrEqual(0.35)
     expect(token('--topbar-halo')).toMatch(/rgba\(/)
     expect(token('--topbar-plate')).toMatch(/rgba\(/)
+
+    /* Each frost token is declared four times -- the root's light defaults,
+       the media dark block, the viewer's dark override and the viewer's light
+       override -- and a value that drifts in one of them is invisible until
+       someone opens that theme. Pin the count and the shared alpha. */
+    const declared = (name: string): string[] =>
+      [...css.matchAll(new RegExp(`${name}:\\s*(rgba\\([^)]*\\))`, 'g'))].map((m) => (m[1] as string))
+    const tintAlphas = declared('--topbar-tint').map((v) => Number(v.slice(v.lastIndexOf(',') + 1).replace(')', '').trim()))
+    expect(tintAlphas).toHaveLength(4)
+    expect(new Set(tintAlphas)).toEqual(new Set([0.3]))
+    expect(declared('--topbar-halo')).toHaveLength(4)
+    expect(declared('--topbar-plate')).toHaveLength(4)
     /* Legibility over a dark bubble is the halo's and the plates' job, not a
        heavier tint: both rules have to stay in the sheet. The plate comes
        through --ghost-bg so .ghost-ic:hover still wins at its own weight. */
