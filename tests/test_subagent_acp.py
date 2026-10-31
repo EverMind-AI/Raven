@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import itertools
 import json
 import os
 import shlex
@@ -3582,6 +3583,48 @@ def _said(steps: list[dict]) -> list[str]:
     return [s["attributes"].get("llm.input_preview") or s["attributes"].get("llm.output_preview") for s in steps]
 
 
+async def test_a_long_run_writes_its_steps_without_holding_the_event_loop(
+    trace_dir, tmp_path: Path, monkeypatch
+) -> None:
+    """A run's steps reach disk when it ends, up to 400 of them, each a span and
+    its artifacts. Written in one go they held the event loop for a quarter of a
+    second (400 steps, measured), and every other conversation on the gateway
+    stalled with it; the loop has to turn between batches of them."""
+    from raven.tracing import spans as tracing_spans
+
+    ticks = 0
+    running = True
+
+    async def ticker() -> None:
+        nonlocal ticks
+        while running:
+            ticks += 1
+            await asyncio.sleep(0)
+
+    at_emit: list[tuple[str | None, int]] = []
+    emit = tracing_spans.emit
+
+    def counted(record: dict) -> None:
+        at_emit.append((record.get("parentSpanId"), ticks))
+        emit(record)
+
+    monkeypatch.setattr(tracing_spans, "emit", counted)
+    backend = build_third_party_backend(stub_config("a", mode="many_steps"))
+    turning = asyncio.create_task(ticker())
+    try:
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    finally:
+        running = False
+        await turning
+
+    run, steps = _steps_of_the_run(trace_dir)
+    assert len(steps) == 202
+    assert run["attributes"]["subagent.external.steps"] == len(steps)
+    marks = [tick for parent, tick in at_emit if parent == run["spanId"]]
+    longest = max(sum(1 for _ in group) for _, group in itertools.groupby(marks))
+    assert longest <= 50, f"{longest} steps written without the loop turning"
+
+
 async def test_a_cancelled_run_still_writes_the_steps_it_took(trace_dir, tmp_path: Path) -> None:
     """A run cut short by its caller writes what its agent said and ran until then.
 
@@ -3629,6 +3672,19 @@ async def test_a_run_whose_agent_died_mid_turn_still_writes_the_steps_it_took(tr
     assert ext["attributes"]["subagent.external.steps"] == len(steps)
 
 
+async def test_a_turn_the_checks_reject_still_writes_the_steps_it_took(trace_dir, tmp_path: Path) -> None:
+    """The checks after the prompt raise on a turn that answered nothing usable,
+    and that turn is the one a reader opens the trajectory for: its steps are
+    written before the error leaves, not only after a turn that passed."""
+    backend = build_third_party_backend(stub_config("a", mode="empty_turn"))
+    with pytest.raises(AcpEmptyTurnError):
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    ext, steps = _steps_of_the_run(trace_dir)
+    assert _said(steps) == ["ping"]
+    assert ext["attributes"]["subagent.external.steps"] == 1
+
+
 async def test_a_prompt_that_never_went_out_writes_no_steps(trace_dir, tmp_path: Path, monkeypatch) -> None:
     """A turn that failed before its prompt was sent records no step: a prompt
     step there would say the agent was asked what it never received."""
@@ -3668,6 +3724,160 @@ async def test_a_backfill_after_a_live_run_writes_no_second_copy_of_its_steps(tr
 
     assert (result["runs"], result["written"], result["already"]) == (1, 0, 1)
     assert _spans_written(trace_dir) == before
+
+
+async def test_a_cancel_while_the_steps_go_to_disk_costs_the_turn_neither_its_usage_nor_its_binding(
+    trace_dir, tmp_path: Path, monkeypatch
+) -> None:
+    """Writing the steps lets the loop through, so a cancel can land in it. The
+    turn had already answered: its spend is booked and a first turn's session
+    is bound before the writing starts, or the next dispatch would open a fresh
+    session and the ledger would miss what the turn spent."""
+    from raven.agent.subagent import activity
+    from raven.tracing import spans as tracing_spans
+
+    booked: list[dict] = []
+
+    async def book(counts: dict, **kwargs: Any) -> None:
+        booked.append(counts)
+
+    monkeypatch.setattr(activity, "note_ledger_usage", book)
+    cfg = stub_config("a", mode="many_steps")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("a", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+    run = asyncio.create_task(
+        backend.run("ping", task_id="t1", workspace=tmp_path, session_key="s", instance="work", executor=None)
+    )
+    emit = tracing_spans.emit
+    steps_out = 0
+
+    def cancel_part_way(record: dict) -> None:
+        nonlocal steps_out
+        emit(record)
+        if record.get("name") in ("llm.call", "tool.call") and record.get("parentSpanId"):
+            steps_out += 1
+            if steps_out == 30:
+                run.cancel()
+
+    monkeypatch.setattr(tracing_spans, "emit", cancel_part_way)
+    with pytest.raises(asyncio.CancelledError):
+        await run
+
+    assert steps_out >= 30
+    assert [(row["prompt_tokens"], row["completion_tokens"]) for row in booked] == [(120, 30)]
+    assert await registry.lookup("s", "a", "work", kind="acp") is not None
+
+
+async def test_a_cancel_while_the_turn_books_its_spend_still_writes_its_steps(
+    trace_dir, tmp_path: Path, monkeypatch
+) -> None:
+    """Booking the spend awaits the ledger, so a cancel can land there, after the
+    turn answered and before anything else of its ending ran: the steps it took
+    are written on the way out all the same."""
+    from raven.agent.subagent import activity
+
+    run: asyncio.Task[Any] | None = None
+
+    async def book_then_get_cancelled(counts: dict, **kwargs: Any) -> None:
+        assert run is not None
+        run.cancel()
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(activity, "note_ledger_usage", book_then_get_cancelled)
+    backend = build_third_party_backend(stub_config("a", mode="many_steps"))
+    run = asyncio.create_task(backend.run("ping", task_id="t1", workspace=tmp_path, executor=None))
+    with pytest.raises(asyncio.CancelledError):
+        await run
+
+    ext, steps = _steps_of_the_run(trace_dir)
+    assert len(steps) == 202
+    assert ext["attributes"]["subagent.external.steps"] == 202
+
+
+async def test_a_step_the_store_cannot_write_never_fails_the_run(monkeypatch) -> None:
+    """The steps are an audit trail, written after the answer is settled: a store
+    that refuses one stops the writing there and the run goes on, its count on
+    it; a collector event that cannot be read writes nothing and fails nothing."""
+    from raven.agent.subagent.backends import observability
+    from raven.tracing import spans as tracing_spans
+
+    class Run:
+        def __init__(self) -> None:
+            self.attrs: dict[str, Any] = {}
+
+        def identity(self) -> dict[str, Any]:
+            return {
+                "trace_id": "t",
+                "span_id": "ext",
+                "session_key": None,
+                "channel": None,
+                "chat_id": None,
+                "surface": None,
+            }
+
+        def set(self, **attrs: Any) -> "Run":
+            self.attrs.update(attrs)
+            return self
+
+    emitted: list[dict] = []
+
+    def refuse_after_the_first(record: dict) -> None:
+        if emitted:
+            raise OSError("no space left on device")
+        emitted.append(record)
+
+    monkeypatch.setattr(tracing_spans, "persist_artifact", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tracing_spans, "emit", refuse_after_the_first)
+    full = Run()
+    await observability.record_steps_async(
+        full, prompt="do it", events=[{"t": "say", "text": f"said {i}", "at": None} for i in range(3)], elapsed_ms=10
+    )
+    assert len(emitted) == 1
+    assert full.attrs[observability.STEPS_KEY] == 4
+
+    unreadable = Run()
+    await observability.record_steps_async(unreadable, prompt="do it", events=[None], elapsed_ms=10)  # type: ignore[list-item]
+    assert unreadable.attrs[observability.STEPS_KEY] == 0
+
+
+async def test_a_run_cancelled_while_its_steps_go_to_disk_gets_no_second_copy_from_a_backfill(
+    trace_dir, tmp_path: Path, monkeypatch
+) -> None:
+    """The steps are written in batches with the loop let through between them,
+    so a cancel can land half way. The run's count is on it before the first
+    step is, so a backfill still leaves the run alone instead of writing every
+    step again beside the ones that reached the log."""
+    from raven.tracing import spans as tracing_spans
+    from raven.trajectory import frames_backfill
+
+    backend = build_third_party_backend(stub_config("a", mode="many_steps"))
+    run = asyncio.create_task(backend.run("ping", task_id="t1", workspace=tmp_path, executor=None))
+    emit = tracing_spans.emit
+    steps_out = 0
+
+    def cancel_part_way(record: dict) -> None:
+        nonlocal steps_out
+        emit(record)
+        if record.get("name") in ("llm.call", "tool.call") and record.get("parentSpanId"):
+            steps_out += 1
+            if steps_out == 30:
+                run.cancel()
+
+    monkeypatch.setattr(tracing_spans, "emit", cancel_part_way)
+    with pytest.raises(asyncio.CancelledError):
+        await run
+    monkeypatch.setattr(tracing_spans, "emit", emit)
+
+    ext, steps = _steps_of_the_run(trace_dir)
+    assert 30 <= len(steps) < 202
+    assert ext["attributes"]["subagent.external.steps"] == 202
+    assert frames_backfill.backfill(trace_dir)["written"] == 0
 
 
 async def test_the_span_measures_the_reply_it_handed_back(trace_dir, tmp_path: Path) -> None:
