@@ -777,6 +777,11 @@ class StintDriver:
         whoever asked, and this one would otherwise be a stint that simply
         stopped advancing with nobody told why.
         """
+        # No round opens from this call, and the pre-approval beat has nothing
+        # left to beat for: stopping it here is what lets `holding()` answer
+        # "nothing is advancing this stint" now, rather than at its next tick
+        # (up to HEARTBEAT_EVERY_SEC later).
+        self._stop_beat(record.stint_id)
         record.status = PAUSED
         record.round_index = max(index - 1, 1)
         record.stop_reason = f"the hourly sub-agent dispatch budget is spent before round {index}"

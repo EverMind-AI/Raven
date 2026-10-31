@@ -1029,6 +1029,28 @@ class TestRunning:
         [after] = store.list()
         assert after.status == "running"
 
+    async def test_a_first_round_paused_for_budget_does_not_hold_the_terminal(self, tmp_path: Path) -> None:
+        """The pre-approval beat has no round to hand over to. After the dispatch
+        budget pauses the first round, nothing is advancing the stint, but the
+        beat still kept `holding()` true until its next tick -- the CLI's
+        "Holding this terminal" wait for up to HEARTBEAT_EVERY_SEC."""
+        from raven.agent.subagent.prompt_errors import RoundBudgetSpentError
+
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+
+        async def spent(nodes: list[dict[str, Any]], **kwargs: Any) -> str:
+            raise RoundBudgetSpentError("the hourly sub-agent dispatch budget is spent")
+
+        tool.run_round = spent  # type: ignore[method-assign]
+        receipt = await driver.start(spec)
+
+        assert receipt.startswith("Paused"), receipt
+        [record] = StintStore(tool.stints_root("web:stint")).list()
+        assert record.status == "paused"
+        assert driver.holding() is False, "nothing is advancing the stint after the pause"
+
     async def test_a_round_no_role_finished_pauses_the_stint_instead_of_costing_a_round(self, tmp_path: Path) -> None:
         """Every node failed, so the round left nothing to build on, and the
         next would hit the same fault. Counted, a stint ran three rounds in two
