@@ -727,6 +727,20 @@ def _span_rows(
 ) -> list[tuple[TrajectoryEntry, dict[str, Any]]]:
     if not records:
         records = [_summary_record(info)]
+    # A call that only thought has no output to show. The read=True projection
+    # already omits the empty output row; the index's preview pass adds the
+    # thinking record beside it, so drop the empty output here as well and let
+    # the thinking row own the span's time.
+    if any(record["slot"] == SLOT_THINKING for record in records):
+        records = [
+            record
+            for record in records
+            if not (
+                record["slot"] == "llm.output"
+                and _record_content_empty(record)
+                and not str(record.get("text") or "").strip()
+            )
+        ]
     status, evidence = _status_of(info, records)
     owner = _owner_slot(records)
     if status == STATUS_ERROR and owner is None:

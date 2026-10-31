@@ -37,7 +37,9 @@ _PREFIX = "subagent.external"
 TRANSCRIPT_KEY = f"{_PREFIX}.transcript"
 FRAMES_KEY = f"{_PREFIX}.frames"
 STEPS_KEY = f"{_PREFIX}.steps"
-"""How many steps a run wrote of itself while it ran; a backfill leaves such a run alone."""
+"""How many steps a run has. Set before the first one is written, so a run cut short while
+its steps go to disk is still marked as one that writes its own steps and a backfill leaves it
+alone; it is a count of the run's steps, not a claim that every one reached the log."""
 LIVE_KEY = f"{_PREFIX}.in_progress"
 """Set on an external run, and on each step of it, written while the run is still going; the
 settled record of either carries no ``True`` (``raven.trajectory.entries.IN_PROGRESS_KEYS``)."""
@@ -391,9 +393,9 @@ def record_steps(
             skip_ids=skip_ids,
         )
         for step in steps:
-            emitted.append(step[0])
             if not dry_run:
                 _write_step(span, identity, step)
+            emitted.append(step[0])
     except Exception:  # noqa: BLE001 — an audit trail must not take down the run
         logger.debug("tracing: record_steps failed", exc_info=True)
     return emitted
