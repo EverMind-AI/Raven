@@ -513,6 +513,35 @@ describe('the model picker, closing', () => {
     expect(pick()).toBeNull()
   })
 
+  it('stays open when the scroll comes from inside the panel, though the row shifts with it', () => {
+    install()
+    mount()
+    let top = 300
+    const anchor = document.getElementById('modelChip')!
+    anchor.getBoundingClientRect = () => ({ top, bottom: top + 30, left: 700, right: 900, width: 200, height: 30, x: 700, y: top, toJSON: () => ({}) }) as DOMRect
+    /* A settings-row opening is the one that arms the scroll-dismiss listener:
+       the composer chip's anchor does not move under the panel. */
+    act(() => {
+      store.open(anchor, undefined, undefined, { kind: 'text', title: 'Default model' })
+    })
+    expect(pick()).toBeTruthy()
+    /* The panel's own list is a scroller, and the listener is on the document
+       in capture phase, so sliding it reaches the listener -- and the row's top
+       moves with the reflow. The shift alone cannot tell that scroll from the
+       row leaving; the target can. */
+    top = 260
+    act(() => {
+      fireEvent.scroll(document.querySelector('.mpick .models')!)
+    })
+    expect(pick(), 'the panel\'s own list scrolled, not the page under it').toBeTruthy()
+    /* A scroll the panel did not originate still closes it. */
+    top = 220
+    act(() => {
+      document.dispatchEvent(new Event('scroll', { bubbles: true }))
+    })
+    expect(pick()).toBeNull()
+  })
+
   it('offers the settings door only when opened from the chip', () => {
     const h = install()
     mount()
