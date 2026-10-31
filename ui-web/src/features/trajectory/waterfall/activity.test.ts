@@ -44,6 +44,18 @@ describe('the activity buckets', () => {
     expect(activity([E('loose', 10, { turn_span_id: null })], axis, 60_000)[0]!.llm).toBe(1)
   })
 
+  it('counts a call of each trace that names one span', () => {
+    /* Span ids are unique within a trace only: two traces calling their span
+       'call' made two calls, not one. */
+    const buckets = activity([
+      E('a', 10, { trace_id: 't', span_id: 'call' }),
+      E('b', 20, { trace_id: 't2', span_id: 'call' }),
+      E('c', 30, { trace_id: 't3', span_id: 'run', kind: 'tool.output', span_name: 'tool.call', slot: 'tool.output' }),
+      E('d', 40, { trace_id: 't4', span_id: 'run', kind: 'tool.output', span_name: 'tool.call', slot: 'tool.output' }),
+    ], axis, 60_000)
+    expect(buckets).toEqual([{ start: T0, end: T0 + 60_000, llm: 2, tool: 2, failed: false }])
+  })
+
   it('widens its buckets as the session grows, so a bar keeps a few pixels', () => {
     const hour = createAxis([{ start: T0, end: T0 + 3_600_000 }])
     const day = createAxis([{ start: T0, end: T0 + 86_400_000 }])

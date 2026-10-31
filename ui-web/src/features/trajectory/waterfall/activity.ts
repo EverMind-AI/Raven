@@ -3,12 +3,13 @@
  *
  * A call is counted once, in the bucket its first entry starts in -- a model
  * call writes its input, its thinking and its answer as three entries of one
- * span. Buckets are real time from the session's start, so in a busy stretch
- * they fall evenly on the folded axis; a folded idle stretch holds none.
+ * span, and a span is named by its trace and its id. Buckets are real time
+ * from the session's start, so in a busy stretch they fall evenly on the
+ * folded axis; a folded idle stretch holds none.
  */
 
 import { createAxis } from './axis'
-import { entryStart } from './model'
+import { entryStart, spanKey } from './model'
 
 import type { TrajectoryEntry } from '../types'
 import type { Interval, TimeAxis } from './axis'
@@ -66,8 +67,9 @@ export function activity(entries: readonly TrajectoryEntry[], axis: TimeAxis, bu
     const kind = entry.kind.startsWith('llm.') ? 'llm' : entry.kind.startsWith('tool.') ? 'tool' : null
     if (kind !== null) {
       const at = entryStart(entry)
-      const held = calls.get(entry.span_id)
-      if (held === undefined || at < held.at) calls.set(entry.span_id, { at, kind })
+      const key = spanKey(entry)
+      const held = calls.get(key)
+      if (held === undefined || at < held.at) calls.set(key, { at, kind })
     }
     if (entry.failure_entry) failures.push(entryStart(entry))
   }

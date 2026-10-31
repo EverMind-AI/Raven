@@ -81,8 +81,8 @@ export function displayRows(
     rows.push({ kind: 'agent', key: `agent:${agent.key}`, agent: at, turn: null, row: null, turnRow: null })
     if (collapsedAgents.has(agent.key)) return
     for (const turn of agent.turns) {
-      rows.push({ kind: 'turn', key: `turn:${turnKey(at, turn.id)}`, agent: at, turn: turn.id, row: null, turnRow: turn })
-      if (!openTurns.has(turnKey(at, turn.id))) continue
+      rows.push({ kind: 'turn', key: `turn:${turnKey(agent.key, turn.id)}`, agent: at, turn: turn.id, row: null, turnRow: turn })
+      if (!openTurns.has(turnKey(agent.key, turn.id))) continue
       turn.rows.forEach((row, index) => rows.push({ kind: 'span', key: `span:${row.entry.entry_id}:${index}`, agent: at, turn: turn.id, row, turnRow: turn }))
     }
     for (const row of agent.loose) {
@@ -683,6 +683,18 @@ export function Waterfall(): JSX.Element {
      it, or wholly after it, steps into one row for each side; the main agent
      always keeps its own. */
   const [foldOpen, setFoldOpen] = useState<ReadonlySet<FoldSide>>(new Set())
+  /* A conversation's folds are its own: the island stays mounted across a
+     session change, so a fold chosen in the one left behind must not hide the
+     next one's rows -- a lone agent starts open, whatever was folded before
+     it. The list starts at its top for the same reason. */
+  useEffect(() => {
+    setAgentFold(new Map())
+    setOpen(new Set())
+    setFoldOpen(new Set())
+    setScrollTop(0)
+    const el = box.current
+    if (el) el.scrollTop = 0
+  }, [sessionKey])
   /* The turn row under the pointer, whose breakdown the tooltip shows. */
   const [hoverTurn, setHoverTurn] = useState<{ key: string; at: number } | null>(null)
   const outside = useMemo(() => {
@@ -779,7 +791,7 @@ export function Waterfall(): JSX.Element {
     }
     if (owner === null) return
     const group = waterfall.agents[owner.agent]!.key
-    const key = owner.turn === null ? null : turnKey(owner.agent, owner.turn)
+    const key = owner.turn === null ? null : turnKey(group, owner.turn)
     /* Everything that hides the row is opened in the one pass: an agent folded
        by default and the turn inside it are both closed, and the next pass
        only scrolls. */
@@ -869,10 +881,10 @@ export function Waterfall(): JSX.Element {
       locate(entry)
       return
     }
-    for (const [index, agent] of waterfall.agents.entries()) {
+    for (const agent of waterfall.agents) {
       for (const turn of agent.turns) {
         if (turn.rows.some((row) => row.entry.entry_id === selected)) {
-          toggleTurn(turnKey(index, turn.id))
+          toggleTurn(turnKey(agent.key, turn.id))
           return
         }
       }
@@ -1039,7 +1051,7 @@ export function Waterfall(): JSX.Element {
     if (row.kind === 'turn') {
       const turn = row.turnRow!
       const parts = turnSegments(turn, now)
-      const openTurn = open.has(turnKey(row.agent, turn.id))
+      const openTurn = open.has(turnKey(agent.key, turn.id))
       const turnName = t('gui.trajectory.turn.ordinal', { n: turn.ordinal })
       painted.push(
         <div key={row.key} id={rowId(at)} className="trajectory-wf-row trajectory-wf-turn" data-row="turn" style={style}
@@ -1049,7 +1061,7 @@ export function Waterfall(): JSX.Element {
           aria-describedby={hoverTurn?.key === row.key ? TIP_ID : undefined}
           onPointerEnter={() => setHoverTurn({ key: row.key, at })}
           onPointerLeave={() => setHoverTurn((current) => (current?.key === row.key ? null : current))}
-          onClick={() => toggleTurn(turnKey(row.agent, turn.id))}>
+          onClick={() => toggleTurn(turnKey(agent.key, turn.id))}>
           <span className="trajectory-wf-guide" style={{ left: GUIDE_X }} />
           <span className="trajectory-wf-label" style={{ paddingLeft: 26 }}>
             <button type="button" className="trajectory-wf-chev" aria-expanded={openTurn} aria-label={turnName}>

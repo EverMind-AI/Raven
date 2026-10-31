@@ -168,8 +168,8 @@ describe('displayRows', () => {
   it('hides a turn’s spans until the turn is open, and an agent’s rows until it is closed', () => {
     const w = buildWaterfall([E('a', 0), E('b', 1)], Date.parse('2026-10-28T10:01:00.000Z'))
     expect(displayRows(w, new Set(), new Set()).map((row) => row.kind)).toEqual(['agent', 'turn'])
-    expect(displayRows(w, new Set(), new Set(['0:T1'])).map((row) => row.kind)).toEqual(['agent', 'turn', 'span', 'span'])
-    expect(displayRows(w, new Set(['main']), new Set(['T1'])).map((row) => row.kind)).toEqual(['agent'])
+    expect(displayRows(w, new Set(), new Set(['main:T1'])).map((row) => row.kind)).toEqual(['agent', 'turn', 'span', 'span'])
+    expect(displayRows(w, new Set(['main']), new Set(['main:T1'])).map((row) => row.kind)).toEqual(['agent'])
   })
 })
 
@@ -655,6 +655,63 @@ describe('a live session growing under the reader', () => {
     })
     expect(document.querySelector('.trajectory-wf-window')!.textContent).toContain('gui.trajectory.window.whole')
     expect(document.querySelectorAll('.trajectory-ruler-pick')).toHaveLength(0)
+  })
+
+  it('reopens a lone agent when the conversation changes, dropping the reader’s folds', async () => {
+    await draw([
+      E('m1', 0),
+      E('door-w', 1, { kind: 'tool.output', opens_subagent_scope: 't:w', meta: { instance: 'w' } }),
+      E('w1', 2, { subagent_scope: 't:w', turn_span_id: 'W1' }),
+    ])
+    const main = (): HTMLElement => document.querySelector<HTMLElement>('[data-row="agent"][data-main]')!
+    /* Several agents start folded: the reader opens main, then folds it again.
+       That choice is kept by the agent's key, and it is still this
+       conversation's, not the next one's. */
+    act(() => { fireEvent.click(main()) })
+    act(() => { fireEvent.click(main()) })
+    expect(main().getAttribute('aria-expanded')).toBe('false')
+    rows = [E('n1', 0), E('n2', 1)]
+    await act(async () => {
+      store.sessionChanged('gui:b')
+      await store.load()
+    })
+    /* A lone agent starts open, whatever the reader chose in the other one. */
+    expect(main().getAttribute('aria-expanded')).toBe('true')
+    expect(count('[data-row="turn"]')).toBe(1)
+    act(() => { fireEvent.click(document.querySelector('[data-row="turn"]')!) })
+    expect(count('[data-row="span"]')).toBe(2)
+  })
+})
+
+describe('a turn opened under a shifting agent order', () => {
+  const grow = (entries: TrajectoryEntry[]): void => {
+    act(() => {
+      store.applyChanges({
+        epoch: 'e1', from_revision: 100, to_revision: 101, upserts: entries, removed: [], has_more: false,
+        reset_required: false, index_state: READY,
+      })
+    })
+  }
+  const door = (id: string, at: number, scope: string): TrajectoryEntry =>
+    E(id, at, { kind: 'tool.output', opens_subagent_scope: scope, meta: { instance: scope } })
+
+  it('stays open when a new agent with an earlier start shifts the agents down', async () => {
+    await draw([
+      E('m1', 0),
+      door('door-b', 10, 't:b'),
+      E('b1', 11, { subagent_scope: 't:b', turn_span_id: 'B1' }),
+    ])
+    openAgents()
+    const turns = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('[data-row="turn"]')]
+    /* The later agent's turn, opened: its own span is on screen. */
+    act(() => { fireEvent.click(turns()[1]!) })
+    expect(document.querySelector('[data-entry="b1"]')).not.toBeNull()
+    /* A backfilled worker started before it: agents are sorted by start, so
+       its index moves. The reader's open state was never the index's to keep. */
+    grow([door('door-c', 5, 't:c'), E('c1', 6, { subagent_scope: 't:c', turn_span_id: 'C1' })])
+    expect(turns()).toHaveLength(2)
+    expect(turns()[1]!.getAttribute('aria-expanded')).toBe('true')
+    expect(document.querySelector('[data-entry="b1"]')).not.toBeNull()
   })
 })
 

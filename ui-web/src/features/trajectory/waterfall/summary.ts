@@ -1,13 +1,14 @@
 /* The figures the waterfall's header prints, and the second line under each.
  *
  * Worked out from the tree the rows are drawn from, so a figure and the rows
- * it summarises cannot disagree. Calls are counted by span: one model call
- * writes its input, its thinking and its output as three entries of one span.
+ * it summarises cannot disagree. Calls are counted by span of a trace -- span
+ * ids are unique only within their trace -- because one model call writes its
+ * input, its thinking and its output as three entries of one span.
  * A share of time is read from the turn bars' own sweep (`segments.ts`), so the
  * header's "of busy time" and a turn's own breakdown are the same arithmetic.
  */
 
-import { entryStart } from './model'
+import { entryStart, spanKey } from './model'
 import { turnSegments } from './segments'
 
 import type { TrajectoryEntry } from '../types'
@@ -63,10 +64,11 @@ export function summarize(waterfall: Waterfall, shown: readonly TrajectoryEntry[
   let errors = 0
   let firstError: TrajectoryEntry | null = null
   for (const entry of shown) {
-    if (entry.kind.startsWith('llm.')) llmSpans.add(entry.span_id)
+    if (entry.kind.startsWith('llm.')) llmSpans.add(spanKey(entry))
     else if (entry.kind.startsWith('tool.')) {
+      const key = spanKey(entry)
       const name = typeof entry.meta?.tool === 'string' && entry.meta.tool !== '' ? entry.meta.tool : null
-      if (!toolNames.has(entry.span_id) || toolNames.get(entry.span_id) === null) toolNames.set(entry.span_id, name)
+      if (!toolNames.has(key) || toolNames.get(key) === null) toolNames.set(key, name)
     }
     if (!entry.failure_entry) continue
     errors += 1

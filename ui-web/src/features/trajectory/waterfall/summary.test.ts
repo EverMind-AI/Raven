@@ -102,6 +102,18 @@ describe('the header figures', () => {
     expect(figures.topTools).toEqual([{ name: 'bash', share: 1 }])
   })
 
+  it('counts a call per trace, though two traces name one span', () => {
+    /* Span ids are unique within a trace only: the fixture's t/t2/t3 all name
+       their model span 'llm', and each of them is a call of its own. */
+    const figures = figuresOf([
+      E('a1', 0, 10, { trace_id: 't', span_id: 'llm' }),
+      E('a2', 0, 10, { trace_id: 't2', span_id: 'llm', turn_span_id: 'T2' }),
+      tool('b1', 0, 1, 'bash', { trace_id: 't3', span_id: 'call' }),
+      tool('b2', 0, 1, 'bash', { trace_id: 't4', span_id: 'call' }),
+    ])
+    expect([figures.llm, figures.tool]).toEqual([2, 2])
+  })
+
   it('finds the earliest failure, not the first one listed', () => {
     const figures = figuresOf([
       E('late', 50, 60, { failure_entry: true, operation_status: 'error', turn_span_id: 'T2' }),
