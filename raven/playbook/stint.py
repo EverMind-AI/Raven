@@ -933,7 +933,8 @@ class StintDriver:
         approve what they just typed is not a second opinion. A stint whose
         first round never opened is not one of those: there is no count to
         change and no approval to change it under, so it is refused and sent
-        back to starting it again, which asks.
+        back to starting it again, which puts the playbook's own question when
+        it has one.
         """
         store = self.store_for(session_key)
         record = store.read(stint_id)
@@ -981,11 +982,14 @@ class StintDriver:
         if not _first_round_opened(record):
             # Nothing was ever approved here, so there is no round count to
             # change. Opening one would run exactly what the first round's
-            # missing approval kept from running.
-            return (
-                f"Error: {stint_id} never ran its first round, so there is nothing to extend. "
+            # missing approval kept from running. Restarting it runs under the
+            # playbook's own question -- which it may not have.
+            restart = (
                 f"Ask for {record.playbook} again to start it; that asks for approval."
+                if spec.confirm
+                else f"Ask for {record.playbook} again to start it; it runs without asking."
             )
+            return f"Error: {stint_id} never ran its first round, so there is nothing to extend. {restart}"
         # The round it last ran, plus one -- except where it never finished one,
         # as a stint whose first round was refused never did. Then this is that
         # round, taken up the way `resume` takes one up: under a new attempt,

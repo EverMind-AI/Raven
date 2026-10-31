@@ -3453,8 +3453,9 @@ class TestMoreRounds:
     async def test_a_plan_whose_first_round_was_refused_is_not_extended(self, tmp_path: Path) -> None:
         """There is no round count to change and no approval to change it
         under: extending a first round that never opened would run exactly what
-        the missing approval kept from running. Starting the playbook again
-        asks."""
+        the missing approval kept from running. Starting the playbook again runs
+        that round under whatever question the playbook itself asks -- for this
+        one, none."""
         from raven.stint.record import StintRecord, StintStore
 
         tool = _FakeTool(tmp_path / "stints")
@@ -3464,7 +3465,7 @@ class TestMoreRounds:
             StintRecord(
                 stint_id="stint-x",
                 playbook="game-dev",
-                spec=_spec().model_dump(by_alias=True),
+                spec=_spec(confirm=False).model_dump(by_alias=True),
                 workdir=str(tmp_path / "tree"),
                 round_index=1,
                 status="stopped",
@@ -3476,8 +3477,39 @@ class TestMoreRounds:
         answer = await self._driver(tmp_path, tool).extend("stint-x", 1, "web:stint")
 
         assert answer.startswith("Error") and "never ran its first round" in answer
+        assert "asks for approval" not in answer
+        assert "without asking" in answer
         assert tool.submitted == []
         assert store.read("stint-x").status == "stopped"
+
+    async def test_extending_a_refused_first_round_still_names_a_confirmed_playbook_s_approval(
+        self, tmp_path: Path
+    ) -> None:
+        """The refusal is the same for a playbook that asks before its first
+        round; restarting that one does ask, and the message has to say so."""
+        from raven.stint.record import StintRecord, StintStore
+
+        tool = _FakeTool(tmp_path / "stints")
+        (tmp_path / "tree").mkdir()
+        store = StintStore(tool.stints_root())
+        store.write(
+            StintRecord(
+                stint_id="stint-x",
+                playbook="game-dev",
+                spec=_spec(confirm=True).model_dump(by_alias=True),
+                workdir=str(tmp_path / "tree"),
+                round_index=1,
+                status="stopped",
+                stop_reason="the first round was refused",
+                origin=tool.turn_origin(),
+            )
+        )
+
+        answer = await self._driver(tmp_path, tool).extend("stint-x", 1, "web:stint")
+
+        assert answer.startswith("Error") and "never ran its first round" in answer
+        assert "asks for approval" in answer
+        assert tool.submitted == []
 
     async def test_no_more_rounds_is_not_more_rounds(self, tmp_path: Path) -> None:
         tool = _FakeTool(tmp_path / "stints")
