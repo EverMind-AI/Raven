@@ -168,11 +168,10 @@ are load-bearing for the tab-per-scope page and both are wrong for this one:
 the waterfall has to place every agent's entries at once, and a click on any of
 them has to select it.
 
-So the store grows a second derived set, `shown` — every entry the page may
-draw — and the waterfall selects with `selectAcross`, which takes any entry
-without moving the current scope. `visible` keeps its meaning for the current
-scope and the details pane's first-block preference; it stops being the only
-door.
+So the waterfall draws `entries` itself — every entry the store holds is one
+the page may draw — and selects with `selectAcross`, which takes any entry
+without moving the current scope. The per-scope `visible` set goes with the
+tabs: nothing on the page reads one scope's rows on their own any more.
 
 Agent naming reuses `scopes.ts`'s existing title logic so an agent row's hover,
 a fold row and the details pane name a worker the same way.

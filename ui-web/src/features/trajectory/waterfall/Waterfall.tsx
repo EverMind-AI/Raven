@@ -507,9 +507,9 @@ export function Waterfall(): JSX.Element {
   /* The clock the bars are cut at. It ticks only while something is still
      running: a fresh `Date.now()` every render would rebuild the whole model
      on every scroll frame, which is what a 500-turn session cannot afford. */
-  const shown = store.get().shown
+  const entries = store.get().entries
   const [now, setNow] = useState(() => Date.now())
-  const live = useMemo(() => shown.some((entry) => isLive(entry, now)), [shown, now])
+  const live = useMemo(() => entries.some((entry) => isLive(entry, now)), [entries, now])
   useEffect(() => {
     if (!live) return
     const timer = setInterval(() => setNow(Date.now()), 1000)
@@ -523,20 +523,20 @@ export function Waterfall(): JSX.Element {
   const tree = useRef<{ index: WaterfallIndex; built: number; now: number } | null>(null)
   const waterfall = useMemo(() => {
     const prev = tree.current
-    if (prev !== null && grownFrom === prev.built && shown.length >= prev.built) {
+    if (prev !== null && grownFrom === prev.built && entries.length >= prev.built) {
       if (prev.now !== now) {
         prev.index.setNow(now)
         prev.now = now
       }
-      if (shown.length > prev.built) prev.index.add(shown.slice(prev.built))
-      prev.built = shown.length
+      if (entries.length > prev.built) prev.index.add(entries.slice(prev.built))
+      prev.built = entries.length
       return prev.index.waterfall()
     }
     const index = new WaterfallIndex(now)
-    index.add(shown)
-    tree.current = { index, built: shown.length, now }
+    index.add(entries)
+    tree.current = { index, built: entries.length, now }
     return index.waterfall()
-  }, [shown, grownFrom, now])
+  }, [entries, grownFrom, now])
 
   /* Agents start folded when there are several -- the session reads as one
      row per agent -- and a lone agent starts open. */
@@ -551,19 +551,19 @@ export function Waterfall(): JSX.Element {
     const prev = axes.current
     /* A running row's end moves with the clock, so a tick rebuilds the axis
        rather than appending to it. */
-    if (prev !== null && grownFrom === prev.built && shown.length >= prev.built && (!live || prev.now === now)) {
-      if (shown.length > prev.built) {
-        prev.index.add(shown.slice(prev.built).map((entry) => ({ start: entryStart(entry), end: entryEnd(entry, now) })))
+    if (prev !== null && grownFrom === prev.built && entries.length >= prev.built && (!live || prev.now === now)) {
+      if (entries.length > prev.built) {
+        prev.index.add(entries.slice(prev.built).map((entry) => ({ start: entryStart(entry), end: entryEnd(entry, now) })))
       }
-      prev.built = shown.length
+      prev.built = entries.length
       prev.now = now
       return prev.index.axis()
     }
     const index = new AxisIndex({ pad: TRAIL_PAD })
-    index.add(shown.map((entry) => ({ start: entryStart(entry), end: entryEnd(entry, now) })))
-    axes.current = { index, built: shown.length, now }
+    index.add(entries.map((entry) => ({ start: entryStart(entry), end: entryEnd(entry, now) })))
+    axes.current = { index, built: entries.length, now }
     return index.axis()
-  }, [shown, grownFrom, now, live])
+  }, [entries, grownFrom, now, live])
   /* The window, projected onto this axis: a different conversation's window
      means nothing here, and is not used. */
   const view: Viewport = (() => {
@@ -671,8 +671,8 @@ export function Waterfall(): JSX.Element {
       const holder = agent.door === null ? undefined : agentOfEntry.get(agent.door.entry_id)
       if (agent.door !== null && holder !== undefined) dispatch.set(agent.key, { holder, at: entryStart(agent.door) })
     }
-    return { nameOfScope, slowestId, runs, busy, failures, sentFrom, dispatch, figures: summarize(waterfall, shown, now) }
-  }, [shown, waterfall, now])
+    return { nameOfScope, slowestId, runs, busy, failures, sentFrom, dispatch, figures: summarize(waterfall, entries, now) }
+  }, [entries, waterfall, now])
   const { nameOfScope, slowestId, runs, busy, failures, sentFrom, dispatch, figures } = summary
 
   /* Once the reader narrows the window, a worker whose work lies wholly before
@@ -1197,7 +1197,7 @@ export function Waterfall(): JSX.Element {
         </div>
       </div>
       {waterfall.agents.length === 0 ? null : (
-        <ActivityStrip axis={axis} entries={shown} start={windowFrom} end={windowTo} zoomed={zoomedView} onWindow={takeWindow} />
+        <ActivityStrip axis={axis} entries={entries} start={windowFrom} end={windowTo} zoomed={zoomedView} onWindow={takeWindow} />
       )}
       <div className="trajectory-wf-head">
         <div className="trajectory-wf-headlabel">

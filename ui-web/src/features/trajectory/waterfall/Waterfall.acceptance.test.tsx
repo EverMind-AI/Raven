@@ -158,6 +158,6 @@ it('a 500-turn session mounts a bounded number of rows', async () => {
   rows = Array.from({ length: 500 }, (_, index) => E(`r${index}`, { turn_span_id: `T${index}`, sort_key: [String(index).padStart(6, '0'), 0] }))
   render(<Waterfall />)
   await act(async () => { await store.load() })
-  expect(store.get().shown).toHaveLength(500)
+  expect(store.get().entries).toHaveLength(500)
   expect(document.querySelectorAll('[data-row]').length).toBeLessThan(60)
 })
