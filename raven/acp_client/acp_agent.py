@@ -64,12 +64,12 @@ from raven.agent.subagent.backends import turn_rows
 from raven.agent.subagent.backends.base import bounded_delta, clamp_output
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.backends.observability import (
+    LiveSteps,
     external_agent_span,
     record_events,
     record_frames,
     record_outcome,
     record_session,
-    record_steps_async,
 )
 from raven.agent.subagent.instances import InstanceRegistry, get_registry
 from raven.agent.subagent.mcp_grant import McpDispatchError, McpGrant, McpSource, acp_target, resolve_grant
@@ -318,6 +318,7 @@ class _TurnCollector:
         limit: int | None = None,
         track_files: bool = True,
         agent_version: str | None = None,
+        steps: LiveSteps | None = None,
     ) -> None:
         # The reply's cap, renewed for every message rather than spent across
         # the turn: the reply is one message, and narration spending a shared
@@ -336,6 +337,9 @@ class _TurnCollector:
         # What the agent said, thought and ran, reduced by the same code the
         # journal replay uses; ``events`` is its list, read in place.
         self._turn = TurnEvents(self._dialect, prompt)
+        # Writes those events as the run's steps while it runs, so the
+        # trajectory shows a worker's work before its turn ends.
+        self.steps = steps
         self._agent_version = agent_version
         self._tool_ran = False
         self._steered = False
@@ -410,6 +414,8 @@ class _TurnCollector:
         activity.note_alive(self._run)
         if method == PERMISSION_METHOD:
             call_id = self._turn.permission(params)
+            if self.steps is not None:
+                self.steps.touch(self.events)
             tool = params.get("toolCall")
             # The earliest frame that names the call. An agent that asks first
             # and announces the call as it runs it -- raven's own does -- leaves
@@ -425,6 +431,8 @@ class _TurnCollector:
         kind = kind if isinstance(kind, str) else "unknown"
         self.kinds.append(kind)
         applied = self._turn.apply(update, self._now())
+        if self.steps is not None:
+            self.steps.touch(self.events)
         if kind in ANSWER_UPDATES:
             if not self.answer:
                 self.answer_at = self._now()
@@ -1651,6 +1659,7 @@ class AcpAgentBackend:
                     limit=self.max_output_chars,
                     track_files=launched is None,
                     agent_version=agent_version(connection.initialize),
+                    steps=LiveSteps(span, prompt=task),
                 )
                 # Built here, in the turn's context, for the reason `_TurnCollector`
                 # documents: the read loop's ContextVars predate this run, and the
@@ -1787,6 +1796,11 @@ class AcpAgentBackend:
                             )
                         activity.offer_steer(collector._run, None)
                         connection.router.detach(session_id, collector)
+                        # Detached, the collector hears nothing more; whatever is
+                        # left is settled by `_write_steps`, not by a timer firing
+                        # after the turn.
+                        if collector.steps is not None:
+                            collector.steps.close()
                         connection.elicitors.detach(session_id, elicitor)
                         connection.responders.detach(session_id, responder)
                         # Detaching stops only the *next* request from routing here.
@@ -2437,7 +2451,8 @@ class AcpAgentBackend:
         writing them again.
         """
         elapsed_ms = int((time.monotonic() - started) * 1000)
-        await record_steps_async(span, prompt=collector.prompt, events=collector.events, elapsed_ms=elapsed_ms)
+        steps = collector.steps if collector.steps is not None else LiveSteps(span, prompt=collector.prompt)
+        await steps.finish(collector.events, elapsed_ms=elapsed_ms)
 
 
 __all__ = ["AcpAgentBackend", "AcpEmptyTurnError"]
