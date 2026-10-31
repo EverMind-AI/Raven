@@ -524,10 +524,11 @@ async function pages(src: TrajectorySource, key: string, g: number, stream: bool
     const before = entries.length
     entries = cursor === null ? [...page.entries] : [...entries, ...page.entries]
     cursor = page.next_cursor ?? null
-    /* Every page goes on screen as it lands, whether or not a picture is
-       already up: a walk over a session the reader has seen before used to
-       wait for the whole snapshot, which is the one case large files hurt.
-       A walk restarted after its cursor expired is not streamed -- its pages
+    /* A first read puts every page on screen as it lands. A re-read does not:
+       streaming it spared the wait for the whole snapshot, but each page put a
+       shorter picture in place of the one up and the list shrank under the
+       reader, so that picture stays until the new one is whole (`load`). A walk
+       restarted after its cursor expired is not streamed either -- its pages
        belong to a different snapshot, and half of one is not a picture. */
     if (stream) patch({ ...rows(entries), grownFrom: cursor === null ? -1 : before, indexState: page.index_state })
     if (cursor === null) return { entries, last: page }
@@ -545,7 +546,7 @@ export async function load(): Promise<void> {
   const key = store.get().sessionKey
   if (!src || !key) return
   let restarts = 0
-  let stream = true
+  let stream = store.get().entries.length === 0
   for (;;) {
     const g = bump()
     patch({ listing: true })

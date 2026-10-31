@@ -379,6 +379,19 @@ describe('load', () => {
     await narrower
     expect(store.get().selectedId).toBeNull()
   })
+
+  it('marks where each page of a first read was appended, and its end as a whole write', async () => {
+    const walk = store.load()
+    await flush()
+    await answer(page([entry('r0', 0), entry('r1', 1)], 'c2'))
+    expect(store.get().grownFrom).toBe(0)
+    await answer(page([entry('r2', 2), entry('r3', 3)], 'c4'))
+    expect(store.get().grownFrom).toBe(2)
+    await answer(page([entry('r4', 4)], null))
+    await walk
+    expect(store.get().entries).toHaveLength(5)
+    expect(store.get().grownFrom).toBe(-1)
+  })
 })
 
 /* ── generations ──────────────────────────────────────────────────── */
@@ -979,29 +992,21 @@ describe('a walk over a picture already up', () => {
     await walk
   }
 
-  it('streams its pages instead of waiting for the whole snapshot', async () => {
+  it('keeps the picture up until the new snapshot is whole, then puts it up in one write', async () => {
     await loaded()
+    const before = store.get().entries
     const walk = store.load()
     await flush()
     await answer(page(ROWS().slice(0, 4), 'c4', { snapshot_revision: 300 }))
-    /* The first page is on screen while the walk is still running. */
-    expect(store.get().entries).toHaveLength(4)
+    /* Half a snapshot is not a picture: the one up stays, whole, while the walk runs. */
+    expect(store.get().entries).toBe(before)
     expect(store.get().listing).toBe(true)
-    await answer(page(ROWS().slice(4), null, { snapshot_revision: 300 }))
+    await answer(page([...ROWS().slice(4), entry('nine', 8)], null, { snapshot_revision: 300 }))
     await walk
-    expect(store.get().entries).toHaveLength(ROWS().length)
+    expect(store.get().entries.map((e) => e.entry_id)).toEqual([...ROWS().map((e) => e.entry_id), 'nine'])
+    /* A rewrite, so the tree and the axis are built again rather than grown. */
+    expect(store.get().grownFrom).toBe(-1)
     expect(store.get().snapshotReady).toBe(true)
     expect(store.get().listing).toBe(false)
-  })
-
-  it('marks where an appending page started, and clears it when a batch rewrites the list', async () => {
-    await loaded()
-    const walk = store.load()
-    await flush()
-    await answer(page(ROWS().slice(0, 4), 'c4', { snapshot_revision: 300 }))
-    expect(store.get().grownFrom).toBe(0)
-    await answer(page(ROWS().slice(4), null, { snapshot_revision: 300 }))
-    await walk
-    expect(store.get().grownFrom).toBe(-1)
   })
 })

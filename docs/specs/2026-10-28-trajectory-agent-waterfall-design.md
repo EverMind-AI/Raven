@@ -146,12 +146,16 @@ position. The raw numbers stay in the details pane as wire values.
 
 ## Loading a large session
 
-The snapshot walk is streamed. Every page `trajectory.list` returns (200 rows by
-default, 500 at most) goes on screen as it lands, whether or not a picture is
-already up -- a refresh over a session the reader has seen before used to wait
-for the whole snapshot, and that wait is the one large files actually feel. A
-walk restarted after its cursor expired is the exception: its pages belong to a
-different snapshot, and half of one is not a picture.
+A first read's snapshot walk is streamed. Every page `trajectory.list` returns
+(200 rows by default, 500 at most) goes on screen as it lands, so a long session
+starts to read before its last page is in. A re-read -- the index's epoch moved,
+or an earlier walk was cut short -- is not. Streaming it too spared the wait for
+the whole snapshot, the one wait large files actually feel, but each page
+replaced the picture up with a shorter one: a gateway restart shrank the list to
+its first page and grew it back under the reader, who lost their place in it. So
+the picture already up stays until the new snapshot is whole and is replaced in
+one write. A walk restarted after its cursor expired is not streamed either: its
+pages belong to a different snapshot, and half of one is not a picture.
 
 The tree and the axis grow with those pages rather than being rebuilt over the
 whole session each time. `store.grownFrom` is the store's word that the last
