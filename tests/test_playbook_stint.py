@@ -928,6 +928,84 @@ class TestRunning:
         [after] = store.list()
         assert after.status == "stopped"
 
+    async def test_a_pause_that_lands_while_the_first_round_is_closing_survives(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        """The close re-reads before writing, but the read and the write were two
+        lock acquisitions: a pause from another writer that landed between them
+        was overwritten by the stop. The write transaction makes them one, so
+        the pause lands either before the read or after the write, never inside.
+        """
+        import threading
+        import time
+
+        from raven.stint.record import PAUSED
+
+        tool = _FakeTool(tmp_path / "stints")
+        asked = self._awaiting_approval(tool)
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+        store = StintStore(tool.stints_root("web:stint"))
+        original_read = StintStore.read
+
+        starting = asyncio.create_task(driver.start(spec))
+        await asyncio.wait_for(asked.wait(), 1.0)
+        [record] = store.list()
+        stint_id = record.stint_id
+        pause_done = threading.Event()
+        fired = {"done": False}
+
+        def pause() -> None:
+            # A person's `stints pause`: a fresh read, then a whole-record
+            # write, as the CLI does it.
+            fresh = original_read(store, stint_id)
+            fresh.status = PAUSED
+            fresh.stop_reason = "a person paused the stint"
+            store.write(fresh)
+            pause_done.set()
+
+        def read_with_a_pause(self: StintStore, sid: str) -> Any:
+            current = original_read(self, sid)
+            if sid == stint_id and not fired["done"]:
+                fired["done"] = True
+                threading.Thread(target=pause, daemon=True).start()
+                # The old shape released the store's lock before this read, so
+                # half a second is a wide margin for the pause write above to
+                # land between the read and the close's write. The fixed shape
+                # holds the lock across the sleep, and the pause then lands
+                # after the close -- where it still wins.
+                time.sleep(0.5)
+            return current
+
+        monkeypatch.setattr(StintStore, "read", read_with_a_pause)
+        starting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await starting
+
+        assert pause_done.wait(2.0), "the pause never landed"
+        [after] = store.list()
+        assert (after.status, after.stop_reason) == (PAUSED, "a person paused the stint")
+
+    async def test_an_unreadable_record_does_not_replace_the_stop(self, tmp_path: Path) -> None:
+        """The close re-reads the record to leave another process's update alone.
+        A record that cannot be decoded used to raise out of that read, replacing
+        the CancelledError the turn was stopping with an ordinary tool error the
+        turn would read and carry on from."""
+        tool = _FakeTool(tmp_path / "stints")
+        asked = self._awaiting_approval(tool)
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+        store = StintStore(tool.stints_root("web:stint"))
+
+        starting = asyncio.create_task(driver.start(spec))
+        await asyncio.wait_for(asked.wait(), 1.0)
+        [record] = store.list()
+        store.path_for(record.stint_id).write_bytes(b'{"stint_id": "\xff\xfe"}')
+
+        starting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await starting
+
     async def test_a_close_does_not_stop_a_record_another_host_has_claimed(self, tmp_path: Path) -> None:
         """The pid alone cannot tell two hosts apart. A record claimed by the
         same pid on another machine belongs to that machine, and its claim is

@@ -78,6 +78,7 @@ from raven.stint.record import (
     stint_token,
 )
 from raven.stint.setup import Layout, lay_out
+from raven.utils.atomic_io import write_transaction
 
 __all__ = [
     "StintDriver",
@@ -515,29 +516,37 @@ class StintDriver:
     def _close_first_round(self, record: StintRecord, store: StintStore, *, reason: str) -> None:
         """Close the record after a first round that never opened.
 
-        Re-read before writing: a question can stand for the broker's whole
-        budget, and a `pause`, `stop` or `extend` from another process can land
-        while it does. Writing the snapshot the caller built would undo it.
-        Only a record still running with no round one is ours to close;
-        anything else has already been said by whoever changed it.
+        Re-read and written under one `write_transaction`: a question can stand
+        for the broker's whole budget, and a `pause`, `stop`, `extend` or a
+        claim from another process can land while it does. Holding the store's
+        write lock across the read and the write means such an update lands
+        either before the read (and is left alone) or after the write (and
+        wins), never between the two. Only a record still running with no round
+        one is ours to close; anything else has already been said by whoever
+        changed it.
 
-        A write that fails is logged rather than raised. The caller is on its
-        way out with a cancellation or a refusal, and a cleanup error must not
-        become the exception the turn reads instead.
+        The holder is the pair, as `holder_gone` reads it: a matching pid on
+        another host is somebody else's claim, not ours.
+
+        A cleanup that cannot read or write is logged rather than raised. The
+        caller is on its way out with a cancellation or a refusal, and a
+        cleanup error must not become the exception the turn reads instead.
         """
         self._stop_beat(record.stint_id)
-        fresh = store.read(record.stint_id)
-        if fresh is None or _first_round_opened(fresh) or fresh.status != RUNNING:
-            return
-        other_host = fresh.holder_host and record.holder_host and fresh.holder_host != record.holder_host
-        if fresh.holder_pid not in (0, record.holder_pid) or other_host:
-            # Another process or host claimed it while our question was up.
-            # Its claim is newer than ours; do not stop the record under it.
-            return
-        fresh.status = STOPPED
-        fresh.stop_reason = reason
         try:
-            store.write(fresh)
+            with write_transaction(store.path_for(record.stint_id)):
+                fresh = store.read(record.stint_id)
+                if fresh is None or _first_round_opened(fresh) or fresh.status != RUNNING:
+                    return
+                other_host = fresh.holder_host and record.holder_host and fresh.holder_host != record.holder_host
+                if fresh.holder_pid not in (0, record.holder_pid) or other_host:
+                    # Another process or host claimed it while our question was
+                    # up. Its claim is newer than ours; do not stop the record
+                    # under it.
+                    return
+                fresh.status = STOPPED
+                fresh.stop_reason = reason
+                store.write(fresh)
         except Exception as exc:  # noqa: BLE001 - the exit must not be replaced by a failed cleanup
             logger.warning("stint {} could not be closed after its first round: {}", record.stint_id, exc)
 
