@@ -11917,6 +11917,18 @@
       "en": "Resize details",
       "zh": "调整详情大小"
     },
+    "gui.trajectory.details.resize_keys": {
+      "en": "The arrow keys resize it.",
+      "zh": "方向键可调整大小。"
+    },
+    "gui.trajectory.details.size": {
+      "en": "Width {width} px, height {height} px",
+      "zh": "宽 {width} 像素，高 {height} 像素"
+    },
+    "gui.trajectory.details.size_full": {
+      "en": "Width {width} px, full height",
+      "zh": "宽 {width} 像素，占满高度"
+    },
     "gui.trajectory.details.region": {
       "en": "Entry details",
       "zh": "条目详情"

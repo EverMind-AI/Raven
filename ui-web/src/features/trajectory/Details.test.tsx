@@ -300,8 +300,7 @@ describe('the details pane', () => {
     expect(pane()?.className).toBe('trajectory-details')
     expect(pane()?.style.width).toBe('480px')
     expect(pane()?.querySelector(':scope > .trajectory-corner')).not.toBeNull()
-    /* The corner is its one handle, for the keyboard as for the hand. */
-    expect([...(pane()?.querySelectorAll('[role="separator"]') ?? [])].map((el) => el.className)).toEqual(['trajectory-corner'])
+    expect(pane()?.querySelector('[role="separator"]')).toBeNull()
     act(() => { details.setAreaWidth(700) })
     expect(q('.trajectory-corner')).toBeNull()
     expect(pane()?.className).toBe('trajectory-details trajectory-details-over')
@@ -457,6 +456,28 @@ describe('moving and sizing the pane', () => {
     await key('ArrowRight')
     await key('ArrowDown')
     expect([card().style.width, card().style.height]).toEqual(['512px', '684px'])
+  })
+
+  it('tells assistive technology both sizes the corner sets, as a control rather than a one-way range', async () => {
+    await open()
+    lay(HOME)
+    const grip = corner()!
+    /* A focusable separator is a range along one axis; this handle sets two. */
+    expect(grip.getAttribute('role')).toBe('button')
+    const described = (): string => (grip.getAttribute('aria-describedby') ?? '').split(' ')
+      .map((id) => document.getElementById(id)?.textContent ?? '').join(' ')
+    const spoken = (): string => grip.querySelector('[aria-live="polite"]')?.textContent ?? ''
+    /* Where it opens, the card fills the room under the header. */
+    expect(described()).toBe('gui.trajectory.details.size_full {"width":480} gui.trajectory.details.resize_keys')
+    /* The hand's pulls are not read out, move by move. */
+    await press(grip, 712, 788)
+    await to(702, 778)
+    await release(702, 778)
+    expect(spoken()).toBe('')
+    lay({ ...HOME, x: 700, w: 490, h: 674 })
+    await act(async () => { fireEvent.keyDown(grip, { key: 'ArrowUp' }) })
+    expect(described()).toBe('gui.trajectory.details.size {"width":490,"height":658} gui.trajectory.details.resize_keys')
+    expect(spoken()).toBe('gui.trajectory.details.size {"width":490,"height":658}')
   })
 
   it('neither moves nor sizes under 800px, where it covers the area', async () => {

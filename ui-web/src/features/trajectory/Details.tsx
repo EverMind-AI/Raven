@@ -12,7 +12,7 @@
  */
 
 import { Pin02Icon } from '@hugeicons/core-free-icons'
-import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
@@ -61,8 +61,18 @@ const homeTop = (card: Element): number =>
    once moved its left edge is, so the hand goes right. The top is pinned
    either way, and a pull takes no more than the room from the pinned edges to
    the area's -- left to the store, the pane would make that room by climbing. */
-function Corner({ moved }: { moved: boolean }): JSX.Element {
+/* The card's size in words: its width, and its height once the reader set one -- until then it
+   fills the room under the header, which the stylesheet sizes. */
+const sizeText = (width: number, height: number | null): string =>
+  height === null ? t('gui.trajectory.details.size_full', { width }) : t('gui.trajectory.details.size', { width, height })
+
+function Corner({ moved, width, height }: { moved: boolean; width: number; height: number | null }): JSX.Element {
   const gesture = useRef<AbortController | null>(null)
+  const sizeId = useId()
+  const keysId = useId()
+  /* What a keyboard step left the card at, read out once per step; the hand's pulls are not, or
+     every pointer move would be spoken. */
+  const [spoken, setSpoken] = useState('')
   useEffect(() => () => gesture.current?.abort(), [])
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>): void => {
     const el = e.currentTarget
@@ -116,15 +126,22 @@ function Corner({ moved }: { moved: boolean }): JSX.Element {
     e.stopPropagation()
     /* The size the store gives the card, not the box: a press can follow the
        last one before the card has been laid out again. */
-    const width = details.detailsWidthPx() + dw
-    const height = (details.detailsHeightPx() ?? rect.height) + dh
+    const nextWidth = details.detailsWidthPx() + dw
+    const nextHeight = (details.detailsHeightPx() ?? rect.height) + dh
     const right = box.right - rect.left - details.CARD_GAP
     const down = box.bottom - rect.top - details.CARD_GAP
-    details.resizeDetails(moved ? Math.min(width, right) : width, Math.min(height, down))
+    details.resizeDetails(moved ? Math.min(nextWidth, right) : nextWidth, Math.min(nextHeight, down))
+    setSpoken(sizeText(details.detailsWidthPx(), details.detailsHeightPx()))
   }
+  /* A button, not a separator: a focusable separator is a range along one axis, and this handle
+     sets two. Its description says both sizes and which keys move them. */
   return (
-    <div className="trajectory-corner" role="separator" aria-label={t('gui.trajectory.details.resize')} tabIndex={0}
-      onPointerDown={onPointerDown} onKeyDown={onKeyDown} />
+    <div className="trajectory-corner" role="button" aria-label={t('gui.trajectory.details.resize')}
+      aria-describedby={`${sizeId} ${keysId}`} tabIndex={0} onPointerDown={onPointerDown} onKeyDown={onKeyDown}>
+      <span id={sizeId} hidden>{sizeText(width, height)}</span>
+      <span id={keysId} hidden>{t('gui.trajectory.details.resize_keys')}</span>
+      <span className="trajectory-sr" aria-live="polite">{spoken}</span>
+    </div>
   )
 }
 
@@ -279,7 +296,7 @@ export function Details(): JSX.Element | null {
       style={narrow ? undefined : { width, height: height ?? undefined, left: place?.x, top: place?.y }}
       data-moved={narrow || place === null ? undefined : ''}
     >
-      {narrow ? null : <Corner moved={place !== null} />}
+      {narrow ? null : <Corner moved={place !== null} width={width} height={height} />}
       <div
         className="trajectory-head"
         onPointerDown={narrow ? undefined : drag}
