@@ -341,13 +341,17 @@ def _session_scope(params: dict, key: str) -> tuple[str | None, bool]:
     Shared by the two keys with a per-conversation reading, ``model`` and
     ``permissions.mode``. With a ``session_id`` the write is scoped to that
     conversation unless ``scope="default"`` says otherwise; without one it moves
-    the default a new conversation starts on.
+    the default a new conversation starts on. ``both`` is the model switch's
+    third scope (this conversation and the default); a permission mode has no
+    default half to move twice, so it is refused there.
     """
     session_id = params.get("session_id")
     scope = params.get("scope")
-    if scope not in (None, "session", "default"):
+    allowed = (None, "session", "default", "both") if key == "model" else (None, "session", "default")
+    if scope not in allowed:
+        expected = "'session', 'default' or 'both'" if key == "model" else "'session' or 'default'"
         raise ConfigValidationError(
-            f"config.set {key} scope must be 'session' or 'default'",
+            f"config.set {key} scope must be {expected}",
             data={"field": "scope", "got": repr(scope)},
         )
     has_session = isinstance(session_id, str) and bool(session_id)
@@ -556,14 +560,19 @@ def _set_model(
     raw_value: Any,
     agent_loop_factory: "AgentLoopFactory | None",
 ) -> dict:
-    """Switch the model this session runs on, or the default new ones start on.
+    """Switch the model this session runs on, and/or the default new ones start on.
 
-    Two scopes, because they answer different questions. With a
-    ``session_id`` (what the picker sends) the switch is scoped to that
-    session: no other session moves, and ``agents.defaults`` is left alone so
-    a new session still starts on the configured default. Pass
+    Three scopes, because they answer different questions. With a
+    ``session_id`` (what the TUI picker and the ACP surface send) the switch is
+    scoped to that session: no other session moves, and ``agents.defaults`` is
+    left alone so a new session still starts on the configured default. Pass
     ``scope="default"``, or omit ``session_id``, to change that default
-    instead; sessions that already switched keep their own model.
+    instead; sessions that already switched keep their own model. The web
+    composer's chip sends ``scope="both"``: the asking conversation and the
+    default move together in one write, so a client never has to roll back half
+    of a pick. Without a ``session_id`` there is no conversation to bind and
+    ``both`` writes only the default, which is what the session minted from a
+    draft reads.
 
     Either way the provider is built before anything is persisted or applied,
     so a rebuild failure aborts with the on-disk model untouched.
@@ -602,7 +611,9 @@ def _set_model(
     raw_value = stored_model_id(new_provider, raw_value)
 
     session_id, session_scoped = _session_scope(params, "model")
+    both = params.get("scope") == "both"
     has_session = session_id is not None
+    scope_name = "both" if both else ("session" if session_scoped else "default")
 
     loop = _loop_or_none_on_first_run(agent_loop_factory, raw_value, new_provider)
     binding = None
@@ -628,7 +639,7 @@ def _set_model(
                 data={"model": raw_value, "error": str(exc)},
             ) from exc
 
-    if session_scoped:
+    if session_scoped and not both:
         if loop is None:
             # Nothing was built, so nothing was validated -- do not report a
             # switch that did not happen. The reason is the one the default
@@ -657,12 +668,22 @@ def _set_model(
             "applies_to_session": True,
         }
 
+    if both and session_scoped and loop is None:
+        # Nothing can bind the asking conversation, and writing only the
+        # default would leave half the pick in force behind a refusal the
+        # caller has to report. Refused as a whole.
+        return {"applied": False, "previous": None, "value": raw_value, "scope": "both"}
+
+    previous_session = None
+    if both and session_scoped:
+        previous_session = loop.session_model(session_id)
+
     # A default-scoped switch still moves the asking conversation when that
     # conversation never chose a model of its own, because it reads the
     # default. Answered here rather than inferred from the scope: the client
     # cannot see which sessions have their own binding.
     follows_default = None
-    if loop is not None and has_session:
+    if loop is not None and has_session and not both:
         has_own = getattr(loop, "has_session_binding", None)
         if callable(has_own):
             follows_default = not has_own(session_id)
@@ -673,6 +694,13 @@ def _set_model(
     if new_provider is not None:
         _set_nested(payload, "agents.defaults.provider", new_provider)
     _save_config(payload)
+
+    if both and session_scoped:
+        # The conversation half lands after the file write, the only step here
+        # that can fail on its own; the bindings below follow a write that
+        # already succeeded.
+        loop.set_session_binding(session_id, binding)
+        _remember_session_model(loop, session_id, raw_value, new_provider)
 
     if loop is not None:
         # Not a two-attribute assignment: the subagent manager, the context
@@ -685,11 +713,13 @@ def _set_model(
 
     out = {
         "applied": True,
-        "previous": previous,
+        "previous": previous_session if both and session_scoped else previous,
         "value": raw_value,
-        "scope": "default",
-        "applies_to_session": follows_default,
+        "scope": scope_name,
+        "applies_to_session": True if both and session_scoped else follows_default,
     }
+    if both and session_scoped:
+        out["session_id"] = session_id
     if loop is None and agent_loop_factory is not None:
         # The write landed; the process serving it did not gain a loop. This
         # gateway built without one -- that is why nothing validated the pair --

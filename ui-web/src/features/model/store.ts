@@ -26,11 +26,12 @@ export interface OpenAt {
      button is already on the settings page. */
   footer: boolean
   /* Which switch the opener meant: the composer chip changes THIS conversation
-     ('session'), the settings default-model control changes what new ones start
-     on ('default'). The backend needs it explicitly -- a model id alone does not
-     say -- and inferring it from whether a conversation happens to be open is
-     exactly the bug that let the settings control change one session. */
-  scope: 'session' | 'default'
+     and the default new ones start on ('both'), the settings default-model
+     control changes only what new ones start on ('default'). The backend needs
+     it explicitly -- a model id alone does not say -- and inferring it from
+     whether a conversation happens to be open is exactly the bug that let the
+     settings control change one session. */
+  scope: 'session' | 'default' | 'both'
   /* Which model the picker marks, when it is not the one the chip shows. The
      chip and the picker share one `current` (the open conversation's model), so
      the settings control -- which edits the default, a different value -- passes
@@ -41,8 +42,8 @@ export interface OpenAt {
   offer: Offer
 }
 
-/* Text models, every connected provider, a pick switches this conversation:
-   the composer chip's opening, and what any caller that names nothing gets. */
+/* Text models, every connected provider: the composer chip's opening, and what
+   any caller that names nothing gets. */
 const DEFAULT_OFFER: Offer = { kind: 'text' }
 
 const CLOSED: OpenAt = { host: null, after: null, footer: false, scope: 'session', marked: null, offer: DEFAULT_OFFER }
@@ -151,10 +152,10 @@ export function open(anchor?: HTMLElement | null, after?: () => void, marked?: s
   }
   const host = anchor || document.getElementById('modelChip')
   if (!host) return
-  /* The composer chip opens with no anchor and means this conversation; the
-     settings control passes its button and means the default, and marks the
-     default model rather than the chip's. */
-  at = { host, after: after || null, footer: !anchor, scope: anchor ? 'default' : 'session', marked: marked || null, offer }
+  /* The composer chip opens with no anchor and means this conversation plus the
+     default a new one starts on; the settings control passes its button and
+     means only the default, and marks the default model rather than the chip's. */
+  at = { host, after: after || null, footer: !anchor, scope: anchor ? 'default' : 'both', marked: marked || null, offer }
   announce()
 }
 
@@ -269,12 +270,13 @@ export async function choose(m: string, provider: string, typed = false, kind?: 
       return
     }
   }
-  /* A session switch is optimistic: the chip -- which reads the same `current`
-     -- says the new model before the round trip, and rolls back if it is
-     refused. A default switch must not touch the chip (a different value), so it
-     commits nothing locally and only reflects the settled default through
-     `after` once the write lands. */
-  if (scope === 'session') {
+  /* A switch that includes this conversation is optimistic: the chip -- which
+     reads the same `current` -- says the new model before the round trip, and
+     rolls back if it is refused. A default switch must not touch the chip (a
+     different value), so it commits nothing locally and only reflects the
+     settled default through `after` once the write lands. */
+  const switchesSession = scope !== 'default'
+  if (switchesSession) {
     setCurrent(m, provider)
     after?.()
   }
@@ -288,7 +290,7 @@ export async function choose(m: string, provider: string, typed = false, kind?: 
       ? t('gui.model.pick_staged', { name: short(m) })
       : t('gui.model.pick_switched', { name: short(m) }))
   } catch (e) {
-    if (scope === 'session') {
+    if (switchesSession) {
       setCurrent(prev, prevAt)
       after?.()
     }

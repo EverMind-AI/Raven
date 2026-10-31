@@ -374,7 +374,7 @@ describe('the model picker, where it lands', () => {
 })
 
 describe('the model picker, choosing', () => {
-  it('closes, sets locally, persists, and says what happened', async () => {
+  it('closes, sets locally, persists as the conversation default too, and says what happened', async () => {
     const h = install()
     mount()
     openIt()
@@ -386,7 +386,9 @@ describe('the model picker, choosing', () => {
     expect(store.current()).toBe('minimax-m2')
     expect(h.persisted).toEqual(['minimax-m2'])
     expect(h.persistedProviders).toEqual(['minimax'])
-    expect(h.persistedScopes).toEqual(['session'])
+    /* The composer chip's pick switches this conversation AND the default a
+       new conversation starts on, so the next session opens on this model. */
+    expect(h.persistedScopes).toEqual(['both'])
     expect(h.toasts).toEqual(['gui.model.pick_switched {"name":"minimax-m2"}'])
   })
 
@@ -473,7 +475,7 @@ describe('the model picker, choosing', () => {
     })
     expect(h.persisted).toEqual(['claude-sonnet-5'])
     expect(h.persistedProviders).toEqual(['anthropic'])
-    expect(h.persistedScopes).toEqual(['session'])
+    expect(h.persistedScopes).toEqual(['both'])
   })
 })
 
