@@ -1234,6 +1234,32 @@ describe('the agents outside the window', () => {
     act(() => { store.selectAcross('c-1', { source: 'link' }) })
     expect(document.querySelector('[data-entry="c-1"]')).not.toBeNull()
   })
+
+  it('walks the rows with the arrows in the order they are drawn, the earlier fold included', async () => {
+    /* `short` started after `long` but was over before the window: drawn in the
+       earlier fold, it stands above `long`, which is later by its start. */
+    await draw([
+      step('m', local(9), local(17)),
+      ...worker('x', local(9, 30), local(13), 'long'),
+      ...worker('y', local(10), local(10, 10), 'short'),
+    ])
+    act(() => { fireEvent.click(preset('1h')) })
+    act(() => { fireEvent.click(folds()[0]!) })
+    openAgents()
+    for (const row of [...document.querySelectorAll<HTMLElement>('[data-row="turn"][aria-expanded="false"]')]) {
+      act(() => { fireEvent.click(row) })
+    }
+    const drawn = [...document.querySelectorAll<HTMLElement>('[data-row="span"]')].map((row) => row.dataset.entry)
+    expect(drawn).toEqual(['m', 'door-x', 'door-y', 'y-1', 'x-1'])
+    const tree = document.querySelector<HTMLElement>('[role="tree"]')!
+    act(() => { store.selectAcross('m', { source: 'click' }) })
+    const walked = ['m']
+    for (let i = 1; i < drawn.length; i += 1) {
+      act(() => { fireEvent.keyDown(tree, { key: 'ArrowDown' }) })
+      walked.push(store.get().selectedId!)
+    }
+    expect(walked).toEqual(drawn)
+  })
 })
 
 describe('an agent’s name', () => {

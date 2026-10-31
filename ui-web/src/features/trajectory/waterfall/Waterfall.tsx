@@ -846,14 +846,16 @@ export function Waterfall(): JSX.Element {
 
   /* Every entry the reader can see, in the order the page draws them, for the
      arrow keys: a picked stretch keeps its own, so the key moves through what
-     is on screen rather than into rows the filter hides. */
-  const order = useMemo(
-    () => waterfall.agents.flatMap((agent) => [
-      ...agent.turns.flatMap((turn) => turn.rows.map((row) => row.entry.entry_id)),
-      ...agent.loose.map((row) => row.entry.entry_id),
-    ]).filter(inPick),
-    [waterfall, inPick],
-  )
+     is on screen rather than into rows the filter hides. Read off the drawn
+     rows with everything open, because the folds outside the window reorder
+     the agents: one wholly before it is drawn after the main agent, above a
+     worker that started earlier. */
+  const order = useMemo(() => {
+    const allTurns = new Set(waterfall.agents.flatMap((agent) => agent.turns.map((turn) => turnKey(agent.key, turn.id))))
+    return displayRows(waterfall, new Set(), allTurns, outside, new Set<FoldSide>(['earlier', 'later']))
+      .flatMap((row) => (row.kind === 'span' && row.row !== null ? [row.row.entry.entry_id] : []))
+      .filter(inPick)
+  }, [waterfall, outside, inPick])
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
     /* Enter pressed on a control inside a row -- a fold button, a door's
