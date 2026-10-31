@@ -44,6 +44,7 @@ import signal
 import socket
 import sys
 import tempfile
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,9 @@ TEMPLATE_ARG = "--fork-template"
 _TEMPLATE_PROGRAM: tuple[str, ...] = ("-m", "raven", TEMPLATE_ARG)
 
 _READY_TIMEOUT_S = 60.0
+#: How long launches go the ordinary way after a template missed the ready
+#: deadline, before a new one is started.
+_RETRY_AFTER_S = 600.0
 _REQUEST_TIMEOUT_S = 30.0
 _GRACE_POLL_S = 0.02
 _TEARDOWN_GRACE_S = 1.0
@@ -192,6 +196,10 @@ class ForkedEndpoint:
         leftovers.forget(self.pid)
 
 
+class _LateReadyError(Exception):
+    """The template did not report ready within the deadline."""
+
+
 class ForkTemplate:
     """The host's handle on one template process: starts it, asks it for agents, closes it when idle."""
 
@@ -210,10 +218,24 @@ class ForkTemplate:
         """The loop its process and pipes were opened under; the handle is no use to another."""
         self.broken = ""
         """Why this template will not be used again, once it has failed."""
+        self._retry_at: float | None = None
 
     @property
     def running(self) -> bool:
         return self._proc is not None and self._proc.returncode is None
+
+    @property
+    def resting(self) -> bool:
+        """Whether a template that missed the ready deadline is still waiting before the next is started."""
+        return self._retry_at is not None and time.monotonic() < self._retry_at
+
+    def _refusal(self) -> str:
+        """Why no agent is forked from this template now, or ``""``."""
+        if self.broken:
+            return self.broken
+        if self.resting:
+            return "the fork template missed the ready deadline and is not tried again yet"
+        return ""
 
     @property
     def children(self) -> int:
@@ -251,7 +273,10 @@ class ForkTemplate:
         leftovers.record(self._proc.pid, "fork-template")
         self._log_task = asyncio.get_running_loop().create_task(self._log_stderr(self._proc), name="fork-template-log")
         self._hold_task = asyncio.get_running_loop().create_task(self._hold(self._proc), name="fork-template-hold")
-        ready = await asyncio.wait_for(self._ready_report(self._proc), timeout=_READY_TIMEOUT_S)
+        try:
+            ready = await asyncio.wait_for(self._ready_report(self._proc), timeout=_READY_TIMEOUT_S)
+        except TimeoutError:
+            raise _LateReadyError(f"the template did not report ready within {_READY_TIMEOUT_S:g} s") from None
         if not ready.get("ready"):
             raise RuntimeError(str(ready.get("reason") or "the template exited before it was ready"))
         from loguru import logger
@@ -290,15 +315,27 @@ class ForkTemplate:
         self, argv: list[str], env: dict[str, str], cwd: str | None, base_env: dict[str, str]
     ) -> ForkedEndpoint:
         """An agent forked from the template, starting the template first if needed. Raises when it cannot."""
-        if self.broken:
-            raise RuntimeError(self.broken)
+        if refusal := self._refusal():
+            raise RuntimeError(refusal)
         async with self._lock:
+            # Asked again: a launch that waited here behind a start that failed
+            # must not wait out a start of its own.
+            if refusal := self._refusal():
+                raise RuntimeError(refusal)
             if not self.running:
                 if self._proc is not None:
                     # A template that ended on its own: clear what it left before the next.
                     await self.close()
                 try:
                     await self._start(base_env)
+                except _LateReadyError as exc:
+                    # A busy machine more often than a broken template: launches go
+                    # the ordinary way for a while, then a new template is tried.
+                    self._retry_at = time.monotonic() + _RETRY_AFTER_S
+                    await self.close()
+                    raise RuntimeError(
+                        f"the fork template did not start: {exc}; a new one is tried in {_RETRY_AFTER_S:g} s"
+                    ) from exc
                 except BaseException as exc:
                     self.broken = f"the fork template did not start: {exc}"
                     await self.close()
@@ -507,7 +544,7 @@ async def fork_launch(
         if _TEMPLATE is not None:
             await _TEMPLATE.close()
         _TEMPLATE = ForkTemplate(skip=skip)
-    if _TEMPLATE.broken:
+    if _TEMPLATE.broken or _TEMPLATE.resting:
         return None
     try:
         return await _TEMPLATE.spawn(argv, env, cwd, base_env)

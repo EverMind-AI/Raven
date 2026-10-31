@@ -405,6 +405,61 @@ async def test_a_template_that_never_reports_ready_is_not_used(tmp_path: Path, m
         await template.spawn([sys.executable, str(script)], base, str(tmp_path), base)
 
 
+async def test_a_template_late_to_report_ready_is_tried_again_after_a_rest(tmp_path: Path, monkeypatch) -> None:
+    """A missed ready deadline is a busy machine, not a broken template.
+
+    The launch that waited goes the ordinary way and says why; launches during
+    the rest go the ordinary way at once and quietly, neither starting a
+    template nor waiting for one; after the rest a new template starts and forks.
+    """
+    from loguru import logger
+
+    warnings: list[str] = []
+    sink = logger.add(lambda message: warnings.append(message.record["message"]), level="WARNING")
+    script = _product(tmp_path, "pass\n")
+    base = dict(os.environ)
+    argv = [sys.executable, str(script)]
+    try:
+        monkeypatch.setattr(fork_template, "_READY_TIMEOUT_S", 0.01)
+        assert await fork_launch(argv, base, str(tmp_path), base_env=base) is None
+        assert len(warnings) == 1 and "did not report ready within 0.01 s" in warnings[0], warnings
+        template = fork_template._TEMPLATE
+        assert template is not None and not template.broken and not template.running
+
+        monkeypatch.setattr(fork_template, "_READY_TIMEOUT_S", 60.0)
+        started = time.monotonic()
+        assert await fork_launch(argv, base, str(tmp_path), base_env=base) is None
+        assert time.monotonic() - started < 5 and not template.running
+        assert len(warnings) == 1, warnings
+    finally:
+        logger.remove(sink)
+
+    monkeypatch.setattr(template, "_retry_at", time.monotonic())
+    endpoint = await fork_launch(argv, base, str(tmp_path), base_env=base)
+    assert endpoint is not None and "forked" in endpoint.describe()
+    await asyncio.wait_for(endpoint.wait(), timeout=30)
+    endpoint.release()
+
+
+async def test_launches_waiting_on_a_late_template_do_not_each_start_another(tmp_path: Path, monkeypatch) -> None:
+    starts = 0
+    real_start = fork_template.ForkTemplate._start
+
+    async def counted(self, env):
+        nonlocal starts
+        starts += 1
+        await real_start(self, env)
+
+    monkeypatch.setattr(fork_template.ForkTemplate, "_start", counted)
+    monkeypatch.setattr(fork_template, "_READY_TIMEOUT_S", 0.01)
+    script = _product(tmp_path, "pass\n")
+    base = dict(os.environ)
+    argv = [sys.executable, str(script)]
+    launches = [fork_launch(argv, base, str(tmp_path), base_env=base) for _ in range(3)]
+    assert await asyncio.gather(*launches) == [None, None, None]
+    assert starts == 1
+
+
 async def test_the_ready_line_is_found_among_what_an_import_printed() -> None:
     from types import SimpleNamespace
 
