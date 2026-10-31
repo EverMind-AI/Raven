@@ -133,12 +133,11 @@ def test_a_message_that_thought_first_keeps_its_thinking_row(tmp_path: Path):
     assert [r["key"] for r in rows] == ["llm.thinking", "llm.output"]
 
 
-def test_render_reads_a_conversation(tmp_path: Path):
-    text = frames_replay.render(frames_replay.replay(_journal(tmp_path), session_id="s"))
-    assert "user: do it" in text
-    assert "I will read it" in text
-    assert "→ read" in text
-    assert "← contents" in text
+def test_items_clip_a_long_part_and_say_so():
+    rows = frames_replay.items([{"role": "tool", "content": "x" * 30_000}])
+    assert rows[0]["value"].startswith("x" * 20_000)
+    assert rows[0]["value"].endswith("(truncated)")
+    assert len(rows[0]["value"]) < 20_100
 
 
 def test_a_missing_journal_replays_nothing(tmp_path: Path):

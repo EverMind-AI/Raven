@@ -149,11 +149,7 @@ def replay(
     return turn_rows.rows(finished)
 
 
-_RENDER_TOTAL = 200_000
-_RENDER_PART = 4_000
-
-
-def _clip(text: object, limit: int = _RENDER_PART) -> str:
+def _clip(text: object, limit: int) -> str:
     value = str(text or "")
     return value if len(value) <= limit else value[:limit] + "\n… (truncated)"
 
@@ -196,34 +192,4 @@ def items(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
-def render(messages: list[dict[str, Any]]) -> str:
-    """The replayed conversation as readable text, for the details pane.
-
-    One journal can hold tens of thousands of frames, so each part and the
-    whole are clipped: the pane is a reading surface, not a pager.
-    """
-    lines: list[str] = []
-    for message in messages:
-        role = message.get("role")
-        if role == "assistant":
-            text = _clip(message.get("content")).strip()
-            if text:
-                lines.append(text)
-            for call in message.get("tool_calls") or []:
-                if not isinstance(call, dict):
-                    continue
-                name = str((call.get("function") or {}).get("name") or "tool")
-                arguments = _clip((call.get("function") or {}).get("arguments"))
-                lines.append(f"→ {name} {arguments}".rstrip())
-        elif role == "tool":
-            lines.append(f"← {_clip(message.get('content'))}")
-        else:
-            lines.append(f"{role or 'message'}: {_clip(message.get('content'))}")
-        lines.append("")
-    glued = "\n".join(lines).strip()
-    if len(glued) <= _RENDER_TOTAL:
-        return glued
-    return glued[:_RENDER_TOTAL] + "\n… (replay truncated)"
-
-
-__all__ = ["events", "items", "replay", "render"]
+__all__ = ["events", "items", "replay"]
