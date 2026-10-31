@@ -89,6 +89,15 @@ def test_the_release_notes_template_matches_the_roster_it_describes() -> None:
     assert "installs every plugin wheel the release carries" in template
 
 
+def test_the_release_notes_template_names_the_checkout_installer_on_both_platforms() -> None:
+    """The workflow copies this template into every draft release. It named
+    only the POSIX checkout installer, which sends a Windows reader to
+    install.sh -- the script that refuses to run there."""
+    template = (ROOT / ".github" / "release-notes-template.md").read_text(encoding="utf-8")
+    assert "git pull && ./install.sh" in template
+    assert ".\\install.ps1" in template
+
+
 def test_the_release_installs_itself_before_it_is_published() -> None:
     """The one check that can say a release is whole: its own installer, piped
     like a user runs it, against the wheels and list this job built, with the

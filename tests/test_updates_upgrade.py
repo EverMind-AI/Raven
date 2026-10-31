@@ -592,16 +592,51 @@ def test_install_script_names_the_platform_s_install_script(windows: bool, scrip
 
 
 @pytest.mark.parametrize(
-    ("os_name", "script"),
-    [("nt", ".\\install.ps1"), ("posix", "./install.sh")],
+    ("windows", "script"),
+    [(True, ".\\install.ps1"), (False, "./install.sh")],
     ids=["windows", "posix"],
 )
 def test_install_script_defaults_to_the_running_platform(
-    monkeypatch: pytest.MonkeyPatch, os_name: str, script: str
+    monkeypatch: pytest.MonkeyPatch, windows: bool, script: str
 ) -> None:
-    monkeypatch.setattr(upgrade_commands.os, "name", os_name)
+    monkeypatch.setattr(upgrade_commands, "_on_windows", lambda: windows)
 
     assert upgrade_commands.install_script() == script
+
+
+@pytest.mark.parametrize(
+    ("windows", "commands"),
+    [
+        (
+            True,
+            (
+                "git pull",
+                'powershell -NoProfile -ExecutionPolicy Bypass -File ".\\install.ps1"',
+            ),
+        ),
+        (False, ("git pull && ./install.sh",)),
+    ],
+    ids=["windows", "posix"],
+)
+def test_checkout_update_commands_are_runnable_in_the_platform_s_shell(
+    windows: bool, commands: tuple[str, ...]
+) -> None:
+    """Windows PowerShell 5.1 rejects `&&` as a statement separator, and
+    cmd.exe cannot run a .ps1 by name, so the Windows form is two commands and
+    names the PowerShell that runs the installer. POSIX keeps the one-line form
+    every release has printed."""
+    assert upgrade_commands.checkout_update_commands(windows=windows) == commands
+
+
+def test_checkout_update_commands_default_to_the_running_platform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(upgrade_commands, "_on_windows", lambda: True)
+
+    assert upgrade_commands.checkout_update_commands() == (
+        "git pull",
+        'powershell -NoProfile -ExecutionPolicy Bypass -File ".\\install.ps1"',
+    )
 
 
 @pytest.mark.parametrize(

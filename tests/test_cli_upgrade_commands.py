@@ -22,6 +22,9 @@ def source_install(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Pat
     distribution.read_text.return_value = json.dumps({"url": checkout.as_uri(), "dir_info": {"editable": True}})
     monkeypatch.setattr(upgrade.metadata, "distribution", lambda name: distribution)
     monkeypatch.setattr(upgrade.shutil, "which", lambda name: "/usr/bin/git")
+    # The rendered guidance is platform-dependent; pin the POSIX form here and
+    # let the Windows test below read the other side of the same seam.
+    monkeypatch.setattr(upgrade, "_on_windows", lambda: False)
     release = Mock(side_effect=AssertionError("Source installations must not query releases"))
     monkeypatch.setattr(upgrade, "fetch_latest_for_channel", release)
     monkeypatch.setattr(upgrade, "_handoff_upgrade", Mock(side_effect=AssertionError("Unexpected install")))
@@ -81,6 +84,28 @@ def test_editable_upgrade_requires_manual_install(source_install, monkeypatch):
 
     assert result.exit_code == 1
     assert "git pull && ./install.sh" in " ".join(result.output.split())
+
+
+def test_editable_update_guidance_is_runnable_on_windows(source_install, monkeypatch):
+    """Windows PowerShell 5.1 has no `&&` statement separator, and cmd.exe does
+    not run a .ps1 by name, so the Windows guidance has to be two lines naming
+    the PowerShell that runs the installer. The one-line
+    `git pull && .\\install.ps1` this used to print fails in both shells."""
+    monkeypatch.setattr(upgrade, "_on_windows", lambda: True)
+    monkeypatch.setattr(
+        upgrade.subprocess,
+        "run",
+        Mock(return_value=subprocess.CompletedProcess([], 0, "0\t0\n", "")),
+    )
+
+    result = invoke("--check")
+
+    assert result.exit_code == 0, result.output
+    lines = [line.strip() for line in result.output.splitlines()]
+    assert "To update, run these commands in the source checkout:" in lines
+    assert "git pull" in lines
+    assert 'powershell -NoProfile -ExecutionPolicy Bypass -File ".\\install.ps1"' in lines
+    assert "&&" not in result.output
 
 
 @pytest.mark.parametrize("url", ["https://example.com/source", "file://remote/source", "file:relative"])

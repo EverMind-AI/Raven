@@ -1343,16 +1343,37 @@ def editable_checkout_status() -> tuple[Path, int, int]:
     return checkout, ahead, behind
 
 
+def _on_windows() -> bool:
+    return os.name == "nt"
+
+
 def install_script(*, windows: bool | None = None) -> str:
-    """The install command a source checkout reruns to update itself.
+    """The installer a source checkout reruns to update itself.
 
     install.sh refuses to run on Windows, so every surface that names the
     checkout's update command -- the CLI's refusal and the page's -- picks the
     script by platform from this one definition and cannot drift apart again.
     """
     if windows is None:
-        windows = os.name == "nt"
+        windows = _on_windows()
     return ".\\install.ps1" if windows else "./install.sh"
+
+
+def checkout_update_commands(*, windows: bool | None = None) -> tuple[str, ...]:
+    """The commands a source checkout reruns to update itself, one per line.
+
+    Windows PowerShell 5.1 rejects `&&` as a statement separator, and cmd.exe
+    cannot run a .ps1 by name, so the Windows form is two commands and names the
+    PowerShell that ships with Windows. POSIX keeps the one-line form every
+    release has printed. The CLI prints these; the page's recovery embeds
+    install_script() in its own PowerShell script instead.
+    """
+    if windows is None:
+        windows = _on_windows()
+    if windows:
+        script = install_script(windows=True)
+        return ("git pull", f'powershell -NoProfile -ExecutionPolicy Bypass -File "{script}"')
+    return (f"git pull && {install_script(windows=False)}",)
 
 
 def _uv_tool_target() -> ToolInstallTarget | None:
