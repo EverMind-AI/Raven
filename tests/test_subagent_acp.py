@@ -3802,6 +3802,7 @@ async def test_a_cancel_while_the_steps_go_to_disk_costs_the_turn_neither_its_us
     is bound before the writing starts, or the next dispatch would open a fresh
     session and the ledger would miss what the turn spent."""
     from raven.agent.subagent import activity
+    from raven.agent.subagent.backends import observability
     from raven.tracing import spans as tracing_spans
 
     booked: list[dict] = []
@@ -3810,6 +3811,10 @@ async def test_a_cancel_while_the_steps_go_to_disk_costs_the_turn_neither_its_us
         booked.append(counts)
 
     monkeypatch.setattr(activity, "note_ledger_usage", book)
+    # The live writer held off, so the thirtieth step is written at the turn's
+    # end, where this cancel belongs: a turn running past the writer's interval
+    # had it written live, and the cancel land mid-turn, before any booking.
+    monkeypatch.setattr(observability.LiveSteps, "touch", lambda self, events: None)
     cfg = stub_config("a", mode="many_steps")
     registry = InstanceRegistry(path=tmp_path / "instances.json")
     backend = AcpAgentBackend(
