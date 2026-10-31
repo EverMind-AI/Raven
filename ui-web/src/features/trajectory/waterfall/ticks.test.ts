@@ -2,7 +2,7 @@
 /* The ruler's marks in wall-clock time. Instants are built from local fields,
  * so every expectation holds in whatever zone the suite runs in. */
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import * as lang from '../../../state/lang'
 import { createAxis } from './axis'
@@ -49,6 +49,12 @@ describe('the clock ruler', () => {
     const ticks = clockTicks(axis, { from: fold.from - 1000, to: fold.to + 1000 }, 1200)
     expect(ticks.length).toBeGreaterThan(0)
     expect(ticks.every((tick) => tick.time <= at(10, 0) || tick.time >= at(15, 0))).toBe(true)
+  })
+
+  it('resumes on a round time past a fold', () => {
+    const axis = createAxis([{ start: at(9, 0), end: at(10, 10) }, { start: at(15, 7), end: at(16, 0) }])
+    const ticks = clockTicks(axis, { from: 0, to: axis.length }, 900)
+    expect(ticks.filter((tick) => tick.time > at(10, 10)).map((tick) => tick.time)).toEqual([at(15, 15), at(15, 30), at(15, 45), at(16, 0)])
   })
 
   it('keeps two marks a fold has pulled together from printing over each other', () => {
@@ -100,5 +106,51 @@ describe('the clock ruler', () => {
   it('has nothing to mark on an empty window', () => {
     const axis = createAxis([{ start: at(9, 0), end: at(10, 0) }])
     expect(clockTicks(axis, { from: 5, to: 5 }, 900)).toEqual([])
+  })
+})
+
+/* A day the clocks change on is 23 or 25 hours long, so a ruler that steps a
+   fixed number of milliseconds from midnight puts every mark after the change
+   off its round time; and an hour the clocks skip does not exist to be marked. */
+describe('the clock ruler across a daylight-saving change', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+  const span = (from: readonly number[], to: readonly number[]) => createAxis([{
+    start: new Date(2026, from[0]!, from[1]!, from[2] ?? 0).getTime(),
+    end: new Date(2026, to[0]!, to[1]!, to[2] ?? 0).getTime(),
+  }])
+  const marks = (axis: ReturnType<typeof createAxis>, width: number) => clockTicks(axis, { from: 0, to: axis.length }, width)
+  const offRound = (ticks: ReturnType<typeof clockTicks>, hours: number): string[] => ticks
+    .filter((tick) => new Date(tick.time).getMinutes() !== 0 || new Date(tick.time).getHours() % hours !== 0)
+    .map((tick) => hhmm(tick.time))
+
+  for (const [name, from, to] of [['spring', [2, 7], [2, 11]], ['autumn', [9, 31], [10, 4]]] as const) {
+    it(`keeps daily marks on midnight, each one a major, across the ${name} change`, () => {
+      vi.stubEnv('TZ', 'America/New_York')
+      const daily = marks(span(from, to), 400)
+      expect(daily.length).toBeGreaterThanOrEqual(4)
+      expect(daily.map((tick) => hhmm(tick.time))).toEqual(daily.map(() => '00:00'))
+      expect(daily.every((tick) => tick.major)).toBe(true)
+      expect(new Set(daily.map((tick) => new Date(tick.time).toDateString())).size).toBe(daily.length)
+    })
+
+    it(`keeps six-, three- and two-hour marks on their round hours across the ${name} change`, () => {
+      vi.stubEnv('TZ', 'America/New_York')
+      for (const [width, hours] of [[1500, 6], [3000, 3], [6000, 2]] as const) {
+        const ticks = marks(span(from, to), width)
+        expect(ticks.length).toBeGreaterThan(8)
+        expect(offRound(ticks, hours)).toEqual([])
+      }
+    })
+  }
+
+  it('keeps hourly marks on the hour where the clocks move by half an hour', () => {
+    vi.stubEnv('TZ', 'Australia/Lord_Howe')
+    for (const [from, to] of [[[9, 3, 18], [9, 4, 12]], [[3, 4, 18], [3, 5, 12]]] as const) {
+      const ticks = marks(span(from, to), 1800)
+      expect(ticks.length).toBeGreaterThan(8)
+      expect(offRound(ticks, 1)).toEqual([])
+    }
   })
 })
