@@ -9,6 +9,8 @@ import { resetSources, setSources } from '../../state/sources'
 import { cleanPreview, okOf } from './source'
 import * as store from './store'
 
+import type { FoldData, Lane, StepData, StepHandle } from './types'
+
 
 beforeEach(() => {
   resetSources()
@@ -574,5 +576,146 @@ describe('a mid-turn message on the live path', () => {
     store.askText(lane, 'Q4 only', null, { midTurn: true })
 
     expect(store.turnKept(lane)).toBe(true)
+  })
+})
+
+/* A finished turn folds its work behind one line. Three kinds of content are
+   important enough that the fold opens itself instead -- an agent message of
+   two or more rendered lines, and a spawn or dag call, whose whole point is
+   that the reader can see it ran. The reader's own toggle still wins: a fold
+   they shut stays shut across the turns that follow. */
+describe('what keeps a finished turn\'s fold open', () => {
+  const folds = (lane: Lane): FoldData[] =>
+    lane.segs.filter((s): s is FoldData => s.kind === 'fold')
+  const turn = (lane: Lane, said: string, call: string): void => {
+    store.askText(lane, 'Q')
+    const first: StepHandle = store.newStep(lane)
+    first.setSay(said)
+    first.tool(call, {}, call, `c-${call}`).done(true, 'ok', 5)
+    const last: StepHandle = store.newStep(lane)
+    last.sayDelta('done')
+    store.finishTurn(lane, last, [first.seg, last.seg], '5s')
+  }
+
+  it('opens over a narration of two or more rendered lines', () => {
+    const lane = store.newLane('main:long', true)
+    turn(lane, 'x'.repeat(store.FOLD_KEEP_OPEN_CHARS), 'read_file')
+
+    const [fold] = folds(lane)
+    expect(fold?.open).toBe(true)
+    const [step] = fold ? fold.steps : []
+    expect((step as StepData | undefined)?.say).toHaveLength(store.FOLD_KEEP_OPEN_CHARS)
+  })
+
+  it('stays shut over a narration shorter than that', () => {
+    const lane = store.newLane('main:short', true)
+    turn(lane, 'x'.repeat(store.FOLD_KEEP_OPEN_CHARS - 1), 'read_file')
+
+    expect(folds(lane)[0]?.open).toBe(false)
+  })
+
+  it('opens over a spawn call without asking', () => {
+    /* `spawn` is display-only here: the fold default is the whole contract. */
+    const lane = store.newLane('main:spawn', true)
+    turn(lane, 'delegating', 'spawn')
+
+    expect(folds(lane)[0]?.open).toBe(true)
+  })
+
+  it('opens over a dag call without asking', () => {
+    const lane = store.newLane('main:dag', true)
+    turn(lane, 'running the graph', 'run_subagent_dag')
+
+    expect(folds(lane)[0]?.open).toBe(true)
+  })
+
+  it('leaves a fold the reader shut shut, even when a later turn would open one', () => {
+    /* The rule is a default, not a lock: `toggleFold` takes the fold over, and
+       nothing the runtime does afterwards reopens it. */
+    const lane = store.newLane('main:pinned', true)
+    turn(lane, 'x'.repeat(store.FOLD_KEEP_OPEN_CHARS), 'spawn')
+    const [first] = folds(lane)
+    store.toggleFold(lane, first as FoldData)
+    expect(first?.open).toBe(false)
+
+    turn(lane, 'x'.repeat(store.FOLD_KEEP_OPEN_CHARS), 'read_file')
+
+    const after = folds(lane)
+    expect(after).toHaveLength(2)
+    expect(after[0]?.open).toBe(false)
+    expect(after[1]?.open).toBe(true)
+  })
+})
+
+/* A run of silent steps is merged into one row. The merged row is a fresh
+   default -- open when it delegated -- unless one of the steps it replaces was
+   the reader's, whose choice travels with the calls it was made about. */
+describe('a merged run of silent steps', () => {
+  const ran = (lane: Lane, name: string, id: string): StepHandle => {
+    const st: StepHandle = store.newStep(lane)
+    st.tool(name, {}, name, id).done(true, 'ok', 5)
+    st.seal()
+    return st
+  }
+  const mergedOf = (lane: Lane): StepData | undefined =>
+    lane.segs.find((s): s is StepData => s.kind === 'step' && s.merged)
+
+  it('stays open when the run delegated', () => {
+    const lane = store.newLane('main:merge-spawn', true)
+    const a = ran(lane, 'spawn', 'c1')
+    const b = ran(lane, 'read_file', 'c2')
+
+    store.foldRuns(lane, [a.seg, b.seg])
+
+    expect(mergedOf(lane)?.wkOpen).toBe(true)
+  })
+
+  it('carries the reader\'s close into the merged row', () => {
+    const lane = store.newLane('main:merge-pin', true)
+    const a = ran(lane, 'spawn', 'c1')
+    const b = ran(lane, 'read_file', 'c2')
+    store.toggleWork(lane, a.seg)
+
+    store.foldRuns(lane, [a.seg, b.seg])
+
+    expect(mergedOf(lane)?.wkPinned).toBe(true)
+    expect(mergedOf(lane)?.wkOpen).toBe(false)
+  })
+})
+
+/* The fold rule reads narration, not the answer. `finishTurn` promotes the
+   last thing the model said into the answer row before `collapse` builds the
+   fold, so a long answer cannot open the work over it. The answer-only shape
+   leaves no step in the fold at all; the shape that proves the clearing is an
+   answer sharing its step with a call, which keeps the step inside the fold. */
+describe('the turn answer is not what the fold rule reads', () => {
+  const folds = (lane: Lane): FoldData[] =>
+    lane.segs.filter((s): s is FoldData => s.kind === 'fold')
+
+  it('does not open over a long answer alone', () => {
+    const lane = store.newLane('main:answer', true)
+    store.askText(lane, 'Q')
+    const work = store.newStep(lane)
+    work.tool('read_file', {}, 'read_file', 'c1').done(true, 'ok', 5)
+    const last = store.newStep(lane)
+    last.sayDelta('A'.repeat(store.FOLD_KEEP_OPEN_CHARS + 60))
+    store.finishTurn(lane, last, [work.seg, last.seg], '5s')
+
+    const [fold] = folds(lane)
+    expect(fold?.open).toBe(false)
+    expect(fold?.steps.some((s: StepData) => s.say.length >= store.FOLD_KEEP_OPEN_CHARS)).toBe(false)
+  })
+
+  it('does not open when a long answer shares its step with a call', () => {
+    const lane = store.newLane('main:answer-with-call', true)
+    store.askText(lane, 'Q')
+    const st = store.newStep(lane)
+    st.setSay('B'.repeat(store.FOLD_KEEP_OPEN_CHARS + 60))
+    st.tool('read_file', {}, 'read_file', 'c1').done(true, 'ok', 5)
+    store.finishTurn(lane, st, [st.seg], '5s')
+
+    const [fold] = folds(lane)
+    expect(fold?.open).toBe(false)
+    expect(fold?.steps[0]?.say).toBe('')
   })
 })

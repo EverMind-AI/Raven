@@ -4,6 +4,7 @@
 
 import type { Episode, EpisodeTool } from '../types.js'
 
+import { MESSAGE_FOLD_KEEP_OPEN_CHARS } from '../config/limits.js'
 import { hasMeaningfulReasoning } from '../lib/reasoning.js'
 import { claudeRule } from './claudeCodeTools.js'
 import { codexRule } from './codexTools.js'
@@ -608,4 +609,21 @@ export const segmentTurn = (episodes: Episode[], liveIndex?: number): Segment[] 
   flush()
 
   return segments
+}
+
+/**
+ * Whether the work segment at `index` follows an agent message long enough
+ * that the work should not be folded away from it.
+ *
+ * The transcript folds "every call between two things the model said" into one
+ * summary row. That is a compression the reader can undo, except when the
+ * message introducing the stretch runs to two or more rendered lines: the
+ * message is the part worth reading, and the calls it led to are what makes it
+ * legible. Judged by character count rather than measured rows -- see
+ * `MESSAGE_FOLD_KEEP_OPEN_CHARS`.
+ */
+export const keepsWorkOpen = (segments: Segment[], index: number): boolean => {
+  const prev = segments[index - 1]
+
+  return prev?.kind === 'talk' && (prev.episode.narration ?? '').trim().length >= MESSAGE_FOLD_KEEP_OPEN_CHARS
 }

@@ -8,7 +8,7 @@ import { stringWidth } from '@hermes/ink'
 import type { EpisodeTool, Msg } from '../types.js'
 
 import { EMPTY_CALL_FOLDS, type CallFolds } from '../app/foldStore.js'
-import { cardDefaultOpen, detailBlockShape, foldedPreviewRows, segmentTurn } from '../domain/episodeSummary.js'
+import { cardDefaultOpen, detailBlockShape, foldedPreviewRows, keepsWorkOpen, segmentTurn } from '../domain/episodeSummary.js'
 import { layoutDagGraph } from './dagGraphLayout.js'
 import { dagNodeToggleKey } from './dagOpenNodes.js'
 import { dagDetailRoom, dagRowDetail, dagTraceBoxRows, dagTraceRows, hasDagRowDetail } from './dagStatus.js'
@@ -255,7 +255,9 @@ export const estimatedMsgHeight = (
     // symptom. A stretch of work is no longer one row by construction: a settled
     // card opens on its own predicate, so its block is measured here the same way
     // it is drawn, and a talk segment is its reasoning row plus its wrapped prose.
-    for (const [i, seg] of segmentTurn(msg.episodes ?? []).entries()) {
+    const segments = segmentTurn(msg.episodes ?? [])
+
+    for (const [i, seg] of segments.entries()) {
       h += i > 0 && !dense ? 1 : 0
 
       if (seg.kind === 'work') {
@@ -301,8 +303,10 @@ export const estimatedMsgHeight = (
         h += 1
 
         // Folded, a multi-call stretch is its summary row; the panels inside it
-        // still draw (WorkSegment's own defaultOpen branch).
-        if (!segIsOpen(seg.key, hasPanel && !seg.live)) {
+        // still draw (WorkSegment's own defaultOpen branch). The message rule
+        // (see `keepsWorkOpen`) opens the stretch by default, and the estimate
+        // has to agree or the virtualizer reserves the folded height.
+        if (!segIsOpen(seg.key, (hasPanel || keepsWorkOpen(segments, i)) && !seg.live)) {
           for (const tool of panelTools) {
             h += panelRows(tool, Math.max(28, panelWidth - (INDENT + STEP)))
           }

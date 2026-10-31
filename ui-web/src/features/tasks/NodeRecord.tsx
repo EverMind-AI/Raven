@@ -194,7 +194,10 @@ function ThinkBlock({ text, live, nodeKey, foldKey }: {
   text: string; live: boolean; nodeKey: string; foldKey: string
 }): JSX.Element {
   const touched = useSyncExternalStore(store.subscribe, () => store.foldOf(nodeKey, foldKey))
-  const open = touched ?? true
+  /* A node's reasoning is the model's scratch work, not its report: a reader
+     opens it when they want to see how the node got there. Same default the
+     transcript gives a delegated run's thought. */
+  const open = touched ?? false
   return (
     <div className={'tkthink' + (live ? ' live' : '')}>
       <button className="tkthh" aria-expanded={open} onClick={() => store.setFold(nodeKey, foldKey, !open)}>

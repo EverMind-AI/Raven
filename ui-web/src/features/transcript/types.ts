@@ -282,9 +282,10 @@ export interface FoldData {
   kind: 'fold'
   time: string | null
   open: boolean
-  /* Open because the runtime opened it, and so still the runtime's to close.
-     A fold the reader has touched is theirs from then on: `toggleFold` clears
-     this, and nothing shuts it afterwards. */
+  /* The runtime still owns this fold's open state, so it may open or shut it
+     as the turn's content changes (see `shutAutoFolds` and `collapse`). A fold
+     the reader has touched is theirs from then on: `toggleFold` clears this,
+     and nothing moves it afterwards. */
   auto: boolean
   steps: StepData[]
 }
