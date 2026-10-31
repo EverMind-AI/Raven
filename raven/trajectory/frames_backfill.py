@@ -124,12 +124,14 @@ def backfill(
         if attrs.get(observability.STEPS_KEY) is not None:
             continue
         session_id = attrs.get(FRAMES_KEY + "session_id")
+        initialize = attrs.get(FRAMES_KEY + "initialize")
         prompt, events = frames_replay.events(
             attrs[FRAMES_KEY + "path"],
             session_id=session_id if isinstance(session_id, str) else None,
             start=_int(attrs.get(FRAMES_KEY + "start")),
             end=_int(attrs.get(FRAMES_KEY + "end")),
             handshake_end=_int(attrs.get(FRAMES_KEY + "handshake_end")),
+            initialize=initialize if isinstance(initialize, dict) else None,
         )
         if prompt is None and not events:
             unread += 1

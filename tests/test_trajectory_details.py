@@ -12,6 +12,7 @@ import pytest
 from raven.tracing import artifact_v2
 from raven.trajectory import conversation as tconv
 from raven.trajectory import details as tdet
+from raven.trajectory import frames_replay
 from raven.trajectory import index as tidx
 from raven.trajectory import store as tstore
 
@@ -2038,6 +2039,23 @@ def _resumed_codex_frames(path: Path) -> tuple[Path, int]:
 def _replay(index: tidx.SessionIndex, state: Path):
     entry = next(e for e in index.entries() if e.span_id == "ext")
     return _block(index, state, entry, "replay")
+
+
+def test_the_replay_block_parses_a_runs_journal_once(state, monkeypatch):
+    journal = _frames(state / "logs" / "acp-frames" / "2026-09-01" / "agent-1.jsonl")
+    index = _external_run(state, journal)
+    calls: list[int] = []
+    real = frames_replay.replay
+
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(frames_replay, "replay", counted)
+    tdet._replay_items.cache_clear()
+    _replay(index, state)
+    _replay(index, state)
+    assert len(calls) == 1
 
 
 def test_replay_reads_the_runs_journal_from_this_stores_own_journals(state):

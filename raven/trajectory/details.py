@@ -36,6 +36,7 @@ from __future__ import annotations
 import base64
 import json
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -922,6 +923,36 @@ def _d_frames(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _Deriv
     return (AVAILABLE if refs else NOT_RECORDED), {"items": refs}, (), None
 
 
+@lru_cache(maxsize=32)
+def _replay_items(
+    path: str,
+    session_id: str | None,
+    start: int | None,
+    end: int | None,
+    handshake_end: int | None,
+    initialize_json: str | None,
+) -> tuple[dict[str, Any], ...]:
+    """The replay rows for one run's fixed journal slice.
+
+    The descriptor is read again for every tab page, and a run's journal can be
+    tens of megabytes; parsing it once per read is what made opening the pane
+    and paging its Replay tab cost the same again each time. The key is the
+    slice, the session and the recorded handshake: the journal is append-only,
+    so a later frame elsewhere in the connection's file cannot change this
+    range. ``_d_replay`` still refuses a file that has gone or shrunk.
+    """
+    initialize = json.loads(initialize_json) if initialize_json is not None else None
+    messages = frames_replay.replay(
+        path,
+        session_id=session_id,
+        start=start,
+        end=end,
+        handshake_end=handshake_end,
+        initialize=initialize,
+    )
+    return tuple(frames_replay.items(messages))
+
+
 def _d_replay(view: EntryView, attrs: dict[str, Any], loaded: _Loader, *, store: Path) -> _Derived:
     """The run's own conversation, replayed from the wire journal it points at.
 
@@ -950,17 +981,25 @@ def _d_replay(view: EntryView, attrs: dict[str, Any], loaded: _Loader, *, store:
     start = attrs.get("subagent.external.frames.start")
     end = attrs.get("subagent.external.frames.end")
     handshake_end = attrs.get("subagent.external.frames.handshake_end")
-    messages = frames_replay.replay(
-        journal,
-        session_id=session_id if isinstance(session_id, str) else None,
-        start=start if isinstance(start, int) else None,
-        end=end if isinstance(end, int) else None,
-        handshake_end=handshake_end if isinstance(handshake_end, int) else None,
+    initialize = attrs.get("subagent.external.frames.initialize")
+    # A cache row for a journal that has since gone (retention) or been cut
+    # below the slice is not this store's record any more.
+    try:
+        if not journal.is_file() or (isinstance(end, int) and journal.stat().st_size < end):
+            return NOT_RECORDED, None, (), None
+    except OSError:
+        return NOT_RECORDED, None, (), None
+    rows = _replay_items(
+        str(journal),
+        session_id if isinstance(session_id, str) else None,
+        start if isinstance(start, int) else None,
+        end if isinstance(end, int) else None,
+        handshake_end if isinstance(handshake_end, int) else None,
+        json.dumps(initialize, sort_keys=True, default=str) if isinstance(initialize, dict) else None,
     )
-    rows = frames_replay.items(messages)
     if not rows:
         return NOT_RECORDED, None, (), None
-    return AVAILABLE, {"items": rows}, (), None
+    return AVAILABLE, {"items": [dict(row) for row in rows]}, (), None
 
 
 def _d_attributes(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _Derived:

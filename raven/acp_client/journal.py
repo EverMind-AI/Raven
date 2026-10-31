@@ -176,7 +176,11 @@ class FrameJournal:
             # prompt and every tool result, so the window where the file exists
             # world-readable must not exist at all.
             fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-            self._handle = os.fdopen(fd, "a", buffering=1, encoding="utf-8")
+            # No newline translation: the offset a call stores is the file's own
+            # byte position, and a reader seeks it. ``newline=None`` would write
+            # CRLF on Windows while ``_offset`` counted LF, so every range came
+            # up one byte per preceding line short.
+            self._handle = os.fdopen(fd, "a", buffering=1, encoding="utf-8", newline="")
         except OSError as exc:
             logger.warning("acp journal: {} could not be opened ({}); frames go unrecorded", self.path, exc)
             self._closed = True

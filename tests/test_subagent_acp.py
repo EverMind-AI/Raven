@@ -4079,7 +4079,10 @@ async def test_a_run_cancelled_while_its_steps_go_to_disk_gets_no_second_copy_fr
 
     ext, steps = _steps_of_the_run(trace_dir)
     assert 30 <= len(steps) < 202
-    assert ext["attributes"]["subagent.external.steps"] == 202
+    # The count is the run's plan at the moment it settles, not a promise that
+    # the stub delivered all 202 updates before the cancel: the live writer can
+    # now emit the thirtieth step while the tail is still on the wire.
+    assert ext["attributes"]["subagent.external.steps"] >= len(steps)
     assert frames_backfill.backfill(trace_dir)["written"] == 0
 
 
@@ -4119,6 +4122,9 @@ async def test_the_call_names_its_own_stretch_of_the_wire_journal(trace_dir, tmp
     assert path.is_file()
     assert 0 < handshake_end <= start < end <= path.stat().st_size
     assert attrs["subagent.external.frames.session_id"] == attrs["subagent.external.session_id"]
+    # A journal of an adopted connection has no handshake in it; the run keeps
+    # the agent info the live turn read so replay can pick the same dialect.
+    assert attrs["subagent.external.frames.initialize"]["agentInfo"]["name"] == "stub-agent"
 
     # The range is a byte range into the file, so it has to slice cleanly.
     lines = [json.loads(line) for line in path.read_bytes()[start:end].decode().splitlines() if line.strip()]

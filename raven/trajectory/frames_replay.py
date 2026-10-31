@@ -27,11 +27,43 @@ _MAX_FRAMES = 400_000
 _MAX_BYTES = 64 * 1024 * 1024
 
 
+def _crlf(path: Path) -> bool:
+    """Whether the journal's lines end CRLF, i.e. a Windows writer translated them.
+
+    The writer used to open in text mode with the default newline, so Windows
+    wrote ``\\r\\n`` while ``offset`` counted the LF byte. The offsets a run
+    stored are therefore positions in the LF-normalized text, one byte per
+    preceding line short of the file. Read the first line's ending; a journal's
+    writer is consistent within one file.
+    """
+    try:
+        with path.open("rb") as handle:
+            previous = b""
+            while chunk := handle.read(1 << 16):
+                found = chunk.find(b"\n")
+                if found >= 0:
+                    return (chunk[found - 1 : found] if found else previous) == b"\r"
+                previous = chunk[-1:]
+    except OSError:
+        return False
+    return False
+
+
 def _slice(path: Path, start: int | None, end: int | None) -> bytes:
     size = path.stat().st_size
     begin = max(0, int(start)) if isinstance(start, int) else 0
     stop = min(size, int(end)) if isinstance(end, int) else size
     if stop <= begin or stop - begin > _MAX_BYTES:
+        return b""
+    try:
+        if _crlf(path):
+            # A legacy Windows journal: the stored offsets index the text with
+            # its CRLF folded to LF, not the bytes on disk. Normalize the whole
+            # file so [start, end) means the range the writer recorded; the
+            # journal is capped at MAX_BYTES, so this read is bounded.
+            raw = path.read_bytes().replace(b"\r\n", b"\n")
+            return raw[begin:stop]
+    except OSError:
         return b""
     with path.open("rb") as handle:
         handle.seek(begin)
@@ -50,17 +82,31 @@ def _records(raw: bytes) -> Any:
             yield record
 
 
-def _dialect(path: Path, handshake_end: int | None) -> AcpDialect:
+def _dialect(
+    path: Path,
+    handshake_end: int | None,
+    *,
+    initialize: dict[str, Any] | None = None,
+    start: int | None = None,
+) -> AcpDialect:
     """The dialect the live run read its frames with: the one its handshake chose.
 
-    A journal is per connection and opens with the handshake, so ``[0,
-    handshake_end)`` holds the ``initialize`` request and the agent's answer
-    to it -- the same answer ``dialect_for`` was given live.
+    The recorded handshake answer is the direct source: an adopted connection's
+    journal starts at the run, so the initialize exchange is not in the file at
+    all and the run carries it. Otherwise the journal is per connection and
+    opens with the handshake, so ``[0, handshake_end)`` holds the ``initialize``
+    request and its answer; a run recorded before ``handshake_end`` existed points
+    at a stretch whose head is still the handshake, so ``[0, start)`` is read.
     """
-    if not isinstance(handshake_end, int) or handshake_end <= 0:
+    if isinstance(initialize, dict):
+        return dialect_for(initialize)
+    end = handshake_end if isinstance(handshake_end, int) and handshake_end > 0 else None
+    if end is None and isinstance(start, int) and start > 0:
+        end = start
+    if end is None:
         return AcpDialect()
     asked: set[Any] = set()
-    for record in _records(_slice(path, 0, handshake_end)):
+    for record in _records(_slice(path, 0, end)):
         frame = record["frame"]
         if frame.get("method") == "initialize":
             asked.add(frame.get("id"))
@@ -76,6 +122,7 @@ def events(
     start: int | None = None,
     end: int | None = None,
     handshake_end: int | None = None,
+    initialize: dict[str, Any] | None = None,
 ) -> tuple[str | None, list[dict[str, Any]]]:
     """(prompt, ordered events) for one run, in the collector's own shape.
 
@@ -89,7 +136,7 @@ def events(
     """
     try:
         raw = _slice(Path(path), start, end)
-        dialect = _dialect(Path(path), handshake_end)
+        dialect = _dialect(Path(path), handshake_end, initialize=initialize, start=start)
     except OSError:
         return None, []
     prompt_text: str | None = None
@@ -124,10 +171,13 @@ def replay(
     start: int | None = None,
     end: int | None = None,
     handshake_end: int | None = None,
+    initialize: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """The run's conversation as provider messages: what it was asked, what it
     said, what it thought and what it ran, in the order the wire saw them."""
-    prompt, steps = events(path, session_id=session_id, start=start, end=end, handshake_end=handshake_end)
+    prompt, steps = events(
+        path, session_id=session_id, start=start, end=end, handshake_end=handshake_end, initialize=initialize
+    )
     if prompt:
         steps = [{"t": "user", "text": prompt, "at": steps[0].get("at") if steps else None}, *steps]
     finished: list[dict[str, Any]] = []

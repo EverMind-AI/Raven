@@ -87,14 +87,190 @@ def test_replay_reads_the_runs_own_stretch(tmp_path: Path):
     assert messages[2]["content"] == "contents"
 
 
-def test_a_byte_range_starts_where_it_says(tmp_path: Path):
+def test_a_byte_range_keeps_the_run_it_names_and_leaves_the_others(tmp_path: Path):
+    """The range is what makes one call's stretch readable out of a connection's
+    journal: a prompt before ``start`` and one after ``end`` both belong to other
+    runs, and neither may leak into this one."""
+    path = tmp_path / "three.jsonl"
+    text = ""
+
+    def frame(direction: str, body: dict) -> None:
+        nonlocal text
+        text += (
+            json.dumps({"_type": "acp_frame", "timestamp": "2026-10-27T09:00:00", "dir": direction, "frame": body})
+            + "\n"
+        )
+
+    def prompt(said: str) -> None:
+        frame(
+            "out",
+            {"method": "session/prompt", "params": {"sessionId": "s", "prompt": [{"type": "text", "text": said}]}},
+        )
+
+    def say(said: str) -> None:
+        frame(
+            "in",
+            {
+                "method": "session/update",
+                "params": {
+                    "sessionId": "s",
+                    "update": {"sessionUpdate": "agent_message_chunk", "content": [{"type": "text", "text": said}]},
+                },
+            },
+        )
+
+    prompt("EARLIER")
+    say("OLD")
+    start = len(text.encode())
+    prompt("TARGET")
+    say("KEEP")
+    frame(
+        "in",
+        {
+            "method": "session/update",
+            "params": {
+                "sessionId": "s",
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "c1",
+                    "title": "read_file",
+                    "kind": "read",
+                    "status": "in_progress",
+                    "rawInput": {"path": "a.py"},
+                },
+            },
+        },
+    )
+    frame(
+        "in",
+        {
+            "method": "session/update",
+            "params": {
+                "sessionId": "s",
+                "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "c1",
+                    "status": "completed",
+                    "rawOutput": "DONE",
+                },
+            },
+        },
+    )
+    end = len(text.encode())
+    prompt("LATER")
+    say("DROP")
+    path.write_text(text, encoding="utf-8", newline="")
+
+    messages = frames_replay.replay(path, session_id="s", start=start, end=end)
+    assert [message["content"] for message in messages] == ["TARGET", "KEEP", "DONE"]
+    assert not any(
+        "OLD" in str(message.get("content")) or "DROP" in str(message.get("content")) for message in messages
+    )
+
+    # The control: ignoring both edges would read all three runs as one. The
+    # provider-row projection drops a say that follows a settled tool call, so
+    # the control reads the events rather than the rows.
+    _, whole_events = frames_replay.events(path, session_id="s")
+    whole_text = " ".join(str(event.get("text")) for event in whole_events)
+    assert "OLD" in whole_text and "DROP" in whole_text
+
+
+def test_a_windows_journal_written_with_crlf_keeps_the_runs_tail(tmp_path: Path):
+    """A journal written before the writer stopped translating newlines records
+    LF byte offsets in a CRLF file. The offset a call stored is one byte per
+    preceding line short of the file's real position, so a raw seek drops the
+    run's last frames -- the Replay block and the backfill both read this way."""
     path = _journal(tmp_path)
-    raw = path.read_bytes()
-    head = raw.index(b"session/prompt")
-    previous = raw.rfind(b"\n", 0, head)
-    cut = previous + 1 if previous >= 0 else 0
-    messages = frames_replay.replay(path, session_id="s", start=cut, end=len(raw))
-    assert messages and messages[0]["content"] == "do it"
+    logical = path.read_bytes()
+    crlf = tmp_path / "crlf.jsonl"
+    crlf.write_bytes(logical.replace(b"\n", b"\r\n"))
+
+    messages = frames_replay.replay(crlf, session_id="s", start=0, end=len(logical))
+    assert [message["role"] for message in messages] == ["user", "assistant", "tool"]
+    assert messages[-1]["content"] == "contents"
+
+
+def _codex_journal(tmp_path: Path, *, handshake: bool) -> tuple[Path, int]:
+    text = ""
+
+    def line(direction: str, frame: dict) -> None:
+        nonlocal text
+        text += (
+            json.dumps({"_type": "acp_frame", "timestamp": "2026-10-27T09:00:00", "dir": direction, "frame": frame})
+            + "\n"
+        )
+
+    if handshake:
+        line("out", {"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {}})
+        line("in", {"jsonrpc": "2.0", "id": 0, "result": {"agentInfo": {"name": "codex-acp"}}})
+    handshake_end = len(text.encode())
+    line(
+        "out",
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/prompt",
+            "params": {"sessionId": "s", "prompt": [{"type": "text", "text": "run it"}]},
+        },
+    )
+    line(
+        "in",
+        {
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "s",
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "c1",
+                    "title": "lint",
+                    "kind": "execute",
+                    "status": "in_progress",
+                    "rawInput": {"command": ["sh", "-c", "exit 1"]},
+                },
+            },
+        },
+    )
+    line(
+        "in",
+        {
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "s",
+                "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "c1",
+                    "status": "completed",
+                    "rawOutput": {"formatted_output": "", "exit_code": 1},
+                },
+            },
+        },
+    )
+    path = tmp_path / "codex.jsonl"
+    path.write_text(text, encoding="utf-8", newline="")
+    return path, handshake_end
+
+
+def test_a_recorded_initialize_names_the_dialect_when_the_journal_has_no_handshake(tmp_path: Path):
+    """An adopted connection's journal starts at the run, so the handshake the
+    live turn read is not in the file. The run records it; replay must use it."""
+    path, _ = _codex_journal(tmp_path, handshake=False)
+    _, events = frames_replay.events(
+        path, session_id="s", initialize={"agentInfo": {"name": "codex-acp"}}, handshake_end=0
+    )
+    result = next(event for event in events if event.get("t") == "result")
+    assert result["ok"] is False
+
+    # The control: without the recorded handshake the spec dialect says completed.
+    _, base = frames_replay.events(path, session_id="s", handshake_end=0)
+    assert next(event for event in base if event.get("t") == "result")["ok"] is True
+
+
+def test_an_old_run_without_handshake_end_reads_the_handshake_from_its_own_journal(tmp_path: Path):
+    path, handshake_end = _codex_journal(tmp_path, handshake=True)
+    _, events = frames_replay.events(path, session_id="s", start=handshake_end)
+    assert next(event for event in events if event.get("t") == "result")["ok"] is False
 
 
 def test_items_split_the_run_by_what_each_row_is(tmp_path: Path):

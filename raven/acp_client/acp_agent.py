@@ -2393,12 +2393,20 @@ class AcpAgentBackend:
         """
         if journal is None or start is None:
             return {}
+        initialize = getattr(connection, "initialize", None)
+        info = initialize.get("agentInfo") if isinstance(initialize, dict) else None
         return {
             "path": str(journal.path),
             "session_id": session_id,
             "start": start,
             "end": journal.offset,
             "handshake_end": getattr(connection, "handshake_bytes", 0),
+            # An adopted connection's journal starts at this run, so the
+            # initialize exchange is not in the file; the answer the live turn
+            # read is the only record of which dialect to replay with. Only the
+            # agent info is kept -- it is all ``dialect_for`` reads, and the
+            # handshake's capabilities belong to the connection, not this run.
+            "initialize": {"agentInfo": info} if isinstance(info, dict) else None,
         }
 
     def _record(
