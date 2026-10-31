@@ -376,7 +376,16 @@ class _TurnCollector:
 
     @staticmethod
     def _now() -> str:
-        return datetime.now().isoformat()
+        # With its offset: the run's steps are written from these stamps, and a
+        # naive one cannot say which 01:30 it was when the clocks fall back.
+        return datetime.now().astimezone().isoformat()
+
+    @staticmethod
+    def _shown(at: str | None) -> str | None:
+        """A stamp as the transcript has always carried it: local, without an offset."""
+        if not at:
+            return at
+        return datetime.fromisoformat(at).astimezone().replace(tzinfo=None).isoformat()
 
     @property
     def prompt(self) -> str:
@@ -819,12 +828,13 @@ class _TurnCollector:
         events: list[dict[str, Any]] = []
         for ev in self.events:
             kind = ev["t"]
+            at = self._shown(ev.get("at"))
             if kind == "say":
                 events.append(turn_rows.say(ev["text"]))
             elif kind == "thought":
-                events.append(turn_rows.thought(ev["text"], at=ev.get("at")))
+                events.append(turn_rows.thought(ev["text"], at=at))
             elif kind == "user":
-                events.append(turn_rows.user(ev["text"], at=ev.get("at")))
+                events.append(turn_rows.user(ev["text"], at=at))
             elif kind == "call":
                 acp_call: ToolCall = ev["call"]
                 events.append(
@@ -832,15 +842,15 @@ class _TurnCollector:
                         id=ev["id"],
                         name=acp_call.name,
                         arguments_json=acp_call.arguments_json(),
-                        at=ev.get("at"),
+                        at=at,
                     )
                 )
             elif kind == "result":
-                events.append(turn_rows.result(id=ev["id"], text=ev["text"], ok=ev["ok"], at=ev.get("at")))
+                events.append(turn_rows.result(id=ev["id"], text=ev["text"], ok=ev["ok"], at=at))
         return turn_rows.rows(
             events,
             in_flight_answer=self.closing_text if in_flight else None,
-            in_flight_answer_at=self.answer_at if in_flight else None,
+            in_flight_answer_at=self._shown(self.answer_at) if in_flight else None,
         )
 
 

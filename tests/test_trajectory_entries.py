@@ -2230,7 +2230,8 @@ def test_an_external_runs_own_steps_are_rows_of_that_run(state, monkeypatch):
         def arguments_json(self):
             return '{"path": "a.py"}'
 
-    # The collector stamps naive local time; the run began a minute ago.
+    # Naive local stamps, as the collector wrote them before they carried an
+    # offset; the run began a minute ago.
     base = datetime.now() - timedelta(seconds=60)
 
     def at(offset):

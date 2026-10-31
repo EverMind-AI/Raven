@@ -154,8 +154,8 @@ _PREVIEW_CHARS = 240
 
 
 def _utc(at: object) -> datetime | None:
-    """The collector stamps naive local times, the journal local times with their
-    offset (naive in a journal written before it carried one); spans are UTC."""
+    """The collector and the journal stamp local times with their offset (naive in
+    what either wrote before its stamps carried one); spans are UTC."""
     if not isinstance(at, str) or not at:
         return None
     try:

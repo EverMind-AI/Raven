@@ -3942,6 +3942,53 @@ async def test_live_steps_keep_a_call_running_until_its_result_lands(monkeypatch
     assert settled["attributes"]["tool.result_preview"] == "a.py"
 
 
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="moving the process zone needs time.tzset")
+async def test_a_live_step_heard_in_the_repeated_hour_of_a_fall_back_starts_when_it_was_heard(monkeypatch) -> None:
+    """When the clocks fall back, 01:30 comes twice. A stamp without its offset
+    cannot say which, so a step heard in the second one read back an hour early
+    and was pulled to its run's start; the transcript keeps the local time it showed."""
+    from datetime import datetime, timezone
+
+    from raven.acp_client import acp_agent
+    from raven.agent.subagent.backends.observability import LiveSteps
+
+    heard = datetime(2026, 11, 1, 6, 30, tzinfo=timezone.utc)
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            return datetime.fromtimestamp(heard.timestamp(), tz)
+
+    class _Run(_LiveRun):
+        def identity(self) -> dict[str, Any]:
+            return {**super().identity(), "start": "2026-11-01T06:10:00+00:00"}
+
+    emitted = _live_writes(monkeypatch)
+    monkeypatch.setattr(acp_agent, "datetime", _Clock)
+    before = os.environ.get("TZ")
+    try:
+        os.environ["TZ"] = "America/New_York"
+        time.tzset()
+        if time.tzname != ("EST", "EDT"):
+            pytest.skip("this machine has no zone database entry for America/New_York")
+        col = acp_agent._TurnCollector(prompt="do it", steps=LiveSteps(_Run(), prompt="do it", interval=0))
+        await col(
+            "session/update",
+            {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "hmm"}}},
+        )
+        shown = col.messages()[-1]["timestamp"]
+    finally:
+        if before is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = before
+        time.tzset()
+
+    thought = [r for r in emitted if r["spanId"] == "ext.1"][-1]
+    assert datetime.fromisoformat(thought["startTime"]) == heard
+    assert shown == "2026-11-01T01:30:00"
+
+
 async def test_live_steps_fold_touches_inside_the_interval_into_one_later_write(monkeypatch) -> None:
     from raven.agent.subagent.backends.observability import LiveSteps
 
