@@ -31,6 +31,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequen
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -381,8 +382,14 @@ class _TurnCollector:
         return datetime.now().astimezone().isoformat()
 
     @staticmethod
+    @lru_cache(maxsize=4096)
     def _shown(at: str | None) -> str | None:
-        """A stamp as the transcript has always carried it: local, without an offset."""
+        """A stamp as the transcript has always carried it: local, without an offset.
+
+        Cached: the transcript is republished on every update, from every event,
+        and converting each stamp every time made a long turn's republishing
+        quadratic.
+        """
         if not at:
             return at
         return datetime.fromisoformat(at).astimezone().replace(tzinfo=None).isoformat()

@@ -3989,6 +3989,39 @@ async def test_a_live_step_heard_in_the_repeated_hour_of_a_fall_back_starts_when
     assert shown == "2026-11-01T01:30:00"
 
 
+async def test_a_turn_converts_each_event_stamp_for_its_transcript_once(monkeypatch) -> None:
+    """The transcript is republished on every update, each time from every event.
+    Converting every stamp on each republish made a long turn's republishing
+    quadratic, enough to carry a slow runner's turn past the live writer's interval."""
+    from datetime import datetime
+
+    from raven.acp_client import acp_agent
+
+    parsed: list[str] = []
+
+    class _Counting(datetime):
+        @classmethod
+        def fromisoformat(cls, text):  # type: ignore[override]
+            parsed.append(text)
+            return datetime.fromisoformat(text)
+
+    monkeypatch.setattr(acp_agent, "datetime", _Counting)
+    col = acp_agent._TurnCollector(prompt="do it")
+
+    async def feed(update: dict) -> None:
+        await col("session/update", {"update": update})
+
+    for i in range(20):
+        await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": f"step {i}."}})
+        await feed({"sessionUpdate": "tool_call", "toolCallId": f"t{i}", "title": "ls", "status": "pending"})
+        await feed({"sessionUpdate": "tool_call_update", "toolCallId": f"t{i}", "status": "completed"})
+
+    # Every stamp the collector holds: one per event, and the answer's own.
+    stamps = {ev["at"] for ev in col.events if ev.get("at")} | {col.answer_at}
+    assert len(col.events) == 60
+    assert len(parsed) <= len(stamps)
+
+
 async def test_live_steps_fold_touches_inside_the_interval_into_one_later_write(monkeypatch) -> None:
     from raven.agent.subagent.backends.observability import LiveSteps
 
