@@ -464,11 +464,14 @@ describe('the chat column chrome when a language is applied', () => {
 
 /* The header floats over the transcript, so a bubble scrolled to the top
  * passes under it instead of being cut at its edge, and what it passes under
- * is frosted glass. happy-dom has no backdrop-filter in its property table and
- * applies an @supports block without evaluating it, so the blur is read off
- * the rule's own text while the two layout facts are read as computed styles:
- * the header out of the flow, and the scroller giving the band's height back
- * as padding. Only a browser can show the blur itself. */
+ * is a fade of frosted glass that reaches below the header's own row.
+ * happy-dom has no backdrop-filter in its property table and applies an
+ * @supports block without evaluating it, so the blur and its ramp are read off
+ * the rule's own text while the layout facts are read as computed styles: the
+ * header out of the flow, the scroller giving the row's height back as padding
+ * (the resting frame) but clearing the whole fade for scrollIntoView, and the
+ * trajectory view and parked copy starting clear of it. Only a browser can
+ * show the blur itself. */
 describe('the header band', () => {
   let sheet: HTMLStyleElement | null = null
 
@@ -478,6 +481,11 @@ describe('the header band', () => {
     sheet.textContent = source('styles/page.css')
     document.head.append(sheet)
   }
+
+  /* The custom property as the page declares it; happy-dom resolves the
+     substitution but not the calc, so the token is compared as written. */
+  const token = (name: string): string =>
+    getComputedStyle(document.documentElement).getPropertyValue(name).trim()
 
   afterEach(() => {
     sheet?.remove()
@@ -489,22 +497,45 @@ describe('the header band', () => {
     expect(getComputedStyle(top()).position).toBe('absolute')
   })
 
-  it('gives its height back to the scroller as padding, so the resting frame does not move', () => {
+  it('gives the row height back as padding, so the resting frame does not move', () => {
     styled()
-    const band = getComputedStyle(top()).height
-    expect(band).toBe('52px')
+    const row = getComputedStyle(top()).height
+    expect(row).toBe('52px')
     const scroll = getComputedStyle(el('scroll'))
-    expect(scroll.paddingTop).toBe(band)
-    expect(scroll.scrollPaddingTop).toBe(band)
+    expect(scroll.paddingTop).toBe(row)
+    /* Not the row: scrollIntoView has to clear the fade below it as well. */
+    expect(token('--topbar-fade-tail')).toBe('36px')
+    expect(scroll.scrollPaddingTop).toBe(token('--topbar-fade-h'))
+    expect(scroll.scrollPaddingTop).not.toBe(row)
+  })
+
+  it('starts the trajectory view and the parked copy clear of the fade', () => {
+    styled()
+    expect(getComputedStyle(el('trajHost')).paddingTop).toBe(token('--topbar-fade-h'))
+    const scroll = el('scroll')
+    scroll.dataset.parked = ''
+    expect(getComputedStyle(scroll).getPropertyValue('inset').trim())
+      .toBe(`${token('--topbar-h')} 0 0`)
   })
 
   it('paints the band as frosted glass, over an opaque ground where the blur is unsupported', () => {
     styled()
-    const rule = (source('styles/page.css').match(/\n\.top::before \{\n([\s\S]*?)\n\}/) as RegExpMatchArray)[1] as string
+    const css = source('styles/page.css')
+    const rule = (css.match(/\.chat > \.top::before\s*\{([\s\S]*?)\}/) as RegExpMatchArray)[1] as string
     expect(rule).toMatch(/-webkit-backdrop-filter: blur\(20px\) saturate\(1\.4\)/)
     expect(rule).toMatch(/backdrop-filter: blur\(20px\) saturate\(1\.4\)/)
-    expect(rule).toMatch(/mask-image: linear-gradient\(180deg, #000 calc\(100% - 20px\), transparent\)/)
-    expect(source('styles/page.css'))
-      .toContain('@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)))')
+    expect(rule).toMatch(/height: var\(--topbar-fade-h\)/)
+    expect(rule).toMatch(/background: var\(--page\)/)
+    expect(rule).toMatch(/mask-image: linear-gradient\(180deg, rgba\(0, 0, 0, \.94\) 0/)
+    /* The ramp lands at the element's lower edge, not 20px above it. */
+    expect(rule).toMatch(/rgba\(0, 0, 0, 0\) 100%\)/)
+    expect(rule).not.toMatch(/color-mix/)
+
+    const fallback = (css.match(
+      /@supports not \(\(backdrop-filter: blur\(1px\)\) or \(-webkit-backdrop-filter: blur\(1px\)\)\) \{\s*\.chat > \.top::before \{([\s\S]*?)\}\s*\}/,
+    ) as RegExpMatchArray)[1] as string
+    expect(fallback).toMatch(/background: var\(--page\)/)
+    expect(fallback).toMatch(/-webkit-mask-image: none/)
+    expect(fallback).toMatch(/mask-image: none/)
   })
 })

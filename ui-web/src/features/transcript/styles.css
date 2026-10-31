@@ -2,8 +2,8 @@
 .transcript-cut { margin-top: 10px; color: var(--muted); font-size: 12px; }
 
 /* The turn nav (TurnNav.tsx): a dash per turn at the chat's right edge,
-   centred on the band between the header (.top, 52px) and the composer
-   (--lift). It stands just left of the strip an anchored desk takes
+   centred on the band between the frost's lower edge (--topbar-fade-h, the
+   same edge headerBand() returns) and the composer (--lift). It stands just left of the strip an anchored desk takes
    (--desk-reserve, whose last 12px are the gap before the desk palette), so
    the marks sit in the gutter between the transcript and the palette; with no
    desk they sit at the edge itself, 6px clear of the overlay scrollbar's thumb
@@ -13,7 +13,7 @@
    The full-height box is deaf to the pointer and only the list hears it, so
    the band above and below the marks stays the transcript's. */
 .transcript-nav {
-  position: absolute; z-index: 4; top: 52px; bottom: var(--lift, 96px);
+  position: absolute; z-index: 4; top: var(--topbar-fade-h); bottom: var(--lift, 96px);
   right: max(14px, calc(var(--desk-reserve, 0px) - 4px));
   display: flex; flex-direction: column; justify-content: center;
   pointer-events: none;

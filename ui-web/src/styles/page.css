@@ -189,11 +189,19 @@
   --rail: 264px;
   --wsw: 420px;
   --chat-min: 430px;
-  /* The chat header's band. It floats over the transcript rather than sitting
-     above it (see .top), so the scroller's top inset, the parked copy's inset,
-     the trajectory box's inset and the up pill's drop all read this one
-     number. The desktop shell swaps in the title bar it measured. */
+  /* The chat header's row. It floats over the transcript rather than sitting
+     above it (see .top), so the scroller's top inset, the parked copy's inset
+     and the trajectory box's inset all read this one number. The desktop shell
+     swaps in the title bar it measured. */
   --topbar-h: 52px;
+  /* How far the frost falls below that row before it is fully clear. The
+     visible band is --topbar-h + this, and its LOWER edge -- not the row's --
+     is the first line the reader can read sharp, so scroll-padding-top and
+     headerBand() (lib/dom.ts) both use the sum. Kept in px: lib/dom.ts parses
+     it off the computed style, and the shell's measured title bar only moves
+     --topbar-h. */
+  --topbar-fade-tail: 36px;
+  --topbar-fade-h: calc(var(--topbar-h) + var(--topbar-fade-tail));
   /* In px, not ch: a ch unit resolves against the font of whatever element
      uses it, so the banner (12.5px) and the transcript column (14.5px)
      computed different widths from the same token and their edges never
@@ -999,35 +1007,47 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    gives back the same height as top padding, so the resting frame is unchanged
    and only a scrolled one passes under.
 
-   The tint is ink at 72%, one step lighter than the floating menus, over the
-   same 20px/saturate(1.4) blur: enough smear that a bubble reads as colour and
-   not as glyphs, enough tint that the name and the corner controls stay
-   legible on any theme. `z-index: 2` stays -- the header's own popovers anchor
-   against it, and code blocks in the scroller are positioned too.
+   The frost reaches PAST the row, and its strength falls from the top down
+   rather than sitting at one value: a solid ground behind the controls, then a
+   linear fade to nothing at the band's lower edge (--topbar-fade-h). A bubble
+   that scrolls up is eaten a little more with every pixel until it is gone,
+   instead of meeting a hard edge with a token 20px softening under it. The
+   mask does that fading. It fades the FILTERED backdrop, and that is why the
+   ramp reads as progressive blur and not as a translucent sheet: measured in
+   Chrome, a mask of 0 leaves the transcript untouched and a mask of 1 draws
+   the full blur, so between them the blurred image itself thins out. (An
+   element that merely faded an opaque tint would leave the text sharp
+   underneath, only paler.)
 
-   The frost is a layer of its own, one z-step behind the controls: the band's
-   last 20px fade out, so a line crossing the edge smears into sharp text
-   instead of starting at a cut, and a fade on .top itself would take the
-   bottom of the buttons' glyphs with it. The mask fades the FILTERED image, so
-   what shows through the tail is the untouched transcript.
+   The ground is plain --page, not a color-mix: the mask is what makes it
+   translucent, so engines without color-mix (Chrome < 111, Safari < 16.2) no
+   longer drop the background and leave the title over a bare blur. That keeps
+   @supports below about the one feature it is actually guarding.
 
-   Where backdrop-filter is unsupported the tint alone cannot stand in for it;
-   the fallback below is the opaque ground the page had before, which hides
-   what passes under rather than showing it washed out. */
-.top {
+   `z-index: 2` stays -- the header's own popovers anchor against it, and code
+   blocks in the scroller are positioned too. The pseudo-element is one z-step
+   behind the controls, and a fade on .top itself would take the bottom of the
+   buttons' glyphs with it.
+
+   Where backdrop-filter is unsupported the mask would fade a tint with no
+   blur under it, which is worse than either: the fallback below paints the
+   whole band as the opaque ground the page had before, so what passes under is
+   hidden down to the same lower edge the reader's jumps clear. */
+.chat > .top {
   display: flex; align-items: center; gap: 10px; padding: 0 16px 0 20px;
   height: var(--topbar-h); position: absolute; top: 0; left: 0; right: 0; z-index: 2;
 }
-.top::before {
-  content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
-  background: color-mix(in oklab, var(--ink) 72%, transparent);
+.chat > .top::before {
+  content: ''; position: absolute; inset: 0 0 auto 0; height: var(--topbar-fade-h);
+  z-index: -1; pointer-events: none;
+  background: var(--page);
   -webkit-backdrop-filter: blur(20px) saturate(1.4);
   backdrop-filter: blur(20px) saturate(1.4);
-  -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 20px), transparent);
-  mask-image: linear-gradient(180deg, #000 calc(100% - 20px), transparent);
+  -webkit-mask-image: linear-gradient(180deg, rgba(0, 0, 0, .94) 0, rgba(0, 0, 0, .9) calc(var(--topbar-h) - 8px), rgba(0, 0, 0, 0) 100%);
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, .94) 0, rgba(0, 0, 0, .9) calc(var(--topbar-h) - 8px), rgba(0, 0, 0, 0) 100%);
 }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .top::before {
+  .chat > .top::before {
     background: var(--page);
     -webkit-mask-image: none;
     mask-image: none;
@@ -1251,11 +1271,15 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    it was at rest, and because padding on a scroll container travels with its
    content, that clearance is gone the moment the reader scrolls -- which is
    what lets a bubble reach the frost instead of stopping at its edge.
-   scroll-padding is the same number for the scrolls this file does not write
-   by hand: a scrollIntoView that brings a control to the top edge lands it
-   under the band rather than behind it. */
+
+   The two insets are different numbers on purpose. Padding is the row's
+   height, because it exists only to keep the resting frame where it was; the
+   frost below the row is meant to have content under it. scroll-padding is the
+   frost's LOWER edge (--topbar-fade-h), for the scrolls this file does not
+   write by hand: a scrollIntoView that brings a control to the top edge has to
+   clear the whole ramp, or it lands it under the blur. */
 .scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; scroll-behavior: smooth; scrollbar-gutter: stable;
-  padding-top: var(--topbar-h); scroll-padding-top: var(--topbar-h); }
+  padding-top: var(--topbar-h); scroll-padding-top: var(--topbar-fade-h); }
 /* The transcript stops being painted before it reaches the composer instead of
    sliding under it. The card is opaque (see .dock-in), so a line arriving at
    its top edge was cut mid-glyph, and the 22px of gutter below the card left
@@ -2063,9 +2087,9 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 }
 .backpill[hidden] { display: none; }
 /* The up pill mirrors the other end: same circle, hung under the header instead
-   of above the composer. --topbar-h is .top's height, the same number
-   .scroll[data-parked] insets by. */
-.chrome-toppill { top: calc(var(--topbar-h) + 12px); bottom: auto; }
+   of above the composer. It clears the whole frost band, not just the row, or
+   it would sit in the middle of the fade hanging over blurred bubbles. */
+.chrome-toppill { top: calc(var(--topbar-fade-h) + 12px); bottom: auto; }
 
 /* mid-turn narration: what the agent said on the way, set between the process
    lines and the answer. It used to sit a step under the reply and a step over
@@ -2924,20 +2948,20 @@ textarea:focus, textarea:focus-visible,
 /* The trajectory view (features/trajectory/). The scroller is parked, not
    removed: out of the flow at the size it had, invisible and deaf to the
    pointer, so its scroll position survives and the transcript keeps streaming
-   into it underneath. --topbar-h is .top's height, so the parked box still
-   starts where the live one did. The trajectory's box takes the flex space
-   and reserves --lift below, the same inset .col reserves, so its last row
-   clears the composer the way the last message does. The pill and the turn
-   nav belong to the scroller and go with it.
+   into it underneath. --topbar-h is the live scroller's own top padding, so
+   the parked box still starts where its content does. The trajectory's box
+   takes the flex space and reserves --lift below, the same inset .col
+   reserves, so its last row clears the composer the way the last message
+   does. The pill and the turn nav belong to the scroller and go with it.
 
-   #trajHost carries the header's height as padding because .top no longer
-   takes it out of the column: without it the view's first strip -- the scope
-   tabs -- would start under the frost. */
+   #trajHost carries the whole frost band as padding, not just the row, because
+   .top no longer takes either out of the column: with only --topbar-h the
+   view's first strip -- the scope tabs -- would start inside the fade. */
 .scroll[data-parked] { position: absolute; inset: var(--topbar-h) 0 0; visibility: hidden; pointer-events: none; }
 .scroll[data-parked] ~ .backpill { display: none; }
 .scroll[data-parked] ~ #turnNav { display: none; }
 #trajHost { flex: 1; min-height: 0; display: flex; flex-direction: column;
-  padding-top: var(--topbar-h); padding-bottom: var(--lift, 96px); }
+  padding-top: var(--topbar-fade-h); padding-bottom: var(--lift, 96px); }
 #trajHost[hidden] { display: none; }
 /* The glass itself: the conversation's own wash is painted on the column and
    the island floats on it, inset far enough that the colour reads around all

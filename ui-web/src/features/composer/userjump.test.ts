@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 /* Where the up pill sends the reader: the user turn above the viewport's top
  * edge. Geometry is defined rather than measured -- happy-dom lays nothing out
- * -- so the number asserted here is the scrollTop the pill would write. */
+ * -- so the number asserted here is the scrollTop the pill would write. Every
+ * landing keeps 16px under the band, the same lead the turn nav leaves. */
 
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -13,6 +14,7 @@ const rect = (top: number): DOMRect => ({
 
 afterEach(() => {
   document.body.innerHTML = ''
+  document.documentElement.style.removeProperty('--topbar-fade-tail')
 })
 
 function scroller(scrollTop: number): HTMLElement {
@@ -39,7 +41,7 @@ describe('the previous user turn', () => {
     turn(sc, 'ai', -300)
     turn(sc, 'me', -50)
     turn(sc, 'ai', 300)
-    expect(previousUserTop(sc)).toBe(50)
+    expect(previousUserTop(sc)).toBe(50 - 16)
   })
 
   it('skips the assistant turns between the questions', () => {
@@ -47,7 +49,7 @@ describe('the previous user turn', () => {
     turn(sc, 'ai', -400)
     turn(sc, 'me', -120)
     turn(sc, 'ai', -60)
-    expect(previousUserTop(sc)).toBe(180)
+    expect(previousUserTop(sc)).toBe(180 - 16)
   })
 
   it('answers null when no question starts above the viewport', () => {
@@ -76,12 +78,13 @@ describe('the previous user turn', () => {
     outside.className = 'turn me'
     outside.getBoundingClientRect = () => rect(-700)
     document.body.appendChild(outside)
-    expect(previousUserTop(sc)).toBe(20)
+    expect(previousUserTop(sc)).toBe(20 - 16)
   })
 
-  /* The header floats over the scroller (page.css, .top), so a question just
-     below the scroller's own edge is still behind the frost and is the one the
-     pill should go back to -- and it must land below the band, not on it. */
+  /* The header floats over the scroller (page.css, .chat > .top), so a
+     question just below the scroller's own edge is still behind the frost and
+     is the one the pill should go back to -- and it must land below the whole
+     band, not on it. The band is the row plus the fade token below it. */
   describe('under the frosted header', () => {
     function banded(sc: HTMLElement, height: number): void {
       const chat = document.createElement('div')
@@ -97,14 +100,25 @@ describe('the previous user turn', () => {
       const sc = scroller(200)
       banded(sc, 52)
       turn(sc, 'me', 20)
-      expect(previousUserTop(sc)).toBe(200 + 20 - 52)
+      expect(previousUserTop(sc)).toBe(200 + 20 - 52 - 16)
     })
 
     it('lands the question below the band rather than at the scroller edge', () => {
       const sc = scroller(200)
       banded(sc, 52)
       turn(sc, 'me', -50)
-      expect(previousUserTop(sc)).toBe(200 - 50 - 52)
+      expect(previousUserTop(sc)).toBe(200 - 50 - 52 - 16)
+    })
+
+    /* The fade reaches below the row (page.css, .chat > .top::before): a jump
+       that cleared only the row would leave the question inside the ramp,
+       blurred. The token is where headerBand() reads that distance. */
+    it('clears the fade below the row, not just the row', () => {
+      const sc = scroller(200)
+      banded(sc, 52)
+      document.documentElement.style.setProperty('--topbar-fade-tail', '36px')
+      turn(sc, 'me', -50)
+      expect(previousUserTop(sc)).toBe(200 - 50 - 52 - 36 - 16)
     })
   })
 })
