@@ -103,6 +103,7 @@ async def test_an_agent_that_says_it_holds_resident_work_is_kept() -> None:
     assert undeclared.asked == [] and busy.asked == []
 
 
+@pytest.mark.slow(reason="Starts a real stub ACP process and waits out the wake it arms")
 async def test_an_agent_holding_a_wake_is_kept_until_the_wake_has_fired(tmp_path: Path) -> None:
     """A turn arms an in-process wake and ends; the agent is then silent until the wake fires.
 
