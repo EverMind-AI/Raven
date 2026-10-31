@@ -28,8 +28,9 @@ top bar and resize from its corner (or focus the corner and use the arrow
 keys). Pick Fit, 3h, 1h or 15m to set the
 window, drag across the activity strip to choose one, or drag its frame
 to move it; hold Ctrl (Cmd on macOS) and scroll to zoom, or hold Shift and
-scroll to move along the timeline. Agents with nothing in the window fold
-into one row before it and one after. A step that failed carries a red mark,
+scroll to move along the timeline. Sub-agents with nothing in the window fold
+into one row before it and one after, while the main agent always keeps a row
+of its own. A step that failed carries a red mark,
 and so do the turn and the agent that hold it. While the trajectory view is
 open the message box is hidden; switch back to the chat to send a message.
 An approval or a question the conversation raises still shows over the

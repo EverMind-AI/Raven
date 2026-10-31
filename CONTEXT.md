@@ -2866,7 +2866,7 @@ has no scope until the parent arrives, when the index reprojects it under a new 
 a boundary trimmed to a skeleton loses its entries, so its scope has no entry to open it
 while its descendants keep the scope id (the skeleton keeps the span's name and `tool.name`,
 so it still counts as a boundary). These fields are the input the trajectory view's
-per-sub-agent tabs are built from.
+agent rows are built from -- the waterfall's one row per agent, keyed by scope.
 _Avoid_: "Lane" -- the scheduler's term; "sub-agent trace" -- a spawned run's steps live in the
 spawning turn's trace; `origin` for the boundary -- it says only whether a trace was dispatched.
 
@@ -2906,8 +2906,8 @@ turn returns), every ok turn end it records is `empty_reply` and
 `redundant_reply` cannot fire; the latter takes effect once that is fixed.
 A `subagent.run` entry's `meta` names the run: `label` and `task_id`, and `agent`,
 `instance`, `handle`, `dispatch`, `outcome`, `dag_run_id`, `node_id` and `attempt` each only
-when recorded with a value; these keys belong to the same input contract for the
-trajectory view's per-sub-agent tabs as the Sub-agent Scope fields.
+when recorded with a value; these keys feed the trajectory view's agent rows alongside
+the Sub-agent Scope fields -- the waterfall's one row per agent, keyed by scope.
 _Avoid_: calling a Conversation Record an entry — that is the CLI's text
 projection, without identity, structured status or timing.
 

@@ -94,8 +94,10 @@ host or to a worker. Within an agent, colours keep the existing
 
 **Cross-agent links are marks on rows.** A dispatching row carries a door
 arrow that brings the run it started into view, and the host turn a report
-started carries a marker naming the worker. No rule is drawn between the
-agents' rows; everything else is position.
+started carries a marker naming the worker. A worker's own row carries the
+dispatch line when it is open: a line from the dispatching row's door, at the
+instant it was sent, down to where the worker's work begins. Everything else
+is position.
 
 ## The time axis
 
@@ -226,9 +228,10 @@ These were open, and are now settled here rather than left to the builder.
   what a list may skip, but the waterfall is the only view of a span, and for
   the reason the threshold filter goes, a row it hides is time nobody can
   account for. Every entry the index returns has a row, and the switch goes.
-- **Turn rows are collapsed by default; agent groups are expanded.** A
-  session's turn count is large and its agent count is small. Agent groups
-  collapse too, for the DAG case where ten workers run at once.
+- **Turn rows are collapsed by default; a lone agent starts open.** A
+  session's turn count is large and its agent count is small. Once the session
+  has more than one agent, agent groups are folded by default too, so the DAG
+  case where ten workers run at once reads as one row per agent.
 - **Rows are windowed.** Only the rows around the viewport mount (`windowOf`
   over `ROW_HEIGHT`, `OVERSCAN` rows either side), the way the row list it
   replaces did; a 387-step session must not mount 387 rows × 3 levels.
