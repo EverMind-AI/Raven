@@ -490,6 +490,21 @@ it('selects the interval dragged across the ruler without moving the axis', asyn
   expect(document.querySelectorAll('.trajectory-ruler-pick')).toHaveLength(0)
 })
 
+it('leaves the list where the reader scrolled it when the ruler is only clicked', async () => {
+  await draw(Array.from({ length: 60 }, (_, index) => E(`r${index}`, index * 10, { turn_span_id: `T${index}` })))
+  const box = document.querySelector('.trajectory-list') as HTMLElement
+  Object.defineProperty(box, 'clientHeight', { value: 300, configurable: true })
+  act(() => { box.scrollTop = 600; fireEvent.scroll(box) })
+  const ruler = document.querySelector('.trajectory-ruler') as HTMLElement
+  boxAt(ruler, 100, 400)
+  /* A hand never clicks quite still: a pixel of travel is still a click. */
+  fireEvent.pointerDown(ruler, { clientX: 300, clientY: 10, button: 0, pointerId: 1 })
+  fireEvent.pointerMove(ruler, { clientX: 301, clientY: 10, pointerId: 1 })
+  fireEvent.pointerUp(ruler, { clientX: 301, clientY: 10, pointerId: 1 })
+  expect(document.querySelectorAll('.trajectory-ruler-pick')).toHaveLength(0)
+  expect(box.scrollTop).toBe(600)
+})
+
 it('moves one edge of the picked interval from its handle', async () => {
   await draw([
     E('a', 0, { turn_span_id: 'T1' }),
