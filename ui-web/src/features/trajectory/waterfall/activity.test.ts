@@ -88,4 +88,3 @@ describe('the strip\'s own axis', () => {
     }
   })
 })
-
