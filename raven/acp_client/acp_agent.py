@@ -193,10 +193,10 @@ def _tokens_reported(result: Any) -> int | None:
 def _agent_version(connection: Any) -> str:
     """The build that answered the handshake on this connection.
 
-    Read straight off ``agentInfo.version`` rather than through the shared
-    handshake parser: that parser also casts ``protocolVersion`` to an int, so
-    an agent that spells it "1.0" makes the whole read raise and the version
-    disappear. Nothing else in the handshake is part of this fact.
+    Read through the shared dialect helper, which reads ``agentInfo.version``
+    alone -- not through the full handshake parser, whose ``int()`` of
+    ``protocolVersion`` makes the whole read raise when an agent spells it
+    "1.0", and the version disappear.
 
     The live one, not a stored snapshot: a snapshot describes the build that
     was measured last, and a reader told "your agent is too old" out of a stale
@@ -207,9 +207,7 @@ def _agent_version(connection: Any) -> str:
     version to give.
     """
     try:
-        payload = connection.initialize
-        info = payload.get("agentInfo") if isinstance(payload, dict) else None
-        return str(info.get("version") or "") if isinstance(info, dict) else ""
+        return agent_version(connection.initialize) or ""
     except Exception:  # noqa: BLE001 - a version is a fact to add, never a reason to fail a turn
         return ""
 
