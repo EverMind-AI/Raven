@@ -3589,13 +3589,16 @@ def _said(steps: list[dict]) -> list[str]:
     return [s["attributes"].get("llm.input_preview") or s["attributes"].get("llm.output_preview") for s in steps]
 
 
+@pytest.mark.parametrize("mode", ["many_steps", "many_steps_held"], ids=["ends_at_once", "held_past_the_interval"])
 async def test_a_long_run_writes_its_steps_without_holding_the_event_loop(
-    trace_dir, tmp_path: Path, monkeypatch
+    trace_dir, tmp_path: Path, monkeypatch, mode: str
 ) -> None:
-    """A run's steps reach disk when it ends, up to 400 of them, each a span and
-    its artifacts. Written in one go they held the event loop for a quarter of a
-    second (400 steps, measured), and every other conversation on the gateway
-    stalled with it; the loop has to turn between batches of them."""
+    """A run's steps reach disk as it goes and when it ends, up to 400 of them,
+    each a span and its artifacts. Written in one go they held the event loop for
+    a quarter of a second (400 steps, measured), and every other conversation on
+    the gateway stalled with it; the loop has to turn between batches of them.
+    Held open past the live writer's interval, the run's steps are all due when
+    its timer fires, which is when a burst would be written whole."""
     from raven.tracing import spans as tracing_spans
 
     ticks = 0
@@ -3615,7 +3618,7 @@ async def test_a_long_run_writes_its_steps_without_holding_the_event_loop(
         emit(record)
 
     monkeypatch.setattr(tracing_spans, "emit", counted)
-    backend = build_third_party_backend(stub_config("a", mode="many_steps"))
+    backend = build_third_party_backend(stub_config("a", mode=mode))
     turning = asyncio.create_task(ticker())
     try:
         await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
@@ -3954,6 +3957,22 @@ async def test_live_steps_fold_touches_inside_the_interval_into_one_later_write(
     assert len(emitted) == written, "inside the interval, the touches wait"
     await asyncio.sleep(0.4)
     assert _marks(emitted)[written:] == [("ext.1", False), ("ext.2", False), ("ext.3", True)]
+
+
+async def test_live_steps_write_a_burst_a_batch_at_a_time_letting_the_loop_through(monkeypatch) -> None:
+    from raven.agent.subagent.backends import observability
+    from raven.agent.subagent.backends.observability import LiveSteps
+
+    emitted = _live_writes(monkeypatch)
+    steps = LiveSteps(_LiveRun(), prompt="do it", interval=0)
+    events: list[dict] = [{"t": "say", "text": f"said {i}", "at": _at(i % 60)} for i in range(100)]
+    steps.touch(events)
+    assert len(emitted) == observability._STEP_BATCH, "no more than one batch before the loop turns"
+    for _ in range(10):
+        await asyncio.sleep(0)
+    marks = _marks(emitted)
+    assert [span_id for span_id, _ in marks] == [f"ext.{i}" for i in range(101)]
+    assert [running for _, running in marks] == [False] * 100 + [True]
 
 
 async def test_live_steps_closed_with_a_write_still_waiting_write_nothing_after_the_turn(monkeypatch) -> None:
