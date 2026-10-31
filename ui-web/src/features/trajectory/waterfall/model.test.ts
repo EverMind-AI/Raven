@@ -180,6 +180,31 @@ it('keeps runs of differently named agents apart', () => {
   expect(w.agents).toHaveLength(3)
 })
 
+/* Three graph nodes on one preset, sent together: nothing names an instance,
+   so only the name is shared -- and one agent is never in two runs at once. */
+const parallel = (spans: Array<[string, number, number]>): TrajectoryEntry[] => spans.flatMap(([id, from, to]) => [
+  E({ entry_id: `d-${id}`, span_id: `d-${id}`, kind: 'subagent.run', opens_subagent_scope: `t:${id}`, meta: { agent: 'Raven-General', label: id }, operation_start: at(from), operation_end: at(to) }),
+  E({ entry_id: `w-${id}`, span_id: `w-${id}`, subagent_scope: `t:${id}`, turn_span_id: `W-${id}`, operation_start: at(from + 1), operation_end: at(to - 1) }),
+])
+
+it('keeps runs of one named agent apart while they overlap', () => {
+  const w = buildWaterfall(parallel([['n1', 5, 65], ['n2', 5, 65], ['n3', 6, 60]]), NOW)
+  expect(w.agents.map((agent) => agent.scopes)).toEqual([[null], ['t:n1'], ['t:n2'], ['t:n3']])
+  expect(new Set(w.agents.map((agent) => agent.key)).size).toBe(4)
+})
+
+it('still folds a named agent’s later run into the lane it has finished in', () => {
+  const w = buildWaterfall(parallel([['a', 0, 10], ['b', 5, 15], ['c', 20, 30]]), NOW)
+  expect(w.agents.slice(1).map((agent) => agent.scopes)).toEqual([['t:a', 't:c'], ['t:b']])
+})
+
+it('keeps runs that name one instance together even when they overlap', () => {
+  const runs = parallel([['a', 0, 10], ['b', 5, 15]]).map((entry) => (
+    entry.opens_subagent_scope ? { ...entry, meta: { ...entry.meta, instance: 'raven-design-1' } } : entry
+  ))
+  expect(buildWaterfall(runs, NOW).agents.slice(1).map((agent) => agent.scopes)).toEqual([['t:a', 't:b']])
+})
+
 it('reads an agent’s busy time as its turns and loose rows merged, not its lifetime', () => {
   const T0 = Date.parse('2026-10-28T10:00:00.000Z')
   const at = (seconds: number): string => new Date(T0 + seconds * 1000).toISOString()

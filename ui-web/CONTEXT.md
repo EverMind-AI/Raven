@@ -178,8 +178,9 @@ flag); the store's `available` is that one condition.
 The waterfall (`features/trajectory/waterfall/`) draws every entry the list
 store holds (`shown`), the ones the index marked `meta.hidden` included: grouped
 by agent -- the main session first, then one group per worker, a worker's runs
-folded into one by instance, else by name (`model.ts`'s `agentIdentity`) -- then
-by turn, then by span. A worker's mark is picked by that same recorded name
+folded into one by instance, else by name, where runs of one name that overlap
+in time are different agents and keep apart (`model.ts`'s `agentIdentity` and
+`foldAgents`) -- then by turn, then by span. A worker's mark is picked by that same recorded name
 (`meta.agent`, else `meta.instance`): an entry carries no preset, so the
 preset key `components/AgentMark.tsx` is built on is not available here.
 A worker's row is named by its task; open, it adds a second line -- the agent

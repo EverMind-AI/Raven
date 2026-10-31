@@ -156,28 +156,49 @@ function scopeOf(scope: string | null, entries: readonly TrajectoryEntry[], now:
    instance on the external span rather than on the run the door is, so the
    agent's own name is the next best identity: every run of `Claude Code-Mirasim`
    is that agent even when the instance id never reaches this page. Only a door
-   with neither keeps a lane of its own. */
-export function agentIdentity(scope: string | null, door: TrajectoryEntry | null): string {
-  if (scope === null) return 'main'
+   with neither keeps a lane of its own. `byName` says the name was all the
+   door had, which `foldAgents` treats as a guess rather than an identity. */
+export function agentIdentity(scope: string | null, door: TrajectoryEntry | null): { key: string; byName: boolean } {
+  if (scope === null) return { key: 'main', byName: false }
   const instance = door?.meta?.instance
-  if (typeof instance === 'string' && instance.trim() !== '') return `agent:${instance.trim()}`
+  if (typeof instance === 'string' && instance.trim() !== '') return { key: `agent:${instance.trim()}`, byName: false }
   const agent = door?.meta?.agent
-  if (typeof agent === 'string' && agent.trim() !== '') return `agent:${agent.trim()}`
-  return `scope:${scope}`
+  if (typeof agent === 'string' && agent.trim() !== '') return { key: `agent:${agent.trim()}`, byName: true }
+  return { key: `scope:${scope}`, byName: false }
 }
+
+const byStart = (a: WaterfallAgent, b: WaterfallAgent): number => a.start - b.start || (a.scope ?? '').localeCompare(b.scope ?? '')
 
 /** One agent per identity, its runs' turns in one sequence, numbered once. */
 export function foldAgents(parts: readonly WaterfallAgent[]): WaterfallAgent[] {
-  const groups = new Map<string, WaterfallAgent[]>()
+  const identities = new Map<string, { byName: boolean; runs: WaterfallAgent[] }>()
   for (const part of parts) {
-    const key = agentIdentity(part.scope, part.door)
-    const list = groups.get(key)
-    if (list) list.push(part)
-    else groups.set(key, [part])
+    const { key, byName } = agentIdentity(part.scope, part.door)
+    const held = identities.get(key)
+    if (held) held.runs.push(part)
+    else identities.set(key, { byName, runs: [part] })
+  }
+  const groups = new Map<string, WaterfallAgent[]>()
+  for (const [key, { byName, runs }] of identities) {
+    runs.sort(byStart)
+    if (!byName) {
+      groups.set(key, runs)
+      continue
+    }
+    /* One agent is never in two runs at once, so a run that starts before a
+       lane's last run has ended is another agent of that name -- a graph's
+       parallel nodes on one preset. Each such run takes the first lane it
+       fits after, or a lane of its own. */
+    const lanes: WaterfallAgent[][] = []
+    for (const run of runs) {
+      const lane = lanes.find((held) => held.at(-1)!.end <= run.start)
+      if (lane) lane.push(run)
+      else lanes.push([run])
+    }
+    lanes.forEach((lane, at) => groups.set(at === 0 ? key : `scope:${lane[0]!.scope}`, lane))
   }
   const agents: WaterfallAgent[] = []
   for (const [key, group] of groups) {
-    group.sort((a, b) => a.start - b.start || (a.scope ?? '').localeCompare(b.scope ?? ''))
     /* A worker's steps carry the turn span that dispatched them, so two runs
        sent from one turn name the same span. The run is part of a worker
        turn's identity; without it the folded agent lists two turns under one
