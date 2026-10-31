@@ -72,6 +72,17 @@ it('re-cuts a running row that carries its snapshot’s end when the clock moves
   expect(index.waterfall()).toEqual(buildWaterfall([running], T0 + 90_000))
 })
 
+it('keeps overlapping runs of one named agent apart across pages, as the one-shot tree does', () => {
+  const run = (id: string, from: number, to: number): TrajectoryEntry[] => [
+    E(`d-${id}`, { kind: 'subagent.run', opens_subagent_scope: `t:${id}`, meta: { agent: 'Raven-General' }, operation_start: at(from), operation_end: at(to) }),
+    E(`w-${id}`, { subagent_scope: `t:${id}`, turn_span_id: `W-${id}`, operation_start: at(from + 1), operation_end: at(to - 1) }),
+  ]
+  const pages = [run('a', 0, 10), run('b', 5, 15), run('c', 20, 30)]
+  const grown = build(pages)
+  expect(grown).toEqual(buildWaterfall(pages.flat(), NOW))
+  expect(grown.agents.slice(1).map((agent) => agent.scopes)).toEqual([['t:a', 't:c'], ['t:b']])
+})
+
 it('folds two pages of runs of one instance into the same agent', () => {
   const door = (id: string, scope: string, at2: number): TrajectoryEntry => E(id, {
     kind: 'tool.output', opens_subagent_scope: scope, meta: { instance: 'raven-design-1' },
