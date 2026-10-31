@@ -64,13 +64,12 @@ from raven.agent.subagent.backends import turn_rows
 from raven.agent.subagent.backends.base import bounded_delta, clamp_output
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.backends.observability import (
-    STEPS_KEY,
     external_agent_span,
     record_events,
     record_frames,
     record_outcome,
     record_session,
-    record_steps,
+    record_steps_async,
 )
 from raven.agent.subagent.instances import InstanceRegistry, get_registry
 from raven.agent.subagent.mcp_grant import McpDispatchError, McpGrant, McpSource, acp_target, resolve_grant
@@ -1747,7 +1746,7 @@ class AcpAgentBackend:
                         activity.note_frames(cancelled)
                         record_frames(span, cancelled)
                         if prompt_out:
-                            self._write_steps(span, collector, started)
+                            await self._write_steps(span, collector, started)
                         raise
                     except Exception:
                         # The prompt ended with no answer of its own -- its
@@ -1755,13 +1754,15 @@ class AcpAgentBackend:
                         # the agent said and ran until then is on the collector
                         # and its frames are in the journal; both are kept, as on
                         # a cancel, so the run is not one bar with nothing in it.
-                        # Recording must not replace the error being raised.
+                        # Recording must not replace the error being raised; only
+                        # a cancel landing while the steps are written does, as a
+                        # cancel should.
                         try:
                             failed = self._frames(journal, connection, session_id, frames_start)
                             activity.note_frames(failed)
                             record_frames(span, failed)
                             if prompt_out:
-                                self._write_steps(span, collector, started)
+                                await self._write_steps(span, collector, started)
                         except Exception:  # noqa: BLE001 - the turn's own error is the one to raise
                             logger.debug(
                                 "acp agent {!r}: recording a failed turn's steps failed", self.name, exc_info=True
@@ -1822,60 +1823,68 @@ class AcpAgentBackend:
                     frames=frames,
                     counted=result.get("usage") if isinstance(result, dict) else None,
                 )
-                # Before the checks below: a turn that answered nothing usable
-                # still spent what it spent.
-                await self._book_usage(
-                    collector,
-                    result.get("usage") if isinstance(result, dict) else None,
-                    initialize=connection.initialize,
-                    session_id=session_id,
-                    resumed=resumed,
-                    session_key=session_key,
-                    task_id=task_id,
-                )
-
-                if not text:
-                    tail = client.stderr_tail(1500)
-                    span.error(f"empty turn (stopReason={stop_reason})")
-                    # An agent that asked raven for something it does not serve --
-                    # `fs/read_text_file` and its siblings, permission requests
-                    # being answered now -- was told the method does not exist, and
-                    # adapters answer that by ending the turn with nothing. The
-                    # stderr tail says nothing about it, so name it here or it is
-                    # unknowable.
-                    refused = client.refusals_since(refused_before, session_id=session_id)
-                    # Collapsed: one turn with three tool calls refuses the same
-                    # method three times, and naming it three times says no more.
-                    asked = f"; refused agent requests: {', '.join(sorted(set(refused)))}" if refused else ""
-                    raise AcpEmptyTurnError(
-                        f"acp agent {self.name!r} ended its turn with no content "
-                        f"(stopReason={stop_reason!r}){asked}; stderr tail: {tail or '<empty>'}"
+                # The steps go to disk last, yielding to the loop as they go, so
+                # a cancel landing meanwhile cannot cost the turn its usage or
+                # its first-turn binding -- and they go however this ends: a
+                # cancel during the booking, or anything the checks raise,
+                # since a turn that ended badly is the one worth reading.
+                try:
+                    # Before the checks below: a turn that answered nothing usable
+                    # still spent what it spent.
+                    await self._book_usage(
+                        collector,
+                        result.get("usage") if isinstance(result, dict) else None,
+                        initialize=connection.initialize,
+                        session_id=session_id,
+                        resumed=resumed,
+                        session_key=session_key,
+                        task_id=task_id,
                     )
 
-                if failed := collector.failed_call_without_answer:
-                    label, detail = failed
-                    span.error(f"no answer after a failed {label}")
-                    # Not `if not text`: this turn said something. What it said
-                    # is the plan it had for the call that then failed, and
-                    # handing that back made a run that did nothing read as a
-                    # completed one whose result was a promise to begin.
-                    raise AcpEmptyTurnError(
-                        f"acp agent {self.name!r} ended its turn on a failed {label} and answered "
-                        f"nothing after it (stopReason={stop_reason!r}); the call reported: "
-                        f"{detail.strip() or '<no detail>'}"
-                    )
+                    if not text:
+                        tail = client.stderr_tail(1500)
+                        span.error(f"empty turn (stopReason={stop_reason})")
+                        # An agent that asked raven for something it does not serve --
+                        # `fs/read_text_file` and its siblings, permission requests
+                        # being answered now -- was told the method does not exist, and
+                        # adapters answer that by ending the turn with nothing. The
+                        # stderr tail says nothing about it, so name it here or it is
+                        # unknowable.
+                        refused = client.refusals_since(refused_before, session_id=session_id)
+                        # Collapsed: one turn with three tool calls refuses the same
+                        # method three times, and naming it three times says no more.
+                        asked = f"; refused agent requests: {', '.join(sorted(set(refused)))}" if refused else ""
+                        raise AcpEmptyTurnError(
+                            f"acp agent {self.name!r} ended its turn with no content "
+                            f"(stopReason={stop_reason!r}){asked}; stderr tail: {tail or '<empty>'}"
+                        )
 
-                if (refused := self._provider_refusal(text)) is not None:
-                    span.error("the reply is the model provider's refusal")
-                    raise AcpProviderRefusalError(refused, said=text)
+                    if failed := collector.failed_call_without_answer:
+                        label, detail = failed
+                        span.error(f"no answer after a failed {label}")
+                        # Not `if not text`: this turn said something. What it said
+                        # is the plan it had for the call that then failed, and
+                        # handing that back made a run that did nothing read as a
+                        # completed one whose result was a promise to begin.
+                        raise AcpEmptyTurnError(
+                            f"acp agent {self.name!r} ended its turn on a failed {label} and answered "
+                            f"nothing after it (stopReason={stop_reason!r}); the call reported: "
+                            f"{detail.strip() or '<no detail>'}"
+                        )
 
-                if not resumed and self.is_stateful:
-                    # Deferred commit, as the cli transport does it: binding a handle
-                    # before the first turn succeeded would resume a session that
-                    # never produced anything. A settled cancel binds it above
-                    # instead -- that session did produce something, and is the one
-                    # the next turn has to continue.
-                    await self._registry.commit(skey, self.name, handle, session_id, kind="acp")
+                    if (refused := self._provider_refusal(text)) is not None:
+                        span.error("the reply is the model provider's refusal")
+                        raise AcpProviderRefusalError(refused, said=text)
+
+                    if not resumed and self.is_stateful:
+                        # Deferred commit, as the cli transport does it: binding a handle
+                        # before the first turn succeeded would resume a session that
+                        # never produced anything. A settled cancel binds it above
+                        # instead -- that session did produce something, and is the one
+                        # the next turn has to continue.
+                        await self._registry.commit(skey, self.name, handle, session_id, kind="acp")
+                finally:
+                    await self._write_steps(span, collector, started)
 
                 reply = await self._finished(collector.reply, stop_reason=stop_reason, span=span, sink=on_delta)
                 notes = [self._resume_lost.pop((skey, handle), None), self._mcp_note(grant, lent)]
@@ -2418,10 +2427,9 @@ class AcpAgentBackend:
         activity.note_closing(collector.closing_text)
         activity.note_frames(frames)
         record_frames(span, frames)
-        self._write_steps(span, collector, started)
 
     @staticmethod
-    def _write_steps(span: Any, collector: _TurnCollector, started: float) -> None:
+    async def _write_steps(span: Any, collector: _TurnCollector, started: float) -> None:
         """What the agent said and ran, as the run's own steps, however the turn ended.
 
         The caller only ever sees the answer, and the wire journal is not a
@@ -2429,8 +2437,7 @@ class AcpAgentBackend:
         writing them again.
         """
         elapsed_ms = int((time.monotonic() - started) * 1000)
-        steps = record_steps(span, prompt=collector.prompt, events=collector.events, elapsed_ms=elapsed_ms)
-        span.set(**{STEPS_KEY: len(steps)})
+        await record_steps_async(span, prompt=collector.prompt, events=collector.events, elapsed_ms=elapsed_ms)
 
 
 __all__ = ["AcpAgentBackend", "AcpEmptyTurnError"]

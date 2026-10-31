@@ -18,6 +18,7 @@ protect the model's context -- and none of this enters the model's context.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -188,6 +189,138 @@ def _step_span(
     )
 
 
+_Step = tuple[str, str, str, datetime, datetime, list[tuple[str, Any]], dict[str, Any]]
+"""One step as it goes to disk: its span id, name, type, both ends, artifacts and attributes."""
+
+
+def _plan_steps(
+    span: Any,
+    *,
+    prompt: str | None,
+    events: list[dict[str, Any]],
+    elapsed_ms: int,
+    started_at: datetime | None = None,
+    ended_at: datetime | None = None,
+    id_seed: str | None = None,
+    skip_ids: set[str] | None = None,
+) -> tuple[dict[str, Any], list[_Step]]:
+    """The steps :func:`record_steps` writes, worked out without touching disk."""
+    identity = span.identity()
+    if not identity.get("trace_id") or not identity.get("span_id"):
+        return identity, []
+    close = ended_at or datetime.now(timezone.utc)
+    floor = started_at or _utc(identity.get("start")) or close - timedelta(milliseconds=max(0, elapsed_ms))
+    ats = [_utc(event.get("at")) for event in events]
+    results = {event.get("id"): event for event in events if event.get("t") == "result"}
+    steps: list[tuple[str, str, datetime, datetime, list[tuple[str, Any]], dict[str, Any]]] = []
+
+    def span_end(index: int) -> datetime:
+        for later in ats[index + 1 :]:
+            if later is not None:
+                return later
+        return close
+
+    if prompt:
+        first = next((at for at in ats if at is not None), close)
+        steps.append(
+            (
+                "llm.call",
+                "model",
+                floor,
+                first,
+                [("llm.input", {"messages": [{"role": "user", "content": prompt}]})],
+                {"llm.input_preview": prompt[:_PREVIEW_CHARS]},
+            )
+        )
+    for index, event in enumerate(events):
+        if len(steps) >= _STEP_LIMIT:
+            break
+        kind = event.get("t")
+        at = ats[index] or (steps[-1][3] if steps else floor)
+        end = span_end(index)
+        if kind == "say":
+            text = str(event.get("text") or "")
+            steps.append(
+                (
+                    "llm.call",
+                    "model",
+                    at,
+                    end,
+                    [("llm.output", {"content": text})],
+                    {"llm.output_preview": text[:_PREVIEW_CHARS]},
+                )
+            )
+        elif kind == "thought":
+            text = str(event.get("text") or "")
+            steps.append(
+                (
+                    "llm.call",
+                    "model",
+                    at,
+                    end,
+                    [("llm.output", {"content": "", "reasoning_content": text})],
+                    {"llm.output_preview": text[:_PREVIEW_CHARS]},
+                )
+            )
+        elif kind == "user":
+            text = str(event.get("text") or "")
+            steps.append(
+                (
+                    "llm.call",
+                    "model",
+                    at,
+                    end,
+                    [("llm.input", {"messages": [{"role": "user", "content": text}]})],
+                    {"llm.input_preview": text[:_PREVIEW_CHARS]},
+                )
+            )
+        elif kind == "call":
+            call = event.get("call")
+            name = str(getattr(call, "name", None) or "tool")
+            try:
+                arguments = call.arguments_json() if call is not None else "{}"
+            except Exception:  # noqa: BLE001 — a call we cannot read is still a row
+                arguments = "{}"
+            artifacts: list[tuple[str, Any]] = [("tool.input", {"name": name, "params": arguments or "{}"})]
+            attributes: dict[str, Any] = {
+                "tool.args_preview": (arguments or "")[:_PREVIEW_CHARS],
+                "tool.name": name,
+            }
+            result = results.get(event.get("id"))
+            if result is not None:
+                text = str(result.get("text") or "")
+                artifacts.append(("tool.output", {"result": text, "ok": result.get("ok")}))
+                attributes["tool.result_preview"] = text[:_PREVIEW_CHARS]
+                if result.get("ok") is False:
+                    # Marked the way the main loop marks a failed call, so the
+                    # trajectory reads it as one: the artifact's `ok` is not
+                    # something it looks at.
+                    attributes["tool.error"] = text[:_PREVIEW_CHARS] or "failed"
+                end = max(end, _utc(result.get("at")) or end)
+            steps.append(("tool.call", "tool", at, end, artifacts, attributes))
+    planned: list[_Step] = []
+    for index, (name, span_type, start, end, artifacts, attributes) in enumerate(steps):
+        # Inside the run, both ends: a journal written before its stamps
+        # carried an offset keeps naive local times, and one read in another
+        # zone, or across a clock step, can fall outside.
+        start = max(start, floor)
+        if ended_at is not None:
+            start = min(start, ended_at)
+            end = min(end, ended_at)
+        span_id = f"span-{id_seed}-{index}" if id_seed else tracing_context.new_span_id()
+        if skip_ids is not None and span_id in skip_ids:
+            continue
+        planned.append((span_id, name, span_type, start, end, artifacts, attributes))
+    return identity, planned
+
+
+def _write_step(span: Any, identity: dict[str, Any], step: _Step) -> None:
+    span_id, name, span_type, start, end, artifacts, attributes = step
+    for key, payload in artifacts:
+        attributes.update(_artifact(span, key, payload))
+    _step_span(span, identity, name, span_type, start, end, attributes, span_id)
+
+
 def record_steps(
     span: Any,
     *,
@@ -224,119 +357,55 @@ def record_steps(
     """
     emitted: list[str] = []
     try:
-        identity = span.identity()
-        if not identity.get("trace_id") or not identity.get("span_id"):
-            return emitted
-        close = ended_at or datetime.now(timezone.utc)
-        floor = started_at or _utc(identity.get("start")) or close - timedelta(milliseconds=max(0, elapsed_ms))
-        ats = [_utc(event.get("at")) for event in events]
-        results = {event.get("id"): event for event in events if event.get("t") == "result"}
-        steps: list[tuple[str, str, datetime, datetime, list[tuple[str, Any]], dict[str, Any]]] = []
-
-        def span_end(index: int) -> datetime:
-            for later in ats[index + 1 :]:
-                if later is not None:
-                    return later
-            return close
-
-        if prompt:
-            first = next((at for at in ats if at is not None), close)
-            steps.append(
-                (
-                    "llm.call",
-                    "model",
-                    floor,
-                    first,
-                    [("llm.input", {"messages": [{"role": "user", "content": prompt}]})],
-                    {"llm.input_preview": prompt[:_PREVIEW_CHARS]},
-                )
-            )
-        for index, event in enumerate(events):
-            if len(steps) >= _STEP_LIMIT:
-                break
-            kind = event.get("t")
-            at = ats[index] or (steps[-1][3] if steps else floor)
-            end = span_end(index)
-            if kind == "say":
-                text = str(event.get("text") or "")
-                steps.append(
-                    (
-                        "llm.call",
-                        "model",
-                        at,
-                        end,
-                        [("llm.output", {"content": text})],
-                        {"llm.output_preview": text[:_PREVIEW_CHARS]},
-                    )
-                )
-            elif kind == "thought":
-                text = str(event.get("text") or "")
-                steps.append(
-                    (
-                        "llm.call",
-                        "model",
-                        at,
-                        end,
-                        [("llm.output", {"content": "", "reasoning_content": text})],
-                        {"llm.output_preview": text[:_PREVIEW_CHARS]},
-                    )
-                )
-            elif kind == "user":
-                text = str(event.get("text") or "")
-                steps.append(
-                    (
-                        "llm.call",
-                        "model",
-                        at,
-                        end,
-                        [("llm.input", {"messages": [{"role": "user", "content": text}]})],
-                        {"llm.input_preview": text[:_PREVIEW_CHARS]},
-                    )
-                )
-            elif kind == "call":
-                call = event.get("call")
-                name = str(getattr(call, "name", None) or "tool")
-                try:
-                    arguments = call.arguments_json() if call is not None else "{}"
-                except Exception:  # noqa: BLE001 — a call we cannot read is still a row
-                    arguments = "{}"
-                artifacts: list[tuple[str, Any]] = [("tool.input", {"name": name, "params": arguments or "{}"})]
-                attributes: dict[str, Any] = {
-                    "tool.args_preview": (arguments or "")[:_PREVIEW_CHARS],
-                    "tool.name": name,
-                }
-                result = results.get(event.get("id"))
-                if result is not None:
-                    text = str(result.get("text") or "")
-                    artifacts.append(("tool.output", {"result": text, "ok": result.get("ok")}))
-                    attributes["tool.result_preview"] = text[:_PREVIEW_CHARS]
-                    if result.get("ok") is False:
-                        # Marked the way the main loop marks a failed call, so the
-                        # trajectory reads it as one: the artifact's `ok` is not
-                        # something it looks at.
-                        attributes["tool.error"] = text[:_PREVIEW_CHARS] or "failed"
-                    end = max(end, _utc(result.get("at")) or end)
-                steps.append(("tool.call", "tool", at, end, artifacts, attributes))
-        for index, (name, span_type, start, end, artifacts, attributes) in enumerate(steps):
-            # Inside the run, both ends: a journal written before its stamps
-            # carried an offset keeps naive local times, and one read in another
-            # zone, or across a clock step, can fall outside.
-            start = max(start, floor)
-            if ended_at is not None:
-                start = min(start, ended_at)
-                end = min(end, ended_at)
-            span_id = f"span-{id_seed}-{index}" if id_seed else tracing_context.new_span_id()
-            if skip_ids is not None and span_id in skip_ids:
-                continue
-            emitted.append(span_id)
-            if dry_run:
-                continue
-            for key, payload in artifacts:
-                attributes.update(_artifact(span, key, payload))
-            _step_span(span, identity, name, span_type, start, end, attributes, span_id)
+        identity, steps = _plan_steps(
+            span,
+            prompt=prompt,
+            events=events,
+            elapsed_ms=elapsed_ms,
+            started_at=started_at,
+            ended_at=ended_at,
+            id_seed=id_seed,
+            skip_ids=skip_ids,
+        )
+        for step in steps:
+            emitted.append(step[0])
+            if not dry_run:
+                _write_step(span, identity, step)
     except Exception:  # noqa: BLE001 — an audit trail must not take down the run
         logger.debug("tracing: record_steps failed", exc_info=True)
     return emitted
+
+
+_STEP_BATCH = 25
+"""Steps written between two turns of the event loop: about 20 ms of disk work, measured."""
+
+
+async def record_steps_async(span: Any, *, prompt: str | None, events: list[dict[str, Any]], elapsed_ms: int) -> None:
+    """:func:`record_steps` for a live run, letting the event loop through between batches.
+
+    A run ends with up to 400 steps to write, a span and its artifacts each;
+    written in one go they held the loop for a quarter of a second, and every
+    other conversation on the gateway with it. The trace store is not safe to
+    write from a second thread, so the writing stays on the loop and yields.
+
+    The run's count goes on first: a run cut short while its steps are still
+    going to disk is then left alone by a backfill, instead of getting a second
+    copy beside the steps that did reach the log.
+    """
+    try:
+        identity, steps = _plan_steps(span, prompt=prompt, events=events, elapsed_ms=elapsed_ms)
+    except Exception:  # noqa: BLE001 — an audit trail must not take down the run
+        logger.debug("tracing: record_steps failed", exc_info=True)
+        identity, steps = {}, []
+    span.set(**{STEPS_KEY: len(steps)})
+    for index, step in enumerate(steps):
+        if index and index % _STEP_BATCH == 0:
+            await asyncio.sleep(0)
+        try:
+            _write_step(span, identity, step)
+        except Exception:  # noqa: BLE001 — an audit trail must not take down the run
+            logger.debug("tracing: record_steps failed", exc_info=True)
+            return
 
 
 __all__ = [
@@ -350,5 +419,6 @@ __all__ = [
     "record_frames",
     "record_session",
     "record_steps",
+    "record_steps_async",
     "record_transcript",
 ]
