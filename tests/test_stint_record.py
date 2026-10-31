@@ -90,6 +90,19 @@ def test_touching_a_stint_moves_only_its_stamp(tmp_path: Path) -> None:
     }
 
 
+def test_touching_a_missing_stint_does_nothing(tmp_path: Path) -> None:
+    assert StintStore(tmp_path).touch("stint-missing", holder_pid=1) is False
+
+
+def test_touching_an_unreadable_stint_does_nothing(tmp_path: Path) -> None:
+    store = StintStore(tmp_path)
+    path = tmp_path / "stint-bad.json"
+    path.write_text("{not json", encoding="utf-8")
+
+    assert store.touch("stint-bad", holder_pid=1) is False
+    assert path.read_text(encoding="utf-8") == "{not json"
+
+
 def test_touching_does_nothing_for_a_stint_that_ended_or_is_held_elsewhere(tmp_path: Path) -> None:
     store = StintStore(tmp_path)
     path = _written(store, "stint-ended")

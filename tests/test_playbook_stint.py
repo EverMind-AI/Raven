@@ -2682,6 +2682,52 @@ class TestResume:
         assert await self._driver(tmp_path, tool).sweep("web:stint") == []
         assert tool.submitted == []
 
+    async def test_a_refused_first_round_taken_up_is_closed(self, tmp_path: Path) -> None:
+        """`resume` asked because the first round never opened; a refusal has
+        to close the record the same way `start` does, or the next request
+        takes it up and asks again from a record that says it is running."""
+        from raven.stint.record import StintRecord
+
+        tool = _FakeTool(tmp_path / "stints")
+        tool.deny = True
+        driver = self._driver(tmp_path, tool)
+        spec = _spec(confirm=True)
+        store = StintStore(tool.stints_root("web:stint"))
+        store.write(
+            StintRecord(
+                stint_id="stint-x",
+                playbook=spec.name,
+                spec=spec.model_dump(by_alias=True, exclude_none=True),
+                workdir=str(tmp_path),
+                project=str(tmp_path),
+                round_index=1,
+                status="interrupted",
+                origin=tool.turn_origin(),
+            )
+        )
+
+        receipt = await driver.resume("stint-x", "web:stint")
+
+        assert receipt.startswith("Error") and "did not approve" in receipt
+        [after] = store.list()
+        assert after.status == "stopped"
+        assert after.stop_reason == "the first round was not approved"
+
+    async def test_resuming_a_round_that_cannot_start_leaves_it_interrupted(self, tmp_path: Path) -> None:
+        """A round that already opened is not asked about again; when its new
+        dispatch is refused, the record goes back to interrupted rather than
+        staying running with nothing advancing it."""
+        tool = _FakeTool(tmp_path / "stints")
+        tool.refuse = "Error: invalid DAG -- node id 'x' is already used by run 'r'."
+        store = self._interrupted(tmp_path, tool)
+        driver = self._driver(tmp_path, tool)
+
+        receipt = await driver.resume("stint-x", "web:stint")
+
+        assert receipt.startswith("Error")
+        [after] = store.list()
+        assert after.status == "interrupted"
+
 
 class TestTheWordThatEndsItEarly:
     """`stop.until` was read by the machine and said to nobody."""
