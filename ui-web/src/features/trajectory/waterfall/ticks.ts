@@ -34,9 +34,20 @@ export interface ClockTick {
   major: boolean
 }
 
-/** The first instant at or after `time` that is a whole number of steps past its local midnight. */
+/** The first instant at or after `time` that is a whole number of steps past its local midnight.
+ *  A step of an hour or more counts the local clock's hours, not milliseconds:
+ *  on a day 23 or 25 hours long, milliseconds would put every mark after the
+ *  clocks change an hour off its round time. An hour the clocks skip gets no
+ *  mark -- `Date` hands back a later time for it. */
 function aligned(time: number, step: number): number {
   const day = new Date(time)
+  if (step >= HOUR) {
+    for (let k = 0; ; k += 1) {
+      const hour = (k * step) / HOUR
+      const at = new Date(day.getFullYear(), day.getMonth(), day.getDate(), hour)
+      if (at.getTime() >= time && at.getHours() === hour % 24 && at.getMinutes() === 0) return at.getTime()
+    }
+  }
   const midnight = new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime()
   return midnight + Math.ceil((time - midnight) / step) * step
 }
@@ -72,18 +83,21 @@ export function clockTicks(axis: TimeAxis, view: Viewport, widthPx: number): Clo
   const ticks: ClockTick[] = []
   let fold = 0
   let lastPx = -Infinity
-  for (let time = aligned(from, step); time <= to; time += step) {
+  let time = aligned(from, step)
+  while (time <= to) {
     while (fold < axis.gaps.length && axis.gaps[fold]!.end <= time) fold++
     const gap = axis.gaps[fold]
     if (gap !== undefined && gap.start < time) {
-      /* Inside a fold: the loop's own step lands on the first round time past it. */
-      time = aligned(gap.end, step) - step
+      /* Inside a fold: carry on from the first round time past it. */
+      time = aligned(gap.end, step)
       continue
     }
     const left = (axis.project(time) - view.from) / span
-    if ((left * widthPx) - lastPx < LABEL_PX * 0.6) continue
-    lastPx = left * widthPx
-    ticks.push({ left, time, major: majorAt(time, step) })
+    if ((left * widthPx) - lastPx >= LABEL_PX * 0.6) {
+      lastPx = left * widthPx
+      ticks.push({ left, time, major: majorAt(time, step) })
+    }
+    time = aligned(time + 1, step)
   }
   return ticks
 }
