@@ -620,8 +620,10 @@ def handle_prompt(request_id, params) -> None:
         update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "a repo."}})
         ok(request_id, {"stopReason": "end_turn"})
         return
-    if MODE == "many_steps":
+    if MODE in ("many_steps", "many_steps_held"):
         # A long run: a hundred messages, each followed by the call it announced.
+        # Held, the turn stays open past the live writer's one-second interval
+        # after the last of them, so its timer fires with every step still due.
         for i in range(100):
             update(
                 session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": f"step {i}."}}
@@ -631,6 +633,9 @@ def handle_prompt(request_id, params) -> None:
             )
             update(session_id, {"sessionUpdate": "tool_call_update", "toolCallId": f"t{i}", "status": "completed"})
         update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "done."}})
+        if MODE == "many_steps_held":
+            sys.stdout.flush()
+            time.sleep(1.3)
         ok(request_id, {"stopReason": "end_turn", "usage": {"inputTokens": 120, "outputTokens": 30}})
         return
     if MODE == "ends_on_a_step":

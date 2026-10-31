@@ -424,8 +424,11 @@ class LiveSteps:
     replaces a settled one.
 
     ``touch`` runs on every update and writes at most once per ``interval``; a touch
-    that lands sooner is folded into one write when the interval runs out.
-    ``finish`` settles what is left.
+    that lands sooner is folded into one write when the interval runs out. A write
+    puts down at most ``_STEP_BATCH`` steps and leaves the rest to the loop's next
+    turn, as ``finish`` does: a burst of updates inside one interval is all due when
+    it runs out, and written whole it would hold the loop. ``finish`` settles what
+    is left.
     Nothing here may fail a run.
     """
 
@@ -436,7 +439,7 @@ class LiveSteps:
         self._events: list[dict[str, Any]] = []
         self._written: dict[str, tuple[Any, ...]] = {}
         self._last = float("-inf")
-        self._pending: asyncio.TimerHandle | None = None
+        self._pending: asyncio.Handle | None = None
         self._closed = False
 
     def touch(self, events: list[dict[str, Any]]) -> None:
@@ -500,11 +503,18 @@ class LiveSteps:
         self._last = time.monotonic()
         try:
             identity, steps = self._plan(self._events, 0)
-            for step, mark in self._due(steps, live=True):
+            due = self._due(steps, live=True)
+            for step, mark in due[:_STEP_BATCH]:
                 _write_step(self._span, identity, step)
                 self._written[step[0]] = mark
         except Exception:  # noqa: BLE001 — an audit trail must not take down the run
             logger.debug("tracing: live steps failed", exc_info=True)
+            return
+        if len(due) > _STEP_BATCH and self._pending is None:
+            try:
+                self._pending = asyncio.get_running_loop().call_soon(self._flush)
+            except RuntimeError:
+                return
 
     def _plan(self, events: list[dict[str, Any]], elapsed_ms: int) -> tuple[dict[str, Any], list[_Step]]:
         run_id = self._span.identity().get("span_id")
