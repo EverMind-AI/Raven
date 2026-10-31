@@ -781,6 +781,29 @@ async def test_execute_holds_the_conversation_lock_against_a_relayed_asker():
 
 
 @pytest.mark.asyncio
+async def test_a_stopped_relayed_question_raises_rather_than_answering_empty():
+    """The ACP route is the real one: `AskViaTool` -> `ask_direct` -> broker.
+    The elicitation tests use a fake asker; this pins what the route actually
+    does when the task waiting on it is stopped."""
+    from raven.acp_client.asker import AskViaTool
+    from raven.rpc.question_broker import QuestionBroker
+
+    asked = asyncio.Event()
+
+    async def send_frame(frame: dict) -> None:
+        asked.set()
+
+    broker = QuestionBroker(send_frame)
+    tool = AskUserTool(broker=broker, conversation_id="tui:test")
+    task = asyncio.create_task(AskViaTool(tool).ask("Relayed?", None, "tui:test"))
+    await asyncio.wait_for(asked.wait(), 1.0)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
 async def test_ask_direct_takes_no_lock_of_its_own():
     """Both relayed routes hold ``question_lock`` across their whole exchange and
     reach the broker through ``ask_direct``; the lock is not re-entrant, so a

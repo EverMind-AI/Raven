@@ -128,8 +128,8 @@ class QuestionBroker:
 
         Returns ``default`` on timeout, EOF (:meth:`cancel_all`), an
         undeliverable question, or any internal error. Raises only
-        ``CancelledError``, and only when the calling task itself is being
-        cancelled.
+        ``CancelledError``, and only when a cancellation of the calling task
+        arrives while this wait is pending.
 
         ``timeout_s`` of ``None`` takes :attr:`default_timeout_s`, and is echoed
         in the notification so a surface can show how long the question
@@ -191,6 +191,13 @@ class QuestionBroker:
         self._by_request[request_id] = conversation_id
         if timeout_s is None:
             timeout_s = self.default_timeout_s
+        task = asyncio.current_task()
+        # The count is cumulative: a task that swallowed an earlier cancellation
+        # carries it for the rest of its life. Remember where this wait started,
+        # so only a cancellation that arrives while it is pending counts as its
+        # own; an old count must not turn someone else's cancelled future into
+        # the calling task's cancellation.
+        cancels_before = task.cancelling() if task is not None else 0
         answered = False
         try:
             # ``clarify.request`` is the ui-tui frontend's existing multi-choice
@@ -229,8 +236,7 @@ class QuestionBroker:
             # stop believed it had stopped. Only a cancellation
             # aimed at this task propagates; the future being cancelled by
             # someone else is still a question that went unanswered.
-            task = asyncio.current_task()
-            if task is not None and task.cancelling():
+            if task is not None and task.cancelling() > cancels_before:
                 raise
             return default
         except QuestionUndeliverableError as exc:
@@ -265,8 +271,8 @@ class QuestionBroker:
 
         Spawned rather than awaited from the ``finally``: one of those exits is a
         cancelled turn, and awaiting while the calling task unwinds a
-        cancellation raises ``CancelledError`` again -- costing both this
-        notification and the default the agent loop is waiting for.
+        cancellation raises ``CancelledError`` again -- costing the notification,
+        and on the fail-safe exits the default the agent loop is waiting for.
         """
         frame = {
             "jsonrpc": "2.0",
