@@ -3449,7 +3449,9 @@ the template, per product, and the next template loads the modules at least two 
 (one product's own while only one has been seen): a module one product alone imports is shared by
 no other process, so it is left for that product to import after the fork. Only the host's own
 interpreter starting `-m raven` or a product launcher is forked; anything else launches the
-ordinary way.
+ordinary way. A template that has not reported ready within a minute is ended, and launches go
+the ordinary way for ten minutes before a new one is started; one that reports it cannot serve,
+or fails to start any other way, is not used again by that loop.
 
 **Leftover agent** (`raven/acp_client/leftovers.py`):
 An ACP agent process group whose launching host is no longer running. An ACP agent runs in a
