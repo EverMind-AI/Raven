@@ -58,6 +58,13 @@ export interface OpenScope {
   door: TrajectoryEntry | null
 }
 
+/** The stretch the reader picked on the ruler: its two ends in real time, so a
+ *  live axis growing past them leaves the stretch where it was picked. */
+export interface RulerPick {
+  a: number
+  b: number
+}
+
 export interface TrajectoryState {
   /** The gateway announced the surface and has not refused it since. */
   served: boolean
@@ -94,6 +101,10 @@ export interface TrajectoryState {
   selectedBy: SelectSource | null
   /** Bumped by every selection `select` makes, so a surface that answers each one once tells it from a re-render. */
   selections: number
+  /** The stretch picked on the ruler, in real time; the rows show only what ran
+   *  inside it. Kept beside the selection so Escape can take it back from the
+   *  one ordered table (`state/escapeOrder.ts`). */
+  picked: RulerPick | null
   /** The current scope: a Sub-agent Scope's id, or null for the main session. */
   scope: string | null
   /** The sub-agent tabs the reader opened, in the order they were opened. */
@@ -157,6 +168,7 @@ const initial: TrajectoryState = {
   selectedId: null,
   selectedBy: null,
   selections: 0,
+  picked: null,
   scope: null,
   scopes: [],
   saved: {},
@@ -239,7 +251,7 @@ export function handshake(): void {
 function leaveView(): void {
   if (store.get().view === 'trajectory') {
     bump()
-    patch({ view: 'chat', listing: false })
+    patch({ view: 'chat', listing: false, picked: null })
   }
 }
 
@@ -303,7 +315,8 @@ export function setView(view: View): void {
   if (s.view === view) return
   if (view === 'trajectory' && !available(s)) return
   bump()
-  patch({ view, listing: false })
+  /* A pick belongs to the ruler it was made on; leaving the view drops it. */
+  patch({ view, listing: false, picked: view === 'trajectory' ? s.picked : null })
 }
 
 export const toggleView = (): void => { setView(store.get().view === 'trajectory' ? 'chat' : 'trajectory') }
@@ -330,6 +343,15 @@ export function selectAcross(entryId: string | null, opts: { source: SelectSourc
   if (entryId !== null && !(entryId in s.index)) return
   if (s.selectedId === entryId) return
   patch({ selectedId: entryId, selectedBy: entryId === null ? null : opts.source, selections: s.selections + 1 })
+}
+
+/** The stretch picked on the ruler; the rows are filtered to it. A pick of the
+ *  same stretch is not a change, so a pointer that never moved writes nothing. */
+export function setPicked(pick: RulerPick | null): void {
+  const held = store.get().picked
+  if (held === pick) return
+  if (held !== null && pick !== null && held.a === pick.a && held.b === pick.b) return
+  patch({ picked: pick })
 }
 
 /* ── the scopes ───────────────────────────────────────────────────────── */
@@ -471,6 +493,7 @@ export function sessionChanged(key: string | null = sessionCurrent()): void {
     fault: null,
     selectedId: back?.selectedId ?? null,
     selectedBy: back?.selectedId ? 'migrate' : null,
+    picked: null,
     scope: null,
     scopes: [],
     saved: {},

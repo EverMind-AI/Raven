@@ -901,6 +901,46 @@ describe('selectAcross', () => {
   })
 })
 
+/* ── the stretch picked on the ruler ──────────────────────────────── */
+
+describe('setPicked', () => {
+  const load = async (rows: TrajectoryEntry[]): Promise<void> => {
+    serve()
+    store.install()
+    unpitch()
+    store.sessionChanged('gui:a')
+    await store.refreshState()
+    const walk = store.load()
+    await flush()
+    await answer(page(rows, null))
+    await walk
+  }
+
+  it('keeps the stretch in real time, and drops it with the conversation', async () => {
+    await load([entry('main1', 0)])
+    store.setPicked({ a: 1000, b: 2000 })
+    expect(store.get().picked).toEqual({ a: 1000, b: 2000 })
+    store.sessionChanged('gui:b')
+    expect(store.get().picked).toBeNull()
+  })
+
+  it('drops the stretch when the reader leaves the view', async () => {
+    await load([entry('main1', 0)])
+    store.setView('trajectory')
+    store.setPicked({ a: 1000, b: 2000 })
+    store.setView('chat')
+    expect(store.get().picked).toBeNull()
+  })
+
+  it('writes nothing when the same stretch is picked again', async () => {
+    await load([entry('main1', 0)])
+    store.setPicked({ a: 1000, b: 2000 })
+    const before = store.get()
+    store.setPicked({ a: 1000, b: 2000 })
+    expect(store.get()).toBe(before)
+  })
+})
+
 /* ── a conversation change leaves nothing of the last one behind ──── */
 
 describe('sessionChanged', () => {

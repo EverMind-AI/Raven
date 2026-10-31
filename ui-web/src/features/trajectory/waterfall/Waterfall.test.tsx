@@ -6,8 +6,10 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import * as turn from '../../../features/composer/turn'
 import { resetTranslator, setTranslator } from '../../../i18n/t'
 import { absorb, resetCapabilities } from '../../../rpc/capabilities'
+import { installEscapeOrder } from '../../../state/globalListeners'
 import { _resetFreshForTests, unpitch } from '../../../state/session/conversation'
 import { resetSources, setSources } from '../../../state/sources'
 import * as details from '../detailStore'
@@ -17,6 +19,7 @@ import { dayOf, spanOf } from './clock'
 import { buildWaterfall } from './model'
 import { GUIDE_X, ROW_HEIGHT, TURN_GUIDE_X, Waterfall, displayRows } from './Waterfall'
 
+import type { ComposerSource } from '../../../features/composer/types'
 import type { TrajectoryEntry, TrajectoryIndexState, TrajectoryListResult, TrajectorySource } from '../types'
 
 /* The strip's bucket width, watched: it is worked out once per drawing of the
@@ -138,6 +141,7 @@ afterEach(() => {
   cleanup()
   resetSources()
   resetTranslator()
+  turn._resetForTests()
   document.body.innerHTML = ''
 })
 
@@ -503,6 +507,25 @@ it('leaves the list where the reader scrolled it when the ruler is only clicked'
   fireEvent.pointerUp(ruler, { clientX: 301, clientY: 10, pointerId: 1 })
   expect(document.querySelectorAll('.trajectory-ruler-pick')).toHaveLength(0)
   expect(box.scrollTop).toBe(600)
+})
+
+it('lets Escape take back a picked stretch rather than stop the running turn', async () => {
+  const stop = vi.fn()
+  setSources({ composer: { stop } as unknown as ComposerSource })
+  await draw([E('m1', 0), E('m2', 60)])
+  const ruler = document.querySelector('.trajectory-ruler') as HTMLElement
+  boxAt(ruler, 100, 400)
+  fireEvent.pointerDown(ruler, { clientX: 200, clientY: 10, button: 0, pointerId: 1 })
+  fireEvent.pointerMove(ruler, { clientX: 300, clientY: 10, pointerId: 1 })
+  fireEvent.pointerUp(ruler, { clientX: 300, clientY: 10, pointerId: 1 })
+  expect(document.querySelectorAll('.trajectory-ruler-pick')).toHaveLength(1)
+  /* A live run is under way, so the Escape table's last resort is the turn. */
+  turn.dispatch({ type: 'send' })
+  installEscapeOrder()
+  fireEvent.keyDown(document, { key: 'Escape' })
+  /* The key goes to the stretch the reader can see, not to the work behind it. */
+  expect(stop).not.toHaveBeenCalled()
+  expect(document.querySelectorAll('.trajectory-ruler-pick')).toHaveLength(0)
 })
 
 it('moves one edge of the picked interval from its handle', async () => {
