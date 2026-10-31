@@ -486,7 +486,7 @@ class StintStore:
         atomic_replace(path, json.dumps(record.to_dict(), indent=2, ensure_ascii=False) + "\n")
         return path
 
-    def touch(self, stint_id: str, *, holder_pid: int | None = None) -> bool:
+    def touch(self, stint_id: str, *, holder_pid: int | None = None, holder_host: str | None = None) -> bool:
         """Move the record's stamp without rewriting its state.
 
         The beat used to read and write the whole record, so a stop or a pause
@@ -494,7 +494,11 @@ class StintStore:
         writing the snapshot back. This updates only the stamp, under the same
         lock that serializes writers, and leaves every other field as the file
         has it. False when the record is gone, not running, or held by another
-        process: the caller's beat should then stop.
+        process or host: the caller's beat should then stop.
+
+        The holder is the pair, as ``holder_gone`` reads it: pids are unique per
+        host, not across them, so a matching pid on another machine is somebody
+        else's claim. An old record with no host recorded is not refused for it.
         """
 
         def update(text: str | None) -> tuple[str | None, bool]:
@@ -507,6 +511,8 @@ class StintStore:
             if not isinstance(data, dict) or data.get("status") != RUNNING:
                 return None, False
             if holder_pid is not None and data.get("holder_pid") not in (0, holder_pid):
+                return None, False
+            if holder_host is not None and data.get("holder_host") not in ("", holder_host):
                 return None, False
             data["touched_at_ms"] = int(time.time() * 1000)
             return json.dumps(data, indent=2, ensure_ascii=False) + "\n", True

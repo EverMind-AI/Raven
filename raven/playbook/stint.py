@@ -336,7 +336,7 @@ class StintDriver:
                 while True:
                     await asyncio.sleep(HEARTBEAT_EVERY_SEC)
                     try:
-                        if not store.touch(stint_id, holder_pid=record.holder_pid):
+                        if not store.touch(stint_id, holder_pid=record.holder_pid, holder_host=record.holder_host):
                             return
                     except Exception as exc:  # noqa: BLE001 - a missed beat is not a failed round
                         logger.debug("stint {} could not be touched: {}", stint_id, exc)
@@ -529,9 +529,10 @@ class StintDriver:
         fresh = store.read(record.stint_id)
         if fresh is None or _first_round_opened(fresh) or fresh.status != RUNNING:
             return
-        if fresh.holder_pid not in (0, record.holder_pid):
-            # Another process claimed it while our question was up. Its claim
-            # is newer than ours; do not stop the record under it.
+        other_host = fresh.holder_host and record.holder_host and fresh.holder_host != record.holder_host
+        if fresh.holder_pid not in (0, record.holder_pid) or other_host:
+            # Another process or host claimed it while our question was up.
+            # Its claim is newer than ours; do not stop the record under it.
             return
         fresh.status = STOPPED
         fresh.stop_reason = reason

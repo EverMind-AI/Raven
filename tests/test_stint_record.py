@@ -121,6 +121,24 @@ def test_touching_does_nothing_for_a_stint_that_ended_or_is_held_elsewhere(tmp_p
     assert store.touch("stint-other", holder_pid=1234) is False
     assert json.loads(path.read_text(encoding="utf-8"))["touched_at_ms"] == 1
 
+    # The same pid on another host is another holder: pids are unique per host,
+    # not across them, and `holder_gone` already reads the pair.
+    path = _written(store, "stint-other-host")
+    other_host = json.loads(path.read_text(encoding="utf-8"))
+    other_host.update(holder_pid=1234, holder_host="another-host", touched_at_ms=1)
+    path.write_text(json.dumps(other_host), encoding="utf-8")
+
+    assert store.touch("stint-other-host", holder_pid=1234, holder_host="this-host") is False
+    assert json.loads(path.read_text(encoding="utf-8"))["touched_at_ms"] == 1
+
+    path = _written(store, "stint-ours")
+    ours = json.loads(path.read_text(encoding="utf-8"))
+    ours.update(holder_pid=1234, holder_host="this-host", touched_at_ms=1)
+    path.write_text(json.dumps(ours), encoding="utf-8")
+
+    assert store.touch("stint-ours", holder_pid=1234, holder_host="this-host") is True
+    assert json.loads(path.read_text(encoding="utf-8"))["touched_at_ms"] > 1
+
 
 def test_every_status_a_stint_can_be_in_has_a_word_for_a_reader() -> None:
     """The pill asks the catalog for `gui.pb.stint_status_<status>` using the

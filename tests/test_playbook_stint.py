@@ -928,6 +928,29 @@ class TestRunning:
         [after] = store.list()
         assert after.status == "stopped"
 
+    async def test_a_close_does_not_stop_a_record_another_host_has_claimed(self, tmp_path: Path) -> None:
+        """The pid alone cannot tell two hosts apart. A record claimed by the
+        same pid on another machine belongs to that machine, and its claim is
+        newer than ours; the close must leave it alone."""
+        tool = _FakeTool(tmp_path / "stints")
+        asked = self._awaiting_approval(tool)
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+        store = StintStore(tool.stints_root("web:stint"))
+
+        starting = asyncio.create_task(driver.start(spec))
+        await asyncio.wait_for(asked.wait(), 1.0)
+        [record] = store.list()
+        record.holder_host = "another-host"
+        store.write(record)
+
+        starting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await starting
+
+        [after] = store.list()
+        assert after.status == "running"
+
     async def test_a_round_no_role_finished_pauses_the_stint_instead_of_costing_a_round(self, tmp_path: Path) -> None:
         """Every node failed, so the round left nothing to build on, and the
         next would hit the same fault. Counted, a stint ran three rounds in two
