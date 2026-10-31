@@ -190,7 +190,8 @@ class _HandoffServer:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW,
+                # Windows-only, and this method is unit-tested on POSIX too.
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 timeout=60,
                 close_fds=True,
             )

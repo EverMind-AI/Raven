@@ -307,6 +307,9 @@ def test_the_handoff_server_serves_each_connection_then_stops(monkeypatch):
 
 
 def test_the_handoff_server_runs_the_relay_with_the_requested_environment(monkeypatch):
+    # POSIX has no CREATE_NO_WINDOW; deleting it here is the shape the Ubuntu
+    # shards run, and the call must still reach the mocked run().
+    monkeypatch.delattr(windows.subprocess, "CREATE_NO_WINDOW", raising=False)
     completed = SimpleNamespace(returncode=0, stdout="4242\n", stderr="")
     run = Mock(return_value=completed)
     monkeypatch.setattr(windows.subprocess, "run", run)
@@ -326,6 +329,7 @@ def test_the_handoff_server_runs_the_relay_with_the_requested_environment(monkey
 
 
 def test_a_relay_the_host_cannot_start_is_answered_with_the_error(monkeypatch):
+    monkeypatch.delattr(windows.subprocess, "CREATE_NO_WINDOW", raising=False)
     monkeypatch.setattr(windows.subprocess, "run", Mock(side_effect=OSError("no interpreter")))
     sent = []
     connection = SimpleNamespace(
