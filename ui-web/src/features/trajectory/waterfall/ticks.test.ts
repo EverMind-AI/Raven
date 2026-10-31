@@ -115,6 +115,7 @@ describe('the clock ruler', () => {
 describe('the clock ruler across a daylight-saving change', () => {
   afterEach(() => {
     vi.unstubAllEnvs()
+    lang._resetForTests()
   })
   const span = (from: readonly number[], to: readonly number[]) => createAxis([{
     start: new Date(2026, from[0]!, from[1]!, from[2] ?? 0).getTime(),
@@ -144,6 +145,15 @@ describe('the clock ruler across a daylight-saving change', () => {
       }
     })
   }
+
+  it('marks a day whose midnight the clocks skip on its first instant, named as the day', () => {
+    vi.stubEnv('TZ', 'America/Havana')
+    lang.set('en')
+    const daily = marks(span([2, 7], [2, 11]), 400)
+    expect(daily.map((tick) => `${new Date(tick.time).getDate()} ${hhmm(tick.time)}`)).toEqual(['7 00:00', '8 01:00', '9 00:00', '10 00:00', '11 00:00'])
+    expect(daily.every((tick) => tick.major)).toBe(true)
+    expect(tickLabel(daily[1]!.time, 24 * 3_600_000)).toBe('Mar 8')
+  })
 
   it('keeps hourly marks on the hour where the clocks move by half an hour', () => {
     vi.stubEnv('TZ', 'Australia/Lord_Howe')

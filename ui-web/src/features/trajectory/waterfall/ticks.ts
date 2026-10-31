@@ -38,14 +38,16 @@ export interface ClockTick {
  *  A step of an hour or more counts the local clock's hours, not milliseconds:
  *  on a day 23 or 25 hours long, milliseconds would put every mark after the
  *  clocks change an hour off its round time. An hour the clocks skip gets no
- *  mark -- `Date` hands back a later time for it. */
+ *  mark -- `Date` hands back a later time for it -- except a midnight, whose
+ *  day still starts: its mark goes on the day's first instant. */
 function aligned(time: number, step: number): number {
   const day = new Date(time)
   if (step >= HOUR) {
     for (let k = 0; ; k += 1) {
       const hour = (k * step) / HOUR
       const at = new Date(day.getFullYear(), day.getMonth(), day.getDate(), hour)
-      if (at.getTime() >= time && at.getHours() === hour % 24 && at.getMinutes() === 0) return at.getTime()
+      const shown = at.getHours() === hour % 24 && at.getMinutes() === 0
+      if (at.getTime() >= time && (shown || hour % 24 === 0)) return at.getTime()
     }
   }
   const midnight = new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime()
@@ -59,9 +61,10 @@ export function stepFor(view: Viewport, widthPx: number): number {
   return STEPS.find((step) => step >= wanted) ?? STEPS.at(-1)!
 }
 
+/* A day's first instant: midnight, or the time the clocks show first on a day they skip it. */
 const atMidnight = (time: number): boolean => {
   const at = new Date(time)
-  return at.getHours() === 0 && at.getMinutes() === 0 && at.getSeconds() === 0 && at.getMilliseconds() === 0
+  return time === new Date(at.getFullYear(), at.getMonth(), at.getDate()).getTime()
 }
 
 /* The next unit up is major: whole minutes on a seconds ruler, whole hours on
@@ -71,7 +74,7 @@ function majorAt(time: number, step: number): boolean {
   if (at.getSeconds() !== 0 || at.getMilliseconds() !== 0) return false
   if (step < MINUTE) return true
   if (at.getMinutes() !== 0) return false
-  return step < HOUR || at.getHours() === 0
+  return step < HOUR || atMidnight(time)
 }
 
 export function clockTicks(axis: TimeAxis, view: Viewport, widthPx: number): ClockTick[] {
