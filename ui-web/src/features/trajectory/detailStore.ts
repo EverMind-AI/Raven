@@ -486,7 +486,8 @@ export function setTab(entryId: string, tab: Tab): void {
 
 /* Where each entry's tab was scrolled to, kept OUTSIDE the store: only the
    restore path reads it, and putting it in the store re-rendered the whole
-   pane -- messages list included -- on every pixel of every scroll. */
+   pane -- messages list included -- on every pixel of every scroll. It goes
+   with the conversation, as the store's own state does (`follow`). */
 const scrollMemory = new Map<string, number>()
 
 export function setTabScroll(entryId: string, tab: Tab, top: number): void {
@@ -1368,6 +1369,7 @@ function follow(): void {
   if (now.sessionKey !== was.sessionKey) {
     bump()
     inflight.clear()
+    scrollMemory.clear()
     revisionHops = 0
     const d = store.get()
     store.set({
