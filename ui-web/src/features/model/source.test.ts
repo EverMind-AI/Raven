@@ -368,6 +368,22 @@ describe('the live model persist', () => {
     ])
   })
 
+  it('a draft pick in flight stays with the draft it was made in', async () => {
+    const h = await live()
+    /* The write is in flight and the reader starts another draft meanwhile. The
+       pick belongs to the first draft's staging object; reading `staging()`
+       after the await would put it on the new draft, an invisible choice
+       crossing a conversation boundary. */
+    const first = h.overrides.staged
+    const write = h.settings.persistModel('m2', 'minimax', 'both')
+    h.bump()
+    const second = h.overrides.staged
+    await h.settle(0, { applied: true })
+    await write
+    expect(first.model).toEqual({ model: 'm2', provider: 'minimax' })
+    expect(second.model).toBeNull()
+  })
+
   it('rejects a refused composer pick so the chip rolls back', async () => {
     const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: false, previous: null, scope: 'both' } } })
     const { t } = await import('../../i18n/t')

@@ -318,6 +318,10 @@ export async function persistModel(
     return r && r.needs_restart ? 'needs_restart' : undefined
   }
   if (scope === 'both') {
+    /* Captured before the write: the reader can start another draft while it
+       is in flight, and the pick belongs to the staging object it was made
+       on, not to whichever one is on screen when the answer lands. */
+    const held = staging()
     const p: ParamsOf<'config.set'> = { key: 'model', value: m, provider, scope: 'both' }
     if (sid) p.session_id = sid
     const r = await gateway().call('config.set', p)
@@ -330,7 +334,7 @@ export async function persistModel(
     /* No session yet: the default is what the conversation minted from this
        draft reads, and the staged pair re-states it against that session, so a
        default moved elsewhere before the first message cannot take the pick. */
-    staging().model = { model: m, provider }
+    held.model = { model: m, provider }
     return r && r.needs_restart ? 'needs_restart' : 'staged'
   }
   if (sid) {
