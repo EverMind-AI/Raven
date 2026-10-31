@@ -49,6 +49,7 @@ from raven.agent.loop._shared import (
     Session,
     TurnSynthesisPolicy,
     _appended_by_hook,
+    _call_window,
     _display_label,
     _file_change_payload,
     _file_composed_reply,
@@ -60,7 +61,6 @@ from raven.agent.loop._shared import (
     _stamp_reasoning_ms,
     _stamp_replied_via_tool,
     _strip_inline_images,
-    _window_reading,
     append_hook_note,
     asyncio,
     autofill_resolver,
@@ -356,6 +356,28 @@ _SAID_LOG_MAX_CHARS = 2000
 # dropped before persistence, so a reader asking what the turn ended on has to
 # drop them too, or it answers about a message nobody is going to keep.
 _TURN_TRANSIENT_KEYS = ("_recovery_synthetic", ATTACHED_IMAGE_KEY)
+
+
+def _stamp_context_used_on_kept(messages: list[dict[str, Any]], response: Any) -> None:
+    """Put the reading of a call whose reply is not filed on the newest row that is.
+
+    An empty reply never becomes a row of its own in the session: recovery
+    stands scaffolding in for it, the loop gives up on it, or it is filed empty
+    and dropped on save. Nor does a provider's error, which is never filed. The
+    live gauge still showed that call's window, and the window it measured ends
+    at the newest row the turn keeps, so the reading goes there. When that row
+    is the turn's question it is already on disk and the stamp never reaches
+    it: the turn either files a row of its own later, which takes a newer
+    reading, or ends on the marker ``_save_broken_turn`` files, which carries
+    it.
+    """
+    used = _call_window(response)
+    if used <= 0:
+        return
+    for message in reversed(messages):
+        if not any(message.get(key) for key in _TURN_TRANSIENT_KEYS):
+            message[_CONTEXT_USED_KEY] = used
+            return
 
 
 # How a turn reports the model saying nothing with no recovery behind it. The
@@ -910,6 +932,7 @@ class TurnPathMixin:
         turn_log: TurnLog | None = None,
         rungs_used: set[str] | None = None,
         reply_awaited: bool = False,
+        window_reading: dict[str, int] | None = None,
     ) -> tuple[str | None, list[str], list[dict], LoopOutcome]:
         """Run the agent iteration loop.
 
@@ -969,6 +992,11 @@ class TurnPathMixin:
         thinking-only reply down to, each asked for once. A caller that may run
         the loop again for one turn hands every run the same set; omitted, this
         run keeps a set of its own.
+
+        ``window_reading``, when given, is kept at ``context_used`` with the
+        newest window a call of this loop measured. It outlives the loop the way
+        ``spend`` does: a turn that fails or is stopped files it on its marker,
+        which can be the only row the turn adds.
         """
         spend = spend if spend is not None else TurnSpend(session_key)
         messages = initial_messages
@@ -1599,11 +1627,23 @@ class TurnPathMixin:
                 # keeps it for a resume (``_stamp_context_used``). They differ
                 # in their thresholds, not in what they measure -- and what
                 # they measure is how full the window is, which is not what
-                # the prompt was billed as (see ``_window_reading``).
-                context_used = _window_reading(response.usage)
+                # the prompt was billed as (see ``_window_reading``), and a
+                # call can give none (see ``_call_window``).
+                context_used = _call_window(response)
                 if context_used > 0:
                     window.last_context_used = context_used
-            if usage_sink is not None and response.usage:
+                    if window_reading is not None:
+                        window_reading["context_used"] = context_used
+            if usage_sink is not None and response.usage and context_used <= 0 and usage_sink.get("context_used"):
+                # No reading -- a block of zeros, or an account ``_call_window``
+                # does not take as one -- so the gauge stays on the call before
+                # it, as the reading the turn files does (``window_reading``
+                # above moves on the same terms). The cost is the turn's, a
+                # flow, and moves on regardless. With no reading to keep, the
+                # branch below fills the sink: an answered turn sends it whole.
+                usage_sink["cost_usd"] = spend.cost_usd
+                usage_sink["cost_missing_calls"] = spend.cost_missing_calls
+            elif usage_sink is not None and response.usage:
                 # An explicitly configured window always wins over the live
                 # table -- that is what setting it means. Otherwise the live
                 # window from the model's provider table (e.g. OpenRouter,
@@ -2193,6 +2233,7 @@ class TurnPathMixin:
                     status = "error"
                     error_detail = _llm_failure_detail(clean, verdict)
                     error_full = response_failure_text(clean, response.call_record)
+                    _stamp_context_used_on_kept(messages, response)
                     break
 
                 if recovery.parts:
@@ -2207,6 +2248,9 @@ class TurnPathMixin:
                         clean = None
                         recovery.parts.clear()
                         carried_gate = None
+
+                if not (clean or "").strip():
+                    _stamp_context_used_on_kept(messages, response)
 
                 # Empty-response recovery. A reply with no tool call is read for
                 # what it is (``reply_kind``) and ``decide`` names the move; an
@@ -3152,6 +3196,12 @@ class TurnPathMixin:
         # turn: a set per attempt would pay for ``high`` and ``low`` again.
         rungs_used: set[str] = set()
 
+        # The newest window a call of this turn measured, held across attempts.
+        # A turn that fails or is stopped after calls that each came back empty
+        # or as an error has filed no row of its own, and the question it would
+        # otherwise end on is already on disk, so its marker carries the reading.
+        reading: dict[str, int] = {}
+
         async def _attempt(seed: list[dict], attempt: int):
             pending.update(rerun=False, reasons=[])
             # The record this attempt persists from, for the rescue paths below as
@@ -3185,6 +3235,7 @@ class TurnPathMixin:
                 turn_log=live["log"],
                 rungs_used=rungs_used,
                 reply_awaited=reply_awaited,
+                window_reading=reading,
             )
 
         # Taken BEFORE the first attempt, because the loop appends to the list it is
@@ -3346,6 +3397,7 @@ class TurnPathMixin:
                 None,
                 streamed,
                 status="cancelled",
+                context_used=reading.get("context_used"),
             )
             raise
         except AnswerlessTurnError as exc:
@@ -3361,6 +3413,7 @@ class TurnPathMixin:
                 status="failed",
                 reason=str(exc),
                 full_detail=attach_full_detail(exc),
+                context_used=reading.get("context_used"),
             )
             raise
         except Exception as exc:
@@ -3376,6 +3429,7 @@ class TurnPathMixin:
                 # and a model both read back.
                 reason=bound_failure_text(str(exc)),
                 full_detail=attach_full_detail(exc),
+                context_used=reading.get("context_used"),
             )
             raise
         self._stash_recovery(key, outcome)
@@ -3519,6 +3573,7 @@ class TurnPathMixin:
         reason: str | None = None,
         full_detail: str | None = None,
         inbound_original: str | None = None,
+        context_used: int | None = None,
     ) -> None:
         """Persist what a cancelled or failed turn got as far as producing.
 
@@ -3539,6 +3594,9 @@ class TurnPathMixin:
           ``_marker_failure``).
           ``turn_ended.full_detail`` is the long account beside the bounded
           ``reason``, filed only when there is more to it.
+          ``context_used`` is the newest window the turn measured, filed on the
+          marker because it is the newest row: a resume reads the window from
+          there, and a turn whose calls left no row of their own has no other.
 
         ``received_at`` and ``inbound_original`` describe the turn's question,
         which ``_process_message`` files before the attempt starts and hands
@@ -3603,6 +3661,8 @@ class TurnPathMixin:
                     **({"full_detail": full_detail} if full_detail else {}),
                 },
             }
+            if context_used:
+                marker[_CONTEXT_USED_KEY] = context_used
             tail.append(marker)
             self._save_turn(session, tail, 0, received_at=received_at, inbound_original=inbound_original)
             self.sessions.save(session)

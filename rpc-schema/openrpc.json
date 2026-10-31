@@ -15325,6 +15325,10 @@
                 "type": "string",
                 "description": "The failure's long account beside the bounded detail, for a reader who expands the row: the runner's own text, credentials scrubbed, capped at 8000 characters. Absent when the bounded text already is the whole account."
               },
+              "usage": {
+                "$ref": "#/components/schemas/TurnUsage",
+                "description": "What a failed or stopped turn measured, in message.complete's shape: its last reported call, so a client's context gauge moves on with the turn's stored record. Absent when that call read no window."
+              },
               "target": {
                 "$ref": "#/components/schemas/DirectTarget"
               }

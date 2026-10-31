@@ -2053,6 +2053,12 @@ class _PrefilledCallErrors(LLMProvider):
         return "stub"
 
 
+def _as_sent(messages: list[dict]) -> list[dict]:
+    """A request as the wire carries it: a provider sends only its allowed keys, so the loop's own
+    underscore bookkeeping -- a window reading stamped on the question, say -- is not what was asked."""
+    return [{key: value for key, value in message.items() if not key.startswith("_")} for message in messages]
+
+
 @pytest.mark.asyncio
 async def test_a_switch_after_a_streamed_error_asks_the_fallback_the_original_question(workspace, monkeypatch):
     """The prefill is the thought of the model being left. A streamed error switches models in the loop
@@ -2068,7 +2074,7 @@ async def test_a_switch_after_a_streamed_error_asks_the_fallback_the_original_qu
     assert final == "fb's answer" and outcome.status == "completed"
     asked = [(model, messages[-1]["role"]) for model, messages in provider.requests]
     assert asked == [("stub", "user"), ("stub", "assistant"), ("fb", "user")]
-    assert provider.requests[2][1] == provider.requests[0][1]
+    assert _as_sent(provider.requests[2][1]) == _as_sent(provider.requests[0][1])
 
 
 class _StreamErrorsThenFallbackReplies(LLMProvider):

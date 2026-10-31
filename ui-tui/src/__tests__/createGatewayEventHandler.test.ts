@@ -11,7 +11,7 @@ import { createGatewayEventHandler } from '../app/createGatewayEventHandler.js'
 import { getOverlayState, resetOverlayState } from '../app/overlayStore.js'
 import { turnController } from '../app/turnController.js'
 import { getTurnState, resetTurnState } from '../app/turnStore.js'
-import { patchUiState, resetUiState } from '../app/uiStore.js'
+import { getUiState, patchUiState, resetUiState } from '../app/uiStore.js'
 import { estimateTokensRough } from '../lib/text.js'
 
 const ref = <T>(current: T) => ({ current })
@@ -581,6 +581,44 @@ describe('createGatewayEventHandler', () => {
     expect(appended[0]?.tools?.[0]).not.toContain('--- a/foo.ts')
     expect(appended[1]?.text).toBe('done')
     expect(appended[1]?.tools ?? []).toEqual([])
+  })
+
+  it('moves the context bar to the window a failed turn measured', () => {
+    const onEvent = createGatewayEventHandler(buildCtx([]))
+
+    patchUiState(state => ({
+      ...state,
+      usage: { ...state.usage, context_max: 40000, context_percent: 8, context_used: 3100 }
+    }))
+    onEvent({
+      payload: {
+        message: 'turn_failed',
+        reason: 'internal',
+        usage: {
+          completion_tokens: 0,
+          context_max: 40000,
+          context_percent: 18,
+          context_used: 7000,
+          prompt_tokens: 7000,
+          total_tokens: 7000
+        }
+      },
+      type: 'error'
+    } as any)
+
+    expect(getUiState().usage).toMatchObject({ context_max: 40000, context_percent: 18, context_used: 7000 })
+  })
+
+  it('leaves the context bar alone when the failure measured nothing', () => {
+    const onEvent = createGatewayEventHandler(buildCtx([]))
+
+    patchUiState(state => ({
+      ...state,
+      usage: { ...state.usage, context_max: 40000, context_percent: 8, context_used: 3100 }
+    }))
+    onEvent({ payload: { message: 'turn_failed', reason: 'internal' }, type: 'error' } as any)
+
+    expect(getUiState().usage).toMatchObject({ context_max: 40000, context_percent: 8, context_used: 3100 })
   })
 
   it('shows setup panel for missing provider startup error', () => {

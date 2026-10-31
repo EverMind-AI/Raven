@@ -625,6 +625,12 @@ const onError = (
   const { reason, message } = ev.payload
   state.turns.delete(MAIN_VIEW_KEY)
   clearRunning(null)
+  // A turn that ended without an answer, failed or stopped, filed the reading
+  // its calls last measured with its record, so the bar moves on with it as
+  // `onMessageComplete` moves it for an answered one.
+  if (ev.payload.usage) {
+    patchUiState(s => ({ ...s, usage: { ...s.usage, ...ev.payload.usage } }))
+  }
   if (reason === 'cancelled_by_client') {
     restoreInputPrompt(appendMessage, sys)
     appendArtifacts(state, appendMessage)

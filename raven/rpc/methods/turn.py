@@ -749,7 +749,7 @@ async def turn_unsubscribe(
     return {"unsubscribed": unsubscribed}
 
 
-def _cancel_payload(turn_id: str) -> dict[str, Any]:
+def _cancel_payload(turn_id: str, usage: dict[str, Any] | None = None) -> dict[str, Any]:
     """The cancelled-turn error's payload, carrying the cancelled turn's id when there is one.
 
     The id is whatever identified the turn being cancelled: the one a named
@@ -758,6 +758,10 @@ def _cancel_payload(turn_id: str) -> dict[str, Any]:
     key is omitted rather than sent empty, so that
     "absent" has one representation on the wire -- a consumer that correlates a
     request to a turn treats both the same way, as not its own.
+
+    ``usage`` is what the stopped turn measured, in ``message.complete``'s
+    shape: the record the turn leaves carries that reading, and this event is
+    the only one its client is sent. Omitted when the turn read no window.
     """
     payload: dict[str, Any] = {
         "code": _TURN_FAILED_CODE,
@@ -766,7 +770,19 @@ def _cancel_payload(turn_id: str) -> dict[str, Any]:
     }
     if turn_id:
         payload["turn_id"] = turn_id
+    if usage:
+        payload["usage"] = usage
     return payload
+
+
+def _stopped_usage(live_usages: dict[str, dict[str, Any]] | None, turn_id: str) -> dict[str, Any] | None:
+    """The usage sink of the turn about to be stopped, while it is still there.
+
+    Read before the cancel: the turn's end takes its entry back. What it holds
+    is the reading the stopped turn files, because the loop moves this sink's
+    reading on the same terms as the one it stores.
+    """
+    return (live_usages or {}).get(turn_id) if turn_id else None
 
 
 def _refused(lane: str) -> dict[str, Any]:
@@ -787,6 +803,7 @@ async def turn_cancel(
     emitter: SubscriptionEmitter | None = None,
     direct_targets: dict[str, dict[str, str]] | None = None,
     turn_ids: dict[str, str] | None = None,
+    live_usages: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """``turn.cancel`` — cancel the in-flight turn + notify subscribers.
 
@@ -827,7 +844,14 @@ async def turn_cancel(
     turn: those are registered under ``direct_lane(...)``, never under the bare
     session key. The emit still goes to the session, which is what the client
     subscribes to; the addressee rides the payload.
+
+    ``live_usages`` is what each running turn has measured, by turn id (see
+    ``RpcTurnRunner``); a stopped turn's error carries its reading from there.
     """
+    # Function-level: the rule lives with the sink that applies it to a failed
+    # turn, and that module wires the agent loop, which this one must not import.
+    from raven.rpc.spine import reported_usage
+
     parsed = TurnCancelParams.model_validate(params)
 
     lane = (
@@ -844,13 +868,17 @@ async def turn_cancel(
         if running is None or running[0] != parsed.turn_id:
             return _refused(lane)
         handle = running[1]
+        measured = _stopped_usage(live_usages, parsed.turn_id)
         await handle.cancel()
         if emitter is not None:
             await emitter.emit(
                 parsed.session_key,
                 {
                     "type": "error",
-                    "payload": _tag(_cancel_payload(parsed.turn_id), (direct_targets or {}).get(lane)),
+                    "payload": _tag(
+                        _cancel_payload(parsed.turn_id, reported_usage(measured)),
+                        (direct_targets or {}).get(lane),
+                    ),
                 },
             )
         await handle.result()
@@ -860,6 +888,7 @@ async def turn_cancel(
     if reach is None:
         return _refused(lane)
     handle, inject_id = reach
+    measured = _stopped_usage(live_usages, inject_id or (turn_ids or {}).get(lane, ""))
 
     await handle.cancel()
 
@@ -874,7 +903,7 @@ async def turn_cancel(
             {
                 "type": "error",
                 "payload": _tag(
-                    _cancel_payload(inject_id or (turn_ids or {}).get(lane, "")),
+                    _cancel_payload(inject_id or (turn_ids or {}).get(lane, ""), reported_usage(measured)),
                     (direct_targets or {}).get(lane),
                 ),
             },
@@ -937,6 +966,7 @@ def register_turn_methods(
     default_channel: str = "tui",
     agent_loop_factory: "AgentLoopFactory | None" = None,
     question_broker: "QuestionBroker | None" = None,
+    live_usages: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Register ``turn.{send,subscribe,unsubscribe,cancel}`` on a dispatcher.
 
@@ -949,6 +979,9 @@ def register_turn_methods(
     client omits one — and it MUST match the channel the outlet was registered
     under (the hub routes deliverables by ``source.channel``), or the reply is
     dropped. Defaults to ``"tui"``.
+
+    ``live_usages`` must be the dict ``build_rpc_spine`` was given, or a stopped
+    turn's cancel has no reading to report.
     """
 
     bind_scheduler(scheduler)
@@ -973,7 +1006,9 @@ def register_turn_methods(
         return await turn_unsubscribe(params, emitter=emitter)
 
     async def _cancel(params: dict[str, Any]) -> dict[str, Any]:
-        return await turn_cancel(params, emitter=emitter, direct_targets=direct_targets, turn_ids=turn_ids)
+        return await turn_cancel(
+            params, emitter=emitter, direct_targets=direct_targets, turn_ids=turn_ids, live_usages=live_usages
+        )
 
     dispatcher.register("turn.send", _send)
     dispatcher.register("turn.subscribe", _subscribe)

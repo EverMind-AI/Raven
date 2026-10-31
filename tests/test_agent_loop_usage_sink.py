@@ -8,6 +8,7 @@ TUI context bar stayed frozen at 0% and never showed cost.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import tempfile
 import threading
@@ -24,17 +25,20 @@ from raven.agent.harness.action import DefaultAction
 from raven.agent.hook import AgentHook, HookDecision
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, HostWiring, ToolWiring, TurnPolicy
+from raven.agent.loop.recovery import RecoveryLimits
 from raven.config.loader import load_config
 from raven.config.raven import ContextConfig
 from raven.contracts.llm_provider import ToolCallRequest
 from raven.contracts.token_strategy import UsageSnapshot
 from raven.contracts.tool import Tool
 from raven.providers import rates, usage_record
-from raven.providers.base import LLMProvider, LLMResponse
+from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse
 from raven.providers.binding import ModelBinding, use_binding
+from raven.rpc.models import TurnUsage
+from raven.rpc.spine import reported_usage
 from raven.session.manager import SessionManager
 from raven.spine.message import ChatType, Source
-from raven.spine.turn import Origin, TurnRequest
+from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
 from raven.token_wise import usage_context
 from raven.token_wise.registry import StrategyRegistry
 from raven.token_wise.usage_tracker import UsageTracker
@@ -582,7 +586,13 @@ def _costing_agent(
     )
 
 
-async def _turn(agent: AgentLoop, sink: dict, session_key: str = "s1") -> None:
+async def _turn(agent: AgentLoop, sink: dict, session_key: str = "s1", *, streamed: bool = False) -> None:
+    """One user turn. ``streamed`` drives it the way the RPC runner does every
+    turn a gauge is shown for: through the streaming exit."""
+
+    async def _watch(_text: str) -> None:
+        return None
+
     await agent._process_message(
         TurnRequest(
             origin=Origin.USER,
@@ -591,6 +601,7 @@ async def _turn(agent: AgentLoop, sink: dict, session_key: str = "s1") -> None:
         ),
         session_key=session_key,
         usage_sink=sink,
+        on_token_delta=_watch if streamed else None,
     )
 
 
@@ -937,3 +948,317 @@ async def test_a_reply_a_hook_put_in_place_of_the_calls_keeps_that_calls_reading
     assert sink["context_used"] == 8000
     assert (usage["context_used"], usage["context_percent"]) == (sink["context_used"], sink["context_percent"])
     assert usage["context_estimated"] is False
+
+
+_ANSWERS_THROUGH_THE_MESSAGE_TOOL = LLMResponse(
+    content="",
+    tool_calls=[ToolCallRequest(id="c1", name="message", arguments={"content": "here it is"})],
+    usage=_measured(6000, 200),
+)
+
+
+def _says_nothing(usage: dict) -> LLMResponse:
+    return LLMResponse(content="", finish_reason="stop", usage=usage)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("limits", "empty_replies", "live"),
+    [
+        (
+            RecoveryLimits(llm_error_retry_delays=()),
+            [_says_nothing(_measured(7000, 0)), _says_nothing(_measured(7400, 0))],
+            7400,
+        ),
+        (RecoveryLimits(enabled=False), [_says_nothing(_measured(7000, 0))], 7000),
+        (RecoveryLimits(llm_error_retry_delays=()), [_says_nothing(_measured(7000, 0)), _says_nothing({})], 7000),
+    ],
+    ids=["recovery_spent", "recovery_off", "last_empty_reply_unreported"],
+)
+async def test_a_turn_that_ends_on_an_empty_reply_keeps_that_calls_reading(
+    workspace, monkeypatch, limits, empty_replies, live
+):
+    """The model answered through the message tool and then said nothing more,
+    so the turn completes on a call whose reply is not filed. The live meter
+    showed the last window reported, which ends at the newest row the turn
+    kept, so a resume must show it too: recovery's scaffolding is dropped, and
+    a call that reported nothing leaves the reading before it standing."""
+    agent = AgentLoop(
+        provider=ScriptedProvider("stub", [_ANSWERS_THROUGH_THE_MESSAGE_TOOL, *empty_replies]),
+        workspace=workspace,
+        model="stub",
+        engine=EngineWiring(context_window_tokens=40000, context_config=ContextConfig(drop_segments=["curator"])),
+        policy=TurnPolicy(max_iterations=6, empty_recovery=limits),
+        tools=ToolWiring(restrict_to_workspace=True),
+    )
+
+    async def _delivered(_content: str, _media: list[str]) -> None:
+        return None
+
+    agent.tools.get("message").set_send_callback(_delivered)
+    sink: dict = {}
+    await _turn(agent, sink, session_key="tui:c1")
+
+    usage = await _resumed_usage(workspace, monkeypatch, "tui:c1")
+
+    assert sink["context_used"] == live
+    assert (usage["context_used"], usage["context_percent"]) == (sink["context_used"], sink["context_percent"])
+    assert usage["context_estimated"] is False
+
+
+def _fails_to_answer(usage: dict) -> LLMResponse:
+    return LLMResponse(
+        content="Error calling LLM (network@stub): connection reset",
+        finish_reason="error",
+        usage=usage,
+        error_classification=ErrorClassification("network", retryable=False),
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_answered_turn_that_ends_on_a_provider_error_keeps_that_calls_reading(workspace, monkeypatch):
+    """The answer went out through the message tool, so the provider error
+    that follows ends the turn without failing it, and its reply is not filed
+    either. The live meter showed that call's window, which ends at the newest
+    row the turn kept."""
+    agent = AgentLoop(
+        provider=ScriptedProvider("stub", [_ANSWERS_THROUGH_THE_MESSAGE_TOOL, _fails_to_answer(_measured(7100, 0))]),
+        workspace=workspace,
+        model="stub",
+        engine=EngineWiring(context_window_tokens=40000, context_config=ContextConfig(drop_segments=["curator"])),
+        policy=TurnPolicy(max_iterations=6, empty_recovery=RecoveryLimits(llm_error_retry_delays=())),
+        tools=ToolWiring(restrict_to_workspace=True),
+    )
+
+    async def _delivered(_content: str, _media: list[str]) -> None:
+        return None
+
+    agent.tools.get("message").set_send_callback(_delivered)
+    sink: dict = {}
+    await _turn(agent, sink, session_key="tui:c1")
+
+    usage = await _resumed_usage(workspace, monkeypatch, "tui:c1")
+
+    assert sink["context_used"] == 7100
+    assert (usage["context_used"], usage["context_percent"]) == (sink["context_used"], sink["context_percent"])
+    assert usage["context_estimated"] is False
+
+
+def _failing_agent(workspace: Path, limits: RecoveryLimits, script: list[LLMResponse]) -> AgentLoop:
+    return AgentLoop(
+        provider=ScriptedProvider("stub", script),
+        workspace=workspace,
+        model="stub",
+        engine=EngineWiring(context_window_tokens=40000, context_config=ContextConfig(drop_segments=["curator"])),
+        policy=TurnPolicy(max_iterations=6, empty_recovery=limits),
+        tools=ToolWiring(restrict_to_workspace=True),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("limits", "script", "live"),
+    [
+        (RecoveryLimits(enabled=False), [_says_nothing(_measured(7000, 0))], 7000),
+        (
+            RecoveryLimits(llm_error_retry_delays=()),
+            [_says_nothing(_measured(7000, 0)), _says_nothing(_measured(7400, 0))],
+            7400,
+        ),
+        (RecoveryLimits(llm_error_retry_delays=()), [_says_nothing(_measured(7000, 0)), _says_nothing({})], 7000),
+        (RecoveryLimits(llm_error_retry_delays=()), [_fails_to_answer(_measured(7100, 0))], 7100),
+    ],
+    ids=["first_reply_empty", "every_retry_empty", "last_retry_unreported", "provider_error"],
+)
+async def test_a_failed_turn_that_filed_no_reply_keeps_its_reading_on_the_failure(
+    workspace, monkeypatch, limits, script, live
+):
+    """No call of the turn left a row behind: each reply was empty or an error,
+    and the question was filed before the first call. The failure the turn
+    files is then the only row it adds, so that is where the live meter's last
+    reading has to go for a resume to show it."""
+    agent = _failing_agent(workspace, limits, script)
+    sink: dict = {}
+
+    with pytest.raises(AnswerlessTurnError):
+        await _turn(agent, sink, session_key="tui:c1")
+
+    failure = _stored_replies(workspace, "tui:c1")[-1]
+    usage = await _resumed_usage(workspace, monkeypatch, "tui:c1")
+
+    assert sink["context_used"] == live
+    assert failure["turn_ended"]["status"] == "failed"
+    assert failure["context_used"] == live
+    assert (usage["context_used"], usage["context_percent"]) == (sink["context_used"], sink["context_percent"])
+    assert usage["context_estimated"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cut", "status"),
+    [(asyncio.CancelledError, "cancelled"), (RuntimeError, "failed")],
+    ids=["cancelled", "crashed"],
+)
+async def test_a_turn_cut_short_after_a_call_keeps_that_calls_reading_on_its_marker(
+    workspace, monkeypatch, cut, status
+):
+    """A stop or a crash files the same marker an answerless turn does, and it
+    can come right after a call whose empty reply left no row behind."""
+    agent = _failing_agent(workspace, RecoveryLimits(llm_error_retry_delays=()), [_says_nothing(_measured(7000, 0))])
+    strip = agent._strip_think
+    seen: list[str | None] = []
+
+    def _cut_on_the_retry(text):
+        seen.append(text)
+        if len(seen) > 1:
+            raise cut("the turn was cut short")
+        return strip(text)
+
+    monkeypatch.setattr(agent, "_strip_think", _cut_on_the_retry)
+
+    with pytest.raises(cut):
+        await _turn(agent, {}, session_key="tui:c1")
+
+    marker = _stored_replies(workspace, "tui:c1")[-1]
+    usage = await _resumed_usage(workspace, monkeypatch, "tui:c1")
+
+    assert marker["turn_ended"]["status"] == status
+    assert marker["context_used"] == 7000
+    assert (usage["context_used"], usage["context_estimated"]) == (7000, False)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_turn_that_measured_nothing_files_no_reading(workspace):
+    """Nothing measured means nothing to file, so a resume falls back to its estimate."""
+    agent = _failing_agent(workspace, RecoveryLimits(llm_error_retry_delays=()), [_fails_to_answer({})])
+
+    with pytest.raises(AnswerlessTurnError):
+        await _turn(agent, {}, session_key="tui:c1")
+
+    assert "context_used" not in _stored_replies(workspace, "tui:c1")[-1]
+
+
+def _fails_in_transport(usage: dict) -> LLMResponse:
+    return LLMResponse(
+        content="The upstream reported a failed call instead of an answer.",
+        finish_reason="error",
+        usage=usage,
+        error_classification=ErrorClassification("upstream_transport_failure", retryable=False),
+    )
+
+
+_LISTS_THE_WORKSPACE = LLMResponse(
+    content="",
+    tool_calls=[ToolCallRequest(id="c1", name="list_dir", arguments={"path": "."})],
+    usage=_measured(6000, 200),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answered", [False, True], ids=["failed", "answered"])
+async def test_a_call_that_failed_in_transport_reads_no_window(workspace, monkeypatch, answered):
+    """The upstream's account of a call it failed is no reading of the window:
+    it may be the very accounting that flagged the call, billed at a size the
+    request cannot have been. Neither the live meter nor the stored record takes
+    it, so both stay on the call before."""
+    first = _ANSWERS_THROUGH_THE_MESSAGE_TOOL if answered else _LISTS_THE_WORKSPACE
+    agent = _failing_agent(
+        workspace,
+        RecoveryLimits(llm_error_retry_delays=()),
+        [first, _fails_in_transport(_measured(5, 0, cost_usd=0.002))],
+    )
+
+    async def _delivered(_content: str, _media: list[str]) -> None:
+        return None
+
+    agent.tools.get("message").set_send_callback(_delivered)
+    sink: dict = {}
+    if answered:
+        await _turn(agent, sink, session_key="tui:c1")
+    else:
+        with pytest.raises(AnswerlessTurnError):
+            await _turn(agent, sink, session_key="tui:c1")
+
+    usage = await _resumed_usage(workspace, monkeypatch, "tui:c1")
+
+    assert sink["context_used"] == 6200
+    # The cost is the turn's, a flow, and the failed call was still billed.
+    assert sink["cost_usd"] == pytest.approx(0.002)
+    assert (usage["context_used"], usage["context_estimated"]) == (6200, False)
+
+
+# What the incident's upstream returned: an empty reply to a prompt of thousands
+# of tokens, billed as one. Through the streaming exit it reaches the transport
+# verdict on its accounting alone.
+_A_CALL_THE_UPSTREAM_NEVER_READ = LLMResponse(
+    content="", finish_reason="stop", usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answered", [False, True], ids=["failed", "answered"])
+async def test_a_streamed_call_that_failed_in_transport_reads_no_window(workspace, monkeypatch, answered):
+    """The pairing production makes: a streamed turn with a usage sink. The
+    streaming exit returns the call the upstream failed with the verdict the
+    other exit gives it, and its one-token account must not become the window
+    on the live meter, the kept row or the failure marker."""
+    first = _ANSWERS_THROUGH_THE_MESSAGE_TOOL if answered else _LISTS_THE_WORKSPACE
+    agent = _failing_agent(
+        workspace, RecoveryLimits(enabled=False, llm_error_retry_delays=()), [first, _A_CALL_THE_UPSTREAM_NEVER_READ]
+    )
+
+    async def _delivered(_content: str, _media: list[str]) -> None:
+        return None
+
+    agent.tools.get("message").set_send_callback(_delivered)
+    sink: dict = {}
+    if answered:
+        await _turn(agent, sink, session_key="tui:c1", streamed=True)
+    else:
+        with pytest.raises(AnswerlessTurnError):
+            await _turn(agent, sink, session_key="tui:c1", streamed=True)
+
+    usage = await _resumed_usage(workspace, monkeypatch, "tui:c1")
+
+    assert sink["context_used"] == 6200
+    assert (usage["context_used"], usage["context_estimated"]) == (6200, False)
+
+
+@pytest.mark.asyncio
+async def test_a_last_call_that_read_no_window_leaves_the_live_reading_where_the_record_is(workspace, monkeypatch):
+    """A usage block of zeros is no reading, so the record keeps the call
+    before it. The live meter has to keep it too: emptied, the failure's error
+    carries no usage at all and the ring stays a turn behind the record."""
+    agent = _failing_agent(
+        workspace, RecoveryLimits(enabled=False), [_LISTS_THE_WORKSPACE, _says_nothing(_measured(0, 0))]
+    )
+    sink: dict = {}
+
+    with pytest.raises(AnswerlessTurnError):
+        await _turn(agent, sink, session_key="tui:c1", streamed=True)
+
+    failure = _stored_replies(workspace, "tui:c1")[-1]
+    usage = await _resumed_usage(workspace, monkeypatch, "tui:c1")
+
+    assert sink["context_used"] == 6200
+    assert (reported_usage(sink) or {}).get("context_used") == 6200
+    assert failure["context_used"] == 6200
+    assert (usage["context_used"], usage["context_estimated"]) == (6200, False)
+
+
+@pytest.mark.asyncio
+async def test_a_turn_whose_calls_read_no_window_still_reports_a_whole_usage(workspace):
+    """With no earlier reading to keep, a call that reads none still fills the
+    sink: an answered turn's ``message.complete`` sends it as it is, and the
+    counts are what make it a ``TurnUsage``."""
+    agent = _failing_agent(
+        workspace,
+        RecoveryLimits(enabled=False),
+        [LLMResponse(content="done", finish_reason="stop", usage=_measured(0, 0))],
+    )
+    sink: dict = {}
+
+    await _turn(agent, sink, session_key="tui:c1", streamed=True)
+
+    assert TurnUsage.model_validate(sink).context_used == 0
+    assert reported_usage(sink) is None

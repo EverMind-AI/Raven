@@ -17,6 +17,7 @@ from raven.contracts.permissions import ApprovalChoice, ApprovalOutcome
 from raven.permissions.builtin import BuiltinRulings
 from raven.permissions.gate import PermissionGate
 from raven.permissions.turn import current_turn
+from raven.rpc.models import ErrorEvent
 from raven.rpc.spine import (
     RpcOutlet,
     RpcTurnRunner,
@@ -2138,3 +2139,132 @@ async def test_a_failed_turn_sends_the_runners_long_account():
     payload = emitter.emitted[-1][1]["payload"]
     assert payload["detail"] == "RuntimeError: boom"
     assert payload["full_detail"] == "RuntimeError: boom, at length"
+
+
+# --- a failed turn's usage reaches the page on its error event ---
+
+
+_A_FAILED_TURNS_LAST_CALL = {
+    "prompt_tokens": 7000,
+    "completion_tokens": 0,
+    "total_tokens": 7000,
+    "context_max": 40000,
+    "context_used": 7000,
+    "context_percent": 18,
+}
+
+
+class _MeasuresThenFails(_RunTurnLoop):
+    """Fills the usage sink the way a loop that made calls does, then gives up."""
+
+    async def run_turn(self, req, emit, drain, *, stream, usage_sink=None, text_sink=None) -> TurnOutcome:
+        if usage_sink is not None and self._usage:
+            usage_sink.update(self._usage)
+        raise AnswerlessTurnError("The model returned no content on 3 attempt(s).")
+
+
+async def test_runner_keeps_what_a_turn_measured_under_its_own_id():
+    """A turn that fails still measured the calls it made, and its stored record
+    carries that reading, so its end has to report it as well. Kept under the
+    turn's id, never in the per-lane register a queued turn shares."""
+    usages: dict[str, dict] = {}
+    live: dict[str, dict] = {}
+    runner = RpcTurnRunner(
+        _MeasuresThenFails(usage=_A_FAILED_TURNS_LAST_CALL), FakeEmitter(), usages, {}, live_usages=live
+    )
+    req = TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1", turn_id="t-1")
+    _events, emit = _collect()
+
+    with pytest.raises(AnswerlessTurnError):
+        await runner.run(req, emit, lambda: [])
+
+    assert live == {"t-1": _A_FAILED_TURNS_LAST_CALL}
+    assert "tui:c1" not in usages
+
+
+_A_LAST_CALL_THAT_READ_NO_WINDOW = {
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "total_tokens": 0,
+    "context_max": 40000,
+    "context_used": 0,
+    "context_percent": 0,
+}
+
+
+@pytest.mark.parametrize(
+    ("measured", "carried"),
+    [
+        (_A_FAILED_TURNS_LAST_CALL, _A_FAILED_TURNS_LAST_CALL),
+        (None, None),
+        (_A_LAST_CALL_THAT_READ_NO_WINDOW, None),
+        ({"cost_usd": 0.01, "cost_missing_calls": 0}, None),
+    ],
+    ids=["measured_a_call", "measured_nothing", "last_call_reported_zeros", "no_window_reading"],
+)
+async def test_a_failed_turn_hands_its_measured_usage_to_its_error(measured, carried):
+    """Without it the context ring stays on the turn before while a resume reads
+    the failed turn's own record, so the two disagree until the next turn. A
+    usage that read no window is not sent: drawn, it would empty the ring."""
+    emitter = FakeEmitter()
+    scheduler, hub, turn_ids, teardown = build_rpc_spine(_MeasuresThenFails(usage=measured), emitter)
+    try:
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
+        await handle.result()
+    finally:
+        await teardown()
+
+    assert emitter.types() == ["error"]
+    event = emitter.emitted[-1][1]
+    assert event["payload"].get("usage") == carried
+    ErrorEvent.model_validate(event)
+
+
+def _failure_sink(usages: dict, live: dict):
+    from raven.rpc.spine import RpcOutlet, _make_rpc_sink
+    from raven.spine.delivery import DeliveryHub
+
+    hub = DeliveryHub()
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter, {})
+    hub.register(outlet)
+    return emitter, _make_rpc_sink(hub, outlet, "tui", {"tui:c1": "owner"}, usages, {}, None, live_usages=live)
+
+
+async def test_a_non_owning_turns_failure_does_not_report_the_owners_usage():
+    """The register is keyed by lane, and a queued turn shares the key with the
+    turn that owns it: its failure must not hand on the owner's reading."""
+    from raven.spine.events import TurnFailed
+
+    live = {"owner": dict(_A_FAILED_TURNS_LAST_CALL)}
+    emitter, sink = _failure_sink({"tui:c1": dict(_A_FAILED_TURNS_LAST_CALL)}, live)
+
+    await sink(TurnFailed(error="boom", cancelled=False, conversation_id="tui:c1", turn_id="queued-1"))
+
+    errors = [e for _k, e in emitter.emitted if e["type"] == "error"]
+    assert errors and "usage" not in errors[-1]["payload"]
+    assert live == {"owner": _A_FAILED_TURNS_LAST_CALL}
+
+
+@pytest.mark.parametrize(
+    "end",
+    ["completed", "failed", "cancelled"],
+)
+async def test_a_turns_end_lets_go_of_what_it_measured(end):
+    """Every way a turn ends takes its reading back, or the map grows by a turn
+    for every one a process runs."""
+    from raven.spine import TurnEnded, Usage
+    from raven.spine.events import TurnFailed
+
+    live = {"t-1": dict(_A_FAILED_TURNS_LAST_CALL)}
+    _emitter, sink = _failure_sink({}, live)
+    if end == "completed":
+        event = TurnEnded(
+            usage=Usage(0, 0, 0), latency_ms=1.0, explicit_reply=False, conversation_id="tui:c1", turn_id="t-1"
+        )
+    else:
+        event = TurnFailed(error="boom", cancelled=end == "cancelled", conversation_id="tui:c1", turn_id="t-1")
+
+    await sink(event)
+
+    assert live == {}

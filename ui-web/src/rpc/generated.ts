@@ -1509,8 +1509,22 @@ export interface ErrorEvent {
      * The failure's long account beside the bounded detail, for a reader who expands the row: the runner's own text, credentials scrubbed, capped at 8000 characters. Absent when the bounded text already is the whole account.
      */
     full_detail?: string;
+    usage?: TurnUsage1;
     target?: DirectTarget;
   };
+}
+/**
+ * What a failed or stopped turn measured, in message.complete's shape: its last reported call, so a client's context gauge moves on with the turn's stored record. Absent when that call read no window.
+ */
+export interface TurnUsage1 {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cost_usd?: number | null;
+  context_used?: number;
+  context_max?: number;
+  context_percent?: number;
+  cost_missing_calls?: number;
 }
 export interface CronDeliveredEvent {
   type: 'cron.delivered';
