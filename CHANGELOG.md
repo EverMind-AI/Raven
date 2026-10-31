@@ -517,6 +517,14 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- A job the on-call agent hands off on Windows now outlives the Raven host that
+  launched the agent. The host starts the handed-off relay itself, outside the
+  kill-on-close job object around the agent, instead of letting that job object
+  admit breakaway: Git for Windows adds `CREATE_BREAKAWAY_FROM_JOB` to every
+  native program it starts when the job allows it, so ordinary Bash tool
+  commands would have outlived the host too. With no host channel, the job
+  starts inside the job object and its log says it ends with the host.
+
 - On native Windows a DAG node can read files by reference: `{{ ref:... }}`,
   `{{ ref_path:... }}` and a `{"file": ...}` input naming a file in the
   session's working directory or its sub-agent history. They were resolved by

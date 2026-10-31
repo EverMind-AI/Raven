@@ -75,6 +75,19 @@ from oncall_flow.process_backend import (
     _stated_cause,
 )
 
+# The host's hand-off channel (``raven.acp_client.windows``): the address and
+# authentication key of a pipe served by the process that launched this agent.
+# The host is not in the agent's job object, so a relay it starts is outside it
+# and outlives the host. Absent when this backend runs outside an ACP agent.
+_HANDOFF_PIPE_ENV = "RAVEN_ACP_HANDOFF_PIPE"
+_HANDOFF_KEY_ENV = "RAVEN_ACP_HANDOFF_KEY"
+# What a job started here, with no channel, must say in its log: the job
+# object around this agent is kill-on-close, so it ends with the host.
+_UNHOSTED_NOTE = (
+    b"the host's hand-off channel was unavailable; this job was started inside "
+    b"the agent's job object and ends if the host exits\n"
+)
+
 
 def _real_interpreter() -> str:
     """The interpreter to launch the job with.
@@ -104,48 +117,140 @@ def _real_interpreter() -> str:
 # of the POSIX launcher's ``nohup ... &``. argv: log path, job dir, then the
 # launcher's own command line.
 #
-# CREATE_BREAKAWAY_FROM_JOB takes the job out of the Windows job object the
-# host keeps this agent in (``raven.acp_client.windows``): that object is
-# kill-on-close, so without leaving it a job died the moment the host exited,
-# hours of work with it, though no parent chain led to it any more. A job
-# object that does not allow leaving refuses the flag, and the job is started
-# as before, inside it. Through a launcher that keeps a job object of its own
-# (a virtual environment's python.exe does) the flag can also be accepted and
-# the job stay in the host's, without an error (measured). Either way the
-# job's log says so -- otherwise "the job died when the host exited" would
-# leave nothing to find.
+# The relay is started by the host over its hand-off channel whenever one is
+# present (``_start_relay``): the host is not in the agent's job object, so
+# the launcher it starts is outside it and outlives the host. With no channel
+# -- a backend run outside an ACP agent -- the relay is started here and the
+# job's log says what that costs.
 _RELAY = """\
-import ctypes, subprocess, sys
+import subprocess, sys
 log = open(sys.argv[1], "ab")
 flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
-kwargs = dict(cwd=sys.argv[2], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
-try:
-    p = subprocess.Popen(sys.argv[3:], creationflags=flags | subprocess.CREATE_BREAKAWAY_FROM_JOB, **kwargs)
-except OSError:
-    log.write(b"could not leave the agent's job object; this job ends if the host exits\\n")
-    p = subprocess.Popen(sys.argv[3:], creationflags=flags, **kwargs)
-else:
-    try:  # only a note: nothing here may keep the pid from being reported
-        # Typed as raven.acp_client.windows types them: a handle is pointer
-        # wide, and an undeclared return is cut to a 32-bit int.
-        k = ctypes.WinDLL("kernel32", use_last_error=True)
-        k.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
-        k.OpenProcess.restype = ctypes.c_void_p
-        k.IsProcessInJob.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
-        k.IsProcessInJob.restype = ctypes.c_int
-        k.CloseHandle.argtypes = [ctypes.c_void_p]
-        k.CloseHandle.restype = ctypes.c_int
-        h, inside = k.OpenProcess(0x1000, False, p.pid), ctypes.c_int(0)
-        if h and k.IsProcessInJob(h, None, ctypes.byref(inside)) and inside.value:
-            log.write(b"still in a job object after asking to leave the agent's; if it is the host's, "
-                      b"this job ends if the host exits\\n")
-        if h:
-            k.CloseHandle(h)
-    except Exception:
-        pass
+p = subprocess.Popen(
+    sys.argv[3:],
+    cwd=sys.argv[2],
+    stdin=subprocess.DEVNULL,
+    stdout=log,
+    stderr=subprocess.STDOUT,
+    creationflags=flags,
+)
 log.flush()
 print(p.pid)
 """
+
+
+def _in_a_job() -> bool:
+    """Whether this process is inside any Windows job object.
+
+    ``IsProcessInJob(GetCurrentProcess(), ...)`` asks about the current
+    process. A failed call answers "no": the note it gates is a diagnostic, and
+    a wrong "yes" would promise a job ends with the host when nothing holds it.
+    """
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetCurrentProcess.argtypes = []
+    kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+    kernel32.IsProcessInJob.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(wintypes.BOOL)]
+    kernel32.IsProcessInJob.restype = wintypes.BOOL
+    inside = wintypes.BOOL(False)
+    answered = kernel32.IsProcessInJob(kernel32.GetCurrentProcess(), None, ctypes.byref(inside))
+    return bool(answered) and bool(inside.value)
+
+
+def _note_unhosted(log_path: str) -> None:
+    """Tell the reader of a fallback start that the job ends with the host."""
+    if not _in_a_job():
+        return
+    try:
+        with open(log_path, "ab") as fh:
+            fh.write(_UNHOSTED_NOTE)
+    except OSError:
+        pass
+
+
+def _handoff_answer(argv: list[str], job_dir: str) -> dict[str, Any] | None:
+    """The host's answer to a hand-off request, or None when it has no channel.
+
+    Raises JobBackendError when the channel answered with a refusal -- that is
+    the relay failing to start, not a channel that is absent -- and also when
+    the request went out but the answer did not come back: the host may have
+    started the job, and starting another one here would run it twice. A
+    request that never went out returns None, so the caller falls back to
+    starting the relay here, which is the behaviour before the channel existed.
+    """
+    address = os.environ.get(_HANDOFF_PIPE_ENV)
+    key = os.environ.get(_HANDOFF_KEY_ENV)
+    if not address or not key:
+        return None
+    sent = False
+    try:
+        from multiprocessing.connection import Client
+
+        connection = Client(address, family="AF_PIPE", authkey=bytes.fromhex(key))
+        try:
+            connection.send(
+                {
+                    "argv": argv,
+                    "cwd": job_dir,
+                    "env": {
+                        name: value
+                        for name, value in os.environ.items()
+                        if name not in (_HANDOFF_PIPE_ENV, _HANDOFF_KEY_ENV)
+                    },
+                }
+            )
+            sent = True
+            answer = connection.recv()
+        finally:
+            try:
+                connection.close()
+            except Exception:
+                pass
+    except Exception:
+        if sent:
+            raise JobBackendError(
+                "the host's hand-off channel did not answer after the request; it may have started the job"
+            ) from None
+        return None
+    if not isinstance(answer, dict):
+        raise JobBackendError("the host's hand-off channel answered with no result")
+    if answer.get("error"):
+        raise JobBackendError(f"the host's hand-off channel could not start the job: {answer['error']}")
+    return answer
+
+
+def _start_relay(argv: list[str], job_dir: str, log_path: str) -> tuple[int, str, str]:
+    """Start the relay outside the agent's job when the host offers to, else here.
+
+    Returns ``(returncode, stdout, stderr)``. The host-started path is the only
+    one that outlives the host; the local fallback covers a backend run outside
+    an ACP agent and a host old enough to have no hand-off channel.
+    """
+    answer = _handoff_answer(argv, job_dir)
+    if answer is not None:
+        return (
+            int(answer.get("returncode", 1)),
+            str(answer.get("stdout") or ""),
+            str(answer.get("stderr") or ""),
+        )
+    _note_unhosted(log_path)
+    try:
+        relay = subprocess.run(
+            argv,
+            cwd=job_dir,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise JobBackendError(f"could not start the job in {job_dir}: {exc}") from exc
+    return relay.returncode, relay.stdout, relay.stderr
 
 
 def pid_alive(pid: int) -> bool:
@@ -578,21 +683,14 @@ class WindowsExecutor(ProcessExecutor):
         # the relay gone, the walk from this process finds no path to
         # the job. ``start_new_session`` is deliberately not passed: Windows
         # ignores it, and passing it here would only suggest it does something.
-        try:
-            relay = subprocess.run(
-                [_real_interpreter(), "-c", _RELAY, log_path, job_dir, _real_interpreter(), launcher, command],
-                cwd=job_dir,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                timeout=60,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise JobBackendError(f"could not start the job in {job_dir}: {exc}") from exc
-        relayed = relay.stdout.strip()
-        if relay.returncode != 0 or not relayed.isdigit():
-            raise JobBackendError(f"could not start the job in {job_dir}: {(relay.stderr or relayed).strip()[-500:]}")
+        returncode, relayed, relay_stderr = _start_relay(
+            [_real_interpreter(), "-c", _RELAY, log_path, job_dir, _real_interpreter(), launcher, command],
+            job_dir,
+            log_path,
+        )
+        relayed = relayed.strip()
+        if returncode != 0 or not relayed.isdigit():
+            raise JobBackendError(f"could not start the job in {job_dir}: {(relay_stderr or relayed).strip()[-500:]}")
 
         # The launcher's own pid, not the relay's report, whenever the launcher
         # has got far enough to write it. They differ under any trampoline (see

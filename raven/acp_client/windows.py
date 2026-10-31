@@ -3,9 +3,17 @@
 The launcher reads one unbuffered byte before starting the configured command.
 Raven sends it only after assigning the launcher to the job. If Raven dies
 before assignment, stdin reaches EOF and the launcher exits without starting
-an agent; afterwards, closing the host's job handle ends the entire tree --
-all but a process started with CREATE_BREAKAWAY_FROM_JOB, which the job
-allows for work handed off to outlive the agent.
+an agent; afterwards, closing the host's job handle ends the entire tree.
+
+A job the agent hands off on purpose has to outlive the agent, and a job object
+cannot let one child leave without letting every child leave: Git for Windows'
+MSYS2 runtime adds CREATE_BREAKAWAY_FROM_JOB to every native program it starts
+when the job allows breakaway (winsup/cygwin/spawn.cc), so an ordinary Bash
+tool command would leak past the host. The job therefore stays closed to
+breakaway, and the host offers a hand-off channel instead: the agent asks the
+host, which is not in the job, to start the relay through ``_HandoffServer``.
+The channel's address and key arrive in the agent's environment; a request
+runs the relay with the environment the agent sent.
 After spawning, the launcher closes its own pipe descriptors so an agent that
 closes stdout still delivers EOF while it remains running.
 """
@@ -15,20 +23,22 @@ from __future__ import annotations
 import asyncio
 import ctypes
 import os
+import secrets
 import shutil
 import subprocess
 import sys
+import threading
 from typing import Any
 
 _KILL_ON_JOB_CLOSE = 0x2000
-# A process started with CREATE_BREAKAWAY_FROM_JOB may leave the job; without
-# this, that flag makes CreateProcess fail. Nothing leaves by default: an
-# agent's own processes still end with the job. Only work an agent hands off
-# on purpose to outlive it -- a job runner's detached launch -- asks to leave.
-_BREAKAWAY_OK = 0x0800
 _EXTENDED_LIMIT_INFORMATION = 9
 _PROCESS_TERMINATE = 0x0001
 _PROCESS_SET_QUOTA = 0x0100
+
+HANDOFF_PIPE = "RAVEN_ACP_HANDOFF_PIPE"
+"""The environment variable naming the host's hand-off pipe, set on every agent."""
+HANDOFF_KEY = "RAVEN_ACP_HANDOFF_KEY"
+"""The environment variable holding the pipe's authentication key, as hex."""
 
 _LAUNCHER = """\
 import ctypes, os, subprocess, sys
@@ -101,7 +111,11 @@ class JobObject:
         if not self._handle:
             raise _win_error()
         limits = _ExtendedLimits()
-        limits.BasicLimitInformation.LimitFlags = _KILL_ON_JOB_CLOSE | _BREAKAWAY_OK
+        # No breakaway: a job object's permission is all-or-nothing for the
+        # tree, and Git for Windows spends it on every native child it starts
+        # (see the module docstring). Work that must outlive the host is
+        # started by the host itself, outside this job.
+        limits.BasicLimitInformation.LimitFlags = _KILL_ON_JOB_CLOSE
         if not self._api.SetInformationJobObject(
             self._handle, _EXTENDED_LIMIT_INFORMATION, ctypes.byref(limits), ctypes.sizeof(limits)
         ):
@@ -126,6 +140,99 @@ class JobObject:
             self._handle = None
 
 
+class _HandoffServer:
+    """Starts handed-off work outside this host's ACP job, on an agent's request.
+
+    One per host process, created on the first launch. It is a thread of the
+    host, not a child of the agent, so what it starts is outside every job
+    object the host owns. The agent reaches it over a named pipe; ``launch``
+    puts the pipe's name and key in the agent's environment.
+
+    A request is ``{"argv": [...], "cwd": str, "env": {name: value}}``. The
+    answer carries the relay's ``returncode``, ``stdout`` and ``stderr``, or
+    ``error`` when it could not be started. The pipe's default security
+    descriptor is the launching user's, and the key keeps another same-session
+    process from using a name it guessed.
+    """
+
+    def __init__(self) -> None:
+        from multiprocessing.connection import Listener
+
+        self.address = f"\\\\.\\pipe\\raven-acp-handoff-{os.getpid()}-{secrets.token_hex(8)}"
+        self._authkey = secrets.token_bytes(32)
+        self._listener = Listener(self.address, family="AF_PIPE", authkey=self._authkey)
+        threading.Thread(target=self._accept, name="raven-acp-handoff", daemon=True).start()
+
+    @property
+    def env(self) -> dict[str, str]:
+        return {HANDOFF_PIPE: self.address, HANDOFF_KEY: self._authkey.hex()}
+
+    def _accept(self) -> None:
+        while True:
+            try:
+                connection = self._listener.accept()
+            except (OSError, EOFError):
+                return
+            except Exception:
+                # A failed handshake is one bad client, not a broken pipe.
+                continue
+            threading.Thread(target=self._serve, args=(connection,), daemon=True).start()
+
+    def _serve(self, connection: Any) -> None:
+        try:
+            request = connection.recv()
+            argv = [str(argument) for argument in request["argv"]]
+            completed = subprocess.run(
+                argv,
+                cwd=request.get("cwd"),
+                env=request.get("env") or None,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=60,
+                close_fds=True,
+            )
+            connection.send(
+                {"returncode": completed.returncode, "stdout": completed.stdout, "stderr": completed.stderr}
+            )
+        except Exception as exc:
+            try:
+                connection.send({"error": f"{type(exc).__name__}: {exc}"})
+            except Exception:
+                pass
+        finally:
+            try:
+                connection.close()
+            except Exception:
+                pass
+
+
+_IS_WINDOWS = sys.platform == "win32"
+_HANDOFF: _HandoffServer | None = None
+_HANDOFF_TRIED = False
+
+
+def _handoff() -> _HandoffServer | None:
+    """The host's hand-off server, started on first use, or None if it cannot be.
+
+    A channel that cannot be opened must not keep an agent from starting: the
+    on-call backend falls back to starting its job inside the job object and
+    says so in the job's log.
+    """
+    global _HANDOFF, _HANDOFF_TRIED
+    if not _IS_WINDOWS:
+        return None
+    if not _HANDOFF_TRIED:
+        _HANDOFF_TRIED = True
+        try:
+            _HANDOFF = _HandoffServer()
+        except Exception:
+            _HANDOFF = None
+    return _HANDOFF
+
+
 def _program(argv: list[str], cwd: str | None) -> list[str]:
     program = argv[0]
     if os.path.dirname(program):
@@ -144,6 +251,14 @@ def _program(argv: list[str], cwd: str | None) -> list[str]:
 async def launch(argv: list[str], **kwargs: Any) -> tuple[asyncio.subprocess.Process, JobObject]:
     """Start a gated launcher, assign its job, then let it start the agent."""
     argv = _program(argv, kwargs.get("cwd"))
+    # The agent's own environment is kept (it was handed in by the caller); the
+    # hand-off channel is the host's, so a relay it starts runs outside this job.
+    # A platform without AF_PIPE gets None from ``_handoff`` and no channel.
+    child_env = dict(kwargs["env"]) if kwargs.get("env") is not None else dict(os.environ)
+    handoff = _handoff()
+    if handoff is not None:
+        child_env.update(handoff.env)
+    kwargs["env"] = child_env
     job = JobObject()
     proc = None
     try:

@@ -36,9 +36,61 @@ def test_a_windows_remote_dir_is_used_as_given():
     assert _root({"remote_dir": r"E:\runs"}) == r"E:\runs"
 
 
+def test_the_backend_and_the_host_name_the_handoff_variables_the_same_way():
+    # The reader cannot import the producer (the plugin runs without raven on
+    # its path), so the two spellings are pinned here rather than by a comment.
+    from oncall_flow import windows_backend
+
+    from raven.acp_client import windows
+
+    assert windows_backend._HANDOFF_PIPE_ENV == windows.HANDOFF_PIPE
+    assert windows_backend._HANDOFF_KEY_ENV == windows.HANDOFF_KEY
+
+
+def _channel(*, answer=None, error=None):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    recv = Mock(return_value=answer) if error is None else Mock(side_effect=error)
+    return SimpleNamespace(send=Mock(), recv=recv, close=Mock())
+
+
+def _with_channel(monkeypatch, channel=None, error=None):
+    import multiprocessing.connection
+    from unittest.mock import Mock
+
+    from oncall_flow import windows_backend
+
+    monkeypatch.setenv(windows_backend._HANDOFF_PIPE_ENV, "pipe")
+    monkeypatch.setenv(windows_backend._HANDOFF_KEY_ENV, "00")
+    factory = Mock(return_value=channel) if channel is not None else Mock(side_effect=error)
+    monkeypatch.setattr(multiprocessing.connection, "Client", factory)
+    return windows_backend
+
+
+def test_a_host_channel_that_cannot_be_reached_falls_back(monkeypatch):
+    backend = _with_channel(monkeypatch, error=OSError("no host"))
+    assert backend._handoff_answer(["py"], "job") is None
+
+
+def test_a_host_channel_that_refuses_the_relay_is_not_a_fallback(monkeypatch):
+    backend = _with_channel(monkeypatch, channel=_channel(answer={"error": "no interpreter"}))
+    with pytest.raises(backend.JobBackendError, match="could not start the job"):
+        backend._handoff_answer(["py"], "job")
+
+
+def test_a_lost_answer_after_the_request_is_not_retried_here(monkeypatch):
+    backend = _with_channel(monkeypatch, channel=_channel(error=EOFError("gone")))
+    with pytest.raises(backend.JobBackendError, match="may have started the job"):
+        backend._handoff_answer(["py"], "job")
+
+
 _SUBMITTER = r"""
-import asyncio, sys
+import asyncio, os, sys
 sys.path.insert(0, sys.argv[1])
+if len(sys.argv) > 4 and sys.argv[4] == "drop-handoff":
+    os.environ.pop("RAVEN_ACP_HANDOFF_PIPE", None)
+    os.environ.pop("RAVEN_ACP_HANDOFF_KEY", None)
 from oncall_flow.backend import JobSpec
 from oncall_flow.windows_backend import WindowsExecutor
 
@@ -83,7 +135,7 @@ def test_a_job_outlives_a_tree_kill_of_the_agent_that_submitted_it(tmp_path):
             agent.kill()
 
 
-def _hand_off_from_an_agent(tmp_path, close):
+def _hand_off_from_an_agent(tmp_path, close, drop_handoff=False):
     """An agent started the way the host starts one (``raven.acp_client.windows.launch``)
     submits a job; the host's job object is closed or left open. Returns (agent ended, result path)."""
     from raven.acp_client import windows
@@ -92,6 +144,8 @@ def _hand_off_from_an_agent(tmp_path, close):
     body.write_text(_BODY, encoding="utf-8")
     root = tmp_path / "ops"
     argv = [sys.executable, "-c", _SUBMITTER, str(PLUGIN_DIR), str(root), f'"{sys.executable}" "{body}"']
+    if drop_handoff:
+        argv.append("drop-handoff")
     result = root / "jobs" / "survivor" / "result.json"
 
     async def run():
@@ -129,23 +183,32 @@ def _written_by(result, wait=30):
 @pytest.mark.skipif(sys.platform != "win32", reason="job objects are Windows'")
 def test_a_job_outlives_the_host_closing_the_agents_job_object(tmp_path):
     # The host keeps each agent in a kill-on-close job object and closes it on
-    # exit. A job the agent handed off was in it too, relay or not, and died
-    # with the host; it now leaves the job, and only the agent ends.
+    # exit. The agent asks the host, which is not in that job, to start the
+    # relay, so the handed-off job is outside it and only the agent ends.
     agent_ended, result = _hand_off_from_an_agent(tmp_path, close=True)
     assert agent_ended
     assert _written_by(result) == "body"
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="job objects are Windows'")
-def test_a_job_object_that_does_not_allow_leaving_still_gets_its_job_started(tmp_path, monkeypatch):
-    from raven.acp_client import windows
-
-    monkeypatch.setattr(windows, "_BREAKAWAY_OK", 0)
-    _, result = _hand_off_from_an_agent(tmp_path, close=False)
+def test_a_job_without_the_host_channel_starts_inside_the_job_and_says_so(tmp_path):
+    # A host old enough to have no hand-off channel (or a backend run outside
+    # an ACP agent) still starts the job, but inside the agent's job object.
+    # While the host lives it runs, and the log says what that costs.
+    _, result = _hand_off_from_an_agent(tmp_path, close=False, drop_handoff=True)
     assert _written_by(result) == "body"
-    # Said where someone will look when the job dies with the host.
     log = (result.parent / "job.log").read_text(encoding="utf-8", errors="replace")
-    assert "this job ends if the host exits" in log
+    assert "ends if the host exits" in log
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="job objects are Windows'")
+def test_a_job_without_the_host_channel_dies_with_the_host(tmp_path):
+    # The fallback is not a second way to survive: the launcher stays in the
+    # agent's kill-on-close job, so closing it ends the job mid-run.
+    agent_ended, result = _hand_off_from_an_agent(tmp_path, close=True, drop_handoff=True)
+    assert agent_ended
+    time.sleep(6)
+    assert not result.exists()
 
 
 _ENV_BODY = r"""

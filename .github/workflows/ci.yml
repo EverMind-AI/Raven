@@ -419,6 +419,12 @@ jobs:
       - name: Test Windows ACP teardown
         run: uv run --frozen --python 3.13 --no-sync pytest tests/test_subagent_acp.py -k close_without_killpg -q -n 0 --tb=short
 
+      # The job object is the only thing that ends an agent's tree on host
+      # exit, and Git Bash is the runtime that exercises a breakaway leak. The
+      # Ubuntu shards skip the Windows-only cases, so they run here.
+      - name: Test the Windows job object and the on-call hand-off
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_acp_windows.py tests/test_agents_oncall_flow_windows_backend.py -q -n 0 --tb=short
+
       - name: Test conditional DAG paths
         run: uv run --frozen --python 3.13 --no-sync pytest tests/test_subagent_dag_core.py -k at_nodes -q -n 0 --tb=short
 
