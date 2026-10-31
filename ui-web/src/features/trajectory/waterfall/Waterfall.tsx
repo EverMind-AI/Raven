@@ -422,9 +422,11 @@ export function Waterfall(): JSX.Element {
      the conversation they were made on. A live session's axis grows with
      every step that lands past its end, which moves every position on it; in
      milliseconds the two mean the same stretch on every axis of the
-     conversation, so only a change of conversation, or the reader, drops them. */
+     conversation, so only a change of conversation, or the reader, drops them.
+     The pick is the store's, so the page's one Escape table can take it back;
+     the window is this component's. */
   const [zoom, setZoom] = useState<{ session: string | null; start: number; end: number } | null>(null)
-  const [picked, setPicked] = useState<{ a: number; b: number } | null>(null)
+  const picked = store.get().picked
   const sessionKey = store.get().sessionKey
   const sessionRef = useRef(sessionKey)
   sessionRef.current = sessionKey
@@ -488,7 +490,7 @@ export function Waterfall(): JSX.Element {
         viewRef.current = view
         if (axisNow === null) return
         setZoom({ session: sessionRef.current, start: axisNow.unproject(view.from), end: axisNow.unproject(view.to) })
-        setPicked(null)
+        store.setPicked(null)
       }
       if (panning) {
         const shift = (span * event.deltaY) / Math.max(1, rect.width)
@@ -581,33 +583,24 @@ export function Waterfall(): JSX.Element {
   axisRef.current = axis
   useEffect(() => {
     setZoom(null)
-    setPicked(null)
   }, [sessionKey])
-  /* The picked stretch is owned here: the axis draws it, and the rows below
+  /* The picked stretch is the store's: the axis draws it, and the rows below
      are filtered to it. The ruler speaks in fractions of the view it is drawn
      over, so the stretch is handed to it that way and taken back in real time;
-     Escape drops it too. */
+     the Escape table takes it back (`detailStore`). */
   const viewSpan = view.to - view.from
   const pickOnView: Pick | null = picked === null || !(viewSpan > 0)
     ? null
     : { from: (axis.project(picked.a) - view.from) / viewSpan, to: (axis.project(picked.b) - view.from) / viewSpan }
   const pickFromView = (next: Pick | null): void => {
-    setPicked(next === null || !(viewSpan > 0)
+    store.setPicked(next === null || !(viewSpan > 0)
       ? null
       : { a: axis.unproject(view.from + viewSpan * next.from), b: axis.unproject(view.from + viewSpan * next.to) })
   }
-  const held = picked !== null
-  useEffect(() => {
-    if (!held) return
-    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') setPicked(null) }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [held])
   const range = useMemo(
     () => (picked === null ? null : { start: Math.min(picked.a, picked.b), end: Math.max(picked.a, picked.b) }),
     [picked],
-  )
-  /* A filtered list is a new list: it starts at its own beginning, not at
+  )  /* A filtered list is a new list: it starts at its own beginning, not at
      whatever scroll offset the full one happened to be at. */
   useEffect(() => {
     if (range === null) return
@@ -922,7 +915,7 @@ export function Waterfall(): JSX.Element {
   const choosePreset = (length: number | null): void => {
     const next = length === null ? null : presetWindow(axis, view, length)
     setZoom(next === null ? null : { session: sessionKey, start: next.start, end: next.end })
-    setPicked(null)
+    store.setPicked(null)
   }
   const painted: JSX.Element[] = []
   for (let at = first; at < last; at++) {
@@ -1090,7 +1083,7 @@ export function Waterfall(): JSX.Element {
   const takeWindow = useCallback((next: { start: number; end: number }): void => {
     const whole = next.start <= axis.start && next.end >= axis.unproject(axis.length)
     setZoom(whole || !(next.end > next.start) ? null : { session: sessionKey, start: next.start, end: next.end })
-    setPicked(null)
+    store.setPicked(null)
   }, [axis, sessionKey])
   const foldAll = (): void => {
     setAgentFold(new Map(waterfall.agents.map((agent) => [agent.key, false])))
@@ -1221,7 +1214,7 @@ export function Waterfall(): JSX.Element {
       <div className="trajectory-list trajectory-wf-scroll" data-thumb="keep" tabIndex={0} ref={attach}
         onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
         onKeyDown={onKeyDown}
-        onDoubleClick={() => { setZoom(null); setPicked(null) }}
+        onDoubleClick={() => { setZoom(null); store.setPicked(null) }}
         role="tree" aria-label={t('gui.trajectory.agents')}
         aria-activedescendant={selectedAt >= first && selectedAt < last ? rowId(selectedAt) : undefined}>
         <div className="trajectory-wf-rows" role="none" style={{ height: rows.length * ROW_HEIGHT }}>

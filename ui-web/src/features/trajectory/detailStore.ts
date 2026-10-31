@@ -1447,12 +1447,17 @@ export const hasFocus = (): boolean => {
   return !!pane && pane.contains(document.activeElement)
 }
 
-/* The one layer the surfaces share: the pane, which counts only while it
-   holds the focus. */
+/* The one layer the surfaces share: the stretch picked on the ruler, which is
+   taken back wherever the focus is, and the pane, which counts only while it
+   holds the focus. The pick answers first, as the bar's own popovers did before
+   it: an Escape in the pane still closes the pane once nothing is picked. */
 onTrajectoryEscape({
   id: 'trajectory.escapeOpen()',
-  isOpen: () => store.get().open && hasFocus(),
-  close: () => closeDetails(),
+  isOpen: () => list.get().picked !== null || (store.get().open && hasFocus()),
+  close: () => {
+    if (list.get().picked !== null) { list.setPicked(null); return }
+    closeDetails()
+  },
 })
 
 /** `keepStorage` stands in for a reload: everything in memory goes, the tab's storage stays. */
