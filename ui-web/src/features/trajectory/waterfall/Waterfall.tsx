@@ -264,6 +264,9 @@ const PRESETS: ReadonlyArray<readonly ['fit' | '3h' | '1h' | '15m', number | nul
    tick still draws. */
 const EDGE_PX = 24
 
+/** How far a press on the ruler travels before it is a drag rather than a click. */
+const CLICK_PX = 4
+
 /** Where a vertical line is drawn: the last pixel stays inside the track, or
  *  the scroll box grows wider than itself and the overlay scrollbars answer
  *  with a horizontal bar nobody can use. */
@@ -296,8 +299,11 @@ function Ticks({ axis, view, pick, onPick, ticks, step, onWidth }: {
      handles are the way to move that edge alone: the other one stays put, and
      the rows filter to whatever the band now covers. Nothing zooms, so the
      scale never shifts under the reader. */
+  /* A new drag picks nothing until it has travelled CLICK_PX: a pick, even a
+     zero-width one, filters the rows and sends the list back to its top, which
+     a click -- one that only takes a pick back, or none at all -- must not do. */
   type Drag =
-    | { mode: 'new'; at: number; width: number }
+    | { mode: 'new'; at: number; width: number; picking: boolean }
     | { mode: 'edge'; edge: 'lo' | 'hi'; width: number; fixed: number }
   const drag = useRef<Drag | null>(null)
   const fraction = (clientX: number, rect: DOMRect): number =>
@@ -313,8 +319,7 @@ function Ticks({ axis, view, pick, onPick, ticks, step, onWidth }: {
       const edge = grip.dataset.edge === 'lo' ? 'lo' : 'hi'
       drag.current = { mode: 'edge', edge, width: rect.width, fixed: edge === 'lo' ? hi : lo }
     } else {
-      drag.current = { mode: 'new', at, width: rect.width }
-      onPick({ from: at, to: at })
+      drag.current = { mode: 'new', at, width: rect.width, picking: false }
     }
     try {
       event.currentTarget.setPointerCapture(event.pointerId)
@@ -330,6 +335,8 @@ function Ticks({ axis, view, pick, onPick, ticks, step, onWidth }: {
       onPick(start.edge === 'lo' ? { from: at, to: start.fixed } : { from: start.fixed, to: at })
       return
     }
+    if (!start.picking && Math.abs(at - start.at) * start.width < CLICK_PX) return
+    start.picking = true
     onPick({ from: start.at, to: at })
   }
   const up = (event: ReactPointerEvent<HTMLDivElement>): void => {
@@ -342,7 +349,7 @@ function Ticks({ axis, view, pick, onPick, ticks, step, onWidth }: {
       return
     }
     /* A click, not a drag, is how the pick is taken back. */
-    onPick(Math.abs(at - start.at) * start.width < 4 ? null : { from: start.at, to: at })
+    onPick(Math.abs(at - start.at) * start.width < CLICK_PX ? null : { from: start.at, to: at })
   }
   const cancel = (): void => {
     drag.current = null
