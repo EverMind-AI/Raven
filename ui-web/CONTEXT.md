@@ -216,6 +216,10 @@ earlier"), which opens in place; the main agent always keeps its own row.
 The zoomed window and a
 stretch picked on the ruler are kept in real time for the conversation they
 were made on, so a live session growing past its end does not reset them.
+Escape takes the picked stretch back through the one ordered table (before the
+details pane, as the bar's own popovers were), and the arrow keys walk only the
+entries that stretch leaves drawn; a selection made elsewhere -- a link in the
+pane -- drops a pick that would hide it.
 The rows are a tree for assistive technology: agents, turns and spans at three
 levels, each fold a button with `aria-expanded`, and the selected row
 `aria-selected` and the tree's active descendant. A failed operation is marked

@@ -600,7 +600,18 @@ export function Waterfall(): JSX.Element {
   const range = useMemo(
     () => (picked === null ? null : { start: Math.min(picked.a, picked.b), end: Math.max(picked.a, picked.b) }),
     [picked],
-  )  /* A filtered list is a new list: it starts at its own beginning, not at
+  )
+  /* Whether the picked stretch keeps this entry: the same overlap the rows are
+     filtered by, so a key can never land on a row the reader cannot see. */
+  const inPick = useCallback((entryId: string): boolean => {
+    if (range === null) return true
+    const s = store.get()
+    const at = s.index[entryId]
+    const entry = at === undefined ? undefined : s.entries[at]
+    if (entry === undefined) return false
+    return entryEnd(entry, now) >= range.start && entryStart(entry) <= range.end
+  }, [range, now])
+  /* A filtered list is a new list: it starts at its own beginning, not at
      whatever scroll offset the full one happened to be at. */
   useEffect(() => {
     if (range === null) return
@@ -748,6 +759,14 @@ export function Waterfall(): JSX.Element {
        #185, which unmounts the island), so once the state has been asked for,
        the effect only ever scrolls -- never asks again. */
     const phase = same ? revealed.current.phase : 'none'
+    /* A selection made elsewhere -- a link in the pane -- lands on the row it
+       names: a pick that hides that row is dropped rather than left hiding the
+       reader's destination. The pick can only be made with a pointer, so a
+       reader who picked it again has not changed the selection. */
+    if (phase === 'none' && !inPick(selectedId)) {
+      store.setPicked(null)
+      return
+    }
     revealed.current = { id: selectedId, tick: selections, phase: 'opening' }
     /* The row's agent, and its turn -- none for a row outside every turn, which
        hangs from its agent directly and needs only the agent open. */
@@ -813,13 +832,15 @@ export function Waterfall(): JSX.Element {
     setAgentFold((previous) => new Map(previous).set(key, collapsed.has(key)))
   }
 
-  /* Every entry in the order the page draws them, for the arrow keys. */
+  /* Every entry the reader can see, in the order the page draws them, for the
+     arrow keys: a picked stretch keeps its own, so the key moves through what
+     is on screen rather than into rows the filter hides. */
   const order = useMemo(
     () => waterfall.agents.flatMap((agent) => [
       ...agent.turns.flatMap((turn) => turn.rows.map((row) => row.entry.entry_id)),
       ...agent.loose.map((row) => row.entry.entry_id),
-    ]),
-    [waterfall],
+    ]).filter(inPick),
+    [waterfall, inPick],
   )
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {

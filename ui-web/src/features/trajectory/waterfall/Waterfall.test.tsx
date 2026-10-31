@@ -528,6 +528,43 @@ it('lets Escape take back a picked stretch rather than stop the running turn', a
   expect(document.querySelectorAll('.trajectory-ruler-pick')).toHaveLength(0)
 })
 
+it('keeps the arrow keys inside the stretch the reader picked', async () => {
+  await draw([E('m1', 0), E('m2', 60), E('m3', 120)])
+  const tree = document.querySelector('[role="tree"]') as HTMLElement
+  const ruler = document.querySelector('.trajectory-ruler') as HTMLElement
+  boxAt(ruler, 100, 400)
+  /* The control: with no pick the key walks to the next row. */
+  store.selectAcross('m1', { source: 'click' })
+  act(() => { fireEvent.keyDown(tree, { key: 'ArrowDown' }) })
+  expect(store.get().selectedId).toBe('m2')
+  /* The same drag as the pick test above covers m2's stretch alone. */
+  fireEvent.pointerDown(ruler, { clientX: 200, clientY: 10, button: 0, pointerId: 1 })
+  fireEvent.pointerMove(ruler, { clientX: 350, clientY: 10, pointerId: 1 })
+  fireEvent.pointerUp(ruler, { clientX: 350, clientY: 10, pointerId: 1 })
+  expect(document.querySelectorAll('.trajectory-ruler-pick')).toHaveLength(1)
+  store.selectAcross('m2', { source: 'click' })
+  act(() => { fireEvent.keyDown(tree, { key: 'ArrowDown' }) })
+  expect(store.get().selectedId).toBe('m2')
+  act(() => { fireEvent.keyDown(tree, { key: 'ArrowUp' }) })
+  expect(store.get().selectedId).toBe('m2')
+})
+
+it('drops a picked stretch that would hide the row a link lands on', async () => {
+  await draw([E('m1', 0), E('m2', 60), E('m3', 120)])
+  const ruler = document.querySelector('.trajectory-ruler') as HTMLElement
+  boxAt(ruler, 100, 400)
+  /* The same drag as the pick test above covers m2's stretch alone. */
+  fireEvent.pointerDown(ruler, { clientX: 200, clientY: 10, button: 0, pointerId: 1 })
+  fireEvent.pointerMove(ruler, { clientX: 350, clientY: 10, pointerId: 1 })
+  fireEvent.pointerUp(ruler, { clientX: 350, clientY: 10, pointerId: 1 })
+  expect(document.querySelectorAll('.trajectory-ruler-pick')).toHaveLength(1)
+  /* A link in the pane lands on a row outside the stretch: the filter that
+     hides it goes, so the reader can see where the link took them. */
+  act(() => { store.selectAcross('m3', { source: 'link' }) })
+  expect(store.get().selectedId).toBe('m3')
+  expect(store.get().picked).toBeNull()
+})
+
 it('moves one edge of the picked interval from its handle', async () => {
   await draw([
     E('a', 0, { turn_span_id: 'T1' }),
