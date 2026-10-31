@@ -300,7 +300,8 @@ describe('the details pane', () => {
     expect(pane()?.className).toBe('trajectory-details')
     expect(pane()?.style.width).toBe('480px')
     expect(pane()?.querySelector(':scope > .trajectory-corner')).not.toBeNull()
-    expect(pane()?.querySelector('[role="separator"]')).toBeNull()
+    /* The corner is its one handle, for the keyboard as for the hand. */
+    expect([...(pane()?.querySelectorAll('[role="separator"]') ?? [])].map((el) => el.className)).toEqual(['trajectory-corner'])
     act(() => { details.setAreaWidth(700) })
     expect(q('.trajectory-corner')).toBeNull()
     expect(pane()?.className).toBe('trajectory-details trajectory-details-over')
@@ -434,6 +435,28 @@ describe('moving and sizing the pane', () => {
     await to(658, 2000)
     await release(658, 2000)
     expect([card().style.left, card().style.top, card().style.height]).toEqual(['100px', '100px', '690px'])
+  })
+
+  it('sizes from the keyboard too: the corner takes the focus and each arrow moves a free edge 16px', async () => {
+    await open()
+    lay(HOME)
+    const grip = corner()!
+    expect(grip.tabIndex).toBe(0)
+    expect(grip.getAttribute('aria-label')).toBeTruthy()
+    const key = async (name: string): Promise<void> => {
+      await act(async () => { fireEvent.keyDown(grip, { key: name }) })
+    }
+    /* Where it opens the left edge is the free one, and the bottom already
+       meets the area, so the pane grows left and only shrinks upward. */
+    await key('ArrowLeft')
+    await key('ArrowUp')
+    expect([card().style.width, card().style.height]).toEqual(['496px', '668px'])
+    act(() => { details.dropDetails({ x: 100, y: 100 }, 668, 106) })
+    lay({ x: 100, y: 100, w: 496, h: 668 })
+    /* Moved, the right edge is the free one. */
+    await key('ArrowRight')
+    await key('ArrowDown')
+    expect([card().style.width, card().style.height]).toEqual(['512px', '684px'])
   })
 
   it('neither moves nor sizes under 800px, where it covers the area', async () => {

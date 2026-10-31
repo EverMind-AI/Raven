@@ -11913,6 +11913,10 @@
       "en": "Show {n} more of {rest}",
       "zh": "再显示 {n} 项（还剩 {rest} 项）"
     },
+    "gui.trajectory.details.resize": {
+      "en": "Resize details",
+      "zh": "调整详情大小"
+    },
     "gui.trajectory.details.region": {
       "en": "Entry details",
       "zh": "条目详情"
