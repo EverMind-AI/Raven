@@ -518,22 +518,34 @@ describe('the header band', () => {
       .toBe(`${token('--topbar-h')} 0 0`)
   })
 
-  it('paints the band as frosted glass, over an opaque ground where the blur is unsupported', () => {
+  it('splits the blur from the tint, over an opaque ground where the blur is unsupported', () => {
     styled()
     const css = source('styles/page.css')
-    const rule = (css.match(/\.chat > \.top::before\s*\{([\s\S]*?)\}/) as RegExpMatchArray)[1] as string
-    expect(rule).toMatch(/-webkit-backdrop-filter: blur\(20px\) saturate\(1\.4\)/)
-    expect(rule).toMatch(/backdrop-filter: blur\(20px\) saturate\(1\.4\)/)
-    expect(rule).toMatch(/height: var\(--topbar-fade-h\)/)
-    expect(rule).toMatch(/background: var\(--page\)/)
-    expect(rule).toMatch(/mask-image: linear-gradient\(180deg, rgba\(0, 0, 0, \.94\) 0/)
+
+    /* The blur layer carries no ground: an engine that paints the element's
+       background over the filtered backdrop would hide the blur entirely. */
+    const blur = (css.match(/\.chat > \.top::before\s*\{([\s\S]*?)\}/) as RegExpMatchArray)[1] as string
+    expect(blur).toMatch(/-webkit-backdrop-filter: blur\(20px\) saturate\(1\.4\)/)
+    expect(blur).toMatch(/backdrop-filter: blur\(20px\) saturate\(1\.4\)/)
+    expect(blur).toMatch(/height: var\(--topbar-fade-h\)/)
+    expect(blur).not.toMatch(/background:/)
     /* The ramp lands at the element's lower edge, not 20px above it. */
-    expect(rule).toMatch(/rgba\(0, 0, 0, 0\) 100%\)/)
-    expect(rule).not.toMatch(/color-mix/)
+    expect(blur).toMatch(/transparent 100%\)/)
+
+    const tint = (css.match(/\.chat > \.top::after\s*\{([\s\S]*?)\}/) as RegExpMatchArray)[1] as string
+    expect(tint).toMatch(/height: var\(--topbar-fade-h\)/)
+    expect(tint).toMatch(/background: var\(--page\)/)
+    expect(tint).toMatch(/mask-image: linear-gradient\(180deg, rgba\(0, 0, 0, \.94\) 0/)
+    expect(tint).toMatch(/rgba\(0, 0, 0, 0\) 100%\)/)
+    /* Neither layer may depend on color-mix: engines with backdrop-filter but
+       without it would lose the ground and leave the title on a bare blur. */
+    expect(blur).not.toMatch(/color-mix/)
+    expect(tint).not.toMatch(/color-mix/)
 
     const fallback = (css.match(
-      /@supports not \(\(backdrop-filter: blur\(1px\)\) or \(-webkit-backdrop-filter: blur\(1px\)\)\) \{\s*\.chat > \.top::before \{([\s\S]*?)\}\s*\}/,
+      /@supports not \(\(backdrop-filter: blur\(1px\)\) or \(-webkit-backdrop-filter: blur\(1px\)\)\) \{([\s\S]*?)\n\}/,
     ) as RegExpMatchArray)[1] as string
+    expect(fallback).toMatch(/\.chat > \.top::before \{ display: none; \}/)
     expect(fallback).toMatch(/background: var\(--page\)/)
     expect(fallback).toMatch(/-webkit-mask-image: none/)
     expect(fallback).toMatch(/mask-image: none/)

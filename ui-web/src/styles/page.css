@@ -1009,45 +1009,57 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 
    The frost reaches PAST the row, and its strength falls from the top down
    rather than sitting at one value: a solid ground behind the controls, then a
-   linear fade to nothing at the band's lower edge (--topbar-fade-h). A bubble
-   that scrolls up is eaten a little more with every pixel until it is gone,
-   instead of meeting a hard edge with a token 20px softening under it. The
-   mask does that fading. It fades the FILTERED backdrop, and that is why the
-   ramp reads as progressive blur and not as a translucent sheet: measured in
-   Chrome, a mask of 0 leaves the transcript untouched and a mask of 1 draws
-   the full blur, so between them the blurred image itself thins out. (An
-   element that merely faded an opaque tint would leave the text sharp
-   underneath, only paler.)
+   fade to nothing at the band's lower edge (--topbar-fade-h). A bubble that
+   scrolls up is eaten a little more with every pixel until it is gone, instead
+   of meeting a hard edge with a token 20px softening under it.
 
-   The ground is plain --page, not a color-mix: the mask is what makes it
-   translucent, so engines without color-mix (Chrome < 111, Safari < 16.2) no
-   longer drop the background and leave the title over a bare blur. That keeps
-   @supports below about the one feature it is actually guarding.
+   Two layers, because the tint and the blur have to fade independently. The
+   blur layer carries no ground: an engine that draws the element's own
+   background over the filtered backdrop -- the order the spec describes --
+   would hide the blur entirely under an opaque one, leaving only a paler sheet
+   of sharp text. With no ground, what that layer paints IS the blurred
+   transcript, and its mask ramps it away over the band's last 22px. The tint
+   layer is the plain --page ground the controls sit on, masked from
+   near-opaque behind them to nothing at the lower edge. Down the band the
+   composite goes from ground to blurred content to sharp content. Measured in
+   Chrome, a mask of 0 leaves the backdrop untouched and a mask of 1 draws the
+   full blur; between them the blurred image itself thins out.
+
+   The ground is plain --page, not a color-mix: engines without color-mix
+   (Chrome < 111, Safari < 16.2) no longer drop it and leave the title over a
+   bare blur. That keeps @supports below about the one feature it guards.
 
    `z-index: 2` stays -- the header's own popovers anchor against it, and code
-   blocks in the scroller are positioned too. The pseudo-element is one z-step
-   behind the controls, and a fade on .top itself would take the bottom of the
-   buttons' glyphs with it.
+   blocks in the scroller are positioned too. Both layers sit behind the
+   controls, one and two z-steps, and a fade on .top itself would take the
+   bottom of the buttons' glyphs with it.
 
-   Where backdrop-filter is unsupported the mask would fade a tint with no
-   blur under it, which is worse than either: the fallback below paints the
-   whole band as the opaque ground the page had before, so what passes under is
-   hidden down to the same lower edge the reader's jumps clear. */
+   Where backdrop-filter is unsupported the blur layer paints nothing, and the
+   fallback below turns the tint layer into the opaque ground the page had
+   before: content is hidden down to the same lower edge the reader's jumps
+   clear, rather than shown through a blurless fade. */
 .chat > .top {
   display: flex; align-items: center; gap: 10px; padding: 0 16px 0 20px;
   height: var(--topbar-h); position: absolute; top: 0; left: 0; right: 0; z-index: 2;
 }
 .chat > .top::before {
   content: ''; position: absolute; inset: 0 0 auto 0; height: var(--topbar-fade-h);
-  z-index: -1; pointer-events: none;
-  background: var(--page);
+  z-index: -2; pointer-events: none;
   -webkit-backdrop-filter: blur(20px) saturate(1.4);
   backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-mask-image: linear-gradient(180deg, #000 0, #000 calc(100% - 22px), transparent 100%);
+  mask-image: linear-gradient(180deg, #000 0, #000 calc(100% - 22px), transparent 100%);
+}
+.chat > .top::after {
+  content: ''; position: absolute; inset: 0 0 auto 0; height: var(--topbar-fade-h);
+  z-index: -1; pointer-events: none;
+  background: var(--page);
   -webkit-mask-image: linear-gradient(180deg, rgba(0, 0, 0, .94) 0, rgba(0, 0, 0, .9) calc(var(--topbar-h) - 8px), rgba(0, 0, 0, 0) 100%);
   mask-image: linear-gradient(180deg, rgba(0, 0, 0, .94) 0, rgba(0, 0, 0, .9) calc(var(--topbar-h) - 8px), rgba(0, 0, 0, 0) 100%);
 }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .chat > .top::before {
+  .chat > .top::before { display: none; }
+  .chat > .top::after {
     background: var(--page);
     -webkit-mask-image: none;
     mask-image: none;
