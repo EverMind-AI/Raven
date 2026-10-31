@@ -176,7 +176,7 @@ The header's toggle (`#trajBtn`) appears only when the gateway announced
 and that conversation is not in its empty state (`state/session/conversation.ts`'s
 flag); the store's `available` is that one condition.
 The waterfall (`features/trajectory/waterfall/`) draws every entry the list
-store holds (`shown`), the ones the index marked `meta.hidden` included: grouped
+store holds (`entries`), the ones the index marked `meta.hidden` included: grouped
 by agent -- the main session first, then one group per worker, a worker's runs
 folded into one by instance, else by name, where runs of one name that overlap
 in time are different agents and keep apart (`model.ts`'s `agentIdentity` and
@@ -246,9 +246,8 @@ Under the raw record the details pane lists the files
 the span names (`features/trajectory/Files.tsx`): the `files` directory whole,
 each file's content read by its own cursor while it is open and in view, kept
 apart from the block pages and let go stalest first when the budget is short.
-The list store also keeps a current Sub-agent Scope and that scope's entries
-(`scope`, `scopes`, `saved` and `visible` in `store.ts`), though no strip shows
-it: `select` on an entry of another scope (a link in the pane) moves it. The
+The list store also keeps a current Sub-agent Scope (`scope`, `scopes` and
+`saved` in `store.ts`), though no strip shows it: `select` on an entry of another scope (a link in the pane) moves it. The
 pane's button on an entry that opens a scope, or on the first row of a turn a
 sub-agent's report started, and a dispatching row's door arrow land on the run
 they name -- its external agent's entry, which opens on what the agent

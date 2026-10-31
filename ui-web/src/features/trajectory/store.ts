@@ -26,13 +26,12 @@
  *   - a batch of changes is one `set`. The feed may carry hundreds of upserts,
  *     and the list repaints once per batch rather than once per row.
  *
- * The page draws every agent's rows at once (`shown`); the store also keeps a
- * current Sub-agent Scope -- the main session, or one sub-agent run -- and its
- * rows (`visible`). `entries`, `index` and `spanIndex` hold every row, since
- * links and the feed cross scopes. A scope is another filter over the same
- * picture, so moving between scopes leaves the generation alone, and `select`
- * on a row of another scope moves to that scope. A scope coming back brings
- * its own selection back under the `migrate` door.
+ * The page draws every agent's rows at once, straight from `entries`; the
+ * store also keeps a current Sub-agent Scope -- the main session, or one
+ * sub-agent run. `entries`, `index` and `spanIndex` hold every row, since links
+ * and the feed cross scopes. Moving between scopes leaves the generation alone,
+ * and `select` on a row of another scope moves to that scope. A scope coming
+ * back brings its own selection back under the `migrate` door.
  */
 
 import { current as sessionCurrent } from '../../lib/session'
@@ -48,19 +47,9 @@ import type {
   TrajectorySource, View,
 } from './types'
 
-/* Where the reader was in the list when they were not following its tail:
-   the entry at the top of the viewport and how far into it they had scrolled.
-   An id rather than an index, because the feed inserts above as well as below. */
-export interface Anchor {
-  id: string
-  offset: number
-}
-
 /** What a scope keeps while another is the current one. */
 export interface ScopeView {
   selectedId: string | null
-  follow: boolean
-  anchor: Anchor | null
 }
 
 /** An open sub-agent tab: its Sub-agent Scope and the entry that opened it, as it was then. */
@@ -105,9 +94,6 @@ export interface TrajectoryState {
   selectedBy: SelectSource | null
   /** Bumped by every selection `select` makes, so a surface that answers each one once tells it from a re-render. */
   selections: number
-  /** Within reach of the tail, so new rows pull the viewport down. */
-  follow: boolean
-  anchor: Anchor | null
   /** The current scope: a Sub-agent Scope's id, or null for the main session. */
   scope: string | null
   /** The sub-agent tabs the reader opened, in the order they were opened. */
@@ -116,12 +102,8 @@ export interface TrajectoryState {
   saved: Record<string, ScopeView>
   /** The length `entries` had before the last purely-appending change, or -1
    *  when that change rewrote the list. A surface that caches a tree over
-   *  `shown` reads this to know it may extend rather than rebuild. */
+   *  `entries` reads this to know it may extend rather than rebuild. */
   grownFrom: number
-  /** Every entry the page may draw, across every scope. */
-  shown: TrajectoryEntry[]
-  /** The current scope's entries: every entry `scopeOf` puts in `scope`. */
-  visible: TrajectoryEntry[]
   /** `trace_id:span_id` to the first entry of that span, for the links a detail carries. */
   spanIndex: Record<string, string>
   /** A Sub-agent Scope's id to the first entry that opens it. */
@@ -141,24 +123,18 @@ export const scopeKey = (scope: string | null): string => scope ?? MAIN_KEY
 
 const spanKey = (trace: string, span: string): string => `${trace}:${span}`
 
-/* Everything the page reads that follows from `entries`: every entry it may
-   draw, the current scope's rows, the span lookup, and the entry that opens
-   each scope. */
-function derived(entries: TrajectoryEntry[], scope: string | null) {
-  const shown: TrajectoryEntry[] = []
-  const visible: TrajectoryEntry[] = []
+/* Everything the page reads that follows from `entries`: their positions,
+   the span lookup, and the entry that opens each scope. */
+function derived(entries: TrajectoryEntry[]) {
   const spanIndex: Record<string, string> = {}
   const doors: Record<string, string> = {}
   for (const entry of entries) {
     const key = spanKey(entry.trace_id, entry.span_id)
     if (!(key in spanIndex)) spanIndex[key] = entry.entry_id
-    const own = scopeOf(entry)
     const opens = opensOf(entry)
     if (opens !== null && !(opens in doors)) doors[opens] = entry.entry_id
-    shown.push(entry)
-    if (own === scope) visible.push(entry)
   }
-  return { entries, index: indexOf(entries), shown, visible, spanIndex, doors }
+  return { entries, index: indexOf(entries), spanIndex, doors }
 }
 
 const initial: TrajectoryState = {
@@ -181,14 +157,10 @@ const initial: TrajectoryState = {
   selectedId: null,
   selectedBy: null,
   selections: 0,
-  follow: true,
-  anchor: null,
   scope: null,
   scopes: [],
   saved: {},
   grownFrom: -1,
-  shown: [],
-  visible: [],
   spanIndex: {},
   doors: {},
 }
@@ -199,21 +171,19 @@ export const { get, set, subscribe } = store
 
 const patch = (p: Partial<TrajectoryState>): void => { store.set({ ...store.get(), ...p }) }
 
-/** The fields that change together with the rows: the whole set, its positions, the visible set and the lookups. */
-export const rowsOf = (entries: TrajectoryEntry[], s: TrajectoryState = store.get()) => derived(entries, s.scope)
+/** The fields that change together with the rows: the whole set, its positions and the lookups. */
+export const rowsOf = (entries: TrajectoryEntry[]) => derived(entries)
 const rows = rowsOf
 
 export const source = (): TrajectorySource | null => sources.trajectory ?? null
 
-/* What a conversation keeps while another is on screen: its view, its
-   selection and where its list was scrolled to. Light on purpose -- the
-   entries themselves are read back from the gateway on return, which is what
-   keeps a page that visits many conversations from holding all of them. */
+/* What a conversation keeps while another is on screen: its view and its
+   selection. Light on purpose -- the entries themselves are read back from
+   the gateway on return, which is what keeps a page that visits many
+   conversations from holding all of them. */
 interface Remembered {
   view: View
   selectedId: string | null
-  follow: boolean
-  anchor: Anchor | null
 }
 
 /** How many conversations' places are kept; the oldest goes when a new one arrives. */
@@ -269,8 +239,7 @@ export function handshake(): void {
 function leaveView(): void {
   if (store.get().view === 'trajectory') {
     bump()
-    const s = store.get()
-    patch({ view: 'chat', listing: false, ...rows(s.entries, s) })
+    patch({ view: 'chat', listing: false })
   }
 }
 
@@ -334,7 +303,7 @@ export function setView(view: View): void {
   if (s.view === view) return
   if (view === 'trajectory' && !available(s)) return
   bump()
-  patch({ view, listing: false, ...rows(s.entries, s) })
+  patch({ view, listing: false })
 }
 
 export const toggleView = (): void => { setView(store.get().view === 'trajectory' ? 'chat' : 'trajectory') }
@@ -363,18 +332,11 @@ export function selectAcross(entryId: string | null, opts: { source: SelectSourc
   patch({ selectedId: entryId, selectedBy: entryId === null ? null : opts.source, selections: s.selections + 1 })
 }
 
-/** The list reports where the reader is: at the tail, or anchored to a row. */
-export function setPlace(follow: boolean, anchor: Anchor | null): void {
-  const s = store.get()
-  if (s.follow === follow && s.anchor?.id === anchor?.id && s.anchor?.offset === anchor?.offset) return
-  patch({ follow, anchor })
-}
-
 /* ── the scopes ───────────────────────────────────────────────────────── */
 
-const freshView = (): ScopeView => ({ selectedId: null, follow: true, anchor: null })
+const freshView = (): ScopeView => ({ selectedId: null })
 
-const viewOf = (s: TrajectoryState): ScopeView => ({ selectedId: s.selectedId, follow: s.follow, anchor: s.anchor })
+const viewOf = (s: TrajectoryState): ScopeView => ({ selectedId: s.selectedId })
 
 const doorOf = (s: TrajectoryState, id: string): TrajectoryEntry | null => {
   const door = s.doors[id]
@@ -401,11 +363,9 @@ function enter(target: string | null, how: {
   const scopes = target === null || s.scopes.some((o) => o.id === target) ? s.scopes : [...s.scopes, { id: target, door: doorOf(s, target) }]
   let selectedId = how.select ? how.select.id : back.selectedId
   if (selectedId !== null && !(selectedId in s.index)) selectedId = null
-  const next = derived(s.entries, target)
   const moved = how.select !== undefined || selectedId !== s.selectedId
   patch({
-    scope: target, scopes, saved, ...next,
-    follow: back.follow, anchor: back.anchor,
+    scope: target, scopes, saved,
     selectedId, selectedBy: selectedId === null ? null : (how.select ? how.select.source : 'migrate'),
     selections: moved ? s.selections + 1 : s.selections,
   })
@@ -444,54 +404,16 @@ export function closeScope(id: string): void {
   patch({ scopes, saved })
 }
 
-/* The rows before and after a change, what the change replaced, and which
-   rows the list draws, for carrying a tab's place across it. */
+/* The rows after a change and what the change replaced, for carrying a
+   saved scope's selection across it. */
 interface Change {
-  before: TrajectoryEntry[]
-  beforeIndex: Record<string, number>
-  after: TrajectoryEntry[]
   afterIndex: Record<string, number>
   replaced: ReadonlyMap<string, string | null>
 }
 
-/* A tab's place after the rows changed under it, worked out in the same
-   write as the change: once the change is past, a gone anchor has nothing
-   left to be found by and its replacement is forgotten, and a tab left in
-   the meantime would keep it. An anchor holds while it is a row of the tab
-   that the list can still put on screen -- itself drawn, or a drawn row of
-   the tab after it, which is where the list puts a hidden anchor. Else its
-   replacement on the same terms, else the first drawn row of the tab after
-   where it was; with none the tab follows the tail -- with neither an
-   anchor nor the tail, the list would keep the scroll position the previous
-   tab left, which says nothing about this one. */
-function carryPlace(place: Pick<ScopeView, 'follow' | 'anchor'>, scope: string | null, c: Change): Pick<ScopeView, 'follow' | 'anchor'> {
-  const { follow, anchor } = place
-  if (anchor === null) return { follow, anchor }
-  const shown = (e: TrajectoryEntry): boolean => scopeOf(e) === scope
-  const placeable = (id: string): boolean => {
-    const at = c.afterIndex[id]
-    if (at === undefined || scopeOf(c.after[at]!) !== scope) return false
-    for (let k = at; k < c.after.length; k += 1) if (shown(c.after[k]!)) return true
-    return false
-  }
-  if (placeable(anchor.id)) return { follow, anchor }
-  const by = c.replaced.get(anchor.id)
-  if (by && placeable(by)) return { follow, anchor: { id: by, offset: anchor.offset } }
-  const from = c.beforeIndex[anchor.id]
-  if (from !== undefined) {
-    for (let k = from + 1; k < c.before.length; k += 1) {
-      const at = c.afterIndex[c.before[k]!.entry_id]
-      const now = at === undefined ? undefined : c.after[at]
-      if (now && shown(now)) return { follow, anchor: { id: now.entry_id, offset: 0 } }
-    }
-  }
-  return { follow: true, anchor: null }
-}
-
-/* The saved tabs after a change: each one's place, and its selection --
-   kept while the index has it or its replacement, whichever tab it is in
-   now, the way the tab on screen keeps its own. Answers the same object
-   when nothing moved. */
+/* The saved scopes after a change: each one's selection, kept while the index
+   has it or its replacement, whichever scope it is in now, the way the
+   current scope keeps its own. Answers the same object when nothing moved. */
 function carry(saved: Record<string, ScopeView>, c: Change): Record<string, ScopeView> {
   let out: Record<string, ScopeView> | null = null
   for (const [key, view] of Object.entries(saved)) {
@@ -500,10 +422,9 @@ function carry(saved: Record<string, ScopeView>, c: Change): Record<string, Scop
       const by = c.replaced.get(selectedId)
       selectedId = by && by in c.afterIndex ? by : null
     }
-    const place = carryPlace(view, key === MAIN_KEY ? null : key, c)
-    if (selectedId === view.selectedId && place.anchor === view.anchor && place.follow === view.follow) continue
+    if (selectedId === view.selectedId) continue
     out ??= { ...saved }
-    out[key] = { ...view, ...place, selectedId }
+    out[key] = { ...view, selectedId }
   }
   return out ?? saved
 }
@@ -512,8 +433,9 @@ const NOTHING_REPLACED: ReadonlyMap<string, string | null> = new Map()
 
 /* ── the conversation on screen ───────────────────────────────────────── */
 
-/* What is kept of a conversation is its main session's place: the sub-agent
-   tabs are let go with it, so one of theirs would be a place nobody can return to. */
+/* What is kept of a conversation is its main session's selection: the
+   sub-agent tabs are let go with it, so one of theirs would be a selection
+   nobody can return to. */
 function remember(key: string): void {
   const s = store.get()
   const main = s.scope === null ? viewOf(s) : (s.saved[MAIN_KEY] ?? freshView())
@@ -549,13 +471,9 @@ export function sessionChanged(key: string | null = sessionCurrent()): void {
     fault: null,
     selectedId: back?.selectedId ?? null,
     selectedBy: back?.selectedId ? 'migrate' : null,
-    follow: back?.follow ?? true,
-    anchor: back?.anchor ?? null,
     scope: null,
     scopes: [],
     saved: {},
-    shown: [],
-    visible: [],
     spanIndex: {},
     doors: {},
   })
@@ -605,10 +523,6 @@ export async function load(): Promise<void> {
   if (!src || !key) return
   let restarts = 0
   let stream = true
-  /* The picture the reader was on when the walk began: the place they kept
-     (or scrolled to while it ran) is carried from that picture to the one the
-     walk ends on, not from whatever page happened to land last. */
-  const start = store.get()
   for (;;) {
     const g = bump()
     patch({ listing: true })
@@ -621,14 +535,10 @@ export async function load(): Promise<void> {
          only throw away the tree the reader is looking at. */
       const whole = was.entries === entries
       const next = whole ? null : rows(entries)
-      const change: Change = {
-        before: start.entries, beforeIndex: start.index, after: entries, afterIndex: next?.index ?? was.index,
-        replaced: NOTHING_REPLACED,
-      }
+      const change: Change = { afterIndex: next?.index ?? was.index, replaced: NOTHING_REPLACED }
       patch({
         ...(next ?? {}),
         grownFrom: -1,
-        ...carryPlace(was, was.scope, change),
         saved: carry(was.saved, change),
         epoch: last.epoch,
         revision: last.snapshot_revision,
@@ -686,13 +596,12 @@ export function applyChanges(batch: TrajectoryChangesResult): void {
     else if (!(selectedId in index)) selectedId = null
   }
   const change: Change = {
-    before: s.entries, beforeIndex: s.index, after: entries, afterIndex: index,
+    afterIndex: index,
     replaced: new Map(batch.removed.map((r) => [r.entry_id, r.replaced_by ?? null])),
   }
   patch({
-    ...rows(entries, s),
+    ...rows(entries),
     grownFrom: -1,
-    ...carryPlace(s, s.scope, change),
     saved: carry(s.saved, change),
     revision: Math.max(s.revision, batch.to_revision),
     indexState: batch.index_state,
