@@ -106,11 +106,20 @@ WebUI，升级完成后再启动。如只想检查是否有新版本而不安装
 
 ### 更新源码安装的 Raven { #update-a-source-checkout }
 
-拉取最新代码后，再运行一次本地安装脚本（PowerShell 中为 `.\install.ps1`）：
+拉取最新代码后，再运行一次本地安装脚本。Linux 和 macOS：
 
 ```bash
 git pull
 ./install.sh
+```
+
+Windows 上先停掉页面，再拉取代码并运行 PowerShell 安装脚本。如果 `git pull`
+失败，先修复再运行安装脚本：
+
+```powershell
+raven web --stop
+git pull
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 安装脚本会以可编辑模式重新安装该检出目录，仅在源码有变动时重新构建 TUI 和
