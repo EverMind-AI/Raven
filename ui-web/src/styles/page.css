@@ -2994,19 +2994,22 @@ textarea:focus, textarea:focus-visible,
    removed: out of the flow at the size it had, invisible and deaf to the
    pointer, so its scroll position survives and the transcript keeps streaming
    into it underneath. --topbar-h is the live scroller's own top padding, so
-   the parked box still starts where its content does. The trajectory's box
-   takes the flex space and reserves --lift below, the same inset .col
-   reserves, so its last row clears the composer the way the last message
-   does. The pill and the turn nav belong to the scroller and go with it.
+   the parked box still starts where its content does.
+   The trajectory's box takes the flex space and reserves --lift below, the
+   same inset .col reserves, so its last row clears the composer the way the
+   last message does. The pill and the turn nav belong to the scroller and go
+   with it.
 
-   #trajHost carries the whole frost band as padding, not just the row, because
-   .top no longer takes either out of the column: with only --topbar-h the
-   view's first strip -- the scope tabs -- would start inside the fade. */
+   #trajHost is the waterfall's glass island. .top no longer takes the row out
+   of the column, so in this view the host reserves the whole frost band as a
+   top margin: the island has to float below the band with its own inset
+   visible, and a padding would push the rows down while the card's top edge
+   stayed under the header. */
 .scroll[data-parked] { position: absolute; inset: var(--topbar-h) 0 0; visibility: hidden; pointer-events: none; }
 .scroll[data-parked] ~ .backpill { display: none; }
 .scroll[data-parked] ~ #turnNav { display: none; }
 #trajHost { flex: 1; min-height: 0; display: flex; flex-direction: column;
-  padding-top: var(--topbar-fade-h); padding-bottom: var(--lift, 96px); }
+  padding-top: 0; padding-bottom: var(--lift, 96px); }
 #trajHost[hidden] { display: none; }
 /* The glass itself: the conversation's own wash is painted on the column and
    the island floats on it, inset far enough that the colour reads around all
@@ -3018,7 +3021,9 @@ textarea:focus, textarea:focus-visible,
 html[data-traj] .chat { background: var(--wash) }
 html[data-traj] #trajHost {
   position: relative;
-  margin: 6px 14px 14px; padding-bottom: 0;
+  /* The band plus the same 6px inset the sides and bottom keep, so the card's
+     top edge and rounded corners are visible below the frost, not under it. */
+  margin: calc(var(--topbar-fade-h) + 6px) 14px 14px; padding-bottom: 0;
   border: 1px solid var(--traj-edge); border-radius: 16px; overflow: hidden;
   box-shadow: var(--traj-shadow);
 }

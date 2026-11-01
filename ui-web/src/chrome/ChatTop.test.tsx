@@ -462,6 +462,7 @@ describe('the chat column chrome when a language is applied', () => {
   })
 })
 
+
 /* The header floats over the transcript, so a bubble scrolled to the top
  * passes under it instead of being cut at its edge, and what it passes under
  * is a fade of frosted glass that reaches below the header's own row.
@@ -490,6 +491,7 @@ describe('the header band', () => {
   afterEach(() => {
     sheet?.remove()
     sheet = null
+    document.documentElement.removeAttribute('data-traj')
   })
 
   it('floats over the transcript instead of ending where it begins', () => {
@@ -509,13 +511,16 @@ describe('the header band', () => {
     expect(scroll.scrollPaddingTop).not.toBe(row)
   })
 
-  it('starts the trajectory view and the parked copy clear of the fade', () => {
+  it('starts the trajectory view below the fade', () => {
     styled()
-    expect(getComputedStyle(el('trajHost')).paddingTop).toBe(token('--topbar-fade-h'))
-    const scroll = el('scroll')
-    scroll.dataset.parked = ''
-    expect(getComputedStyle(scroll).getPropertyValue('inset').trim())
-      .toBe(`${token('--topbar-h')} 0 0`)
+    document.documentElement.setAttribute('data-traj', '')
+    /* The island is an inset card now (the waterfall's glass sheet), so the
+       band is its top margin, not padding inside it: padding would push the
+       content down while the card's top edge stayed under the header. */
+    expect(getComputedStyle(el('trajHost')).paddingTop).toBe('0px')
+    const css = source('styles/page.css')
+    const island = (css.match(/html\[data-traj\] #trajHost \{([\s\S]*?)\}/) as RegExpMatchArray)[1] as string
+    expect(island).toMatch(/margin: calc\(var\(--topbar-fade-h\) \+ 6px\) 14px 14px;/)
   })
 
   it('splits a translucent tint from the blur, over an opaque ground where the blur is unsupported', () => {
@@ -580,3 +585,4 @@ describe('the header band', () => {
     expect(fallback).toMatch(/mask-image: none/)
   })
 })
+
