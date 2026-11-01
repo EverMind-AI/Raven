@@ -3419,11 +3419,18 @@ write failed, or its leader had already exited when the record was taken), and a
 by a Raven older than the records.
 
 On Windows, each locally launched ACP connection owns an unnamed, non-inheritable Job Object with
-`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. A launcher waits for one byte on stdin before starting
-the agent; the host sends it only after assigning the launcher to the job. Host death before
-assignment closes stdin, so no agent starts. After assignment, host death or closing the
-connection closes the job's only handle, ending its processes and descendants even if the
-original launcher has already exited.
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and no breakaway permission. A launcher waits for one byte
+on stdin before starting the agent; the host sends it only after assigning the launcher to the
+job. Host death before assignment closes stdin, so no agent starts. After assignment, host death
+or closing the connection closes the job's only handle, ending its processes and descendants
+even if the original launcher has already exited. Work an agent hands off on purpose is started
+by the host when that channel is present: the host serves a named pipe whose address and key
+reach the agent in `RAVEN_ACP_HANDOFF_PIPE` and `RAVEN_ACP_HANDOFF_KEY`, and starts the hand-off
+relay outside the job. The handed-off job therefore outlives the host while nothing in the
+agent's tree can leave the job -- a breakaway permission would have let Git for Windows spend it
+on every native program the agent's Bash tool starts. Without the channel (a host older than this
+mechanism, or a backend run outside an ACP agent), the relay starts inside the job and the job
+ends when that job object closes.
 _Avoid_: "orphaned" - in POSIX terms every agent group is an orphaned process group from the
 moment it starts, since its session does not hold the host; and the DAG vocabulary rules the
 word out for a released run.
