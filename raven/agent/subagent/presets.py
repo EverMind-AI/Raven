@@ -88,7 +88,7 @@ from raven.agent.subagent.acp_registry_presets import (
 )
 from raven.agent.subagent.mirasim_presets import MIRASIM_PRESETS, MIRASIM_SHIM_PRESETS
 from raven.agent.subagent.vendored_agents import _resolved_python
-from raven.utils.commands import resolve_subagent_command
+from raven.utils.commands import command_quote, resolve_subagent_command
 
 # Command templates for the cli transport, kept as reference rather than as
 # presets. Nothing reads them: they exist because the cli backend still runs
@@ -414,6 +414,15 @@ class SignIn(NamedTuple):
     Qwen Code opens on its prompt, not on a sign-in, and the command that reaches
     its providers is a slash command typed there. Without this a reader told to
     run ``qwen`` is left at a prompt with nothing saying what to do next."""
+    check: str | None = None
+    """The command that shows the credential state, for an agent that has one.
+
+    A separate verb from the sign-in: the sign-in is the fix, and this is how a
+    reader finds out whether one is needed. Named apart because the failure it
+    answers is the one Raven cannot classify -- an agent that defers its
+    credential to the first model call opens a session happily and fails
+    afterwards, so the only place the state is written down is the agent's own
+    command."""
 
 
 SIGN_IN_HINTS: dict[str, SignIn] = {
@@ -466,6 +475,13 @@ SIGN_IN_HINTS: dict[str, SignIn] = {
     # declares no `engines.node` and a launch that quits on an old Node.js
     # was not measured, so it is not in `NODE_RUNTIME_PRESETS`.
     "github_copilot": SignIn(exe="copilot", local="copilot login"),
+    # `opencode auth login` is what OpenCode names itself: its ACP handshake
+    # advertises an auth method whose description is "Run `opencode auth login`
+    # in the terminal" (measured 2026-10-24, OpenCode 1.14.31), and the same
+    # build's `opencode auth --help` lists it under "manage AI providers and
+    # credentials". `opencode auth list` is the check beside it: it prints the
+    # credentials it holds ("0 credentials" on a machine that has none).
+    "opencode": SignIn(exe="opencode", local="opencode auth login", check="opencode auth list"),
 }
 """How to sign in to the agent a row defers to, by preset key.
 
@@ -584,13 +600,125 @@ DIAGNOSE_HINTS: dict[str, str] = {
     # (authentication failed, HTTP 401)") within seconds (measured 2026-09-29,
     # OpenClaw 2026.9.1).
     "openclaw": "openclaw agent --agent main -m hi --json",
+    # OpenCode relays a refused model call the same way: its inference endpoint
+    # answered 426 ("OpenCode 1.18.0 or newer is required to use the free tier")
+    # and the ACP session came back as `end_turn` with no content, 0 tokens and
+    # an empty stderr -- so the connect named an empty turn and nothing a reader
+    # could act on. `opencode run` is the one-shot form, and it takes the model
+    # (`--model`, `provider/model`), so the command asks for the row's own model
+    # rather than the agent's default one: a command that runs a different model
+    # answers a different question, and where the default answers and the pinned
+    # one does not, it hides the cause (measured 2026-10-24, OpenCode 1.14.31:
+    # the default answers 426, the pinned
+    # `opencode/nemotron-3.5-super-vl-free/low` answers "ProviderModelNotFound").
+    "opencode": "opencode run{model} hi",
 }
 """A command that makes the agent a row defers to say why it is not answering.
 
 For the failure that carries no reason at all: a connect that timed out while
 the agent kept working, or a turn that ended with nothing in it. Only for an
 agent measured to fail that way, because for the rest a timeout is not known to
-mean anything in particular."""
+mean anything in particular.
+
+``{model}`` is where the row's own model goes, for an agent whose command takes
+one: the command has to run the model the row is pinned to, or it answers about
+a different turn than the one that failed. It expands to the flag and the model,
+or to nothing when the row is on the agent's own default."""
+
+
+class VersionFloor(NamedTuple):
+    """The lowest build of an agent that still serves what Raven connects it for.
+
+    Not a version Raven requires in general: a build floor of one service of
+    one agent. The agent answers with its version in the ACP handshake, so the
+    gap is a fact to read rather than a guess -- but only for a failure the
+    floor is about, which is why the sentence that carries it also carries the
+    command that shows the provider's own answer.
+    """
+
+    version: str
+    """The lowest build that serves it, as the agent spells its version."""
+    what: str
+    """What the floor gates, in the reader's words."""
+    upgrade: str
+    """The agent's own command that moves it past the floor."""
+    measured: str
+    """When the floor was measured, and what the older build answered."""
+
+
+VERSION_FLOORS: dict[str, VersionFloor] = {
+    # OpenCode's own models moved behind a floor: a build under it answers the
+    # inference endpoint with 426 ("OpenCode 1.18.0 or newer is required to use
+    # the free tier"), the ACP session relays that as an empty turn with 0
+    # tokens, and nothing on the wire says why. Measured 2026-10-24 on
+    # 1.14.31; `opencode upgrade` is the command its own help names.
+    "opencode": VersionFloor(
+        version="1.18.0",
+        what="OpenCode's own (free) models need 1.18.0 or newer",
+        upgrade="opencode upgrade",
+        measured=(
+            "measured 2026-10-24: a 1.14.31 build answers its inference endpoint with 426 "
+            "'UpgradeRequired' and the turn comes back empty"
+        ),
+    ),
+}
+"""The build floors a row's agent can be under, by preset key.
+
+Only for an agent measured to answer under one: a floor nobody has seen an
+agent refuse on is a guess, and a guess about a version sends a reader after an
+upgrade that changes nothing."""
+
+
+def _version_numbers(version: str) -> tuple[int, ...]:
+    """A version's numbers, for the comparison a floor is about.
+
+    The leading digits of each dot-separated part, and the parts up to the first
+    that is not a number: "1.18.31" is (1, 18, 31), "1.18" is (1, 18), and
+    "1.18.0-rc1" is (1, 18, 0) -- the suffix is not a number and the
+    comparison stops there.
+    """
+    numbers: list[int] = []
+    for part in str(version or "").split("."):
+        digits = ""
+        for char in part:
+            if not char.isdigit():
+                break
+            digits += char
+        if not digits:
+            break
+        numbers.append(int(digits))
+    return tuple(numbers)
+
+
+def _at_least(found: str, floor: str) -> bool:
+    """Whether a version is at or above a floor.
+
+    A version either side cannot be read is no evidence of a gap: the floor is
+    a fact about a build, and an unreadable version says nothing about which
+    build it is. Missing parts count as zero, so "1.18" and "1.18.0" are the
+    same build.
+    """
+    here, want = _version_numbers(found), _version_numbers(floor)
+    if not here or not want:
+        return True
+    width = max(len(here), len(want))
+    here += (0,) * (width - len(here))
+    want += (0,) * (width - len(want))
+    return here >= want
+
+
+def version_gap_for(cfg: Any, found: str) -> VersionFloor | None:
+    """The floor this row's agent is under, or ``None`` when it is at or above it.
+
+    ``found`` is the version the agent answered the handshake with -- the live
+    one, not a stored snapshot, whose copy describes whatever build was measured
+    last and would keep naming a gap an upgrade had already closed.
+    """
+    preset = getattr(cfg, "preset", None)
+    floor = VERSION_FLOORS.get(preset) if preset else None
+    if floor is None or not str(found or "").strip():
+        return None
+    return None if _at_least(str(found), floor.version) else floor
 
 
 NODE_RUNTIME_PRESETS: frozenset[str] = frozenset(
@@ -621,9 +749,18 @@ def model_switch_hint_for(cfg: Any) -> InAgent | None:
 
 
 def diagnose_hint_for(cfg: Any) -> str | None:
-    """How to see why this row's agent is silent, by provenance like :func:`sign_in_hint_for`."""
+    """How to see why this row's agent is silent, by provenance like :func:`sign_in_hint_for`.
+
+    The row's own model goes into the command where the agent's takes one: the
+    command has to run the turn the row asked for, or it answers about a
+    different one.
+    """
     preset = getattr(cfg, "preset", None)
-    return DIAGNOSE_HINTS.get(preset) if preset else None
+    template = DIAGNOSE_HINTS.get(preset) if preset else None
+    if template is None:
+        return None
+    model = str(getattr(cfg, "model", "") or "").strip()
+    return template.replace("{model}", f" --model {command_quote(model)}" if model else "")
 
 
 def upgrade_hint_for(cfg: Any) -> str | None:
@@ -674,11 +811,14 @@ def shim_requirement_for(cfg: Any) -> tuple[str, str] | None:
 
 __all__ = [
     "BUNDLED_SHIM_PRESETS",
+    "DIAGNOSE_HINTS",
     "SHIM_LAUNCHED_PRESETS",
     "SHIM_REQUIRED_EXECUTABLES",
     "LENDABLE_KEYS",
     "SIGN_IN_HINTS",
     "SignIn",
+    "VERSION_FLOORS",
+    "VersionFloor",
     "install_hint_for",
     "lendable_keys",
     "shim_requirement_for",
@@ -687,4 +827,5 @@ __all__ = [
     "session_mcp_for",
     "third_party_subagent_presets",
     "third_party_subagent_preset",
+    "version_gap_for",
 ]
