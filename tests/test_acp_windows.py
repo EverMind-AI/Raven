@@ -18,16 +18,27 @@ from raven.acp_client import windows
 
 
 def _git_bash() -> str | None:
-    found = shutil.which("bash")
-    if found:
-        return found
     for candidate in (r"C:\Program Files\Git\usr\bin\bash.exe", r"C:\Program Files\Git\bin\bash.exe"):
         if os.path.isfile(candidate):
             return candidate
+    found = shutil.which("bash")
+    if found and not found.lower().startswith(
+        os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32").lower()
+    ):
+        return found
     return None
 
 
 GIT_BASH = _git_bash()
+
+
+def test_the_git_bash_probe_prefers_gits_install_over_a_wsl_bash(monkeypatch):
+    import shutil
+
+    git = r"C:\Program Files\Git\bin\bash.exe"
+    monkeypatch.setattr(shutil, "which", lambda name: r"C:\Windows\System32\bash.exe")
+    monkeypatch.setattr(os.path, "isfile", lambda path: path == git)
+    assert _git_bash() == git
 
 
 @pytest.fixture

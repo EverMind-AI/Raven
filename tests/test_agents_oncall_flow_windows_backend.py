@@ -86,6 +86,110 @@ def test_a_lost_answer_after_the_request_is_not_retried_here(monkeypatch):
         backend._handoff_answer(["py"], "job")
 
 
+def test_a_host_channel_that_never_answers_falls_back(monkeypatch):
+    import threading
+
+    release = threading.Event()
+
+    def blocked(*args, **kwargs):
+        release.wait(5)
+        raise OSError("released")
+
+    backend = _with_channel(monkeypatch, error=blocked)
+    monkeypatch.setattr(backend, "_HANDOFF_DEADLINE_S", 0.2, raising=False)
+    outcome = []
+    thread = threading.Thread(target=lambda: outcome.append(backend._handoff_answer(["py"], "job")), daemon=True)
+    thread.start()
+    thread.join(2.0)
+    try:
+        assert not thread.is_alive(), "a host that never answers must not wedge submit"
+        assert outcome == [None]
+    finally:
+        release.set()
+
+
+def test_a_host_channel_that_never_answers_after_the_send_is_not_retried(monkeypatch):
+    import multiprocessing.connection
+    import threading
+
+    from oncall_flow import windows_backend
+
+    monkeypatch.setenv(windows_backend._HANDOFF_PIPE_ENV, "pipe")
+    monkeypatch.setenv(windows_backend._HANDOFF_KEY_ENV, "00")
+    monkeypatch.setattr(windows_backend, "_HANDOFF_DEADLINE_S", 0.2, raising=False)
+    release = threading.Event()
+
+    class Channel:
+        def send_bytes(self, data):
+            pass
+
+        def recv_bytes(self):
+            release.wait(5)
+            raise EOFError("released")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(multiprocessing.connection, "Client", lambda *args, **kwargs: Channel())
+    outcome = []
+
+    def call():
+        try:
+            outcome.append(("ok", windows_backend._handoff_answer(["py"], "job")))
+        except BaseException as exc:  # noqa: BLE001 - the test reports either side
+            outcome.append(("raised", exc))
+
+    thread = threading.Thread(target=call, daemon=True)
+    thread.start()
+    thread.join(2.0)
+    try:
+        assert not thread.is_alive(), "a lost answer must not wedge submit"
+        assert outcome and outcome[0][0] == "raised"
+        assert "may have started" in str(outcome[0][1])
+    finally:
+        release.set()
+
+
+def test_the_fallback_relay_does_not_inherit_the_handoff_key(monkeypatch):
+    import subprocess
+
+    from oncall_flow import windows_backend
+
+    monkeypatch.setenv(windows_backend._HANDOFF_PIPE_ENV, "pipe")
+    monkeypatch.setenv(windows_backend._HANDOFF_KEY_ENV, "00")
+    monkeypatch.setattr(windows_backend, "_handoff_answer", lambda argv, job_dir: None)
+    monkeypatch.setattr(windows_backend, "_note_unhosted", lambda log_path: None)
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0, raising=False)
+    seen = {}
+
+    def run(argv, **kwargs):
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(argv, 0, "1\n", "")
+
+    monkeypatch.setattr(windows_backend.subprocess, "run", run)
+    assert windows_backend._start_relay(["py"], "job", "log") == (0, "1\n", "")
+    assert windows_backend._HANDOFF_PIPE_ENV not in seen["env"]
+    assert windows_backend._HANDOFF_KEY_ENV not in seen["env"]
+
+
+def test_the_fallback_note_is_not_written_when_the_relay_cannot_start(monkeypatch, tmp_path):
+    import subprocess
+    from unittest.mock import Mock
+
+    from oncall_flow import windows_backend
+
+    log = tmp_path / "job.log"
+    monkeypatch.setenv(windows_backend._HANDOFF_PIPE_ENV, "pipe")
+    monkeypatch.setenv(windows_backend._HANDOFF_KEY_ENV, "00")
+    monkeypatch.setattr(windows_backend, "_handoff_answer", lambda argv, job_dir: None)
+    monkeypatch.setattr(windows_backend, "_in_a_job", lambda: True)
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0, raising=False)
+    monkeypatch.setattr(windows_backend.subprocess, "run", Mock(side_effect=OSError("no interpreter")))
+    with pytest.raises(windows_backend.JobBackendError):
+        windows_backend._start_relay(["py"], "job", str(log))
+    assert not log.exists()
+
+
 _SUBMITTER = r"""
 import asyncio, os, sys
 sys.path.insert(0, sys.argv[1])
@@ -175,9 +279,7 @@ def _hand_off_from_an_agent(tmp_path, close, drop_handoff=False):
 
 
 def _written_by(result, wait=30):
-    deadline = time.time() + wait
-    while not result.exists() and time.time() < deadline:
-        time.sleep(0.2)
+    assert _wait_for(result, wait), f"the job wrote no result at {result}"
     return json.loads(result.read_text(encoding="utf-8"))["written_by"]
 
 
@@ -199,7 +301,7 @@ def test_a_job_without_the_host_channel_starts_inside_the_job_and_says_so(tmp_pa
     _, result = _hand_off_from_an_agent(tmp_path, close=False, drop_handoff=True)
     assert _written_by(result) == "body"
     log = (result.parent / "job.log").read_text(encoding="utf-8", errors="replace")
-    assert "ends if the host exits" in log
+    assert "ends when that job closes" in log
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="job objects are Windows'")

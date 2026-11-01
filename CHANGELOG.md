@@ -523,7 +523,7 @@ All notable changes to Raven are documented here.
   admit breakaway: Git for Windows adds `CREATE_BREAKAWAY_FROM_JOB` to every
   native program it starts when the job allows it, so ordinary Bash tool
   commands would have outlived the host too. With no host channel, the job
-  starts inside the job object and its log says it ends with the host.
+  starts inside the job object and its log says a Windows job object holds it.
 
 - On native Windows a DAG node can read files by reference: `{{ ref:... }}`,
   `{{ ref_path:... }}` and a `{"file": ...}` input naming a file in the

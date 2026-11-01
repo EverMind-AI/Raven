@@ -48,6 +48,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from typing import Any
 
@@ -81,11 +82,16 @@ from oncall_flow.process_backend import (
 # and outlives the host. Absent when this backend runs outside an ACP agent.
 _HANDOFF_PIPE_ENV = "RAVEN_ACP_HANDOFF_PIPE"
 _HANDOFF_KEY_ENV = "RAVEN_ACP_HANDOFF_KEY"
-# What a job started here, with no channel, must say in its log: the job
-# object around this agent is kill-on-close, so it ends with the host.
+# The old local start's subprocess.run(timeout=60) bounded a submit; the channel
+# keeps that bound, because the host, its accept loop, or the connection can be
+# wedged and nothing below the deadline raises on its own.
+_HANDOFF_DEADLINE_S = 60.0
+# What a job started here, with no host channel, must say in its log. The job
+# inherits whichever job object(s) this process is in; the note cannot name the
+# agent's job, because ``_in_a_job`` only answers "any job".
 _UNHOSTED_NOTE = (
     b"the host's hand-off channel was unavailable; this job was started inside "
-    b"the agent's job object and ends if the host exits\n"
+    b"a Windows job object and ends when that job closes\n"
 )
 
 
@@ -134,7 +140,6 @@ p = subprocess.Popen(
     stderr=subprocess.STDOUT,
     creationflags=flags,
 )
-log.flush()
 print(p.pid)
 """
 
@@ -162,7 +167,7 @@ def _in_a_job() -> bool:
 
 
 def _note_unhosted(log_path: str) -> None:
-    """Tell the reader of a fallback start that the job ends with the host."""
+    """Tell the reader of a fallback start that a Windows job object holds it."""
     if not _in_a_job():
         return
     try:
@@ -177,40 +182,77 @@ def _handoff_answer(argv: list[str], job_dir: str) -> dict[str, Any] | None:
 
     Raises JobBackendError when the channel answered with a refusal -- that is
     the relay failing to start, not a channel that is absent -- and also when
-    the request went out but the answer did not come back: the host may have
-    started the job, and starting another one here would run it twice. A
-    request that never went out returns None, so the caller falls back to
+    the request may have gone out but the answer did not come back: the host
+    may have started the job, and starting another one here would run it twice.
+    A request that never went out returns None, so the caller falls back to
     starting the relay here, which is the behaviour before the channel existed.
+
+    The exchange runs on its own daemon thread and the caller waits no longer
+    than ``_HANDOFF_DEADLINE_S``. Nothing in ``Client`` or ``recv_bytes`` has a
+    timeout, so a host that never answers would otherwise wedge the agent's
+    event loop; the old local start's ``subprocess.run(timeout=60)`` used to
+    bound exactly this wait.
     """
     address = os.environ.get(_HANDOFF_PIPE_ENV)
     key = os.environ.get(_HANDOFF_KEY_ENV)
     if not address or not key:
         return None
-    sent = False
     try:
-        from multiprocessing.connection import Client
+        authkey = bytes.fromhex(key)
+    except ValueError:
+        return None
+    request = {
+        "argv": argv,
+        "cwd": job_dir,
+        "env": {name: value for name, value in os.environ.items() if name not in (_HANDOFF_PIPE_ENV, _HANDOFF_KEY_ENV)},
+    }
+    outcome: list[Any] = []
+    phase = ["connecting"]
+    guard = threading.Lock()
+    cancelled = threading.Event()
 
-        connection = Client(address, family="AF_PIPE", authkey=bytes.fromhex(key))
+    def exchange() -> None:
+        connection = None
         try:
-            request = {
-                "argv": argv,
-                "cwd": job_dir,
-                "env": {
-                    name: value
-                    for name, value in os.environ.items()
-                    if name not in (_HANDOFF_PIPE_ENV, _HANDOFF_KEY_ENV)
-                },
-            }
-            connection.send_bytes(json.dumps(request).encode("utf-8"))
-            sent = True
-            answer = json.loads(connection.recv_bytes().decode("utf-8"))
+            from multiprocessing.connection import Client
+
+            connection = Client(address, family="AF_PIPE", authkey=authkey)
+            with guard:
+                if cancelled.is_set():
+                    return
+                phase[0] = "sending"
+                connection.send_bytes(json.dumps(request).encode("utf-8"))
+                phase[0] = "sent"
+            outcome.append(json.loads(connection.recv_bytes().decode("utf-8")))
+        except BaseException as exc:  # noqa: BLE001 - the caller decides what it means
+            outcome.append(exc)
         finally:
-            try:
-                connection.close()
-            except Exception:
-                pass
-    except Exception:
-        if sent:
+            if connection is not None:
+                try:
+                    connection.close()
+                except Exception:
+                    pass
+
+    thread = threading.Thread(target=exchange, name="raven-acp-handoff-request", daemon=True)
+    thread.start()
+    thread.join(max(0.0, _HANDOFF_DEADLINE_S))
+    if thread.is_alive():
+        acquired = guard.acquire(timeout=0.5)
+        try:
+            if acquired and phase[0] == "connecting":
+                cancelled.set()
+                return None
+        finally:
+            if acquired:
+                guard.release()
+        raise JobBackendError(
+            "the host's hand-off channel did not answer after the request; it may have started the job"
+        )
+    if not outcome:
+        return None
+    answer = outcome[0]
+    if isinstance(answer, BaseException):
+        if phase[0] != "connecting":
             raise JobBackendError(
                 "the host's hand-off channel did not answer after the request; it may have started the job"
             ) from None
@@ -227,7 +269,9 @@ def _start_relay(argv: list[str], job_dir: str, log_path: str) -> tuple[int, str
 
     Returns ``(returncode, stdout, stderr)``. The host-started path is the only
     one that outlives the host; the local fallback covers a backend run outside
-    an ACP agent and a host old enough to have no hand-off channel.
+    an ACP agent and a host old enough to have no hand-off channel. The fallback
+    starts with the same environment the host path sends -- without the channel
+    key -- and writes its note only after the relay actually started.
     """
     answer = _handoff_answer(argv, job_dir)
     if answer is not None:
@@ -236,11 +280,12 @@ def _start_relay(argv: list[str], job_dir: str, log_path: str) -> tuple[int, str
             str(answer.get("stdout") or ""),
             str(answer.get("stderr") or ""),
         )
-    _note_unhosted(log_path)
+    env = {name: value for name, value in os.environ.items() if name not in (_HANDOFF_PIPE_ENV, _HANDOFF_KEY_ENV)}
     try:
         relay = subprocess.run(
             argv,
             cwd=job_dir,
+            env=env,
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
@@ -249,6 +294,7 @@ def _start_relay(argv: list[str], job_dir: str, log_path: str) -> tuple[int, str
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise JobBackendError(f"could not start the job in {job_dir}: {exc}") from exc
+    _note_unhosted(log_path)
     return relay.returncode, relay.stdout, relay.stderr
 
 
