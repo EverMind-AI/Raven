@@ -1289,15 +1289,20 @@ def test_settings_quality_wins_only_where_it_names_one(section: dict, expected: 
         ("custom/gpt-image-2", "medium"),
         ("custom/gpt-image-2.5", None),
     ],
-    ids=["gpt-image-2-keeps-its-default", "other-families-send-none"],
+    ids=["gpt-image-2-has-a-default", "gpt-image-2.5-has-no-default"],
 )
-def test_no_quality_anywhere_resolves_like_an_unset_section(model: str, expected: str | None) -> None:
-    """With the picker's ``quality: ""`` and no quality on the call, resolution
-    lands where a section that never had the key lands: the gpt-image-2 default
-    (medium), and nothing for a family without the knob."""
+@pytest.mark.parametrize(
+    "section",
+    [{}, {"quality": ""}],
+    ids=["unset", "picker-saved-empty"],
+)
+def test_no_quality_anywhere_resolves_like_an_unset_section(model: str, expected: str | None, section: dict) -> None:
+    """With nothing on the call either, an empty Settings value lands where a
+    section that never had the key lands: gpt-image-2's medium default, and
+    nothing for the other gpt-image ids."""
     from raven.config.schema import ImageToolConfig
 
-    config = ImageToolConfig(model=model, provider="custom", quality="")
+    config = ImageToolConfig(model=model, provider="custom", **section)
 
     assert ImageGenerateTool(config).effective_quality(None) == expected
 
