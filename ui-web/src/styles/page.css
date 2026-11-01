@@ -1066,10 +1066,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .chat > .top::before {
   content: ''; position: absolute; inset: 0 0 auto 0; height: var(--topbar-h);
   z-index: -2; pointer-events: none;
-  -webkit-backdrop-filter: blur(20px) saturate(1.4);
-  backdrop-filter: blur(20px) saturate(1.4);
-  -webkit-mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .85) 20%, rgba(0, 0, 0, .65) 40%, rgba(0, 0, 0, .45) 60%, rgba(0, 0, 0, .22) 80%, rgba(0, 0, 0, 0) 100%);
-  mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .85) 20%, rgba(0, 0, 0, .65) 40%, rgba(0, 0, 0, .45) 60%, rgba(0, 0, 0, .22) 80%, rgba(0, 0, 0, 0) 100%);
+  -webkit-backdrop-filter: blur(44px) saturate(1.4);
+  backdrop-filter: blur(44px) saturate(1.4);
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .9) 25%, rgba(0, 0, 0, .62) 50%, rgba(0, 0, 0, .3) 75%, rgba(0, 0, 0, 0) 100%);
+  mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .9) 25%, rgba(0, 0, 0, .62) 50%, rgba(0, 0, 0, .3) 75%, rgba(0, 0, 0, 0) 100%);
 }
 .chat > .top::after {
   content: ''; position: absolute; inset: 0 0 auto 0; height: var(--topbar-h);
