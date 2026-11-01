@@ -82,16 +82,18 @@ from oncall_flow.process_backend import (
 # and outlives the host. Absent when this backend runs outside an ACP agent.
 _HANDOFF_PIPE_ENV = "RAVEN_ACP_HANDOFF_PIPE"
 _HANDOFF_KEY_ENV = "RAVEN_ACP_HANDOFF_KEY"
-# The old local start's subprocess.run(timeout=60) bounded a submit; the channel
-# keeps that bound, because the host, its accept loop, or the connection can be
-# wedged and nothing below the deadline raises on its own.
-_HANDOFF_DEADLINE_S = 60.0
+# The host, its accept loop, or the connection can be wedged, and nothing below
+# the deadline raises on its own. The host's own budget is the request poll
+# (30 s) plus the relay timeout (60 s); waiting longer than that keeps a healthy
+# but slow host from being reported as indeterminate before it can answer.
+_HANDOFF_DEADLINE_S = 100.0
 # What a job started here, with no host channel, must say in its log. The job
 # inherits whichever job object(s) this process is in; the note cannot name the
-# agent's job, because ``_in_a_job`` only answers "any job".
+# agent's job, because ``_in_a_job`` only answers "any job", and a job object
+# without kill-on-close would not end it.
 _UNHOSTED_NOTE = (
     b"the host's hand-off channel was unavailable; this job was started inside "
-    b"a Windows job object and ends when that job closes\n"
+    b"a Windows job object and may end when that job closes\n"
 )
 
 
@@ -177,6 +179,16 @@ def _note_unhosted(log_path: str) -> None:
         pass
 
 
+def _environment_without_channel() -> dict[str, str]:
+    """The agent's environment with the hand-off channel removed.
+
+    Both the request the host starts the relay with and the local fallback must
+    lose these names; one place keeps a future channel variable from reaching
+    the relay through the path that was not updated.
+    """
+    return {name: value for name, value in os.environ.items() if name not in (_HANDOFF_PIPE_ENV, _HANDOFF_KEY_ENV)}
+
+
 def _handoff_answer(argv: list[str], job_dir: str) -> dict[str, Any] | None:
     """The host's answer to a hand-off request, or None when it has no channel.
 
@@ -188,10 +200,11 @@ def _handoff_answer(argv: list[str], job_dir: str) -> dict[str, Any] | None:
     starting the relay here, which is the behaviour before the channel existed.
 
     The exchange runs on its own daemon thread and the caller waits no longer
-    than ``_HANDOFF_DEADLINE_S``. Nothing in ``Client`` or ``recv_bytes`` has a
-    timeout, so a host that never answers would otherwise wedge the agent's
-    event loop; the old local start's ``subprocess.run(timeout=60)`` used to
-    bound exactly this wait.
+    than ``_HANDOFF_DEADLINE_S``, which outlasts the host's own request (30 s)
+    plus relay (60 s) budget. Nothing in ``Client`` or ``recv_bytes`` has a
+    timeout, so a host that never answers would otherwise wedge a caller that
+    ran on the event loop; ``submit`` runs this whole function on a worker
+    thread.
     """
     address = os.environ.get(_HANDOFF_PIPE_ENV)
     key = os.environ.get(_HANDOFF_KEY_ENV)
@@ -204,7 +217,7 @@ def _handoff_answer(argv: list[str], job_dir: str) -> dict[str, Any] | None:
     request = {
         "argv": argv,
         "cwd": job_dir,
-        "env": {name: value for name, value in os.environ.items() if name not in (_HANDOFF_PIPE_ENV, _HANDOFF_KEY_ENV)},
+        "env": _environment_without_channel(),
     }
     outcome: list[Any] = []
     phase = ["connecting"]
@@ -280,7 +293,7 @@ def _start_relay(argv: list[str], job_dir: str, log_path: str) -> tuple[int, str
             str(answer.get("stdout") or ""),
             str(answer.get("stderr") or ""),
         )
-    env = {name: value for name, value in os.environ.items() if name not in (_HANDOFF_PIPE_ENV, _HANDOFF_KEY_ENV)}
+    env = _environment_without_channel()
     try:
         relay = subprocess.run(
             argv,
@@ -294,7 +307,8 @@ def _start_relay(argv: list[str], job_dir: str, log_path: str) -> tuple[int, str
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise JobBackendError(f"could not start the job in {job_dir}: {exc}") from exc
-    _note_unhosted(log_path)
+    if relay.returncode == 0 and relay.stdout.strip().isdigit():
+        _note_unhosted(log_path)
     return relay.returncode, relay.stdout, relay.stderr
 
 
@@ -651,7 +665,10 @@ class WindowsExecutor(ProcessExecutor):
 
     async def submit(self, spec: JobSpec) -> JobHandle:
         job_id = f"{self._prefix}{spec.idem_key}"
-        job_dir = self._job_dir(spec.idem_key)
+        # The host resolves the request's cwd and argv against its own working
+        # directory, which need not be the agent's. Make every path absolute
+        # here, where the agent's cwd is the one that created the job dir.
+        job_dir = os.path.abspath(self._job_dir(spec.idem_key))
 
         if self._existing_state(job_dir) in ("done", "running"):
             return JobHandle(self.name, job_id)
@@ -728,7 +745,8 @@ class WindowsExecutor(ProcessExecutor):
         # the relay gone, the walk from this process finds no path to
         # the job. ``start_new_session`` is deliberately not passed: Windows
         # ignores it, and passing it here would only suggest it does something.
-        returncode, relayed, relay_stderr = _start_relay(
+        returncode, relayed, relay_stderr = await asyncio.to_thread(
+            _start_relay,
             [_real_interpreter(), "-c", _RELAY, log_path, job_dir, _real_interpreter(), launcher, command],
             job_dir,
             log_path,

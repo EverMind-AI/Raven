@@ -207,9 +207,11 @@ time.sleep(120)
 """
 
 _BODY = r"""
-import json, time
+import json, os, time
 time.sleep(4)
-json.dump({"status": "succeeded", "written_by": "body", "gpu_minutes_used": 0.1}, open("result.json", "w"))
+with open("result.json.tmp", "w") as fh:
+    json.dump({"status": "succeeded", "written_by": "body", "gpu_minutes_used": 0.1}, fh)
+os.replace("result.json.tmp", "result.json")
 """
 
 
@@ -279,8 +281,14 @@ def _hand_off_from_an_agent(tmp_path, close, drop_handoff=False):
 
 
 def _written_by(result, wait=30):
-    assert _wait_for(result, wait), f"the job wrote no result at {result}"
-    return json.loads(result.read_text(encoding="utf-8"))["written_by"]
+    deadline = time.time() + wait
+    while True:
+        try:
+            return json.loads(result.read_text(encoding="utf-8"))["written_by"]
+        except (OSError, KeyError, ValueError):
+            if time.time() >= deadline:
+                raise AssertionError(f"the job wrote no valid result at {result}") from None
+            time.sleep(0.05)
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="job objects are Windows'")
@@ -301,7 +309,7 @@ def test_a_job_without_the_host_channel_starts_inside_the_job_and_says_so(tmp_pa
     _, result = _hand_off_from_an_agent(tmp_path, close=False, drop_handoff=True)
     assert _written_by(result) == "body"
     log = (result.parent / "job.log").read_text(encoding="utf-8", errors="replace")
-    assert "ends when that job closes" in log
+    assert "may end when that job closes" in log
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="job objects are Windows'")
@@ -459,3 +467,109 @@ def test_a_cancel_before_the_command_started_writes_the_record_itself(tmp_path):
     finally:
         if launcher.poll() is None:
             launcher.kill()
+
+
+def test_the_host_request_env_does_not_carry_the_handoff_key(monkeypatch):
+    import multiprocessing.connection
+    from unittest.mock import Mock
+
+    from oncall_flow import windows_backend
+
+    monkeypatch.setenv(windows_backend._HANDOFF_PIPE_ENV, "pipe")
+    monkeypatch.setenv(windows_backend._HANDOFF_KEY_ENV, "00")
+    connection = _channel(answer={"returncode": 0, "stdout": "1\n", "stderr": ""})
+    monkeypatch.setattr(multiprocessing.connection, "Client", Mock(return_value=connection))
+    assert windows_backend._handoff_answer(["py"], "job") == {
+        "returncode": 0,
+        "stdout": "1\n",
+        "stderr": "",
+    }
+    request = json.loads(connection.send_bytes.call_args.args[0].decode("utf-8"))
+    assert windows_backend._HANDOFF_PIPE_ENV not in request["env"]
+    assert windows_backend._HANDOFF_KEY_ENV not in request["env"]
+
+
+def test_the_handoff_deadline_outlasts_the_hosts_budget():
+    from oncall_flow import windows_backend
+
+    from raven.acp_client import windows
+
+    assert windows_backend._HANDOFF_DEADLINE_S > windows._REQUEST_TIMEOUT_S + windows._RELAY_TIMEOUT_S
+
+
+def test_a_relative_remote_dir_is_absolute_for_the_handoff(tmp_path, monkeypatch):
+    import asyncio
+
+    from oncall_flow import windows_backend
+    from oncall_flow.backend import JobSpec
+
+    captured = {}
+
+    def relay(argv, job_dir, log_path):
+        captured.update(argv=argv, job_dir=job_dir, log=log_path)
+        return 0, "123\n", ""
+
+    monkeypatch.setattr(windows_backend, "_start_relay", relay)
+    monkeypatch.setattr(windows_backend.WindowsExecutor, "_await_pid", lambda self, job_dir, tries=50: 123)
+    monkeypatch.chdir(tmp_path)
+    executor = windows_backend.WindowsExecutor(remote_dir="relative-ops", command="echo hi")
+    asyncio.run(executor.submit(JobSpec(payload={}, idem_key="k", labels={})))
+    assert os.path.isabs(captured["job_dir"])
+    assert os.path.isabs(captured["log"])
+    assert os.path.isabs(captured["argv"][4])
+    assert captured["job_dir"] == os.path.abspath(os.path.join("relative-ops", "jobs", "k"))
+
+
+def test_submit_calls_the_relay_off_the_event_loop(tmp_path, monkeypatch):
+    import asyncio
+    import threading
+
+    from oncall_flow import windows_backend
+    from oncall_flow.backend import JobSpec
+
+    seen = []
+
+    def relay(argv, job_dir, log_path):
+        seen.append(threading.current_thread())
+        return 0, "123\n", ""
+
+    monkeypatch.setattr(windows_backend, "_start_relay", relay)
+    monkeypatch.setattr(windows_backend.WindowsExecutor, "_await_pid", lambda self, job_dir, tries=50: 123)
+    executor = windows_backend.WindowsExecutor(remote_dir=str(tmp_path / "ops"), command="echo hi")
+    asyncio.run(executor.submit(JobSpec(payload={}, idem_key="k", labels={})))
+    assert seen
+    assert seen[0] is not threading.main_thread()
+
+
+def test_the_fallback_note_is_not_written_when_the_relay_exits_nonzero(monkeypatch, tmp_path):
+    from oncall_flow import windows_backend
+
+    log = tmp_path / "job.log"
+    monkeypatch.setattr(windows_backend, "_handoff_answer", lambda argv, job_dir: None)
+    monkeypatch.setattr(windows_backend, "_in_a_job", lambda: True)
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0, raising=False)
+    monkeypatch.setattr(
+        windows_backend.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 1, "", "boom"),
+    )
+    assert windows_backend._start_relay(["py"], "job", str(log)) == (1, "", "boom")
+    assert not log.exists()
+
+
+def test_written_by_waits_for_a_result_that_is_still_being_written(tmp_path):
+    import threading
+
+    result = tmp_path / "result.json"
+    result.write_text("", encoding="utf-8")
+
+    def finish():
+        time.sleep(0.3)
+        result.write_text(json.dumps({"written_by": "body"}), encoding="utf-8")
+
+    thread = threading.Thread(target=finish, daemon=True)
+    thread.start()
+    try:
+        assert _written_by(result, wait=3) == "body"
+    finally:
+        thread.join()
