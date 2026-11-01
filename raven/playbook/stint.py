@@ -630,6 +630,41 @@ class StintDriver:
         except Exception as exc:  # noqa: BLE001 - the exit must not be replaced by a failed cleanup
             logger.warning("stint {} could not be restored after a stopped resume: {}", record.stint_id, exc)
 
+    def _record_opened_round(
+        self, record: StintRecord, store: StintStore, *, index: int, run_id: str, attempt: int
+    ) -> None:
+        """Record a dispatched round, leaving an out-of-band stop or pause standing.
+
+        The first round's approval can stand for the broker's whole budget, and
+        a ``pause`` or ``stop`` from another window can land while the question
+        is up. The round is already dispatched, so it is recorded either way;
+        but the status the person set is kept, because ``advance`` already ends
+        or parks a stint whose round finished after one. Writing the caller's
+        pre-question snapshot back would revive what they just ended.
+
+        Read and written under one ``write_transaction``: a beat's touch or a
+        whole-record write from another task lands either before the read or
+        after the write, never between them.
+        """
+        with write_transaction(store.path_for(record.stint_id)):
+            try:
+                fresh = store.read(record.stint_id)
+            except Exception:  # noqa: BLE001 - an unreadable record is replaced, not refused
+                # The file went away or cannot be decoded while the round was
+                # being dispatched. Nothing readable is here to disagree with,
+                # and the round is already running: the caller's record is
+                # written over it rather than losing the run id entirely.
+                fresh = None
+            if fresh is None:
+                store.write(record)
+                return
+            fresh.round_index = index
+            fresh.open_round(index, run_id, attempt=attempt)
+            fresh.claim()
+            if fresh.status not in (STOPPED, PAUSED):
+                fresh.status = RUNNING
+            store.write(fresh)
+
     async def _report(self, spec: PlaybookSpec, record: StintRecord, finished: Any) -> None:
         """Say a round is done, for a person who cannot otherwise tell.
 
@@ -1334,9 +1369,10 @@ class StintDriver:
             # did not exist, and a terminal that holds while a beat is alive
             # then held on nothing. Said as an error so `start` closes the record.
             return text if text.startswith("Error") else f"Error: {text}"
-        record.open_round(index, _run_id_of(text), attempt=attempt)
+        run_id = _run_id_of(text)
+        record.open_round(index, run_id, attempt=attempt)
         record.claim()
-        store.write(record)
+        self._record_opened_round(record, store, index=index, run_id=run_id, attempt=attempt)
         # After the write, so the first beat cannot race the record into being.
         self._start_beat(record, store)
         return text

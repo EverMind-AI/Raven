@@ -1135,6 +1135,92 @@ class TestRunning:
         replaced.cancel()
         await asyncio.sleep(0)
 
+    @pytest.mark.parametrize("status", ["paused", "stopped"])
+    async def test_an_out_of_band_stop_or_pause_survives_the_first_round_opening(
+        self, tmp_path: Path, status: str
+    ) -> None:
+        """The approval question stands for the broker's whole budget, and a
+        `stop` or `pause` from another window can land while it is up. The round
+        is already dispatched, so it is recorded either way -- but the status the
+        person set has to survive: `advance` ends or parks a stint whose round
+        finished after an out-of-band stop, and writing the pre-question
+        snapshot back revives what they just ended."""
+        from raven.rpc.question_broker import QuestionBroker
+
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+        store = StintStore(tool.stints_root("web:stint"))
+        asked = asyncio.Event()
+
+        async def send_frame(frame: dict[str, Any]) -> None:
+            asked.set()
+
+        broker = QuestionBroker(send_frame)
+        real = tool.run_round
+
+        async def run_round(nodes: list[dict[str, Any]], **kwargs: Any) -> str:
+            if kwargs.get("confirm"):
+                waiting = asyncio.create_task(
+                    broker.await_question("web:stint", prompt="Run it?", choices=["Run it", "Not now"])
+                )
+                await asyncio.wait_for(asked.wait(), 1.0)
+                broker.reply("web:stint", "Run it")
+                await waiting
+            return await real(nodes, **kwargs)
+
+        tool.run_round = run_round  # type: ignore[method-assign]
+        starting = asyncio.create_task(driver.start(spec))
+        await asyncio.wait_for(asked.wait(), 1.0)
+
+        [record] = store.list()
+        record.status = status
+        record.stop_reason = f"a person {status} the stint"
+        store.write(record)
+
+        receipt = await asyncio.wait_for(starting, 5.0)
+
+        assert receipt.startswith("DAG run"), receipt
+        [after] = store.list()
+        assert (after.status, after.stop_reason) == (status, f"a person {status} the stint")
+        entry = after.round(1)
+        assert entry is not None and entry.run_id == "run-1", "the dispatched round was not recorded"
+        assert tool.submitted
+        driver._stop_beat(after.stint_id)
+        await asyncio.sleep(0)
+
+    async def test_an_unreadable_record_does_not_lose_a_dispatched_round(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        """The open-round write re-reads the record to keep a concurrent stop or
+        pause. A record that cannot be decoded must be replaced, not turn a
+        round that is already running into an error the turn reads."""
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = _spec(confirm=False, roles=[{"as": "planner", "name": "echo", "promptTemplate": "plan"}])
+        store = StintStore(tool.stints_root("web:stint"))
+        original = StintStore.write
+        calls = {"n": 0}
+
+        def write(self: Any, record: Any) -> Any:
+            calls["n"] += 1
+            path = original(self, record)
+            if calls["n"] == 1:
+                path.write_bytes(b'{"stint_id": "\xff\xfe"}')
+            return path
+
+        monkeypatch.setattr(StintStore, "write", write)
+
+        receipt = await driver.start(spec)
+
+        assert receipt.startswith("DAG run"), receipt
+        [after] = store.list()
+        entry = after.round(1)
+        assert entry is not None and entry.run_id == "run-1", "the dispatched round was lost with the unreadable file"
+        assert after.status == "running"
+        driver._stop_beat(after.stint_id)
+        await asyncio.sleep(0)
+
     async def test_a_first_round_approved_before_the_budget_pause_is_not_asked_again(self, tmp_path: Path) -> None:
         """The charge runs after the confirmation, so the first round the budget
         turned away was approved. Its run id was never written, which is what
