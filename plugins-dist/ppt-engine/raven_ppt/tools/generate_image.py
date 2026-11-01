@@ -319,11 +319,14 @@ class PptGenerateImageTool(Tool):
         # generates. The author asks for a picture again when the one it got is not
         # the one it wanted, and answering that from disk hands back the picture it
         # just rejected. Overwriting is what makes the retry work without editing
-        # the script, since the page already names this file.
+        # the script, since the page already names this file. Neither spelling of
+        # "no quality" (``None`` and ``""``) is a value of its own, so both name
+        # the same file -- and the empty spelling is the one a picker-saved
+        # section used before this fix, so its decks keep their names.
         sent_quality = self.media.effective_quality(quality, model)
         ref_digest = "".join(hashlib.sha256(ref.read_bytes()).hexdigest()[:8] for ref in refs)
         digest = hashlib.sha256(
-            f"{model}\x00{sent_quality}\x00{aspect_ratio}\x00{ref_digest}\x00{prompt}".encode("utf-8")
+            f"{model}\x00{sent_quality or ''}\x00{aspect_ratio}\x00{ref_digest}\x00{prompt}".encode("utf-8")
         ).hexdigest()[:12]
         name = _filename(str(spec.get("filename") or ""), digest)
         scratch = deck.build_dir / _SCRATCH_DIRNAME

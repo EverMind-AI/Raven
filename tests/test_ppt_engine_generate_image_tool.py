@@ -188,6 +188,27 @@ async def test_an_unset_quality_is_the_hosts_to_resolve_not_this_tools(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_both_spellings_of_no_quality_name_the_same_file(monkeypatch, tmp_path: Path) -> None:
+    """The host now resolves "no quality" to ``None``; an empty request value
+    still resolves to ``""``. Both mean the request carries no quality, so the
+    deck must name one file: the name the picker-saved empty section already
+    used before this fix, which is what keeps a page's existing picture
+    overwritable after the upgrade."""
+    requested = _mock(monkeypatch, _images_api(_png()))
+    tool = _tool(tmp_path)
+
+    tool.media.effective_quality = lambda _requested, model_id=None: ""
+    first = json.loads(await tool.execute(project="talk", prompt="a lantern", filename="lantern"))
+
+    tool.media.effective_quality = lambda _requested, model_id=None: None
+    second = json.loads(await tool.execute(project="talk", prompt="a lantern", filename="lantern"))
+
+    assert "quality" not in json.loads(requested[0].content)
+    assert "quality" not in json.loads(requested[1].content)
+    assert second["path"] == first["path"]
+
+
+@pytest.mark.asyncio
 async def test_a_compatible_gateway_gets_a_frame_the_gpt_image_family_accepts(monkeypatch, tmp_path: Path) -> None:
     """Behind an OpenAI-compatible base the Images API takes a size, and gpt-image draws
     three frames: the deck's 16:9 is asked for as the landscape frame, and the reply says
