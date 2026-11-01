@@ -2560,3 +2560,58 @@ def test_receiver_reports_an_unusable_save_dir(tmp_path, monkeypatch, exc):
     (line,) = [line for line in r.output.splitlines() if "Cannot prepare" in line]
     assert str(deep) in line and exc.strerror in line
     assert isinstance(r.exception, SystemExit)
+
+
+def test_backfill_frames_reports_what_it_wrote_and_what_it_closed(monkeypatch):
+    from raven.trajectory import frames_backfill
+
+    seen: dict = {}
+
+    def backfill(*, session_key=None, dry_run=False, force=False):
+        seen.update(session_key=session_key, dry_run=dry_run)
+        return {"runs": 3, "written": 1, "steps": 7, "already": 2, "repaired": 4}
+
+    monkeypatch.setattr(frames_backfill, "backfill", backfill)
+    r = runner.invoke(trajectory_app, ["backfill-frames", "--session", "tui:x", "--dry-run"])
+    assert r.exit_code == 0, r.output
+    assert seen == {"session_key": "tui:x", "dry_run": True}
+    assert "7 step span(s) for 1 of 3" in r.output
+    assert "2 already on record" in r.output
+    assert "4 step(s)" in r.output
+
+
+def test_backfill_frames_says_how_many_runs_it_could_not_read(monkeypatch):
+    from raven.trajectory import frames_backfill
+
+    monkeypatch.setattr(
+        frames_backfill,
+        "backfill",
+        lambda **_: {"runs": 3, "written": 1, "steps": 7, "already": 1, "repaired": 0, "unread": 1},
+    )
+    r = runner.invoke(trajectory_app, ["backfill-frames"])
+    assert r.exit_code == 0, r.output
+    assert "1 already on record" in r.output
+    assert "1 already on record; 1 with nothing left to read in the journal." in r.output
+
+
+def test_backfill_frames_says_tracing_is_off_and_how_to_write_anyway(monkeypatch):
+    from raven.trajectory import frames_backfill
+
+    seen: list[bool] = []
+
+    def backfill(*, session_key=None, dry_run=False, force=False):
+        seen.append(force)
+        if not force:
+            return {"runs": 0, "written": 0, "steps": 0, "already": 0, "repaired": 0, "tracing_off": 1}
+        return {"runs": 1, "written": 1, "steps": 3, "already": 0, "repaired": 0}
+
+    monkeypatch.setattr(frames_backfill, "backfill", backfill)
+    off = runner.invoke(trajectory_app, ["backfill-frames"])
+    assert off.exit_code == 0, off.output
+    assert "Tracing is off" in off.output and "--force" in off.output
+    assert "step span(s)" not in off.output
+
+    forced = runner.invoke(trajectory_app, ["backfill-frames", "--force"])
+    assert forced.exit_code == 0, forced.output
+    assert seen == [False, True]
+    assert "Wrote 3 step span(s) for 1 of 1" in forced.output

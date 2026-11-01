@@ -18,16 +18,31 @@ protect the model's context -- and none of this enters the model's context.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import asyncio
+import json
+import time
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from loguru import logger
+
+from raven.tracing import context as tracing_context
+from raven.tracing import spans as tracing_spans
 from raven.tracing import trace
 
 SPAN_NAME = "subagent.external"
 _PREFIX = "subagent.external"
 TRANSCRIPT_KEY = f"{_PREFIX}.transcript"
 FRAMES_KEY = f"{_PREFIX}.frames"
+STEPS_KEY = f"{_PREFIX}.steps"
+"""How many steps a run has. Set before the first one is written, so a run cut short while
+its steps go to disk is still marked as one that writes its own steps and a backfill leaves it
+alone; it is a count of the run's steps, not a claim that every one reached the log."""
+LIVE_KEY = f"{_PREFIX}.in_progress"
+"""Set on an external run, and on each step of it, written while the run is still going; the
+settled record of either carries no ``True`` (``raven.trajectory.entries.IN_PROGRESS_KEYS``)."""
 
 
 @contextmanager
@@ -49,7 +64,15 @@ def external_agent_span(
             f"{_PREFIX}.instance": instance,
         },
     ) as span:
-        yield span
+        # On record from the moment it opens, marked running: the steps written
+        # while it runs have their parent on disk, and the run reads as going on
+        # until its settled record says it ended.
+        span.set(**{LIVE_KEY: True})
+        span.checkpoint()
+        try:
+            yield span
+        finally:
+            span.set(**{LIVE_KEY: False})
 
 
 def record_session(span: Any, *, session_id: str | None, resumed: bool) -> None:
@@ -125,14 +148,427 @@ def record_frames(span: Any, frames: dict[str, Any] | None) -> None:
     span.set(**{f"{FRAMES_KEY}.{key}": value for key, value in frames.items()})
 
 
+_STEP_LIMIT = 400
+"""A run that said more than this has already told the reader what it was."""
+_PREVIEW_CHARS = 240
+
+
+def _utc(at: object) -> datetime | None:
+    """The collector and the journal stamp local times with their offset (naive in
+    what either wrote before its stamps carried one); spans are UTC."""
+    if not isinstance(at, str) or not at:
+        return None
+    try:
+        parsed = datetime.fromisoformat(at)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.astimezone()
+    return parsed.astimezone(timezone.utc)
+
+
+def _artifact(span: Any, key: str, payload: Any) -> dict[str, Any]:
+    identity = span.identity()
+    meta = {"traceId": identity["trace_id"], "sessionKey": identity["session_key"]}
+    art = tracing_spans.persist_artifact(key, meta, payload, label=key)
+    return tracing_spans.artifact_attributes(key, art)
+
+
+def _step_span(
+    span: Any,
+    identity: dict[str, Any],
+    name: str,
+    span_type: str,
+    start: datetime,
+    end: datetime,
+    attributes: dict[str, Any],
+    span_id: str,
+) -> None:
+    tracing_spans.emit(
+        tracing_spans.build_span(
+            name,
+            span_type,
+            trace_id=identity["trace_id"],
+            span_id=span_id,
+            parent_span_id=identity["span_id"],
+            session_key=identity["session_key"],
+            channel=identity["channel"],
+            chat_id=identity["chat_id"],
+            surface=identity["surface"],
+            start_time=start.isoformat(),
+            end_time=max(start, end).isoformat(),
+            status_code="ERROR" if attributes.get("tool.error") else "OK",
+            status_message=str(attributes.get("tool.error") or ""),
+            attributes=attributes,
+        )
+    )
+
+
+_Step = tuple[str, str, str, datetime, datetime, list[tuple[str, Any]], dict[str, Any]]
+"""One step as it goes to disk: its span id, name, type, both ends, artifacts and attributes."""
+
+
+def _plan_steps(
+    span: Any,
+    *,
+    prompt: str | None,
+    events: list[dict[str, Any]],
+    elapsed_ms: int,
+    started_at: datetime | None = None,
+    ended_at: datetime | None = None,
+    id_seed: str | None = None,
+    skip_ids: set[str] | None = None,
+    step_id: Callable[[int], str] | None = None,
+) -> tuple[dict[str, Any], list[_Step]]:
+    """The steps :func:`record_steps` writes, worked out without touching disk.
+
+    A step's id is ``step_id(index)`` when given (the live writer's, stable within a
+    run), else derived from ``id_seed`` (the backfill's), else fresh.
+    """
+    identity = span.identity()
+    if not identity.get("trace_id") or not identity.get("span_id"):
+        return identity, []
+    close = ended_at or datetime.now(timezone.utc)
+    floor = started_at or _utc(identity.get("start")) or close - timedelta(milliseconds=max(0, elapsed_ms))
+    ats = [_utc(event.get("at")) for event in events]
+    results = {event.get("id"): event for event in events if event.get("t") == "result"}
+    steps: list[tuple[str, str, datetime, datetime, list[tuple[str, Any]], dict[str, Any]]] = []
+
+    def span_end(index: int) -> datetime:
+        for later in ats[index + 1 :]:
+            if later is not None:
+                return later
+        return close
+
+    if prompt:
+        first = next((at for at in ats if at is not None), close)
+        steps.append(
+            (
+                "llm.call",
+                "model",
+                floor,
+                first,
+                [("llm.input", {"messages": [{"role": "user", "content": prompt}]})],
+                {"llm.input_preview": prompt[:_PREVIEW_CHARS]},
+            )
+        )
+    for index, event in enumerate(events):
+        if len(steps) >= _STEP_LIMIT:
+            break
+        kind = event.get("t")
+        at = ats[index] or (steps[-1][3] if steps else floor)
+        end = span_end(index)
+        if kind == "say":
+            text = str(event.get("text") or "")
+            steps.append(
+                (
+                    "llm.call",
+                    "model",
+                    at,
+                    end,
+                    [("llm.output", {"content": text})],
+                    {"llm.output_preview": text[:_PREVIEW_CHARS]},
+                )
+            )
+        elif kind == "thought":
+            text = str(event.get("text") or "")
+            steps.append(
+                (
+                    "llm.call",
+                    "model",
+                    at,
+                    end,
+                    [("llm.output", {"content": "", "reasoning_content": text})],
+                    {"llm.output_preview": text[:_PREVIEW_CHARS]},
+                )
+            )
+        elif kind == "user":
+            text = str(event.get("text") or "")
+            steps.append(
+                (
+                    "llm.call",
+                    "model",
+                    at,
+                    end,
+                    [("llm.input", {"messages": [{"role": "user", "content": text}]})],
+                    {"llm.input_preview": text[:_PREVIEW_CHARS]},
+                )
+            )
+        elif kind == "call":
+            call = event.get("call")
+            name = str(getattr(call, "name", None) or "tool")
+            try:
+                arguments = call.arguments_json() if call is not None else "{}"
+            except Exception:  # noqa: BLE001 — a call we cannot read is still a row
+                arguments = "{}"
+            artifacts: list[tuple[str, Any]] = [("tool.input", {"name": name, "params": arguments or "{}"})]
+            attributes: dict[str, Any] = {
+                "tool.args_preview": (arguments or "")[:_PREVIEW_CHARS],
+                "tool.name": name,
+            }
+            result = results.get(event.get("id"))
+            if result is not None:
+                text = str(result.get("text") or "")
+                artifacts.append(("tool.output", {"result": text, "ok": result.get("ok")}))
+                attributes["tool.result_preview"] = text[:_PREVIEW_CHARS]
+                if result.get("ok") is False:
+                    # Marked the way the main loop marks a failed call, so the
+                    # trajectory reads it as one: the artifact's `ok` is not
+                    # something it looks at.
+                    attributes["tool.error"] = text[:_PREVIEW_CHARS] or "failed"
+                end = max(end, _utc(result.get("at")) or end)
+            steps.append(("tool.call", "tool", at, end, artifacts, attributes))
+    planned: list[_Step] = []
+    for index, (name, span_type, start, end, artifacts, attributes) in enumerate(steps):
+        # Inside the run, both ends: a journal written before its stamps
+        # carried an offset keeps naive local times, and one read in another
+        # zone, or across a clock step, can fall outside.
+        start = max(start, floor)
+        if ended_at is not None:
+            start = min(start, ended_at)
+            end = min(end, ended_at)
+        if step_id is not None:
+            span_id = step_id(index)
+        elif id_seed:
+            span_id = f"span-{id_seed}-{index}"
+        else:
+            span_id = tracing_context.new_span_id()
+        if skip_ids is not None and span_id in skip_ids:
+            continue
+        planned.append((span_id, name, span_type, start, end, artifacts, attributes))
+    return identity, planned
+
+
+def _write_step(span: Any, identity: dict[str, Any], step: _Step) -> None:
+    span_id, name, span_type, start, end, artifacts, attributes = step
+    for key, payload in artifacts:
+        attributes.update(_artifact(span, key, payload))
+    _step_span(span, identity, name, span_type, start, end, attributes, span_id)
+
+
+def record_steps(
+    span: Any,
+    *,
+    prompt: str | None,
+    events: list[dict[str, Any]],
+    elapsed_ms: int,
+    started_at: datetime | None = None,
+    ended_at: datetime | None = None,
+    id_seed: str | None = None,
+    skip_ids: set[str] | None = None,
+    dry_run: bool = False,
+) -> list[str]:
+    """The run's own conversation, one span per step.
+
+    Every tool call and every message the agent reported is a step of this run,
+    not of the caller's turn: the timeline that shows the worker should show
+    what it said and ran, where the caller only ever sees the answer. The
+    collector has kept them in order, with the moment each arrived -- so each
+    becomes a child span of the run, shaped exactly like the spans the main
+    loop writes (``llm.call`` / ``tool.call`` with their artifacts), and the
+    trajectory layer reads them with the same code.
+
+    A step ends when the next one starts; the last one ends with the run.
+    ``ended_at`` is that end when it is already known -- a backfill replaying a
+    run long after it closed -- and every step is held inside it. A live run
+    ends now. The first step, the prompt, starts when the run's span opened:
+    ``elapsed_ms`` is timed from before that (the caller resolves its MCP grant
+    first), and only stands in for a span that cannot say.
+
+    A step's artifacts are written with the step: a dry run, and a step whose
+    id is already on record (``skip_ids``), leave no file behind.
+
+    Nothing here may fail a run: the caller's answer is already on its way.
+    """
+    emitted: list[str] = []
+    try:
+        identity, steps = _plan_steps(
+            span,
+            prompt=prompt,
+            events=events,
+            elapsed_ms=elapsed_ms,
+            started_at=started_at,
+            ended_at=ended_at,
+            id_seed=id_seed,
+            skip_ids=skip_ids,
+        )
+        for step in steps:
+            if not dry_run:
+                _write_step(span, identity, step)
+            emitted.append(step[0])
+    except Exception:  # noqa: BLE001 — an audit trail must not take down the run
+        logger.debug("tracing: record_steps failed", exc_info=True)
+    return emitted
+
+
+_STEP_BATCH = 25
+"""Steps written between two turns of the event loop: about 20 ms of disk work, measured."""
+
+_LIVE_INTERVAL = 1.0
+"""At most one write of a running run's steps a second: often enough to read as live, rarely
+enough that a stream of chunks is not a stream of writes."""
+
+# A message still streaming grows with every chunk; its text is left out of what decides a
+# rewrite of its running record, and the step is written again in full once it settles.
+_STREAMING_KEYS = ("llm.output_preview", "llm.input_preview")
+
+
+class LiveSteps:
+    """A run's steps written while the run goes on, rather than once it has ended.
+
+    The trajectory reads only the span log, so a step held back until the turn ends
+    is invisible for as long as the agent works. Each step goes to disk once it is
+    known: a step whose end is fixed -- a later one has begun, and a call has its
+    result -- as its settled record; the one still going -- the last, or a call
+    awaiting its result -- as a running one (``LIVE_KEY``), written again when it
+    settles. Ids are the run's own and stable, so a rewrite supersedes the record
+    before it: the index keeps the last record of a span, and a running one never
+    replaces a settled one.
+
+    ``touch`` runs on every update and writes at most once per ``interval``; a touch
+    that lands sooner is folded into one write when the interval runs out. A write
+    puts down at most ``_STEP_BATCH`` steps and leaves the rest to the loop's next
+    turn, as ``finish`` does: a burst of updates inside one interval is all due when
+    it runs out, and written whole it would hold the loop. ``finish`` settles what
+    is left.
+    Nothing here may fail a run.
+    """
+
+    def __init__(self, span: Any, *, prompt: str | None, interval: float = _LIVE_INTERVAL) -> None:
+        self._span = span
+        self._prompt = prompt
+        self._interval = interval
+        self._events: list[dict[str, Any]] = []
+        self._written: dict[str, tuple[Any, ...]] = {}
+        self._last = float("-inf")
+        self._pending: asyncio.Handle | None = None
+        self._closed = False
+
+    def touch(self, events: list[dict[str, Any]]) -> None:
+        """The run moved: write its steps now, or when the interval runs out."""
+        if self._closed:
+            return
+        self._events = events
+        wait = self._last + self._interval - time.monotonic()
+        if wait <= 0:
+            self._write_live()
+            return
+        if self._pending is None:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return
+            self._pending = loop.call_later(wait, self._flush)
+
+    def close(self) -> None:
+        """No more live writes -- a write still waiting does nothing when it comes due;
+        :meth:`finish` still settles the steps."""
+        self._closed = True
+
+    async def finish(self, events: list[dict[str, Any]], *, elapsed_ms: int) -> None:
+        """Settle every step, writing only those whose last record says otherwise.
+
+        A run can end with up to 400 steps still to write, a span and its
+        artifacts each; written in one go they held the event loop for a quarter
+        of a second, and every other conversation on the gateway with it. The
+        trace store is not safe to write from a second thread, so the writing
+        stays on the loop and yields between batches.
+
+        The run's count goes on first: a run cut short while its steps are still
+        going to disk is then left alone by a backfill, instead of getting a
+        second copy beside the steps that did reach the log.
+        """
+        self.close()
+        try:
+            identity, steps = self._plan(events, elapsed_ms)
+            due = self._due(steps, live=False)
+        except Exception:  # noqa: BLE001 — an audit trail must not take down the run
+            logger.debug("tracing: record_steps failed", exc_info=True)
+            identity, steps, due = {}, [], []
+        self._span.set(**{STEPS_KEY: len(steps)})
+        for index, (step, mark) in enumerate(due):
+            if index and index % _STEP_BATCH == 0:
+                await asyncio.sleep(0)
+            try:
+                _write_step(self._span, identity, step)
+            except Exception:  # noqa: BLE001 — an audit trail must not take down the run
+                logger.debug("tracing: record_steps failed", exc_info=True)
+                return
+            self._written[step[0]] = mark
+
+    def _flush(self) -> None:
+        self._pending = None
+        if not self._closed:
+            self._write_live()
+
+    def _write_live(self) -> None:
+        self._last = time.monotonic()
+        try:
+            identity, steps = self._plan(self._events, 0)
+            due = self._due(steps, live=True)
+            for step, mark in due[:_STEP_BATCH]:
+                _write_step(self._span, identity, step)
+                self._written[step[0]] = mark
+        except Exception:  # noqa: BLE001 — an audit trail must not take down the run
+            logger.debug("tracing: live steps failed", exc_info=True)
+            return
+        if len(due) > _STEP_BATCH and self._pending is None:
+            try:
+                self._pending = asyncio.get_running_loop().call_soon(self._flush)
+            except RuntimeError:
+                return
+
+    def _plan(self, events: list[dict[str, Any]], elapsed_ms: int) -> tuple[dict[str, Any], list[_Step]]:
+        run_id = self._span.identity().get("span_id")
+        return _plan_steps(
+            self._span,
+            prompt=self._prompt,
+            events=events,
+            elapsed_ms=elapsed_ms,
+            step_id=lambda index: f"{run_id}.{index}",
+        )
+
+    def _due(self, steps: list[_Step], *, live: bool) -> list[tuple[_Step, tuple[Any, ...]]]:
+        """The steps whose record would differ from the last one written, each with its mark."""
+        due: list[tuple[_Step, tuple[Any, ...]]] = []
+        last = len(steps) - 1
+        for index, step in enumerate(steps):
+            span_id, name, span_type, start, end, artifacts, attributes = step
+            awaiting = name == "tool.call" and all(key != "tool.output" for key, _ in artifacts)
+            if live and (index == last or awaiting):
+                shown = {k: v for k, v in attributes.items() if k not in _STREAMING_KEYS}
+                mark: tuple[Any, ...] = (
+                    "running",
+                    name,
+                    start.isoformat(),
+                    json.dumps(shown, sort_keys=True, default=str),
+                )
+                step = (span_id, name, span_type, start, end, artifacts, {**attributes, LIVE_KEY: True})
+            else:
+                mark = (
+                    "settled",
+                    start.isoformat(),
+                    end.isoformat(),
+                    json.dumps(attributes, sort_keys=True, default=str),
+                    json.dumps(artifacts, sort_keys=True, default=str),
+                )
+            if self._written.get(span_id) != mark:
+                due.append((step, mark))
+        return due
+
+
 __all__ = [
     "FRAMES_KEY",
+    "LIVE_KEY",
     "SPAN_NAME",
+    "STEPS_KEY",
     "TRANSCRIPT_KEY",
+    "LiveSteps",
     "external_agent_span",
     "record_events",
     "record_outcome",
     "record_frames",
     "record_session",
+    "record_steps",
     "record_transcript",
 ]

@@ -11749,10 +11749,6 @@
       "en": "Conversation",
       "zh": "会话"
     },
-    "gui.trajectory.empty": {
-      "en": "No trajectory entries yet",
-      "zh": "还没有轨迹条目"
-    },
     "gui.trajectory.scanning": {
       "en": "Scanning {done} / {total} MiB",
       "zh": "正在扫描 {done} / {total} MiB"
@@ -11772,18 +11768,6 @@
     "gui.trajectory.not_recording": {
       "en": "Tracing is off; the list will not grow",
       "zh": "采集已关闭，列表不会增长"
-    },
-    "gui.trajectory.no_preview": {
-      "en": "(no preview)",
-      "zh": "（无预览）"
-    },
-    "gui.trajectory.failed": {
-      "en": "Failed",
-      "zh": "失败"
-    },
-    "gui.trajectory.list_label": {
-      "en": "Trajectory entries",
-      "zh": "轨迹条目"
     },
     "gui.trajectory.kind.user_input": {
       "en": "User input",
@@ -11931,7 +11915,19 @@
     },
     "gui.trajectory.details.resize": {
       "en": "Resize details",
-      "zh": "调整详情宽度"
+      "zh": "调整详情大小"
+    },
+    "gui.trajectory.details.resize_keys": {
+      "en": "The arrow keys resize it.",
+      "zh": "方向键可调整大小。"
+    },
+    "gui.trajectory.details.size": {
+      "en": "Width {width} px, height {height} px",
+      "zh": "宽 {width} 像素，高 {height} 像素"
+    },
+    "gui.trajectory.details.size_full": {
+      "en": "Width {width} px, full height",
+      "zh": "宽 {width} 像素，占满高度"
     },
     "gui.trajectory.details.region": {
       "en": "Entry details",
@@ -11985,6 +11981,10 @@
       "en": "Request",
       "zh": "请求"
     },
+    "gui.trajectory.block.reasoning": {
+      "en": "Reasoning",
+      "zh": "推理"
+    },
     "gui.trajectory.block.thinking": {
       "en": "Thinking",
       "zh": "思考内容"
@@ -12019,7 +12019,7 @@
     },
     "gui.trajectory.block.schema": {
       "en": "Schema",
-      "zh": "Schema"
+      "zh": "定义"
     },
     "gui.trajectory.block.result": {
       "en": "Result",
@@ -12101,6 +12101,10 @@
       "en": "Transcript",
       "zh": "转录"
     },
+    "gui.trajectory.block.replay": {
+      "en": "Replay",
+      "zh": "回放"
+    },
     "gui.trajectory.block.frames": {
       "en": "Frame references",
       "zh": "帧记录引用"
@@ -12159,7 +12163,11 @@
     },
     "gui.trajectory.reason.schema_unproven": {
       "en": "No confirmable historical schema was recorded",
-      "zh": "未记录可确认的历史 Schema"
+      "zh": "未记录可确认的历史定义"
+    },
+    "gui.trajectory.reason.reasoning_withheld": {
+      "en": "The provider counted reasoning tokens but returned no reasoning text; the count is on the Usage tab",
+      "zh": "服务商计了推理 token，但没有返回推理内容，数量见“用量”标签"
     },
     "gui.trajectory.reason.preview_dropped": {
       "en": "Preview omitted to keep the overview small",
@@ -12317,70 +12325,6 @@
       "en": "Waiting for the list to catch up",
       "zh": "等待列表同步"
     },
-    "gui.trajectory.bar.zoom_in": {
-      "en": "Zoom in",
-      "zh": "放大"
-    },
-    "gui.trajectory.bar.zoom_out": {
-      "en": "Zoom out",
-      "zh": "缩小"
-    },
-    "gui.trajectory.bar.reset": {
-      "en": "Fit the whole conversation",
-      "zh": "复位到整条会话"
-    },
-    "gui.trajectory.bar.sum_known": {
-      "en": "{dur} charged",
-      "zh": "计入 {dur}"
-    },
-    "gui.trajectory.bar.sum_unknown": {
-      "en": "{n} entries of unknown duration",
-      "zh": "另有 {n} 条耗时未知"
-    },
-    "gui.trajectory.bar.sum_overlap": {
-      "en": "Nested calls overlap",
-      "zh": "含父子调用重叠"
-    },
-    "gui.trajectory.bar.event_at": {
-      "en": "At {t}",
-      "zh": "时刻 {t}"
-    },
-    "gui.trajectory.bar.span": {
-      "en": "{from} to {to}",
-      "zh": "{from} 至 {to}"
-    },
-    "gui.trajectory.bar.span_unknown": {
-      "en": "Start and end unknown",
-      "zh": "起止未知"
-    },
-    "gui.trajectory.bar.thinking_range": {
-      "en": "Within the call above; its own time was not recorded",
-      "zh": "所属调用范围内，独立时间未记录"
-    },
-    "gui.trajectory.bar.dense": {
-      "en": "{n} entries, {dur} known, {unknown} unknown",
-      "zh": "{n} 条，已知累计 {dur}，未知 {unknown} 条"
-    },
-    "gui.trajectory.bar.dense_hint": {
-      "en": "Dense view: zoom in or spread this out to see each entry",
-      "zh": "密集视图：放大或展开此段查看各条目"
-    },
-    "gui.trajectory.bar.expand": {
-      "en": "Spread this out",
-      "zh": "展开此段"
-    },
-    "gui.trajectory.bar.pick_one": {
-      "en": "Pick an entry",
-      "zh": "选择条目"
-    },
-    "gui.trajectory.bar.canvas_label": {
-      "en": "Duration bar: {n} entries, {known} charged",
-      "zh": "耗时构成条：{n} 条，计入 {known}"
-    },
-    "gui.trajectory.bar.failed": {
-      "en": "Failed",
-      "zh": "失败"
-    },
     "gui.trajectory.kind.skill_read": {
       "en": "Skill read",
       "zh": "读技能"
@@ -12476,22 +12420,6 @@
     "gui.trajectory.kind.plugin_load": {
       "en": "Plugin load",
       "zh": "插件加载"
-    },
-    "gui.trajectory.missing_record": {
-      "en": "Recorded data missing",
-      "zh": "记录数据缺失"
-    },
-    "gui.trajectory.turn_total": {
-      "en": "Turn {n}: {dur} in all",
-      "zh": "回合 {n}：总耗时 {dur}"
-    },
-    "gui.trajectory.revealed_row": {
-      "en": "A hidden entry, shown because something pointed at it",
-      "zh": "已隐藏的条目，因被引用而临时显示"
-    },
-    "gui.trajectory.bar.turn_total": {
-      "en": "Turn {n}: {dur} in all",
-      "zh": "回合 {n} · 总耗时 {dur}"
     },
     "gui.trajectory.details.tabs_earlier": {
       "en": "Earlier tabs",
@@ -12605,22 +12533,6 @@
       "en": "Turn end",
       "zh": "回合结束"
     },
-    "gui.trajectory.bar.show_hidden": {
-      "en": "Show hidden entries ({n})",
-      "zh": "显示已隐藏的条目（{n} 条）"
-    },
-    "gui.trajectory.bar.threshold": {
-      "en": "Hide entries under {ms}",
-      "zh": "隐藏短于 {ms} 的条目"
-    },
-    "gui.trajectory.bar.threshold_off": {
-      "en": "No duration filter",
-      "zh": "不按时长过滤"
-    },
-    "gui.trajectory.bar.threshold_label": {
-      "en": "Duration filter",
-      "zh": "时长过滤"
-    },
     "gui.trajectory.details.files_listed_part": {
       "en": "Too many files to list: the first {n} of {total} are shown",
       "zh": "目录过长，只列出前 {n} 项（共 {total} 项）"
@@ -12645,21 +12557,261 @@
       "en": "Released to stay within memory; click to read it again",
       "zh": "内容已释放（内存上限），点击重新读取"
     },
-    "gui.trajectory.scope.strip": {
-      "en": "Trajectory tabs",
-      "zh": "轨迹页签"
-    },
     "gui.trajectory.scope.main": {
       "en": "Main",
       "zh": "主会话"
     },
+    "gui.trajectory.agents": {
+      "en": "Agents",
+      "zh": "智能体"
+    },
+    "gui.trajectory.crash": {
+      "en": "The trace could not be drawn: {detail}",
+      "zh": "轨迹渲染出错：{detail}"
+    },
+    "gui.trajectory.crash_retry": {
+      "en": "Try again",
+      "zh": "重试"
+    },
+    "gui.trajectory.stat.duration": {
+      "en": "DURATION",
+      "zh": "时长"
+    },
+    "gui.trajectory.stat.agents": {
+      "en": "AGENTS",
+      "zh": "智能体"
+    },
+    "gui.trajectory.stat.turns": {
+      "en": "TURNS",
+      "zh": "轮次"
+    },
+    "gui.trajectory.stat.llm": {
+      "en": "LLM CALLS",
+      "zh": "模型调用"
+    },
+    "gui.trajectory.stat.tool": {
+      "en": "TOOL CALLS",
+      "zh": "工具调用"
+    },
+    "gui.trajectory.stat.errors": {
+      "en": "ERRORS",
+      "zh": "错误"
+    },
+    "gui.trajectory.stat.span": {
+      "en": "{from} → {to}",
+      "zh": "{from} → {to}"
+    },
+    "gui.trajectory.stat.main": {
+      "en": "{n} main",
+      "zh": "主会话 {n}"
+    },
+    "gui.trajectory.stat.sub_one": {
+      "en": "1 sub-agent",
+      "zh": "子智能体 1"
+    },
+    "gui.trajectory.stat.sub_n": {
+      "en": "{n} sub-agents",
+      "zh": "子智能体 {n}"
+    },
+    "gui.trajectory.stat.median": {
+      "en": "median {duration}",
+      "zh": "中位 {duration}"
+    },
+    "gui.trajectory.stat.model_share": {
+      "en": "{percent}% of busy time",
+      "zh": "占忙碌时间 {percent}%"
+    },
+    "gui.trajectory.stat.tool_share": {
+      "en": "{name} {percent}%",
+      "zh": "{name} {percent}%"
+    },
+    "gui.trajectory.stat.jump": {
+      "en": "Jump to first ›",
+      "zh": "跳到第一个 ›"
+    },
+    "gui.trajectory.slowest": {
+      "en": "slowest",
+      "zh": "最慢"
+    },
+    "gui.trajectory.next": {
+      "en": "next at {time} ›",
+      "zh": "下次 {time} ›"
+    },
+    "gui.trajectory.last": {
+      "en": "‹ last at {time}",
+      "zh": "‹ 上次 {time}"
+    },
+    "gui.trajectory.fold.earlier_one": {
+      "en": "1 agent finished earlier · last at {time}",
+      "zh": "1 个智能体更早结束 · 最后在 {time}"
+    },
+    "gui.trajectory.fold.earlier_n": {
+      "en": "{n} agents finished earlier · last at {time}",
+      "zh": "{n} 个智能体更早结束 · 最后在 {time}"
+    },
+    "gui.trajectory.fold.later_one": {
+      "en": "1 more agent later · from {time}",
+      "zh": "之后还有 1 个智能体 · 从 {time} 开始"
+    },
+    "gui.trajectory.fold.later_n": {
+      "en": "{n} more agents later · from {time}",
+      "zh": "之后还有 {n} 个智能体 · 从 {time} 开始"
+    },
+    "gui.trajectory.agent.from_turn": {
+      "en": "from Turn {n}",
+      "zh": "来自第 {n} 轮"
+    },
+    "gui.trajectory.agent.turns_one": {
+      "en": "1 turn",
+      "zh": "1 轮"
+    },
+    "gui.trajectory.agent.turns_n": {
+      "en": "{n} turns",
+      "zh": "{n} 轮"
+    },
+    "gui.trajectory.tip.head": {
+      "en": "{turn} · {from} – {to} · {length}",
+      "zh": "{turn} · {from} – {to} · {length}"
+    },
+    "gui.trajectory.tip.model": {
+      "en": "LLM {calls} · {time} · {percent}%",
+      "zh": "模型 {calls} · {time} · {percent}%"
+    },
+    "gui.trajectory.tip.tool": {
+      "en": "Tools {calls} · {time} · {percent}%",
+      "zh": "工具 {calls} · {time} · {percent}%"
+    },
+    "gui.trajectory.tip.subagent": {
+      "en": "Sub-agents {time} · {percent}%",
+      "zh": "子智能体 {time} · {percent}%"
+    },
+    "gui.trajectory.tip.failure": {
+      "en": "Failed {time} · {percent}%",
+      "zh": "失败 {time} · {percent}%"
+    },
+    "gui.trajectory.tip.waiting": {
+      "en": "Waiting {time} · {percent}%",
+      "zh": "等待 {time} · {percent}%"
+    },
+    "gui.trajectory.tip.calls_one": {
+      "en": "1 call",
+      "zh": "1 次"
+    },
+    "gui.trajectory.tip.calls_n": {
+      "en": "{n} calls",
+      "zh": "{n} 次"
+    },
+    "gui.trajectory.activity.title": {
+      "en": "ACTIVITY",
+      "zh": "活动"
+    },
+    "gui.trajectory.activity.per": {
+      "en": "calls per {length} · idle time folded",
+      "zh": "每 {length} 调用数 · 空闲已折叠"
+    },
+    "gui.trajectory.activity.llm": {
+      "en": "LLM call",
+      "zh": "模型调用"
+    },
+    "gui.trajectory.activity.tool": {
+      "en": "Tool call",
+      "zh": "工具调用"
+    },
+    "gui.trajectory.activity.error": {
+      "en": "Error",
+      "zh": "错误"
+    },
+    "gui.trajectory.tool.read": {
+      "en": "Read",
+      "zh": "读取"
+    },
+    "gui.trajectory.tool.edit": {
+      "en": "Edit",
+      "zh": "编辑"
+    },
+    "gui.trajectory.tool.delete": {
+      "en": "Delete",
+      "zh": "删除"
+    },
+    "gui.trajectory.tool.move": {
+      "en": "Move",
+      "zh": "移动"
+    },
+    "gui.trajectory.tool.search": {
+      "en": "Search",
+      "zh": "搜索"
+    },
+    "gui.trajectory.tool.execute": {
+      "en": "Run",
+      "zh": "执行"
+    },
+    "gui.trajectory.tool.think": {
+      "en": "Think",
+      "zh": "思考"
+    },
+    "gui.trajectory.tool.fetch": {
+      "en": "Fetch",
+      "zh": "抓取"
+    },
+    "gui.trajectory.tool.switch_mode": {
+      "en": "Switch mode",
+      "zh": "切换模式"
+    },
+    "gui.trajectory.tool.other": {
+      "en": "Other",
+      "zh": "其他"
+    },
+    "gui.trajectory.busy": {
+      "en": "BUSY",
+      "zh": "忙碌"
+    },
+    "gui.trajectory.zoom.label": {
+      "en": "Window",
+      "zh": "时间窗口"
+    },
+    "gui.trajectory.zoom.fit": {
+      "en": "Fit",
+      "zh": "全部"
+    },
+    "gui.trajectory.zoom.3h": {
+      "en": "3h",
+      "zh": "3 小时"
+    },
+    "gui.trajectory.zoom.1h": {
+      "en": "1h",
+      "zh": "1 小时"
+    },
+    "gui.trajectory.zoom.15m": {
+      "en": "15m",
+      "zh": "15 分钟"
+    },
+    "gui.trajectory.fold_all": {
+      "en": "Collapse all",
+      "zh": "全部折叠"
+    },
+    "gui.trajectory.window.whole": {
+      "en": "{from} – {to} · whole session",
+      "zh": "{from} – {to} · 整段会话"
+    },
+    "gui.trajectory.window.zoomed": {
+      "en": "{from} – {to} · {length} window",
+      "zh": "{from} – {to} · {length} 窗口"
+    },
+    "gui.trajectory.axis.idle": {
+      "en": "{duration} idle",
+      "zh": "空闲 {duration}"
+    },
+    "gui.trajectory.turn.ordinal": {
+      "en": "Turn {n}",
+      "zh": "第 {n} 轮"
+    },
+    "gui.trajectory.turn.from_report": {
+      "en": "From {name}",
+      "zh": "来自 {name}"
+    },
     "gui.trajectory.scope.untitled": {
       "en": "Sub-agent",
       "zh": "子智能体"
-    },
-    "gui.trajectory.scope.close_named": {
-      "en": "Close {title}",
-      "zh": "关闭 {title}"
     },
     "gui.trajectory.scope.open": {
       "en": "Open trajectory",
@@ -12672,38 +12824,6 @@
     "gui.trajectory.scope.from": {
       "en": "From sub-agent: {title}",
       "zh": "来自子智能体：{title}"
-    },
-    "gui.trajectory.scope.locate": {
-      "en": "Show in main",
-      "zh": "在主会话中定位"
-    },
-    "gui.trajectory.scope.dispatched_in": {
-      "en": "Dispatched in turn {n}",
-      "zh": "第 {n} 回合派出"
-    },
-    "gui.trajectory.scope.agent": {
-      "en": "Agent: {name}",
-      "zh": "智能体：{name}"
-    },
-    "gui.trajectory.scope.instance": {
-      "en": "Instance: {name}",
-      "zh": "实例：{name}"
-    },
-    "gui.trajectory.scope.reported": {
-      "en": "Started by a sub-agent's report",
-      "zh": "由子智能体回报触发"
-    },
-    "gui.trajectory.scope.empty_running": {
-      "en": "No steps recorded yet",
-      "zh": "还没有记录到步骤"
-    },
-    "gui.trajectory.scope.empty_done": {
-      "en": "No steps were recorded",
-      "zh": "没有记录到步骤"
-    },
-    "gui.trajectory.scope.gone": {
-      "en": "This sub-agent's records are no longer available",
-      "zh": "记录已不可用"
     },
     "gui.settings.cloud.title": {
       "en": "Long-term memory: EverOS Cloud",

@@ -166,19 +166,33 @@ function visible(el: HTMLElement): Box | null {
   return box.bottom > box.top && box.right > box.left ? box : null
 }
 
-function place(el: HTMLElement, b: Bars, axis: Axis): HTMLElement | undefined {
+/* Where the thumb goes, read from the element rather than cached: a scroller
+   can be resized, moved by a panel drag, re-rendered under the same node, or
+   have its content grow while the reader holds its bar. Draws and drags both
+   come through here, so the bar the reader sees and the bar they drag cannot
+   disagree about the track. */
+interface Geo {
+  vert: boolean
+  /** The track's start on screen: the visible slice's near edge, inside the pad. */
+  from: number
+  track: number
+  len: number
+  full: number
+  size: number
+  /** The fixed edge the thumb is drawn against: 8px in from the scroller's. */
+  edge: number
+}
+
+function geometry(el: HTMLElement, axis: Axis): Geo | null {
   const vert = axis === 'v'
   const size = vert ? el.clientHeight : el.clientWidth
   const full = vert ? el.scrollHeight : el.scrollWidth
   /* A hidden scroller keeps its box -- the chat column parks its transcript
      that way, under the trajectory view -- but a thumb over it would float
      over whatever is shown there, and drag what nobody can see. */
-  if (!el.isConnected || full <= size + 1 || size < 40 || getComputedStyle(el).visibility === 'hidden') {
-    drop(el, b, axis)
-    return
-  }
+  if (!el.isConnected || full <= size + 1 || size < 40 || getComputedStyle(el).visibility === 'hidden') return null
   const r = el.getBoundingClientRect()
-  if (!r.width || !r.height) return
+  if (!r.width || !r.height) return null
   /* The track is the part of the box on screen, not the whole box: a scroller
      inside another scroller can be scrolled halfway out of it, and a bar laid
      out over the whole box is then drawn past the edge of the outer one -- over
@@ -186,26 +200,39 @@ function place(el: HTMLElement, b: Bars, axis: Axis): HTMLElement | undefined {
      the visible slice, the bar stays in the slice and still says where in the
      content the reader is. */
   const box = visible(el)
-  if (!box) {
+  if (!box) return null
+  const from = (vert ? Math.max(r.top, box.top) : Math.max(r.left, box.left)) + SB_PAD
+  const to = (vert ? Math.min(r.bottom, box.bottom) : Math.min(r.right, box.right)) - SB_PAD
+  const track = to - from
+  if (track < SB_PAD * 2) return null
+  const len = Math.min(track, Math.max(SB_MIN, Math.round(track * (size / full))))
+  const edge = (vert ? Math.min(r.right, box.right) : Math.min(r.bottom, box.bottom)) - 8
+  return { vert, from, track, len, full, size, edge }
+}
+
+function place(el: HTMLElement, b: Bars, axis: Axis): HTMLElement | undefined {
+  const geo = geometry(el, axis)
+  if (!geo) {
     drop(el, b, axis)
     return
   }
   const t = thumb(el, b, axis)
-  const from = (vert ? Math.max(r.top, box.top) : Math.max(r.left, box.left)) + SB_PAD
-  const to = (vert ? Math.min(r.bottom, box.bottom) : Math.min(r.right, box.right)) - SB_PAD
-  const track = to - from
-  if (track < SB_PAD * 2) return
-  const len = Math.min(track, Math.max(SB_MIN, Math.round(track * (size / full))))
-  const pos = (vert ? el.scrollTop : el.scrollLeft) / (full - size)
-  const off = Math.round((track - len) * Math.min(1, Math.max(0, pos)))
-  if (vert) {
-    t.style.cssText = `top:${from + off}px;left:${Math.min(r.right, box.right) - 8}px;width:6px;height:${len}px`
+  const pos = (geo.vert ? el.scrollTop : el.scrollLeft) / (geo.full - geo.size)
+  const off = Math.round((geo.track - geo.len) * Math.min(1, Math.max(0, pos)))
+  if (geo.vert) {
+    t.style.cssText = `top:${geo.from + off}px;left:${geo.edge}px;width:6px;height:${geo.len}px`
   } else {
-    t.style.cssText = `left:${from + off}px;top:${Math.min(r.bottom, box.bottom) - 8}px;height:6px;width:${len}px`
+    t.style.cssText = `left:${geo.from + off}px;top:${geo.edge}px;height:6px;width:${geo.len}px`
   }
   wireDrag(t, el, axis)
   return t
 }
+
+/* A scroller can also declare that its bar stays: `data-thumb="keep"`. The
+   trajectory view asks for it -- its bars are how the reader says where in a
+   session they are and how they get somewhere else, and a bar that fades out
+   after the last scroll is not there when it is wanted. */
+const keeps = (el: HTMLElement): boolean => el.dataset.thumb === 'keep'
 
 export function show(el: HTMLElement): void {
   /* Not on a one-line field. A text input scrolls itself to the caret as you
@@ -225,6 +252,7 @@ export function show(el: HTMLElement): void {
   }
   live.add(el)
   clearTimeout(b.timer)
+  if (keeps(el)) return
   b.timer = setTimeout(() => {
     /* A bar being dragged must not time out from under the pointer. */
     if (b.drag) return
@@ -261,21 +289,30 @@ export function hide(el: HTMLElement): void {
 }
 
 /* The native bar is gone, so the thumb has to be draggable itself or scrolling
-   by grabbing the bar -- the one gesture a trackpad cannot do -- would be lost. */
+   by grabbing the bar -- the one gesture a trackpad cannot do -- would be lost.
+
+   The grabbed point of the bar stays under the pointer, and the geometry is
+   read again on every move: the list behind a message pane measures its rows
+   while the reader scrolls, so the content's height can change under the bar,
+   and a ratio taken at pointerdown would then send the content to a place the
+   pointer never pointed at. The moves are heard on the window rather than on
+   the thumb: a 6px bar is easy to leave, and pointer capture -- which a drag
+   may not depend on -- is then only an optimisation. */
 function wireDrag(t: HTMLElement, el: HTMLElement, axis: Axis): void {
   if (dragWired.has(t)) return
   dragWired.add(t)
   t.addEventListener('pointerdown', (e) => {
     e.preventDefault()
     e.stopPropagation()
-    const vert = axis === 'v'
+    const start = geometry(el, axis)
+    if (!start) return
+    const pointer = start.vert ? e.clientY : e.clientX
+    /* Where the bar stands, by the same arithmetic place() drew it with: the
+       rect of a thumb parked in the fixed layer is one frame behind at best. */
+    const pos = (start.vert ? el.scrollTop : el.scrollLeft) / (start.full - start.size)
+    const shown = Math.round((start.track - start.len) * Math.min(1, Math.max(0, pos)))
+    const grab = Math.max(0, Math.min(start.len, pointer - (start.from + shown)))
     const b = bars(el)
-    const start = vert ? e.clientY : e.clientX
-    const from = vert ? el.scrollTop : el.scrollLeft
-    const size = vert ? el.clientHeight : el.clientWidth
-    const full = vert ? el.scrollHeight : el.scrollWidth
-    const track = (vert ? el.clientHeight : el.clientWidth) - SB_PAD * 2
-    const len = Math.max(SB_MIN, track * (size / full))
     b.drag = true
     t.dataset.drag = 'true'
     /* A pointer can be gone by the time this runs (released mid-dispatch, or a
@@ -287,23 +324,26 @@ function wireDrag(t: HTMLElement, el: HTMLElement, axis: Axis): void {
     }
     document.body.style.userSelect = 'none'
     const move = (ev: PointerEvent): void => {
-      const d = (vert ? ev.clientY : ev.clientX) - start
-      const ratio = (full - size) / Math.max(1, track - len)
-      if (vert) el.scrollTop = from + d * ratio
-      else el.scrollLeft = from + d * ratio
+      const geo = geometry(el, axis) ?? start
+      const at = geo.vert ? ev.clientY : ev.clientX
+      const free = Math.max(1, geo.track - geo.len)
+      const off = Math.min(free, Math.max(0, at - grab - geo.from))
+      const to = (off / free) * (geo.full - geo.size)
+      if (geo.vert) el.scrollTop = to
+      else el.scrollLeft = to
     }
     const up = (): void => {
-      t.removeEventListener('pointermove', move)
-      t.removeEventListener('pointerup', up)
-      t.removeEventListener('pointercancel', up)
+      window.removeEventListener('pointermove', move, true)
+      window.removeEventListener('pointerup', up, true)
+      window.removeEventListener('pointercancel', up, true)
       delete t.dataset.drag
       b.drag = false
       document.body.style.userSelect = ''
       show(el)
     }
-    t.addEventListener('pointermove', move)
-    t.addEventListener('pointerup', up)
-    t.addEventListener('pointercancel', up)
+    window.addEventListener('pointermove', move, true)
+    window.addEventListener('pointerup', up, true)
+    window.addEventListener('pointercancel', up, true)
   })
 }
 
@@ -320,7 +360,16 @@ export function onScroll(e: Event): void {
 /* Resizing moves every box at once, and a bar mid-fade would be left hanging
    over whatever landed under it. */
 export function onResize(): void {
-  live.forEach(hide)
+  live.forEach((el) => {
+    /* A bar that stays only has to be placed again from its new box; one that
+       fades is taken down and comes back with the next scroll. */
+    if (keeps(el)) {
+      const b = bars(el)
+      for (const a of AXES) if (b[a]) place(el, b, a)
+      return
+    }
+    hide(el)
+  })
 }
 
 /** Raises the layer, so the thumbs have somewhere to be parked. */

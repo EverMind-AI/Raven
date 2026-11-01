@@ -54,10 +54,13 @@ MAX_BYTES = 64 * 1024 * 1024
 truncated one answers fewer questions than a large one; bounded because a
 long-lived connection would otherwise grow without limit."""
 
-KEEP_DAYS = 7
+KEEP_DAYS = 90
 """How many days of journals survive. The existing artifact store has no reclaim
 policy at all and had grown to gigabytes on a developer machine, so this one
-states a policy rather than inheriting that."""
+states a policy rather than inheriting that. Ninety days keeps a quarter of
+history for replay at roughly ten megabytes a day; the wire journal is the only
+record that can reconstruct what an external run actually saw, and a converted
+step span cannot replace it."""
 
 _TRUNCATED = "truncated"
 _DIR_NAME = "acp-frames"
@@ -144,6 +147,10 @@ def prune(root: Path, keep_days: int = KEEP_DAYS) -> None:
                 logger.debug("acp journal: could not prune {}: {}", day, exc)
 
 
+def _stamp() -> str:
+    return datetime.now().astimezone().isoformat()
+
+
 class FrameJournal:
     """One connection's wire log. Append-only, newest last, never raises."""
 
@@ -169,7 +176,11 @@ class FrameJournal:
             # prompt and every tool result, so the window where the file exists
             # world-readable must not exist at all.
             fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-            self._handle = os.fdopen(fd, "a", buffering=1, encoding="utf-8")
+            # No newline translation: the offset a call stores is the file's own
+            # byte position, and a reader seeks it. ``newline=None`` would write
+            # CRLF on Windows while ``_offset`` counted LF, so every range came
+            # up one byte per preceding line short.
+            self._handle = os.fdopen(fd, "a", buffering=1, encoding="utf-8", newline="")
         except OSError as exc:
             logger.warning("acp journal: {} could not be opened ({}); frames go unrecorded", self.path, exc)
             self._closed = True
@@ -193,11 +204,12 @@ class FrameJournal:
         """
         if self._closed or self._full:
             return
-        # `timestamp`, naive and local, because that is what the session log and
-        # `transcript.jsonl` beside it both use -- an audit file would rather
-        # have UTC, but a reader that has to branch on two time formats is the
-        # worse trade.
-        record: dict[str, Any] = {"_type": FRAME, "timestamp": datetime.now().isoformat(), "dir": direction}
+        # `timestamp`, local like the session log and `transcript.jsonl` beside
+        # it, but with its offset: a backfill reads the journal later, possibly
+        # in another zone, and a naive stamp read there lands its steps hours
+        # outside their run. An ISO stamp with an offset parses with the same
+        # call as a naive one, so a reader does not branch on the format.
+        record: dict[str, Any] = {"_type": FRAME, "timestamp": _stamp(), "dir": direction}
         if session:
             record["session"] = session
         if frame is not None:
@@ -220,7 +232,7 @@ class FrameJournal:
         join has no other side.
         """
         if identity:
-            self._write({"_type": CALL, "timestamp": datetime.now().isoformat(), **dict(identity)})
+            self._write({"_type": CALL, "timestamp": _stamp(), **dict(identity)})
 
     def _write(self, record: dict[str, Any]) -> None:
         from raven.config.held_secrets import scrub_held_secrets

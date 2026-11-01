@@ -3193,7 +3193,7 @@ export interface TrajectoryEntry {
   operation_end?: string | null;
   duration_ms?: number | null;
   /**
-   * What the duration bar charges this entry; null means unknown, never zero.
+   * The time charged to this entry, so a span is counted once however many entries it has; null means unknown, never zero.
    */
   charged_ms?: number | null;
   /**

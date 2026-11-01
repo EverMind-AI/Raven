@@ -36,6 +36,7 @@ from __future__ import annotations
 import base64
 import json
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -43,6 +44,7 @@ from raven.tracing import artifact_v2, message_pack
 from raven.tracing import codec as trace_codec
 from raven.trajectory import conversation as _conv
 from raven.trajectory import entries as _entries
+from raven.trajectory import frames_replay
 from raven.trajectory import store as tstore
 from raven.trajectory.index import PHASE_SCANNING, CursorExpiredError, EntryView, SessionIndex
 
@@ -85,6 +87,7 @@ READ_BLOCK_BYTES_LIMIT = 16 * 1024 * 1024
 REASON_NOT_LOADED = "not_loaded"
 REASON_SCHEMA_UNPROVEN = "schema_unproven"
 REASON_PREVIEW_DROPPED = "preview_dropped"
+REASON_REASONING_WITHHELD = "reasoning_withheld"
 
 NOTE_OUTER_ONLY = "outer_only"
 NOTE_IN_PROGRESS = "in_progress_snapshot"
@@ -227,6 +230,7 @@ _REGISTRY: dict[str, tuple[BlockSpec, ...]] = {
     ),
     "llm.output": (
         _art("content", TEXT, "llm.output", "content"),
+        BlockSpec("reasoning", TEXT, False, "derived:llm_reasoning"),
         _art("toolCalls", ITEMS, "llm.output", "tool_calls", required=False),
         BlockSpec("finish", KEY_VALUES, True, "derived:llm_finish"),
         BlockSpec("usage", KEY_VALUES, False, "derived:llm_usage"),
@@ -352,6 +356,7 @@ _EXTERNAL = (
     ),
     _art("transcript", TEXT, "subagent.external.transcript", required=False),
     BlockSpec("frames", REFERENCES, False, "derived:frames"),
+    BlockSpec("replay", ITEMS, False, "derived:replay"),
 )
 
 _TAIL = (
@@ -798,6 +803,33 @@ def _d_thinking(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _Der
 _USAGE_PREFIX = "llm.usage."
 
 
+def _d_llm_reasoning(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _Derived:
+    """The call's own reasoning, or the reason there is none to read.
+
+    Some providers count reasoning tokens and hand back no text -- the
+    responses protocol does exactly that. A tab that says so beats one that
+    silently is not there. It says so with a reason code the page words in the
+    reader's language, not a sentence written here; the count itself is on the
+    usage block beside it.
+    """
+    out = loaded("llm.output")
+    if not out.loaded:
+        return NOT_RECORDED, None, (), None
+    if isinstance(out.payload, dict):
+        text = _conv._thinking_text(out.payload)
+        if text:
+            return AVAILABLE, {"text": text}, out.integrity, None
+        usage = out.payload.get("usage")
+        tokens = usage.get("reasoning_tokens") if isinstance(usage, dict) else None
+    else:
+        tokens = None
+    if not isinstance(tokens, int) or tokens <= 0:
+        tokens = attrs.get("llm.usage.reasoning_tokens")
+    if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens > 0:
+        return EMPTY, None, (), REASON_REASONING_WITHHELD
+    return NOT_RECORDED, None, (), None
+
+
 def _d_llm_usage(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _Derived:
     """The normalized counters alone (``llm.usage.*`` without the prefix); the
     provider's own ``usage`` object stays in the raw record, where it is not
@@ -889,6 +921,85 @@ def _d_frames(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _Deriv
         if isinstance(key, str) and ".frames." in key and isinstance(value, (str, int))
     ]
     return (AVAILABLE if refs else NOT_RECORDED), {"items": refs}, (), None
+
+
+@lru_cache(maxsize=32)
+def _replay_items(
+    path: str,
+    session_id: str | None,
+    start: int | None,
+    end: int | None,
+    handshake_end: int | None,
+    initialize_json: str | None,
+) -> tuple[dict[str, Any], ...]:
+    """The replay rows for one run's fixed journal slice.
+
+    The descriptor is read again for every tab page, and a run's journal can be
+    tens of megabytes; parsing it once per read is what made opening the pane
+    and paging its Replay tab cost the same again each time. The key is the
+    slice, the session and the recorded handshake: the journal is append-only,
+    so a later frame elsewhere in the connection's file cannot change this
+    range. ``_d_replay`` still refuses a file that has gone or shrunk.
+    """
+    initialize = json.loads(initialize_json) if initialize_json is not None else None
+    messages = frames_replay.replay(
+        path,
+        session_id=session_id,
+        start=start,
+        end=end,
+        handshake_end=handshake_end,
+        initialize=initialize,
+    )
+    return tuple(frames_replay.items(messages))
+
+
+def _d_replay(view: EntryView, attrs: dict[str, Any], loaded: _Loader, *, store: Path) -> _Derived:
+    """The run's own conversation, replayed from the wire journal it points at.
+
+    An external run recorded before spans carried its steps leaves only the
+    journal reference; this reads that slice back -- the prompt it was given,
+    what it said, thought and ran -- so the pane can show the work, not just
+    the answer.
+
+    The path is the one the writing machine recorded, so only a journal of the
+    store being read is opened (``logs/acp-frames``, the layout
+    ``raven.acp_client.journal.journal_root`` writes). An imported
+    conversation's records would otherwise name files on this machine, and a
+    link out of the journals counts as outside.
+    """
+    path = attrs.get("subagent.external.frames.path")
+    if not isinstance(path, str) or not path:
+        return NOT_RECORDED, None, (), None
+    try:
+        journal = Path(path).resolve()
+        inside = journal.is_relative_to((store / "logs" / "acp-frames").resolve())
+    except (OSError, RuntimeError, ValueError):
+        inside = False
+    if not inside:
+        return NOT_RECORDED, None, (), None
+    session_id = attrs.get("subagent.external.frames.session_id")
+    start = attrs.get("subagent.external.frames.start")
+    end = attrs.get("subagent.external.frames.end")
+    handshake_end = attrs.get("subagent.external.frames.handshake_end")
+    initialize = attrs.get("subagent.external.frames.initialize")
+    # A cache row for a journal that has since gone (retention) or been cut
+    # below the slice is not this store's record any more.
+    try:
+        if not journal.is_file() or (isinstance(end, int) and journal.stat().st_size < end):
+            return NOT_RECORDED, None, (), None
+    except OSError:
+        return NOT_RECORDED, None, (), None
+    rows = _replay_items(
+        str(journal),
+        session_id if isinstance(session_id, str) else None,
+        start if isinstance(start, int) else None,
+        end if isinstance(end, int) else None,
+        handshake_end if isinstance(handshake_end, int) else None,
+        json.dumps(initialize, sort_keys=True, default=str) if isinstance(initialize, dict) else None,
+    )
+    if not rows:
+        return NOT_RECORDED, None, (), None
+    return AVAILABLE, {"items": [dict(row) for row in rows]}, (), None
 
 
 def _d_attributes(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _Derived:
@@ -1038,6 +1149,7 @@ _DERIVED: dict[str, Callable[[EntryView, dict[str, Any], _Loader], _Derived]] = 
         ("llm.provider", "llm.model", "llm.stream", "llm.invocation_source"),
     ),
     "thinking": _d_thinking,
+    "llm_reasoning": _d_llm_reasoning,
     "llm_finish": _from_payload_and_attrs(
         "llm.output", ("finish_reason",), ("llm.truncated", "llm.max_tokens", "llm.finish_reason")
     ),
@@ -1072,10 +1184,16 @@ _DERIVED: dict[str, Callable[[EntryView, dict[str, Any], _Loader], _Derived]] = 
 
 def _derived(name: str, view: EntryView, reader: _Reader, loaded: _Loader) -> _Derived:
     """(availability, data, integrity, reason) for a derived block."""
+    attrs = tstore._span_attrs(view.span or {})
+    if name == "replay":
+        # The one derivation that opens a file a record names: it has to know
+        # which store it is reading to stay inside it, so it sits outside the
+        # table whose entries see only the record.
+        return _d_replay(view, attrs, loaded, store=reader.state)
     build = _DERIVED.get(name)
     if build is None:
         return UNSUPPORTED, None, (), "unsupported"
-    return build(view, tstore._span_attrs(view.span or {}), loaded)
+    return build(view, attrs, loaded)
 
 
 # ── schema association ────────────────────────────────────────────────

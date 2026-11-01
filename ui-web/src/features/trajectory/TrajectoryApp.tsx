@@ -1,29 +1,26 @@
 /* The trajectory island: what `#trajHost` shows while the trajectory view is
- * up. The Scope Tab strip on top once there is a sub-agent tab to offer, with
- * the line that names the sub-agent tab on screen, then a status line for
- * what the index wants said, the duration bar under it, and the list with the
- * details pane beside it under all of them.
+ * up. A status line for what the index wants said, then the agent waterfall
+ * with the details pane floating over it.
  *
  * The root subscribes to the language itself, like every island, and to the
- * store for the few facts the status line reads; the list and the pane have
- * their own subscriptions so a scroll in one does not redraw the other. The
- * root also measures its own width for the pane: how wide the pane may be,
- * and whether the area is too narrow for two columns at all.
+ * store for the few facts the status line reads; the waterfall and the pane
+ * have their own subscriptions so a scroll in one does not redraw the other. The
+ * root also measures its own size for the pane: how wide the card may be,
+ * whether the area is too narrow to leave the list any of its width, and the
+ * bounds the card is moved and sized within.
  */
 
-import { useCallback, useRef, useSyncExternalStore } from 'react'
+import { Component, useCallback, useRef, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
-import { Details, Grip } from './Details'
+import { Details } from './Details'
 import * as details from './detailStore'
-import { DurationBar } from './DurationBar'
-import { EntryList, mib } from './EntryList'
-import { ScopeInfo, ScopeTabs } from './ScopeTabs'
 import * as store from './store'
+import { Waterfall, mib } from './waterfall/Waterfall'
 import './styles.css'
 
-import type { JSX } from 'react'
+import type { ErrorInfo, JSX, ReactNode } from 'react'
 
 function Status(): JSX.Element | null {
   const s = useSyncExternalStore(store.subscribe, store.get)
@@ -48,43 +45,74 @@ function Status(): JSX.Element | null {
   return <div className="trajectory-status" role="status">{lines}</div>
 }
 
-/* The list and the pane side by side, or the pane over the list when the
-   area is narrow. Open or not is the details store's; the width it is given
-   is the store's clamp of the reader's own number against the area measured
-   here. */
+/* The list at its whole width, the pane floating over its right side -- or
+   over all of it when the area is narrow. Open or not is the details store's;
+   the card's size and place are the store's clamp of the reader's own numbers
+   against the area measured here. */
 function Body(): JSX.Element {
-  const d = useSyncExternalStore(details.subscribe, details.get)
+  /* Only what the body itself says: the card's size and place are the card's,
+     and the corner writes them on every pointer move -- read whole, the store
+     redrew every row under the card each frame. */
+  const open = useSyncExternalStore(details.subscribe, () => details.get().open)
+  const narrow = useSyncExternalStore(details.subscribe, () => details.narrow())
   const observer = useRef<ResizeObserver | null>(null)
   const attach = useCallback((el: HTMLDivElement | null): void => {
     observer.current?.disconnect()
     observer.current = null
     if (!el) return
-    const measure = (): void => { details.setAreaWidth(el.clientWidth) }
+    const measure = (): void => {
+      details.setAreaWidth(el.clientWidth)
+      details.setAreaHeight(el.clientHeight)
+    }
     measure()
     if (typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(measure)
     ro.observe(el)
     observer.current = ro
   }, [])
-  const narrow = details.narrow(d)
   return (
-    <div className="trajectory-body" ref={attach} data-details={d.open ? '' : undefined} data-narrow={narrow ? '' : undefined}>
-      <EntryList />
-      {d.open && !narrow ? <Grip /> : null}
+    <div className="trajectory-body" ref={attach} data-details={open ? '' : undefined} data-narrow={narrow ? '' : undefined}>
+      <Waterfall />
       <Details />
     </div>
   )
+}
+
+/* The island render throws, the page loses the whole column -- a blank page
+   with no way back and no message. This keeps the failure where it happened:
+   the reader sees what went wrong and can try again. */
+export class CrashBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null }
+
+  static getDerivedStateFromError(error: Error): { error: Error } {
+    return { error }
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.error('trajectory island:', error, info.componentStack)
+  }
+
+  render(): ReactNode {
+    if (this.state.error === null) return this.props.children
+    return (
+      <div className="trajectory-crash" role="alert">
+        <div className="trajectory-crash-text">{t('gui.trajectory.crash', { detail: this.state.error.message })}</div>
+        <button className="trajectory-wf-tool" onClick={() => this.setState({ error: null })}>
+          {t('gui.trajectory.crash_retry')}
+        </button>
+      </div>
+    )
+  }
 }
 
 export function TrajectoryApp(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
     <div className="trajectory-root">
-      <ScopeTabs />
-      <ScopeInfo />
       <Status />
-      <DurationBar />
-      <Body />
+      <CrashBoundary>
+        <Body />
+      </CrashBoundary>
     </div>
   )
 }

@@ -653,6 +653,50 @@ def test_a_running_subagent_run_has_its_entry_and_its_steps_their_turn(state):
     assert all("turn_unknown" in e.integrity for e in orphaned if e.span_id == "child")
 
 
+def _external_live(state, *, settled):
+    """An external run under a spawned run, and one step of it, written live or settled."""
+    live = {"subagent.external.in_progress": True}
+    ext = _span(
+        "t",
+        "ext",
+        "subagent.external",
+        parent="run",
+        start=3,
+        end=9 if settled else 4,
+        attrs={"subagent.external.agent": "a", "subagent.external.in_progress": False}
+        if settled
+        else {
+            "subagent.external.agent": "a",
+            **live,
+        },
+    )
+    step = _span(
+        "t",
+        "step",
+        "llm.call",
+        parent="ext",
+        start=3,
+        end=6 if settled else 4,
+        attrs={**_llm_attrs(state, "step", _messages("ping"), {"content": "working"}), **({} if settled else live)},
+    )
+    return [ext, step]
+
+
+@pytest.mark.parametrize("settled_first", [False, True], ids=["live_then_settled", "settled_then_live"])
+def test_an_external_run_and_its_step_read_running_until_their_settled_records(state, settled_first):
+    base = _spawned_run(state, _checkpoint())
+    live = tent.project_entries([*base, *_external_live(state, settled=False)], state=state, read=True).entries
+    assert _one(live, "ext", "summary").operation_status == "running"
+    assert {e.operation_status for e in live if e.span_id == "step"} == {"running"}
+
+    records = _external_live(state, settled=True) + _external_live(state, settled=False)
+    if not settled_first:
+        records = records[2:] + records[:2]
+    done = tent.project_entries([*base, *records], state=state, read=True).entries
+    assert _one(done, "ext", "summary").operation_status != "running"
+    assert "running" not in {e.operation_status for e in done if e.span_id == "step"}
+
+
 @pytest.mark.parametrize("final_first", [False, True], ids=["checkpoint_then_final", "final_then_checkpoint"])
 def test_a_finished_subagent_run_replaces_its_checkpoint_in_either_order(state, final_first):
     records = (_final(), _checkpoint()) if final_first else (_checkpoint(), _final())
@@ -2100,6 +2144,39 @@ def test_tool_results_after_a_call_s_own_output_are_what_the_next_call_adds(stat
     assert _one(entries, "b1", "llm.input").preview == "thanks"
 
 
+def test_a_step_the_store_refuses_is_not_counted(state, monkeypatch):
+    """A write that raised is not on record, so the backfill must not report it
+    as written nor add its id to the set a second pass skips."""
+    from raven.agent.subagent.backends import observability as obs
+
+    class Handle:
+        def identity(self):
+            return {
+                "trace_id": "t",
+                "span_id": "ext",
+                "session_key": None,
+                "channel": None,
+                "chat_id": None,
+                "surface": None,
+            }
+
+    calls: list[str] = []
+
+    def refuse(span, identity, step):
+        calls.append(step[0])
+        if len(calls) == 2:
+            raise OSError("no space left on device")
+
+    monkeypatch.setattr(obs, "_write_step", refuse)
+    events = [
+        {"t": "say", "text": "one", "at": "2026-10-27T09:00:01"},
+        {"t": "say", "text": "two", "at": "2026-10-27T09:00:02"},
+    ]
+    ids = obs.record_steps(Handle(), prompt="do it", events=events, elapsed_ms=10)
+    assert len(calls) == 2
+    assert ids == [calls[0]]
+
+
 def test_a_reply_is_not_hidden_while_either_side_is_unread(state):
     turn = _span("t", "turn", "session.turn", start=0, end=10, attrs=_turn_attrs(state, "turn", content_out="Done."))
     call = _call(state, "t", "l1", "turn", start=1, messages=[_m("user", "go")], content="Done.")
@@ -2112,3 +2189,265 @@ def test_a_reply_is_not_hidden_while_either_side_is_unread(state):
         [turn, call], state=state, cached_records={("t", "turn"): turn_cache.records, ("t", "l1"): call_cache.records}
     ).entries
     assert _one(both, "turn", "turn.output").meta.get("hidden") == "redundant_reply"
+
+
+def test_an_external_runs_own_steps_are_rows_of_that_run(state, monkeypatch):
+    """The prompt, what it said, what it thought and what it ran: spans beside
+    the external span, reading as the run's own entries."""
+    import hashlib
+    from datetime import datetime, timedelta
+
+    from raven.agent.subagent.backends import observability as obs
+    from raven.tracing import spans as tracing_spans
+
+    captured: list[dict] = []
+    artifacts = state / "logs" / "audit-artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+
+    def persist(kind, meta, payload, *, label=None):
+        digest = hashlib.sha1(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()[:8]
+        path = artifacts / f"{label}-{digest}.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return {"path": str(path), "sha1": "x", "bytes": path.stat().st_size}
+
+    monkeypatch.setattr(tracing_spans, "emit", captured.append)
+    monkeypatch.setattr(tracing_spans, "persist_artifact", persist)
+
+    class Handle:
+        def identity(self):
+            return {
+                "trace_id": "t",
+                "span_id": "ext",
+                "session_key": None,
+                "channel": None,
+                "chat_id": None,
+                "surface": None,
+            }
+
+    class Call:
+        name = "read_file"
+
+        def arguments_json(self):
+            return '{"path": "a.py"}'
+
+    # Naive local stamps, as the collector wrote them before they carried an
+    # offset; the run began a minute ago.
+    base = datetime.now() - timedelta(seconds=60)
+
+    def at(offset):
+        return (base + timedelta(seconds=offset)).isoformat()
+
+    events = [
+        {"t": "say", "text": "I will read it", "at": at(1)},
+        {"t": "thought", "text": "hmm", "at": at(2)},
+        {"t": "call", "id": "c1", "call": Call(), "at": at(3)},
+        {"t": "result", "id": "c1", "ok": True, "text": "contents", "at": at(4)},
+    ]
+    obs.record_steps(Handle(), prompt="do the task", events=events, elapsed_ms=60_000)
+
+    assert [s["name"] for s in captured] == ["llm.call", "llm.call", "llm.call", "tool.call"]
+    assert {s["parentSpanId"] for s in captured} == {"ext"}
+    assert all(s["traceId"] == "t" for s in captured)
+    assert captured[0]["startTime"] < captured[1]["startTime"] <= captured[2]["startTime"] <= captured[3]["startTime"]
+
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=50),
+        _tool_span(state, "t", "spawn", "turn", "spawn", start=1),
+        _run_span("t", "run", "spawn", start=2, end=40),
+        _span("t", "ext", "subagent.external", parent="run", start=3, end=39),
+        *captured,
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+    steps = [e for e in entries if e.span_id in {s["spanId"] for s in captured}]
+    assert {(e.slot, e.kind) for e in steps} == {
+        ("llm.input", "llm.input"),
+        ("llm.output", "llm.output"),
+        ("llm.thinking", "llm.thinking"),
+        ("tool.input", "tool.input"),
+        ("tool.output", "tool.output"),
+    }
+    for span_id in {s["spanId"] for s in captured}:
+        assert _scope_fields(entries, span_id) == ("t:run", None, None)
+
+
+def _external_steps(state, monkeypatch, events: list[dict]) -> list[dict]:
+    """The spans ``record_steps`` writes for one external run's events."""
+    from raven.agent.subagent.backends import observability as obs
+    from raven.tracing import spans as tracing_spans
+
+    captured: list[dict] = []
+    artifacts = state / "logs" / "audit-artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+
+    def persist(kind, meta, payload, *, label=None):
+        path = artifacts / f"{label}-{len(list(artifacts.iterdir()))}.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return {"path": str(path), "sha1": "x", "bytes": path.stat().st_size}
+
+    monkeypatch.setattr(tracing_spans, "emit", captured.append)
+    monkeypatch.setattr(tracing_spans, "persist_artifact", persist)
+
+    class Handle:
+        def identity(self):
+            return {
+                "trace_id": "t",
+                "span_id": "ext",
+                "session_key": None,
+                "channel": None,
+                "chat_id": None,
+                "surface": None,
+            }
+
+    obs.record_steps(Handle(), prompt="do the task", events=events, elapsed_ms=60_000)
+    return captured
+
+
+class _Call:
+    name = "bash"
+
+    def arguments_json(self):
+        return '{"command": "npm test"}'
+
+
+def test_a_failed_external_tool_call_is_a_failed_step(state, monkeypatch):
+    from datetime import datetime, timedelta
+
+    base = datetime.now() - timedelta(seconds=60)
+    events = [
+        {"t": "call", "id": "c1", "call": _Call(), "at": (base + timedelta(seconds=1)).isoformat()},
+        {
+            "t": "result",
+            "id": "c1",
+            "ok": False,
+            "text": "2 tests failed",
+            "at": (base + timedelta(seconds=9)).isoformat(),
+        },
+    ]
+    captured = _external_steps(state, monkeypatch, events)
+    tool_span = next(s for s in captured if s["name"] == "tool.call")
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=50),
+        _tool_span(state, "t", "spawn", "turn", "spawn", start=1),
+        _run_span("t", "run", "spawn", start=2, end=40),
+        _span("t", "ext", "subagent.external", parent="run", start=3, end=39),
+        *captured,
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+    rows = [e for e in entries if e.span_id == tool_span["spanId"]]
+    assert {e.operation_status for e in rows} == {"error"}
+    assert sum(1 for e in rows if e.failure_entry) == 1
+
+
+def test_an_external_runs_model_steps_are_typed_the_way_the_main_loop_types_them(state, monkeypatch):
+    from datetime import datetime, timedelta
+
+    events = [{"t": "say", "text": "done", "at": (datetime.now() - timedelta(seconds=5)).isoformat()}]
+    captured = _external_steps(state, monkeypatch, events)
+    assert {s["attributes"]["span.type"] for s in captured if s["name"] == "llm.call"} == {"model"}
+
+
+def test_a_span_that_only_thought_has_no_empty_output_row(state):
+    attrs = _llm_attrs(state, "think-only", _messages("q"), {"content": "", "reasoning_content": "hmm"})
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=10),
+        _span("t", "think-only", "llm.call", parent="turn", start=1, end=2, attrs=attrs),
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+    kinds = {e.kind for e in entries if e.span_id == "think-only"}
+    assert "llm.thinking" in kinds
+    assert "llm.output" not in kinds
+
+
+def test_the_production_preview_path_drops_a_thought_only_calls_empty_output(state):
+    """The page reads the index with read=False and its preview cache, not the
+    read=True path the earlier test covers: the empty output record the preview
+    pass adds beside the thinking one must not survive into the entry list."""
+    output = {"content": "", "reasoning_content": "hmm"}
+    attrs = _llm_attrs(state, "think-only", _messages("q"), output, extra={"llm.output_preview": "hmm"})
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=10),
+        _span("t", "think-only", "llm.call", parent="turn", start=1, end=6, attrs=attrs),
+    ]
+    cache = tent.preview_records(spans[1], state=state, budget=tent.ReadBudget(100, 10_000_000))
+    entries = tent.project_entries(
+        spans, state=state, read=False, cached_records={("t", "think-only"): cache.records}
+    ).entries
+    rows = [entry for entry in entries if entry.span_id == "think-only"]
+    assert [entry.slot for entry in rows] == ["llm.input", "llm.thinking"]
+    thinking = rows[1]
+    assert (thinking.charged_ms, thinking.timing_basis) == (5000, "span_full")
+    assert {entry.duration_owner for entry in rows} == {thinking.entry_id}
+
+
+def test_the_preview_path_keeps_an_output_row_with_tool_calls_but_no_content(state):
+    output = {
+        "content": "",
+        "reasoning_content": "hmm",
+        "tool_calls": [{"type": "function", "function": {"name": "read_file", "arguments": '{"path": "a.py"}'}}],
+    }
+    attrs = _llm_attrs(state, "think-tools", _messages("q"), output, extra={"llm.output_preview": "hmm"})
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=10),
+        _span("t", "think-tools", "llm.call", parent="turn", start=1, end=6, attrs=attrs),
+    ]
+    cache = tent.preview_records(spans[1], state=state, budget=tent.ReadBudget(100, 10_000_000))
+    entries = tent.project_entries(
+        spans, state=state, read=False, cached_records={("t", "think-tools"): cache.records}
+    ).entries
+    slots = [entry.slot for entry in entries if entry.span_id == "think-tools"]
+    assert "llm.thinking" in slots
+    assert "llm.output" in slots, "the tool-call line is an output; only a completely empty output is dropped"
+
+
+def test_a_span_that_only_thought_is_still_charged_its_time(state):
+    """With no output row, the thinking row carries the span's duration.
+
+    Otherwise the call's time is charged to no entry and every row of it reads
+    as unknown timing -- for a main-loop call that reasoned and answered
+    nothing, which is exactly the call an empty reply is debugged from.
+    """
+    attrs = _llm_attrs(state, "think-only", _messages("q"), {"content": "", "reasoning_content": "hmm"})
+    spans = [
+        _turn_span(state, "t", "turn", start=0, end=10),
+        _span("t", "think-only", "llm.call", parent="turn", start=1, end=6, attrs=attrs),
+    ]
+    entries = [e for e in tent.project_entries(spans, state=state, read=True).entries if e.span_id == "think-only"]
+    thinking = next(e for e in entries if e.kind == "llm.thinking")
+    assert (thinking.charged_ms, thinking.timing_basis) == (5000, "span_full")
+    assert {e.duration_owner for e in entries} == {thinking.entry_id}
+
+
+def test_a_call_that_reasoned_without_returning_the_words_says_so():
+    """The responses protocol counts reasoning tokens and hands back no text."""
+    from types import SimpleNamespace
+
+    from raven.trajectory import details
+
+    class Loaded:
+        loaded = True
+        payload = {"content": "ok", "usage": {"reasoning_tokens": 593}}
+        integrity = ()
+        text = None
+        availability = "available"
+        reason = None
+
+    class WithText(Loaded):
+        payload = {"content": "ok", "reasoning_content": "hmm"}
+
+    # Said by a reason code the page words in the reader's language, not by an
+    # English sentence built here; the count itself is on the usage block.
+    availability, data, _, reason = details._d_llm_reasoning(None, {}, lambda _key: Loaded())
+    assert (availability, data, reason) == ("empty", None, "reasoning_withheld")
+    spec = next(s for s in details._REGISTRY["llm.output"] if s.id == "reasoning")
+    evaluated = details._evaluate(spec, SimpleNamespace(span={}), None, lambda _key: Loaded())
+    assert evaluated is not None, "an optional block that says why it is empty is still shown"
+    assert (evaluated.availability, evaluated.reason) == ("empty", "reasoning_withheld")
+
+    availability, data, _, _ = details._d_llm_reasoning(None, {}, lambda _key: WithText())
+    assert availability == "available"
+    assert (data or {})["text"] == "hmm"
+
+    class Silent(Loaded):
+        payload = {"content": "ok"}
+
+    assert details._d_llm_reasoning(None, {}, lambda _key: Silent())[0] == "not_recorded"

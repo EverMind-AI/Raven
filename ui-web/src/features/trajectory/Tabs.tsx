@@ -106,7 +106,8 @@ export function Tabs({ entryId, blocks }: { entryId: string; blocks: TrajectoryB
           {'\u2039'}
         </button>
       ) : null}
-    <div className="trajectory-tabs" role="tablist" aria-label={t('gui.trajectory.details.tabs')} ref={strip} onScroll={measure} onKeyDown={onKeyDown}>
+    <div className="trajectory-tabs" role="tablist" aria-label={t('gui.trajectory.details.tabs')} ref={strip}
+      data-thumb="none" onScroll={measure} onKeyDown={onKeyDown}>
       {tabs.map((tab) => {
         const block = tab === 'overview' ? null : blocks.find((b) => b.id === tab)
         const selected = tab === current

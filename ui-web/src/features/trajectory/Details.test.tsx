@@ -1,16 +1,33 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+/* This file forces many renders; under a full-suite run they share the CPU
+   with every other worker, so the wall clock is not the thing under test. */
+vi.setConfig({ testTimeout: 20_000 })
+
+/* How often the rows are drawn: the real waterfall, counted. */
+const renders = vi.hoisted(() => ({ waterfall: 0 }))
+vi.mock('./waterfall/Waterfall', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./waterfall/Waterfall')>()
+  return {
+    ...real,
+    Waterfall: () => {
+      renders.waterfall += 1
+      return real.Waterfall()
+    },
+  }
+})
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import { absorb, resetCapabilities } from '../../rpc/capabilities'
 import { RpcError } from '../../rpc/transport'
 import { dispatch as escape } from '../../state/escapeOrder'
+import { _resetForTests as resetBars, onShowBar } from '../../state/scrollbars'
 import { _resetFreshForTests, unpitch } from '../../state/session/conversation'
 import { resetSources, setSources } from '../../state/sources'
 import { shortName } from './Details'
 import * as details from './detailStore'
-import { DBL_MS } from './geometry'
 import * as list from './store'
 import { TrajectoryApp } from './TrajectoryApp'
 
@@ -90,7 +107,20 @@ async function draw(): Promise<void> {
   })
 }
 
+/* Agents start folded when there are several, and turns until asked; a test
+   that wants a row opens them all first -- the agents in an act of their own,
+   so their turns are drawn by the time the second one looks for them. */
+const openAgents = (): void => {
+  for (const agent of document.querySelectorAll<HTMLElement>('[data-row="agent"][aria-expanded="false"]')) fireEvent.click(agent)
+}
+const openTurns = (): void => {
+  for (const turn of document.querySelectorAll<HTMLElement>('[data-row="turn"]:not([data-open])')) fireEvent.click(turn)
+}
+
 const pick = async (id: string): Promise<void> => {
+  act(openAgents)
+  act(openTurns)
+  await flush()
   act(() => { fireEvent.click(q(`[data-entry="${id}"]`) as HTMLElement) })
   await flush()
 }
@@ -258,22 +288,21 @@ describe('the details pane', () => {
     expect(pane()).toBeNull()
   })
 
-  it('lays the pane over the list under 800px with a back button, and beside it with a grip otherwise', async () => {
+  it('floats the pane over the list, sized by its corner alone, and fills the area under 800px with a back button', async () => {
     await draw()
     await pick('r0')
     await answerDetail(descriptor('r0', [block({ id: 'result' })]))
     act(() => { details.setAreaWidth(1000) })
-    expect(q('.trajectory-grip')).not.toBeNull()
+    /* Nothing stands between the list and the pane, which floats over the
+       list rather than beside it; like the desk palette, it sizes by its
+       corner and has no edge to pull. */
+    expect([...(q('.trajectory-body')?.children ?? [])].map((el) => el.className.split(' ')[0])).toEqual(['trajectory-wf', 'trajectory-details'])
     expect(pane()?.className).toBe('trajectory-details')
     expect(pane()?.style.width).toBe('480px')
-    const grip = q('.trajectory-grip') as HTMLElement
-    act(() => { fireEvent.keyDown(grip, { key: 'ArrowLeft' }) })
-    expect(pane()?.style.width).toBe(`${480 + details.RESIZE_STEP}px`)
-    act(() => { fireEvent.keyDown(grip, { key: 'ArrowRight' }) })
-    act(() => { fireEvent.keyDown(grip, { key: 'ArrowRight' }) })
-    expect(pane()?.style.width).toBe(`${480 - details.RESIZE_STEP}px`)
+    expect(pane()?.querySelector(':scope > .trajectory-corner')).not.toBeNull()
+    expect(pane()?.querySelector('[role="separator"]')).toBeNull()
     act(() => { details.setAreaWidth(700) })
-    expect(q('.trajectory-grip')).toBeNull()
+    expect(q('.trajectory-corner')).toBeNull()
     expect(pane()?.className).toBe('trajectory-details trajectory-details-over')
     expect(q('.trajectory-close')?.textContent).toBe('gui.trajectory.details.back')
     expect(q('.trajectory-body')?.hasAttribute('data-narrow')).toBe(true)
@@ -292,6 +321,308 @@ describe('the details pane', () => {
     await answerDetail(descriptor('r0', [block({ id: 'result' })]))
     expect(q('.trajectory-fault')).toBeNull()
     expect(tabs()).toHaveLength(2)
+  })
+})
+
+/* The head moves the pane once a press travels past its threshold, and the
+   corner sizes it. happy-dom lays nothing out, so the area and the
+   pane are given the rectangles the stylesheet would give them, and the pane
+   the header height it opens under. */
+describe('moving and sizing the pane', () => {
+  const card = (): HTMLElement => pane() as HTMLElement
+  const head = (): HTMLElement => q('.trajectory-head') as HTMLElement
+  const corner = (): HTMLElement | null => q('.trajectory-corner')
+  /* Where the stylesheet opens a 480px pane in a 1200x800 area: against the
+     right side, below the whole header -- the 96px stats, the 92px activity
+     strip and the 56px ruler, then the 10px gap (`--wf-card-top`, 254px). */
+  const HOME = { x: 710, y: 254, w: 480, h: 536 }
+  let captured = false
+  const rect = (x: number, y: number, width: number, height: number): DOMRect =>
+    ({ x, y, left: x, top: y, width, height, right: x + width, bottom: y + height, toJSON: () => ({}) }) as DOMRect
+  const lay = (at: { x: number; y: number; w: number; h: number }): void => {
+    q<HTMLElement>('.trajectory-body')!.getBoundingClientRect = () => rect(0, 0, 1200, 800)
+    card().getBoundingClientRect = () => rect(at.x, at.y, at.w, at.h)
+    card().style.setProperty('--wf-card-top', '254px')
+    for (const el of [head(), corner()]) {
+      if (!el) continue
+      el.setPointerCapture = () => { captured = true }
+      el.hasPointerCapture = () => captured
+      el.releasePointerCapture = () => { captured = false }
+    }
+  }
+  const press = async (on: Element, x: number, y: number): Promise<void> => {
+    captured = false
+    await act(async () => {
+      on.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerId: 1, clientX: x, clientY: y }))
+    })
+  }
+  const to = async (x: number, y: number): Promise<void> => {
+    await act(async () => { window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX: x, clientY: y })) })
+  }
+  const release = async (x: number, y: number): Promise<void> => {
+    await act(async () => { window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: x, clientY: y })) })
+  }
+  const click = async (on: Element): Promise<void> => {
+    await act(async () => { on.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+  }
+  const open = async (): Promise<void> => {
+    await draw()
+    await pick('r0')
+    await answerDetail(descriptor('r0', [block({ id: 'result' })]))
+    act(() => {
+      details.setAreaWidth(1200)
+      details.setAreaHeight(800)
+    })
+  }
+
+  it('moves by its head once the press travels, and the click that ends the drag closes nothing', async () => {
+    await open()
+    lay(HOME)
+    const close = q('.trajectory-close') as HTMLElement
+    /* The drag starts on the head's name: a press on one of its buttons belongs
+       to that button. */
+    await press(q('.trajectory-head-name') as HTMLElement, 900, 120)
+    await to(600, 64)
+    expect(captured).toBe(true)
+    expect(card().style.transform).toBe('translate(-300px, -56px)')
+    await release(600, 64)
+    await click(close)
+    expect(details.get().open).toBe(true)
+    expect(card().style.transform).toBe('')
+    expect([card().style.left, card().style.top, card().style.height]).toEqual(['410px', '198px', '536px'])
+    expect(card().hasAttribute('data-moved')).toBe(true)
+  })
+
+  /* A drag that ended without a click leaves its swallow flag set; the next
+     press on a button must clear it, or that button's click is eaten. */
+  it('gives the next button its click after a drag that ended without one', async () => {
+    await open()
+    lay(HOME)
+    await press(q('.trajectory-head-name') as HTMLElement, 900, 120)
+    await to(600, 64)
+    await release(600, 64)
+    expect(card().hasAttribute('data-moved')).toBe(true)
+    const close = q('.trajectory-close') as HTMLElement
+    await press(close, 900, 120)
+    await click(close)
+    expect(details.get().open).toBe(false)
+  })
+
+  it('leaves the head\'s buttons their click when the press barely moves', async () => {
+    await open()
+    lay(HOME)
+    const close = q('.trajectory-close') as HTMLElement
+    await press(close, 900, 120)
+    await to(901, 121)
+    await release(901, 121)
+    expect(captured).toBe(false)
+    await click(close)
+    expect(details.get().open).toBe(false)
+  })
+
+  it('goes back where it opens when let go near there, filling the room under the header again', async () => {
+    await open()
+    lay(HOME)
+    const name = q('.trajectory-head-name') as HTMLElement
+    await press(name, 900, 120)
+    await to(600, 64)
+    await release(600, 64)
+    expect(card().style.left).toBe('410px')
+    lay({ x: 410, y: 198, w: 480, h: 536 })
+    await press(name, 600, 64)
+    await to(880, 100)
+    await release(880, 100)
+    expect(card().hasAttribute('data-moved')).toBe(false)
+    expect([card().style.left, card().style.top, card().style.height, card().style.transform]).toEqual(['', '', '', ''])
+  })
+
+  it('sizes by its corner, pulled left where it opens and right once moved, never past the area', async () => {
+    await open()
+    lay(HOME)
+    await press(corner()!, 712, 788)
+    await to(672, 688)
+    await release(672, 688)
+    expect([card().style.width, card().style.height]).toEqual(['520px', '436px'])
+    act(() => { details.dropDetails({ x: 100, y: 100 }, 436, 254) })
+    lay({ x: 100, y: 100, w: 520, h: 436 })
+    await press(corner()!, 618, 682)
+    await to(658, 702)
+    expect([card().style.width, card().style.height]).toEqual(['560px', '456px'])
+    /* Pulled past the bottom, it stops there rather than climbing. */
+    await to(658, 2000)
+    await release(658, 2000)
+    expect([card().style.left, card().style.top, card().style.height]).toEqual(['100px', '100px', '690px'])
+  })
+
+  it('sizes from the keyboard too: the corner takes the focus and each arrow moves a free edge 16px', async () => {
+    await open()
+    lay(HOME)
+    const grip = corner()!
+    expect(grip.tabIndex).toBe(0)
+    expect(grip.getAttribute('aria-label')).toBeTruthy()
+    const key = async (name: string): Promise<void> => {
+      await act(async () => { fireEvent.keyDown(grip, { key: name }) })
+    }
+    /* Where it opens the left edge is the free one, and the bottom already
+       meets the area, so the pane grows left and only shrinks upward. */
+    await key('ArrowLeft')
+    await key('ArrowUp')
+    expect([card().style.width, card().style.height]).toEqual(['496px', '520px'])
+    act(() => { details.dropDetails({ x: 100, y: 100 }, 520, 254) })
+    lay({ x: 100, y: 100, w: 496, h: 520 })
+    /* Moved, the right edge is the free one. */
+    await key('ArrowRight')
+    await key('ArrowDown')
+    expect([card().style.width, card().style.height]).toEqual(['512px', '536px'])
+  })
+
+  it('tells assistive technology both sizes the corner sets, as a control rather than a one-way range', async () => {
+    await open()
+    lay(HOME)
+    const grip = corner()!
+    /* A focusable separator is a range along one axis; this handle sets two. */
+    expect(grip.getAttribute('role')).toBe('button')
+    const described = (): string => (grip.getAttribute('aria-describedby') ?? '').split(' ')
+      .map((id) => document.getElementById(id)?.textContent ?? '').join(' ')
+    const spoken = (): string => grip.querySelector('[aria-live="polite"]')?.textContent ?? ''
+    /* Where it opens, the card fills the room under the header. */
+    expect(described()).toBe('gui.trajectory.details.size_full {"width":480} gui.trajectory.details.resize_keys')
+    /* The hand's pulls are not read out, move by move. */
+    await press(grip, 712, 788)
+    await to(702, 778)
+    await release(702, 778)
+    expect(spoken()).toBe('')
+    lay({ ...HOME, x: 700, w: 490, h: 526 })
+    await act(async () => { fireEvent.keyDown(grip, { key: 'ArrowUp' }) })
+    expect(described()).toBe('gui.trajectory.details.size {"width":490,"height":510} gui.trajectory.details.resize_keys')
+    expect(spoken()).toBe('gui.trajectory.details.size {"width":490,"height":510}')
+  })
+
+  it('neither moves nor sizes under 800px, where it covers the area', async () => {
+    await open()
+    act(() => { details.setAreaWidth(700) })
+    expect(corner()).toBeNull()
+    lay(HOME)
+    await press(head(), 300, 40)
+    await to(100, 200)
+    /* Watched mid-drag: let go, a narrow area's clamp lands any card on its home. */
+    expect([card().style.transform, captured]).toEqual(['', false])
+    await release(100, 200)
+    expect(details.detailsPlace()).toBeNull()
+  })
+
+  /* The bars are parked in a fixed layer and placed from the scroller's box,
+     so a card that moves or changes size has to ask for its pane's bar again. */
+  it('takes the pane\'s bar along when it moves or changes size', async () => {
+    const asked: HTMLElement[] = []
+    onShowBar((el) => { asked.push(el) })
+    try {
+      await open()
+      lay(HOME)
+      const bars = (): number => asked.filter((el) => el.classList.contains('trajectory-pane')).length
+      let before = bars()
+      await press(head(), 900, 120)
+      await to(880, 130)
+      expect(bars()).toBeGreaterThan(before)
+      /* Let go near where it opened: the place is unchanged, the bar has moved. */
+      before = bars()
+      await release(880, 130)
+      expect(details.detailsPlace()).toBeNull()
+      expect(bars()).toBeGreaterThan(before)
+      before = bars()
+      await press(corner()!, 712, 788)
+      await to(672, 688)
+      await release(672, 688)
+      expect(bars()).toBeGreaterThan(before)
+    } finally {
+      resetBars()
+    }
+  })
+
+  /* The rows do not depend on the card's size, and the card's corner writes the
+     store on every pointer move: redrawing every row each frame was waste. */
+  it('redraws only the card while its corner is pulled, not the rows under it', async () => {
+    await open()
+    lay(HOME)
+    const before = renders.waterfall
+    await press(corner()!, 712, 788)
+    await to(692, 768)
+    await to(672, 748)
+    await release(672, 748)
+    expect(card().style.width).toBe('520px')
+    expect(renders.waterfall).toBe(before)
+  })
+
+  it('lets a drag go when the pane closes under it', async () => {
+    await open()
+    lay(HOME)
+    await press(head(), 900, 120)
+    await to(600, 64)
+    act(() => { details.closeDetails() })
+    await release(600, 64)
+    expect(details.detailsPlace()).toBeNull()
+  })
+
+  /* A press on one of the head's buttons belongs to that button, not to the
+     drag: it must not be canceled -- canceling a pointerdown suppresses the
+     mousedown that focuses the button -- and the pane has to hold the focus, or
+     Escape falls past it to the turn behind. */
+  it('leaves the focus on a head button when it is pressed, so Escape takes back the pane', async () => {
+    await open()
+    lay(HOME)
+    const pin = q('.trajectory-pin') as HTMLElement
+    await press(pin, 900, 130)
+    expect(document.activeElement).toBe(pin)
+    expect(details.hasFocus()).toBe(true)
+    act(() => { expect(escape()).toBe(true) })
+    expect(details.get().open).toBe(false)
+  })
+
+  it('takes the focus itself when its head background is pressed, so Escape reaches it there too', async () => {
+    await open()
+    lay(HOME)
+    await press(head(), 300, 270)
+    expect(document.activeElement).toBe(card())
+    expect(details.hasFocus()).toBe(true)
+    act(() => { expect(escape()).toBe(true) })
+    expect(details.get().open).toBe(false)
+  })
+
+  it('takes the focus when its corner is pressed, so the arrows land on the handle', async () => {
+    await open()
+    lay(HOME)
+    await press(corner()!, 712, 788)
+    expect(document.activeElement).toBe(corner())
+    expect(details.hasFocus()).toBe(true)
+  })
+
+  /* A pull that only moves the width must not freeze the height the card was
+     filling: a stored number reads as the reader's own, and the card would stop
+     growing with the room under the header. */
+  it('keeps an auto height through a pull that only moves its width', async () => {
+    await open()
+    lay(HOME)
+    await press(corner()!, 712, 788)
+    await to(672, 788)
+    await release(672, 788)
+    expect(card().style.width).toBe('520px')
+    expect(details.detailsHeightPx()).toBeNull()
+    expect(card().style.height).toBe('')
+    act(() => { details.setAreaHeight(1000) })
+    expect(details.detailsHeightPx()).toBeNull()
+    expect(card().style.height).toBe('')
+  })
+
+  it('keeps an auto height through an arrow that only moves its width', async () => {
+    await open()
+    lay(HOME)
+    const grip = corner()!
+    await act(async () => { fireEvent.keyDown(grip, { key: 'ArrowLeft' }) })
+    expect(card().style.width).toBe('496px')
+    expect(details.detailsHeightPx()).toBeNull()
+    act(() => { details.setAreaHeight(1000) })
+    expect(details.detailsHeightPx()).toBeNull()
+    expect(card().style.height).toBe('')
   })
 })
 
@@ -506,7 +837,7 @@ describe('the pin', () => {
   })
 })
 
-describe('the way to a Scope Tab from the head', () => {
+describe('the way to a Sub-agent Scope from the head', () => {
   const A = 't:runA'
   const ROWS: TrajectoryEntry[] = [
     { ...entry('door', 0, 'subagent.run'), span_name: 'subagent.run', opens_subagent_scope: A, meta: { agent: 'coder', label: 'Fix the parser' } },
@@ -514,6 +845,7 @@ describe('the way to a Scope Tab from the head', () => {
     { ...entry('back', 2, 'user.input'), turn_start: true, turn_number: 2, origin: 'subagent', dispatched_by_subagent_scope: A },
     { ...entry('backEnd', 3, 'turn.end'), turn_number: 2, origin: 'subagent', dispatched_by_subagent_scope: A },
     entry('plain', 4),
+    { ...entry('lonely', 5, 'subagent.run'), span_name: 'subagent.run', opens_subagent_scope: 't:runEmpty', meta: { agent: 'coder' } },
   ]
 
   beforeEach(() => {
@@ -524,10 +856,10 @@ describe('the way to a Scope Tab from the head', () => {
   /* A click on a row that opens a tab waits out a double click before the pane opens. */
   const pickDoor = async (id: string): Promise<void> => {
     await pick(id)
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, DBL_MS + 10)) })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 260)) })
   }
 
-  it('offers to open a door\'s trajectory, and opens it', async () => {
+  it('offers to open a door\'s trajectory, and lands on the run with the pane still open', async () => {
     await draw()
     await pickDoor('door')
     expect(jump()?.textContent).toBe('gui.trajectory.scope.open')
@@ -537,15 +869,40 @@ describe('the way to a Scope Tab from the head', () => {
       'trajectory-head-name', 'trajectory-scope-jump', 'trajectory-close',
     ])
     act(() => { fireEvent.click(jump()!) })
-    expect(list.get().scope).toBe(A)
+    await flush()
+    /* Every agent is drawn at once, so the jump selects the run's own row and
+       the pane follows it there: nothing is filtered, nothing is closed. */
+    expect([list.get().scope, list.get().selectedId]).toEqual([null, 'a0'])
+    expect(pane()).not.toBeNull()
   })
 
-  it('names the sub-agent a report turn came from, and opens its tab', async () => {
+  it('lands again on a second jump from the same door', async () => {
+    await draw()
+    await pickDoor('door')
+    act(() => { fireEvent.click(jump()!) })
+    await flush()
+    await pickDoor('door')
+    act(() => { fireEvent.click(jump()!) })
+    await flush()
+    expect(list.get().selectedId).toBe('a0')
+    expect(pane()).not.toBeNull()
+  })
+
+  it('names the sub-agent a report turn came from, and lands on its run', async () => {
     await draw()
     await pickDoor('back')
     expect(jump()?.textContent).toBe('gui.trajectory.scope.from {"title":"coder · Fix the parser"}')
     act(() => { fireEvent.click(jump()!) })
-    expect(list.get().scope).toBe(A)
+    await flush()
+    expect([list.get().scope, list.get().selectedId]).toEqual([null, 'a0'])
+    expect(pane()).not.toBeNull()
+  })
+
+  it('offers no jump into a run that has nothing on record yet', async () => {
+    await draw()
+    await pickDoor('lonely')
+    expect(pane()).not.toBeNull()
+    expect(jump()).toBeNull()
   })
 
   it('offers nothing on a row that leads nowhere', async () => {

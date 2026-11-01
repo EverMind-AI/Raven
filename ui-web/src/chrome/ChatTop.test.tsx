@@ -381,6 +381,16 @@ describe('the chat column chrome and the trajectory view', () => {
     const text = source('chrome/ChatTop.tsx')
     expect(text).not.toMatch(/getElementById|querySelector\(/)
   })
+  it('marks the document while the trajectory is up, and clears it on the way back', async () => {
+    render()
+    await offer()
+    expect(document.documentElement.hasAttribute('data-traj')).toBe(false)
+    act(() => { el('trajBtn').click() })
+    expect(document.documentElement.hasAttribute('data-traj')).toBe(true)
+    act(() => { el('trajBtn').click() })
+    expect(document.documentElement.hasAttribute('data-traj')).toBe(false)
+  })
+
 })
 
 /* Last in the file on purpose: applying a language is module state for

@@ -597,6 +597,11 @@ def _emit_llm(
         thinking = _thinking_text(obj)
         if thinking:
             _emit(info, records, "LLM thinking", _PHASE_OUTPUT, thinking, slot="llm.thinking", meta=meta)
+            # A span that only thought has no output to show: its words are the
+            # thinking record above, and an empty "LLM output" row beside them
+            # reads as a run that said nothing.
+            if not text.strip():
+                return
     elif not read and "llm.reasoning_preview" in info.attrs:
         reasoning = _preview_attr(info.attrs, "llm.reasoning_preview")
         _emit(

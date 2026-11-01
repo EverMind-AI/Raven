@@ -4,12 +4,12 @@
  * one CSS asset that build.py inlines after page.css (`cssFileName` in
  * vite.config.ts) -- so the page still ships one <style> block. Every class
  * below carries this domain's prefix; the only rules outside this sheet are
- * the two in styles/page.css that park the scroller and size `#trajHost`,
- * which are the chat column's and not this island's.
+ * the few in styles/page.css that park the scroller, size `#trajHost` and
+ * paint its glass, which are the chat column's and not this island's.
  *
- * Colours are pairs of custom properties per kind, `-bg` for the row's tag and
- * `-fg` for its text -- the duration bar reads the same `-fg` later, so a tool
- * call is one purple in the row and in the bar. Input and output of one
+ * Colours are pairs of custom properties per kind, `-bg` for a kind's tag and
+ * `-fg` for its text -- the waterfall's bars read the same `-fg`, so a tool
+ * call is one purple in its tag and in its bar. Input and output of one
  * actor share a hue at two strengths; thinking stands apart in amber; every
  * kind the palette does not know is one neutral grey. Both themes are set
  * here, on the same attribute state/look.ts writes; the system theme writes
@@ -26,6 +26,32 @@
   --trajectory-c-tool-input-bg: #ebe0f5;  --trajectory-c-tool-input-fg: #6a3fa0;
   --trajectory-c-tool-output-bg: #dccbee; --trajectory-c-tool-output-fg: #512a84;
   --trajectory-c-other-bg: #ececec;       --trajectory-c-other-fg: #5c5c5c;
+  /* The waterfall's own surfaces: bars, chips, tiles, the ruler's pick. Every
+     ink is a token, so the dark theme is a second set of values rather than a
+     second set of rules; text uses the page's --text / --muted / --faint. */
+  --trajectory-wf-quiet: #b4b4b4;          --trajectory-wf-hover: #fafafa;
+  --trajectory-wf-soft: #f1f2f4;           --trajectory-wf-tile: #fbfbfc;
+  --trajectory-wf-tone1-bg: #f7f9fe;       --trajectory-wf-tone1-line: #e6ecf9;
+  --trajectory-wf-tone2-bg: #f7fbf8;       --trajectory-wf-tone2-line: #e4f0e7;
+  --trajectory-wf-tone3-bg: #faf8fd;       --trajectory-wf-tone3-line: #eee8f7;
+  --trajectory-wf-glyph: #b48ce0;
+  --trajectory-wf-from-fg: #3f6b2c;        --trajectory-wf-from-bg: #f1f7ee;    --trajectory-wf-from-line: #d9e7d2;
+  --trajectory-wf-slow-fg: #c2713a;        --trajectory-wf-slow-bg: #fdf0e3;
+  --trajectory-wf-model-bg: #6a5ae0;       --trajectory-wf-model-line: #6a5ae0;
+  --trajectory-wf-tool-bg: #1e9e8c;        --trajectory-wf-tool-line: #1e9e8c;
+  --trajectory-wf-user-bg: #eef0f2;        --trajectory-wf-user-line: #cdd4db;
+  --trajectory-wf-sub-bg: #e7f1e7;         --trajectory-wf-sub-line: #bcdabc;
+  --trajectory-wf-fail-bg: #fae3e1;        --trajectory-wf-fail-line: #e9b6ae;
+  --trajectory-wf-wait-bg: #f4f4f4;        --trajectory-wf-wait-line: #d3d3d3;
+  --trajectory-wf-grid: #e9ebee;           --trajectory-wf-guide: #dfe4e9;
+  --trajectory-wf-grid-major: #d5d9de;
+  --trajectory-act-veil: rgba(255, 255, 255, .62);
+  --trajectory-card-shadow: 0 16px 42px rgba(0, 0, 0, .16), 0 1px 1px rgba(0, 0, 0, .04);
+  --trajectory-wf-main: #b8892a;          --trajectory-wf-agent: #66635c;        --trajectory-wf-err: #d0453b;
+  --trajectory-crash-bg: #fdf5f4;          --trajectory-crash-line: #f0d7d2;    --trajectory-crash-fg: #8a3a2e;
+  --trajectory-ruler-dim: rgba(31, 35, 40, .07);    --trajectory-ruler-pick: rgba(31, 35, 40, .35);
+  --trajectory-ruler-grip-line: rgba(31, 35, 40, .30); --trajectory-ruler-grip-line-hover: rgba(31, 35, 40, .55);
+  --trajectory-ruler-grip-bg: #fff;        --trajectory-ruler-grip-bg-hover: #f7f7f8;
 }
 html[data-theme="dark"] {
   --trajectory-c-user-input-bg: #243a1c;  --trajectory-c-user-input-fg: #9fd48a;
@@ -36,6 +62,29 @@ html[data-theme="dark"] {
   --trajectory-c-tool-input-bg: #37284d;  --trajectory-c-tool-input-fg: #c9aef2;
   --trajectory-c-tool-output-bg: #45336a; --trajectory-c-tool-output-fg: #d9c5f7;
   --trajectory-c-other-bg: #343434;       --trajectory-c-other-fg: #b0b0b0;
+  --trajectory-wf-quiet: #8a8a88;          --trajectory-wf-hover: #262626;
+  --trajectory-wf-soft: #2e2e30;           --trajectory-wf-tile: #2a2a2c;
+  --trajectory-wf-tone1-bg: #212938;       --trajectory-wf-tone1-line: #2f3b55;
+  --trajectory-wf-tone2-bg: #1f2a22;       --trajectory-wf-tone2-line: #2c3f31;
+  --trajectory-wf-tone3-bg: #282233;       --trajectory-wf-tone3-line: #3b3150;
+  --trajectory-wf-glyph: #c9aef2;
+  --trajectory-wf-from-fg: #9fd48a;        --trajectory-wf-from-bg: #22301d;    --trajectory-wf-from-line: #34482b;
+  --trajectory-wf-slow-fg: #e8a06c;        --trajectory-wf-slow-bg: #3d2a1a;
+  --trajectory-wf-model-bg: #776ae0;       --trajectory-wf-model-line: #776ae0;
+  --trajectory-wf-tool-bg: #25a28f;        --trajectory-wf-tool-line: #25a28f;
+  --trajectory-wf-user-bg: #2b2f34;        --trajectory-wf-user-line: #4a5159;
+  --trajectory-wf-sub-bg: #22331f;         --trajectory-wf-sub-line: #3b5933;
+  --trajectory-wf-fail-bg: #45221f;        --trajectory-wf-fail-line: #7a3a33;
+  --trajectory-wf-wait-bg: #2a2a2a;        --trajectory-wf-wait-line: #4a4a4a;
+  --trajectory-wf-grid: #2c2c2e;           --trajectory-wf-guide: #3a3a3d;
+  --trajectory-wf-grid-major: #3d3d41;
+  --trajectory-act-veil: rgba(32, 32, 32, .62);
+  --trajectory-card-shadow: 0 16px 42px rgba(0, 0, 0, .16), 0 1px 1px rgba(0, 0, 0, .04);
+  --trajectory-wf-main: #b68a30;          --trajectory-wf-agent: #a8a49a;        --trajectory-wf-err: #ec6b5f;
+  --trajectory-crash-bg: #3a2220;          --trajectory-crash-line: #5a302b;    --trajectory-crash-fg: #f0a493;
+  --trajectory-ruler-dim: rgba(255, 255, 255, .06); --trajectory-ruler-pick: rgba(255, 255, 255, .35);
+  --trajectory-ruler-grip-line: rgba(255, 255, 255, .30); --trajectory-ruler-grip-line-hover: rgba(255, 255, 255, .55);
+  --trajectory-ruler-grip-bg: #3a3a3d;     --trajectory-ruler-grip-bg-hover: #46464a;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -47,12 +96,46 @@ html[data-theme="dark"] {
     --trajectory-c-tool-input-bg: #37284d;  --trajectory-c-tool-input-fg: #c9aef2;
     --trajectory-c-tool-output-bg: #45336a; --trajectory-c-tool-output-fg: #d9c5f7;
     --trajectory-c-other-bg: #343434;       --trajectory-c-other-fg: #b0b0b0;
+    --trajectory-wf-quiet: #8a8a88;          --trajectory-wf-hover: #262626;
+    --trajectory-wf-soft: #2e2e30;           --trajectory-wf-tile: #2a2a2c;
+    --trajectory-wf-tone1-bg: #212938;       --trajectory-wf-tone1-line: #2f3b55;
+    --trajectory-wf-tone2-bg: #1f2a22;       --trajectory-wf-tone2-line: #2c3f31;
+    --trajectory-wf-tone3-bg: #282233;       --trajectory-wf-tone3-line: #3b3150;
+    --trajectory-wf-glyph: #c9aef2;
+    --trajectory-wf-from-fg: #9fd48a;        --trajectory-wf-from-bg: #22301d;    --trajectory-wf-from-line: #34482b;
+    --trajectory-wf-slow-fg: #e8a06c;        --trajectory-wf-slow-bg: #3d2a1a;
+    --trajectory-wf-model-bg: #776ae0;       --trajectory-wf-model-line: #776ae0;
+    --trajectory-wf-tool-bg: #25a28f;        --trajectory-wf-tool-line: #25a28f;
+    --trajectory-wf-user-bg: #2b2f34;        --trajectory-wf-user-line: #4a5159;
+    --trajectory-wf-sub-bg: #22331f;         --trajectory-wf-sub-line: #3b5933;
+    --trajectory-wf-fail-bg: #45221f;        --trajectory-wf-fail-line: #7a3a33;
+    --trajectory-wf-wait-bg: #2a2a2a;        --trajectory-wf-wait-line: #4a4a4a;
+    --trajectory-wf-grid: #2c2c2e;           --trajectory-wf-guide: #3a3a3d;
+    --trajectory-wf-grid-major: #3d3d41;
+    --trajectory-act-veil: rgba(32, 32, 32, .62);
+    --trajectory-card-shadow: 0 16px 42px rgba(0, 0, 0, .16), 0 1px 1px rgba(0, 0, 0, .04);
+    --trajectory-wf-main: #b68a30;          --trajectory-wf-agent: #a8a49a;        --trajectory-wf-err: #ec6b5f;
+    --trajectory-crash-bg: #3a2220;          --trajectory-crash-line: #5a302b;    --trajectory-crash-fg: #f0a493;
+    --trajectory-ruler-dim: rgba(255, 255, 255, .06); --trajectory-ruler-pick: rgba(255, 255, 255, .35);
+    --trajectory-ruler-grip-line: rgba(255, 255, 255, .30); --trajectory-ruler-grip-line-hover: rgba(255, 255, 255, .55);
+    --trajectory-ruler-grip-bg: #3a3a3d;     --trajectory-ruler-grip-bg-hover: #46464a;
   }
 }
 
 /* ── the island ─────────────────────────────────────────────────── */
 
-.trajectory-root { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+.trajectory-root { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0;
+  /* The header the details card starts below: the stats, the activity strip
+     under them, and the ruler under that, each sized by one variable. */
+  --wf-stats-h: 96px;
+  --wf-act-h: 92px;
+  --wf-ruler-h: 56px;
+  /* Where the card opens: under the whole header, a gap below the ruler. A top
+     measured from the stats alone (106px) covered the strip and its right
+     brush handle; the card floats over the rows, not the header. */
+  --wf-card-top: calc(var(--wf-stats-h) + var(--wf-act-h) + var(--wf-ruler-h) + 10px);
+  /* The details card's size handle, and the strip at its foot the pane leaves it. */
+  --wf-corner: 18px; }
 
 /* One quiet line above the list for what the index wants the reader to know:
    a scan still running, a head cut off, a failure. Absent when nothing is. */
@@ -62,89 +145,17 @@ html[data-theme="dark"] {
 }
 .trajectory-status-bad { color: var(--clay); }
 
-/* ── the Scope Tabs ─────────────────────────────────────────────── */
+/* ── the scroller and the kind tags ─────────────────────────────── */
 
-/* The strip over the view: the main session's tab, then one per sub-agent
-   run the reader opened, each with its own close button beside it. It
-   scrolls sideways rather than wrap, with an arrow at either end once it
-   overflows, the way the details pane's block strip does. */
-.trajectory-scope-wrap { flex: none; display: flex; align-items: stretch; border-bottom: 1px solid var(--line-soft); }
-.trajectory-scope-tabs {
-  flex: 1; min-width: 0; display: flex; gap: 2px; padding: 4px 12px 0; overflow-x: auto; overflow-y: hidden; white-space: nowrap;
-  scrollbar-width: none;
-}
-.trajectory-scope-arrow {
-  flex: none; width: 22px; color: var(--muted); font-size: 16px; line-height: 1; display: grid; place-items: center;
-}
-.trajectory-scope-arrow:hover { color: var(--text); background: var(--hover); }
-.trajectory-scope-arrow:disabled { color: var(--faint); background: none; }
-.trajectory-scope-item { flex: none; display: flex; align-items: stretch; border-radius: 6px 6px 0 0; }
-.trajectory-scope-item:hover { background: var(--hover); }
-.trajectory-scope-tab {
-  flex: none; max-width: 240px; padding: 6px 10px 7px; font-size: 12px; color: var(--muted);
-  border-bottom: 2px solid transparent; border-radius: 6px 6px 0 0; display: inline-flex; align-items: center; gap: 6px;
-}
-.trajectory-scope-tab:hover { color: var(--text); background: var(--hover); }
-.trajectory-scope-item .trajectory-scope-tab:hover { background: transparent; }
-.trajectory-scope-tab-on, .trajectory-scope-tab-on:hover { color: var(--text); border-bottom-color: var(--amber); background: transparent; }
-.trajectory-scope-tab:focus-visible, .trajectory-scope-close:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
-.trajectory-scope-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.trajectory-scope-close {
-  flex: none; width: 22px; margin-left: -6px; color: var(--faint); font-size: 14px; line-height: 1;
-  display: grid; place-items: center; border-radius: 4px;
-}
-.trajectory-scope-close:hover { color: var(--text); background: var(--hover); }
-.trajectory-scope-mark { flex: none; width: 6px; height: 6px; border-radius: 50%; }
-.trajectory-scope-mark-running { background: var(--amber); }
-.trajectory-scope-mark-error { background: var(--clay); }
-.trajectory-scope-mark-cancelled { background: var(--muted); }
-
-/* The line under the strip that says which run the tab on screen is. */
-.trajectory-scope-info {
-  flex: none; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px;
-  padding: 6px 20px 4px; font-size: 11.5px; color: var(--muted);
-}
-.trajectory-scope-agent { color: var(--text); font-weight: 600; }
-.trajectory-scope-task { min-width: 0; max-width: 100%; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.trajectory-scope-state, .trajectory-scope-dur, .trajectory-scope-turn { white-space: nowrap; }
-.trajectory-scope-locate { font-size: 11.5px; white-space: nowrap; }
-
-/* ── the list ───────────────────────────────────────────────────── */
-
-/* The scroller. Its rows are positioned inside `.trajectory-rows`, which is
-   as tall as every row would be, so the scrollbar speaks for the whole list
-   while only the rows in view exist. */
+/* What the waterfall's rows scroll in, and where the focus goes when a move
+   takes away the element that had it. */
 .trajectory-list {
   flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
   position: relative; outline: 0; scrollbar-gutter: stable;
-  --trajectory-cols: 72px 14px 176px minmax(0, 1fr);
 }
 .trajectory-list:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
-.trajectory-list[data-narrow] { --trajectory-cols: 48px 14px 120px minmax(0, 1fr); }
-.trajectory-rows { position: relative; width: 100%; }
 
-/* Fixed 32px rows, one grid each: turn, failure mark, kind, content. */
-.trajectory-row {
-  position: absolute; left: 0; right: 0; height: 32px;
-  display: grid; grid-template-columns: var(--trajectory-cols); align-items: center; gap: 8px;
-  padding: 0 20px 0 16px; box-sizing: border-box; cursor: default;
-  font-size: 12.5px; color: var(--text); border-bottom: 1px solid var(--line-soft);
-}
-.trajectory-row:hover { background: var(--hover); }
-.trajectory-row-on, .trajectory-row-on:hover { background: var(--selected, var(--raised)); }
-
-.trajectory-turn {
-  font-family: var(--mono); font-size: 11px; color: var(--faint);
-  font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden;
-}
-.trajectory-turn-sub::after { content: '\2022'; margin-left: 4px; color: var(--sky); }
-
-.trajectory-fail { width: 14px; height: 14px; display: grid; place-items: center; }
-.trajectory-fail-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--chat-danger, var(--clay)); }
-
-/* The kind tag: right-aligned so the column's ragged edge is on the left,
-   away from the content it introduces. */
-.trajectory-kind { display: flex; justify-content: flex-end; min-width: 0; }
+/* A kind named in the details pane and the overview, on its own colours. */
 .trajectory-tag {
   display: inline-block; max-width: 100%; padding: 1px 8px; border-radius: 999px;
   font-size: 11px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -159,97 +170,8 @@ html[data-theme="dark"] {
 .trajectory-k-tool-output { background: var(--trajectory-c-tool-output-bg); color: var(--trajectory-c-tool-output-fg); }
 .trajectory-k-other { background: var(--trajectory-c-other-bg); color: var(--trajectory-c-other-fg); }
 
-.trajectory-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.trajectory-text-none { color: var(--faint); font-style: italic; }
-/* A row whose record is not there to read says so, in the failure colour. */
-.trajectory-text-missing { color: var(--chat-danger, var(--clay)); }
-/* A hidden row shown because something pointed at it: a dashed edge on the left. */
-.trajectory-row-revealed { box-shadow: inset 3px 0 0 var(--line); color: var(--muted); }
-/* A row that opens a sub-agent's tab has one more column: how the run stands,
-   for how long, and that it opens. On a narrow list the state and the
-   duration stack in the row's height and the row gives up some of its gaps
-   and right margin, so the column stays whole and the preview keeps room. */
-.trajectory-row-door { grid-template-columns: var(--trajectory-cols-door, var(--trajectory-cols) auto); }
-.trajectory-list[data-narrow] .trajectory-row-door { column-gap: 6px; padding-right: 10px; }
-.trajectory-scope-door { display: inline-flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
-.trajectory-scope-door-state, .trajectory-scope-door-dur { font-variant-numeric: tabular-nums; }
-.trajectory-list[data-narrow] .trajectory-scope-door {
-  display: inline-grid; grid-template-columns: auto auto; gap: 0 4px; align-items: center; align-content: center;
-  font-size: 10.5px; line-height: 12px;
-}
-.trajectory-list[data-narrow] .trajectory-scope-door-state { grid-column: 1; grid-row: 1; }
-.trajectory-list[data-narrow] .trajectory-scope-door-dur { grid-column: 1; grid-row: 2; }
-.trajectory-list[data-narrow] .trajectory-scope-opens { grid-column: 2; grid-row: 1 / span 2; }
+/* The way from a dispatching row to the agent it started. */
 .trajectory-scope-opens { display: inline-grid; place-items: center; color: var(--faint); }
-.trajectory-row-door:hover .trajectory-scope-opens { color: var(--text); }
-/* A turn a sub-agent's report started: the dot the dispatched turns carry, here an element so it can say so. */
-.trajectory-scope-from { margin-left: 4px; color: var(--sky); cursor: default; }
-
-.trajectory-empty {
-  flex: 1; display: grid; place-items: center; padding: 24px;
-  font-size: 12.5px; color: var(--muted); text-align: center;
-}
-
-/* ── the duration bar ───────────────────────────────────────────── */
-
-/* One row the height of a list row, between the title and the list: the
-   canvas takes the width and the tools sit after it; what the bar has to say
-   it says on hover. The lines above and below are the pane dividers. */
-.trajectory-bar {
-  flex: none; height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 8px 0 0;
-  border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); position: relative; outline: 0;
-}
-.trajectory-canvas { flex: 1; min-width: 0; height: 32px; display: block; cursor: crosshair; touch-action: none; }
-.trajectory-bar[data-fit] .trajectory-canvas { cursor: pointer; }
-.trajectory-bar[data-drag] .trajectory-canvas { cursor: grabbing; }
-.trajectory-bar-tools { flex: none; display: flex; gap: 2px; }
-.trajectory-bar-switch[aria-pressed="true"] { color: var(--text); background: var(--selected, var(--raised)); }
-/* The duration filter's popover: under the tools, right-aligned, one line of words and the slider. */
-.trajectory-threshold {
-  position: absolute; z-index: var(--z-pop); top: calc(100% + 4px); right: 8px; width: 240px; padding: 10px 12px;
-  display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--line); border-radius: 10px;
-  background: var(--ink); box-shadow: var(--elev);
-}
-.trajectory-threshold-text { font-size: 12px; color: var(--text); }
-.trajectory-threshold-range { width: 100%; accent-color: var(--accent, var(--text)); }
-.trajectory-threshold-btn[aria-expanded="true"] { outline: 1px solid var(--line); }
-.trajectory-bar-tool {
-  width: 22px; height: 22px; border-radius: 6px; color: var(--muted); font-size: 13px; line-height: 1;
-  display: grid; place-items: center;
-}
-.trajectory-bar-tool:hover { color: var(--text); background: var(--hover); }
-.trajectory-bar-tool:disabled { color: var(--faint); background: none; }
-.trajectory-bar-tool:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
-
-/* The three-line card over the block under the pointer. */
-.trajectory-hover {
-  position: fixed; z-index: var(--z-tip); max-width: 360px; width: 320px; padding: 7px 10px; border-radius: 8px;
-  background: var(--text); color: var(--ink); font-size: 11.5px; line-height: 1.5; pointer-events: none;
-  box-shadow: var(--elev);
-}
-.trajectory-hover-line { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.trajectory-hover-brief { width: auto; max-width: 420px; padding: 5px 10px; }
-.trajectory-hover-mono { font-family: var(--mono); font-size: 11px; }
-.trajectory-hover-muted { opacity: .8; }
-.trajectory-hover-fail { color: var(--chat-danger, var(--clay)); }
-
-/* The dense block's pick list. */
-.trajectory-bucket {
-  position: fixed; z-index: var(--z-pop); width: 320px; max-height: 280px; display: flex; flex-direction: column;
-  border: 1px solid var(--line); border-radius: 10px; background: var(--ink); box-shadow: var(--elev); overflow: hidden;
-}
-.trajectory-bucket-head {
-  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px;
-  font-size: 11.5px; color: var(--muted); border-bottom: 1px solid var(--line-soft);
-}
-.trajectory-bucket-list { flex: 1; min-height: 0; overflow-y: auto; padding: 4px; }
-.trajectory-bucket-item {
-  width: 100%; display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; text-align: left;
-  font-size: 12px; color: var(--text);
-}
-.trajectory-bucket-item:hover, .trajectory-bucket-item:focus-visible { background: var(--hover); outline: 0; }
-.trajectory-bucket-item[aria-selected="true"] { background: var(--selected, var(--raised)); }
-.trajectory-bucket-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── the list and the pane ──────────────────────────────────────── */
 
@@ -257,20 +179,47 @@ html[data-theme="dark"] {
    area is narrow, where the pane covers the body and the list stays beneath
    for the way back. */
 .trajectory-body { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; }
-.trajectory-body > .trajectory-list, .trajectory-body > .trajectory-empty { flex: 1; min-width: 0; }
+.trajectory-body > .trajectory-list { flex: 1; min-width: 0; }
+/* The pane is a card laid over the list's right side: the list keeps its
+   whole width, so opening the pane never moves the axis under the reader.
+   It opens below the whole header -- the stats, the activity strip and the
+   ruler, whose window presets, brush handles and fold button stay in reach --
+   and a height the reader gives it stops at the bottom of the room there.
+   Plain paper, rounded, with the desk palette's edge -- the page's line and a
+   shadow on every side: the frosted sheet under it is nearly white, so the
+   edge is what sets the card apart. Under 800px it covers the whole area.
+   The 10px is the store's CARD_GAP, which a moved card keeps. */
 .trajectory-details {
-  flex: none; display: flex; flex-direction: column; min-width: 0; min-height: 0;
-  border-left: 1px solid var(--line);
+  position: absolute; top: var(--wf-card-top); right: 10px; bottom: 10px; z-index: 6;
+  max-height: calc(100% - var(--wf-card-top) - 10px);
+  display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;
+  border: 1px solid var(--line); border-radius: 14px;
+  background: var(--paper); box-shadow: var(--trajectory-card-shadow);
 }
-.trajectory-details-over { background: var(--ink); }
-.trajectory-details-over { position: absolute; inset: 0; width: auto; border-left: 0; z-index: 1; }
+.trajectory-details-over { inset: 10px; width: auto; }
+/* A moved card is placed and sized by the store, which holds it inside the
+   area; the narrow one covers the area. */
+.trajectory-details[data-moved], .trajectory-details-over { max-height: none; }
 
-/* The seam: a 6px grab area drawn as a hairline, lit while dragged. */
-.trajectory-grip {
-  flex: none; width: 6px; margin: 0 -3px; cursor: col-resize; position: relative; z-index: 2; outline: 0;
+/* The size handle, on the corner that is free: bottom-left where the card
+   opens, its right edge pinned there, and bottom-right once moved -- the desk
+   palette's own handle and hatch, set in from the rounded corner. */
+.trajectory-corner {
+  position: absolute; left: 0; bottom: 0; z-index: 3; width: var(--wf-corner); height: var(--wf-corner); cursor: nesw-resize; touch-action: none;
 }
-.trajectory-grip::after { content: ''; position: absolute; inset: 0 2px; background: transparent; transition: background .12s; }
-.trajectory-grip:hover::after, .trajectory-grip[data-drag]::after, .trajectory-grip:focus-visible::after { background: var(--amber); }
+.trajectory-corner::after {
+  content: ''; position: absolute; left: 5px; bottom: 5px; width: 9px; height: 9px; opacity: .55; pointer-events: none;
+  background: linear-gradient(45deg, transparent 48%, var(--faint) 50%, var(--faint) 57%, transparent 59%, transparent 70%, var(--faint) 72%, var(--faint) 79%, transparent 81%);
+}
+/* Read by a screen reader and drawn nowhere: what a keyboard step left the card at. */
+.trajectory-sr {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+.trajectory-details[data-moved] .trajectory-corner { left: auto; right: 0; cursor: nwse-resize; }
+.trajectory-details[data-moved] .trajectory-corner::after {
+  left: auto; right: 5px;
+  background: linear-gradient(135deg, transparent 48%, var(--faint) 50%, var(--faint) 57%, transparent 59%, transparent 70%, var(--faint) 72%, var(--faint) 79%, transparent 81%);
+}
 
 /* ── the pane's head and tabs ───────────────────────────────────── */
 
@@ -278,6 +227,9 @@ html[data-theme="dark"] {
   flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 14px; min-height: 40px;
   border-bottom: 1px solid var(--line-soft);
 }
+/* What the card moves by, wherever it can move. */
+.trajectory-details:not(.trajectory-details-over) > .trajectory-head { cursor: grab; touch-action: none; user-select: none; }
+.trajectory-head[data-dragging] { cursor: grabbing; }
 .trajectory-head-name { flex: 1; min-width: 0; font-size: 12.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .trajectory-close {
   flex: none; height: 26px; min-width: 26px; padding: 0 8px; border-radius: 7px; color: var(--muted);
@@ -322,7 +274,16 @@ html[data-theme="dark"] {
 
 /* ── the pane's body ────────────────────────────────────────────── */
 
-.trajectory-pane { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 12px 14px 20px; font-size: 12.5px; }
+/* The message list stands empty height in for the rows it does not draw, so
+   the pane's content above the viewport changes size while the reader scrolls
+   -- the one case scroll anchoring reacts to, and it reacts by moving the
+   offset under the reader's hand. The list places its own rows; the browser
+   must not place them a second time. */
+.trajectory-pane { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 12px 14px 20px; font-size: 12.5px; overflow-anchor: none; }
+/* The pane's overlay bar runs along the pane's own box, and the size handle
+   owns the card's bottom corner: the pane stops a handle's height short of the
+   card's foot, so the bar never runs under the handle on either side. */
+.trajectory-details:not(.trajectory-details-over) > .trajectory-pane { margin-bottom: var(--wf-corner); }
 .trajectory-overview { display: flex; flex-direction: column; gap: 20px; }
 
 /* Info: two borderless rows, a 72px label, the value free to wrap. */
@@ -389,8 +350,11 @@ html[data-theme="dark"] {
 /* The rest of a long node, a page at a time, on the line its next child would take. */
 .trajectory-json-more { display: block; margin: 2px 0; font-size: 11.5px; }
 
-/* Key-values: no borders, label left, value beside it. */
-.trajectory-kv { margin: 0; display: grid; grid-template-columns: minmax(96px, 160px) minmax(0, 1fr); gap: 5px 12px; }
+/* Key-values: no borders, label left, value beside it. The label column is a
+   share of the card, so widening the card shows more of a long key; the same
+   share in every section keeps the values in line, and the cap keeps a short
+   key near its value in a very wide card. */
+.trajectory-kv { margin: 0; display: grid; grid-template-columns: minmax(96px, min(40%, 320px)) minmax(0, 1fr); gap: 5px 12px; }
 .trajectory-kv-row { display: contents; }
 .trajectory-kv-k { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .trajectory-kv-v { margin: 0; min-width: 0; overflow-wrap: anywhere; }
@@ -458,3 +422,530 @@ html[data-theme="dark"] {
 .trajectory-skel { display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }
 .trajectory-skel-line { height: 10px; border-radius: 5px; background: var(--raised); }
 .trajectory-skel-short { width: 40%; }
+
+/* ── the agent waterfall ──────────────────────────────────────────────
+   Rows are absolutely placed by scroll offset; the label column is the same
+   width on every row so one axis serves the ruler, an agent's lifetime, a
+   turn's composite bar and a span's own extent. */
+
+.trajectory-wf { display: flex; flex-direction: column; min-height: 0; flex: 1 }
+.trajectory-ruler { position: relative; height: 22px; margin-left: 196px; border-bottom: 1px solid var(--line); flex: none;
+  font: 10px/22px var(--mono); color: var(--faint) }
+.trajectory-ruler b { position: absolute; transform: translateX(-50%); font-weight: 400 }
+.trajectory-wf-scroll { overflow: auto; flex: 1; min-height: 0 }
+.trajectory-wf-rows { position: relative }
+.trajectory-wf-row { position: absolute; left: 0; right: 0; display: grid;
+  grid-template-columns: 188px minmax(0, 1fr); gap: 8px; align-items: center; cursor: default }
+.trajectory-wf-row:hover { background: var(--hover) }
+.trajectory-wf-label { display: flex; align-items: center; gap: 6px; min-width: 0;
+  font: 11px/1 var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.trajectory-wf-agent .trajectory-wf-label { font-weight: 600; color: var(--text) }
+.trajectory-wf-from { font: 9px/1 var(--mono); color: var(--moss); border: 1px solid var(--line);
+  border-radius: 4px; padding: 2px 4px; margin-left: 6px; overflow: hidden; text-overflow: ellipsis }
+.trajectory-wf-track { position: relative; height: 12px; overflow: hidden }
+.trajectory-wf-track i { position: absolute; top: 0; height: 12px; border-radius: 3px; min-width: 2px }
+.trajectory-wf-span .trajectory-wf-track { height: 8px }
+.trajectory-wf-span .trajectory-wf-track i { height: 8px; border-radius: 2px }
+.trajectory-wf-turn .trajectory-wf-track { height: 10px }
+.trajectory-wf-turn .trajectory-wf-track i { height: 10px }
+.trajectory-wf-seg-model { background: var(--trajectory-c-llm-output-fg) }
+.trajectory-wf-seg-tool { background: var(--trajectory-c-tool-output-fg) }
+.trajectory-wf-seg-subagent { background: var(--moss) }
+.trajectory-wf-seg-failure { background: var(--chat-danger) }
+.trajectory-wf-seg-waiting { background: var(--raised) }
+.trajectory-wf-kind-model { background: var(--trajectory-c-llm-output-fg) }
+.trajectory-wf-kind-tool { background: var(--trajectory-c-tool-output-fg) }
+.trajectory-wf-kind-user { background: var(--trajectory-c-user-input-fg) }
+.trajectory-wf-kind-failure { background: var(--chat-danger) }
+/* A failed operation's mark, beside its name and its turn's. */
+.trajectory-wf-fail { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--chat-danger) }
+
+.trajectory-wf-links { position: absolute; top: 0; bottom: 0; left: 196px; right: 0; pointer-events: none }
+.trajectory-wf-seg { position: absolute; top: 0; height: 10px; border-radius: 3px; min-width: 2px }
+.trajectory-wf-spanbar { position: absolute; top: 0; height: 8px; border-radius: 2px; min-width: 2px }
+
+.trajectory-wf-tool { font: 10px/1 var(--mono); color: var(--muted); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; cursor: pointer }
+.trajectory-wf-tool[aria-pressed='true'] { color: var(--text); background: var(--raised) }
+.trajectory-wf-tool:disabled { opacity: .5; cursor: default }
+.trajectory-ruler-idle { position: absolute; top: 0; height: 22px; display: flex; align-items: center;
+  justify-content: center; font: 9px/1 var(--mono); color: var(--faint); overflow: hidden;
+  border-left: 1px dashed var(--line); border-right: 1px dashed var(--line) }
+
+/* ── the reference's light trace card ─────────────────────────────────
+   White ground, hairlines, uppercase micro-labels, and one pale bar per
+   row with its duration just after. Colour is used only for meaning:
+   the model/tool families, the slowest badge and errors. */
+
+.trajectory-wf { background: var(--paper); --wf-gutter: max(240px, 30%); }
+.trajectory-wf-stats { display: flex; align-items: stretch; gap: 0; padding: 10px 16px;
+  border-bottom: 1px solid var(--line); flex: none }
+.trajectory-wf-stat { display: flex; flex-direction: column; gap: 5px; padding: 0 24px;
+  border-left: 1px solid var(--line-soft); min-width: 96px }
+.trajectory-wf-stat:first-child { padding-left: 0; border-left: 0 }
+.trajectory-wf-statk { font: 10px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--faint) }
+.trajectory-wf-statv { font: 600 19px/1 var(--mono); color: var(--text); font-variant-numeric: tabular-nums }
+.trajectory-wf-statv[data-bad] { color: var(--clay) }
+.trajectory-wf-tool { font: 10px/1 var(--mono); color: var(--muted); background: var(--paper);
+  border: 1px solid var(--line); border-radius: 8px; padding: 5px 9px; cursor: pointer }
+.trajectory-wf-tool[aria-pressed='true'] { color: var(--text); background: var(--trajectory-wf-soft) }
+.trajectory-wf-tool:disabled { opacity: .45; cursor: default }
+
+.trajectory-wf-head { display: grid; grid-template-columns: var(--wf-gutter) minmax(0, 1fr);
+  border-bottom: 1px solid var(--line); background: var(--paper); flex: none }
+.trajectory-ruler { position: relative; height: 34px; margin-left: 0; border-bottom: 0;
+  font: 11px/34px var(--mono); color: var(--faint); background: var(--paper) }
+.trajectory-ruler b { position: absolute; top: 0; transform: translateX(-50%); font-weight: 400 }
+
+.trajectory-wf-scroll { background: var(--paper) }
+.trajectory-wf-row { grid-template-columns: var(--wf-gutter) minmax(0, 1fr); gap: 0 }
+.trajectory-wf-row:hover { background: var(--trajectory-wf-hover) }
+.trajectory-wf-label { font: 12px/1.25 var(--sans); color: var(--text); gap: 6px }
+.trajectory-wf-agent .trajectory-wf-label { font-weight: 600 }
+.trajectory-wf-name { font: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.trajectory-wf-sub { font: 11px/1.25 var(--sans); color: var(--faint); flex: none; max-width: 45%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.trajectory-wf-chev { flex: none; width: 10px; color: var(--trajectory-wf-quiet); font-size: 9px; line-height: 1 }
+.trajectory-wf-tile { flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid;
+  place-items: center; border: 1px solid var(--line); background: var(--trajectory-wf-tile); overflow: hidden }
+.trajectory-wf-tile[data-tone='1'] { background: var(--trajectory-wf-tone1-bg); border-color: var(--trajectory-wf-tone1-line) }
+.trajectory-wf-tile[data-tone='2'] { background: var(--trajectory-wf-tone2-bg); border-color: var(--trajectory-wf-tone2-line) }
+.trajectory-wf-tile[data-tone='3'] { background: var(--trajectory-wf-tone3-bg); border-color: var(--trajectory-wf-tone3-line) }
+.trajectory-wf-tile img { width: 14px; height: 14px; display: block }
+.trajectory-wf-glyph { font-size: 10px; color: var(--trajectory-wf-glyph) }
+.trajectory-wf-from { font: 9.5px/1 var(--mono); color: var(--trajectory-wf-from-fg); background: var(--trajectory-wf-from-bg); border: 1px solid var(--trajectory-wf-from-line);
+  border-radius: 4px; padding: 2px 5px; flex: none; max-width: 190px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap }
+.trajectory-wf-slow { flex: none; font: 9px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase;
+  color: var(--trajectory-wf-slow-fg); background: var(--trajectory-wf-slow-bg); border-radius: 4px; padding: 3px 5px }
+
+.trajectory-wf-track { position: relative; height: 32px }
+.trajectory-wf-track i { top: 50%; transform: translateY(-50%); height: 14px; border-radius: 4px; min-width: 3px }
+.trajectory-wf-spanbar.trajectory-wf-kind-model, .trajectory-wf-seg-model { background: var(--trajectory-wf-model-bg) }
+.trajectory-wf-spanbar.trajectory-wf-kind-tool, .trajectory-wf-seg-tool { background: var(--trajectory-wf-tool-bg) }
+.trajectory-wf-spanbar.trajectory-wf-kind-user { background: var(--trajectory-wf-user-bg) }
+.trajectory-wf-seg-subagent { background: var(--trajectory-wf-sub-bg) }
+.trajectory-wf-spanbar.trajectory-wf-kind-failure, .trajectory-wf-seg-failure { background: var(--trajectory-wf-fail-bg) }
+.trajectory-wf-seg-waiting { background: var(--trajectory-wf-wait-bg) }
+.trajectory-wf-turn .trajectory-wf-track i { height: 14px }
+
+.trajectory-wf-links { left: var(--wf-gutter) }
+.trajectory-wf-grid { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--trajectory-wf-grid) }
+.trajectory-wf-links { pointer-events: none }
+.trajectory-ruler-idle { font: 9px/1 var(--mono); color: var(--trajectory-wf-quiet); white-space: nowrap; overflow: hidden }
+
+/* ── type and air, matched to the reference card ──────────────────────
+   The reference is set in one sans with tabular figures, at a much larger
+   scale than the first pass: 48px rows, 15px labels, 18px bars. The number
+   columns keep their figures aligned without the monospace face, which is
+   what made the first pass read as a terminal rather than a trace. */
+
+.trajectory-wf { --wf-gutter: max(300px, 34%); --wf-row: 48px }
+.trajectory-wf-stats { padding: 16px 24px; }
+.trajectory-wf-stat { padding: 0 40px; min-width: 128px; gap: 8px }
+.trajectory-wf-stat:first-child { padding-left: 4px }
+.trajectory-wf-statk { font: 500 11px/1 var(--sans); letter-spacing: .1em; color: var(--faint) }
+.trajectory-wf-statv { font: 600 23px/1 var(--sans); letter-spacing: -.01em; color: var(--text);
+  font-variant-numeric: tabular-nums }
+.trajectory-wf-tool { font: 500 11px/1 var(--sans); padding: 6px 11px; border-radius: 9px }
+
+.trajectory-wf-head { border-bottom: 1px solid var(--line) }
+.trajectory-ruler { height: var(--wf-ruler-h); font: 400 14px var(--sans); line-height: var(--wf-ruler-h);
+  color: var(--faint); font-variant-numeric: tabular-nums }
+
+.trajectory-wf-row { height: 48px }
+.trajectory-wf-track { height: 48px }
+.trajectory-wf-label { font: 400 15px/1.3 var(--sans); color: var(--text); gap: 10px; position: relative }
+.trajectory-wf-agent .trajectory-wf-label { font-weight: 600; font-size: 16px }
+.trajectory-wf-name { font: inherit }
+.trajectory-wf-sub { font: 400 13.5px/1.3 var(--sans); color: var(--faint); max-width: 42% }
+.trajectory-wf-chev { width: 12px; font-size: 10px; color: var(--trajectory-wf-quiet) }
+.trajectory-wf-tile { width: 26px; height: 26px; border-radius: 50%; border-color: var(--line); background: var(--trajectory-wf-tile) }
+.trajectory-wf-tile img { width: 17px; height: 17px }
+.trajectory-wf-glyph { font-size: 12px }
+.trajectory-wf-from { font: 500 10.5px/1 var(--sans); padding: 3px 7px; border-radius: 6px; max-width: 200px }
+.trajectory-wf-slow { font: 600 10.5px/1 var(--sans); letter-spacing: .08em; color: var(--trajectory-wf-slow-fg);
+  background: var(--trajectory-wf-slow-bg); border-radius: 6px; padding: 4px 7px }
+
+.trajectory-wf-track i { height: 18px; border-radius: 6px; min-width: 4px }
+.trajectory-wf-turn .trajectory-wf-track i { height: 18px }
+
+/* The tree's guide: one hairline at the row's own indent, behind the icons. */
+.trajectory-wf-span .trajectory-wf-label::before { content: ''; position: absolute;
+  left: calc(var(--indent, 44px) - 14px); top: -14px; bottom: -14px; width: 1px; background: var(--trajectory-wf-soft) }
+
+/* A fixed word never gives way to a preview: the preview truncates first. */
+.trajectory-wf-name { flex: none }
+.trajectory-wf-chev, .trajectory-wf-tile { flex: none }
+.trajectory-wf-sub { flex: 0 1 auto; min-width: 0 }
+
+/* A span's label is its preview, so it is the part that truncates; the turn's
+   word is fixed ("Turn 3") and its preview gives way instead. */
+.trajectory-wf-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis }
+.trajectory-wf-turn .trajectory-wf-name { flex: none }
+.trajectory-wf-sub { flex: none }
+
+/* The rows breathe less than the first reference pass: 40px rows against 15px
+   labels, with the icon plate and the bars scaled to match. */
+.trajectory-wf { --wf-row: 40px }
+.trajectory-wf-row, .trajectory-wf-track { height: 40px }
+.trajectory-wf-track i, .trajectory-wf-turn .trajectory-wf-track i { height: 16px; border-radius: 5px }
+.trajectory-wf-tile { width: 24px; height: 24px }
+.trajectory-wf-tile img { width: 16px; height: 16px }
+.trajectory-wf-span .trajectory-wf-label::before { top: -10px; bottom: -10px }
+
+/* The icon fills its box: a 15px drawing in a 24px cell, the reference's
+   proportion, rather than a text glyph's own small em box. */
+
+.trajectory-wf-glyph { display: grid; place-items: center; font-size: 0 }
+.trajectory-wf-tile img { width: 18px; height: 18px }
+
+/* One notch tighter again: 34px rows, and the icon plate and bars follow so
+   the row keeps its proportions rather than looking cramped. */
+.trajectory-wf { --wf-row: 34px }
+.trajectory-wf-row, .trajectory-wf-track { height: 34px }
+.trajectory-wf-track i, .trajectory-wf-turn .trajectory-wf-track i { height: 14px; border-radius: 4px }
+.trajectory-wf-tile { width: 22px; height: 22px }
+.trajectory-wf-glyph svg { width: 14px; height: 14px }
+.trajectory-wf-tile img { width: 16px; height: 16px }
+.trajectory-wf-span .trajectory-wf-label::before { top: -8px; bottom: -8px }
+
+/* 30px rows, and the tree's guide becomes one continuous line: each row draws
+   half a row above and half below, so consecutive siblings meet exactly. */
+.trajectory-wf { --wf-row: 30px }
+.trajectory-wf-row, .trajectory-wf-track { height: 30px }
+.trajectory-wf-track i, .trajectory-wf-turn .trajectory-wf-track i { height: 12px; border-radius: 4px }
+.trajectory-wf-tile { width: 20px; height: 20px }
+.trajectory-wf-glyph svg { width: 13px; height: 13px }
+.trajectory-wf-tile img { width: 15px; height: 15px }
+.trajectory-wf-span .trajectory-wf-label::before { content: none }
+
+/* The guide is a trunk plus one branch per depth: every row draws its own
+   column and its ancestors'. A line runs exactly the row's height -- rows are
+   contiguous, so the columns still join into unbroken lines, but no line ever
+   reaches up into the chevron that folds it. */
+.trajectory-wf-guide { position: absolute; top: 0; bottom: 0;
+  width: 1px; background: var(--trajectory-wf-guide) }
+
+/* The label clips its text, but not its guide: each piece of text truncates
+   on its own, so nothing needs the label to clip. */
+.trajectory-wf-label { overflow: visible }
+
+/* One size up: a 22px plate with a 15px drawing (68%), which still clears the
+   30px row. */
+.trajectory-wf-tile { width: 22px; height: 22px }
+.trajectory-wf-glyph svg { width: 15px; height: 15px }
+.trajectory-wf-tile img { width: 17px; height: 17px }
+
+/* The header is allowed to shrink: its six cells at their old size set a
+   min-content width wider than the column, which pushed the details pane off
+   the screen. Cells give way, and the island itself may be narrower than its
+   content's natural size. */
+.trajectory-wf { min-width: 0 }
+.trajectory-wf-stats { min-width: 0; overflow: hidden }
+.trajectory-wf-stat { min-width: 0; padding: 0 20px; flex: 0 1 auto }
+.trajectory-wf-statv { white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.trajectory-wf { --wf-gutter: clamp(180px, 34%, 420px) }
+
+/* The header's cells never shrink into each other: the strip scrolls instead. */
+.trajectory-wf-stats { overflow-x: auto; overflow-y: hidden }
+/* A fixed height, so the details card can start just below it (--wf-stats-h). */
+.trajectory-wf-stats { box-sizing: border-box; height: var(--wf-stats-h) }
+.trajectory-wf-stat { flex: 0 0 auto }
+.trajectory-wf-statk, .trajectory-wf-statv { white-space: nowrap }
+
+/* Each figure's second line: what the number is made of, in a caption's faint
+   ink. Under the error count it is a button that lands on the first failure. */
+.trajectory-wf-statsub { font: 400 11.5px/1 var(--sans); color: var(--faint); white-space: nowrap;
+  font-variant-numeric: tabular-nums }
+.trajectory-wf-jump { align-self: flex-start; padding: 0; border: 0; background: none; color: var(--clay);
+  font-weight: 500; cursor: pointer }
+.trajectory-wf-jump:hover { text-decoration: underline }
+.trajectory-wf-jump:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; border-radius: 3px }
+
+/* The row label cannot clip (its tree guide is a child that must show outside
+   the row), so each piece of text clips itself: the preview gives way first,
+   the fixed words and the source badge keep their size. Nothing is left to
+   paint over its neighbour. */
+.trajectory-wf-label { min-width: 0; max-width: 100% }
+.trajectory-wf-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis }
+.trajectory-wf-turn .trajectory-wf-name { flex: 0 0 auto }
+.trajectory-wf-sub { flex: 0 1 auto; min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis }
+.trajectory-wf-from { flex: 0 1 auto; min-width: 4ch; overflow: hidden; text-overflow: ellipsis }
+
+.trajectory-crash { display: flex; align-items: center; gap: 12px; padding: 16px 20px; margin: 12px;
+  border: 1px solid var(--trajectory-crash-line); background: var(--trajectory-crash-bg); border-radius: 10px; color: var(--trajectory-crash-fg);
+  font: 12px/1.5 var(--sans) }
+.trajectory-crash-text { flex: 1; min-width: 0; word-break: break-word }
+
+/* A handle straddling the axis's end keeps both halves, so the ruler does not
+   clip its content; no label reaches an edge (EDGE_PX in Waterfall.tsx). */
+.trajectory-ruler { overflow: visible }
+
+/* The fold control, as the reference draws it: a thin chevron in a quiet
+   square that only shows itself on hover, instead of a bare text glyph. It is
+   a button for the keyboard, so the button's own chrome is taken off. */
+.trajectory-wf-chev { width: 18px; height: 18px; display: grid; place-items: center;
+  border-radius: 6px; color: var(--faint); flex: none; transition: background 120ms ease }
+button.trajectory-wf-chev { border: 0; padding: 0; margin: 0; background: none; font: inherit; cursor: pointer }
+.trajectory-wf-row:hover .trajectory-wf-chev { background: var(--trajectory-wf-soft); color: var(--muted) }
+.trajectory-wf-chev svg { width: 14px; height: 14px; display: block }
+
+/* The strip scrolls sideways under its arrows, but shows no scrollbar of its
+   own -- the overlay thumb is opted out on the element, the native one here. */
+.trajectory-tabs { scrollbar-width: none }
+.trajectory-tabs::-webkit-scrollbar { display: none }
+
+/* The way into a sub-agent's own trace stands at the end of the label column,
+   not out on the axis: which agent ran this row is a property of the row, not
+   of when it ran. Right-aligned in the gutter, so every door lines up. */
+.trajectory-wf-label .trajectory-scope-opens {
+  margin-left: auto; margin-right: 4px; flex: none; width: 18px; height: 18px;
+  border: 0; border-radius: 6px; background: none; cursor: pointer;
+  font: 12px/1 var(--sans); color: var(--trajectory-wf-quiet);
+}
+.trajectory-wf-label .trajectory-scope-opens:hover { background: var(--trajectory-wf-soft); color: var(--muted) }
+
+/* Selecting an interval on the axis, drawn the way the network panel's
+   timeline draws one: what is outside is dimmed, the interval is left at the
+   ruler's own ground, and each edge carries a grip. The axis itself never
+   moves -- selecting is not zooming. */
+.trajectory-ruler { cursor: crosshair; touch-action: none; user-select: none }
+.trajectory-ruler-dim, .trajectory-ruler-pick, .trajectory-ruler-grip { pointer-events: none }
+.trajectory-ruler-dim { position: absolute; top: 0; bottom: 0; background: var(--trajectory-ruler-dim) }
+.trajectory-ruler-pick { position: absolute; top: 0; bottom: 0;
+  border-left: 1px solid var(--trajectory-ruler-pick); border-right: 1px solid var(--trajectory-ruler-pick) }
+/* One per edge of the picked band, drawn the way the network panel draws its
+   handles: a rounded pill straddling the edge, on a wider invisible target and
+   with a grab cursor. These are what the reader drags to move an edge alone. */
+.trajectory-ruler-grip { position: absolute; top: 0; bottom: 0; width: 14px; margin-left: -7px;
+  pointer-events: auto; cursor: ew-resize; z-index: 2 }
+.trajectory-ruler-grip::before { content: ''; position: absolute; top: 9px; bottom: 9px; left: 2px; right: 2px;
+  border: 1px solid var(--trajectory-ruler-grip-line); border-radius: 4px; background: var(--trajectory-ruler-grip-bg) }
+.trajectory-ruler-grip:hover::before { border-color: var(--trajectory-ruler-grip-line-hover); background: var(--trajectory-ruler-grip-bg-hover) }
+
+/* The labels own the column in front of the axis, and the axis starts where
+   they end: a bar's position is a fraction of that track, never of the whole
+   row, so a row's name and its bar cannot sit on top of each other. The
+   duration is a column at the row's right edge, where every row lines it up
+   -- the reference's Time column. */
+.trajectory-wf-head .trajectory-ruler { grid-column: 2 }
+.trajectory-wf-guide { z-index: 1 }
+.trajectory-wf-time { position: absolute; top: 0; bottom: 0; z-index: 2;
+  display: flex; align-items: center; pointer-events: none; white-space: nowrap;
+  font: 400 15px/1 var(--sans); color: var(--muted); font-variant-numeric: tabular-nums }
+
+/* A label stands centred over its own clock time, and its tick is a short
+   mark at the ruler's foot -- longer on a major one -- so no line runs under
+   the text; the rows' grid carries the line on down. No label sits closer to
+   either end than EDGE_PX (Waterfall.tsx), so none hangs past the ruler. */
+.trajectory-ruler b { transform: translateX(-50%); padding: 0; white-space: nowrap }
+
+/* The ticks: short marks at the ruler's foot, where the rows' grid lines
+   begin, so a label, its mark and the line under it are one reading. */
+.trajectory-ruler-tick { position: absolute; top: auto; bottom: 0; height: 6px; width: 1px; background: var(--trajectory-wf-grid-major); pointer-events: none }
+.trajectory-ruler-tick[data-major] { height: 10px }
+.trajectory-wf-grid { background: var(--trajectory-wf-grid) }
+
+/* ── inside the sheet ────────────────────────────────────────────────
+   The host carries the blur, so the island's own grounds go away and the one
+   sheet shows through. The details pane is the exception: a card of plain
+   paper over the sheet, since it is the reading surface and 11px monospace
+   reads best on white. Hairlines swap paper values for translucent ink, which
+   is what keeps a rule visible on the wash instead of a grey line that only
+   worked on white. */
+html[data-traj] .trajectory-wf,
+html[data-traj] .trajectory-wf-scroll,
+html[data-traj] .trajectory-wf-head,
+html[data-traj] .trajectory-ruler { background: transparent }
+html[data-traj] .trajectory-wf-row:hover { background: var(--traj-hover) }
+/* The selected row: the reader's place, for the eye as aria-selected is for a
+   screen reader. It holds over the hover, on the glass and off it. */
+.trajectory-wf-span[aria-selected="true"],
+.trajectory-wf-span[aria-selected="true"]:hover,
+html[data-traj] .trajectory-wf-span[aria-selected="true"],
+html[data-traj] .trajectory-wf-span[aria-selected="true"]:hover { background: var(--selected, var(--raised)) }
+html[data-traj] .trajectory-wf-guide,
+html[data-traj] .trajectory-ruler-tick,
+html[data-traj] .trajectory-wf-grid { background: var(--traj-rule) }
+html[data-traj] .trajectory-wf-head, html[data-traj] .trajectory-wf-stats, html[data-traj] .trajectory-tabs-wrap { border-bottom-color: var(--traj-line) }
+
+/* The track holds the duration label as well as the bar now, so it is the
+   row's full height. The per-kind heights further up (8px for a span, 10px
+   for a turn) were the bar's own box from before the label moved in; left as
+   they were, the label was clipped top and bottom by the track's clip. The
+   bar keeps its own thickness. */
+.trajectory-wf-track,
+.trajectory-wf-span .trajectory-wf-track,
+.trajectory-wf-turn .trajectory-wf-track { height: var(--wf-row, 30px) }
+
+/* Every bar carries a 1px edge of its own hue, one step darker. On the glass
+   the pale fill alone sits at almost the same value as the sheet, and the
+   edge is what gives a short bar a readable shape without changing its
+   colour; border-box keeps the drawn width. */
+.trajectory-wf-spanbar.trajectory-wf-kind-model,
+.trajectory-wf-seg-model { border: 1px solid var(--trajectory-wf-model-line) }
+.trajectory-wf-spanbar.trajectory-wf-kind-tool,
+.trajectory-wf-seg-tool { border: 1px solid var(--trajectory-wf-tool-line) }
+.trajectory-wf-spanbar.trajectory-wf-kind-user { border: 1px solid var(--trajectory-wf-user-line) }
+.trajectory-wf-seg-subagent { border: 1px solid var(--trajectory-wf-sub-line) }
+.trajectory-wf-spanbar.trajectory-wf-kind-failure,
+.trajectory-wf-seg-failure { border: 1px solid var(--trajectory-wf-fail-line) }
+.trajectory-wf-seg-waiting { border: 1px solid var(--trajectory-wf-wait-line) }
+
+/* The vertical rules stand over the bars: a bar is a duration, not an
+   occluder, and a rule that vanishes under every long stretch stops reading
+   as an axis. The duration labels stay above the rules so a line never runs
+   through the text. */
+.trajectory-wf-links { z-index: 2 }
+.trajectory-wf-time { z-index: 3 }
+
+/* ── the clock ruler and the window it names ─────────────────────────
+   Marks on round clock times; the next unit up (whole hours, minutes or
+   midnights) is major, darker on the ruler and in the rows' grid. The head's
+   first column names the window the axis shows. */
+.trajectory-ruler b[data-major] { color: var(--text); font-weight: 500 }
+.trajectory-wf-grid[data-major] { background: var(--trajectory-wf-grid-major) }
+.trajectory-wf-window { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 16px 0 24px;
+  font: 400 12.5px/1 var(--sans); color: var(--faint); white-space: nowrap; overflow: hidden }
+.trajectory-wf-window b { flex: none; color: var(--text); font-weight: 600 }
+.trajectory-wf-window span { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums }
+
+/* The header's tools, at its right end: the window presets as one segmented
+   control -- the pressed one inverted -- and the fold-all button beside it. */
+.trajectory-wf-tools { flex: none; display: flex; align-items: center; gap: 8px; margin-left: auto; padding-left: 16px }
+.trajectory-wf-zoom { display: flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: var(--paper) }
+.trajectory-wf-zoom button { padding: 6px 11px; border: 0; border-left: 1px solid var(--line); background: none;
+  font: 500 12px/1 var(--sans); color: var(--muted); cursor: pointer; white-space: nowrap }
+.trajectory-wf-zoom button:first-child { border-left: 0 }
+.trajectory-wf-zoom button:hover { color: var(--text) }
+.trajectory-wf-zoom button[aria-pressed='true'] { background: var(--text); color: var(--paper) }
+.trajectory-wf-zoom button:focus-visible, .trajectory-wf-foldall:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px }
+.trajectory-wf-foldall { white-space: nowrap }
+
+/* Each row's busy time stands in one column at the end of its label, right
+   aligned so the figures line up down the page, under a header in the head's
+   label column. The window's name takes the rest of that column. */
+.trajectory-wf-busy { flex: none; margin-left: auto; width: 76px; padding-right: 14px; text-align: right;
+  font: 400 12.5px/1 var(--sans); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap }
+.trajectory-wf-agent .trajectory-wf-busy { color: var(--text); font-weight: 400 }
+.trajectory-wf-headlabel { display: flex; align-items: center; min-width: 0 }
+.trajectory-wf-headlabel .trajectory-wf-window { flex: 1 1 auto }
+.trajectory-wf-busyhead { flex: none; width: 76px; padding-right: 14px; margin-left: auto; text-align: right;
+  font: 500 10.5px/1 var(--sans); letter-spacing: .09em; text-transform: uppercase; color: var(--faint) }
+
+/* ── an agent's row: a capsule per run of work ─────────────────────────
+   The row reads as the agent's day: one capsule per run of work on a faint
+   line from its first to its last, the main agent in gold and every other in
+   one neutral, a diamond where a failure happened, an arrow at an edge the
+   agent's work runs past, and a chip naming when it works next (or last did)
+   when nothing of it is inside the window. */
+.trajectory-wf-track .trajectory-wf-life { top: 50%; height: 2px; min-width: 0; border-radius: 1px; transform: translateY(-50%);
+  background: var(--trajectory-wf-agent); opacity: .3 }
+.trajectory-wf-track .trajectory-wf-cap { top: 50%; height: 12px; min-width: 4px; border-radius: 6px; transform: translateY(-50%);
+  background: var(--trajectory-wf-agent) }
+.trajectory-wf-agent[data-main] .trajectory-wf-track .trajectory-wf-life,
+.trajectory-wf-agent[data-main] .trajectory-wf-track .trajectory-wf-cap { background: var(--trajectory-wf-main) }
+.trajectory-wf-track .trajectory-wf-diamond { top: 50%; width: 8px; height: 8px; min-width: 0; margin-left: -4px; border-radius: 1.5px;
+  background: var(--trajectory-wf-err); transform: translateY(-50%) translateY(-7px) rotate(45deg); box-shadow: 0 0 0 2px var(--paper) }
+.trajectory-wf-track .trajectory-wf-edge { top: 50%; width: 0; height: 0; min-width: 0; border-radius: 0; transform: translateY(-50%);
+  border-top: 4px solid transparent; border-bottom: 4px solid transparent }
+/* The start arrow stands just outside the track, in the busy column's spare
+   edge, so it never sits on a capsule that runs off the window; the end arrow
+   has no such room before the scroller's edge, so it wears a halo instead. */
+.trajectory-wf-agent .trajectory-wf-track, .trajectory-wf-fold .trajectory-wf-track { overflow: visible }
+.trajectory-wf-track .trajectory-wf-edge[data-side='start'] { left: -11px; border-right: 6px solid var(--trajectory-wf-quiet) }
+.trajectory-wf-track .trajectory-wf-edge[data-side='end'] { right: 2px; border-left: 6px solid var(--trajectory-wf-quiet);
+  filter: drop-shadow(0 0 1.5px var(--paper)) }
+.trajectory-wf-next { position: absolute; top: 50%; transform: translateY(-50%); padding: 2px 8px; border: 1px solid var(--line);
+  border-radius: 999px; background: var(--paper); font: 400 11px/1.3 var(--sans); color: var(--faint); white-space: nowrap }
+.trajectory-wf-next[data-side='end'] { right: 14px }
+.trajectory-wf-next[data-side='start'] { left: 14px }
+
+/* A fold row: the agents wholly before or after the window, as one row with
+   their marks stacked and an arrow at the edge their work lies past. */
+.trajectory-wf-fold .trajectory-wf-name { font-weight: 500; color: var(--muted) }
+.trajectory-wf-stack { flex: none; display: flex }
+.trajectory-wf-stack .trajectory-wf-tile { margin-left: -6px; box-shadow: 0 0 0 2px var(--paper) }
+.trajectory-wf-stack .trajectory-wf-tile:first-child { margin-left: 0 }
+
+/* An open worker's label is two lines: its task, then who ran it, the turn
+   that sent it and how many turns it took. */
+.trajectory-wf-two { flex: 0 1 auto; display: flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 0 }
+.trajectory-wf-two .trajectory-wf-name { line-height: 1.15 }
+.trajectory-wf-agentsub { font: 400 11px/1.15 var(--sans); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+
+/* A call row is keyed by a small square in its kind's colour -- the same ink
+   as its bar and as the turn's stretch of that kind -- in place of an icon. */
+.trajectory-wf-key { flex: none; width: 8px; height: 8px; border-radius: 2px; background: var(--trajectory-wf-quiet) }
+.trajectory-wf-key.trajectory-wf-kind-model { background: var(--trajectory-wf-model-bg) }
+.trajectory-wf-key.trajectory-wf-kind-tool { background: var(--trajectory-wf-tool-bg) }
+.trajectory-wf-key.trajectory-wf-kind-failure,
+.trajectory-wf-spanbar.trajectory-wf-kind-failure, .trajectory-wf-seg-failure { background: var(--trajectory-wf-err); border-color: var(--trajectory-wf-err) }
+.trajectory-wf-spanbar.trajectory-wf-kind-other { background: var(--trajectory-wf-wait-bg); border: 1px solid var(--trajectory-wf-wait-line) }
+
+/* The hovered turn's breakdown: an inverted card -- the page's ink as its
+   ground -- under the row, one line per kind of time, each with its key. */
+.trajectory-wf-tip { position: absolute; z-index: 5; width: 262px; padding: 10px 12px; border-radius: 10px;
+  background: var(--text); color: var(--paper); font: 400 12px/1.55 var(--sans); pointer-events: none;
+  font-variant-numeric: tabular-nums }
+.trajectory-wf-tip [data-part] { display: flex; align-items: center; gap: 6px; white-space: nowrap }
+.trajectory-wf-tip [data-part='head'] { font-weight: 600 }
+
+/* ── the activity strip ────────────────────────────────────────────────
+   The whole session's calls on the folded axis, in the rows' own columns: the
+   key in the label gutter, the bars over the track. Each bar stacks the
+   model's calls under the tools' with a hairline between; a diamond rides a
+   bar that holds a failure; a folded idle stretch is a quiet band carrying
+   how long it was. The window is a framed brush, the rest of the strip under
+   a veil, with a grip on each edge. */
+.trajectory-act { flex: none; display: grid; grid-template-columns: var(--wf-gutter) minmax(0, 1fr); height: var(--wf-act-h);
+  border-bottom: 1px solid var(--line) }
+.trajectory-act-key { display: flex; flex-direction: column; justify-content: center; gap: 6px; min-width: 0; padding: 0 16px 0 24px }
+.trajectory-act-key b { font: 500 10.5px/1 var(--sans); letter-spacing: .09em; text-transform: uppercase; color: var(--faint) }
+.trajectory-act-key i { font: 400 12px/1 var(--sans); font-style: normal; color: var(--faint); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis }
+.trajectory-act-legend { font: 400 11.5px/1 var(--sans); color: var(--muted); white-space: nowrap; overflow: hidden }
+.trajectory-act-legend em { display: inline-block; width: 9px; height: 9px; margin: 0 5px 0 12px; border-radius: 2px; vertical-align: -1px }
+.trajectory-act-legend em:first-child { margin-left: 0 }
+.trajectory-act-legend em[data-kind='llm'] { background: var(--trajectory-wf-model-bg) }
+.trajectory-act-legend em[data-kind='tool'] { background: var(--trajectory-wf-tool-bg) }
+.trajectory-act-legend em[data-kind='error'] { width: 7px; height: 7px; background: var(--trajectory-wf-err); transform: rotate(45deg) }
+.trajectory-act-plot { position: relative; cursor: crosshair; touch-action: none; user-select: none }
+.trajectory-act-plot::after { content: ''; position: absolute; left: 0; right: 0; bottom: 26px; height: 1px; background: var(--line); pointer-events: none }
+.trajectory-act-bar { position: absolute; bottom: 26px; height: 48px; display: flex; flex-direction: column-reverse; padding: 0 1px;
+  pointer-events: none }
+.trajectory-act-bar i { display: block; flex: none; width: 100% }
+.trajectory-act-bar i + i { margin-bottom: 1px }
+.trajectory-act-bar i[data-kind='llm'] { background: var(--trajectory-wf-model-bg) }
+.trajectory-act-bar i[data-kind='tool'] { background: var(--trajectory-wf-tool-bg); border-radius: 1.5px 1.5px 0 0 }
+.trajectory-act-err { position: absolute; left: 50%; width: 6px; height: 6px; margin: 0 0 4px -3px; background: var(--trajectory-wf-err);
+  transform: rotate(45deg) }
+.trajectory-act-fold { position: absolute; top: 12px; bottom: 26px; display: flex; align-items: flex-end; justify-content: center;
+  padding-bottom: 4px; border-radius: 5px; background: var(--trajectory-wf-soft); font: 400 10.5px/1 var(--sans);
+  color: var(--faint); pointer-events: none; overflow: hidden }
+.trajectory-act-day { position: absolute; top: 0; padding-left: 2px; font: 600 10.5px/1 var(--sans); color: var(--text);
+  white-space: nowrap; pointer-events: none }
+.trajectory-act-end { position: absolute; bottom: 9px; font: 500 10.5px/1 var(--sans); color: var(--muted); pointer-events: none;
+  font-variant-numeric: tabular-nums }
+.trajectory-act-end[data-side='start'] { left: 0 }
+.trajectory-act-end[data-side='end'] { right: 0 }
+.trajectory-act-dim { position: absolute; top: 12px; bottom: 26px; background: var(--trajectory-act-veil); pointer-events: none }
+.trajectory-act-brush { position: absolute; top: 12px; bottom: 26px; border: 1px solid var(--text); border-radius: 4px; cursor: grab }
+.trajectory-act-grip { position: absolute; top: 50%; width: 6px; height: 18px; margin: -9px 0 0 -3px; border: 1px solid var(--text);
+  border-radius: 3px; background: var(--paper); cursor: ew-resize }
+.trajectory-act-grip[data-edge='lo'] { left: 0 }
+.trajectory-act-grip[data-edge='hi'] { left: 100% }
+html[data-traj] .trajectory-act { background: transparent }
+
+/* The dispatch line: from the instant an open worker was sent, on its
+   dispatcher's row, to where its work begins -- gold from the main agent,
+   the agents' neutral otherwise -- with a dot where it leaves. Behind the
+   rows, so it never covers a label or a bar it passes. */
+.trajectory-wf-dispatch { position: absolute; top: 0; left: var(--wf-gutter); right: 0; width: calc(100% - var(--wf-gutter));
+  overflow: visible; pointer-events: none }
+.trajectory-wf-dispatch path { fill: none; stroke: var(--trajectory-wf-agent); stroke-width: 1.2; opacity: .7 }
+.trajectory-wf-dispatch path[data-main] { stroke: var(--trajectory-wf-main) }
+.trajectory-wf-dispatch-dot { position: absolute; z-index: 1; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%;
+  background: var(--paper); border: 1.5px solid var(--trajectory-wf-agent); pointer-events: none }
+.trajectory-wf-dispatch-dot[data-main] { border-color: var(--trajectory-wf-main) }
