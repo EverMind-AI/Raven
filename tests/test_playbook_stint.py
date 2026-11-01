@@ -1135,6 +1135,49 @@ class TestRunning:
         replaced.cancel()
         await asyncio.sleep(0)
 
+    async def test_a_first_round_approved_before_the_budget_pause_is_not_asked_again(self, tmp_path: Path) -> None:
+        """The charge runs after the confirmation, so the first round the budget
+        turned away was approved. Its run id was never written, which is what
+        `_first_round_opened` reads; asking again on resume spends a second
+        approval on a round the person already said yes to."""
+        from raven.agent.subagent.prompt_errors import RoundBudgetSpentError
+        from raven.rpc.question_broker import QuestionBroker
+
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+        asked = asyncio.Event()
+
+        async def send_frame(frame: dict[str, Any]) -> None:
+            asked.set()
+
+        broker = QuestionBroker(send_frame)
+
+        async def approving(nodes: list[dict[str, Any]], **kwargs: Any) -> str:
+            if kwargs.get("confirm"):
+                waiting = asyncio.create_task(
+                    broker.await_question("web:stint", prompt="Run it?", choices=["Run it", "Not now"])
+                )
+                await asyncio.wait_for(asked.wait(), 1.0)
+                broker.reply("web:stint", "Run it")
+                await waiting
+            raise RoundBudgetSpentError("the hourly sub-agent dispatch budget is spent")
+
+        tool.run_round = approving  # type: ignore[method-assign]
+        receipt = await driver.start(spec)
+        assert receipt.startswith("Paused"), receipt
+        [paused] = StintStore(tool.stints_root("web:stint")).list()
+
+        async def record_round(nodes: list[dict[str, Any]], **kwargs: Any) -> str:
+            tool.handed.append(kwargs)
+            return "DAG run run-1 started in the background (2 nodes)."
+
+        tool.run_round = record_round  # type: ignore[method-assign]
+        second = await driver.resume(paused.stint_id, "web:stint")
+
+        assert second.startswith("DAG run"), second
+        assert tool.handed[0]["confirm"] is False, "the approved round was asked a second time"
+
     async def test_a_round_no_role_finished_pauses_the_stint_instead_of_costing_a_round(self, tmp_path: Path) -> None:
         """Every node failed, so the round left nothing to build on, and the
         next would hit the same fault. Counted, a stint ran three rounds in two

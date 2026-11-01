@@ -1125,11 +1125,13 @@ class StintDriver:
             previous = record.round(index)
             attempt = (previous.attempt if previous is not None else 0) + 1
             satisfied = await self._completed_of(record, spec, index, previous)
-        # A first round that never opened was never approved. `resume` asks
-        # nobody for a round that was approved, but this one still has to be
-        # put to the person before it runs. Claimed here as `start` does: the
-        # question can stand for the broker's whole budget.
-        confirm = spec.confirm if not _first_round_opened(record) else False
+        # A first round that never opened was never approved -- unless a budget
+        # pause turned it away after the person had said yes; `_submit` marks
+        # that. `resume` asks nobody for a round that was approved, but one
+        # still unapproved has to be put to the person before it runs. Claimed
+        # here as `start` does: the question can stand for the broker's whole
+        # budget.
+        confirm = spec.confirm if not (_first_round_opened(record) or record.first_round_approved) else False
         record.status = RUNNING
         record.claim()
         store.write(record)
@@ -1238,6 +1240,14 @@ class StintDriver:
                 **_own_servers(spec, record),
             )
         except RoundBudgetSpentError as spent:
+            # The charge runs after the confirmation, so a budget pause on the
+            # first round is only reached once the question was answered yes.
+            # Record that: the round has no run id for `_first_round_opened` to
+            # read, and without this a later `resume` asks again -- and can close
+            # "not approved" a round the person already approved when they
+            # cannot answer a second time.
+            if confirm and index == 1:
+                record.first_round_approved = True
             return await self._pause_on_budget(record, store, index, spent.refusal)
         except RoundNotApprovedError:
             return _NOT_APPROVED

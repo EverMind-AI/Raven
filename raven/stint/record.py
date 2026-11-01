@@ -296,6 +296,17 @@ class StintRecord:
     stop_reason: str = ""
     origin: dict[str, Any] = field(default_factory=dict)
     rounds: list[RoundRecord] = field(default_factory=list)
+    first_round_approved: bool = False
+    """A first round that never opened was approved before the budget refused it.
+
+    The charge runs after the confirmation, so a budget pause on round one is
+    only reached once the question was answered yes -- but the round has no run
+    id for ``_first_round_opened`` to read. Without this, ``resume`` asks again
+    for a round the person already approved, and a second answer that cannot be
+    given closes it "not approved". Written only by the driver, only for round
+    one, and only after the question was answered; a record written before the
+    field reads as not approved and is asked again.
+    """
     questions: list[dict[str, Any]] = field(default_factory=list)
     handbacks: dict[str, int] = field(default_factory=dict)
     stage_base: str = ""
