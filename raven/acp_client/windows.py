@@ -29,6 +29,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from typing import Any
 
 _KILL_ON_JOB_CLOSE = 0x2000
@@ -44,8 +45,22 @@ HANDOFF_KEY = "RAVEN_ACP_HANDOFF_KEY"
 _HANDSHAKE_SLOTS = 64
 _REQUEST_TIMEOUT_S = 30.0
 """How long a connection that passed the key handshake may take to send its request."""
+_RELAY_TIMEOUT_S = 60.0
+"""How long the host lets the relay process run before answering with an error."""
 _MAX_MESSAGE = 1 << 20
 """The hand-off request is small; a larger message is refused before it is decoded."""
+_ACCEPT_FAILURE_LIMIT = 5
+"""Consecutive accept failures after which the accept loop gives up for a rebuild."""
+_ACCEPT_BACKOFF_S = 0.05
+
+_PIPE_SDDL = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;OW)"
+"""The hand-off pipe grants SYSTEM, Administrators, and its owner (the host user).
+
+The default named-pipe descriptor also grants read access to Everyone and
+Anonymous (CreateNamedPipeW, lpSecurityAttributes NULL), which would let any
+local user hold handshake slots without the key. OW is the owner-rights SID:
+the host's user.
+"""
 
 _LAUNCHER = """\
 import ctypes, os, subprocess, sys
@@ -147,6 +162,92 @@ class JobObject:
             self._handle = None
 
 
+_PipeApi = tuple[Any, Any, Any, Any, Any, Any]
+_PIPE_API: _PipeApi | None = None
+
+
+def _pipe_api() -> _PipeApi:  # pragma: no cover - native Windows bindings
+    """The Win32 entry points and security descriptor the hand-off pipe is made with."""
+    global _PIPE_API
+    if _PIPE_API is not None:
+        return _PIPE_API
+
+    import _winapi
+    from ctypes import wintypes
+
+    class _SecurityAttributes(ctypes.Structure):
+        _fields_ = [
+            ("nLength", wintypes.DWORD),
+            ("lpSecurityDescriptor", ctypes.c_void_p),
+            ("bInheritHandle", wintypes.BOOL),
+        ]
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(wintypes.ULONG),
+    ]
+    advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = wintypes.BOOL
+    kernel32.CreateNamedPipeW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(_SecurityAttributes),
+    ]
+    kernel32.CreateNamedPipeW.restype = wintypes.HANDLE
+
+    descriptor = ctypes.c_void_p()
+    size = wintypes.ULONG()
+    if not advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        _PIPE_SDDL, 1, ctypes.byref(descriptor), ctypes.byref(size)
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
+    security = _SecurityAttributes(ctypes.sizeof(_SecurityAttributes), descriptor, False)
+    _PIPE_API = (advapi32, kernel32, security, _winapi, wintypes, descriptor)
+    return _PIPE_API
+
+
+def _create_pipe_handle(address: str, first: bool) -> int:  # pragma: no cover - native Windows bindings
+    """One named-pipe instance with the hand-off DACL."""
+    _, kernel32, security, _winapi, wintypes, _ = _pipe_api()
+    from multiprocessing.connection import BUFSIZE  # type: ignore
+
+    flags = _winapi.PIPE_ACCESS_DUPLEX | _winapi.FILE_FLAG_OVERLAPPED
+    if first:
+        flags |= _winapi.FILE_FLAG_FIRST_PIPE_INSTANCE
+    handle = kernel32.CreateNamedPipeW(
+        address,
+        flags,
+        _winapi.PIPE_TYPE_MESSAGE | _winapi.PIPE_READMODE_MESSAGE | _winapi.PIPE_WAIT,
+        _winapi.PIPE_UNLIMITED_INSTANCES,
+        BUFSIZE,
+        BUFSIZE,
+        _winapi.NMPWAIT_WAIT_FOREVER,
+        ctypes.byref(security),
+    )
+    if not handle or handle == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    return int(handle)
+
+
+def _pipe_listener(address: str) -> Any:
+    """A ``PipeListener`` whose instances use the hand-off DACL."""
+    from multiprocessing.connection import PipeListener  # type: ignore
+
+    class _PrivatePipeListener(PipeListener):  # type: ignore[misc]
+        def _new_handle(self, first: bool = False) -> int:  # pragma: no cover - native Windows bindings
+            return _create_pipe_handle(self._address, first)
+
+    return _PrivatePipeListener(address)
+
+
 class _HandoffServer:
     """Starts handed-off work outside this host's ACP job, on an agent's request.
 
@@ -162,18 +263,16 @@ class _HandoffServer:
 
     A request is ``{"argv": [...], "cwd": str, "env": {name: value}}``. The
     answer carries the relay's ``returncode``, ``stdout`` and ``stderr``, or
-    ``error`` when it could not be started. The pipe's default security
-    descriptor is the launching user's, and the key keeps another same-session
-    process from using a name it guessed.
+    ``error`` when it could not be started. The pipe's DACL grants full control
+    to SYSTEM, Administrators, and the launching user (its owner), so another
+    local user cannot connect even before the key is checked; the key keeps
+    another process of the same user from using a name it guessed.
     """
 
     def __init__(self) -> None:
-        # The typeshed omits PipeListener; it is the raw pipe the Listener wraps.
-        from multiprocessing.connection import PipeListener  # type: ignore
-
         self.address = f"\\\\.\\pipe\\raven-acp-handoff-{os.getpid()}-{secrets.token_hex(8)}"
         self._authkey = secrets.token_bytes(32)
-        self._listener = PipeListener(self.address)
+        self._listener = _pipe_listener(self.address)
         self._closed = threading.Event()
         self._handshake_slots = threading.BoundedSemaphore(_HANDSHAKE_SLOTS)
         self._accept_thread = threading.Thread(target=self._accept, name="raven-acp-handoff", daemon=True)
@@ -188,26 +287,48 @@ class _HandoffServer:
         return not self._closed.is_set() and self._accept_thread.is_alive()
 
     def close(self) -> None:
-        """Stop accepting. A client already talking closes on its own."""
+        """Stop accepting: wake a blocked accept so it can close unserved."""
         self._closed.set()
         try:
             self._listener.close()
         except Exception:
             pass
 
+        def wake() -> None:
+            try:
+                from multiprocessing.connection import PipeClient  # type: ignore
+
+                PipeClient(self.address).close()  # pragma: no cover - Windows-only wake
+            except Exception:
+                pass
+
+        try:
+            threading.Thread(target=wake, name="raven-acp-handoff-wake", daemon=True).start()
+        except Exception:
+            pass
+
     def _accept(self) -> None:
+        failures = 0
         while not self._closed.is_set():
             try:
                 connection = self._listener.accept()
-            except (OSError, EOFError):
-                if self._closed.is_set():
-                    return
-                # A client that connected and went away is not a dead listener.
-                continue
             except Exception:
                 if self._closed.is_set():
                     return
+                # A client that connected and went away is not a dead listener;
+                # a listener that keeps failing is, and must not spin.
+                failures += 1
+                if failures >= _ACCEPT_FAILURE_LIMIT:
+                    return
+                time.sleep(min(_ACCEPT_BACKOFF_S * failures, 0.5))
                 continue
+            failures = 0
+            if self._closed.is_set():
+                try:
+                    connection.close()
+                except Exception:
+                    pass
+                return
             if not self._handshake_slots.acquire(blocking=False):
                 connection.close()
                 continue
@@ -245,8 +366,6 @@ class _HandoffServer:
             if not connection.poll(_REQUEST_TIMEOUT_S):
                 raise TimeoutError("the hand-off request did not arrive")
             raw = connection.recv_bytes(_MAX_MESSAGE)
-            if raw is None:
-                raise ValueError("the hand-off request is too large")
             request = json.loads(raw.decode("utf-8"))
             if not isinstance(request, dict):
                 raise ValueError("the hand-off request must be an object")
@@ -264,7 +383,7 @@ class _HandoffServer:
                 text=True,
                 # Windows-only, and this method is unit-tested on POSIX too.
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                timeout=60,
+                timeout=_RELAY_TIMEOUT_S,
                 close_fds=True,
             )
             connection.send_bytes(

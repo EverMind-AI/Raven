@@ -430,6 +430,7 @@ def test_the_handoff_server_runs_the_relay_with_the_requested_environment(monkey
     assert run.call_args.args[0] == ["py", "-c", "relay"]
     assert run.call_args.kwargs["cwd"] == "job"
     assert run.call_args.kwargs["env"] == {"KEEP": "1"}
+    assert run.call_args.kwargs["timeout"] == windows._RELAY_TIMEOUT_S
     assert json.loads(sent[0].decode("utf-8")) == {"returncode": 0, "stdout": "4242\n", "stderr": ""}
     connection.recv.assert_not_called()
     connection.send.assert_not_called()
@@ -478,13 +479,15 @@ def test_the_handoff_server_does_not_inherit_the_host_environment_for_an_empty_r
     assert run.call_args.kwargs["env"] == {}
 
 
-def test_the_handoff_server_rejects_an_oversized_request():
+def test_an_oversized_request_is_refused_by_the_stdlib_length_check():
     import json
 
     sent = []
     connection = SimpleNamespace(
         poll=Mock(return_value=True),
-        recv_bytes=Mock(return_value=None),
+        # Connection.recv_bytes(maxlength) raises this when the message is too
+        # large; it does not return None (CPython _bad_message_length).
+        recv_bytes=Mock(side_effect=OSError("bad message length")),
         send_bytes=Mock(side_effect=sent.append),
         recv=Mock(side_effect=AssertionError("the request must not be unpickled")),
         send=Mock(side_effect=AssertionError("the answer must not be pickled")),
@@ -492,7 +495,7 @@ def test_the_handoff_server_rejects_an_oversized_request():
     )
     server = object.__new__(windows._HandoffServer)
     server._serve(connection)
-    assert "too large" in json.loads(sent[0].decode("utf-8"))["error"]
+    assert "bad message length" in json.loads(sent[0].decode("utf-8"))["error"]
 
 
 def test_a_connection_that_cannot_be_answered_is_closed_quietly():
@@ -745,3 +748,108 @@ async def test_launch_gives_the_agent_the_hosts_handoff_channel(launcher, monkey
     monkeypatch.setattr(windows, "_handoff", lambda: SimpleNamespace(env=channel))
     await windows.launch(launcher.argv, env={"KEEP": "1"})
     assert launcher.spawn.call_args.kwargs["env"] == {"KEEP": "1", **channel}
+
+
+def _pipe_dacl_sddl(handle):
+    from ctypes import wintypes
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi32.GetSecurityInfo.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    advapi32.GetSecurityInfo.restype = wintypes.DWORD
+    advapi32.ConvertSecurityDescriptorToStringSecurityDescriptorW.argtypes = [
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.LPWSTR),
+        ctypes.POINTER(wintypes.ULONG),
+    ]
+    advapi32.ConvertSecurityDescriptorToStringSecurityDescriptorW.restype = wintypes.BOOL
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel32.LocalFree.restype = ctypes.c_void_p
+
+    descriptor = ctypes.c_void_p()
+    dacl = ctypes.c_void_p()
+    result = advapi32.GetSecurityInfo(
+        wintypes.HANDLE(handle),
+        6,  # SE_KERNEL_OBJECT
+        0x00000004,  # DACL_SECURITY_INFORMATION
+        None,
+        None,
+        ctypes.byref(dacl),
+        None,
+        ctypes.byref(descriptor),
+    )
+    assert result == 0, ctypes.WinError(result)
+    text = wintypes.LPWSTR()
+    length = wintypes.ULONG()
+    try:
+        assert advapi32.ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            descriptor, 1, 0x00000004, ctypes.byref(text), ctypes.byref(length)
+        )
+        return text.value
+    finally:
+        kernel32.LocalFree(descriptor)
+        if text:
+            kernel32.LocalFree(text)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="named pipes are Windows'")
+def test_the_handoff_pipe_is_not_readable_by_other_users():
+    server = windows._HandoffServer()
+    try:
+        time.sleep(0.2)
+        sddl = _pipe_dacl_sddl(server._listener._handle_queue[0])
+        assert ";;;WD)" not in sddl, sddl
+        assert ";;;AN)" not in sddl, sddl
+        assert ";;;SY)" in sddl, sddl
+        assert ";;;OW)" in sddl, sddl
+    finally:
+        server.close()
+
+
+def test_the_handoff_server_stops_after_repeated_accept_errors(monkeypatch):
+    import threading
+
+    calls = []
+    sleeps = []
+
+    def accept():
+        calls.append(1)
+        if len(calls) >= 50:
+            server._closed.set()
+        raise OSError("listener broken")
+
+    server = object.__new__(windows._HandoffServer)
+    server._listener = SimpleNamespace(accept=accept)
+    server._closed = threading.Event()
+    server._handshake_slots = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(windows.time, "sleep", sleeps.append)
+    assert server._accept() is None
+    assert len(calls) == windows._ACCEPT_FAILURE_LIMIT
+    assert len(sleeps) == windows._ACCEPT_FAILURE_LIMIT - 1
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="named pipes are Windows'")
+def test_a_closed_handoff_server_serves_nothing_more():
+    from multiprocessing.connection import PipeClient
+
+    server = windows._HandoffServer()
+    try:
+        time.sleep(0.3)
+        server.close()
+        server._accept_thread.join(3)
+        assert not server._accept_thread.is_alive()
+        with pytest.raises(OSError):
+            PipeClient(server.address)
+    finally:
+        server.close()
