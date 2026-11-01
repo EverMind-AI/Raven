@@ -3059,6 +3059,82 @@ class TestResume:
         )
         assert driver.holding() is False
 
+    async def test_a_stopped_resume_that_asked_nobody_leaves_the_stint_retryable(self, tmp_path: Path) -> None:
+        """The pre-write `running` keeps a second caller off the preflight, but
+        it must not outlive a stop. Left running with a fresh stamp under a
+        holder another host cannot disprove, the next resume is refused for the
+        whole stale window although nothing advances the stint."""
+        from raven.stint.record import StintRecord
+
+        tool = _FakeTool(tmp_path / "stints")
+        driver = self._driver(tmp_path, tool)
+        spec = _spec(confirm=False, roles=[{"as": "planner", "name": "echo", "promptTemplate": "plan"}])
+        store = StintStore(tool.stints_root("web:stint"))
+        record = StintRecord(
+            stint_id="stint-x",
+            playbook=spec.name,
+            spec=spec.model_dump(by_alias=True, exclude_none=True),
+            workdir=str(tmp_path),
+            project=str(tmp_path),
+            round_index=1,
+            status="interrupted",
+            origin=tool.turn_origin(),
+        )
+        record.open_round(1, "run-old")
+        record.holder_pid, record.holder_host = 4242, "the-old-host"
+        store.write(record)
+
+        started = asyncio.Event()
+
+        async def blocking(nodes: list[dict[str, Any]], **kwargs: Any) -> str:
+            started.set()
+            await asyncio.sleep(3600)
+
+        tool.run_round = blocking  # type: ignore[method-assign]
+        running = asyncio.create_task(driver.resume("stint-x", "web:stint"))
+        await asyncio.wait_for(started.wait(), 1.0)
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+
+        assert store.read("stint-x").status == "interrupted", "a stopped preflight left the record running"
+
+        tool.run_round = type(tool).run_round.__get__(tool)  # type: ignore[method-assign]
+        receipt = await driver.resume("stint-x", "web:stint")
+
+        assert receipt.startswith("DAG run"), receipt
+        assert tool.submitted, "the retry was refused although nothing advanced the stint"
+
+    async def test_a_stopped_resume_of_an_abandoned_stint_does_not_leave_it_looking_held(self, tmp_path: Path) -> None:
+        """A resume of a stale `running` record writes `running` again with a
+        fresh stamp before it preflights. Stopped there, the restored record has
+        to be retryable -- putting the old status back would make it look held
+        by a live process, which is exactly the signal the stamp exists for."""
+        tool = _FakeTool(tmp_path / "stints")
+        store = self._interrupted(tmp_path, tool)
+        driver = self._driver(tmp_path, tool)
+        started = asyncio.Event()
+
+        async def blocking(nodes: list[dict[str, Any]], **kwargs: Any) -> str:
+            started.set()
+            await asyncio.sleep(3600)
+
+        tool.run_round = blocking  # type: ignore[method-assign]
+        running = asyncio.create_task(driver.resume("stint-x", "web:stint"))
+        await asyncio.wait_for(started.wait(), 1.0)
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+
+        after = store.read("stint-x")
+        assert after.status == "interrupted", "a stopped resume left an abandoned record looking held"
+        assert driver.holding() is False
+
+        tool.run_round = type(tool).run_round.__get__(tool)  # type: ignore[method-assign]
+        receipt = await driver.resume("stint-x", "web:stint")
+
+        assert receipt.startswith("DAG run"), receipt
+
 
 class TestTheWordThatEndsItEarly:
     """`stop.until` was read by the machine and said to nobody."""

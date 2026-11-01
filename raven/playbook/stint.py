@@ -586,6 +586,50 @@ class StintDriver:
         except Exception as exc:  # noqa: BLE001 - the exit must not be replaced by a failed cleanup
             logger.warning("stint {} could not be closed after its first round: {}", record.stint_id, exc)
 
+    def _restore_unopened(
+        self,
+        record: StintRecord,
+        store: StintStore,
+        *,
+        index: int,
+        status: str,
+        round_index: int,
+        opened_before: str,
+    ) -> None:
+        """Put a resume's record back where it was when its round never opened.
+
+        A resume that asks nobody writes ``running`` before ``_submit`` so a
+        second caller cannot take the same round up while it preflights.
+        Stopped there, the record must not keep saying it is running: it would
+        refuse the next resume for the whole stale window although nothing
+        advances the stint. ``status`` is what the record said before, except
+        that a stale ``running`` becomes ``interrupted`` -- that claim was
+        already abandoned, and writing ``running`` back with this write's fresh
+        stamp would make it look held by a live process.
+
+        Re-read under the write lock, and only a record still on this attempt is
+        put back: one whose round opened a new run, or that another process has
+        since moved or claimed, is left alone. A cleanup that cannot read or
+        write is logged rather than raised; the caller is already leaving.
+        """
+        try:
+            with write_transaction(store.path_for(record.stint_id)):
+                fresh = store.read(record.stint_id)
+                if fresh is None or fresh.status != RUNNING:
+                    return
+                if _round_opened_since(fresh, index, opened_before) or _round_opened_since(
+                    record, index, opened_before
+                ):
+                    return
+                other_host = fresh.holder_host and record.holder_host and fresh.holder_host != record.holder_host
+                if fresh.holder_pid not in (0, record.holder_pid) or other_host:
+                    return
+                fresh.status = status
+                fresh.round_index = round_index
+                store.write(fresh)
+        except Exception as exc:  # noqa: BLE001 - the exit must not be replaced by a failed cleanup
+            logger.warning("stint {} could not be restored after a stopped resume: {}", record.stint_id, exc)
+
     async def _report(self, spec: PlaybookSpec, record: StintRecord, finished: Any) -> None:
         """Say a round is done, for a person who cannot otherwise tell.
 
@@ -1106,6 +1150,10 @@ class StintDriver:
                 f"nothing to take up. Stop it first if you want it to start that round over."
             )
         spec = PlaybookSpec.model_validate(record.spec)
+        # What a stop during the preflight puts back. A stale `running` is an
+        # abandoned claim, so it is restored as interrupted rather than written
+        # back as running with this write's fresh stamp.
+        before_status, before_round_index = record.status, record.round_index
         if _round_done(record):
             # A pause lands *between* rounds, not inside one: the round in flight
             # finishes and is recorded, and only the next is stopped from
@@ -1134,6 +1182,10 @@ class StintDriver:
         # alive while `_submit` preflights, and `_submit` claims once the round
         # opens.
         confirm = spec.confirm if not (_first_round_opened(record) or record.first_round_approved) else False
+        # The run id this attempt started from: a round that carries a new one
+        # after `_submit` was dispatched even when its record could not be
+        # written, and is not a resume that never opened one.
+        opened_before = _round_run_id(record, index)
         record.status = RUNNING
         if confirm:
             record.claim()
@@ -1151,6 +1203,19 @@ class StintDriver:
         except BaseException as exc:
             if confirm:
                 self._close_first_round(record, store, reason=self._first_round_stop_reason(spec, exc), beat=beat)
+            else:
+                # A resume that asked nobody wrote `running` only to keep a
+                # second caller off its preflight. Stopped there, the record
+                # goes back to what this resume found: a pause stays a pause,
+                # and a stale `running` becomes interrupted.
+                self._restore_unopened(
+                    record,
+                    store,
+                    index=index,
+                    status=PAUSED if before_status == PAUSED else INTERRUPTED,
+                    round_index=before_round_index,
+                    opened_before=opened_before,
+                )
             raise
         if receipt.startswith("Error"):
             if confirm and receipt == _NOT_APPROVED:
@@ -1162,8 +1227,14 @@ class StintDriver:
                 # as a resume that never asked already did; only "not approved"
                 # closes it.
                 self._stop_this_beat(record.stint_id, beat)
-                record.status = INTERRUPTED
-                store.write(record)
+                self._restore_unopened(
+                    record,
+                    store,
+                    index=index,
+                    status=INTERRUPTED,
+                    round_index=record.round_index,
+                    opened_before=opened_before,
+                )
         return receipt
 
     async def _completed_of(self, record: StintRecord, spec: PlaybookSpec, index: int, previous: Any) -> dict[str, str]:
@@ -1689,15 +1760,30 @@ def _about_this_project(layout: Layout | None) -> list[str]:
     return lines
 
 
-def _first_round_opened(record: StintRecord) -> bool:
-    """Round one carries a run id, so it was put to the person and started.
+def _round_run_id(record: StintRecord, index: int) -> str:
+    entry = record.round(index)
+    return entry.run_id if entry is not None else ""
+
+
+def _round_opened(record: StintRecord, index: int) -> bool:
+    """This round carries a run id, so it was put to the person and started.
 
     A round record without one is an attempt that never opened -- a refusal,
     a crash, or a record from before the run id was written. It is not an
-    approval, so a first round in that state still has to ask.
+    approval, so a round in that state still has to ask.
     """
-    entry = record.round(1)
-    return entry is not None and bool(entry.run_id)
+    return bool(_round_run_id(record, index))
+
+
+def _round_opened_since(record: StintRecord, index: int, before: str) -> bool:
+    """This attempt opened the round: its run id is new, not one left by an earlier one."""
+    run_id = _round_run_id(record, index)
+    return bool(run_id) and run_id != before
+
+
+def _first_round_opened(record: StintRecord) -> bool:
+    """Round one carries a run id, so it was put to the person and started."""
+    return _round_opened(record, 1)
 
 
 def _round_done(record: StintRecord) -> bool:
