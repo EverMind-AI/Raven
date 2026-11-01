@@ -6,9 +6,11 @@
  * at a time -- and the first pass plays all of it: in its own time when that is
  * no longer than REPLAY_MS, squeezed into exactly REPLAY_MS otherwise. The pass
  * is measured again every frame, so history that lands mid-way stretches what
- * it covers and never how long it takes. What starts after the press is new,
- * and is played after the first pass at CATCH_UP_RATE, from where that work
- * starts, until the playhead reaches the present.
+ * it covers. It lengthens the pass only when what was on the page at the press
+ * came to less than REPLAY_MS, and then no further than REPLAY_MS: the
+ * countdown rises once, to what the whole history earns. What starts after
+ * the press is new, and is played after the first pass at CATCH_UP_RATE, from
+ * where that work starts, until the playhead reaches the present.
  *
  * Lengths are taken on the axis's projected positions rather than real time,
  * so an idle stretch the axis folds is crossed at its folded width: a session

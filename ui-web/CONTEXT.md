@@ -283,11 +283,17 @@ window and a picked stretch are let go: the replay is of the whole session.
 The press divides the session: what had started by then is history, however
 late the index hands it over, and the first pass plays all of it on the folded
 axis -- in its own time when that is no longer than fifteen seconds, squeezed
-into fifteen seconds otherwise (`REPLAY_MS`), the button counting it down. What
-starts after the press, or runs on past it, is played next at twice real time
+into fifteen seconds otherwise (`REPLAY_MS`), the button counting it down; if
+the rest of the history lands after a press that found less than that, the
+pass grows towards fifteen seconds and the countdown rises once. What starts
+after the press, or runs on past it, is played next at twice real time
 (`CATCH_UP_RATE`) until the playhead reaches the present. Pressing again,
-another conversation or going back to the chat ends it. Meanwhile each header
-figure keeps the width of the whole session's, so nothing in the header moves.
+opening a step's details, another conversation or going back to the chat ends
+it, and a details pane left open closes as it starts: the pane shows a step as
+it was recorded, not as it stood at the playhead. Meanwhile each header figure
+keeps the room the whole session's takes, the duration the room of the widest
+spelling its count passes through, so nothing in the header moves while it
+plays; the session's own figures growing still do, as without a replay.
 _Avoid_: "trajectory replay" for it -- that is the Runtime's Trajectory Replay
 (`raven trajectory replay`), a re-run of the harness against a recording; this
 re-runs nothing and only redraws the entries the list store holds.
