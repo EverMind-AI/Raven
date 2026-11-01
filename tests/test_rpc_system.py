@@ -357,7 +357,7 @@ class TestUpgradingFromAGatewayHostedPage:
             SERVE.disarm()
 
         assert excinfo.value.data["reason"] == "editable", excinfo.value.data
-        assert "git pull" in excinfo.value.data["command"].splitlines()
+        assert "git pull" in excinfo.value.data["command"]
 
     async def _probe_answers(self, monkeypatch, distribution, reason, detail=None):
         """Drive system_upgrade with the real editable probe: only the metadata
