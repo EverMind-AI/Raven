@@ -1423,3 +1423,284 @@ describe('the dispatch line', () => {
     expect(document.querySelector('.trajectory-wf-dispatch path')).toBeNull()
   })
 })
+
+describe('the replay', () => {
+  /* The playhead moves on animation frames by the wall clock, both faked:
+     the page's clock reads an hour after the sessions below start. The
+     trajectory is the view on screen, as it is wherever its button is seen. */
+  beforeEach(async () => {
+    vi.useFakeTimers({ now: Date.parse('2026-10-28T11:00:00.000Z') })
+    await store.refreshState()
+    store.setView('trajectory')
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  /** A step from `from` to `to` seconds into the session. */
+  const ran = (id: string, from: number, to: number, over: Partial<TrajectoryEntry> = {}): TrajectoryEntry =>
+    E(id, from, { operation_end: new Date(Date.parse('2026-10-28T10:00:00.000Z') + to * 1000).toISOString(), ...over })
+  const button = (): HTMLButtonElement => document.querySelector<HTMLButtonElement>('button.trajectory-wf-replay')!
+  const play = (): void => { act(() => { fireEvent.click(button()) }) }
+  /* A quarter second per render: the page reads its axis and its clock off
+     its last render, which a browser makes between any two frames. */
+  const wait = (ms: number): void => {
+    for (let left = ms; left > 0; left -= 250) act(() => { vi.advanceTimersByTime(Math.min(250, left)) })
+  }
+  const playing = (): boolean => button().textContent!.includes('gui.trajectory.replay.stop')
+  const spans = (): string[] => [...document.querySelectorAll<HTMLElement>('[data-row="span"]')].map((row) => row.dataset.entry!)
+  const openTurn = (): void => { act(() => { fireEvent.click(document.querySelector('[data-row="turn"]')!) }) }
+  const grow = (entry: TrajectoryEntry): void => {
+    act(() => {
+      store.applyChanges({
+        epoch: 'e1', from_revision: 100, to_revision: 101, upserts: [entry], removed: [], has_more: false,
+        reset_required: false, index_state: READY,
+      })
+    })
+  }
+
+  it('leads the header’s tools, ahead of the window presets', async () => {
+    await draw([ran('a', 0, 2)])
+    expect(document.querySelector('.trajectory-wf-tools')!.firstElementChild).toBe(button())
+    expect(button().textContent).toBe('gui.trajectory.replay.start')
+    expect(button().disabled).toBe(false)
+  })
+
+  it('has nothing to replay in a session with no steps', async () => {
+    await draw([])
+    expect(button().disabled).toBe(true)
+  })
+
+  it('draws the session again from its first instant, each step from when it started', async () => {
+    await draw([ran('a', 0, 2), ran('b', 4, 6), ran('c', 8, 10)])
+    openTurn()
+    expect(spans()).toEqual(['a', 'b', 'c'])
+    play()
+    expect(playing()).toBe(true)
+    expect(spans()).toEqual(['a'])
+    wait(5_000)
+    expect(spans()).toEqual(['a', 'b'])
+    wait(5_100)
+    expect(playing()).toBe(false)
+    expect(spans()).toEqual(['a', 'b', 'c'])
+  })
+
+  it('cuts a step under way at the playhead: its bar ends there, and it reads as long as it has run', async () => {
+    await draw([ran('a', 0, 2), ran('b', 4, 10)])
+    openTurn()
+    play()
+    wait(6_500)
+    const row = document.querySelector<HTMLElement>('[data-entry="b"]')!
+    /* Two and a half of the axis's 10.2 seconds. */
+    const width = parseFloat(row.querySelector<HTMLElement>('.trajectory-wf-spanbar')!.style.width)
+    expect(width).toBeGreaterThan(24)
+    expect(width).toBeLessThan(25)
+    expect(row.querySelector('.trajectory-wf-busy')!.textContent).toBe('2s')
+  })
+
+  it('plays a session shorter than fifteen seconds in its own time', async () => {
+    await draw([ran('a', 0, 2), ran('b', 8, 10)])
+    play()
+    expect(button().textContent).toContain('0:10')
+    wait(9_500)
+    expect(playing()).toBe(true)
+    wait(700)
+    expect(playing()).toBe(false)
+  })
+
+  it('keeps to fifteen seconds however long the session ran', async () => {
+    await draw([ran('long', 0, 3600), ran('mid', 1800, 1900)])
+    play()
+    wait(14_000)
+    expect(playing()).toBe(true)
+    wait(1_100)
+    expect(playing()).toBe(false)
+  })
+
+  it('counts down the time the replay has left, rather than a rate a folded axis would belie', async () => {
+    await draw([ran('long', 0, 3600)])
+    play()
+    expect(button().textContent).toBe('gui.trajectory.replay.stop0:15')
+    wait(5_500)
+    expect(button().textContent).toContain('0:10')
+    wait(5_000)
+    expect(button().textContent).toContain('0:05')
+  })
+
+  it('divides at the moment of the press, not at the page’s last clock tick', async () => {
+    /* A finished session leaves the page's clock where it was when the page
+       opened. A minute later a step that ran half a minute before the press
+       lands just after it: it is history, so there is no catch-up after it. */
+    await draw([ran('a', 0, 30)])
+    wait(60_000)
+    play()
+    wait(500)
+    grow(ran('b', 3630, 3640))
+    wait(14_800)
+    expect(playing()).toBe(false)
+  })
+
+  it('keeps to fifteen seconds when the history is still landing as it starts', async () => {
+    /* A cold index hands the page a session a page at a time. Here the first
+       two minutes are up when Replay is pressed, and the rest of the hour lands
+       a second later: it started before the press, so it is history, and the
+       first pass takes it in without running past fifteen seconds. */
+    await draw([ran('a', 0, 120)])
+    play()
+    wait(1_000)
+    grow(ran('b', 3000, 3600))
+    wait(13_500)
+    expect(playing()).toBe(true)
+    expect(button().textContent).not.toContain('2\u00d7')
+    wait(800)
+    expect(playing()).toBe(false)
+  })
+
+  it('plays what landed during the replay at twice real time once the first pass is through', async () => {
+    /* Thirty seconds of work, so the first pass runs at 2x for fifteen. Five
+       seconds in, a three-second step lands an hour after the session's
+       end: the idle hour is skipped, and the step takes a second and a half. */
+    await draw([ran('a', 0, 30)])
+    openTurn()
+    play()
+    wait(5_000)
+    grow(ran('late', 3601, 3604))
+    wait(9_500)
+    expect(playing()).toBe(true)
+    expect(spans()).toEqual(['a'])
+    wait(1_000)
+    expect(spans()).toEqual(['a', 'late'])
+    expect(button().textContent).toContain('2\u00d7')
+    wait(800)
+    expect(playing()).toBe(true)
+    wait(500)
+    expect(playing()).toBe(false)
+  })
+
+  it('carries a live session on at twice real time until it reaches the present', async () => {
+    /* Twenty seconds of a session still running when the replay starts: the
+       first pass takes fifteen, by when the session has run fifteen more;
+       closing that at 2x takes about fifteen again. */
+    await draw([ran('a', 3580, 3590), ran('live', 3590, 3599, { operation_status: 'running' })])
+    play()
+    wait(25_000)
+    expect(playing()).toBe(true)
+    expect(button().textContent).toContain('2\u00d7')
+    wait(6_000)
+    expect(playing()).toBe(false)
+  })
+
+  it('stops on a second press, the whole session back', async () => {
+    await draw([ran('a', 0, 2), ran('b', 8, 10)])
+    openTurn()
+    play()
+    expect(spans()).toEqual(['a'])
+    play()
+    expect(playing()).toBe(false)
+    expect(spans()).toEqual(['a', 'b'])
+  })
+
+  it('counts a failure only once it has happened', async () => {
+    await draw([ran('fine', 0, 2), ran('bad', 4, 10, { operation_status: 'error', failure_entry: true })])
+    expect(document.querySelector('.trajectory-wf-statv[data-bad]')).not.toBeNull()
+    play()
+    wait(6_000)
+    expect(document.querySelector('.trajectory-wf-statv[data-bad]')).toBeNull()
+    wait(4_500)
+    expect(document.querySelector('.trajectory-wf-statv[data-bad]')).not.toBeNull()
+  })
+
+  it('holds each figure in the room the whole session’s takes, so a count gaining a digit moves nothing', async () => {
+    /* happy-dom lays nothing out, so the mechanism is what is pinned: each
+       figure and second line sits over a hidden copy of the whole session's,
+       which is what sets its cell's width. A real browser measures the result. */
+    await draw([ran('fine', 0, 2), ran('bad', 4, 10, { operation_status: 'error', failure_entry: true })])
+    const cells = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.trajectory-wf-stat')]
+    const subOf = (cell: HTMLElement): Element | null => cell.querySelector('.trajectory-wf-statsub:not(.trajectory-wf-jump)')
+    const values = cells().map((cell) => cell.querySelector('.trajectory-wf-statv')!.textContent)
+    const subs = cells().map((cell) => subOf(cell)?.textContent ?? null)
+    play()
+    expect(cells().map((cell) => cell.querySelector('.trajectory-wf-statv [aria-hidden="true"]')?.textContent)).toEqual(values)
+    expect(cells().map((cell) => subOf(cell)?.querySelector('[aria-hidden="true"]')?.textContent ?? null)).toEqual(subs)
+    /* The failure has not happened yet: its jump is not offered, but its line is kept. */
+    expect(document.querySelector('button.trajectory-wf-jump')).toBeNull()
+    expect(document.querySelector('.trajectory-wf-jumphold')).not.toBeNull()
+    wait(10_500)
+    expect(playing()).toBe(false)
+    expect(document.querySelectorAll('.trajectory-wf-held, .trajectory-wf-jumphold')).toHaveLength(0)
+  })
+
+  it('folds the agents as the whole session has them, so no row jumps when a worker first appears', async () => {
+    await draw([ran('m1', 0, 2), ran('door', 3, 4, { opens_subagent_scope: 'x' }), ran('x1', 5, 9, { subagent_scope: 'x', turn_span_id: 'X1' })])
+    const folds = (): string[] => [...document.querySelectorAll('[data-row="agent"]')].map((row) => row.getAttribute('aria-expanded')!)
+    expect(folds()).toEqual(['false', 'false'])
+    play()
+    expect(folds()).toEqual(['false'])
+    wait(6_000)
+    expect(folds()).toEqual(['false', 'false'])
+  })
+
+  it('fills the activity strip as it goes', async () => {
+    /* A call every ten seconds for fifty-two: six ten-second buckets, played at 52/15. */
+    await draw(Array.from({ length: 6 }, (_, i) => ran(`c${i}`, i * 10, i * 10 + 2)))
+    expect(count('.trajectory-act-bar')).toBe(6)
+    play()
+    expect(count('.trajectory-act-bar')).toBe(1)
+    wait(7_500)
+    expect(count('.trajectory-act-bar')).toBe(3)
+    wait(7_600)
+    expect(count('.trajectory-act-bar')).toBe(6)
+  })
+
+  it('draws a playhead down the ruler and the rows only while it plays', async () => {
+    await draw([ran('a', 0, 10)])
+    expect(count('.trajectory-wf-playhead')).toBe(0)
+    play()
+    wait(5_000)
+    /* Five of the axis's 10.2 seconds, its 2% trailing scale included. */
+    const left = parseFloat(document.querySelector<HTMLElement>('.trajectory-wf-playhead')!.style.left)
+    expect(left).toBeGreaterThan(48)
+    expect(left).toBeLessThan(50)
+    expect(count('.trajectory-ruler-playhead')).toBe(1)
+    wait(5_100)
+    expect(count('.trajectory-wf-playhead')).toBe(0)
+    expect(count('.trajectory-ruler-playhead')).toBe(0)
+  })
+
+  it('replays the whole session: a narrowed window goes back to all of it', async () => {
+    await draw([ran('long', 0, 7200)])
+    act(() => { fireEvent.click([...document.querySelectorAll<HTMLButtonElement>('.trajectory-wf-zoom button')].find((b) => b.textContent === 'gui.trajectory.zoom.1h')!) })
+    expect(document.querySelector('.trajectory-wf-window')!.textContent).toContain('gui.trajectory.window.zoomed')
+    play()
+    expect(document.querySelector('.trajectory-wf-window')!.textContent).toContain('gui.trajectory.window.whole')
+  })
+
+  it('ends with the conversation', async () => {
+    /* Both conversations were last read as trajectories, so the switch keeps
+       the view: only the conversation changes under the replay. */
+    const visit = async (key: string, entries: TrajectoryEntry[]): Promise<void> => {
+      rows = entries
+      await act(async () => {
+        store.sessionChanged(key)
+        store.setView('trajectory')
+        await store.load()
+      })
+    }
+    await draw([ran('a', 0, 10)])
+    await visit('gui:b', [ran('n', 0, 10)])
+    await visit('gui:a', [ran('a', 0, 10)])
+    play()
+    const views: string[] = []
+    const stop = store.subscribe(() => { views.push(store.get().view) })
+    await visit('gui:b', [ran('n', 0, 10)])
+    stop()
+    expect(views.every((view) => view === 'trajectory')).toBe(true)
+    expect(playing()).toBe(false)
+  })
+
+  it('ends when the reader goes back to the conversation, rather than playing out of sight', async () => {
+    await draw([ran('a', 0, 10)])
+    play()
+    act(() => { store.setView('chat') })
+    act(() => { store.setView('trajectory') })
+    expect(playing()).toBe(false)
+  })
+})

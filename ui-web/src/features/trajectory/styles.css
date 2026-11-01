@@ -662,6 +662,15 @@ html[data-theme="dark"] {
   font-weight: 500; cursor: pointer }
 .trajectory-wf-jump:hover { text-decoration: underline }
 .trajectory-wf-jump:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; border-radius: 3px }
+/* While a replay runs, each figure sits over a hidden copy of the whole
+   session's, which sets its cell's width (`Held`): the figure fills that
+   room and is cut short rather than widening it, so no cell moves. The
+   jump to the first failure keeps its line before the failure happens. */
+.trajectory-wf-held { display: inline-grid; max-width: 100% }
+.trajectory-wf-held > span { grid-area: 1 / 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.trajectory-wf-held > span:first-child { width: 0; min-width: 100% }
+.trajectory-wf-held > span:last-child { visibility: hidden }
+.trajectory-wf-jumphold { align-self: flex-start; font-weight: 500; visibility: hidden }
 
 /* The row label cannot clip (its tree guide is a child that must show outside
    the row), so each piece of text clips itself: the preview gives way first,
@@ -820,8 +829,17 @@ html[data-traj] .trajectory-wf-head, html[data-traj] .trajectory-wf-stats, html[
 .trajectory-wf-zoom button:first-child { border-left: 0 }
 .trajectory-wf-zoom button:hover { color: var(--text) }
 .trajectory-wf-zoom button[aria-pressed='true'] { background: var(--text); color: var(--paper) }
-.trajectory-wf-zoom button:focus-visible, .trajectory-wf-foldall:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px }
+.trajectory-wf-zoom button:focus-visible, .trajectory-wf-foldall:focus-visible, .trajectory-wf-replay:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px }
 .trajectory-wf-foldall { white-space: nowrap }
+
+/* The replay leads the tools. While one runs the button reads Stop, beside
+   the time it has left (the catch-up's rate once it is catching up), and the
+   playhead is one line down the ruler and the rows. */
+.trajectory-wf-replay { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap }
+.trajectory-wf-replay[data-playing] { color: var(--text); background: var(--trajectory-wf-soft) }
+.trajectory-wf-readout { color: var(--muted); font-variant-numeric: tabular-nums }
+.trajectory-wf-playhead, .trajectory-ruler-playhead { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px;
+  background: var(--text); pointer-events: none }
 
 /* Each row's busy time stands in one column at the end of its label, right
    aligned so the figures line up down the page, under a header in the head's
