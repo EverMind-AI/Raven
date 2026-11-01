@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 
 import { TRAIL_PAD, createAxis } from './axis'
 import { entryEnd, entryStart } from './model'
-import { CATCH_UP_RATE, REPLAY_MS, advance, entriesAt, startReplay } from './replay'
+import { CATCH_UP_RATE, REPLAY_MS, advance, entriesAt, entryAt, startReplay } from './replay'
 
 import type { TrajectoryEntry } from '../types'
 import type { TimeAxis } from './axis'
@@ -211,5 +211,14 @@ describe('entriesAt', () => {
   it('keeps the index’s order', () => {
     const steps = [step('b', 2, 3), step('a', 1, 4)]
     expect(entriesAt(steps, s(2.5), s(100)).map((entry) => entry.entry_id)).toEqual(['b', 'a'])
+  })
+})
+
+describe('entryAt', () => {
+  it('is one entry as entriesAt shows it: absent before it starts, cut while it runs, itself once it has ended', () => {
+    const b = step('b', 2, 8)
+    expect(entryAt(b, s(1), s(100))).toBeNull()
+    expect(entryAt(b, s(5), s(100))).toMatchObject({ entry_id: 'b', operation_status: 'running', operation_end: null })
+    expect(entryAt(b, s(8), s(100))).toBe(b)
   })
 })

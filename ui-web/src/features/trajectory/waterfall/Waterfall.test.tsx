@@ -1673,6 +1673,19 @@ describe('the replay', () => {
     expect(document.querySelector('.trajectory-wf-window')!.textContent).toContain('gui.trajectory.window.whole')
   })
 
+  it('keeps the arrow keys off a step the playhead has cut out of a picked stretch', async () => {
+    /* Six seconds in, `b` has run two of its eight seconds: a stretch picked
+       from eight to ten meets it as recorded, not as the replay draws it. */
+    await draw([ran('a', 0, 4), ran('b', 4, 12)])
+    openTurn()
+    play()
+    wait(6_000)
+    act(() => { store.setPicked({ a: Date.parse('2026-10-28T10:00:08.000Z'), b: Date.parse('2026-10-28T10:00:10.000Z') }) })
+    expect(spans()).toEqual([])
+    act(() => { fireEvent.keyDown(document.querySelector('[role="tree"]')!, { key: 'End' }) })
+    expect(store.get().selectedId).toBeNull()
+  })
+
   it('ends with the conversation', async () => {
     /* Both conversations were last read as trajectories, so the switch keeps
        the view: only the conversation changes under the replay. */

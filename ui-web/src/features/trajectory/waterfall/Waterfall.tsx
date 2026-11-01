@@ -28,7 +28,7 @@ import { AxisIndex, TRAIL_PAD, barOf, clampViewport, presetWindow, zoomViewport 
 import { clockOf, lengthOf, spanOf, windowText } from './clock'
 import { WaterfallIndex } from './incremental'
 import { buildWaterfall, busyRuns, entryEnd, entryStart, isLive, turnKey } from './model'
-import { CATCH_UP_RATE, REPLAY_MS, advance, entriesAt, startReplay } from './replay'
+import { CATCH_UP_RATE, REPLAY_MS, advance, entriesAt, entryAt, startReplay } from './replay'
 import { turnBreakdown, turnSegments } from './segments'
 import { summarize } from './summary'
 import { clockTicks, stepFor, tickLabel } from './ticks'
@@ -706,15 +706,17 @@ export function Waterfall(): JSX.Element {
     [picked],
   )
   /* Whether the picked stretch keeps this entry: the same overlap the rows are
-     filtered by, so a key can never land on a row the reader cannot see. */
+     filtered by, on the same step -- cut at the playhead while a replay runs --
+     so a key can never land on a row the reader cannot see. */
   const inPick = useCallback((entryId: string): boolean => {
     if (range === null) return true
     const s = store.get()
     const at = s.index[entryId]
     const entry = at === undefined ? undefined : s.entries[at]
-    if (entry === undefined) return false
-    return entryEnd(entry, now) >= range.start && entryStart(entry) <= range.end
-  }, [range, now])
+    const seen = entry === undefined ? null : replayAt === null ? entry : entryAt(entry, replayAt, now)
+    if (seen === null) return false
+    return entryEnd(seen, clock) >= range.start && entryStart(seen) <= range.end
+  }, [range, now, replayAt, clock])
   /* A filtered list is a new list: it starts at its own beginning, not at
      whatever scroll offset the full one happened to be at. */
   useEffect(() => {

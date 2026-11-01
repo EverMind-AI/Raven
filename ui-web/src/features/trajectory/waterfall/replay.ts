@@ -104,14 +104,20 @@ export function advance(
   return at < limit ? { ...replay, at } : null
 }
 
-/** The session as it stood at `at`: what had not started is left out, and
- *  what was still running is cut there, running -- a failure it ended in had
- *  not happened yet. Finished steps are passed through as they are. */
+/** One step as it stood at `at`: none before it started, and cut there,
+ *  running, while it still ran -- a failure it ended in had not happened yet.
+ *  A finished step is passed through as it is. */
+export function entryAt(entry: TrajectoryEntry, at: number, now: number): TrajectoryEntry | null {
+  if (entryStart(entry) > at) return null
+  return entryEnd(entry, now) <= at ? entry : { ...entry, operation_status: 'running', operation_end: null, failure_entry: false }
+}
+
+/** The session as it stood at `at`, step by step (`entryAt`), in the index's order. */
 export function entriesAt(entries: readonly TrajectoryEntry[], at: number, now: number): TrajectoryEntry[] {
   const shown: TrajectoryEntry[] = []
   for (const entry of entries) {
-    if (entryStart(entry) > at) continue
-    shown.push(entryEnd(entry, now) <= at ? entry : { ...entry, operation_status: 'running', operation_end: null, failure_entry: false })
+    const seen = entryAt(entry, at, now)
+    if (seen !== null) shown.push(seen)
   }
   return shown
 }
