@@ -1359,6 +1359,24 @@ def install_script(*, windows: bool | None = None) -> str:
     return ".\\install.ps1" if windows else "./install.sh"
 
 
+def install_command(*, windows: bool | None = None) -> str:
+    """The command that runs the checkout's installer, per platform.
+
+    cmd.exe cannot run a .ps1 by name, and Windows PowerShell 5.1 rejects `&&`,
+    so Windows names the PowerShell that ships with the OS and bypasses the
+    execution policy for that process only. The stock Windows client policy is
+    Restricted and refuses a bare script file, so the page and the CLI read the
+    whole invocation from here, not only the script name. POSIX runs install.sh
+    directly.
+    """
+    if windows is None:
+        windows = _on_windows()
+    script = install_script(windows=windows)
+    if windows:
+        return f'powershell -NoProfile -ExecutionPolicy Bypass -File "{script}"'
+    return script
+
+
 def checkout_update_commands(*, windows: bool | None = None) -> tuple[str, ...]:
     """The commands a source checkout reruns to update itself, one per line.
 
@@ -1374,13 +1392,8 @@ def checkout_update_commands(*, windows: bool | None = None) -> tuple[str, ...]:
     if windows is None:
         windows = _on_windows()
     if windows:
-        script = install_script(windows=True)
-        return (
-            "raven web --stop",
-            "git pull",
-            f'powershell -NoProfile -ExecutionPolicy Bypass -File "{script}"',
-        )
-    return (f"git pull && {install_script(windows=False)}",)
+        return ("raven web --stop", "git pull", install_command(windows=True))
+    return (f"git pull && {install_command(windows=False)}",)
 
 
 def _uv_tool_target() -> ToolInstallTarget | None:

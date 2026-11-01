@@ -605,6 +605,28 @@ def test_install_script_defaults_to_the_running_platform(
 
 
 @pytest.mark.parametrize(
+    ("windows", "command"),
+    [
+        (True, 'powershell -NoProfile -ExecutionPolicy Bypass -File ".\\install.ps1"'),
+        (False, "./install.sh"),
+    ],
+    ids=["windows", "posix"],
+)
+def test_install_command_runs_the_platform_s_installer(windows: bool, command: str) -> None:
+    """The page and the CLI must share the invocation, not only the script name:
+    a bare `.\\install.ps1` is refused by the stock Windows client policy."""
+    assert upgrade_commands.install_command(windows=windows) == command
+
+
+def test_install_command_defaults_to_the_running_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(upgrade_commands, "_on_windows", lambda: True)
+
+    assert upgrade_commands.install_command() == (
+        'powershell -NoProfile -ExecutionPolicy Bypass -File ".\\install.ps1"'
+    )
+
+
+@pytest.mark.parametrize(
     ("windows", "commands"),
     [
         (

@@ -268,7 +268,7 @@ def _checkout_recovery(checkout: str, windows: bool) -> str:
     from raven.updates import upgrade as _upgrade
 
     if windows:
-        # PowerShell, which `.\install.ps1` needs anyway: -LiteralPath keeps
+        # PowerShell, which the installer needs anyway: -LiteralPath keeps
         # `[` and `]` from reading as wildcards, and a doubled quote is the only
         # escape a single-quoted string has -- for each of the four curly single
         # quotes PowerShell also reads as one, not only for the ASCII quote.
@@ -276,10 +276,11 @@ def _checkout_recovery(checkout: str, windows: bool) -> str:
         return (
             "raven web --stop\nSet-Location -LiteralPath '"
             + literal
-            + "'\ngit pull\n"
-            + _upgrade.install_script(windows=True)
+            + "'\ngit pull\nif ($LASTEXITCODE -eq 0) { "
+            + _upgrade.install_command(windows=True)
+            + " }"
         )
-    return f"cd {shlex.quote(checkout)}\ngit pull\n{_upgrade.install_script(windows=False)}"
+    return f"cd {shlex.quote(checkout)}\ngit pull\n{_upgrade.install_command(windows=False)}"
 
 
 def _unsupervised_recovery(windows: bool) -> tuple[str, str]:
