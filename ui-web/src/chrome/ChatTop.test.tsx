@@ -548,6 +548,27 @@ describe('the header band', () => {
     expect(fallback).toMatch(/mask-image: none/)
   })
 
+  it('strengthens the frost upward, from clear at the row lower edge to full at its top', () => {
+    styled()
+    const css = source('styles/page.css')
+    const layer = (selector: string): string =>
+      (css.match(new RegExp(`${selector}\\s*\\{([\\s\\S]*?)\\}`)) as RegExpMatchArray)[1] as string
+    const stops = (text: string): Array<{ at: number; alpha: number }> =>
+      [...text.matchAll(/(?:#000|rgba\(0, 0, 0, ([\d.]+)\)) (\d+)%/g)]
+        .map((m) => ({ at: Number(m[2]), alpha: m[1] === undefined ? 1 : Number(m[1]) }))
+    for (const selector of ['\\.chat > \\.top::before', '\\.chat > \\.top::after']) {
+      const mask = layer(selector).match(/mask-image: (linear-gradient\([^;]+\));/)?.[1] ?? ''
+      const ramp = stops(mask)
+      expect(ramp.length).toBeGreaterThanOrEqual(3)
+      expect(ramp.map((s) => s.at)).toEqual([...ramp.map((s) => s.at)].sort((a, b) => a - b))
+      expect(ramp.at(-1)).toEqual({ at: 100, alpha: 0 })
+      expect(ramp[0]!.alpha).toBe(1)
+      expect(ramp.some((s) => s.at > 0 && s.at < 100 && s.alpha > 0 && s.alpha < 1)).toBe(true)
+      for (let i = 1; i < ramp.length; i += 1) {
+        expect(ramp[i]!.alpha).toBeLessThanOrEqual(ramp[i - 1]!.alpha)
+      }
+    }
+  })
 })
 
 /* Last in the file on purpose: applying a language is module state for

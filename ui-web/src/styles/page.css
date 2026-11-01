@@ -1013,11 +1013,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    gives back the same height as top padding, so the resting frame is unchanged
    and only a scrolled one passes under.
 
-   The frost is the row itself, and its strength falls from the top down rather
-   than sitting at one value: fully blurred behind the controls, then a fade to
-   nothing within the row's lower edge. A bubble that scrolls up is eaten while
-   it is under the title bar and is sharp again below it, instead of meeting a
-   hard edge.
+   The frost is the row itself, and its strength falls continuously from the
+   top down: fully blurred at the top, weaker behind the lower controls, and
+   clear at the row's lower edge. A bubble that scrolls up is eaten more the
+   higher it sits under the title bar, and is sharp again below it, instead of
+   meeting a hard edge.
 
    Two layers, because the tint and the blur have to fade independently. The
    blur layer carries no ground: an engine that draws the element's own
@@ -1028,7 +1028,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    to none at the lower edge.
 
    The tint layer is deliberately WEAK --topbar-tint, under a third of --page,
-   fading out below the controls. It is not there to hide the
+   fading out toward the row's lower edge. It is not there to hide the
    transcript: the
    point of the effect is that a bubble under the title bar is still seen as
    colour and shape, the way a title bar shows the window behind it. Measured in
@@ -1068,15 +1068,15 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   z-index: -2; pointer-events: none;
   -webkit-backdrop-filter: blur(20px) saturate(1.4);
   backdrop-filter: blur(20px) saturate(1.4);
-  -webkit-mask-image: linear-gradient(180deg, #000 0, #000 calc(var(--topbar-h) - 12px), rgba(0, 0, 0, .8) calc(var(--topbar-h) - 8px), rgba(0, 0, 0, .45) calc(var(--topbar-h) - 4px), rgba(0, 0, 0, .18) calc(var(--topbar-h) - 2px), rgba(0, 0, 0, 0) 100%);
-  mask-image: linear-gradient(180deg, #000 0, #000 calc(var(--topbar-h) - 12px), rgba(0, 0, 0, .8) calc(var(--topbar-h) - 8px), rgba(0, 0, 0, .45) calc(var(--topbar-h) - 4px), rgba(0, 0, 0, .18) calc(var(--topbar-h) - 2px), rgba(0, 0, 0, 0) 100%);
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .85) 20%, rgba(0, 0, 0, .65) 40%, rgba(0, 0, 0, .45) 60%, rgba(0, 0, 0, .22) 80%, rgba(0, 0, 0, 0) 100%);
+  mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .85) 20%, rgba(0, 0, 0, .65) 40%, rgba(0, 0, 0, .45) 60%, rgba(0, 0, 0, .22) 80%, rgba(0, 0, 0, 0) 100%);
 }
 .chat > .top::after {
   content: ''; position: absolute; inset: 0 0 auto 0; height: var(--topbar-h);
   z-index: -1; pointer-events: none;
   background: var(--topbar-tint);
-  -webkit-mask-image: linear-gradient(180deg, #000 0, #000 calc(var(--topbar-h) - 12px), rgba(0, 0, 0, .35) calc(var(--topbar-h) - 6px), rgba(0, 0, 0, 0) 100%);
-  mask-image: linear-gradient(180deg, #000 0, #000 calc(var(--topbar-h) - 12px), rgba(0, 0, 0, .35) calc(var(--topbar-h) - 6px), rgba(0, 0, 0, 0) 100%);
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .7) 25%, rgba(0, 0, 0, .45) 50%, rgba(0, 0, 0, .2) 75%, rgba(0, 0, 0, 0) 100%);
+  mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .7) 25%, rgba(0, 0, 0, .45) 50%, rgba(0, 0, 0, .2) 75%, rgba(0, 0, 0, 0) 100%);
 }
 /* Over a dark bubble the frost's own contrast can vanish; the halo keeps the
    name, the chip and the corner glyphs off it without making the band opaque. */
