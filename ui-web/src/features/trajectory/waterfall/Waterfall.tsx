@@ -487,8 +487,9 @@ export function Waterfall(): JSX.Element {
   useLayoutEffect(() => {
     const closed = wasOpen.current && !paneOpen
     wasOpen.current = paneOpen
-    /* A tab switch also closes the old pane; that keeps the focus on the strip. */
-    if (!closed || details.get().swapped) return
+    /* A tab switch also closes the old pane; that keeps the focus on the strip.
+       So does a replay as it starts: the focus stays on its button. */
+    if (!closed || details.get().swapped || replayRef.current !== null) return
     box.current?.focus()
   }, [paneOpen])
 
@@ -675,6 +676,15 @@ export function Waterfall(): JSX.Element {
     replayRef.current = null
     setReplay(null)
   }, [sessionKey, onScreen])
+  /* The details pane reads a step as it was recorded, not as it stood at the
+     playhead, so the two never share the page: pressing Replay closes the
+     pane, and opening it -- a row, the jump to the first failure -- lets the
+     replay go, the whole session back under it. */
+  useLayoutEffect(() => {
+    if (!paneOpen || replayRef.current === null) return
+    replayRef.current = null
+    setReplay(null)
+  }, [paneOpen])
   /* The picked stretch is the store's: the axis draws it, and the rows below
      are filtered to it. The ruler speaks in fractions of the view it is drawn
      over, so the stretch is handed to it that way and taken back in real time;
@@ -1053,6 +1063,7 @@ export function Waterfall(): JSX.Element {
     setScrollTop(0)
     replayRef.current = next
     setReplay(next)
+    details.closeDetails()
   }
   const painted: JSX.Element[] = []
   for (let at = first; at < last; at++) {

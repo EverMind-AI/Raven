@@ -1703,4 +1703,42 @@ describe('the replay', () => {
     act(() => { store.setView('trajectory') })
     expect(playing()).toBe(false)
   })
+
+  /* The details pane reads a step as it was recorded, and a replay draws it
+     as it stood: the two never share the page. */
+  it('closes a details pane left open as it starts, the focus staying on its button', async () => {
+    await draw([ran('a', 0, 2), ran('b', 4, 10)])
+    openTurn()
+    act(() => { fireEvent.click(document.querySelector('[data-entry="b"]')!) })
+    expect(details.get().open).toBe(true)
+    button().focus()
+    play()
+    expect(playing()).toBe(true)
+    expect(details.get().open).toBe(false)
+    expect(document.activeElement).toBe(button())
+  })
+
+  it('ends when a step’s details are opened, the rows and the figures back on the whole session', async () => {
+    await draw([ran('a', 0, 2), ran('b', 4, 10, { operation_status: 'error', failure_entry: true })])
+    openTurn()
+    play()
+    wait(6_000)
+    expect(document.querySelector('.trajectory-wf-statv[data-bad]')).toBeNull()
+    act(() => { fireEvent.click(document.querySelector('[data-entry="b"]')!) })
+    expect(playing()).toBe(false)
+    expect(details.get().open).toBe(true)
+    expect(store.get().selectedId).toBe('b')
+    expect(document.querySelector('.trajectory-wf-statv[data-bad]')).not.toBeNull()
+  })
+
+  it('ends when the jump to the first failure opens the pane', async () => {
+    await draw([ran('fine', 0, 2), ran('bad', 4, 6, { operation_status: 'error', failure_entry: true }), ran('after', 8, 10)])
+    play()
+    wait(6_500)
+    act(() => { fireEvent.click(document.querySelector('button.trajectory-wf-jump')!) })
+    expect(playing()).toBe(false)
+    expect(details.get().open).toBe(true)
+    expect(store.get().selectedId).toBe('bad')
+  })
+
 })
