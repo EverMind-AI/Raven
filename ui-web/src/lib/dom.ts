@@ -23,27 +23,20 @@ export const HEADER_LEAD = 16
 /* How much of the transcript's top the chat header covers.
  *
  * The header floats over the scroller rather than sitting above it (page.css,
- * .chat > .top), and its frost reaches below the header row: the row's height
- * plus --topbar-fade-tail, the distance over which the blur fades to nothing.
- * That lower edge -- not the row's -- is the first line the reader can see
- * sharp, so anything that brings a turn to the top edge (the turn nav's marks,
- * the up pill) has to land it under the band instead, or what it was asked to
- * show is behind the frost.
+ * .chat > .top), and its frost is the header row itself. That lower edge is the
+ * first line the reader can see sharp, so anything that brings a turn to the
+ * top edge (the turn nav's marks, the up pill) has to land it under the row
+ * instead, or what it was asked to show is behind the frost.
  *
- * Measured for the row, read for the tail: the row's height is what a desktop
- * shell swaps for the title bar it measured, and the tail is the token the
- * pseudo-element itself is sized by, so a resize and shell mode both reach the
- * band without a second number here. The token is declared on :root, so it is
- * read there; `scroll` scopes the header lookup to the conversation that owns
- * it, so two chat columns cannot measure each other's. Without a header in the
- * document the band is zero and the token is never read, which is also what
- * keeps the layout-free tests on their old numbers.
+ * Measured for the row: the row's height is what a desktop shell swaps for the
+ * title bar it measured, so a resize and shell mode both reach the band without
+ * a second number here. `scroll` scopes the header lookup to the conversation
+ * that owns it, so two chat columns cannot measure each other's. Without a
+ * header in the document the band is zero, which is also what keeps the
+ * layout-free tests on their old numbers.
  */
 export function headerBand(scroll?: HTMLElement | null): number {
   const top = scroll?.closest('.chat')?.querySelector<HTMLElement>('.top') ?? $('.chat > .top')
   if (!top) return 0
-  const tail = Number.parseFloat(
-    getComputedStyle(document.documentElement).getPropertyValue('--topbar-fade-tail'),
-  )
-  return top.offsetHeight + (Number.isFinite(tail) ? tail : 0)
+  return top.offsetHeight
 }

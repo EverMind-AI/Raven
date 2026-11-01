@@ -2,11 +2,11 @@
  * content at the top of the scrollport. A turn the top edge is already inside
  * counts as the answer above it, not as the question being looked for.
  *
- * The top edge that counts is the frost's lower edge, not the scroller's and
- * not the header row's: the header floats over the transcript and its blur
- * fades out below the row (page.css, .chat > .top::before), so a question
- * between the two is hidden behind the frost and has not been reached. The
- * jump lands it a lead under that edge for the same reason. */
+ * The top edge that counts is the title bar's lower edge, not the
+ * scroller's: the header floats over the transcript and its frost is the row
+ * itself (page.css, .chat > .top), so a question under that row is hidden
+ * behind the frost and has not been reached. The jump lands it a lead under
+ * that edge for the same reason. */
 
 import { HEADER_LEAD, headerBand } from '../../lib/dom'
 

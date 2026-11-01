@@ -75,7 +75,7 @@ function goTo(seg: AskData): void {
   if (!scroll || !question) return
   tail.setStuck(false)
   /* The header floats over the scroller, so the question is put under the
-     frost's lower edge rather than at the scroller's own top (lib/dom.ts,
+     title bar's lower edge rather than at the scroller's own top (lib/dom.ts,
      headerBand), with the same lead the up pill leaves. */
   const top = scroll.scrollTop + question.getBoundingClientRect().top - scroll.getBoundingClientRect().top
     - headerBand(scroll) - HEADER_LEAD

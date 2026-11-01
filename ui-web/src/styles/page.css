@@ -199,18 +199,9 @@
   --chat-min: 430px;
   /* The chat header's row. It floats over the transcript rather than sitting
      above it (see .top), so the scroller's resting top inset reads this one
-     number, and the frost band the trajectory view clears is this row plus
-     --topbar-fade-tail below. The desktop shell swaps in the title bar it
-     measured. */
+     number, and the frost's range is this row. The desktop shell swaps in the
+     title bar it measured. */
   --topbar-h: 52px;
-  /* How far the frost falls below that row before it is fully clear. The
-     visible band is --topbar-h + this, and its LOWER edge -- not the row's --
-     is the first line the reader can read sharp, so scroll-padding-top and
-     headerBand() (lib/dom.ts) both use the sum. Kept in px: lib/dom.ts parses
-     it off the computed style, and the shell's measured title bar only moves
-     --topbar-h. */
-  --topbar-fade-tail: 56px;
-  --topbar-fade-h: calc(var(--topbar-h) + var(--topbar-fade-tail));
   /* In px, not ch: a ch unit resolves against the font of whatever element
      uses it, so the banner (12.5px) and the transcript column (14.5px)
      computed different widths from the same token and their edges never
@@ -1022,11 +1013,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    gives back the same height as top padding, so the resting frame is unchanged
    and only a scrolled one passes under.
 
-   The frost reaches PAST the row, and its strength falls from the top down
-   rather than sitting at one value: fully blurred behind the controls, then a
-   fade to nothing at the band's lower edge (--topbar-fade-h). A bubble that
-   scrolls up is eaten a little more with every pixel until it is sharp again,
-   instead of meeting a hard edge.
+   The frost is the row itself, and its strength falls from the top down rather
+   than sitting at one value: fully blurred behind the controls, then a fade to
+   nothing within the row's lower edge. A bubble that scrolls up is eaten while
+   it is under the title bar and is sharp again below it, instead of meeting a
+   hard edge.
 
    Two layers, because the tint and the blur have to fade independently. The
    blur layer carries no ground: an engine that draws the element's own
@@ -1037,9 +1028,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    to none at the lower edge.
 
    The tint layer is deliberately WEAK --topbar-tint, under a third of --page,
-   fading out below the controls. It is not there to hide the transcript: the
-   point of the effect is that a bubble under the band is still seen as colour
-   and shape, the way a title bar shows the window behind it. Measured in
+   fading out below the controls. It is not there to hide the
+   transcript: the
+   point of the effect is that a bubble under the title bar is still seen as
+   colour and shape, the way a title bar shows the window behind it. Measured in
    Chrome, a mask of 0 leaves the backdrop untouched and a mask of 1 draws the
    full blur, so the blur layer's ramp is what makes the gradient; the tint
    only unifies the tone over it.
@@ -1067,24 +1059,24 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   display: flex; align-items: center; gap: 10px; padding: 0 16px 0 20px;
   height: var(--topbar-h); position: absolute; top: 0; left: 0; right: 0; z-index: 2;
   /* The corner buttons sit on the page's own colour so a dark bubble under the
-     transparent band cannot swallow them; :hover and the pressed toggle
+     transparent title bar cannot swallow them; :hover and the pressed toggle
      override it at their own specificity. */
   --ghost-bg: var(--topbar-plate);
 }
 .chat > .top::before {
-  content: ''; position: absolute; inset: 0 0 auto 0; height: var(--topbar-fade-h);
+  content: ''; position: absolute; inset: 0 0 auto 0; height: var(--topbar-h);
   z-index: -2; pointer-events: none;
   -webkit-backdrop-filter: blur(20px) saturate(1.4);
   backdrop-filter: blur(20px) saturate(1.4);
-  -webkit-mask-image: linear-gradient(180deg, #000 0, #000 calc(var(--topbar-h) - 8px), rgba(0, 0, 0, .8) calc(var(--topbar-h) + 16px), rgba(0, 0, 0, .45) calc(100% - 20px), rgba(0, 0, 0, .18) calc(100% - 8px), rgba(0, 0, 0, 0) 100%);
-  mask-image: linear-gradient(180deg, #000 0, #000 calc(var(--topbar-h) - 8px), rgba(0, 0, 0, .8) calc(var(--topbar-h) + 16px), rgba(0, 0, 0, .45) calc(100% - 20px), rgba(0, 0, 0, .18) calc(100% - 8px), rgba(0, 0, 0, 0) 100%);
+  -webkit-mask-image: linear-gradient(180deg, #000 0, #000 calc(var(--topbar-h) - 12px), rgba(0, 0, 0, .8) calc(var(--topbar-h) - 8px), rgba(0, 0, 0, .45) calc(var(--topbar-h) - 4px), rgba(0, 0, 0, .18) calc(var(--topbar-h) - 2px), rgba(0, 0, 0, 0) 100%);
+  mask-image: linear-gradient(180deg, #000 0, #000 calc(var(--topbar-h) - 12px), rgba(0, 0, 0, .8) calc(var(--topbar-h) - 8px), rgba(0, 0, 0, .45) calc(var(--topbar-h) - 4px), rgba(0, 0, 0, .18) calc(var(--topbar-h) - 2px), rgba(0, 0, 0, 0) 100%);
 }
 .chat > .top::after {
-  content: ''; position: absolute; inset: 0 0 auto 0; height: var(--topbar-fade-h);
+  content: ''; position: absolute; inset: 0 0 auto 0; height: var(--topbar-h);
   z-index: -1; pointer-events: none;
   background: var(--topbar-tint);
-  -webkit-mask-image: linear-gradient(180deg, #000 0, #000 calc(var(--topbar-h) - 4px), rgba(0, 0, 0, .35) calc(var(--topbar-h) + 16px), rgba(0, 0, 0, 0) 100%);
-  mask-image: linear-gradient(180deg, #000 0, #000 calc(var(--topbar-h) - 4px), rgba(0, 0, 0, .35) calc(var(--topbar-h) + 16px), rgba(0, 0, 0, 0) 100%);
+  -webkit-mask-image: linear-gradient(180deg, #000 0, #000 calc(var(--topbar-h) - 12px), rgba(0, 0, 0, .35) calc(var(--topbar-h) - 6px), rgba(0, 0, 0, 0) 100%);
+  mask-image: linear-gradient(180deg, #000 0, #000 calc(var(--topbar-h) - 12px), rgba(0, 0, 0, .35) calc(var(--topbar-h) - 6px), rgba(0, 0, 0, 0) 100%);
 }
 /* Over a dark bubble the frost's own contrast can vanish; the halo keeps the
    name, the chip and the corner glyphs off it without making the band opaque. */
@@ -1318,14 +1310,12 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    content, that clearance is gone the moment the reader scrolls -- which is
    what lets a bubble reach the frost instead of stopping at its edge.
 
-   The two insets are different numbers on purpose. Padding is the row's
-   height, because it exists only to keep the resting frame where it was; the
-   frost below the row is meant to have content under it. scroll-padding is the
-   frost's LOWER edge (--topbar-fade-h), for the scrolls this file does not
-   write by hand: a scrollIntoView that brings a control to the top edge has to
-   clear the whole ramp, or it lands it under the blur. */
+   Padding and scroll-padding are both the row's height: the frost does not
+   reach below the row, so a scrollIntoView that brings a control to the top
+   edge only has to clear the title bar. The frost's own fade is inside the
+   row, so it never needs room in the scroller. */
 .scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; scroll-behavior: smooth; scrollbar-gutter: stable;
-  padding-top: var(--topbar-h); scroll-padding-top: var(--topbar-fade-h); }
+  padding-top: var(--topbar-h); scroll-padding-top: var(--topbar-h); }
 /* The transcript stops being painted before it reaches the composer instead of
    sliding under it. The card is opaque (see .dock-in), so a line arriving at
    its top edge was cut mid-glyph, and the 22px of gutter below the card left
@@ -2132,10 +2122,10 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
   stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
 }
 .backpill[hidden] { display: none; }
-/* The up pill mirrors the other end: same circle, hung under the header instead
-   of above the composer. It clears the whole frost band, not just the row, or
-   it would sit in the middle of the fade hanging over blurred bubbles. */
-.chrome-toppill { top: calc(var(--topbar-fade-h) + 12px); bottom: auto; }
+/* The up pill mirrors the other end: same circle, hung under the title bar
+   instead of above the composer. It clears the row, whose frost is the only
+   glass in the column. */
+.chrome-toppill { top: calc(var(--topbar-h) + 12px); bottom: auto; }
 
 /* mid-turn narration: what the agent said on the way, set between the process
    lines and the answer. It used to sit a step under the reply and a step over
@@ -3002,10 +2992,10 @@ textarea:focus, textarea:focus-visible,
    with it.
 
    #trajHost is the waterfall's glass island. .top no longer takes the row out
-   of the column, so in this view the host reserves the whole frost band as a
-   top margin: the island has to float below the band with its own inset
-   visible, and a padding would push the rows down while the card's top edge
-   stayed under the header. */
+   of the column, so in this view the host reserves the title bar as a top
+   margin: the island has to float below the row with its own inset visible,
+   and a padding would push the rows down while the card's top edge stayed
+   under the header. */
 .scroll[data-parked] { position: absolute; inset: 0; visibility: hidden; pointer-events: none; }
 .scroll[data-parked] ~ .backpill { display: none; }
 .scroll[data-parked] ~ #turnNav { display: none; }
@@ -3022,9 +3012,9 @@ textarea:focus, textarea:focus-visible,
 html[data-traj] .chat { background: var(--wash) }
 html[data-traj] #trajHost {
   position: relative;
-  /* The band plus the same 6px inset the sides and bottom keep, so the card's
-     top edge and rounded corners are visible below the frost, not under it. */
-  margin: calc(var(--topbar-fade-h) + 6px) 14px 14px; padding-bottom: 0;
+  /* The title bar plus the same 6px inset the sides and bottom keep, so the
+     card's top edge and rounded corners are visible below it, not under it. */
+  margin: calc(var(--topbar-h) + 6px) 14px 14px; padding-bottom: 0;
   border: 1px solid var(--traj-edge); border-radius: 16px; overflow: hidden;
   box-shadow: var(--traj-shadow);
 }

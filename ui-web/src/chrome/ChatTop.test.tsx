@@ -437,22 +437,21 @@ describe('the header band', () => {
     expect(row).toBe('52px')
     const scroll = getComputedStyle(el('scroll'))
     expect(scroll.paddingTop).toBe(row)
-    /* Not the row: scrollIntoView has to clear the fade below it as well. */
-    expect(token('--topbar-fade-tail')).toBe('56px')
-    expect(scroll.scrollPaddingTop).toBe(token('--topbar-fade-h'))
-    expect(scroll.scrollPaddingTop).not.toBe(row)
+    /* The frost is the title bar itself, so scrollIntoView clears that same
+       row; there is no fade below it to leave room for. */
+    expect(scroll.scrollPaddingTop).toBe(row)
   })
 
-  it('starts the trajectory view below the fade and parks the scroller at its live size', () => {
+  it('starts the trajectory view below the title bar and parks the scroller at its live size', () => {
     styled()
     document.documentElement.setAttribute('data-traj', '')
     /* The island is an inset card now (the waterfall's glass sheet), so the
-       band is its top margin, not padding inside it: padding would push the
-       content down while the card's top edge stayed under the header. */
+       title bar is its top margin, not padding inside it: padding would push
+       the content down while the card's top edge stayed under the header. */
     expect(getComputedStyle(el('trajHost')).paddingTop).toBe('0px')
     const css = source('styles/page.css')
     const island = (css.match(/html\[data-traj\] #trajHost \{([\s\S]*?)\}/) as RegExpMatchArray)[1] as string
-    expect(island).toMatch(/margin: calc\(var\(--topbar-fade-h\) \+ 6px\) 14px 14px;/)
+    expect(island).toMatch(/margin: calc\(var\(--topbar-h\) \+ 6px\) 14px 14px;/)
     const scroll = el('scroll')
     scroll.dataset.parked = ''
     /* The parked copy is the live box out of the flow: inset 0 keeps its
@@ -460,18 +459,18 @@ describe('the header band', () => {
     expect(getComputedStyle(scroll).getPropertyValue('inset').trim()).toBe('0')
   })
 
-  it('places the up pill and the turn nav clear of the whole band', () => {
+  it('places the up pill and the turn nav clear of the title bar', () => {
     styled()
     const css = source('styles/page.css')
     /* The pill's top is a calc-of-calc, which happy-dom cannot read back as a
        number, so the rule is pinned as written; the nav is a single token and
        can be measured. */
-    expect(css).toMatch(/\.chrome-toppill \{ top: calc\(var\(--topbar-fade-h\) \+ 12px\); bottom: auto; \}/)
+    expect(css).toMatch(/\.chrome-toppill \{ top: calc\(var\(--topbar-h\) \+ 12px\); bottom: auto; \}/)
     sheet!.textContent = `${sheet!.textContent}\n${source('features/transcript/styles.css')}`
     const nav = document.createElement('div')
     nav.className = 'transcript-nav'
     document.body.append(nav)
-    expect(getComputedStyle(nav).top).toBe(token('--topbar-fade-h'))
+    expect(getComputedStyle(nav).top).toBe(token('--topbar-h'))
     nav.remove()
   })
 
@@ -482,7 +481,7 @@ describe('the header band', () => {
     expect(getComputedStyle(top()).height).toBe('38px')
     const scroll = getComputedStyle(el('scroll'))
     expect(scroll.paddingTop).toBe('38px')
-    expect(scroll.scrollPaddingTop).toBe(token('--topbar-fade-h'))
+    expect(scroll.scrollPaddingTop).toBe(token('--topbar-h'))
     expect(source('styles/page.css'))
       .toMatch(/:root\[data-shell="1"\] \{ --topbar-h: var\(--tl-row, 38px\); \}/)
   })
@@ -496,13 +495,13 @@ describe('the header band', () => {
     const blur = (css.match(/\.chat > \.top::before\s*\{([\s\S]*?)\}/) as RegExpMatchArray)[1] as string
     expect(blur).toMatch(/-webkit-backdrop-filter: blur\(20px\) saturate\(1\.4\)/)
     expect(blur).toMatch(/backdrop-filter: blur\(20px\) saturate\(1\.4\)/)
-    expect(blur).toMatch(/height: var\(--topbar-fade-h\)/)
+    expect(blur).toMatch(/height: var\(--topbar-h\)/)
     expect(blur).not.toMatch(/background:/)
-    /* The ramp lands at the element's lower edge, not 20px above it. */
+    /* The ramp lands at the element's lower edge, not above it. */
     expect(blur).toMatch(/rgba\(0, 0, 0, 0\) 100%\)/)
 
     const tint = (css.match(/\.chat > \.top::after\s*\{([\s\S]*?)\}/) as RegExpMatchArray)[1] as string
-    expect(tint).toMatch(/height: var\(--topbar-fade-h\)/)
+    expect(tint).toMatch(/height: var\(--topbar-h\)/)
     expect(tint).toMatch(/background: var\(--topbar-tint\)/)
     expect(tint).toMatch(/mask-image: linear-gradient\(180deg, #000 0/)
     expect(tint).toMatch(/rgba\(0, 0, 0, 0\) 100%\)/)
@@ -548,6 +547,7 @@ describe('the header band', () => {
     expect(fallback).toMatch(/-webkit-mask-image: none/)
     expect(fallback).toMatch(/mask-image: none/)
   })
+
 })
 
 /* Last in the file on purpose: applying a language is module state for
@@ -618,4 +618,3 @@ describe('the chat column chrome when a language is applied', () => {
     expect(el('stage').lastElementChild).toBe(live)
   })
 })
-
