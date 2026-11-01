@@ -1281,8 +1281,9 @@ class MediaToolConfig(Base):
     / ``OPENROUTER_API_KEY``, borrowed only while the tool calls OpenRouter's own
     address; ``api_base`` → OpenRouter; ``model`` → the tool's default
     (gpt-image-2.5-sunburst for images). An empty ``quality`` names no quality:
-    the request's own value applies, and the provider default only when the
-    request names none either.
+    the request's own value applies for the gpt-image family; with nothing on
+    the request either, the exact ``gpt-image-2`` id sends ``medium`` and other
+    models send none.
     """
 
     api_key: str = ""
