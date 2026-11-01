@@ -662,14 +662,15 @@ html[data-theme="dark"] {
   font-weight: 500; cursor: pointer }
 .trajectory-wf-jump:hover { text-decoration: underline }
 .trajectory-wf-jump:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; border-radius: 3px }
-/* While a replay runs, each figure sits over a hidden copy of the whole
-   session's, which sets its cell's width (`Held`): the figure fills that
-   room and is cut short rather than widening it, so no cell moves. The
-   jump to the first failure keeps its line before the failure happens. */
+/* While a replay runs, each figure sits over hidden copies of the whole
+   session's, which set its cell's width (`Held`): the figure fills that
+   room and is cut short rather than widening it, so no cell moves while
+   it plays -- only the session's own figures growing still do. The jump
+   to the first failure keeps its line before the failure happens. */
 .trajectory-wf-held { display: inline-grid; max-width: 100% }
 .trajectory-wf-held > span { grid-area: 1 / 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .trajectory-wf-held > span:first-child { width: 0; min-width: 100% }
-.trajectory-wf-held > span:last-child { visibility: hidden }
+.trajectory-wf-held > span + span { visibility: hidden }
 .trajectory-wf-jumphold { align-self: flex-start; font-weight: 500; visibility: hidden }
 
 /* The row label cannot clip (its tree guide is a child that must show outside

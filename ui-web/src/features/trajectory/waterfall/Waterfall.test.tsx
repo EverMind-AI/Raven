@@ -1608,7 +1608,7 @@ describe('the replay', () => {
     expect(document.querySelector('.trajectory-wf-statv[data-bad]')).not.toBeNull()
   })
 
-  it('holds each figure in the room the whole session’s takes, so a count gaining a digit moves nothing', async () => {
+  it('holds each figure in the room the whole session’s takes, so a replayed count gaining a digit moves nothing', async () => {
     /* happy-dom lays nothing out, so the mechanism is what is pinned: each
        figure and second line sits over a hidden copy of the whole session's,
        which is what sets its cell's width. A real browser measures the result. */
@@ -1626,6 +1626,33 @@ describe('the replay', () => {
     wait(10_500)
     expect(playing()).toBe(false)
     expect(document.querySelectorAll('.trajectory-wf-held, .trajectory-wf-jumphold')).toHaveLength(0)
+  })
+
+  it('widens a cell only when the whole session’s own figure does, as it would without a replay', async () => {
+    /* Nine failures by the press and a tenth that starts after it: the room
+       follows the whole session, so the cell makes room for 10 as the tenth
+       lands, rather than cutting the replayed 10 short once it is reached. */
+    await draw(Array.from({ length: 9 }, (_, i) => ran(`bad${i}`, i * 2, i * 2 + 1, { operation_status: 'error', failure_entry: true })))
+    const errorsHeld = (): string | null | undefined => {
+      const cells = document.querySelectorAll('.trajectory-wf-stat')
+      return cells[cells.length - 1]!.querySelector('.trajectory-wf-statv [aria-hidden="true"]')?.textContent
+    }
+    play()
+    expect(errorsHeld()).toBe('9')
+    wait(500)
+    grow(ran('bad9', 3601, 3602, { operation_status: 'error', failure_entry: true }))
+    expect(errorsHeld()).toBe('10')
+  })
+
+  it('keeps room in the duration for every spelling its count passes through', async () => {
+    /* Forty-five minutes in, a session of five hours and more reads 45m 30s:
+       wider than its own 5h 55m, which alone would cut it short. */
+    await draw([ran('long', 0, 21_300)])
+    play()
+    const copies = [...document.querySelector('.trajectory-wf-stat .trajectory-wf-statv')!.querySelectorAll('[aria-hidden="true"]')]
+      .map((copy) => copy.textContent)
+    expect(copies[0]).toBe('5h 55m')
+    expect(copies).toContain('59m 59s')
   })
 
   it('folds the agents as the whole session has them, so no row jumps when a worker first appears', async () => {

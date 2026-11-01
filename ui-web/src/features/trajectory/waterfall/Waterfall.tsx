@@ -16,7 +16,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { AgentMark, agentMarkPath } from '../../../components/AgentMark'
 import { Icon } from '../../../components/Icon'
 import { t } from '../../../i18n/t'
-import { formatDuration } from '../../../lib/duration'
+import { formatDuration, widestDurations } from '../../../lib/duration'
 import * as lang from '../../../state/lang'
 import { showBar } from '../../../state/scrollbars'
 import * as details from '../detailStore'
@@ -150,11 +150,14 @@ function agentSplit(agents: Figures['agents']): string | null {
   return parts.length ? parts.join(' \u00b7 ') : null
 }
 
-/** The header's six figures, each with the line that says what it is made of. */
-function statsOf(figures: Figures, agents: number): Array<[string, string, string | null]> {
+/** The header's six figures, each with the line that says what it is made of.
+ *  The duration also names every spelling its count passes through at its
+ *  widest, the room a replay keeps for it (`Held`). */
+function statsOf(figures: Figures, agents: number): Array<[string, string, string | null, string[]?]> {
+  const duration = agents ? figures.end - figures.start : 0
   return [
-    [t('gui.trajectory.stat.duration'), formatDuration(agents ? figures.end - figures.start : 0),
-      agents ? t('gui.trajectory.stat.span', spanOf(figures.start, figures.end)) : null],
+    [t('gui.trajectory.stat.duration'), formatDuration(duration),
+      agents ? t('gui.trajectory.stat.span', spanOf(figures.start, figures.end)) : null, widestDurations(duration)],
     [t('gui.trajectory.stat.agents'), String(agents), agentSplit(figures.agents)],
     [t('gui.trajectory.stat.turns'), String(figures.turns),
       figures.medianTurn === null ? null : t('gui.trajectory.stat.median', { duration: formatDuration(figures.medianTurn) })],
@@ -168,16 +171,17 @@ function statsOf(figures: Figures, agents: number): Array<[string, string, strin
   ]
 }
 
-/** A figure drawn in the room another takes. While a replay runs, each figure in the header
- *  sits over a hidden copy of the whole session's, which sets its cell's width: a count gaining
- *  a digit moves none of its neighbours, and a line that is longer mid-way than at the end is
- *  cut short rather than widening its cell. */
-function Held({ text, held }: { text: string | null; held: string | null }): JSX.Element {
+/** A figure drawn in the room others take. While a replay runs, each figure in the header
+ *  sits over hidden copies of the whole session's, which set its cell's width: a replayed
+ *  count gaining a digit moves none of its neighbours, and a line that is longer mid-way than
+ *  at the end is cut short rather than widening its cell. The copies follow the whole session,
+ *  so a cell still widens when the session's own figure does, as it would without a replay. */
+function Held({ text, held }: { text: string | null; held: readonly string[] | null }): JSX.Element {
   if (held === null) return <>{text}</>
   return (
     <span className="trajectory-wf-held">
       <span>{text}</span>
-      <span aria-hidden="true">{held}</span>
+      {held.map((copy) => <span key={copy} aria-hidden="true">{copy}</span>)}
     </span>
   )
 }
@@ -1319,9 +1323,11 @@ export function Waterfall(): JSX.Element {
             <div key={label} className="trajectory-wf-stat">
               <span className="trajectory-wf-statk">{label}</span>
               <span className="trajectory-wf-statv" data-bad={errorCell && errors > 0 ? '' : undefined}>
-                <Held text={value} held={keep?.[1] ?? null} />
+                <Held text={value} held={keep === null ? null : keep[3] ?? [keep[1]]} />
               </span>
-              {sub === null && keepSub === null ? null : <span className="trajectory-wf-statsub"><Held text={sub} held={keepSub} /></span>}
+              {sub === null && keepSub === null ? null : (
+                <span className="trajectory-wf-statsub"><Held text={sub} held={keepSub === null ? null : [keepSub]} /></span>
+              )}
               {errorCell && figures.firstError !== null ? (
                 <button type="button" className="trajectory-wf-statsub trajectory-wf-jump" onClick={jumpToFirstError}>
                   {t('gui.trajectory.stat.jump')}
