@@ -753,6 +753,38 @@ class TestRunning:
         assert "could not start" in record.stop_reason
         assert "approved" not in record.stop_reason
 
+    async def test_a_dispatched_round_is_not_closed_when_its_record_cannot_be_written(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        """The round is dispatched before its run id is persisted. A write that
+        fails between the two leaves a round running, and closing the record as
+        a start that never happened makes it `stopped` -- which is not
+        unfinished, so a second start may open another stint on one project."""
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = _spec(confirm=False, roles=[{"as": "planner", "name": "echo", "promptTemplate": "plan"}])
+        store = StintStore(tool.stints_root("web:stint"))
+        original = StintStore.write
+        calls = {"n": 0}
+
+        def write(self: Any, record: Any) -> Any:
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OSError("the record could not be written")
+            return original(self, record)
+
+        monkeypatch.setattr(StintStore, "write", write)
+
+        with pytest.raises(OSError, match="the record could not be written"):
+            await driver.start(spec)
+
+        [after] = store.list()
+        assert tool.submitted, "the round was dispatched"
+        assert after.status == "running", "a dispatched round is not a start that never happened"
+        assert driver.holding() is True, "the dispatched round lost its beat"
+        driver._stop_beat(after.stint_id)
+        await asyncio.sleep(0)
+
     async def test_a_pause_landing_while_the_approval_waits_survives_the_stop(self, tmp_path: Path) -> None:
         """The record was built before the question went up. Writing that
         snapshot back on the way out undoes whatever another process changed

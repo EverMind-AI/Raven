@@ -544,6 +544,12 @@ class StintDriver:
         one is ours to close; anything else has already been said by whoever
         changed it.
 
+        Both the record read from disk and the caller's own object are asked
+        whether round one opened: `_submit` opens the round on the object before
+        it writes, so a write that failed between the two leaves the file
+        without a run id while a round is in fact dispatched. Closing that one
+        would say `stopped` for a stint something is running.
+
         The holder is the pair, as `holder_gone` reads it: a matching pid on
         another host is somebody else's claim, not ours.
 
@@ -560,7 +566,7 @@ class StintDriver:
         try:
             with write_transaction(store.path_for(record.stint_id)):
                 fresh = store.read(record.stint_id)
-                if fresh is not None and _first_round_opened(fresh):
+                if fresh is not None and (_first_round_opened(fresh) or _first_round_opened(record)):
                     return
                 # No round opened: below is either a return that has nothing
                 # left to advance, or the close itself. Either way this
