@@ -32,8 +32,9 @@ scroll to move along the timeline. Sub-agents with nothing in the window fold
 into one row before it and one after, while the main agent always keeps a row
 of its own. Press Replay to watch the conversation unfold again from its first
 step, in 15 seconds at most -- a shorter one plays in its own time, and idle
-stretches pass quickly -- while the button counts down; anything that starts
-meanwhile follows at double speed, and pressing it again stops the replay.
+stretches pass quickly -- while the button counts down; what happens after the
+press, new steps and steps still running, then follows at double speed.
+Pressing it again, or opening a step's details, stops the replay.
 A step that failed carries a red mark,
 and so do the turn and the agent that hold it. While the trajectory view is
 open the message box is hidden; switch back to the chat to send a message.

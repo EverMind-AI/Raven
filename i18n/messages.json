@@ -12802,8 +12802,8 @@
       "zh": "从第一步开始重放整段会话，最长 {seconds} 秒"
     },
     "gui.trajectory.replay.catching_up": {
-      "en": "Playing what arrived during the replay at {rate} speed",
-      "zh": "正在以 {rate} 速度播放重放期间新到的内容"
+      "en": "Catching up to the present at {rate} speed",
+      "zh": "正在以 {rate} 速度追到当前进度"
     },
     "gui.trajectory.window.whole": {
       "en": "{from} – {to} · whole session",
