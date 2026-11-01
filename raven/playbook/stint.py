@@ -643,7 +643,7 @@ class StintDriver:
         pre-question snapshot back would revive what they just ended.
 
         Read and written under one ``write_transaction``: a beat's touch or a
-        whole-record write from another task lands either before the read or
+        whole-record write from another caller lands either before the read or
         after the write, never between them.
         """
         with write_transaction(store.path_for(record.stint_id)):

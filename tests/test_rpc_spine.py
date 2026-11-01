@@ -453,7 +453,7 @@ class _QuestionLoop:
 
 
 async def test_a_cancelled_turn_ends_while_its_question_is_on_the_screen():
-    """The lane's stop has to reach the task the broker is holding. Answered
+    """The lane's stop has to reach the caller the broker is holding. Answered
     with its default, the cancellation used to end inside the broker: the tool
     returned "the user did not answer", and the turn went on -- and could put a
     second question up -- after the person had pressed stop."""
