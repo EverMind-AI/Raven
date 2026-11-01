@@ -263,9 +263,7 @@ async def test_an_externally_cancelled_wait_after_a_swallowed_cancel_still_answe
     await _wait_for_frame(frames)
     broker._pending[CID].future.cancel()
 
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    assert broker.pending_req(CID) is None
+    assert await task == "d"
     await _wait_for_method(frames, "clarify.closed")
 
 

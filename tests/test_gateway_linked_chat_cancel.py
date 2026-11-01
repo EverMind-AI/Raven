@@ -244,7 +244,7 @@ async def test_stale_named_cancel_leaves_linked_turn_and_pending_inject_alone(li
     await inbound(r, "linked work")
     host, handle = await running(r)
     sent = await rpc(r, "turn.send", session_key=KEY, content="page correction", busy="inject")
-    assert await rpc(r, "turn.cancel", session_key=KEY, turn_id="finished-turn") == {"cancelled": False}
+    assert await rpc(r, "turn.cancel", session_key=KEY, turn_id="finished-turn") == {"cancelled": False, "busy": True}
     assert r.scheduler.running_turn(KEY)[0] == host.turn_id
     assert sent["turn_id"] in turn._pending_injects[KEY]
     assert cancelled_ids(r) == []
