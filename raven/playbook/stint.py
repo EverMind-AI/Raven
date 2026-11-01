@@ -1222,10 +1222,12 @@ class StintDriver:
                 self._close_first_round(record, store, reason="the first round was not approved", beat=beat)
             else:
                 # A refusal the person did not make -- delegation paused, a
-                # validation refusal, a question that could not be delivered --
-                # is not an answer to the question. Leave the record retryable,
-                # as a resume that never asked already did; only "not approved"
-                # closes it.
+                # validation refusal, a dispatch that never started -- is not
+                # an answer to the question. Leave the record retryable, as a
+                # resume that never asked already did; only "not approved"
+                # closes it. A question nobody answered (a timeout, or one the
+                # broker could not deliver) fails safe to `_NOT_APPROVED` above
+                # and closes like any other unanswered ask.
                 self._stop_this_beat(record.stint_id, beat)
                 self._restore_unopened(
                     record,
