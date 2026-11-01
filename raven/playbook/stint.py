@@ -1129,11 +1129,14 @@ class StintDriver:
         # pause turned it away after the person had said yes; `_submit` marks
         # that. `resume` asks nobody for a round that was approved, but one
         # still unapproved has to be put to the person before it runs. Claimed
-        # here as `start` does: the question can stand for the broker's whole
-        # budget.
+        # here, and only here, as `start` does: the question can stand for the
+        # broker's whole budget. A resume that asks nobody has nothing to keep
+        # alive while `_submit` preflights, and `_submit` claims once the round
+        # opens.
         confirm = spec.confirm if not (_first_round_opened(record) or record.first_round_approved) else False
         record.status = RUNNING
-        record.claim()
+        if confirm:
+            record.claim()
         store.write(record)
         beat = None
         if confirm:

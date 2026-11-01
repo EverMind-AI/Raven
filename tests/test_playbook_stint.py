@@ -3015,6 +3015,50 @@ class TestResume:
         assert after.status == "interrupted", "a transient refusal is not the person saying no"
         assert driver.holding() is False, "the pre-approval beat outlived the resume"
 
+    async def test_a_resume_that_asks_nobody_does_not_claim_the_stint(self, tmp_path: Path) -> None:
+        """Only the approval wait needs a live claim. A resume that opens an
+        already-approved round has nothing to keep alive while it preflights;
+        claiming here makes a cancelled resume look like a live holder and
+        refuses the next one for five minutes although nothing advances it."""
+        from raven.stint.record import StintRecord
+
+        tool = _FakeTool(tmp_path / "stints")
+        driver = self._driver(tmp_path, tool)
+        spec = _spec(confirm=False, roles=[{"as": "planner", "name": "echo", "promptTemplate": "plan"}])
+        store = StintStore(tool.stints_root("web:stint"))
+        record = StintRecord(
+            stint_id="stint-x",
+            playbook=spec.name,
+            spec=spec.model_dump(by_alias=True, exclude_none=True),
+            workdir=str(tmp_path),
+            project=str(tmp_path),
+            round_index=1,
+            status="interrupted",
+            origin=tool.turn_origin(),
+        )
+        record.open_round(1, "run-old")
+        record.holder_pid, record.holder_host = 4242, "the-old-host"
+        store.write(record)
+
+        started = asyncio.Event()
+
+        async def blocking(nodes: list[dict[str, Any]], **kwargs: Any) -> str:
+            started.set()
+            await asyncio.sleep(3600)
+
+        tool.run_round = blocking  # type: ignore[method-assign]
+        running = asyncio.create_task(driver.resume("stint-x", "web:stint"))
+        await asyncio.wait_for(started.wait(), 1.0)
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+
+        after = store.read("stint-x")
+        assert (after.holder_pid, after.holder_host) == (4242, "the-old-host"), (
+            "a resume that asks nobody claimed the stint"
+        )
+        assert driver.holding() is False
+
 
 class TestTheWordThatEndsItEarly:
     """`stop.until` was read by the machine and said to nobody."""
