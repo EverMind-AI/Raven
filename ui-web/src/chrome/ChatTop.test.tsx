@@ -393,6 +393,163 @@ describe('the chat column chrome and the trajectory view', () => {
 
 })
 
+/* The header floats over the transcript, so a bubble scrolled to the top
+ * passes under it instead of being cut at its edge, and what it passes under
+ * is a fade of frosted glass that reaches below the header's own row.
+ * happy-dom has no backdrop-filter in its property table and applies an
+ * @supports block without evaluating it, so the blur and its ramp are read off
+ * the rule's own text while the layout facts are read as computed styles: the
+ * header out of the flow, the scroller giving the row's height back as padding
+ * (the resting frame) but clearing the whole fade for scrollIntoView, and the
+ * trajectory view and parked copy starting clear of it. Only a browser can
+ * show the blur itself. */
+describe('the header band', () => {
+  let sheet: HTMLStyleElement | null = null
+
+  function styled(): void {
+    render()
+    sheet = document.createElement('style')
+    sheet.textContent = source('styles/page.css')
+    document.head.append(sheet)
+  }
+
+  /* The custom property as the page declares it; happy-dom resolves the
+     substitution but not the calc, so the token is compared as written. */
+  const token = (name: string): string =>
+    getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+
+  afterEach(() => {
+    sheet?.remove()
+    sheet = null
+    document.documentElement.removeAttribute('data-traj')
+    document.documentElement.removeAttribute('data-shell')
+    document.documentElement.style.removeProperty('--tl-row')
+  })
+
+  it('floats over the transcript instead of ending where it begins', () => {
+    styled()
+    expect(getComputedStyle(top()).position).toBe('absolute')
+  })
+
+  it('gives the row height back as padding, so the resting frame does not move', () => {
+    styled()
+    const row = getComputedStyle(top()).height
+    expect(row).toBe('52px')
+    const scroll = getComputedStyle(el('scroll'))
+    expect(scroll.paddingTop).toBe(row)
+    /* Not the row: scrollIntoView has to clear the fade below it as well. */
+    expect(token('--topbar-fade-tail')).toBe('56px')
+    expect(scroll.scrollPaddingTop).toBe(token('--topbar-fade-h'))
+    expect(scroll.scrollPaddingTop).not.toBe(row)
+  })
+
+  it('starts the trajectory view below the fade and parks the scroller at its live size', () => {
+    styled()
+    document.documentElement.setAttribute('data-traj', '')
+    /* The island is an inset card now (the waterfall's glass sheet), so the
+       band is its top margin, not padding inside it: padding would push the
+       content down while the card's top edge stayed under the header. */
+    expect(getComputedStyle(el('trajHost')).paddingTop).toBe('0px')
+    const css = source('styles/page.css')
+    const island = (css.match(/html\[data-traj\] #trajHost \{([\s\S]*?)\}/) as RegExpMatchArray)[1] as string
+    expect(island).toMatch(/margin: calc\(var\(--topbar-fade-h\) \+ 6px\) 14px 14px;/)
+    const scroll = el('scroll')
+    scroll.dataset.parked = ''
+    /* The parked copy is the live box out of the flow: inset 0 keeps its
+       size, so its content starts at the same offset the live one does. */
+    expect(getComputedStyle(scroll).getPropertyValue('inset').trim()).toBe('0')
+  })
+
+  it('places the up pill and the turn nav clear of the whole band', () => {
+    styled()
+    const css = source('styles/page.css')
+    /* The pill's top is a calc-of-calc, which happy-dom cannot read back as a
+       number, so the rule is pinned as written; the nav is a single token and
+       can be measured. */
+    expect(css).toMatch(/\.chrome-toppill \{ top: calc\(var\(--topbar-fade-h\) \+ 12px\); bottom: auto; \}/)
+    sheet!.textContent = `${sheet!.textContent}\n${source('features/transcript/styles.css')}`
+    const nav = document.createElement('div')
+    nav.className = 'transcript-nav'
+    document.body.append(nav)
+    expect(getComputedStyle(nav).top).toBe(token('--topbar-fade-h'))
+    nav.remove()
+  })
+
+  it('reads the shell title row into the row, the band and the scroller', () => {
+    styled()
+    document.documentElement.dataset.shell = '1'
+    document.documentElement.style.setProperty('--tl-row', '38px')
+    expect(getComputedStyle(top()).height).toBe('38px')
+    const scroll = getComputedStyle(el('scroll'))
+    expect(scroll.paddingTop).toBe('38px')
+    expect(scroll.scrollPaddingTop).toBe(token('--topbar-fade-h'))
+    expect(source('styles/page.css'))
+      .toMatch(/:root\[data-shell="1"\] \{ --topbar-h: var\(--tl-row, 38px\); \}/)
+  })
+
+  it('splits a translucent tint from the blur, over an opaque ground where the blur is unsupported', () => {
+    styled()
+    const css = source('styles/page.css')
+
+    /* The blur layer carries no ground: an engine that paints the element's
+       background over the filtered backdrop would hide the blur entirely. */
+    const blur = (css.match(/\.chat > \.top::before\s*\{([\s\S]*?)\}/) as RegExpMatchArray)[1] as string
+    expect(blur).toMatch(/-webkit-backdrop-filter: blur\(20px\) saturate\(1\.4\)/)
+    expect(blur).toMatch(/backdrop-filter: blur\(20px\) saturate\(1\.4\)/)
+    expect(blur).toMatch(/height: var\(--topbar-fade-h\)/)
+    expect(blur).not.toMatch(/background:/)
+    /* The ramp lands at the element's lower edge, not 20px above it. */
+    expect(blur).toMatch(/rgba\(0, 0, 0, 0\) 100%\)/)
+
+    const tint = (css.match(/\.chat > \.top::after\s*\{([\s\S]*?)\}/) as RegExpMatchArray)[1] as string
+    expect(tint).toMatch(/height: var\(--topbar-fade-h\)/)
+    expect(tint).toMatch(/background: var\(--topbar-tint\)/)
+    expect(tint).toMatch(/mask-image: linear-gradient\(180deg, #000 0/)
+    expect(tint).toMatch(/rgba\(0, 0, 0, 0\) 100%\)/)
+    /* Neither layer may depend on color-mix: engines with backdrop-filter but
+       without it would lose the ground and leave the title on a bare blur. */
+    expect(blur).not.toMatch(/color-mix/)
+    expect(tint).not.toMatch(/color-mix/)
+
+    /* The band is glass, not paint: the tint token's alpha has to stay low
+       enough that the bubble under it is still read as colour and shape. An
+       opaque --page here is the regression this guards. */
+    const tintValue = token('--topbar-tint')
+    const alpha = Number(tintValue.slice(tintValue.lastIndexOf(',') + 1).replace(')', '').trim())
+    expect(alpha).toBeGreaterThan(0)
+    expect(alpha).toBeLessThanOrEqual(0.35)
+    expect(token('--topbar-halo')).toMatch(/rgba\(/)
+    expect(token('--topbar-plate')).toMatch(/rgba\(/)
+
+    /* Each frost token is declared four times -- the root's light defaults,
+       the media dark block, the viewer's dark override and the viewer's light
+       override -- and a value that drifts in one of them is invisible until
+       someone opens that theme. Pin the count and the shared alpha. */
+    const declared = (name: string): string[] =>
+      [...css.matchAll(new RegExp(`${name}:\\s*(rgba\\([^)]*\\))`, 'g'))].map((m) => (m[1] as string))
+    const tintAlphas = declared('--topbar-tint').map((v) => Number(v.slice(v.lastIndexOf(',') + 1).replace(')', '').trim()))
+    expect(tintAlphas).toHaveLength(4)
+    expect(new Set(tintAlphas)).toEqual(new Set([0.3]))
+    expect(declared('--topbar-halo')).toHaveLength(4)
+    expect(declared('--topbar-plate')).toHaveLength(4)
+    /* Legibility over a dark bubble is the halo's and the plates' job, not a
+       heavier tint: both rules have to stay in the sheet. The plate comes
+       through --ghost-bg so .ghost-ic:hover still wins at its own weight. */
+    expect(css).toMatch(/\.chat > \.top h1,\n\.chat > \.top \.chrome-wd-tag \{ text-shadow: 0 0 2px var\(--topbar-halo\), 0 0 9px var\(--topbar-halo\); \}/)
+    expect(css).toMatch(/\.chat > \.top \{[^}]*--ghost-bg: var\(--topbar-plate\);/)
+    expect(css).toMatch(/\.ghost-ic \{[^}]*background: var\(--ghost-bg, transparent\);/)
+    expect(css).toMatch(/\.ghost-ic:hover \{[^}]*background: var\(--hover\)/ )
+
+    const fallback = (css.match(
+      /@supports not \(\(backdrop-filter: blur\(1px\)\) or \(-webkit-backdrop-filter: blur\(1px\)\)\) \{([\s\S]*?)\n\}/,
+    ) as RegExpMatchArray)[1] as string
+    expect(fallback).toMatch(/\.chat > \.top::before \{ display: none; \}/)
+    expect(fallback).toMatch(/background: var\(--page\)/)
+    expect(fallback).toMatch(/-webkit-mask-image: none/)
+    expect(fallback).toMatch(/mask-image: none/)
+  })
+})
+
 /* Last in the file on purpose: applying a language is module state for
    everything after it.
  *
@@ -459,135 +616,6 @@ describe('the chat column chrome when a language is applied', () => {
     flip()
     expect(Array.from(el('stage').children)).toEqual([lane, live])
     expect(el('stage').lastElementChild).toBe(live)
-  })
-})
-
-
-/* The header floats over the transcript, so a bubble scrolled to the top
- * passes under it instead of being cut at its edge, and what it passes under
- * is a fade of frosted glass that reaches below the header's own row.
- * happy-dom has no backdrop-filter in its property table and applies an
- * @supports block without evaluating it, so the blur and its ramp are read off
- * the rule's own text while the layout facts are read as computed styles: the
- * header out of the flow, the scroller giving the row's height back as padding
- * (the resting frame) but clearing the whole fade for scrollIntoView, and the
- * trajectory view and parked copy starting clear of it. Only a browser can
- * show the blur itself. */
-describe('the header band', () => {
-  let sheet: HTMLStyleElement | null = null
-
-  function styled(): void {
-    render()
-    sheet = document.createElement('style')
-    sheet.textContent = source('styles/page.css')
-    document.head.append(sheet)
-  }
-
-  /* The custom property as the page declares it; happy-dom resolves the
-     substitution but not the calc, so the token is compared as written. */
-  const token = (name: string): string =>
-    getComputedStyle(document.documentElement).getPropertyValue(name).trim()
-
-  afterEach(() => {
-    sheet?.remove()
-    sheet = null
-    document.documentElement.removeAttribute('data-traj')
-  })
-
-  it('floats over the transcript instead of ending where it begins', () => {
-    styled()
-    expect(getComputedStyle(top()).position).toBe('absolute')
-  })
-
-  it('gives the row height back as padding, so the resting frame does not move', () => {
-    styled()
-    const row = getComputedStyle(top()).height
-    expect(row).toBe('52px')
-    const scroll = getComputedStyle(el('scroll'))
-    expect(scroll.paddingTop).toBe(row)
-    /* Not the row: scrollIntoView has to clear the fade below it as well. */
-    expect(token('--topbar-fade-tail')).toBe('56px')
-    expect(scroll.scrollPaddingTop).toBe(token('--topbar-fade-h'))
-    expect(scroll.scrollPaddingTop).not.toBe(row)
-  })
-
-  it('starts the trajectory view below the fade and parks the scroller at its live size', () => {
-    styled()
-    document.documentElement.setAttribute('data-traj', '')
-    /* The island is an inset card now (the waterfall's glass sheet), so the
-       band is its top margin, not padding inside it: padding would push the
-       content down while the card's top edge stayed under the header. */
-    expect(getComputedStyle(el('trajHost')).paddingTop).toBe('0px')
-    const css = source('styles/page.css')
-    const island = (css.match(/html\[data-traj\] #trajHost \{([\s\S]*?)\}/) as RegExpMatchArray)[1] as string
-    expect(island).toMatch(/margin: calc\(var\(--topbar-fade-h\) \+ 6px\) 14px 14px;/)
-    const scroll = el('scroll')
-    scroll.dataset.parked = ''
-    /* The parked copy is the live box out of the flow: inset 0 keeps its
-       size, so its content starts at the same offset the live one does. */
-    expect(getComputedStyle(scroll).getPropertyValue('inset').trim()).toBe('0')
-  })
-
-  it('splits a translucent tint from the blur, over an opaque ground where the blur is unsupported', () => {
-    styled()
-    const css = source('styles/page.css')
-
-    /* The blur layer carries no ground: an engine that paints the element's
-       background over the filtered backdrop would hide the blur entirely. */
-    const blur = (css.match(/\.chat > \.top::before\s*\{([\s\S]*?)\}/) as RegExpMatchArray)[1] as string
-    expect(blur).toMatch(/-webkit-backdrop-filter: blur\(20px\) saturate\(1\.4\)/)
-    expect(blur).toMatch(/backdrop-filter: blur\(20px\) saturate\(1\.4\)/)
-    expect(blur).toMatch(/height: var\(--topbar-fade-h\)/)
-    expect(blur).not.toMatch(/background:/)
-    /* The ramp lands at the element's lower edge, not 20px above it. */
-    expect(blur).toMatch(/rgba\(0, 0, 0, 0\) 100%\)/)
-
-    const tint = (css.match(/\.chat > \.top::after\s*\{([\s\S]*?)\}/) as RegExpMatchArray)[1] as string
-    expect(tint).toMatch(/height: var\(--topbar-fade-h\)/)
-    expect(tint).toMatch(/background: var\(--topbar-tint\)/)
-    expect(tint).toMatch(/mask-image: linear-gradient\(180deg, #000 0/)
-    expect(tint).toMatch(/rgba\(0, 0, 0, 0\) 100%\)/)
-    /* Neither layer may depend on color-mix: engines with backdrop-filter but
-       without it would lose the ground and leave the title on a bare blur. */
-    expect(blur).not.toMatch(/color-mix/)
-    expect(tint).not.toMatch(/color-mix/)
-
-    /* The band is glass, not paint: the tint token's alpha has to stay low
-       enough that the bubble under it is still read as colour and shape. An
-       opaque --page here is the regression this guards. */
-    const tintValue = token('--topbar-tint')
-    const alpha = Number(tintValue.slice(tintValue.lastIndexOf(',') + 1).replace(')', '').trim())
-    expect(alpha).toBeGreaterThan(0)
-    expect(alpha).toBeLessThanOrEqual(0.35)
-    expect(token('--topbar-halo')).toMatch(/rgba\(/)
-    expect(token('--topbar-plate')).toMatch(/rgba\(/)
-
-    /* Each frost token is declared four times -- the root's light defaults,
-       the media dark block, the viewer's dark override and the viewer's light
-       override -- and a value that drifts in one of them is invisible until
-       someone opens that theme. Pin the count and the shared alpha. */
-    const declared = (name: string): string[] =>
-      [...css.matchAll(new RegExp(`${name}:\\s*(rgba\\([^)]*\\))`, 'g'))].map((m) => (m[1] as string))
-    const tintAlphas = declared('--topbar-tint').map((v) => Number(v.slice(v.lastIndexOf(',') + 1).replace(')', '').trim()))
-    expect(tintAlphas).toHaveLength(4)
-    expect(new Set(tintAlphas)).toEqual(new Set([0.3]))
-    expect(declared('--topbar-halo')).toHaveLength(4)
-    expect(declared('--topbar-plate')).toHaveLength(4)
-    /* Legibility over a dark bubble is the halo's and the plates' job, not a
-       heavier tint: both rules have to stay in the sheet. The plate comes
-       through --ghost-bg so .ghost-ic:hover still wins at its own weight. */
-    expect(css).toMatch(/\.chat > \.top h1,\n\.chat > \.top \.chrome-wd-tag \{ text-shadow: 0 0 2px var\(--topbar-halo\), 0 0 9px var\(--topbar-halo\); \}/)
-    expect(css).toMatch(/\.chat > \.top \{[^}]*--ghost-bg: var\(--topbar-plate\);/)
-    expect(css).toMatch(/\.ghost-ic \{[^}]*background: var\(--ghost-bg, transparent\);/)
-    expect(css).toMatch(/\.ghost-ic:hover \{[^}]*background: var\(--hover\)/ )
-
-    const fallback = (css.match(
-      /@supports not \(\(backdrop-filter: blur\(1px\)\) or \(-webkit-backdrop-filter: blur\(1px\)\)\) \{([\s\S]*?)\n\}/,
-    ) as RegExpMatchArray)[1] as string
-    expect(fallback).toMatch(/\.chat > \.top::before \{ display: none; \}/)
-    expect(fallback).toMatch(/background: var\(--page\)/)
-    expect(fallback).toMatch(/-webkit-mask-image: none/)
-    expect(fallback).toMatch(/mask-image: none/)
   })
 })
 
