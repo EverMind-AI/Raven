@@ -209,7 +209,8 @@ or cmd with the wheel zooms about the pointer (read against the ruler, which
 spans the axis exactly), and shift with the wheel pans. The header's presets
 set a window of three hours, one hour or fifteen minutes about the middle of
 the one on screen -- a middle in an idle fold moves to the work beside it --
-and Fit gives the whole session back; Collapse all folds every agent and turn.
+and Fit gives the whole session back; Collapse folds every agent and turn,
+and Replay draws the session again from its first instant (Waterfall Replay).
 Once the window is narrowed, the workers whose work lies wholly before it, or
 wholly after it, step into one fold row for each side ("2 agents finished
 earlier"), which opens in place; the main agent always keeps its own row.
@@ -270,6 +271,26 @@ waterfall row, they select across scopes without moving the current one
 _Avoid_: "trace view" or "audit view" for this -- the trace is what the runtime
 records, the trajectory is how this page reads it back -- and "sub-agent trace"
 -- a spawned run's steps are in the trace of the turn that dispatched it.
+
+**Waterfall Replay**:
+The Trajectory View drawing its conversation again from the first instant
+(`features/trajectory/waterfall/replay.ts`), from the header's Replay button.
+Each entry appears when it started, one still running at the playhead is cut
+there as running with its failure not yet shown (`entriesAt`), and the header's
+figures, the activity strip and the rows are worked out from that, on the whole
+session's axis, with a playhead line down the ruler and the rows. A narrowed
+window and a picked stretch are let go: the replay is of the whole session.
+The press divides the session: what had started by then is history, however
+late the index hands it over, and the first pass plays all of it on the folded
+axis -- in its own time when that is no longer than fifteen seconds, squeezed
+into fifteen seconds otherwise (`REPLAY_MS`), the button counting it down. What
+starts after the press, or runs on past it, is played next at twice real time
+(`CATCH_UP_RATE`) until the playhead reaches the present. Pressing again,
+another conversation or going back to the chat ends it. Meanwhile each header
+figure keeps the width of the whole session's, so nothing in the header moves.
+_Avoid_: "trajectory replay" for it -- that is the Runtime's Trajectory Replay
+(`raven trajectory replay`), a re-run of the harness against a recording; this
+re-runs nothing and only redraws the entries the list store holds.
 
 **Region**:
 One of the things `src/App.tsx` renders at the body, in the standing order
