@@ -128,12 +128,19 @@ afterwards. To check whether a newer release exists without installing it, run
 
 ### Update a source checkout
 
-Pull the latest changes and run the local installer again (`.\install.ps1` in
-PowerShell):
+Pull the latest changes and run the local installer again. On Linux and macOS:
 
 ```bash
+git pull && ./install.sh
+```
+
+On Windows, stop the page first, pull, then run the PowerShell installer. If
+`git pull` fails, fix it before running the installer:
+
+```powershell
+raven web --stop
 git pull
-./install.sh
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 The installer reinstalls the checkout in editable mode, rebuilds the TUI and

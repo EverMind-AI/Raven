@@ -1343,6 +1343,59 @@ def editable_checkout_status() -> tuple[Path, int, int]:
     return checkout, ahead, behind
 
 
+def _on_windows() -> bool:
+    return os.name == "nt"
+
+
+def install_script(*, windows: bool | None = None) -> str:
+    """The installer a source checkout reruns to update itself.
+
+    install.sh refuses to run on Windows, so every surface that names the
+    checkout's update command -- the CLI's refusal and the page's -- picks the
+    script by platform from this one definition and cannot drift apart again.
+    """
+    if windows is None:
+        windows = _on_windows()
+    return ".\\install.ps1" if windows else "./install.sh"
+
+
+def install_command(*, windows: bool | None = None) -> str:
+    """The command that runs the checkout's installer, per platform.
+
+    cmd.exe cannot run a .ps1 by name, and Windows PowerShell 5.1 rejects `&&`,
+    so Windows names the PowerShell that ships with the OS and bypasses the
+    execution policy for that process only. The stock Windows client policy is
+    Restricted and refuses a bare script file, so the page and the CLI read the
+    whole invocation from here, not only the script name. POSIX runs install.sh
+    directly.
+    """
+    if windows is None:
+        windows = _on_windows()
+    script = install_script(windows=windows)
+    if windows:
+        return f'powershell -NoProfile -ExecutionPolicy Bypass -File "{script}"'
+    return script
+
+
+def checkout_update_commands(*, windows: bool | None = None) -> tuple[str, ...]:
+    """The commands a source checkout reruns to update itself, one per line.
+
+    Windows PowerShell 5.1 rejects `&&` as a statement separator, and cmd.exe
+    cannot run a .ps1 by name, so the Windows form is several commands and names
+    the PowerShell that ships with Windows. It stops the page first: `uv tool
+    install --force` replaces the environment Raven runs from, and Windows will
+    not delete a running `raven.exe`. POSIX keeps the one-line form every
+    release has printed -- install.sh stops and restarts the gateway itself
+    after replacing the executable in place. The CLI prints these; the page's
+    recovery embeds install_command() in its own PowerShell script instead.
+    """
+    if windows is None:
+        windows = _on_windows()
+    if windows:
+        return ("raven web --stop", "git pull", install_command(windows=True))
+    return (f"git pull && {install_command(windows=False)}",)
+
+
 def _uv_tool_target() -> ToolInstallTarget | None:
     prefix = Path(sys.prefix)
     if not prefix.is_absolute():
