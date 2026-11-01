@@ -538,7 +538,7 @@ async def test_upgrade_refuses_when_the_install_cannot_self_upgrade(monkeypatch:
 @pytest.mark.parametrize(
     ("windows", "checkout", "command"),
     [
-        (False, "/srv/raven dev", "cd '/srv/raven dev'\ngit pull\n./install.sh"),
+        (False, "/srv/raven dev", "cd '/srv/raven dev'\ngit pull && ./install.sh"),
         (
             True,
             "C:\\Users\\o'neil\\Raven",
@@ -615,13 +615,14 @@ def test_a_windows_checkout_recovery_runs_the_cli_s_policy_safe_installer():
 def test_a_posix_checkout_recovery_leaves_the_running_page_alone():
     """POSIX replaces a running executable in place, and `install.sh` stops and
     restarts the gateway itself once the new install is in: stopping first
-    would only take the page down for the whole build."""
+    would only take the page down for the whole build. The pull and install
+    stay one guarded line, as the CLI and the release notes print them."""
     from raven.rpc.methods.system import _checkout_recovery
 
     command = _checkout_recovery("/srv/raven", False)
 
     assert "raven web --stop" not in command
-    assert command.splitlines()[-1] == "./install.sh"
+    assert command.splitlines()[-1] == "git pull && ./install.sh"
 
 
 async def test_a_checkout_whose_path_cannot_be_read_gets_no_command(monkeypatch: pytest.MonkeyPatch):

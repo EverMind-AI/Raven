@@ -131,8 +131,7 @@ afterwards. To check whether a newer release exists without installing it, run
 Pull the latest changes and run the local installer again. On Linux and macOS:
 
 ```bash
-git pull
-./install.sh
+git pull && ./install.sh
 ```
 
 On Windows, stop the page first, pull, then run the PowerShell installer. If

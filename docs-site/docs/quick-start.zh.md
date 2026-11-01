@@ -109,8 +109,7 @@ WebUI，升级完成后再启动。如只想检查是否有新版本而不安装
 拉取最新代码后，再运行一次本地安装脚本。Linux 和 macOS：
 
 ```bash
-git pull
-./install.sh
+git pull && ./install.sh
 ```
 
 Windows 上先停掉页面，再拉取代码并运行 PowerShell 安装脚本。如果 `git pull`

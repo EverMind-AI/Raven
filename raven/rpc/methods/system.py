@@ -280,7 +280,7 @@ def _checkout_recovery(checkout: str, windows: bool) -> str:
             + _upgrade.install_command(windows=True)
             + " }"
         )
-    return f"cd {shlex.quote(checkout)}\ngit pull\n{_upgrade.install_command(windows=False)}"
+    return f"cd {shlex.quote(checkout)}\ngit pull && {_upgrade.install_command(windows=False)}"
 
 
 def _unsupervised_recovery(windows: bool) -> tuple[str, str]:
