@@ -239,11 +239,14 @@ function placeholder(): string {
   return t(turn.busy() ? 'gui.composer.ph_busy' : 'gui.composer.ph_session')
 }
 
-/* The field may take half the window, computed when asked rather than stored,
-   so a resized window moves the cap with it and there is no second number to
-   keep in step. The stylesheet gives it the same half as a backstop for the
-   frame between a resize and the fit below. */
-const fieldCeiling = (): number => Math.round(window.innerHeight * 0.5)
+/* The field may take half the visual viewport, computed when asked rather than
+   stored, so a resized window moves the cap with it. The visual viewport is
+   also the one a soft keyboard shrinks -- iOS Safari leaves the window's own
+   height and its resize event alone -- and `innerHeight` is the fallback for a
+   browser that does not implement it. The stylesheet sets no cap of its own,
+   so there is still no second number to keep in step. */
+const fieldCeiling = (): number =>
+  Math.round((window.visualViewport?.height ?? window.innerHeight) * 0.5)
 
 /* The floor is today's resting height, which is the CSS min-height: read back
    rather than repeated, so the two cannot drift. */

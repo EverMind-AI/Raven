@@ -77,8 +77,8 @@ function DockIn(): JSX.Element {
   return (
     <div className="dock-in">
       {/* The height seam: dragged from the card's top edge between the field's
-          resting height and half the window (features/composer/store.ts). No
-          interior of its own. */}
+          resting height and half the visual viewport (features/composer/store.ts).
+          No interior of its own. */}
       <div
         className="chrome-composer-grip"
         id="composerGrip"

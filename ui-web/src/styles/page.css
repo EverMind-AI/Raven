@@ -2654,8 +2654,8 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 .field .c { font-family: var(--mono); color: var(--amber); padding-bottom: 3px; }
 /* The ceiling is viewport-relative on purpose: a fixed 168px eats a third of a
    short window, and what it eats is the tail of the transcript the reader is
-   writing about. The composer's own field takes the same viewport-relative
-   ceiling, set where its height is (features/composer/store.ts). */
+   writing about. The composer's own field has its own ceiling, measured on the
+   visual viewport where its height is set (features/composer/store.ts). */
 /* Two lines at rest: an input that opens at one cramped line undersells
    itself as the main act of the page. */
 textarea {
@@ -2664,13 +2664,14 @@ textarea {
 }
 textarea::placeholder { color: var(--faint); }
 /* The composer's own field: the reply's 15/26 body (--fs-body), two lines at
-   rest and up to half the window before it scrolls. Its height is written by
-   features/composer/store.ts, which owns both bounds; the min-height here is
-   the floor that file reads back, and the max-height only holds the field
-   between writes. */
+   rest and up to half the visual viewport before it scrolls. Its height is
+   written by features/composer/store.ts, which owns both bounds; the min-height
+   here is the floor that file reads back. No max-height: a vh cap is measured
+   against the layout viewport, which is not the one a soft keyboard shrinks,
+   so it would be a second number that disagrees with the first. */
 .dock-in textarea {
   font-size: var(--fs-body); line-height: 26px; padding: 0; color: var(--composer-ink);
-  min-height: 52px; max-height: 50vh;
+  min-height: 52px; max-height: none;
 }
 .dock-in textarea::placeholder { color: var(--composer-ph); }
 /* WebKit paints its own focus ring on text controls; ours is the container

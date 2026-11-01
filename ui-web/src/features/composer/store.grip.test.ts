@@ -1,21 +1,41 @@
 // @vitest-environment happy-dom
 /* The composer's height seam: a drag from the card's top edge sets the field's
- * height between its resting size and half the window, the dragged height takes
- * precedence over the content fit, and the lift the transcript reserves is
- * published inside the move rather than after the paint that follows it.
+ * height between its resting size and half the visual viewport, the dragged
+ * height takes precedence over the content fit, and the lift the transcript
+ * reserves is published inside the move rather than after the paint that
+ * follows it.
  *
  * happy-dom does no layout and loads no stylesheet, so the field's min-height
  * is stated inline (the value page.css gives it) and its scroll height and
  * rects are stubbed; the numbers are what is being asserted.
  */
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
+import { installGlobalListeners } from '../../state/globalListeners'
 import { _resetForTests, fitField, gripDrag, resizeField } from './store'
 
 const FLOOR = 52
 
+/* happy-dom has no visual viewport, so the one a soft keyboard shrinks is
+   ours: the page registers its re-clamp on this target, and only its height
+   moves when the keyboard opens. */
+class KeyboardViewport extends EventTarget {
+  height = 800
+}
+
+const vv = new KeyboardViewport()
+Object.defineProperty(window, 'visualViewport', { configurable: true, value: vv })
+
+/* A window resize moves both viewports. */
 function viewport(px: number): void {
   Object.defineProperty(window, 'innerHeight', { value: px, configurable: true })
+  vv.height = px
+}
+
+/* The soft keyboard on iOS Safari moves the visual viewport alone. */
+function keyboard(px: number): void {
+  vv.height = px
+  vv.dispatchEvent(new Event('resize'))
 }
 
 function rect(top: number, height: number): DOMRect {
@@ -58,6 +78,10 @@ function moveTo(el: HTMLElement, y: number): void {
 function key(el: HTMLElement, name: string, shiftKey = false): void {
   el.dispatchEvent(new KeyboardEvent('keydown', { key: name, shiftKey, bubbles: true, cancelable: true }))
 }
+
+beforeAll(() => {
+  installGlobalListeners()
+})
 
 beforeEach(() => {
   _resetForTests()
@@ -181,5 +205,38 @@ describe('resizing without a pointer', () => {
     expect(ta.style.height).toBe(`${FLOOR}px`)
     resizeField(9999)
     expect(ta.style.height).toBe('400px')
+  })
+})
+
+describe('a soft keyboard over the field', () => {
+  it('pulls a dragged height down with the keyboard and gives it back when it closes', () => {
+    const ta = mount()
+    resizeField(350)
+    expect(ta.style.height).toBe('350px')
+    keyboard(400)
+    expect(ta.style.height).toBe('200px')
+    keyboard(800)
+    expect(ta.style.height).toBe('350px')
+  })
+
+  it('caps the content fit at half the visual viewport, not the window', () => {
+    const ta = mount()
+    content(ta, 900)
+    keyboard(400)
+    expect(ta.style.height).toBe('200px')
+    keyboard(800)
+    expect(ta.style.height).toBe('400px')
+  })
+
+  it('falls back to the window where the visual viewport is not implemented', () => {
+    const ta = mount()
+    Object.defineProperty(window, 'visualViewport', { configurable: true, value: undefined })
+    try {
+      Object.defineProperty(window, 'innerHeight', { value: 600, configurable: true })
+      resizeField(9999)
+      expect(ta.style.height).toBe('300px')
+    } finally {
+      Object.defineProperty(window, 'visualViewport', { configurable: true, value: vv })
+    }
   })
 })
