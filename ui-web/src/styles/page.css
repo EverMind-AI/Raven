@@ -198,9 +198,10 @@
   --wsw: 420px;
   --chat-min: 430px;
   /* The chat header's row. It floats over the transcript rather than sitting
-     above it (see .top), so the scroller's top inset, the parked copy's inset
-     and the trajectory box's inset all read this one number. The desktop shell
-     swaps in the title bar it measured. */
+     above it (see .top), so the scroller's resting top inset reads this one
+     number, and the frost band the trajectory view clears is this row plus
+     --topbar-fade-tail below. The desktop shell swaps in the title bar it
+     measured. */
   --topbar-h: 52px;
   /* How far the frost falls below that row before it is fully clear. The
      visible band is --topbar-h + this, and its LOWER edge -- not the row's --
@@ -2993,8 +2994,8 @@ textarea:focus, textarea:focus-visible,
 /* The trajectory view (features/trajectory/). The scroller is parked, not
    removed: out of the flow at the size it had, invisible and deaf to the
    pointer, so its scroll position survives and the transcript keeps streaming
-   into it underneath. --topbar-h is the live scroller's own top padding, so
-   the parked box still starts where its content does.
+   into it underneath. Inset 0 is the live box's geometry, padding included,
+   so the parked copy keeps the size and content offset the live one had.
    The trajectory's box takes the flex space and reserves --lift below, the
    same inset .col reserves, so its last row clears the composer the way the
    last message does. The pill and the turn nav belong to the scroller and go
@@ -3005,7 +3006,7 @@ textarea:focus, textarea:focus-visible,
    top margin: the island has to float below the band with its own inset
    visible, and a padding would push the rows down while the card's top edge
    stayed under the header. */
-.scroll[data-parked] { position: absolute; inset: var(--topbar-h) 0 0; visibility: hidden; pointer-events: none; }
+.scroll[data-parked] { position: absolute; inset: 0; visibility: hidden; pointer-events: none; }
 .scroll[data-parked] ~ .backpill { display: none; }
 .scroll[data-parked] ~ #turnNav { display: none; }
 #trajHost { flex: 1; min-height: 0; display: flex; flex-direction: column;

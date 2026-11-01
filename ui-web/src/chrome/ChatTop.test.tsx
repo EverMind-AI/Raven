@@ -511,7 +511,7 @@ describe('the header band', () => {
     expect(scroll.scrollPaddingTop).not.toBe(row)
   })
 
-  it('starts the trajectory view below the fade', () => {
+  it('starts the trajectory view below the fade and parks the scroller at its live size', () => {
     styled()
     document.documentElement.setAttribute('data-traj', '')
     /* The island is an inset card now (the waterfall's glass sheet), so the
@@ -521,6 +521,11 @@ describe('the header band', () => {
     const css = source('styles/page.css')
     const island = (css.match(/html\[data-traj\] #trajHost \{([\s\S]*?)\}/) as RegExpMatchArray)[1] as string
     expect(island).toMatch(/margin: calc\(var\(--topbar-fade-h\) \+ 6px\) 14px 14px;/)
+    const scroll = el('scroll')
+    scroll.dataset.parked = ''
+    /* The parked copy is the live box out of the flow: inset 0 keeps its
+       size, so its content starts at the same offset the live one does. */
+    expect(getComputedStyle(scroll).getPropertyValue('inset').trim()).toBe('0')
   })
 
   it('splits a translucent tint from the blur, over an opaque ground where the blur is unsupported', () => {
