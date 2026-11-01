@@ -160,6 +160,11 @@ Follow the prompts to configure a model provider and choose which built-in
 agents to enable. You can later add or update providers in the WebUI under
 **Settings > Model providers**.
 
+The **Add model** list groups models by what they generate. GPT Image models,
+including `gpt-image-2.5-flare` and `gpt-image-2.5-sunburst`, appear under
+**Image**, including when you enter their IDs manually. A chat model that
+reads images and answers in text stays under **Text**.
+
 ### Behind a corporate proxy or private CA
 
 Raven checks HTTPS certificates against your operating system's certificate
