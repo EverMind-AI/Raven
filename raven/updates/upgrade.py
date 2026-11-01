@@ -1387,7 +1387,7 @@ def checkout_update_commands(*, windows: bool | None = None) -> tuple[str, ...]:
     not delete a running `raven.exe`. POSIX keeps the one-line form every
     release has printed -- install.sh stops and restarts the gateway itself
     after replacing the executable in place. The CLI prints these; the page's
-    recovery embeds install_script() in its own PowerShell script instead.
+    recovery embeds install_command() in its own PowerShell script instead.
     """
     if windows is None:
         windows = _on_windows()
