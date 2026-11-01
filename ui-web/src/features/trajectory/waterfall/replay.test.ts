@@ -176,6 +176,22 @@ describe('advance', () => {
     expect(held).toMatchObject({ at: s(29), played: 8000 })
   })
 
+  it('grows a pass that began short when the rest of the history lands, to the budget and no further', () => {
+    /* Five seconds were on the page at the press; the other ten minutes land
+       a second later. The pass grows to the budget -- the countdown rises
+       once -- and still ends fifteen seconds after the press. */
+    const now = s(700)
+    const first = [step('a', 0, 5)]
+    const all = [...first, step('b', 10, 600)]
+    const started = startReplay(axisOf(first, now), first, now, now)!
+    expect(started.duration).toBe(5_000)
+    const landed = advance(advance(started, axisOf(first, now), 1000, first, now)!, axisOf(all, now), 16, all, now)!
+    expect(landed.duration).toBe(REPLAY_MS)
+    const wall = 1016 + playOut(landed, all, now)
+    expect(wall).toBeGreaterThanOrEqual(REPLAY_MS)
+    expect(wall).toBeLessThanOrEqual(REPLAY_MS + 16)
+  })
+
   it('takes the budget frame by frame however long the session ran, and its own time when shorter', () => {
     const hour = [step('a', 0, 3600), step('b', 1800, 1900)]
     const long = startReplay(axisOf(hour, s(4000)), hour, s(4000), s(4000))!
