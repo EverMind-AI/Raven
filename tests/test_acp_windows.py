@@ -255,41 +255,123 @@ def test_a_git_bash_descendant_stays_in_the_agents_job(tmp_path):
     assert not escaped.exists(), "a Git Bash child left the agent's job and outlived it"
 
 
+def _handoff_exchange(server, timeout=5.0):
+    """One real request through the pipe; returns (finished, result)."""
+    import threading
+    from multiprocessing.connection import Client
+
+    result = []
+
+    def call():
+        try:
+            key = bytes.fromhex(server.env[windows.HANDOFF_KEY])
+            connection = Client(server.address, family="AF_PIPE", authkey=key)
+            try:
+                connection.send(
+                    {
+                        "argv": [sys.executable, "-c", "print('ok')"],
+                        "cwd": os.getcwd(),
+                        "env": dict(os.environ),
+                    }
+                )
+                result.append(connection.recv())
+            finally:
+                connection.close()
+        except BaseException as exc:  # noqa: BLE001 - the probe reports everything
+            result.append(exc)
+
+    thread = threading.Thread(target=call, daemon=True)
+    thread.start()
+    thread.join(timeout)
+    return not thread.is_alive(), result
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="named pipes are Windows'")
+def test_a_client_that_aborts_the_handshake_does_not_stop_the_server():
+    server = windows._HandoffServer()
+    try:
+        time.sleep(0.2)
+        os.close(os.open(server.address, os.O_RDWR))
+        finished, result = _handoff_exchange(server)
+        assert finished, "a client that aborted the handshake stopped the accept loop"
+        assert result == [{"returncode": 0, "stdout": "ok\n", "stderr": ""}]
+    finally:
+        close = getattr(server, "close", None)
+        if close is not None:
+            close()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="named pipes are Windows'")
+def test_a_client_that_stalls_the_handshake_does_not_stop_the_server():
+    server = windows._HandoffServer()
+    held = None
+    try:
+        time.sleep(0.2)
+        held = os.open(server.address, os.O_RDWR)
+        time.sleep(0.5)
+        finished, result = _handoff_exchange(server)
+        assert finished, "a stalled handshake stopped the accept loop"
+        assert result == [{"returncode": 0, "stdout": "ok\n", "stderr": ""}]
+    finally:
+        if held is not None:
+            os.close(held)
+        close = getattr(server, "close", None)
+        if close is not None:
+            close()
+
+
 def test_the_handoff_server_names_its_pipe_and_publishes_its_key(monkeypatch):
     import multiprocessing.connection
 
     listeners = []
     threads = []
 
-    class FakeListener:
-        def __init__(self, address, family=None, authkey=None):
-            self.address, self.family, self.authkey = address, family, authkey
+    class FakePipeListener:
+        def __init__(self, address, backlog=None):
+            self.address = address
             listeners.append(self)
 
+        def close(self):
+            pass
+
     class FakeThread:
-        def __init__(self, target, name=None, daemon=None):
-            self.target, self.name, self.daemon = target, name, daemon
+        def __init__(self, target, args=(), name=None, daemon=None):
+            self.target, self.args, self.name, self.daemon = target, args, name, daemon
             threads.append(self)
 
         def start(self):
             pass
 
-    monkeypatch.setattr(multiprocessing.connection, "Listener", FakeListener)
+        def is_alive(self):
+            return True
+
+    monkeypatch.setattr(multiprocessing.connection, "PipeListener", FakePipeListener, raising=False)
     monkeypatch.setattr(windows.threading, "Thread", FakeThread)
     server = windows._HandoffServer()
     assert listeners[0].address.startswith("\\\\.\\pipe\\raven-acp-handoff-")
-    assert listeners[0].family == "AF_PIPE"
-    assert len(listeners[0].authkey) == 32
+    assert len(server._authkey) == 32
     assert server.env[windows.HANDOFF_PIPE] == listeners[0].address
-    assert server.env[windows.HANDOFF_KEY] == listeners[0].authkey.hex()
+    assert server.env[windows.HANDOFF_KEY] == server._authkey.hex()
     assert threads[0].daemon is True
     assert threads[0].name == "raven-acp-handoff"
+    assert server.alive() is True
 
 
-def test_the_handoff_server_serves_each_connection_then_stops(monkeypatch):
+def test_the_handoff_server_survives_a_bad_client_then_stops_when_closed(monkeypatch):
+    import threading
+
     connection = SimpleNamespace()
-    listener = SimpleNamespace(accept=Mock(side_effect=[ValueError("bad key"), connection, OSError("closed")]))
+    state = {"calls": 0}
     served = []
+
+    def accept():
+        state["calls"] += 1
+        if state["calls"] == 1:
+            raise EOFError("aborted handshake")
+        if state["calls"] == 2:
+            return connection
+        server._closed.set()
+        raise OSError("listener closed")
 
     class FakeThread:
         def __init__(self, target, args=(), name=None, daemon=None):
@@ -298,12 +380,14 @@ def test_the_handoff_server_serves_each_connection_then_stops(monkeypatch):
         def start(self):
             served.append(self.args)
 
-    monkeypatch.setattr(windows.threading, "Thread", FakeThread)
     server = object.__new__(windows._HandoffServer)
-    server._listener = listener
+    server._listener = SimpleNamespace(accept=Mock(side_effect=accept))
+    server._closed = threading.Event()
+    server._handshake_slots = threading.BoundedSemaphore(2)
+    monkeypatch.setattr(windows.threading, "Thread", FakeThread)
     assert server._accept() is None
     assert served == [(connection,)]
-    assert listener.accept.call_count == 3
+    assert state["calls"] == 3
 
 
 def test_the_handoff_server_runs_the_relay_with_the_requested_environment(monkeypatch):
@@ -314,13 +398,16 @@ def test_the_handoff_server_runs_the_relay_with_the_requested_environment(monkey
     run = Mock(return_value=completed)
     monkeypatch.setattr(windows.subprocess, "run", run)
     sent = []
+    poll = Mock(return_value=True)
     connection = SimpleNamespace(
+        poll=poll,
         recv=Mock(return_value={"argv": ["py", "-c", "relay"], "cwd": "job", "env": {"KEEP": "1"}}),
         send=Mock(side_effect=sent.append),
         close=Mock(),
     )
     server = object.__new__(windows._HandoffServer)
     server._serve(connection)
+    assert poll.call_args.args[0] == windows._REQUEST_TIMEOUT_S
     assert run.call_args.args[0] == ["py", "-c", "relay"]
     assert run.call_args.kwargs["cwd"] == "job"
     assert run.call_args.kwargs["env"] == {"KEEP": "1"}
@@ -333,12 +420,14 @@ def test_a_relay_the_host_cannot_start_is_answered_with_the_error(monkeypatch):
     monkeypatch.setattr(windows.subprocess, "run", Mock(side_effect=OSError("no interpreter")))
     sent = []
     connection = SimpleNamespace(
+        poll=Mock(return_value=True),
         recv=Mock(return_value={"argv": ["py"], "cwd": None, "env": None}),
         send=Mock(side_effect=sent.append),
         close=Mock(),
     )
     server = object.__new__(windows._HandoffServer)
     server._serve(connection)
+    assert connection.poll.called
     assert "error" in sent[0]
     assert "no interpreter" in sent[0]["error"]
     connection.close.assert_called_once()
@@ -346,12 +435,14 @@ def test_a_relay_the_host_cannot_start_is_answered_with_the_error(monkeypatch):
 
 def test_a_connection_that_cannot_be_answered_is_closed_quietly():
     connection = SimpleNamespace(
+        poll=Mock(return_value=True),
         recv=Mock(side_effect=EOFError("gone")),
         send=Mock(side_effect=OSError("gone")),
         close=Mock(side_effect=OSError("gone")),
     )
     server = object.__new__(windows._HandoffServer)
     server._serve(connection)
+    assert connection.poll.called
     connection.send.assert_called_once()
     connection.close.assert_called_once()
 
@@ -359,8 +450,7 @@ def test_a_connection_that_cannot_be_answered_is_closed_quietly():
 def test_the_host_starts_one_handoff_server_and_reuses_it(monkeypatch):
     monkeypatch.setattr(windows, "_IS_WINDOWS", True)
     monkeypatch.setattr(windows, "_HANDOFF", None)
-    monkeypatch.setattr(windows, "_HANDOFF_TRIED", False)
-    server = SimpleNamespace(env={windows.HANDOFF_PIPE: "pipe", windows.HANDOFF_KEY: "key"})
+    server = SimpleNamespace(env={windows.HANDOFF_PIPE: "pipe", windows.HANDOFF_KEY: "key"}, alive=lambda: True)
     made = []
     monkeypatch.setattr(windows, "_HandoffServer", lambda: made.append(server) or server)
     assert windows._handoff() is server
@@ -368,14 +458,25 @@ def test_the_host_starts_one_handoff_server_and_reuses_it(monkeypatch):
     assert made == [server]
 
 
-def test_a_host_that_cannot_open_a_handoff_channel_returns_none(monkeypatch):
+def test_a_host_that_cannot_open_a_handoff_channel_retries(monkeypatch):
     monkeypatch.setattr(windows, "_IS_WINDOWS", True)
     monkeypatch.setattr(windows, "_HANDOFF", None)
-    monkeypatch.setattr(windows, "_HANDOFF_TRIED", False)
-    monkeypatch.setattr(windows, "_HandoffServer", Mock(side_effect=OSError("no pipe")))
+    server = SimpleNamespace(alive=lambda: True)
+    attempts = Mock(side_effect=[OSError("no pipe"), server])
+    monkeypatch.setattr(windows, "_HandoffServer", attempts)
     assert windows._handoff() is None
-    assert windows._handoff() is None
-    windows._HandoffServer.assert_called_once()
+    assert windows._handoff() is server
+    assert attempts.call_count == 2
+
+
+def test_a_dead_handoff_server_is_replaced(monkeypatch):
+    monkeypatch.setattr(windows, "_IS_WINDOWS", True)
+    old = SimpleNamespace(alive=lambda: False, close=Mock())
+    new = SimpleNamespace(alive=lambda: True)
+    monkeypatch.setattr(windows, "_HANDOFF", old)
+    monkeypatch.setattr(windows, "_HandoffServer", lambda: new)
+    assert windows._handoff() is new
+    old.close.assert_called_once()
 
 
 async def test_launch_gives_the_agent_the_hosts_handoff_channel(launcher, monkeypatch):

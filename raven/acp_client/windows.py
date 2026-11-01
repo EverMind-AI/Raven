@@ -40,6 +40,10 @@ HANDOFF_PIPE = "RAVEN_ACP_HANDOFF_PIPE"
 HANDOFF_KEY = "RAVEN_ACP_HANDOFF_KEY"
 """The environment variable holding the pipe's authentication key, as hex."""
 
+_HANDSHAKE_SLOTS = 64
+_REQUEST_TIMEOUT_S = 30.0
+"""How long a connection that passed the key handshake may take to send its request."""
+
 _LAUNCHER = """\
 import ctypes, os, subprocess, sys
 if os.read(0, 1) != b'1':
@@ -148,6 +152,11 @@ class _HandoffServer:
     object the host owns. The agent reaches it over a named pipe; ``launch``
     puts the pipe's name and key in the agent's environment.
 
+    The accept loop only accepts connections. Each connection gets its own
+    thread for the key handshake and the request, so a client that disconnects
+    mid-handshake ends that thread, not the channel, and a client that connects
+    and sends nothing holds one handshake slot rather than the accept loop.
+
     A request is ``{"argv": [...], "cwd": str, "env": {name: value}}``. The
     answer carries the relay's ``returncode``, ``stdout`` and ``stderr``, or
     ``error`` when it could not be started. The pipe's default security
@@ -156,30 +165,82 @@ class _HandoffServer:
     """
 
     def __init__(self) -> None:
-        from multiprocessing.connection import Listener
+        # The typeshed omits PipeListener; it is the raw pipe the Listener wraps.
+        from multiprocessing.connection import PipeListener  # type: ignore
 
         self.address = f"\\\\.\\pipe\\raven-acp-handoff-{os.getpid()}-{secrets.token_hex(8)}"
         self._authkey = secrets.token_bytes(32)
-        self._listener = Listener(self.address, family="AF_PIPE", authkey=self._authkey)
-        threading.Thread(target=self._accept, name="raven-acp-handoff", daemon=True).start()
+        self._listener = PipeListener(self.address)
+        self._closed = threading.Event()
+        self._handshake_slots = threading.BoundedSemaphore(_HANDSHAKE_SLOTS)
+        self._accept_thread = threading.Thread(target=self._accept, name="raven-acp-handoff", daemon=True)
+        self._accept_thread.start()
 
     @property
     def env(self) -> dict[str, str]:
         return {HANDOFF_PIPE: self.address, HANDOFF_KEY: self._authkey.hex()}
 
+    def alive(self) -> bool:
+        """Whether the accept loop is still running."""
+        return not self._closed.is_set() and self._accept_thread.is_alive()
+
+    def close(self) -> None:
+        """Stop accepting. A client already talking closes on its own."""
+        self._closed.set()
+        try:
+            self._listener.close()
+        except Exception:
+            pass
+
     def _accept(self) -> None:
-        while True:
+        while not self._closed.is_set():
             try:
                 connection = self._listener.accept()
             except (OSError, EOFError):
-                return
-            except Exception:
-                # A failed handshake is one bad client, not a broken pipe.
+                if self._closed.is_set():
+                    return
+                # A client that connected and went away is not a dead listener.
                 continue
-            threading.Thread(target=self._serve, args=(connection,), daemon=True).start()
+            except Exception:
+                if self._closed.is_set():
+                    return
+                continue
+            if not self._handshake_slots.acquire(blocking=False):
+                connection.close()
+                continue
+            try:
+                threading.Thread(
+                    target=self._handshake,
+                    args=(connection,),
+                    name="raven-acp-handoff-auth",
+                    daemon=True,
+                ).start()
+            except Exception:
+                self._handshake_slots.release()
+                try:
+                    connection.close()
+                except Exception:
+                    pass
+
+    def _handshake(self, connection: Any) -> None:
+        from multiprocessing.connection import answer_challenge, deliver_challenge
+
+        try:
+            deliver_challenge(connection, self._authkey)
+            answer_challenge(connection, self._authkey)
+            self._serve(connection)
+        except Exception:
+            try:
+                connection.close()
+            except Exception:
+                pass
+        finally:
+            self._handshake_slots.release()
 
     def _serve(self, connection: Any) -> None:
         try:
+            if not connection.poll(_REQUEST_TIMEOUT_S):
+                raise TimeoutError("the hand-off request did not arrive")
             request = connection.recv()
             argv = [str(argument) for argument in request["argv"]]
             completed = subprocess.run(
@@ -212,7 +273,6 @@ class _HandoffServer:
 
 _IS_WINDOWS = sys.platform == "win32"
 _HANDOFF: _HandoffServer | None = None
-_HANDOFF_TRIED = False
 
 
 def _handoff() -> _HandoffServer | None:
@@ -220,13 +280,17 @@ def _handoff() -> _HandoffServer | None:
 
     A channel that cannot be opened must not keep an agent from starting: the
     on-call backend falls back to starting its job inside the job object and
-    says so in the job's log.
+    says so in the job's log. A transient failure is retried on the next launch,
+    and a server whose accept loop has died is replaced, rather than latching
+    either condition for the host's lifetime.
     """
-    global _HANDOFF, _HANDOFF_TRIED
+    global _HANDOFF
     if not _IS_WINDOWS:
         return None
-    if not _HANDOFF_TRIED:
-        _HANDOFF_TRIED = True
+    if _HANDOFF is not None and not _HANDOFF.alive():
+        _HANDOFF.close()
+        _HANDOFF = None
+    if _HANDOFF is None:
         try:
             _HANDOFF = _HandoffServer()
         except Exception:
