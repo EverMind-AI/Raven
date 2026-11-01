@@ -425,7 +425,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         renames_models=True,
     ),
     # === Resale gateways reached through OpenAI's driver ===================
-    # Fourteen shelves that resell other vendors' models over an
+    # Fifteen shelves that resell other vendors' models over an
     # OpenAI-compatible endpoint. LiteLLM routes none of them, so each borrows
     # OpenAI's driver and states the address that distinguishes it -- the same
     # shape as SiliconFlow above, and a gateway for the same reason: a model id
@@ -610,6 +610,19 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         is_gateway=True,
         detect_by_base_keyword="aiionly",
         default_api_base="https://api.aiionly.com/v1",
+        strip_model_prefix=False,
+    ),
+    ProviderSpec(
+        name="atlascloud",
+        key_url="https://console.atlascloud.ai/api-keys",
+        keywords=("atlascloud",),
+        env_key="OPENAI_API_KEY",
+        display_name="Atlas Cloud",
+        homepage="https://www.atlascloud.ai",
+        via_driver="openai",
+        is_gateway=True,
+        detect_by_base_keyword="atlascloud",
+        default_api_base="https://api.atlascloud.ai/v1",
         strip_model_prefix=False,
     ),
     ProviderSpec(
