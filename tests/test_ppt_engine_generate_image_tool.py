@@ -191,9 +191,9 @@ async def test_an_unset_quality_is_the_hosts_to_resolve_not_this_tools(monkeypat
 async def test_both_spellings_of_no_quality_name_the_same_file(monkeypatch, tmp_path: Path) -> None:
     """The host now resolves "no quality" to ``None``; an empty request value
     still resolves to ``""``. Both mean the request carries no quality, so the
-    deck must name one file: the name the picker-saved empty section already
-    used before this fix, which is what keeps a page's existing picture
-    overwritable after the upgrade."""
+    deck names one file -- and it is the empty spelling's name, which the
+    picker-saved section already used: that is the file the page carries, so a
+    re-ask overwrites the picture it shows."""
     requested = _mock(monkeypatch, _images_api(_png()))
     tool = _tool(tmp_path)
 
@@ -205,6 +205,10 @@ async def test_both_spellings_of_no_quality_name_the_same_file(monkeypatch, tmp_
 
     assert "quality" not in json.loads(requested[0].content)
     assert "quality" not in json.loads(requested[1].content)
+    # The empty spelling's name, which is the file a picker-saved section's page
+    # already names. Normalizing to the ``None`` spelling would still make these
+    # two calls agree, and would still rename every such deck's picture.
+    assert Path(first["path"]).name == "lantern-b384de827020.png"
     assert second["path"] == first["path"]
 
 
