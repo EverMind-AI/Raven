@@ -355,10 +355,10 @@ async def test_a_cancelled_turn_answers_cancel_not_decline() -> None:
 async def test_a_cancelled_run_stops_the_form_rather_than_skipping_one_field() -> None:
     """`cancel` has to stop the form, not just the question standing on screen.
 
-    `QuestionBroker.await_question` answers a cancellation with the question's
-    default and never raises, so cancelling the waiting task alone arrives inside
-    `_one` as an empty answer -- which is a user's skip. The form would go on to
-    put its next field to a user whose run is already gone.
+    The asking route now propagates a cancellation of the calling task, as the
+    broker does; the fake below raises too. Without that, cancelling the waiting
+    task alone would arrive inside `_one` as an empty answer -- a user's skip --
+    and the form would go on to put its next field to a user whose run is gone.
     """
     import asyncio
 
@@ -379,8 +379,9 @@ async def test_a_cancelled_run_stops_the_form_rather_than_skipping_one_field() -
             try:
                 await asyncio.sleep(3600)
             except asyncio.CancelledError:
-                # What the broker does with a cancellation: its own default.
-                return ""
+                # The real asking route re-raises a caller's cancellation now;
+                # the form has to stop rather than put its next field up.
+                raise
 
     form = {
         "sessionId": "s",
@@ -413,11 +414,10 @@ async def test_a_cancelled_run_stops_the_form_rather_than_skipping_one_field() -
 async def test_a_retracted_form_stops_rather_than_putting_its_next_field_up() -> None:
     """The agent took its question back, so the rest of the form is not ours to ask.
 
-    Cancelling the answering task is all an inbound `$/cancel_request` can do, and
-    `QuestionBroker.await_question` answers a cancellation with the question's
-    default rather than propagating one -- so it arrives inside `_one` as an empty
-    answer, which is a user's skip. Read that way the form goes on to put its next
-    field to a run that has already stopped listening.
+    Cancelling the answering task is all an inbound `$/cancel_request` can do,
+    and the asking route now propagates it; the fake below raises as the real
+    route does. Read as a skip, the form would go on to put its next field to a
+    run that has already stopped listening.
     """
     import asyncio
 
@@ -438,8 +438,9 @@ async def test_a_retracted_form_stops_rather_than_putting_its_next_field_up() ->
             try:
                 await asyncio.sleep(3600)
             except asyncio.CancelledError:
-                # What the broker does with a cancellation: its own default.
-                return ""
+                # The real asking route re-raises a caller's cancellation now;
+                # the form has to stop rather than put its next field up.
+                raise
 
     start_ask_turn(Parks(), conversation_id="tui:c-retract")
     task = asyncio.create_task(
@@ -978,8 +979,9 @@ async def test_a_fully_answered_form_does_not_accept_for_a_run_that_ended() -> N
 
     The swallow below is what makes the flag load-bearing rather than the raised
     cancellation: `cancel` marks the run *and* cancels the waiting task, and a
-    cancellation absorbed downstream -- which is what `QuestionBroker` does to
-    the one on the asking side -- leaves only the flag and the request count.
+    cancellation absorbed downstream -- as the autofill below does, and as
+    response layers that answer instead of propagating still can -- leaves only
+    the flag and the request count.
     """
     import asyncio
     import contextlib

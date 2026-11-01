@@ -433,6 +433,60 @@ async def test_a_cron_turn_binds_no_asker_even_in_a_watched_conversation():
     assert loop.bound == (None, "cron:j1")
 
 
+class _QuestionLoop:
+    """A runner whose turn asks the user and waits, as the real loop does."""
+
+    def __init__(self, tool: AskUserTool) -> None:
+        self.tool = tool
+        self.tools = {"ask_user": tool}
+        self.subagent_questions_config = SubagentQuestionsConfig()
+        self.started = asyncio.Event()
+        self.raised: BaseException | None = None
+
+    async def run_turn(self, req, emit, drain, **kwargs) -> TurnOutcome:
+        self.started.set()
+        try:
+            await self.tool.execute(questions=[{"question": "A or B?", "options": ["A", "B"]}])
+        except BaseException as exc:
+            self.raised = exc
+            raise
+        return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
+
+
+async def test_a_cancelled_turn_ends_while_its_question_is_on_the_screen():
+    """The lane's stop has to reach the caller the broker is holding. Answered
+    with its default, the cancellation used to end inside the broker: the tool
+    returned "the user did not answer", and the turn went on -- and could put a
+    second question up -- after the person had pressed stop."""
+    from raven.rpc.question_broker import QuestionBroker
+
+    frames: list[dict] = []
+
+    async def send_frame(frame: dict) -> None:
+        frames.append(frame)
+
+    broker = QuestionBroker(send_frame)
+    loop = _QuestionLoop(AskUserTool(broker=broker, conversation_id="tui:c1"))
+    emitter = FakeEmitter()
+    scheduler, _hub, _turn_ids, teardown = build_rpc_spine(loop, emitter)
+    try:
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
+        await asyncio.wait_for(loop.started.wait(), 1.0)
+        for _ in range(100):
+            if any(frame.get("method") == "clarify.request" for frame in frames):
+                break
+            await asyncio.sleep(0.01)
+        assert any(frame.get("method") == "clarify.request" for frame in frames), "the question was never put up"
+
+        await handle.cancel()
+        await asyncio.wait_for(handle.result(), 2.0)
+
+        assert isinstance(loop.raised, asyncio.CancelledError), "the stop ended inside the question"
+        assert broker.pending_req("tui:c1") is None
+    finally:
+        await teardown()
+
+
 async def test_runner_emits_eve22_synthetic_tool_complete_when_message_tool_fired():
     message_tool = MessageTool()
     loop = _RunTurnLoop(tools={"message": message_tool})
