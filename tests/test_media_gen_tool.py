@@ -1332,6 +1332,50 @@ async def test_an_empty_settings_quality_leaves_the_call_s_quality_in_the_reques
     assert seen[-1]["quality"] == "low"
 
 
+async def test_an_empty_settings_quality_reaches_a_custom_generations_route(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The report's shape: a Custom provider section the picker saved with
+    ``quality: ""``, read live from the config file. That base's generation
+    route is a different quality-injection site from OpenRouter's ``/images``,
+    so the call's own value is checked where the report's request went."""
+    from raven.config.schema import MediaToolConfig
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    source = tmp_path / "host.json"
+    source.write_text(
+        json.dumps(
+            {
+                "tools": {
+                    "media": {
+                        "image": {
+                            "apiBase": "https://custom.example/v1",
+                            "apiKey": "custom-key",
+                            "model": "openai/gpt-image-2.5",
+                            "quality": "",
+                        }
+                    }
+                }
+            }
+        )
+    )
+    tool = _image_tool(monkeypatch, handler, model="", workspace=tmp_path)
+    tool._config_static = MediaToolConfig(selection_config=str(source))
+
+    result = json.loads(await tool.execute("a kitten", quality="high"))
+
+    assert result["success"] and result["model"] == "openai/gpt-image-2.5"
+    assert seen[-1].url.path == "/v1/images/generations"
+    body = json.loads(seen[-1].content)
+    assert body["model"] == "openai/gpt-image-2.5"
+    assert body["quality"] == "high"
+
+
 @pytest.mark.parametrize(
     "model",
     [
