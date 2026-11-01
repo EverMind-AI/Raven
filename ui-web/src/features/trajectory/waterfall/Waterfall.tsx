@@ -552,9 +552,10 @@ export function Waterfall(): JSX.Element {
 
   }, [])
 
-  /* The clock the bars are cut at. It ticks only while something is still
-     running: a fresh `Date.now()` every render would rebuild the whole model
-     on every scroll frame, which is what a 500-turn session cannot afford. */
+  /* The clock the bars are cut at, unless a replay cuts them at its playhead
+     (`clock` below). It ticks only while something is still running: a fresh
+     `Date.now()` every render would rebuild the whole model on every scroll
+     frame, which is what a 500-turn session cannot afford. */
   const entries = store.get().entries
   const [now, setNow] = useState(() => Date.now())
   const live = useMemo(() => entries.some((entry) => isLive(entry, now)), [entries, now])
