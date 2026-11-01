@@ -91,14 +91,20 @@ def test_the_release_notes_template_matches_the_roster_it_describes() -> None:
 
 def test_the_release_notes_template_names_the_checkout_installer_on_both_platforms() -> None:
     """The workflow copies this template into every draft release. It must name
-    the Windows installer in a form that runs under the stock execution policy,
-    and never regress to the PowerShell 5.1-incompatible
+    the Windows stop-and-install sequence in a form that runs under the stock
+    execution policy, and never regress to the PowerShell 5.1-incompatible
     `git pull && .\\install.ps1` one-liner."""
     template = (ROOT / ".github" / "release-notes-template.md").read_text(encoding="utf-8")
     normalized = " ".join(template.split())
     assert "git pull && ./install.sh" in normalized
     assert "powershell -NoProfile -ExecutionPolicy Bypass -File .\\install.ps1" in normalized
     assert "git pull && .\\install.ps1" not in normalized
+    windows = normalized.split("on Windows,", 1)
+    assert len(windows) == 2, "the template must name the Windows sequence"
+    stop = windows[1].index("`raven web --stop`")
+    pull = windows[1].index("`git pull`", stop)
+    installer = windows[1].index("powershell -NoProfile -ExecutionPolicy Bypass -File .\\install.ps1", pull)
+    assert stop < pull < installer
 
 
 def test_the_release_installs_itself_before_it_is_published() -> None:

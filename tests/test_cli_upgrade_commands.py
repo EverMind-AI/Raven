@@ -88,8 +88,8 @@ def test_editable_upgrade_requires_manual_install(source_install, monkeypatch):
 
 def test_editable_update_guidance_is_runnable_on_windows(source_install, monkeypatch):
     """Windows PowerShell 5.1 has no `&&` statement separator, and cmd.exe does
-    not run a .ps1 by name, so the Windows guidance has to be two lines naming
-    the PowerShell that runs the installer. The one-line
+    not run a .ps1 by name, so the Windows guidance has to be separate steps, the
+    last naming the PowerShell that runs the installer. The one-line
     `git pull && .\\install.ps1` this used to print fails in both shells."""
     monkeypatch.setattr(upgrade, "_on_windows", lambda: True)
     monkeypatch.setattr(
