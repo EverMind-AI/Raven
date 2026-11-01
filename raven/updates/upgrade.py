@@ -1363,16 +1363,23 @@ def checkout_update_commands(*, windows: bool | None = None) -> tuple[str, ...]:
     """The commands a source checkout reruns to update itself, one per line.
 
     Windows PowerShell 5.1 rejects `&&` as a statement separator, and cmd.exe
-    cannot run a .ps1 by name, so the Windows form is two commands and names the
-    PowerShell that ships with Windows. POSIX keeps the one-line form every
-    release has printed. The CLI prints these; the page's recovery embeds
-    install_script() in its own PowerShell script instead.
+    cannot run a .ps1 by name, so the Windows form is several commands and names
+    the PowerShell that ships with Windows. It stops the page first: `uv tool
+    install --force` replaces the environment Raven runs from, and Windows will
+    not delete a running `raven.exe`. POSIX keeps the one-line form every
+    release has printed -- install.sh stops and restarts the gateway itself
+    after replacing the executable in place. The CLI prints these; the page's
+    recovery embeds install_script() in its own PowerShell script instead.
     """
     if windows is None:
         windows = _on_windows()
     if windows:
         script = install_script(windows=True)
-        return ("git pull", f'powershell -NoProfile -ExecutionPolicy Bypass -File "{script}"')
+        return (
+            "raven web --stop",
+            "git pull",
+            f'powershell -NoProfile -ExecutionPolicy Bypass -File "{script}"',
+        )
     return (f"git pull && {install_script(windows=False)}",)
 
 

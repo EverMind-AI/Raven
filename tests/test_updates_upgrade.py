@@ -610,6 +610,7 @@ def test_install_script_defaults_to_the_running_platform(
         (
             True,
             (
+                "raven web --stop",
                 "git pull",
                 'powershell -NoProfile -ExecutionPolicy Bypass -File ".\\install.ps1"',
             ),
@@ -622,9 +623,10 @@ def test_checkout_update_commands_are_runnable_in_the_platform_s_shell(
     windows: bool, commands: tuple[str, ...]
 ) -> None:
     """Windows PowerShell 5.1 rejects `&&` as a statement separator, and
-    cmd.exe cannot run a .ps1 by name, so the Windows form is two commands and
-    names the PowerShell that runs the installer. POSIX keeps the one-line form
-    every release has printed."""
+    cmd.exe cannot run a .ps1 by name, so the Windows form is several commands
+    and names the PowerShell that runs the installer. It stops the page first:
+    `uv tool install --force` cannot replace a running `raven.exe`. POSIX keeps
+    the one-line form every release has printed."""
     assert upgrade_commands.checkout_update_commands(windows=windows) == commands
 
 
@@ -634,9 +636,20 @@ def test_checkout_update_commands_default_to_the_running_platform(
     monkeypatch.setattr(upgrade_commands, "_on_windows", lambda: True)
 
     assert upgrade_commands.checkout_update_commands() == (
+        "raven web --stop",
         "git pull",
         'powershell -NoProfile -ExecutionPolicy Bypass -File ".\\install.ps1"',
     )
+
+
+@pytest.mark.parametrize(("name", "windows"), [("nt", True), ("posix", False)])
+def test_the_platform_switch_reads_os_name(monkeypatch: pytest.MonkeyPatch, name: str, windows: bool) -> None:
+    """The CLI's default path must read the real predicate, not a patched seam:
+    an inverted `_on_windows` would print the POSIX form on Windows, which is
+    the defect this change removes."""
+    with monkeypatch.context() as patched:
+        patched.setattr(os, "name", name)
+        assert upgrade_commands._on_windows() is windows
 
 
 @pytest.mark.parametrize(

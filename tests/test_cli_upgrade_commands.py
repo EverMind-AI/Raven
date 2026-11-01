@@ -103,9 +103,34 @@ def test_editable_update_guidance_is_runnable_on_windows(source_install, monkeyp
     assert result.exit_code == 0, result.output
     lines = [line.strip() for line in result.output.splitlines()]
     assert "To update, run these commands in the source checkout:" in lines
+    assert "If `git pull` fails, fix it before installing." in lines
+    assert "raven web --stop" in lines
     assert "git pull" in lines
-    assert 'powershell -NoProfile -ExecutionPolicy Bypass -File ".\\install.ps1"' in lines
+    installer = 'powershell -NoProfile -ExecutionPolicy Bypass -File ".\\install.ps1"'
+    assert installer in lines
+    assert lines.index("raven web --stop") < lines.index("git pull") < lines.index(installer)
     assert "&&" not in result.output
+
+
+def test_editable_update_guidance_keeps_the_windows_installer_on_one_line(source_install, monkeypatch):
+    """A 67-character command on a 60-column console must stay one copyable
+    line: rich wraps at the console width unless soft_wrap is set, and a wrap
+    after `-File` turns the pasted command into a call with no script."""
+    from rich.console import Console
+
+    monkeypatch.setattr(upgrade, "_on_windows", lambda: True)
+    monkeypatch.setattr(
+        upgrade.subprocess,
+        "run",
+        Mock(return_value=subprocess.CompletedProcess([], 0, "0\t0\n", "")),
+    )
+    monkeypatch.setattr(upgrade_commands, "console", Console(width=60))
+
+    result = invoke("--check")
+
+    assert result.exit_code == 0, result.output
+    installer = 'powershell -NoProfile -ExecutionPolicy Bypass -File ".\\install.ps1"'
+    assert installer in result.output.splitlines()
 
 
 @pytest.mark.parametrize("url", ["https://example.com/source", "file://remote/source", "file:relative"])

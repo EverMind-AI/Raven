@@ -90,12 +90,15 @@ def test_the_release_notes_template_matches_the_roster_it_describes() -> None:
 
 
 def test_the_release_notes_template_names_the_checkout_installer_on_both_platforms() -> None:
-    """The workflow copies this template into every draft release. It named
-    only the POSIX checkout installer, which sends a Windows reader to
-    install.sh -- the script that refuses to run there."""
+    """The workflow copies this template into every draft release. It must name
+    the Windows installer in a form that runs under the stock execution policy,
+    and never regress to the PowerShell 5.1-incompatible
+    `git pull && .\\install.ps1` one-liner."""
     template = (ROOT / ".github" / "release-notes-template.md").read_text(encoding="utf-8")
-    assert "git pull && ./install.sh" in template
-    assert ".\\install.ps1" in template
+    normalized = " ".join(template.split())
+    assert "git pull && ./install.sh" in normalized
+    assert "powershell -NoProfile -ExecutionPolicy Bypass -File .\\install.ps1" in normalized
+    assert "git pull && .\\install.ps1" not in normalized
 
 
 def test_the_release_installs_itself_before_it_is_published() -> None:
