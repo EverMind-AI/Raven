@@ -844,6 +844,14 @@ class ErrorEventPayload(_Strict):
             "bounded text already is the whole account."
         ),
     )
+    usage: TurnUsage | None = Field(
+        None,
+        description=(
+            "What a failed or stopped turn measured, in message.complete's shape: its last reported call, "
+            "so a client's context gauge moves on with the turn's stored record. Absent when that call "
+            "read no window."
+        ),
+    )
     target: DirectTarget | None = None
 
 

@@ -1243,3 +1243,87 @@ async def test_a_waiter_cancelled_mid_unwind_does_not_wedge_the_lane(
         unwind.set()
         _turn_mod.bind_scheduler(None)
         await teardown()
+
+
+# --- a stopped turn's cancel reports what the turn measured ---
+
+
+_A_STOPPED_TURNS_LAST_CALL = {
+    "prompt_tokens": 6000,
+    "completion_tokens": 200,
+    "total_tokens": 6200,
+    "context_max": 40000,
+    "context_used": 6200,
+    "context_percent": 16,
+}
+
+
+@pytest.mark.parametrize(
+    ("named", "measured", "carried"),
+    [
+        (False, _A_STOPPED_TURNS_LAST_CALL, _A_STOPPED_TURNS_LAST_CALL),
+        (True, _A_STOPPED_TURNS_LAST_CALL, _A_STOPPED_TURNS_LAST_CALL),
+        (False, None, None),
+        (False, {**_A_STOPPED_TURNS_LAST_CALL, "context_used": 0, "context_percent": 0}, None),
+    ],
+    ids=["unnamed_cancel", "named_cancel", "measured_nothing", "last_call_read_no_window"],
+)
+async def test_a_stopped_turns_cancel_carries_what_it_measured(
+    emitter: SubscriptionEmitter, send_frame_capture: AsyncMock, named, measured, carried
+) -> None:
+    """A stopped turn files what it measured with the record it leaves, so a
+    resume shows that reading; the cancel is the one event its client gets, and
+    without the reading on it the ring stays on the turn before."""
+    from raven.rpc.methods import turn as _turn_mod
+    from raven.rpc.models import ErrorEvent
+    from raven.rpc.spine import build_rpc_spine
+
+    class _MeasuresThenHangs:
+        tools: dict = {}
+
+        def __init__(self) -> None:
+            self.measured = asyncio.Event()
+
+        async def run_turn(self, req, emit, drain, *, stream=True, usage_sink=None, **_kwargs):
+            if usage_sink is not None and measured:
+                usage_sink.update(measured)
+            self.measured.set()
+            await asyncio.Event().wait()
+
+    loop = _MeasuresThenHangs()
+    live: dict[str, dict] = {}
+    scheduler, _hub, turn_ids, teardown = build_rpc_spine(
+        loop, emitter, on_turn_end=_turn_mod.clear_active, live_usages=live
+    )
+    # Through the registered handlers, so the map reaching turn.cancel is the
+    # one the wiring hands it, not one this test passes by hand.
+    d = Dispatcher()
+    register_turn_methods(d, emitter=emitter, scheduler=scheduler, turn_ids=turn_ids, live_usages=live)
+    try:
+        await turn_subscribe({"session_key": "tui:default"}, emitter=emitter)
+        sent = await d.dispatch(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "turn.send",
+                "params": {"session_key": "tui:default", "content": "hi"},
+            }
+        )
+        await asyncio.wait_for(loop.measured.wait(), 5)
+        params = {"session_key": "tui:default", **({"turn_id": sent["result"]["turn_id"]} if named else {})}
+
+        cancel = await d.dispatch({"jsonrpc": "2.0", "id": 2, "method": "turn.cancel", "params": params})
+        assert cancel["result"] == {"cancelled": True}
+        await asyncio.sleep(0.05)
+    finally:
+        _turn_mod.bind_scheduler(None)
+        await teardown()
+
+    (cancelled,) = [
+        e
+        for e in _collect_events(send_frame_capture)
+        if e.get("type") == "error" and e["payload"].get("reason") == "cancelled_by_client"
+    ]
+    assert cancelled["payload"].get("usage") == carried
+    ErrorEvent.model_validate(cancelled)
+    assert live == {}

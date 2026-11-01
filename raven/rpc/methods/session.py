@@ -684,7 +684,7 @@ async def session_resume(
 def _fill_resumed_context(usage: dict[str, Any], session: Any) -> None:
     """How full the context window is, into a caller's usage mapping.
 
-    Read off the newest stored reply that carries the window its call measured
+    Read off the newest stored row that carries the window a call measured
     (``context_used``): that is the number the meter showed when the turn ended.
     The stored log cannot stand in for it. The context engine compacts on its
     own and leaves the log whole, so ``last_consolidated`` never moves and the
@@ -692,8 +692,8 @@ def _fill_resumed_context(usage: dict[str, Any], session: Any) -> None:
     times the window its last call measured, and a short one at a few tokens,
     the system prompt and the tool list being no part of it.
 
-    A session with no reading -- written before replies carried one, or never
-    answered -- falls back to a tiktoken estimate of
+    A session with no reading -- written before rows carried one, or whose
+    calls never reported their usage -- falls back to a tiktoken estimate of
     ``get_history(max_messages=0)``, marked ``context_estimated``. Failures
     leave the zero baseline alone rather than guessing -- a wrong denominator is
     worse than an unknown one.
@@ -707,12 +707,13 @@ def _fill_resumed_context(usage: dict[str, Any], session: Any) -> None:
         usage["context_estimated"] = False
         return
     try:
-        # max_messages=0 is "all of it", which is what both places that build or
-        # measure the real prompt pass (loop/main.py and the consolidator's own
-        # estimator). The default caps at the last 500, and the tail is bounded
-        # in tokens rather than in messages -- consolidation fires on the window
-        # -- so a chatty session on a large-window model sits well past 500 and
-        # the meter would go quiet exactly as it started to matter.
+        # The estimate counts what an engine that leaves compaction to the
+        # consolidator would be handed: max_messages=0 is "all of it", the slice
+        # ``DefaultMemory.candidate_messages`` and the consolidator's own
+        # estimator both take. The default caps at the last 500, and that tail is
+        # bounded in tokens rather than in messages -- consolidation fires on the
+        # window -- so a chatty session on a large-window model sits well past
+        # 500 and the meter would go quiet exactly as it started to matter.
         messages = session.get_history(max_messages=0)
     except Exception:
         logger.exception("session.*: could not read the session history")
@@ -729,11 +730,17 @@ def _fill_resumed_context(usage: dict[str, Any], session: Any) -> None:
     usage["context_estimated"] = True
 
 
+# No context window holds a billion tokens, so a stored reading past this was
+# not written by a call; one past float range would also raise on the way to a
+# percentage. Either is read as no reading.
+_READING_CEILING = 1_000_000_000
+
+
 def _last_window_reading(messages: list[Any]) -> int:
-    """The window the newest reading-carrying reply measured, or 0 for none."""
+    """The window the newest reading-carrying row records, or 0 for none."""
     for message in reversed(messages):
         used = message.get("context_used") if isinstance(message, dict) else None
-        if isinstance(used, int) and not isinstance(used, bool) and used > 0:
+        if isinstance(used, int) and not isinstance(used, bool) and 0 < used <= _READING_CEILING:
             return used
     return 0
 

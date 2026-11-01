@@ -875,6 +875,14 @@ describe('tool.complete', () => {
 })
 
 describe('message.complete', () => {
+  it('draws the prompt count when the turn measured no window', async () => {
+    const h = await harness()
+
+    h.dispatch({ type: 'message.complete', payload: { usage: { prompt_tokens: 1200, context_max: 40000 } } })
+
+    expect(h.did('setCtx')).toEqual([['setCtx', 1200, 40000]])
+  })
+
   it('folds the turn (050-turn.js:192)', async () => {
     const h = await harness({ rows: [{ id: 's1', title: 'a deck' }] })
     h.dispatch({ type: 'token.delta', payload: { text: 'the answer' } })
@@ -938,6 +946,58 @@ describe('error', () => {
     })
 
     expect(h.did('noteRow')).toEqual([['noteRow', 'FAILED_LABEL', 'short', ['full', 'retry']]])
+  })
+
+  it('moves the context ring to the window the failed turn measured', async () => {
+    const h = await harness()
+
+    h.dispatch({
+      type: 'error',
+      payload: {
+        message: 'turn_failed',
+        reason: 'internal',
+        detail: 'no content',
+        usage: { prompt_tokens: 7000, completion_tokens: 0, total_tokens: 7000, context_used: 7000, context_max: 40000 },
+      },
+    })
+
+    expect(h.did('setCtx')).toEqual([['setCtx', 7000, 40000]])
+  })
+
+  it('leaves the context ring alone when the failure measured nothing', async () => {
+    const h = await harness()
+
+    h.dispatch({ type: 'error', payload: { message: 'turn_failed', reason: 'internal', detail: 'boom' } })
+
+    expect(h.did('setCtx')).toEqual([])
+  })
+
+  it("draws a failed turn's reading the way a completion draws the same one", async () => {
+    const usage = { prompt_tokens: 7000, completion_tokens: 0, total_tokens: 7000, context_used: 7000, context_max: 40000 }
+    const done = await harness()
+    done.dispatch({ type: 'message.complete', payload: { usage } })
+    const failed = await harness()
+
+    failed.dispatch({ type: 'error', payload: { message: 'turn_failed', reason: 'internal', detail: 'boom', usage } })
+
+    expect(failed.did('setCtx')).toEqual(done.did('setCtx'))
+  })
+
+  /* `cancelling` is this window's own stop, which the arm otherwise leaves
+     early; `stream` is a stop another window on the session asked for. */
+  it.each(['cancelling', 'stream'])('moves the ring to what a stopped turn measured (%s)', async (phase) => {
+    const h = await harness({ phase, busy: true })
+
+    h.dispatch({
+      type: 'error',
+      payload: {
+        message: 'turn_cancelled',
+        reason: 'cancelled_by_client',
+        usage: { prompt_tokens: 6000, completion_tokens: 200, total_tokens: 6200, context_used: 6200, context_max: 40000 },
+      },
+    })
+
+    expect(h.did('setCtx')).toEqual([['setCtx', 6200, 40000]])
   })
 })
 

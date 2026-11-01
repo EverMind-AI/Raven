@@ -84,6 +84,7 @@ def register_aligned_methods(
     build_error: "RpcError | None" = None,
     send_frame: "Any" = None,
     default_channel: str = "tui",
+    live_usages: "dict[str, dict[str, Any]] | None" = None,
 ) -> None:
     """Register every aligned RPC handler on a dispatcher.
 
@@ -116,6 +117,7 @@ def register_aligned_methods(
         build_error=build_error,
         send_frame=send_frame,
         default_channel=default_channel,
+        live_usages=live_usages,
     )
 
 
@@ -135,6 +137,7 @@ def register_aligned_methods_except_system(
     send_frame: "Any" = None,
     default_channel: str = "tui",
     ensure_stack: "Callable[[], Awaitable[bool]] | None" = None,
+    live_usages: "dict[str, dict[str, Any]] | None" = None,
 ) -> None:
     """Register every aligned RPC handler EXCEPT system.* on a dispatcher.
 
@@ -223,6 +226,7 @@ def register_aligned_methods_except_system(
             # Must equal the channel ``build_rpc_spine`` registered its outlet
             # under; ``turn.py`` documents that a mismatch drops the reply.
             default_channel=default_channel,
+            live_usages=live_usages,
         )
     # confirm.respond — needs a ConfirmBroker to resolve the pending
     # confirm future. Gated like turn.*: when no broker is supplied (demo

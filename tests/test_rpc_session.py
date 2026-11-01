@@ -2095,11 +2095,17 @@ async def test_session_resume_reports_the_window_the_last_call_measured(
     assert usage["context_estimated"] is False
 
 
-@pytest.mark.parametrize("junk", [0, -5, True, "50000", 1.5], ids=["zero", "negative", "bool", "string", "float"])
+@pytest.mark.parametrize(
+    "junk",
+    [0, -5, True, "50000", 1.5, 10**12, 10**400],
+    ids=["zero", "negative", "bool", "string", "float", "past_any_window", "past_float_range"],
+)
 async def test_session_resume_reads_past_a_stored_reading_that_is_no_token_count(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, junk: object
 ) -> None:
-    """Only a positive integer is a reading -- and ``True`` is an ``int`` to Python."""
+    """Only a positive integer a window could hold is a reading -- ``True`` is an
+    ``int`` to Python, and a count past float range would raise on the way to a
+    percentage, turning the reader's conversation into a fresh empty one."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
     cfg.agents.defaults.context_window_tokens = 200_000

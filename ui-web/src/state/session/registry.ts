@@ -31,13 +31,13 @@ import { isImportedKey } from '../../lib/imported'
 import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
 import { draw as drawBanner } from '../banner'
-import { set as setCtx } from '../ctxChip'
 import { adopt as adoptBases, clearStaged as clearStagedBases } from '../mentions'
 import { load as loadTier } from '../tier'
 import { show as toast } from '../toast'
 import { clearStaged as clearStagedWorkdir } from '../workdir'
 import { reset as wsReset, setOpen as setWs } from '../ws'
 import { noteRow, pitch, readOnly, unpitch } from './conversation'
+import { applyUsage } from './ctxReport'
 import { dropAll as dropHeldHosts } from './hosts'
 import { park, resume as resumeInPlace } from './residency'
 import { refreshDag, resume as resumeConversation } from './resume'
@@ -372,7 +372,7 @@ export async function switchTo(s: SessRow, turnOver = false): Promise<void> {
     /* context_estimated rides along in this payload and is not passed on: the
        ring has nowhere to say an estimate, so the writer takes two numbers.
        See state/ctxChip.ts. */
-    setCtx(u.context_used, u.context_max)
+    applyUsage(u)
     /* The turn this conversation is in the middle of, which nothing else on a
        page that has just loaded can know: its frames went to a socket this page
        did not have. Put the machine back into the state `message.start` would
