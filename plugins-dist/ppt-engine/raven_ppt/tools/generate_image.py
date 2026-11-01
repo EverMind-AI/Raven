@@ -321,8 +321,10 @@ class PptGenerateImageTool(Tool):
         # just rejected. Overwriting is what makes the retry work without editing
         # the script, since the page already names this file. Neither spelling of
         # "no quality" (``None`` and ``""``) is a value of its own, so both name
-        # the same file -- and the empty spelling is the one a picker-saved
-        # section used before this fix, so its decks keep their names.
+        # the same file. The empty spelling is the one a picker-saved section
+        # used before an empty Settings quality stopped outranking the request,
+        # so those decks keep their names -- except exact ``gpt-image-2``, whose
+        # empty quality now resolves to ``medium`` and renames the file once.
         sent_quality = self.media.effective_quality(quality, model)
         ref_digest = "".join(hashlib.sha256(ref.read_bytes()).hexdigest()[:8] for ref in refs)
         digest = hashlib.sha256(
