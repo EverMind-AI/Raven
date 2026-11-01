@@ -257,6 +257,7 @@ def test_a_git_bash_descendant_stays_in_the_agents_job(tmp_path):
 
 def _handoff_exchange(server, timeout=5.0):
     """One real request through the pipe; returns (finished, result)."""
+    import json
     import threading
     from multiprocessing.connection import Client
 
@@ -267,14 +268,16 @@ def _handoff_exchange(server, timeout=5.0):
             key = bytes.fromhex(server.env[windows.HANDOFF_KEY])
             connection = Client(server.address, family="AF_PIPE", authkey=key)
             try:
-                connection.send(
-                    {
-                        "argv": [sys.executable, "-c", "print('ok')"],
-                        "cwd": os.getcwd(),
-                        "env": dict(os.environ),
-                    }
+                connection.send_bytes(
+                    json.dumps(
+                        {
+                            "argv": [sys.executable, "-c", "print('ok')"],
+                            "cwd": os.getcwd(),
+                            "env": dict(os.environ),
+                        }
+                    ).encode("utf-8")
                 )
-                result.append(connection.recv())
+                result.append(json.loads(connection.recv_bytes().decode("utf-8")))
             finally:
                 connection.close()
         except BaseException as exc:  # noqa: BLE001 - the probe reports everything
@@ -393,16 +396,21 @@ def test_the_handoff_server_survives_a_bad_client_then_stops_when_closed(monkeyp
 def test_the_handoff_server_runs_the_relay_with_the_requested_environment(monkeypatch):
     # POSIX has no CREATE_NO_WINDOW; deleting it here is the shape the Ubuntu
     # shards run, and the call must still reach the mocked run().
+    import json
+
     monkeypatch.delattr(windows.subprocess, "CREATE_NO_WINDOW", raising=False)
     completed = SimpleNamespace(returncode=0, stdout="4242\n", stderr="")
     run = Mock(return_value=completed)
     monkeypatch.setattr(windows.subprocess, "run", run)
     sent = []
     poll = Mock(return_value=True)
+    request = {"argv": ["py", "-c", "relay"], "cwd": "job", "env": {"KEEP": "1"}}
     connection = SimpleNamespace(
         poll=poll,
-        recv=Mock(return_value={"argv": ["py", "-c", "relay"], "cwd": "job", "env": {"KEEP": "1"}}),
-        send=Mock(side_effect=sent.append),
+        recv=Mock(side_effect=AssertionError("the request must not be unpickled")),
+        recv_bytes=Mock(return_value=json.dumps(request).encode("utf-8")),
+        send=Mock(side_effect=AssertionError("the answer must not be pickled")),
+        send_bytes=Mock(side_effect=sent.append),
         close=Mock(),
     )
     server = object.__new__(windows._HandoffServer)
@@ -411,39 +419,85 @@ def test_the_handoff_server_runs_the_relay_with_the_requested_environment(monkey
     assert run.call_args.args[0] == ["py", "-c", "relay"]
     assert run.call_args.kwargs["cwd"] == "job"
     assert run.call_args.kwargs["env"] == {"KEEP": "1"}
-    assert sent == [{"returncode": 0, "stdout": "4242\n", "stderr": ""}]
+    assert json.loads(sent[0].decode("utf-8")) == {"returncode": 0, "stdout": "4242\n", "stderr": ""}
+    connection.recv.assert_not_called()
+    connection.send.assert_not_called()
     connection.close.assert_called_once()
 
 
 def test_a_relay_the_host_cannot_start_is_answered_with_the_error(monkeypatch):
+    import json
+
     monkeypatch.delattr(windows.subprocess, "CREATE_NO_WINDOW", raising=False)
     monkeypatch.setattr(windows.subprocess, "run", Mock(side_effect=OSError("no interpreter")))
     sent = []
     connection = SimpleNamespace(
         poll=Mock(return_value=True),
-        recv=Mock(return_value={"argv": ["py"], "cwd": None, "env": None}),
-        send=Mock(side_effect=sent.append),
+        recv_bytes=Mock(return_value=json.dumps({"argv": ["py"], "cwd": None, "env": {}}).encode("utf-8")),
+        send_bytes=Mock(side_effect=sent.append),
+        recv=Mock(side_effect=AssertionError("the request must not be unpickled")),
+        send=Mock(side_effect=AssertionError("the answer must not be pickled")),
         close=Mock(),
     )
     server = object.__new__(windows._HandoffServer)
     server._serve(connection)
     assert connection.poll.called
-    assert "error" in sent[0]
-    assert "no interpreter" in sent[0]["error"]
+    answer = json.loads(sent[0].decode("utf-8"))
+    assert "error" in answer
+    assert "no interpreter" in answer["error"]
     connection.close.assert_called_once()
+
+
+def test_the_handoff_server_does_not_inherit_the_host_environment_for_an_empty_request(monkeypatch):
+    import json
+
+    monkeypatch.delattr(windows.subprocess, "CREATE_NO_WINDOW", raising=False)
+    run = Mock(return_value=SimpleNamespace(returncode=0, stdout="", stderr=""))
+    monkeypatch.setattr(windows.subprocess, "run", run)
+    connection = SimpleNamespace(
+        poll=Mock(return_value=True),
+        recv_bytes=Mock(return_value=json.dumps({"argv": ["py"], "cwd": None, "env": {}}).encode("utf-8")),
+        send_bytes=Mock(),
+        recv=Mock(side_effect=AssertionError("the request must not be unpickled")),
+        send=Mock(side_effect=AssertionError("the answer must not be pickled")),
+        close=Mock(),
+    )
+    server = object.__new__(windows._HandoffServer)
+    server._serve(connection)
+    assert run.call_args.kwargs["env"] == {}
+
+
+def test_the_handoff_server_rejects_an_oversized_request():
+    import json
+
+    sent = []
+    connection = SimpleNamespace(
+        poll=Mock(return_value=True),
+        recv_bytes=Mock(return_value=None),
+        send_bytes=Mock(side_effect=sent.append),
+        recv=Mock(side_effect=AssertionError("the request must not be unpickled")),
+        send=Mock(side_effect=AssertionError("the answer must not be pickled")),
+        close=Mock(),
+    )
+    server = object.__new__(windows._HandoffServer)
+    server._serve(connection)
+    assert "too large" in json.loads(sent[0].decode("utf-8"))["error"]
 
 
 def test_a_connection_that_cannot_be_answered_is_closed_quietly():
     connection = SimpleNamespace(
         poll=Mock(return_value=True),
-        recv=Mock(side_effect=EOFError("gone")),
-        send=Mock(side_effect=OSError("gone")),
+        recv_bytes=Mock(side_effect=EOFError("gone")),
+        send_bytes=Mock(side_effect=OSError("gone")),
+        recv=Mock(side_effect=AssertionError("the request must not be unpickled")),
+        send=Mock(side_effect=AssertionError("the answer must not be pickled")),
         close=Mock(side_effect=OSError("gone")),
     )
     server = object.__new__(windows._HandoffServer)
     server._serve(connection)
     assert connection.poll.called
-    connection.send.assert_called_once()
+    connection.send_bytes.assert_called_once()
+    connection.recv.assert_not_called()
     connection.close.assert_called_once()
 
 

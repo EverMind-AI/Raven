@@ -48,11 +48,12 @@ def test_the_backend_and_the_host_name_the_handoff_variables_the_same_way():
 
 
 def _channel(*, answer=None, error=None):
+    import json
     from types import SimpleNamespace
     from unittest.mock import Mock
 
-    recv = Mock(return_value=answer) if error is None else Mock(side_effect=error)
-    return SimpleNamespace(send=Mock(), recv=recv, close=Mock())
+    recv = Mock(return_value=json.dumps(answer).encode("utf-8")) if error is None else Mock(side_effect=error)
+    return SimpleNamespace(send_bytes=Mock(), recv_bytes=recv, close=Mock())
 
 
 def _with_channel(monkeypatch, channel=None, error=None):

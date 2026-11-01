@@ -192,19 +192,18 @@ def _handoff_answer(argv: list[str], job_dir: str) -> dict[str, Any] | None:
 
         connection = Client(address, family="AF_PIPE", authkey=bytes.fromhex(key))
         try:
-            connection.send(
-                {
-                    "argv": argv,
-                    "cwd": job_dir,
-                    "env": {
-                        name: value
-                        for name, value in os.environ.items()
-                        if name not in (_HANDOFF_PIPE_ENV, _HANDOFF_KEY_ENV)
-                    },
-                }
-            )
+            request = {
+                "argv": argv,
+                "cwd": job_dir,
+                "env": {
+                    name: value
+                    for name, value in os.environ.items()
+                    if name not in (_HANDOFF_PIPE_ENV, _HANDOFF_KEY_ENV)
+                },
+            }
+            connection.send_bytes(json.dumps(request).encode("utf-8"))
             sent = True
-            answer = connection.recv()
+            answer = json.loads(connection.recv_bytes().decode("utf-8"))
         finally:
             try:
                 connection.close()

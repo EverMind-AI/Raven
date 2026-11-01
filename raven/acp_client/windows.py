@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import json
 import os
 import secrets
 import shutil
@@ -43,6 +44,8 @@ HANDOFF_KEY = "RAVEN_ACP_HANDOFF_KEY"
 _HANDSHAKE_SLOTS = 64
 _REQUEST_TIMEOUT_S = 30.0
 """How long a connection that passed the key handshake may take to send its request."""
+_MAX_MESSAGE = 1 << 20
+"""The hand-off request is small; a larger message is refused before it is decoded."""
 
 _LAUNCHER = """\
 import ctypes, os, subprocess, sys
@@ -241,12 +244,20 @@ class _HandoffServer:
         try:
             if not connection.poll(_REQUEST_TIMEOUT_S):
                 raise TimeoutError("the hand-off request did not arrive")
-            request = connection.recv()
+            raw = connection.recv_bytes(_MAX_MESSAGE)
+            if raw is None:
+                raise ValueError("the hand-off request is too large")
+            request = json.loads(raw.decode("utf-8"))
+            if not isinstance(request, dict):
+                raise ValueError("the hand-off request must be an object")
             argv = [str(argument) for argument in request["argv"]]
+            env = request["env"]
+            if not isinstance(env, dict):
+                raise ValueError("the hand-off request env must be an object")
             completed = subprocess.run(
                 argv,
                 cwd=request.get("cwd"),
-                env=request.get("env") or None,
+                env=env,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -256,12 +267,18 @@ class _HandoffServer:
                 timeout=60,
                 close_fds=True,
             )
-            connection.send(
-                {"returncode": completed.returncode, "stdout": completed.stdout, "stderr": completed.stderr}
+            connection.send_bytes(
+                json.dumps(
+                    {
+                        "returncode": completed.returncode,
+                        "stdout": completed.stdout,
+                        "stderr": completed.stderr,
+                    }
+                ).encode("utf-8")
             )
         except Exception as exc:
             try:
-                connection.send({"error": f"{type(exc).__name__}: {exc}"})
+                connection.send_bytes(json.dumps({"error": f"{type(exc).__name__}: {exc}"}).encode("utf-8"))
             except Exception:
                 pass
         finally:
