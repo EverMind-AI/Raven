@@ -1264,6 +1264,75 @@ def test_a_plain_config_section_stays_a_snapshot() -> None:
 
 
 @pytest.mark.parametrize(
+    ("section", "expected"),
+    [
+        ({}, "high"),
+        ({"quality": ""}, "high"),
+        ({"quality": "low"}, "low"),
+    ],
+    ids=["unset", "picker-saved-empty", "named"],
+)
+def test_settings_quality_wins_only_where_it_names_one(section: dict, expected: str) -> None:
+    """`mediaSelection()` saves `quality: ""` when the reader picks a model
+    without choosing a quality. An empty string is the section's "no quality
+    named", not a choice that outranks the tool call's own request."""
+    from raven.config.schema import ImageToolConfig
+
+    config = ImageToolConfig(model="custom/gpt-image-2.5", provider="custom", **section)
+
+    assert ImageGenerateTool(config).effective_quality("high") == expected
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("custom/gpt-image-2", "medium"),
+        ("custom/gpt-image-2.5", None),
+    ],
+    ids=["gpt-image-2-keeps-its-default", "other-families-send-none"],
+)
+def test_no_quality_anywhere_resolves_like_an_unset_section(model: str, expected: str | None) -> None:
+    """With the picker's ``quality: ""`` and no quality on the call, resolution
+    lands where a section that never had the key lands: the gpt-image-2 default
+    (medium), and nothing for a family without the knob."""
+    from raven.config.schema import ImageToolConfig
+
+    config = ImageToolConfig(model=model, provider="custom", quality="")
+
+    assert ImageGenerateTool(config).effective_quality(None) == expected
+
+
+async def test_an_empty_settings_quality_leaves_the_call_s_quality_in_the_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The picker's saved `quality: ""` used to read as an authoritative choice
+    that the `if quality:` sites then dropped, so a tool call asking for high
+    quality went out with no quality at all. Empty means unset, so the call's
+    value travels; a quality named in Settings still wins over the call's."""
+    from raven.config.schema import ImageToolConfig
+
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+
+    picker_saved = ImageToolConfig(model="openai/gpt-image-2.5", quality="", api_key="k")
+    assert json.loads(await ImageGenerateTool(picker_saved, workspace=tmp_path).execute("a kitten", quality="high"))[
+        "success"
+    ]
+    assert seen[-1]["quality"] == "high"
+
+    named = ImageToolConfig(model="openai/gpt-image-2.5", quality="low", api_key="k")
+    assert json.loads(await ImageGenerateTool(named, workspace=tmp_path).execute("a kitten", quality="high"))["success"]
+    assert seen[-1]["quality"] == "low"
+
+
+@pytest.mark.parametrize(
     "model",
     [
         "bytedance-seed/seedream-5-0-lite",
