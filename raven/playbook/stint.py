@@ -360,6 +360,21 @@ class StintDriver:
         if task is not None and not task.done():
             task.cancel()
 
+    def _stop_this_beat(self, stint_id: str, task: asyncio.Task | None) -> None:
+        """Stop the beat this caller started, not whichever beat is current.
+
+        Two callers can hold one stint at once -- a second resume queued behind
+        the first one's question -- and the beat table holds only the latest.
+        A close that declines because the other caller's round opened must take
+        its own beat out, not that round's.
+        """
+        if task is None:
+            return
+        if self._beats.get(stint_id) is task:
+            self._beats.pop(stint_id, None)
+        if not task.done():
+            task.cancel()
+
     def _in_flight(self, record: StintRecord) -> bool:
         """A round of this stint that some task in this process is still running.
 
@@ -478,6 +493,7 @@ class StintDriver:
         # open to beat for yet. Keep the stamp fresh so a second request reads
         # a holder that is still asking, not one that went quiet.
         self._start_beat(record, store)
+        beat = self._beats.get(record.stint_id)
         try:
             receipt = await self._submit(spec, record, store, index=1, confirm=spec.confirm, layout=layout)
         except BaseException as exc:
@@ -487,7 +503,7 @@ class StintDriver:
             # playbook, and once its stamp went stale the next request took it
             # up through `resume` and ran the round unasked. A round already
             # opened has its run and its beat, and is left to them.
-            self._close_first_round(record, store, reason=self._first_round_stop_reason(spec, exc))
+            self._close_first_round(record, store, reason=self._first_round_stop_reason(spec, exc), beat=beat)
             raise
         if receipt.startswith("Error"):
             # Closed, not left running: a denied round left the record open
@@ -500,6 +516,7 @@ class StintDriver:
                 reason=(
                     "the first round was not approved" if receipt == _NOT_APPROVED else "the first round was refused"
                 ),
+                beat=beat,
             )
         return receipt
 
@@ -513,7 +530,9 @@ class StintDriver:
             )
         return f"the first round could not start ({exc})"
 
-    def _close_first_round(self, record: StintRecord, store: StintStore, *, reason: str) -> None:
+    def _close_first_round(
+        self, record: StintRecord, store: StintStore, *, reason: str, beat: asyncio.Task | None = None
+    ) -> None:
         """Close the record after a first round that never opened.
 
         Re-read and written under one `write_transaction`: a question can stand
@@ -528,15 +547,26 @@ class StintDriver:
         The holder is the pair, as `holder_gone` reads it: a matching pid on
         another host is somebody else's claim, not ours.
 
+        ``beat`` is the pre-approval beat this caller started, and only that
+        one is stopped, and only when no round opened. A close that declines
+        because another caller already opened the round must leave that round's
+        beat alone: it is what keeps a second host from taking the same
+        checkout up.
+
         A cleanup that cannot read or write is logged rather than raised. The
         caller is on its way out with a cancellation or a refusal, and a
         cleanup error must not become the exception the turn reads instead.
         """
-        self._stop_beat(record.stint_id)
         try:
             with write_transaction(store.path_for(record.stint_id)):
                 fresh = store.read(record.stint_id)
-                if fresh is None or _first_round_opened(fresh) or fresh.status != RUNNING:
+                if fresh is not None and _first_round_opened(fresh):
+                    return
+                # No round opened: below is either a return that has nothing
+                # left to advance, or the close itself. Either way this
+                # caller's beat has nothing left to beat for.
+                self._stop_this_beat(record.stint_id, beat)
+                if fresh is None or fresh.status != RUNNING:
                     return
                 other_host = fresh.holder_host and record.holder_host and fresh.holder_host != record.holder_host
                 if fresh.holder_pid not in (0, record.holder_pid) or other_host:
@@ -1097,17 +1127,19 @@ class StintDriver:
         record.status = RUNNING
         record.claim()
         store.write(record)
+        beat = None
         if confirm:
             # Same reason as `start`: the question stands before any round is
             # open to beat for.
             self._start_beat(record, store)
+            beat = self._beats.get(record.stint_id)
         try:
             receipt = await self._submit(
                 spec, record, store, index=index, confirm=confirm, attempt=attempt, satisfied=satisfied
             )
         except BaseException as exc:
             if confirm:
-                self._close_first_round(record, store, reason=self._first_round_stop_reason(spec, exc))
+                self._close_first_round(record, store, reason=self._first_round_stop_reason(spec, exc), beat=beat)
             raise
         if receipt.startswith("Error"):
             if confirm:
@@ -1119,6 +1151,7 @@ class StintDriver:
                         if receipt == _NOT_APPROVED
                         else "the first round was refused"
                     ),
+                    beat=beat,
                 )
             else:
                 record.status = INTERRUPTED

@@ -1051,6 +1051,58 @@ class TestRunning:
         assert record.status == "paused"
         assert driver.holding() is False, "nothing is advancing the stint after the pause"
 
+    async def test_a_close_that_leaves_the_round_alone_leaves_its_beat_alone(self, tmp_path: Path) -> None:
+        """A close can lose the race to a round another caller already opened.
+        It then writes nothing -- and must stop nothing either: that round's
+        beat is what keeps a second host from taking the same checkout up."""
+        from raven.stint.record import StintRecord
+
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+        store = StintStore(tool.stints_root("web:stint"))
+        record = StintRecord(
+            stint_id="stint-x",
+            playbook=spec.name,
+            spec=spec.model_dump(by_alias=True, exclude_none=True),
+            workdir=str(tmp_path),
+            project=str(tmp_path),
+            round_index=1,
+            status="running",
+            origin=tool.turn_origin(),
+        )
+        record.open_round(1, "run-1")
+        record.claim()
+        store.write(record)
+        driver._start_beat(record, store)
+        live = driver._beats[record.stint_id]
+        # This caller's own beat was replaced when the other caller's round
+        # opened; only that own beat is a close's to stop.
+        replaced = asyncio.create_task(asyncio.sleep(3600))
+
+        # The caller's own snapshot was read before that round opened.
+        stale = StintRecord(
+            stint_id="stint-x",
+            playbook=spec.name,
+            spec=spec.model_dump(by_alias=True, exclude_none=True),
+            workdir=str(tmp_path),
+            project=str(tmp_path),
+            round_index=1,
+            status="running",
+            origin=tool.turn_origin(),
+        )
+        stale.claim()
+        driver._close_first_round(stale, store, reason="not ours to close", beat=replaced)
+        await asyncio.sleep(0)
+
+        assert driver._beats.get(record.stint_id) is live
+        assert not live.done(), "a close that wrote nothing stopped the live round's beat"
+        assert driver.holding() is True
+        assert store.read("stint-x").status == "running"
+        driver._stop_beat(record.stint_id)
+        replaced.cancel()
+        await asyncio.sleep(0)
+
     async def test_a_round_no_role_finished_pauses_the_stint_instead_of_costing_a_round(self, tmp_path: Path) -> None:
         """Every node failed, so the round left nothing to build on, and the
         next would hit the same fault. Counted, a stint ran three rounds in two
