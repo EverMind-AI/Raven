@@ -544,6 +544,202 @@ def test_a_dead_handoff_server_is_replaced(monkeypatch):
     old.close.assert_called_once()
 
 
+def test_the_handoff_server_continues_after_an_unknown_accept_error(monkeypatch):
+    import threading
+
+    connection = SimpleNamespace()
+    state = {"calls": 0}
+    served = []
+
+    def accept():
+        state["calls"] += 1
+        if state["calls"] == 1:
+            raise ValueError("bad client")
+        if state["calls"] == 2:
+            return connection
+        server._closed.set()
+        raise OSError("closed")
+
+    class FakeThread:
+        def __init__(self, target, args=(), name=None, daemon=None):
+            self.target, self.args, self.daemon = target, args, daemon
+
+        def start(self):
+            served.append(self.args)
+
+    server = object.__new__(windows._HandoffServer)
+    server._listener = SimpleNamespace(accept=Mock(side_effect=accept))
+    server._closed = threading.Event()
+    server._handshake_slots = threading.BoundedSemaphore(2)
+    monkeypatch.setattr(windows.threading, "Thread", FakeThread)
+    assert server._accept() is None
+    assert served == [(connection,)]
+    assert state["calls"] == 3
+
+
+def test_the_handoff_server_closes_a_connection_when_its_slots_are_taken():
+    import threading
+
+    connection = SimpleNamespace(close=Mock())
+    state = {"calls": 0}
+
+    def accept():
+        state["calls"] += 1
+        if state["calls"] == 1:
+            return connection
+        server._closed.set()
+        raise OSError("closed")
+
+    server = object.__new__(windows._HandoffServer)
+    server._listener = SimpleNamespace(accept=Mock(side_effect=accept))
+    server._closed = threading.Event()
+    server._handshake_slots = threading.BoundedSemaphore(1)
+    server._handshake_slots.acquire()
+    assert server._accept() is None
+    connection.close.assert_called_once()
+
+
+def test_the_handoff_server_releases_a_slot_when_it_cannot_start_a_worker(monkeypatch):
+    import threading
+
+    connection = SimpleNamespace(close=Mock())
+    state = {"calls": 0}
+
+    def accept():
+        state["calls"] += 1
+        if state["calls"] == 1:
+            return connection
+        server._closed.set()
+        raise OSError("closed")
+
+    class FailingThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("no thread")
+
+    server = object.__new__(windows._HandoffServer)
+    server._listener = SimpleNamespace(accept=Mock(side_effect=accept))
+    server._closed = threading.Event()
+    server._handshake_slots = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(windows.threading, "Thread", FailingThread)
+    assert server._accept() is None
+    connection.close.assert_called_once()
+    assert server._handshake_slots.acquire(blocking=False)
+    server._handshake_slots.release()
+
+
+def test_the_handoff_server_authenticates_the_client_then_serves_it(monkeypatch):
+    import multiprocessing.connection
+    import threading
+
+    calls = []
+    connection = SimpleNamespace(close=Mock())
+    server = object.__new__(windows._HandoffServer)
+    server._authkey = b"key"
+    server._handshake_slots = threading.BoundedSemaphore(1)
+    server._handshake_slots.acquire()
+    monkeypatch.setattr(
+        multiprocessing.connection, "deliver_challenge", lambda conn, key: calls.append(("deliver", conn, key))
+    )
+    monkeypatch.setattr(
+        multiprocessing.connection, "answer_challenge", lambda conn, key: calls.append(("answer", conn, key))
+    )
+    monkeypatch.setattr(server, "_serve", lambda conn: calls.append(("serve", conn)))
+    server._handshake(connection)
+    assert calls == [("deliver", connection, b"key"), ("answer", connection, b"key"), ("serve", connection)]
+    connection.close.assert_not_called()
+    assert server._handshake_slots.acquire(blocking=False)
+    server._handshake_slots.release()
+
+
+def test_a_failed_handshake_closes_its_connection_and_releases_the_slot(monkeypatch):
+    import multiprocessing.connection
+    import threading
+
+    connection = SimpleNamespace(close=Mock())
+    server = object.__new__(windows._HandoffServer)
+    server._authkey = b"key"
+    server._handshake_slots = threading.BoundedSemaphore(1)
+    server._handshake_slots.acquire()
+    monkeypatch.setattr(multiprocessing.connection, "deliver_challenge", Mock(side_effect=OSError("bad key")))
+    monkeypatch.setattr(multiprocessing.connection, "answer_challenge", Mock())
+    monkeypatch.setattr(server, "_serve", Mock())
+    server._handshake(connection)
+    connection.close.assert_called_once()
+    assert server._handshake_slots.acquire(blocking=False)
+    server._handshake_slots.release()
+
+
+def test_closing_the_handoff_server_stops_accepting():
+    import threading
+
+    closing = []
+    server = object.__new__(windows._HandoffServer)
+    server._closed = threading.Event()
+    server._listener = SimpleNamespace(close=lambda: closing.append(True))
+    server.close()
+    assert server._closed.is_set()
+    assert closing == [True]
+
+    server = object.__new__(windows._HandoffServer)
+    server._closed = threading.Event()
+    server._listener = SimpleNamespace(close=Mock(side_effect=OSError("gone")))
+    server.close()
+    assert server._closed.is_set()
+
+
+def test_a_handoff_request_that_does_not_arrive_is_answered_with_the_error():
+    import json
+
+    sent = []
+    connection = SimpleNamespace(
+        poll=Mock(return_value=False),
+        recv_bytes=Mock(),
+        send_bytes=Mock(side_effect=sent.append),
+        close=Mock(),
+    )
+    server = object.__new__(windows._HandoffServer)
+    server._serve(connection)
+    assert "did not arrive" in json.loads(sent[0].decode("utf-8"))["error"]
+    connection.recv_bytes.assert_not_called()
+
+
+def test_a_handoff_request_that_is_not_an_object_is_refused(monkeypatch):
+    import json
+
+    monkeypatch.setattr(windows.subprocess, "run", Mock())
+    sent = []
+    connection = SimpleNamespace(
+        poll=Mock(return_value=True),
+        recv_bytes=Mock(return_value=b"[]"),
+        send_bytes=Mock(side_effect=sent.append),
+        close=Mock(),
+    )
+    server = object.__new__(windows._HandoffServer)
+    server._serve(connection)
+    assert "must be an object" in json.loads(sent[0].decode("utf-8"))["error"]
+    windows.subprocess.run.assert_not_called()
+
+
+def test_a_handoff_request_whose_env_is_not_an_object_is_refused(monkeypatch):
+    import json
+
+    monkeypatch.setattr(windows.subprocess, "run", Mock())
+    sent = []
+    connection = SimpleNamespace(
+        poll=Mock(return_value=True),
+        recv_bytes=Mock(return_value=json.dumps({"argv": ["py"], "cwd": None, "env": []}).encode("utf-8")),
+        send_bytes=Mock(side_effect=sent.append),
+        close=Mock(),
+    )
+    server = object.__new__(windows._HandoffServer)
+    server._serve(connection)
+    assert "env must be an object" in json.loads(sent[0].decode("utf-8"))["error"]
+    windows.subprocess.run.assert_not_called()
+
+
 async def test_launch_gives_the_agent_the_hosts_handoff_channel(launcher, monkeypatch):
     channel = {windows.HANDOFF_PIPE: "pipe", windows.HANDOFF_KEY: "key"}
     monkeypatch.setattr(windows, "_handoff", lambda: SimpleNamespace(env=channel))
