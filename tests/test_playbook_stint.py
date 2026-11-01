@@ -2935,6 +2935,43 @@ class TestResume:
         [after] = store.list()
         assert after.status == "interrupted"
 
+    async def test_a_resume_that_cannot_start_before_asking_stays_interrupted(self, tmp_path: Path) -> None:
+        """An approval is not the only thing that can stop a first round before
+        it opens. A delegation pause or a validation refusal is not the person
+        saying no; closing the record as `refused` takes away the retry."""
+        from raven.stint.record import StintRecord
+
+        tool = _FakeTool(tmp_path / "stints")
+        driver = self._driver(tmp_path, tool)
+        spec = _spec(
+            confirm=True,
+            roles=[
+                {"as": "planner", "name": "echo", "promptTemplate": "plan"},
+                {"as": "builder", "name": "echo", "dependsOn": ["planner"], "promptTemplate": "build"},
+            ],
+        )
+        store = StintStore(tool.stints_root("web:stint"))
+        store.write(
+            StintRecord(
+                stint_id="stint-x",
+                playbook=spec.name,
+                spec=spec.model_dump(by_alias=True, exclude_none=True),
+                workdir=str(tmp_path),
+                project=str(tmp_path),
+                round_index=1,
+                status="interrupted",
+                origin=tool.turn_origin(),
+            )
+        )
+        tool.refuse = "Error: delegation is paused. The user paused sub-agent spawning."
+
+        receipt = await driver.resume("stint-x", "web:stint")
+
+        assert receipt.startswith("Error"), receipt
+        [after] = store.list()
+        assert after.status == "interrupted", "a transient refusal is not the person saying no"
+        assert driver.holding() is False, "the pre-approval beat outlived the resume"
+
 
 class TestTheWordThatEndsItEarly:
     """`stop.until` was read by the machine and said to nobody."""

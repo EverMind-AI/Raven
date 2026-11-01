@@ -1148,18 +1148,15 @@ class StintDriver:
                 self._close_first_round(record, store, reason=self._first_round_stop_reason(spec, exc), beat=beat)
             raise
         if receipt.startswith("Error"):
-            if confirm:
-                self._close_first_round(
-                    record,
-                    store,
-                    reason=(
-                        "the first round was not approved"
-                        if receipt == _NOT_APPROVED
-                        else "the first round was refused"
-                    ),
-                    beat=beat,
-                )
+            if confirm and receipt == _NOT_APPROVED:
+                self._close_first_round(record, store, reason="the first round was not approved", beat=beat)
             else:
+                # A refusal the person did not make -- delegation paused, a
+                # validation refusal, a question that could not be delivered --
+                # is not an answer to the question. Leave the record retryable,
+                # as a resume that never asked already did; only "not approved"
+                # closes it.
+                self._stop_this_beat(record.stint_id, beat)
                 record.status = INTERRUPTED
                 store.write(record)
         return receipt
