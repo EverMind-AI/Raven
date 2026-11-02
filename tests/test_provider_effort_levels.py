@@ -123,3 +123,26 @@ def test_an_unknown_provider_spelling_still_finds_its_row(table):
 def test_a_model_with_no_registry_row_uses_its_route_vendor(table):
     table({"zai/glm-5": {**_row(), "litellm_provider": "zai"}})
     assert effort_levels.levels_for("bigmodel/glm-5") == ("minimal", "low", "medium", "high")
+
+
+def test_an_empty_table_is_unreadable_not_a_model_answer(table):
+    table({})
+    assert effort_levels.levels_for("openai/gpt-5") is None
+
+
+def test_a_route_silent_on_reasoning_keeps_its_own_level_flags(table):
+    table(
+        {
+            "claude-opus-4-6": _row(supports_xhigh_reasoning_effort=True, litellm_provider="anthropic"),
+            "openrouter/anthropic/claude-opus-4.6": {
+                "supports_reasoning": None,
+                "supports_xhigh_reasoning_effort": False,
+            },
+        }
+    )
+    assert "xhigh" not in effort_levels.levels_for("openrouter/anthropic/claude-opus-4.6")
+
+
+def test_an_openrouter_alias_is_consulted(table):
+    table({"openrouter/vendor/some-model": _row()})
+    assert effort_levels.levels_for("vendor/some-model") == ("minimal", "low", "medium", "high")

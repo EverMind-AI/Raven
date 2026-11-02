@@ -42,8 +42,9 @@ def levels_for(model: str, declared: Sequence[str] = ()) -> tuple[str, ...] | No
     if route is not None and route.get("supports_reasoning") is False:
         return ()
     authority = _authority_row(model, by_name)
-    if route is not None and route.get("supports_reasoning") is True:
-        return _derive(_merged(route, authority))
+    if route is not None:
+        merged = _merged(route, authority)
+        return _derive(merged) if merged.get("supports_reasoning") is True else ()
     if authority is not None and authority.get("supports_reasoning") is True:
         return _derive(authority)
     return ()
@@ -61,7 +62,7 @@ def _table() -> dict[str, dict[str, Any]] | None:
         table = getattr(import_litellm(), "model_cost", None)
     except Exception:
         return None
-    if not isinstance(table, dict):
+    if not isinstance(table, dict) or not table:
         return None
     return {key: row for key, row in table.items() if isinstance(row, dict)}
 
@@ -69,7 +70,7 @@ def _table() -> dict[str, dict[str, Any]] | None:
 @lru_cache(maxsize=1)
 def _index() -> tuple[dict[str, dict[str, Any]], dict[str, tuple[tuple[str, dict[str, Any]], ...]]] | None:
     table = _table()
-    if table is None:
+    if not table:
         return None
     by_name: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
     for key, row in table.items():
@@ -89,6 +90,10 @@ def _candidates(model: str) -> list[tuple[str, bool]]:
     raw_head = (model or "").partition("/")[0]
     if provider and rest and raw_head and raw_head != provider:
         out.append((f"{provider}/{rest}", False))
+    from raven.providers.wire import metadata_candidates
+
+    for candidate in metadata_candidates(model):
+        out.append((candidate, "/" not in candidate))
     try:
         from litellm.utils import _get_potential_model_names
 
@@ -118,15 +123,14 @@ def _provider_names(provider: str) -> set[str]:
     from raven.providers.registry import canonical_provider_name, find_by_name
 
     spec = find_by_name(provider) if provider else None
-    names = {canonical_provider_name(provider)} if provider else set()
-    for name in (
-        getattr(spec, "name", ""),
-        getattr(spec, "via_driver", ""),
-        *(getattr(spec, "name_aliases", ()) or ()),
-    ):
-        if name:
-            names.add(canonical_provider_name(name))
-    return {name for name in names if name}
+    names = set(spec.route_names) if spec is not None else set()
+    if spec is not None:
+        metadata_prefix = getattr(spec, "metadata_prefix", None)
+        if metadata_prefix:
+            names.add(metadata_prefix)
+    if provider:
+        names.add(canonical_provider_name(provider))
+    return {canonical_provider_name(name) for name in names if name}
 
 
 def _provider_agrees(row_provider: Any, model: str) -> bool:
