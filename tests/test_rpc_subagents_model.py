@@ -534,6 +534,84 @@ async def test_an_enabled_rows_model_only_move_asks_the_agent_before_measuring_i
     assert order == ["ping"], "a move the agent cannot answer is refused without a handshake"
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize("written", ["Other", "Hermes Agent"])
+async def test_a_write_that_lands_while_a_move_is_measured_is_kept(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, enabled: bool, written: str
+) -> None:
+    """The move's handshake is an await bounded only by the agent's readiness
+    timeout, and other ``subagents.*`` writes land during it -- the page runs
+    them side by side. Writing back the list read before the handshake reverted
+    every one of them after it had answered success. The list is read again after
+    the last await and only this call's own fields are replayed onto it, on the
+    row it edits as on any other."""
+    raw = json.loads(config_path.read_text())
+    raw["subagents"]["agents"][0].update(model="vendor/reasoner", enabled=enabled)
+    raw["subagents"]["agents"].append(
+        {"name": "Other", "kind": "acp", "command": "other acp", "description": "old", "enabled": False}
+    )
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    row = raw["subagents"]["agents"][0]
+    SnapshotStore().record(_measured_snapshot(_as_configs([row])[0], _MENUS["vendor/reasoner"]))
+    _gate_answers(monkeypatch)
+
+    async def record(cfg):
+        if cfg.name == "Hermes Agent" and cfg.model == "vendor/flash":
+            await subagents_update({"name": written, "description": "written meanwhile"})
+        snapshot = _measured_snapshot(cfg, _MENUS.get(cfg.model or "", ()))
+        SnapshotStore().record(snapshot)
+        return snapshot
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", record)
+
+    await subagents_update({"name": "Hermes Agent", "model": "vendor/flash"})
+
+    stored = {entry["name"]: entry for entry in _stored(config_path)}
+    assert stored["Hermes Agent"]["model"] == "vendor/flash"
+    assert stored[written]["description"] == "written meanwhile", "the other write answered success and stays"
+
+
+async def test_two_model_moves_measured_at_once_both_land(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two picks on two rows, each waiting on its own handshake: both answer
+    success, so both moves have to be on disk afterwards."""
+    import asyncio
+
+    raw = json.loads(config_path.read_text())
+    raw["subagents"]["agents"][0]["model"] = "vendor/reasoner"
+    raw["subagents"]["agents"].append(
+        {"name": "Second", "kind": "acp", "command": "second acp", "model": "vendor/reasoner", "enabled": True}
+    )
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    for row in raw["subagents"]["agents"]:
+        SnapshotStore().record(_measured_snapshot(_as_configs([row])[0], _MENUS["vendor/reasoner"]))
+    _gate_answers(monkeypatch)
+    both_measuring = asyncio.Event()
+    measuring: list[str] = []
+
+    async def record(cfg):
+        if cfg.model == "vendor/flash":
+            measuring.append(cfg.name)
+            if len(measuring) == 2:
+                both_measuring.set()
+            await both_measuring.wait()
+        snapshot = _measured_snapshot(cfg, _MENUS.get(cfg.model or "", ()))
+        SnapshotStore().record(snapshot)
+        return snapshot
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", record)
+
+    await asyncio.gather(
+        subagents_update({"name": "Hermes Agent", "model": "vendor/flash"}),
+        subagents_update({"name": "Second", "model": "vendor/flash"}),
+    )
+
+    assert sorted(measuring) == ["Hermes Agent", "Second"], "the two handshakes overlapped"
+    assert {entry["name"]: entry.get("model") for entry in _stored(config_path)} == {
+        "Hermes Agent": "vendor/flash",
+        "Second": "vendor/flash",
+    }
+
+
 async def test_a_rename_onto_a_taken_name_is_refused_before_anything_is_measured(
     config_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

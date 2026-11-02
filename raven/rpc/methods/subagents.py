@@ -1152,11 +1152,14 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
         # already gated, so asking here would buy the same answer twice.
         if bool(target.get("enabled")) and (target.get("apiKey") != key_before or target.get("model") != model_before):
             await _refuse_unless_it_answers(entries, str(target["name"]), refusal="so it was not changed")
-            entries, target = _merged_over_the_ping(
-                target, row_before, name_before, materialized=materialized_discovered
-            )
         if moved_the_row and move is None:
             move = await _measure_the_move(name, row_before, target)
+        # Read again after the last await, whichever ran: the gate's prompt and a
+        # move's handshake each give other `subagents.*` writes time to land.
+        entries, target = _merged_over_the_awaits(
+            target, row_before, name_before, materialized=materialized_discovered, shipped=shipped
+        )
+        if move is not None:
             _drop_an_effort_the_move_lacks(target, move)
         try:
             reject_unsupported_openai_fields([target])
@@ -1176,13 +1179,17 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
     return {"updated": True, "name": target["name"]}
 
 
-def _merged_over_the_ping(
-    target: dict, before: dict, stored_name: str | None, *, materialized: bool
+def _merged_over_the_awaits(
+    target: dict, before: dict, stored_name: str | None, *, materialized: bool, shipped: dict | None = None
 ) -> tuple[list[dict], dict]:
-    """Re-read the agent list across the gate's await, keeping both authors.
+    """Re-read the agent list across the call's awaits, keeping both authors.
 
-    The list read before a ping of up to a minute is stale in two ways, and
-    they want different answers.
+    The list read before the gate's ping of up to a minute, or a model move's
+    handshake bounded only by the agent's readiness timeout, is stale in two
+    ways, and they want different answers. It is read once, after the last of
+    them: this call's own fields are worked out against ``before`` every time,
+    and a second merge over a list the first had already merged into ``target``
+    would replay fields another writer set there.
 
     Rows this call never touched are simply whatever disk says now, so the list
     is read again -- writing back the one read before the ping would revert
@@ -1202,7 +1209,10 @@ def _merged_over_the_ping(
     removed meanwhile, and there is nothing left to merge onto: the change is
     refused rather than resurrecting a row somebody deleted. The exception is a
     row this call materialized itself -- a discovered folder or a built-in
-    getting its first stored entry -- which was never on disk to be found.
+    getting its first stored entry -- which was never on disk to be found. Under
+    a folder's name disk may hold the switch's stub instead, which carries the
+    flag and nothing to merge onto: the folder's entry this call built replaces
+    it whole, as the write would have without the await.
     """
     entries = _read_agents()
     current = next((e for e in entries if e.get("name") == stored_name), None)
@@ -1211,9 +1221,11 @@ def _merged_over_the_ping(
             entries.append(target)
             return entries, target
         raise SubagentNotFoundError(
-            f"sub-agent {stored_name!r} was renamed or removed while it was being proved, so it was not changed",
+            f"sub-agent {stored_name!r} was renamed or removed while this change was being checked, so it was not changed",
             data={"name": stored_name, "field": "name"},
         )
+    if materialized and shipped is not None and _is_switch_row(current, shipped):
+        return [target if e is current else e for e in entries], target
     current.update({key: value for key, value in target.items() if before.get(key) != value})
     return entries, current
 
@@ -1831,8 +1843,11 @@ def _recorded_menu(cfg: Any) -> dict[str, Any]:
 _READ_BOOKKEEPING = ("measuredAtMs", "elapsedMs", "status", "detail")
 
 
-def _read_left_the_capabilities_alone(previous: Any, measured: Any) -> bool:
+def _read_left_the_capabilities_alone(previous: Any, stored: Any) -> bool:
     """Did this read change a capability the composed table derives?
+
+    ``previous`` is the row the store held before the read and ``stored`` the one
+    it holds after.
 
     Compared on the stored row without the read's own bookkeeping -- when it was
     taken, how long it took, and what it said about the attempt -- because every
@@ -1845,10 +1860,10 @@ def _read_left_the_capabilities_alone(previous: Any, measured: Any) -> bool:
     function does not know) is never called unchanged, so a read is never left
     unsynced on the strength of a shape that is not the real one.
     """
-    if previous is None or measured is None:
+    if previous is None or stored is None:
         return False
     stored_before = getattr(previous, "to_row", None)
-    stored_after = getattr(measured, "to_row", None)
+    stored_after = getattr(stored, "to_row", None)
     if not callable(stored_before) or not callable(stored_after):
         return False
     left, right = stored_before(), stored_after()
@@ -1872,14 +1887,20 @@ async def _read_menu_and_sync(
     Recomposed only when the read changed a capability: the picker asks for this
     read every time it opens, and an apply replaces every backend instance. When
     the handshake reports what the row already held there is nothing for the
-    table to pick up.
+    table to pick up. The comparison is against the row the store now holds, not
+    the handshake's own answer: a failed handshake answers with no capabilities
+    at all while the store keeps the previous ones, and read off the answer every
+    failure looked like news.
+
+    Stamped for the cooldown however the read ended. A failed read leaves the
+    recorded menu standing, and that is what a picker opening moments later
+    takes; launching an agent that just failed to start on every open is what
+    the cooldown is there to stop. A press of the refresh control still reads.
     """
     previous = acp_snapshot_for(cfg)
     snapshot = await record_capabilities(cfg)
-    measured = bool(getattr(snapshot, "usable", False) and getattr(snapshot, "model_menu_measured", False))
-    if measured:
-        _MENU_READ_AT[key] = time.monotonic()
-    if source != "preset" and not _read_left_the_capabilities_alone(previous, snapshot):
+    _MENU_READ_AT[key] = time.monotonic()
+    if source != "preset" and not _read_left_the_capabilities_alone(previous, acp_snapshot_for(cfg)):
         # The roster reads `stateful` and the menu from the table built the last
         # time `apply` ran, so a snapshot written now has to reach the table or
         # `subagents.list` and the instance picker answer different menus.

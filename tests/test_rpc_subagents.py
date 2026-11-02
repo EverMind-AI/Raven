@@ -1128,6 +1128,32 @@ async def test_update_materializes_a_vendored_mcp_override(
     assert entry["allowMcpSecrets"] is True
 
 
+async def test_an_edit_of_a_switched_off_folder_writes_its_whole_entry(
+    config_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The switch's stub carries the flag alone, so an edit lands on the folder's
+    entry instead. The write reads the list again after the call's awaits and
+    finds the stub under the folder's name; merged onto the stub, the edit would
+    keep nothing of the folder it was made to."""
+    vendored = ThirdPartyCliSubagentConfig(
+        name="Raven-Probe",
+        command="raven-probe {prompt_file}",
+        description="shipped",
+    )
+    monkeypatch.setattr(
+        "raven.agent.subagent.vendored_agents.discover_product_rows",
+        lambda root=None: [vendored],
+    )
+    await subagents_toggle({"name": "Raven-Probe", "enabled": False})
+    assert next(e for e in _stored(config_path) if e["name"] == "Raven-Probe").get("switchOnly") is True
+
+    await subagents_update({"name": "Raven-Probe", "description": "edited"})
+
+    entry = next(e for e in _stored(config_path) if e["name"] == "Raven-Probe")
+    assert (entry["command"], entry["description"], entry["enabled"]) == ("raven-probe {prompt_file}", "edited", False)
+
+
 async def test_a_vendored_override_cannot_be_renamed(
     config_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3147,8 +3173,12 @@ async def test_a_menu_read_that_measured_the_same_capabilities_leaves_the_agent_
     )
     SnapshotStore().record(recorded)
 
+    # Each stand-in writes the store, as ``record_capabilities`` does: the sync
+    # judges the row the store holds after the read, not the read's own answer.
     async def same_record(cfg):
-        return replace(recorded, measured_at_ms=2)
+        measured = replace(recorded, measured_at_ms=2)
+        SnapshotStore().record(measured)
+        return measured
 
     monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", same_record)
     applied: list[list] = []
@@ -3164,17 +3194,93 @@ async def test_a_menu_read_that_measured_the_same_capabilities_leaves_the_agent_
     assert applied == [], "the same capabilities, so there is nothing to recompose"
 
     async def moved_record(cfg):
-        return replace(
+        measured = replace(
             recorded,
             measured_at_ms=3,
             model_choices=(AcpModelChoice(value="m2", name="Two", group="Group"),),
         )
+        SnapshotStore().record(measured)
+        return measured
 
     monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", moved_record)
     await subagents_refresh_models(
         {"name": "Helped", "source": "config", "force": True}, agent_loop_factory=lambda: _Loop()
     )
     assert len(applied) == 1, "a menu that moved still reaches the composed table"
+
+
+async def test_a_menu_read_that_fails_leaves_the_agent_table_alone_and_takes_the_cooldown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, menu_reads
+) -> None:
+    """A failed handshake keeps the recorded capabilities (``_test_record``), but
+    ``record_capabilities`` answers with the raw failed snapshot, which carries
+    none. Compared against that, every failed read looked like news: it recomposed
+    the table, replacing every backend and the per-backend state with them, such
+    as a session's booked spend. And it set no cooldown, so each picker open on a
+    failing agent launched it again and recomposed again."""
+    from dataclasses import replace
+
+    from raven.acp_client.capabilities import (
+        AcpModelChoice,
+        CapabilitySnapshot,
+        SnapshotStore,
+        snapshot_fingerprint,
+    )
+    from raven.agent.subagent.probe import record_capabilities
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {"subagents": {"agents": [{"name": "Helped", "kind": "acp", "command": "helper --acp", "enabled": True}]}}
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+
+    cfg = menu_reads._find("Helped", "config")
+    recorded = CapabilitySnapshot(
+        agent="Helped",
+        fingerprint=snapshot_fingerprint(cfg),
+        status="ready",
+        detail="connected",
+        measured_at_ms=1,
+        can_load=True,
+        model_choices=(AcpModelChoice(value="m1", name="One", group="Group"),),
+    )
+    SnapshotStore().record(recorded)
+    launched: list[str] = []
+
+    async def failing_verify(cfg, **_kw):
+        launched.append(cfg.name)
+        return replace(
+            recorded,
+            status="attention",
+            detail="the agent did not start",
+            measured_at_ms=2,
+            can_load=False,
+            model_choices=(),
+        )
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", record_capabilities)
+    monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", failing_verify)
+    applied: list[list] = []
+
+    class _Loop:
+        def apply_agents(self, configs: list) -> None:
+            applied.append(configs)
+
+    out = await subagents_refresh_models(
+        {"name": "Helped", "source": "config", "force": True}, agent_loop_factory=lambda: _Loop()
+    )
+    assert out["ok"] is False
+    assert applied == [], "a failed read keeps the capabilities the table already shows"
+    kept = SnapshotStore().load([cfg], allow_stale=True)["Helped"]
+    assert (kept.status, [c.value for c in kept.model_choices]) == ("attention", ["m1"])
+
+    await subagents_refresh_models({"name": "Helped", "source": "config"}, agent_loop_factory=lambda: _Loop())
+    assert launched == ["Helped"], "a picker opening right after the failed read does not launch the agent again"
+    assert applied == []
 
 
 async def test_the_menu_refresh_wrapper_carries_the_live_loop(
