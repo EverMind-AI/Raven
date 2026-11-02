@@ -30,6 +30,7 @@ Comparing by `merge_key` rather than by string is what makes that impossible.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from raven.providers.registry import (
@@ -112,6 +113,21 @@ def _through_gateway(model: str, gateway: ProviderSpec) -> str:
     return model
 
 
+#: Copilot serves its newest GPT ids on ``/responses`` only and answers
+#: ``/chat/completions`` with HTTP 400 ("model ... is not accessible via the
+#: /chat/completions endpoint"). Same family OmniRoute routes to /responses:
+#: gpt-5.5 and later, gpt-6.x, and any codex id.
+_COPILOT_RESPONSES_ONLY = re.compile(r"^(?:gpt-(?:[6-9]|5\.[5-9])|.*codex)", re.IGNORECASE)
+
+
+def _copilot_responses_only(spec: ProviderSpec | None, model: str) -> bool:
+    """True when ``model`` is a Copilot id that has to go over ``/responses``."""
+    if spec is None or spec.name != "github_copilot":
+        return False
+    _, bare = split_model_id(model)
+    return bool(_COPILOT_RESPONSES_ONLY.match(bare))
+
+
 def _direct(model: str) -> str:
     """Put the routing vendor's prefix in front, for LiteLLM to route on."""
     spec = find_by_model(model)
@@ -120,6 +136,13 @@ def _direct(model: str) -> str:
         model = _canonical_prefix(model, spec, prefix)
         if not any(model.startswith(s) for s in (*spec.skip_prefixes, f"{prefix}/")):
             model = f"{prefix}/{model}"
+    if _copilot_responses_only(spec, model):
+        # LiteLLM's ``responses/`` segment sends the call through its Responses
+        # bridge, which Copilot's driver implements; without it the call goes to
+        # /chat/completions and is refused.
+        head, _, bare = model.partition("/")
+        if not bare.startswith("responses/"):
+            model = f"{head}/responses/{bare}"
     return model
 
 

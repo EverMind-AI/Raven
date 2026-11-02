@@ -811,7 +811,9 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="",
         default_api_base="",
         strip_model_prefix=False,
-        model_overrides=(),
+        # Copilot's gpt-6.x answers 400 "Unsupported parameter: 'temperature'", and
+        # LiteLLM does not yet know the family, so drop_params leaves it in.
+        model_overrides=(("gpt-6", {"temperature": None}),),
         is_oauth=True,
         default_model="github_copilot/gpt-4o",
     ),

@@ -217,6 +217,10 @@ class LiteLLMProvider(LiteLLMShape):
         matches = [(p, o) for p, o in self.model_overrides.items() if p.lower() in model_lower]
         if matches:
             kwargs.update(max(matches, key=lambda item: len(item[0]))[1])
+        # An override set to None means "do not send this parameter" (a model that
+        # rejects a field LiteLLM does not yet know it rejects).
+        for key in [k for k, v in kwargs.items() if v is None and k in ("temperature", "top_p")]:
+            del kwargs[key]
 
     @staticmethod
     def _normalize_tool_call_id(tool_call_id: Any) -> Any:
