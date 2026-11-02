@@ -36,6 +36,9 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                      zero tokens and says nothing on stderr: the shape measured
                      on a live ``opencode acp`` whose inference endpoint refused
                      the call and whose agent swallowed the refusal.
+- ``empty_turn_unreadable_tokens`` - like ``empty_turn_no_tokens``, but the
+                     total it reports is ``Infinity``: a value JSON parsers
+                     accept and that is no count.
 - ``failed_call``  - like ``ok``, but the tool call answers ``status: "failed"``
                      and the turn goes on to say something after it. A run that
                      failed a call and still finished, which is the shape a
@@ -350,6 +353,9 @@ def _empty_answer(request_id) -> None:
     """
     if MODE == "empty_turn_no_tokens":
         ok(request_id, {"stopReason": "end_turn", "usage": {"totalTokens": 0, "inputTokens": 0, "outputTokens": 0}})
+        return
+    if MODE == "empty_turn_unreadable_tokens":
+        ok(request_id, {"stopReason": "end_turn", "usage": {"totalTokens": float("inf")}})
         return
     print("provider rejected the credential: HTTP 401", file=sys.stderr, flush=True)
     ok(request_id, {"stopReason": "end_turn"})
@@ -717,7 +723,7 @@ def handle_prompt(request_id, params) -> None:
         # A provider that takes its time: the prompt is answered after the delay
         # -- from the first prompt, or from the one ACP_STUB_PROMPT_DELAY_FROM names.
         time.sleep(float(delay))
-    if MODE in ("empty_turn", "empty_turn_no_tokens"):
+    if MODE in ("empty_turn", "empty_turn_no_tokens", "empty_turn_unreadable_tokens"):
         _empty_answer(request_id)
         return
     update(session_id, {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "thinking"}})
