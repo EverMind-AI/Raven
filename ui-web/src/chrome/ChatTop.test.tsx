@@ -573,6 +573,24 @@ describe('the header band', () => {
       }
     }
   })
+
+  it('pins both frost ramps stop for stop, in both spellings', () => {
+    styled()
+    const css = source('styles/page.css')
+    const layer = (selector: string): string =>
+      (css.match(new RegExp(`${selector}\\s*\\{([\\s\\S]*?)\\}`)) as RegExpMatchArray)[1] as string
+    const ramps: Record<string, string> = {
+      '\\.chat > \\.top::before':
+        'linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .92) 30%, rgba(0, 0, 0, .8) 58%, rgba(0, 0, 0, .55) 80%, rgba(0, 0, 0, 0) 100%)',
+      '\\.chat > \\.top::after':
+        'linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .82) 34%, rgba(0, 0, 0, .5) 62%, rgba(0, 0, 0, .2) 84%, rgba(0, 0, 0, 0) 100%)',
+    }
+    for (const [selector, ramp] of Object.entries(ramps)) {
+      for (const prop of ['-webkit-mask-image', 'mask-image']) {
+        expect(layer(selector)).toContain(`${prop}: ${ramp};`)
+      }
+    }
+  })
 })
 
 /* Last in the file on purpose: applying a language is module state for
