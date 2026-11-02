@@ -2293,3 +2293,31 @@ async def test_model_options_label_carries_declared_efforts(fake_home: Path) -> 
     result = await model_options({"include_providers": True})
     provider = next(p for p in result["providers"] if p["slug"] == "anthropic")
     assert provider["model_labels"]["anthropic/mine"]["reasoning_efforts"] == ["low", "high"]
+
+
+async def test_a_stored_overlay_reaches_the_effort_read(fake_home: Path) -> None:
+    from raven.rpc.methods.session import session_set_effort
+    from raven.session.manager import SessionManager
+
+    await model_add_model(
+        {
+            "slug": "anthropic",
+            "model": "mine",
+            "reasoning_efforts": ["low", "high"],
+        }
+    )
+
+    class _Loop:
+        def __init__(self, path: Path) -> None:
+            self.sessions = SessionManager(path)
+
+        def session_policy(self, key):
+            from raven.agent.loop._shared import SessionPolicy
+
+            return SessionPolicy()
+
+    result = await session_set_effort(
+        {"session_key": "", "model": "anthropic/mine"},
+        agent_loop_factory=lambda: _Loop(fake_home),
+    )
+    assert result["options"] == ["low", "high"]

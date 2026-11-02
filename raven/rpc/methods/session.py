@@ -581,9 +581,12 @@ def _default_effort(agent_loop: object, config: Any, session_key: str | None) ->
 
 def _effort_levels(model_id: str, config: Any) -> tuple[str, ...] | None:
     """What this model declares, with the provider's overlay as the authority."""
-    from raven.providers.registry import canonical_provider_name, split_model_id
+    from raven.providers.registry import canonical_provider_name, find_by_model, split_model_id
 
     provider, _rest = split_model_id(model_id)
+    if not provider:
+        spec = find_by_model(model_id)
+        provider = getattr(spec, "name", "") if spec else ""
     section = getattr(config, "providers", {}).get(canonical_provider_name(provider)) if provider else None
     overlay = overlay_for(section, provider, model_id) if section is not None else None
     return effort_levels.levels_for(model_id, declared_efforts(overlay))
@@ -1684,7 +1687,7 @@ async def session_set_effort(
     mgr = manager_for(loop, config)
     model_id = (
         str(requested_model)
-        if isinstance(requested_model, str) and requested_model
+        if not session_key and isinstance(requested_model, str) and requested_model
         else _session_model(loop, config, session_key)
     )
     model_levels = _effort_levels(model_id, config)

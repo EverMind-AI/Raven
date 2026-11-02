@@ -20,7 +20,11 @@ def overlay_for(section: Any, provider: str, model: str) -> Any | None:
         overlay = section.get("modelOverlay") or section.get("model_overlay") or {}
     else:
         overlay = getattr(section, "model_overlay", None) or {}
-    return overlay.get(merge_key(provider, model))
+    target = merge_key(provider, model)
+    for stored, value in overlay.items():
+        if merge_key(provider, stored) == target:
+            return value
+    return None
 
 
 def declared_efforts(overlay: Any) -> tuple[str, ...]:

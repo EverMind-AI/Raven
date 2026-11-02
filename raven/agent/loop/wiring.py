@@ -549,11 +549,29 @@ class WiringMixin:
         if not provider:
             spec = find_by_model(model_id)
             provider = getattr(spec, "name", "") if spec else ""
-        section = (
-            (self._live_config.get("providers") or {}).get(canonical_provider_name(provider)) if provider else None
-        )
+        try:
+            from raven.config.schema import _provider_section
+
+            section = (
+                _provider_section(
+                    self._live_config.get("providers") or {},
+                    canonical_provider_name(provider),
+                )
+                if provider
+                else None
+            )
+        except Exception:  # noqa: BLE001 - a bad edit must not fail the turn over an overlay
+            section = None
         overlay = overlay_for(section, provider, model_id) if section is not None else None
-        return session_effort.clamp(value, effort_levels.levels_for(model_id, declared_efforts(overlay)))
+        clamped = session_effort.clamp(value, effort_levels.levels_for(model_id, declared_efforts(overlay)))
+        if value is not None and clamped is None:
+            logger.debug(
+                "session {}: reasoning effort {} is not declared by {}; using the provider default",
+                session_key,
+                value,
+                model_id,
+            )
+        return clamped
 
     @property
     def personalization_enabled(self) -> bool:

@@ -446,3 +446,46 @@ async def test_an_unreadable_table_keeps_the_pick(tmp_path, monkeypatch):
     monkeypatch.setattr(wiring.effort_levels, "levels_for", lambda model, declared=(): None)
     loop = _loop(tmp_path, _ScriptedProvider([_text("ok")]))
     assert loop.session_reasoning_effort("cli:c", "high") == "high"
+
+
+def _live_with_legacy_overlay(tmp_path) -> LiveConfig:
+    import json
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "zhipu": {
+                        "modelOverlay": {
+                            "zai/glm-5": {"reasoningEfforts": ["high"]},
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    return LiveConfig(path)
+
+
+async def test_a_legacy_provider_spelling_reaches_the_overlay(tmp_path, monkeypatch):
+    """The file kept its former provider name; the turn must read the overlay
+    the same way the RPC's parsed config does, or the status bar and the turn
+    disagree."""
+    from raven.agent.loop import wiring
+
+    monkeypatch.setattr(
+        wiring.effort_levels,
+        "levels_for",
+        lambda model, declared=(): tuple(declared) if declared else ("minimal", "low"),
+    )
+    loop = AgentLoop(
+        provider=_ScriptedProvider([_text("ok")]),
+        workspace=tmp_path,
+        model="zai/glm-5",
+        policy=TurnPolicy(max_iterations=6),
+        tools=ToolWiring(restrict_to_workspace=True),
+    )
+    loop._live_config = _live_with_legacy_overlay(tmp_path)
+    assert loop.session_reasoning_effort("cli:c", "high") == "high"

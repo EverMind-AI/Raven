@@ -4568,3 +4568,34 @@ async def test_the_bundle_reports_the_clamped_effort(tmp_path, monkeypatch, leve
     levels(["low", "medium"])
     info = await session_module._default_session_info(loop, config, "tui:1")
     assert info["reasoning_effort"] is None
+
+
+async def test_a_pick_comes_back_when_a_later_model_declares_it(tmp_path, monkeypatch, levels):
+    _configured_effort(monkeypatch, "low")
+    levels(["medium", "high"])
+    loop = _EffortLoop(tmp_path)
+    _filed(loop.sessions, "tui:1")
+    await session_module.session_set_effort({"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop)
+    levels(["medium"])
+    dropped = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert dropped["effort"] is None
+    levels(["medium", "high"])
+    back = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert back["effort"] == "high"
+    assert loop.sessions.peek("tui:1").metadata["reasoning_effort"] == "high"
+
+
+async def test_a_model_param_does_not_override_a_sessions_model(tmp_path, monkeypatch):
+    _configured_effort(monkeypatch, "low")
+    seen = {}
+
+    def resolve(model, declared=()):
+        seen["model"] = model
+        return ("low", "high")
+
+    monkeypatch.setattr(session_module.effort_levels, "levels_for", resolve)
+    loop = _EffortLoop(tmp_path)
+    await session_module.session_set_effort(
+        {"session_key": "tui:1", "model": "other/model"}, agent_loop_factory=lambda: loop
+    )
+    assert seen["model"] == session_module.load_config().agents.defaults.model
