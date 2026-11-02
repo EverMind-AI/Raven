@@ -3520,7 +3520,7 @@ def levels(monkeypatch):
         monkeypatch.setattr(
             session_module.effort_levels,
             "levels_for",
-            lambda model, declared=(): None if words is None else tuple(words),
+            lambda model, declared=(), refresh=False: None if words is None else tuple(words),
         )
 
     use(["minimal", "low", "medium", "high"])
@@ -4521,7 +4521,7 @@ async def test_a_draft_read_names_the_model_it_asks_about(tmp_path, monkeypatch)
     _configured_effort(monkeypatch, "low")
     seen = {}
 
-    def resolve(model, declared=()):
+    def resolve(model, declared=(), refresh=False):
         seen["model"] = model
         return ("low", "high")
 
@@ -4589,7 +4589,7 @@ async def test_a_model_param_does_not_override_a_sessions_model(tmp_path, monkey
     _configured_effort(monkeypatch, "low")
     seen = {}
 
-    def resolve(model, declared=()):
+    def resolve(model, declared=(), refresh=False):
         seen["model"] = model
         return ("low", "high")
 

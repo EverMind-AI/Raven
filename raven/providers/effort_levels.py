@@ -1,14 +1,20 @@
-"""Which reasoning-effort levels a model declares, from LiteLLM's static table.
+"""Which reasoning-effort levels a model declares, from LiteLLM's static table
+or the Codex account catalogue.
 
-The table is read offline from ``import_litellm().model_cost``; ``get_model_info``
-is deliberately not used because it may query a provider's endpoint.
+LiteLLM's table is read offline from ``import_litellm().model_cost``;
+``get_model_info`` is deliberately not used because it may query a provider's
+endpoint. The Codex account catalogue is the one provider-owned source: its
+``supported_reasoning_levels`` are the account's own declaration for models no
+static table carries. It is network data, so the turn reads only the cache
+``codex_catalog`` keeps; ``refresh`` lets the RPC warm that cache. A level the
+account states outside this build's ladder (``ultra``) is not offered.
 
 The answer is tri-state: a tuple of levels when the model or the user declares
-them, ``()`` when the model declares none, and ``None`` when the table itself
-cannot be read (an internal failure, not a model answer). Level semantics
-mirror LiteLLM's own validator: medium/high are the baseline, minimal/low are
-opt-out, xhigh/max are opt-in. ``none`` is ignored: Raven's None means "provider
-default", not "reasoning off".
+them, ``()`` when the model declares none, and ``None`` when the source cannot
+answer (an internal failure or a cold account cache, not a model answer). Level
+semantics mirror LiteLLM's own validator: medium/high are the baseline,
+minimal/low are opt-out, xhigh/max are opt-in. ``none`` is ignored: Raven's
+None means "provider default", not "reasoning off".
 """
 
 from __future__ import annotations
@@ -29,11 +35,23 @@ EFFORT_FLAGS = (
 LEVEL_ORDER = ("minimal", "low", "medium", "high", "xhigh", "max")
 
 
-def levels_for(model: str, declared: Sequence[str] = ()) -> tuple[str, ...] | None:
-    """The levels this model declares, or ``()``/``None`` per the module docstring."""
+def levels_for(model: str, declared: Sequence[str] = (), *, refresh: bool = False) -> tuple[str, ...] | None:
+    """The levels this model declares, or ``()``/``None`` per the module docstring.
+
+    ``refresh`` lets a caller that is already spending a round trip (the RPC)
+    ask the Codex account catalogue when its cache is cold; the turn leaves it
+    false and reads the cache only.
+    """
     if declared:
         known = set(declared)
         return tuple(name for name in LEVEL_ORDER if name in known)
+    from raven.providers.registry import canonical_provider_name, split_model_id
+
+    provider, rest = split_model_id(model)
+    if canonical_provider_name(provider) == "openai_codex":
+        from raven.providers import codex_catalog
+
+        return codex_catalog.account_efforts(rest, refresh=refresh)
     index = _index()
     if index is None:
         return None

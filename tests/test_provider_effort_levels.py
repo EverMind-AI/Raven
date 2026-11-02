@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from raven.providers import effort_levels
+from raven.providers import codex_catalog, effort_levels
 
 
 def _row(**flags):
@@ -146,3 +146,61 @@ def test_a_route_silent_on_reasoning_keeps_its_own_level_flags(table):
 def test_an_openrouter_alias_is_consulted(table):
     table({"openrouter/vendor/some-model": _row()})
     assert effort_levels.levels_for("vendor/some-model") == ("minimal", "low", "medium", "high")
+
+
+def test_an_openai_codex_model_reads_the_account_catalogue(monkeypatch):
+    calls = []
+
+    def efforts(slug, *, refresh=False):
+        calls.append((slug, refresh))
+        return ("low", "medium", "high", "xhigh", "max")
+
+    monkeypatch.setattr(codex_catalog, "account_efforts", efforts)
+    assert effort_levels.levels_for("openai-codex/gpt-5.6-sol") == (
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    )
+    assert calls == [("gpt-5.6-sol", False)]
+
+
+def test_the_account_catalogue_is_refreshed_only_when_asked(monkeypatch):
+    calls = []
+
+    def efforts(slug, *, refresh=False):
+        calls.append(refresh)
+        return ("high",)
+
+    monkeypatch.setattr(codex_catalog, "account_efforts", efforts)
+    assert effort_levels.levels_for("openai-codex/gpt-5.6-sol", refresh=True) == ("high",)
+    assert calls == [True]
+
+
+def test_a_cold_account_catalogue_is_unknown(monkeypatch):
+    monkeypatch.setattr(codex_catalog, "account_efforts", lambda slug, *, refresh=False: None)
+    assert effort_levels.levels_for("openai-codex/gpt-5.6-sol") is None
+
+
+def test_an_unlisted_account_model_has_no_levels(monkeypatch):
+    monkeypatch.setattr(codex_catalog, "account_efforts", lambda slug, *, refresh=False: ())
+    assert effort_levels.levels_for("openai-codex/gpt-5.6-sol") == ()
+
+
+def test_an_overlay_beats_the_account_catalogue(monkeypatch):
+    def boom(slug, *, refresh=False):
+        raise AssertionError("the overlay must short-circuit the catalogue")
+
+    monkeypatch.setattr(codex_catalog, "account_efforts", boom)
+    assert effort_levels.levels_for("openai-codex/gpt-5.6-sol", ("high",)) == ("high",)
+
+
+def test_a_non_codex_model_does_not_read_the_catalogue(monkeypatch, table):
+    table({"gpt-5": _row()})
+
+    def boom(slug, *, refresh=False):
+        raise AssertionError("only openai_codex models read the account catalogue")
+
+    monkeypatch.setattr(codex_catalog, "account_efforts", boom)
+    assert effort_levels.levels_for("openai/gpt-5") == ("minimal", "low", "medium", "high")

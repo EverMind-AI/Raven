@@ -579,7 +579,7 @@ def _default_effort(agent_loop: object, config: Any, session_key: str | None) ->
     return session_effort.in_force(None, _mode_effort(agent_loop, session_key), _configured_effort(config))
 
 
-def _effort_levels(model_id: str, config: Any) -> tuple[str, ...] | None:
+def _effort_levels(model_id: str, config: Any, *, refresh: bool = False) -> tuple[str, ...] | None:
     """What this model declares, with the provider's overlay as the authority."""
     from raven.providers.registry import canonical_provider_name, find_by_model, split_model_id
 
@@ -589,7 +589,7 @@ def _effort_levels(model_id: str, config: Any) -> tuple[str, ...] | None:
         provider = getattr(spec, "name", "") if spec else ""
     section = getattr(config, "providers", {}).get(canonical_provider_name(provider)) if provider else None
     overlay = overlay_for(section, provider, model_id) if section is not None else None
-    return effort_levels.levels_for(model_id, declared_efforts(overlay))
+    return effort_levels.levels_for(model_id, declared_efforts(overlay), refresh=refresh)
 
 
 def _effort_in_force(
@@ -1690,7 +1690,7 @@ async def session_set_effort(
         if not session_key and isinstance(requested_model, str) and requested_model
         else _session_model(loop, config, session_key)
     )
-    model_levels = _effort_levels(model_id, config)
+    model_levels = _effort_levels(model_id, config, refresh=True)
 
     def _reply(stored: str | None) -> dict:
         return {

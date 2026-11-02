@@ -15,6 +15,9 @@ from __future__ import annotations
 import pytest
 
 from raven.agent import session_effort
+from raven.providers import effort_levels as effort_levels_module
+
+_REAL_LEVELS_FOR = effort_levels_module.levels_for
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.agent.window import compaction
@@ -415,7 +418,7 @@ def _fake_model_declares_every_level(monkeypatch):
     monkeypatch.setattr(
         wiring.effort_levels,
         "levels_for",
-        lambda model, declared=(): ("minimal", "low", "medium", "high", "xhigh", "max"),
+        lambda model, declared=(), refresh=False: ("minimal", "low", "medium", "high", "xhigh", "max"),
     )
 
 
@@ -425,7 +428,7 @@ async def test_a_pick_the_model_does_not_declare_is_dropped(tmp_path, monkeypatc
     monkeypatch.setattr(
         wiring.effort_levels,
         "levels_for",
-        lambda model, declared=(): ("medium", "high"),
+        lambda model, declared=(), refresh=False: ("medium", "high"),
     )
     loop = _loop(tmp_path, _ScriptedProvider([_text("ok")]))
     assert loop.session_reasoning_effort("cli:c", "minimal") is None
@@ -435,7 +438,7 @@ async def test_a_pick_the_model_does_not_declare_is_dropped(tmp_path, monkeypatc
 async def test_a_model_that_declares_no_reasoning_drops_the_pick(tmp_path, monkeypatch):
     from raven.agent.loop import wiring
 
-    monkeypatch.setattr(wiring.effort_levels, "levels_for", lambda model, declared=(): ())
+    monkeypatch.setattr(wiring.effort_levels, "levels_for", lambda model, declared=(), refresh=False: ())
     loop = _loop(tmp_path, _ScriptedProvider([_text("ok")]))
     assert loop.session_reasoning_effort("cli:c", "high") is None
 
@@ -443,7 +446,7 @@ async def test_a_model_that_declares_no_reasoning_drops_the_pick(tmp_path, monke
 async def test_an_unreadable_table_keeps_the_pick(tmp_path, monkeypatch):
     from raven.agent.loop import wiring
 
-    monkeypatch.setattr(wiring.effort_levels, "levels_for", lambda model, declared=(): None)
+    monkeypatch.setattr(wiring.effort_levels, "levels_for", lambda model, declared=(), refresh=False: None)
     loop = _loop(tmp_path, _ScriptedProvider([_text("ok")]))
     assert loop.session_reasoning_effort("cli:c", "high") == "high"
 
@@ -478,7 +481,7 @@ async def test_a_legacy_provider_spelling_reaches_the_overlay(tmp_path, monkeypa
     monkeypatch.setattr(
         wiring.effort_levels,
         "levels_for",
-        lambda model, declared=(): tuple(declared) if declared else ("minimal", "low"),
+        lambda model, declared=(), refresh=False: tuple(declared) if declared else ("minimal", "low"),
     )
     loop = AgentLoop(
         provider=_ScriptedProvider([_text("ok")]),
@@ -489,3 +492,27 @@ async def test_a_legacy_provider_spelling_reaches_the_overlay(tmp_path, monkeypa
     )
     loop._live_config = _live_with_legacy_overlay(tmp_path)
     assert loop.session_reasoning_effort("cli:c", "high") == "high"
+
+
+async def test_the_turn_reads_a_codex_accounts_levels_from_the_cache(tmp_path, monkeypatch):
+    """The turn must never fetch the account catalogue; the RPC warms it."""
+    from raven.agent.loop import wiring
+    from raven.providers import codex_catalog
+
+    monkeypatch.setattr(wiring.effort_levels, "levels_for", _REAL_LEVELS_FOR)
+    calls = []
+
+    def efforts(slug, *, refresh=False):
+        calls.append((slug, refresh))
+        return ("high",)
+
+    monkeypatch.setattr(codex_catalog, "account_efforts", efforts)
+    loop = AgentLoop(
+        provider=_ScriptedProvider([_text("ok")]),
+        workspace=tmp_path,
+        model="openai-codex/gpt-5.6-sol",
+        policy=TurnPolicy(max_iterations=6),
+        tools=ToolWiring(restrict_to_workspace=True),
+    )
+    assert loop.session_reasoning_effort("cli:c", "high") == "high"
+    assert calls == [("gpt-5.6-sol", False)]

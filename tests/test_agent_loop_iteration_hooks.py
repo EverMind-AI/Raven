@@ -589,5 +589,5 @@ def _fake_model_declares_every_level(monkeypatch):
     monkeypatch.setattr(
         wiring.effort_levels,
         "levels_for",
-        lambda model, declared=(): ("minimal", "low", "medium", "high", "xhigh", "max"),
+        lambda model, declared=(), refresh=False: ("minimal", "low", "medium", "high", "xhigh", "max"),
     )

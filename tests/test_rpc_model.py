@@ -2321,3 +2321,61 @@ async def test_a_stored_overlay_reaches_the_effort_read(fake_home: Path) -> None
         agent_loop_factory=lambda: _Loop(fake_home),
     )
     assert result["options"] == ["low", "high"]
+
+
+async def test_a_codex_model_gets_its_options_from_the_account_catalogue(fake_home: Path, monkeypatch) -> None:
+    from raven.providers import codex_catalog
+    from raven.rpc.methods.session import session_set_effort
+    from raven.session.manager import SessionManager
+
+    calls = []
+
+    def efforts(slug, *, refresh=False):
+        calls.append((slug, refresh))
+        return ("low", "medium", "high", "xhigh", "max")
+
+    monkeypatch.setattr(codex_catalog, "account_efforts", efforts)
+
+    class _Loop:
+        def __init__(self, path: Path) -> None:
+            self.sessions = SessionManager(path)
+
+        def session_policy(self, key):
+            from raven.agent.loop._shared import SessionPolicy
+
+            return SessionPolicy()
+
+    result = await session_set_effort(
+        {"session_key": "", "model": "openai-codex/gpt-5.6-sol"},
+        agent_loop_factory=lambda: _Loop(fake_home),
+    )
+    assert result["options"] == ["low", "medium", "high", "xhigh", "max"]
+    assert calls == [("gpt-5.6-sol", True)]
+
+
+async def test_the_bundle_reads_the_codex_catalogue_without_refreshing(tmp_path, monkeypatch) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from raven.providers import codex_catalog
+    from raven.rpc.methods import session as session_module
+    from raven.session.manager import SessionManager
+
+    calls = []
+
+    def efforts(slug, *, refresh=False):
+        calls.append((slug, refresh))
+        return ("high",)
+
+    monkeypatch.setattr(codex_catalog, "account_efforts", efforts)
+    loop = MagicMock()
+    loop.model = "openai-codex/gpt-5.6-sol"
+    loop.session_model = lambda key: "openai-codex/gpt-5.6-sol"
+    loop.sessions = SessionManager(tmp_path)
+    loop.session_policy = lambda key: SimpleNamespace(reasoning_effort=None)
+    held = loop.sessions.get_or_create("tui:1")
+    held.metadata["reasoning_effort"] = "high"
+    loop.sessions.save(held)
+    info = await session_module._default_session_info(loop, session_module.load_config(), "tui:1")
+    assert info["reasoning_effort"] == "high"
+    assert calls == [("gpt-5.6-sol", False)]
