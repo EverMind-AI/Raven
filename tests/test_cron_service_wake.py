@@ -39,17 +39,26 @@ async def test_mutation_during_inflight_run_fires_once_and_leaves_no_claim(tmp_p
         events.append(("end", job.id))
 
     svc = CronService(store_path, on_job=on_job)
-    job = svc.add_job(
-        name="oneshot",
-        schedule=CronSchedule(kind="at", at_ms=_now_ms() + 150),
-        message="fire exactly once",
-        channel="tui",
-        to="direct",
-        delete_after_run=True,
-    )
-
     await svc.start()
     try:
+        # Registered after start(): start() recomputes every 'at' job against
+        # its own clock read and drops a past-due one as a missed reminder, so
+        # a deadline chosen before start() can expire during start() itself.
+        # The schedule stays far out; making it due on the store keeps the
+        # fire independent of how long any call in between takes.
+        job = svc.add_job(
+            name="oneshot",
+            schedule=CronSchedule(kind="at", at_ms=_now_ms() + 60_000),
+            message="fire exactly once",
+            channel="tui",
+            to="direct",
+            delete_after_run=True,
+        )
+        (stored,) = svc._store.jobs
+        stored.state.next_run_at_ms = 1
+        svc._save_store()
+        svc._signal_wake()
+
         await asyncio.wait_for(started.wait(), timeout=5.0)
         # Mutate while the one-shot is mid-execution. Different `to` and a
         # far schedule so no dedup layer swallows the add.
