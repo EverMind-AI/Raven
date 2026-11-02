@@ -3283,13 +3283,13 @@ export interface ConfigSetParams {
   value: JsonValue;
   session_id?: string;
   provider?: string;
-  scope?: 'session' | 'default';
+  scope?: 'session' | 'default' | 'both';
 }
 export interface ConfigSetResult {
   applied: boolean;
   previous: JsonValue | null;
   value?: string;
-  scope?: 'session' | 'default';
+  scope?: 'session' | 'default' | 'both';
   session_id?: string;
   applies_to_session?: boolean;
   /**

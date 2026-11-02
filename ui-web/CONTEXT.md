@@ -411,8 +411,9 @@ What ONE opening of the model picker lists, and what a pick there means
 (`Offer` in `features/model/types.ts`): a kind, optionally the providers the
 caller allows, optionally a title and the pair to mark, optionally the write to
 make. The composer's chip opens with none of it and gets the default -- text
-models, every connected provider, switch this conversation. A settings role
-slot opens with its own through `openPicker` in `features/model/source.ts`.
+models, every connected provider, switch this conversation and the default a
+new one starts on. A settings role slot opens with its own through `openPicker`
+in `features/model/source.ts`.
 The kind narrows each provider's column, never the provider list.
 
 **Gateway provider**:

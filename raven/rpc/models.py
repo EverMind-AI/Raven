@@ -2402,11 +2402,11 @@ class ConfigSetParams(_Strict):
     key: str
     value: JsonValue
     # Scope extras for the two keys with a per-conversation reading, ``model``
-    # and ``permissions.mode``: this conversation, or the default a new one
-    # starts on.
+    # and ``permissions.mode``: this conversation, the default a new one starts
+    # on, or -- for ``model`` alone -- both at once.
     session_id: str | None = None
     provider: str | None = None
-    scope: Literal["session", "default"] | None = None
+    scope: Literal["session", "default", "both"] | None = None
 
 
 class ConfigUnsetParams(_Strict):
@@ -2430,7 +2430,7 @@ class ConfigSetResult(_Strict):
     previous: JsonValue = Field(...)
     # Present on a model switch: what was applied, and where it reached.
     value: str | None = None
-    scope: Literal["session", "default"] | None = None
+    scope: Literal["session", "default", "both"] | None = None
     session_id: str | None = None
     # Does the asking conversation now run this model? A default-scoped switch
     # moves the sessions that never chose one, so scope alone cannot answer it
