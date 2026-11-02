@@ -39,7 +39,7 @@ def save_board(session_dir: Path, board: Board) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / BOARD_FILENAME
     tmp = directory / f"{BOARD_FILENAME}.{os.getpid()}.tmp"
-    tmp.write_text(json.dumps(board_to_dict(board), ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.write_text(json.dumps(board_to_dict(board, revisions=True), ensure_ascii=False, indent=1), encoding="utf-8")
     os.replace(tmp, path)
 
 

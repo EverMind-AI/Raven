@@ -121,7 +121,7 @@ class TaskBoardService:
             self._dropped.setdefault(session_key, set()).update(removed)
             board = self.load(session_key)
             kept = drop_turns(board, removed)
-            if board_to_dict(kept) != board_to_dict(board):
+            if board_to_dict(kept, revisions=True) != board_to_dict(board, revisions=True):
                 await self.write(session_key, kept)
         return kept
 

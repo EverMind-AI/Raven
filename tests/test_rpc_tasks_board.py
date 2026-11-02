@@ -280,6 +280,60 @@ async def test_undo_drops_the_undone_turns_steps(workspace):
     assert [g.title for g in load_board(_dir(workspace)).groups] == ["Kept"]
 
 
+def _two_turns(workspace: Path) -> _Loop:
+    loop = _Loop(workspace)
+    session = loop.sessions.get_or_create(KEY)
+    session.add_message("user", "first", timestamp="T1")
+    session.add_message("assistant", "one", timestamp="T1a")
+    session.add_message("user", "second", timestamp="T2")
+    session.add_message("assistant", "two", timestamp="T2a")
+    loop.sessions.save(session)
+    return loop
+
+
+async def test_undo_puts_back_a_group_the_undone_turn_left_waiting(workspace):
+    """The undone turn asked the user and rewrote the summary; once it is gone, the
+    group must not go on asking."""
+    loop = _two_turns(workspace)
+    first = _board(turn_at="T1")
+    group_id = first.groups[0].id
+    asked = {"title": "Asked", "summary": "Asked which fix.", "status": "needs_you", "questions": ["Which fix?"]}
+    save_board(
+        _dir(workspace),
+        apply_update(
+            first,
+            {"steps": [{"group": group_id, **asked}], "groups": [{"group": group_id, "summary": "Which fix?"}]},
+            [],
+            turn_at="T2",
+            turn_id=None,
+            now_ms=2,
+        ),
+    )
+
+    await session_undo({"session_id": KEY}, agent_loop_factory=lambda: loop)
+
+    group = load_board(_dir(workspace)).groups[0]
+    assert (group.status, group.summary, group.updated_at) == ("idle", "Review of the login fix", 1)
+    assert ([s.turn_at for s in group.steps], group.revisions) == (["T1"], [])
+
+
+async def test_undo_forgets_a_revision_even_when_it_puts_nothing_back(workspace):
+    """The reader completed the group after the undone turn set it running: the
+    status stays the reader's, and the undone turn's record still goes."""
+    loop = _two_turns(workspace)
+    first = _board(turn_at="T1")
+    group_id = first.groups[0].id
+    running = apply_update(
+        first, {"groups": [{"group": group_id, "status": "running"}]}, [], turn_at="T2", turn_id=None, now_ms=2
+    )
+    save_board(_dir(workspace), set_group_status(running, group_id, "completed", now_ms=3))
+
+    await session_undo({"session_id": KEY}, agent_loop_factory=lambda: loop)
+
+    group = load_board(_dir(workspace)).groups[0]
+    assert (group.status, group.updated_at, group.revisions) == ("completed", 3, [])
+
+
 async def test_branch_copies_the_board_to_the_child(workspace):
     loop = _Loop(workspace)
     session = loop.sessions.get_or_create(KEY)
