@@ -279,6 +279,38 @@ describe('the turn nav', () => {
     expect(marks().map((m) => m.getAttribute('aria-current'))).toEqual([null, null, 'true'])
   })
 
+  /* The header floats over the scroller (page.css, .chat > .top), so the
+     reading line is a fraction of the height the header leaves visible, not of
+     the scroller's whole box: it has to stay where it was before the header
+     left the flow. */
+  it('keeps the reading line below the floating header, not on the scroller box', async () => {
+    await settle(() => {
+      mount.ask('first question')
+      mount.ask('second question')
+      mount.ask('third question')
+    })
+    const scroll = $('#scroll') as HTMLElement
+    const top = document.createElement('div')
+    top.className = 'top'
+    Object.defineProperty(top, 'offsetHeight', { configurable: true, value: 52 })
+    ;(scroll.parentElement as HTMLElement).append(top)
+    const turns = [...stage().querySelectorAll<HTMLElement>('[data-ask]')]
+    vi.spyOn(scroll, 'getBoundingClientRect').mockReturnValue({ top: 0, height: 1000 } as DOMRect)
+    Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: 5000 })
+    Object.defineProperty(scroll, 'clientHeight', { configurable: true, value: 1000 })
+    /* 370 sits between the scroller-box line (350) and the band-relative one
+       (52 + (1000 - 52) * 0.35 = 383.8), so only the band-relative reading
+       counts the second turn as reached. */
+    const tops = [-1500, 370, 1400]
+    turns.forEach((el, i) => {
+      vi.spyOn(el, 'getBoundingClientRect').mockImplementation(() => ({ top: tops[i] }) as DOMRect)
+    })
+
+    await settle(() => { scroll.dispatchEvent(new Event('scroll')) })
+    await settle()
+    expect(marks().map((m) => m.getAttribute('aria-current'))).toEqual([null, 'true', null])
+  })
+
   it('follows the conversation on the stage, not one held off it', async () => {
     await settle(() => {
       mount.ask('first question')
