@@ -4,7 +4,7 @@ One schema carries both actions on purpose. The post-turn call sends the turn's
 own tools array, byte for byte, so a provider that caches by prefix reads the
 whole window from cache; an update-only schema sent there alone would miss it
 from the first token. During a turn ``update`` is refused -- the board is kept
-by the post-turn call, which reads the forced call's arguments itself.
+by the post-turn call, which reads that call's arguments itself.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ PARAMETERS: dict[str, Any] = {
         "group_id": {"type": "string"},
         "include_turns": {"type": "boolean"},
         "steps": {"type": "array", "items": {"type": "object"}},
-        "statuses": {"type": "array", "items": {"type": "object"}},
+        "groups": {"type": "array", "items": {"type": "object"}},
     },
     "required": ["action"],
 }
@@ -57,8 +57,8 @@ class TaskBoardTool(Tool):
         return (
             "This conversation's task board -- one group per matter, one step per turn that moved it -- "
             "kept for you after every turn, so never call action=update. action=recall: alone lists the "
-            "groups; group_id gives one group's thread; query finds a matter by its words; include_turns "
-            "adds each step's turn."
+            "groups, with the questions they still wait on; group_id gives one group's thread; query "
+            "finds a matter by its words; include_turns adds each step's turn."
         )
 
     @property

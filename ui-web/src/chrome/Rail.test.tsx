@@ -15,9 +15,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as imported from '../features/imported/store'
 import * as settings from '../features/settings/store'
+import * as boards from '../features/tasks/boards'
+import { t } from '../i18n/t'
 import * as hub from '../state/hub'
 import * as lang from '../state/lang'
+import * as page from '../state/page'
 import * as railState from '../state/rail'
+import { resetSources, setSources } from '../state/sources'
 import { mountPageRoot } from '../test/pageRoot'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -119,7 +123,7 @@ describe('the rail', () => {
     const pick = vi.spyOn(imported, 'pick').mockImplementation(() => {})
     render()
     const nav = document.querySelector('nav.rail-nav') as HTMLElement
-    expect(Array.from(nav.children).map((b) => b.id)).toEqual(['newBtn', 'agentsBtn', 'knowledgeBtn', 'importedBtn'])
+    expect(Array.from(nav.children).map((b) => b.id)).toEqual(['newBtn', 'agentsBtn', 'knowledgeBtn', 'boardsBtn', 'importedBtn'])
     const button = el('importedBtn') as HTMLButtonElement
     const idle = button.textContent
     expect(idle).not.toBe('')
@@ -321,5 +325,76 @@ describe('the rail once a language is applied', () => {
     render()
     expect(words()).toEqual(applied)
     expect(hint()).toBe(appliedHint)
+  })
+})
+
+describe('the task board button', () => {
+  let calls = 0
+  let needsYou = 3
+
+  beforeEach(() => {
+    calls = 0
+    needsYou = 3
+    boards._resetForTests()
+    setSources({
+      tasks: {
+        list: async () => [],
+        one: async () => null,
+        stop: async () => true,
+        node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false }),
+        roster: async () => [],
+        boards: async () => {
+          calls += 1
+          return { cards: [], completed_count: 0, needs_you_count: needsYou }
+        },
+      },
+    })
+  })
+
+  afterEach(() => {
+    boards._resetForTests()
+    page.show(null)
+    resetSources()
+  })
+
+  it('sits after Knowledge and before importing a conversation', () => {
+    render()
+    const ids = Array.from(rail().querySelectorAll('nav button')).map((b) => b.id)
+    expect(ids.indexOf('boardsBtn')).toBe(ids.indexOf('knowledgeBtn') + 1)
+    expect(ids.indexOf('importedBtn')).toBe(ids.indexOf('boardsBtn') + 1)
+  })
+
+  it('asks for the count once the rail mounts, before the page is ever opened', async () => {
+    render()
+    await act(async () => {})
+    expect(calls).toBe(1)
+    expect(el('boardsBtn').querySelector('.chrome-nav-badge')?.textContent).toBe('3')
+  })
+
+  it('carries the needs-you count as a badge and hides it at zero', async () => {
+    render()
+    await act(async () => {
+      await boards.refresh()
+    })
+    const badge = el('boardsBtn').querySelector('.chrome-nav-badge')
+    expect(badge?.textContent).toBe('3')
+    expect(badge?.getAttribute('aria-label')).toBe(t('gui.tasks.page.badge', { n: 3 }))
+
+    needsYou = 0
+    await act(async () => {
+      await boards.refresh()
+    })
+    expect(el('boardsBtn').querySelector('.chrome-nav-badge')).toBeNull()
+  })
+
+  it('opens the task board page and starts its poll', async () => {
+    render()
+    await act(async () => {})
+    const before = calls
+    await act(async () => {
+      el('boardsBtn').click()
+    })
+    expect(page.get()).toBe('tasksBoardPage')
+    expect(calls).toBe(before + 1)
   })
 })

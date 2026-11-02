@@ -293,6 +293,22 @@ def test_a_rolled_back_message_leaves_the_record():
     assert [m["content"] for m in log.messages()] == ["q", "kept", "the re-sample"]
 
 
+def test_added_leaves_out_the_history_the_turn_opened_with():
+    base = [
+        {"role": "user", "content": "earlier"},
+        {"role": "assistant", "content": "earlier reply"},
+        {"role": "user", "content": "q"},
+    ]
+    log = TurnLog(base, 3)
+    base.append({"role": "assistant", "content": "this turn's reply"})
+    log.follow(base)
+
+    assert [m["content"] for m in log.messages()] == ["earlier", "earlier reply", "q", "this turn's reply"]
+    assert [m["content"] for m in log.added()] == ["this turn's reply"]
+    carried = [{"role": "user", "content": "q"}, {"role": "user", "content": "a correction", "_mid_turn_user": True}]
+    assert [m["content"] for m in TurnLog(carried, 1).added()] == ["a correction"]
+
+
 def test_a_rerun_seed_copied_from_another_attempt_is_recorded_afresh():
     base = [{"role": "user", "content": "q"}]
     first = TurnLog(base, 1)

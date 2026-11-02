@@ -245,6 +245,10 @@ export interface DeliveredData {
   v: number
   id: number
   kind: 'sdlv'
+  /* When the result re-entered, in epoch ms: the stored entry's stamp, or this
+     page's clock for one drawn live. The turn it opens is found by it -- a
+     task board step keyed by that turn names it the way it names a question's. */
+  at: number
   label: string
   isDag: boolean
   status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled'

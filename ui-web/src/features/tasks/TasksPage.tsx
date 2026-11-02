@@ -184,7 +184,7 @@ function Row({ row, now, open, graphColumn, onOpen }: {
             {failed ? <ErrorTag /> : null}
             {isGraph(row) ? <GraphTag /> : failed && graphColumn ? <GraphSlot /> : null}
           </div>
-          <s className="st">{line}</s>
+          <span className="st">{line}</span>
         </div>
       </button>
     </div>
@@ -239,9 +239,9 @@ function List({ only }: { only?: TaskRow[] }): JSX.Element {
   )
 }
 
-export function TasksApp(): JSX.Element {
+export function TasksPanel(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
-  /* The language the page resolved, so a pick repaints this island: every
+  /* The language the page resolved, so a pick repaints this panel: every
      word below is a t(key) read at render time. */
   useSyncExternalStore(lang.subscribe, lang.get)
   useEffect(() => { if (!s.loaded) void store.refresh() }, [s.loaded])

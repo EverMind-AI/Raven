@@ -4,9 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setTranslator } from '../../i18n/t'
 import * as page from '../../state/page'
 import * as settings from '../../state/settings'
-import { askInChat, startTaskWith } from './startTaskWith'
+import { answerInChat, askInChat, focusChat, startTaskWith } from './startTaskWith'
 
-const PAGES = ['extAgentsPage', 'connectionsPage', 'knowledgePage']
+const PAGES = ['extAgentsPage', 'connectionsPage', 'knowledgePage', 'tasksBoardPage']
 
 /* The page as the two verbs reach it: the field, the draft row's button, the
    shell mark and the sections page.show writes, and the drawer it closes. The
@@ -70,6 +70,33 @@ describe('askInChat', () => {
   })
 })
 
+/* A Task Board group's answer draft: the questions with a slot under each,
+   and the cursor in the first slot rather than at the end. */
+describe('answerInChat', () => {
+  it('fills the field with the draft, tells the dock, and puts the cursor where it is told', () => {
+    const seen = heard()
+    answerInChat('Q1\nA: \nQ2\nA: ', 6)
+    expect(settings.close).toHaveBeenCalledTimes(1)
+    expect(ta().value).toBe('Q1\nA: \nQ2\nA: ')
+    expect(seen).toEqual(['Q1\nA: \nQ2\nA: '])
+    expect(document.activeElement).toBe(ta())
+    expect([ta().selectionStart, ta().selectionEnd]).toEqual([6, 6])
+  })
+
+  it('keeps what was typed, puts the draft after it, and moves the cursor with it', () => {
+    ta().value = 'half a thought  \n'
+    answerInChat('Q1\nA: ', 6)
+    expect(ta().value).toBe('half a thought\n\nQ1\nA: ')
+    expect(ta().selectionStart).toBe('half a thought\n\n'.length + 6)
+  })
+
+  it('puts a module page away first', () => {
+    page.show('tasksBoardPage')
+    answerInChat('Q1\nA: ', 6)
+    expect(page.get()).toBeNull()
+  })
+})
+
 describe('startTaskWith', () => {
   it('opens a fresh conversation and fills the field with the translated prompt', () => {
     let clicks = 0
@@ -82,3 +109,15 @@ describe('startTaskWith', () => {
     expect(settings.close).not.toHaveBeenCalled()
   })
 })
+
+describe('focusChat', () => {
+  it('puts the reader in the open conversation s composer and leaves what is typed alone', () => {
+    ta().value = 'half a thought'
+
+    focusChat()
+
+    expect(document.activeElement).toBe(ta())
+    expect(ta().value).toBe('half a thought')
+  })
+})
+

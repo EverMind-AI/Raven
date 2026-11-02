@@ -15,6 +15,7 @@ from pathlib import Path
 from loguru import logger
 
 from raven.agent.task_board.board import Board, board_from_dict, board_to_dict
+from raven.agent.task_board.notes import NOTES_FILENAME
 
 BOARD_FILENAME = "task_board.json"
 
@@ -44,6 +45,7 @@ def save_board(session_dir: Path, board: Board) -> None:
 
 def reset_board(session_dir: Path) -> None:
     (Path(session_dir) / BOARD_FILENAME).unlink(missing_ok=True)
+    (Path(session_dir) / NOTES_FILENAME).unlink(missing_ok=True)
 
 
 def copy_board(src: Path, dst: Path) -> None:
@@ -52,3 +54,5 @@ def copy_board(src: Path, dst: Path) -> None:
         return
     Path(dst).mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, Path(dst) / BOARD_FILENAME)
+    if (notes := Path(src) / NOTES_FILENAME).is_file():
+        shutil.copyfile(notes, Path(dst) / NOTES_FILENAME)

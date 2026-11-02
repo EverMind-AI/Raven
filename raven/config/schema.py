@@ -182,19 +182,11 @@ class CompactionConfig(Base):
 class TaskBoardConfig(Base):
     """The host's Task Board: one extra call after every turn that keeps it.
 
-    ``reasoning_effort`` is that call's own; ``minimal`` is refused because the
-    Codex lane rejects it outright.
+    The switch is all there is to set: the call runs at the model and effort the
+    turn's own last call ran at, so the main model's settings govern it.
     """
 
     enabled: bool = True
-    reasoning_effort: str = "low"
-
-    @field_validator("reasoning_effort")
-    @classmethod
-    def _not_minimal(cls, value: str) -> str:
-        if value == "minimal":
-            raise ValueError("taskBoard.reasoningEffort cannot be 'minimal'")
-        return value
 
 
 class AgentDefaults(Base):

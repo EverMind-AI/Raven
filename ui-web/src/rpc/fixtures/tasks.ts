@@ -14,7 +14,7 @@
  */
 
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
-import type { TaskBoard, TaskCounts, TaskGroup, TaskNode, TaskRow } from '../generated'
+import type { TaskBoard, TaskBoardCard, TaskCounts, TaskGroup, TaskNode, TaskRow } from '../generated'
 
 const MIN = 60000
 const SEC = 1000
@@ -411,29 +411,62 @@ export function createTasks(env: FixtureEnv): TasksFixture {
     ['f', scenarioBranched(env)],
   ])
 
-  /* The host's Task Board for two of the conversations above, so the offline
+  /* The host's Task Board for four of the conversations above, so the offline
      page draws both halves of the tab: groups whose steps hang those Tasks,
      and (everywhere else) the Unassigned row a session from before the board
-     shows. */
-  const groupOf = (id: string, rows: TaskRow[], text: string, status: TaskGroup['status']): TaskGroup => {
+     shows. Between them the Task Board page gets a card in every category --
+     the interrupted run's group is the idle one: it says running, and the run
+     a restart cut off says otherwise. */
+  const groupOf = (id: string, rows: TaskRow[], step: string, summary: string, status: TaskGroup['status']): TaskGroup => {
     const at = Math.min(...rows.map((r) => r.started_at ?? env.now()))
     return {
-      id, title: rows[0]?.task_summary || id, status, created_at: at, updated_at: at,
+      id, title: rows[0]?.task_summary || id, summary, status, created_at: at, updated_at: at,
       steps: [{
-        id: `s_${id}`, turn_at: new Date(at).toISOString(), turn_id: null, text,
+        id: `s_${id}`, turn_at: new Date(at).toISOString(), turn_id: null, title: step,
+        summary: status === 'needs_you'
+          ? `Asked the user whether the result looks right or should change. ${summary}.`
+          : `${summary}.`,
+        questions: status === 'needs_you' ? ['Does the result look right to you, or should it change?'] : [],
         tasks: rows.map((r) => ({ kind: r.kind, id: r.id, summary: r.task_summary || r.id })),
       }],
     }
   }
   const boards = new Map<string, TaskBoard>()
+  /* A group as the Task Board page's card, by the rule `tasks.boards` keeps:
+     needs_you and completed stand as marked; any other group is running while
+     a row it links still runs, and idle otherwise. */
+  const cardOf = (key: string, g: TaskGroup): TaskBoardCard => {
+    const rows = bySession.get(key) ?? []
+    const links = new Set(g.steps.flatMap((s) => s.tasks.map((t) => `${t.kind}:${t.id}`)))
+    const live = rows.filter((r) => links.has(`${r.kind}:${r.id}`) && r.status === 'running')
+    const category = g.status === 'needs_you' || g.status === 'completed' ? g.status
+      : live.length ? 'running' : 'idle'
+    return {
+      session_key: key, session_title: rows[0]?.task_summary || key,
+      group_id: g.id, title: g.title, summary: g.summary, status: g.status,
+      created_at: g.created_at, updated_at: g.updated_at, category,
+      running_since_ms: live.length ? Math.min(...live.map((r) => r.started_at ?? env.now())) : null,
+      events: g.steps.length, sub_agents: links.size,
+    }
+  }
   const spawns = bySession.get('h') ?? []
   boards.set('h', {
     version: 1, unassigned: [],
-    groups: spawns.map((r, i) => groupOf(`g_h${i}`, [r], 'Sent a sub-agent to do it.', r.status === 'running' ? 'active' : 'waiting')),
+    groups: spawns.map((r, i) => (r.status === 'running'
+      ? groupOf(`g_h${i}`, [r], 'Sent a sub-agent to do it', 'A sub-agent is on it', 'running')
+      : groupOf(`g_h${i}`, [r], 'Sent a sub-agent to do it', 'Done; waiting on your look', 'needs_you'))),
   })
   boards.set('g', {
     version: 1, unassigned: [],
-    groups: [groupOf('g_g0', bySession.get('g') ?? [], 'Wrote the files and reported them back.', 'completed')],
+    groups: [groupOf('g_g0', bySession.get('g') ?? [], 'Wrote the files', 'Files written and reported back', 'completed')],
+  })
+  boards.set('c', {
+    version: 1, unassigned: [],
+    groups: [groupOf('g_c0', bySession.get('c') ?? [], 'Started the survey graph', 'The survey graph is running', 'running')],
+  })
+  boards.set('d', {
+    version: 1, unassigned: [],
+    groups: [groupOf('g_d0', bySession.get('d') ?? [], 'Started the reindex', 'Cut off by a restart; ready to run again', 'running')],
   })
 
   const findRow = (id: string, kind?: string): { rows: TaskRow[]; at: number; row: TaskRow } | null => {
@@ -450,6 +483,15 @@ export function createTasks(env: FixtureEnv): TasksFixture {
         board: boards.get(p.session_key) ?? { version: 1, groups: [], unassigned: [] },
         lineage: {},
       }),
+      'tasks.boards': (p) => {
+        const cards = [...boards.entries()].flatMap(([key, board]) => board.groups.map((g) => cardOf(key, g)))
+        return {
+          cards: cards.filter((c) => p.include_completed || c.category !== 'completed')
+            .sort((a, b) => b.updated_at - a.updated_at),
+          completed_count: cards.filter((c) => c.category === 'completed').length,
+          needs_you_count: cards.filter((c) => c.category === 'needs_you').length,
+        }
+      },
       /* An unknown group answers the board unchanged rather than throwing: the
          offline library answers every method for any params it is handed. */
       'tasks.set_group_status': (p) => {
@@ -461,6 +503,20 @@ export function createTasks(env: FixtureEnv): TasksFixture {
         }
         return { board, lineage: {} }
       },
+      /* The board model's rule: the question leaves its step, and a group whose
+         latest step then asks nothing goes idle. */
+      'tasks.ignore_question': (p) => {
+        const board = boards.get(p.session_key) ?? { version: 1, groups: [], unassigned: [] }
+        const group = board.groups.find((g) => g.id === p.group_id)
+        const step = group?.steps.find((s) => s.id === p.step_id)
+        if (group && step && step.questions.includes(p.question)) {
+          step.questions = step.questions.filter((q) => q !== p.question)
+          if (group.status === 'needs_you' && !group.steps[group.steps.length - 1]!.questions.length) group.status = 'idle'
+          group.updated_at = env.now()
+        }
+        return { board, lineage: {} }
+      },
+      'tasks.move_on': () => ({ noted: true }),
       'tasks.list': (p) => {
         const all = bySession.get(p.session_key) || []
         const filtered = p.kind && p.id ? all.filter((r) => r.kind === p.kind && r.id === p.id) : all

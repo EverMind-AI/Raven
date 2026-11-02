@@ -423,6 +423,133 @@ describe('revealTurnAt', () => {
     expect(moved).toHaveLength(1)
   })
 
+  /* What a task board event opens is what Raven said in that turn: the reply
+     the turn ended on, rather than the question that opened it. happy-dom has
+     no layout, so the rows are pinned where a tall transcript would put them. */
+  const pin = (el: Element, top: number): void => {
+    (el as HTMLElement).getBoundingClientRect = () => ({ top }) as DOMRect
+  }
+
+  it('scrolls to the reply the named turn ended on', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))
+    await settle(() => { mount.ask('first question'); mount.answer('first reply'); mount.answer('first reply, continued') })
+    vi.setSystemTime(new Date('2026-10-29T11:00:00Z'))
+    await settle(() => { mount.ask('second question'); mount.answer('second reply') })
+    const scroll = $('#scroll') as HTMLElement
+    const moved: number[] = []
+    scroll.scrollTo = ((opts: ScrollToOptions) => { moved.push(Number(opts.top)) }) as typeof scroll.scrollTo
+    pin(scroll, 0)
+    stage().querySelectorAll('[data-ask]').forEach((el, i) => pin(el, [100, 3100][i]!))
+    stage().querySelectorAll('[data-answer]').forEach((el, i) => pin(el, [600, 1200, 3600][i]!))
+
+    expect(revealTurnAt('2026-10-29T10:00:30Z')).toBe(true)
+    expect(revealTurnAt('2026-10-29T11:00:30Z')).toBe(true)
+    expect(moved).toEqual([1200 - 16, 3600 - 16])
+  })
+
+  it('looks past a message merged into the running turn for its reply', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))
+    await settle(() => {
+      mount.ask('first question')
+      mount.ask('and one more thing', null, { midTurn: true })
+      mount.answer('the reply to both')
+    })
+    const scroll = $('#scroll') as HTMLElement
+    const moved: number[] = []
+    scroll.scrollTo = ((opts: ScrollToOptions) => { moved.push(Number(opts.top)) }) as typeof scroll.scrollTo
+    pin(scroll, 0)
+    stage().querySelectorAll('[data-ask]').forEach((el, i) => pin(el, [100, 400][i]!))
+    stage().querySelectorAll('[data-answer]').forEach((el) => pin(el, 900))
+
+    expect(revealTurnAt('2026-10-29T10:00:30Z')).toBe(true)
+    expect(moved).toEqual([900 - 16])
+  })
+
+  it('scrolls to the question while the named turn has no reply', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))
+    await settle(() => { mount.ask('first question'); mount.answer('first reply') })
+    vi.setSystemTime(new Date('2026-10-29T11:00:00Z'))
+    await settle(() => { mount.ask('second question') })
+    const scroll = $('#scroll') as HTMLElement
+    const moved: number[] = []
+    scroll.scrollTo = ((opts: ScrollToOptions) => { moved.push(Number(opts.top)) }) as typeof scroll.scrollTo
+    pin(scroll, 0)
+    stage().querySelectorAll('[data-ask]').forEach((el, i) => pin(el, 100 + i * 1000))
+    stage().querySelectorAll('[data-answer]').forEach((el, i) => pin(el, 600 + i * 1000))
+
+    expect(revealTurnAt('2026-10-29T11:00:30Z')).toBe(true)
+    expect(moved).toEqual([1100 - 16])
+  })
+
+  /* A delegated result re-entering opens a turn with no question typed: its
+     delivered row is where that turn begins, and a step keyed by it names it. */
+  it('finds a turn a delivered result opened, and scrolls to its reply', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))
+    await settle(() => { mount.ask('first question'); mount.answer('first reply') })
+    vi.setSystemTime(new Date('2026-10-29T10:30:00Z'))
+    await settle(() => {
+      mount.delivered({ label: 'the search', isDag: false, open: () => {} })
+      mount.answer('what the search found')
+    })
+    const scroll = $('#scroll') as HTMLElement
+    const moved: number[] = []
+    scroll.scrollTo = ((opts: ScrollToOptions) => { moved.push(Number(opts.top)) }) as typeof scroll.scrollTo
+    pin(scroll, 0)
+    stage().querySelectorAll('[data-ask]').forEach((el) => pin(el, 100))
+    stage().querySelectorAll('[data-delivered]').forEach((el) => pin(el, 2100))
+    stage().querySelectorAll('[data-answer]').forEach((el, i) => pin(el, [600, 2600][i]!))
+
+    expect(revealTurnAt('2026-10-29T10:30:05Z')).toBe(true)
+    expect(revealTurnAt('2026-10-29T10:00:05Z')).toBe(true)
+    expect(moved).toEqual([2600 - 16, 600 - 16])
+  })
+
+  it('scrolls to the delivered row while the turn it opened has no reply', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))
+    await settle(() => { mount.ask('first question'); mount.answer('first reply') })
+    vi.setSystemTime(new Date('2026-10-29T10:30:00Z'))
+    await settle(() => { mount.delivered({ label: 'the search', isDag: false, open: () => {} }) })
+    const scroll = $('#scroll') as HTMLElement
+    const moved: number[] = []
+    scroll.scrollTo = ((opts: ScrollToOptions) => { moved.push(Number(opts.top)) }) as typeof scroll.scrollTo
+    pin(scroll, 0)
+    stage().querySelectorAll('[data-ask]').forEach((el) => pin(el, 100))
+    stage().querySelectorAll('[data-delivered]').forEach((el) => pin(el, 2100))
+    stage().querySelectorAll('[data-answer]').forEach((el) => pin(el, 600))
+
+    expect(revealTurnAt('2026-10-29T10:30:05Z')).toBe(true)
+    expect(moved).toEqual([2100 - 16])
+  })
+
+  it('finds a delivered result s turn in a conversation read back from history', async () => {
+    await settle(() => {
+      mount.history([
+        { role: 'user', text: 'find the PRs', timestamp: '2026-10-30T09:28:33.706973' },
+        { role: 'assistant', text: 'Sent a sub-agent to look.', timestamp: '2026-10-30T09:29:11.896748' },
+        {
+          role: 'user', text: 'the sub-agent s report', timestamp: '2026-10-30T09:34:50.345450',
+          delegated: { kind: 'spawn', label: 'find the PRs', status: 'ok', node_id: 'n1' },
+        },
+        { role: 'assistant', text: 'Four PRs set the effort.', timestamp: '2026-10-30T09:35:01.840139' },
+      ])
+    })
+    const scroll = $('#scroll') as HTMLElement
+    const moved: number[] = []
+    scroll.scrollTo = ((opts: ScrollToOptions) => { moved.push(Number(opts.top)) }) as typeof scroll.scrollTo
+    pin(scroll, 0)
+    stage().querySelectorAll('[data-ask]').forEach((el) => pin(el, 100))
+    stage().querySelectorAll('[data-delivered]').forEach((el) => pin(el, 2100))
+    stage().querySelectorAll('[data-answer]').forEach((el, i) => pin(el, [600, 2600][i]!))
+
+    expect(revealTurnAt('2026-10-30T09:34:50.345450')).toBe(true)
+    expect(moved).toEqual([2600 - 16])
+  })
+
   it('answers false for a time no opening question is near', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))

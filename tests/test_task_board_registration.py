@@ -5,9 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-from pydantic import ValidationError
-
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.agent.task_board.service import TaskBoardService
@@ -88,13 +85,18 @@ def test_every_product_config_switches_the_board_off():
         assert defaults["taskBoard"]["enabled"] is False, path
 
 
-def test_the_config_reads_camel_case_and_refuses_minimal_effort():
-    defaults = AgentDefaults.model_validate({"taskBoard": {"enabled": False, "reasoningEffort": "medium"}})
+def test_the_config_holds_only_the_switch():
+    # The post-turn call runs at the main model's own settings, so the board has
+    # no model or effort of its own to configure.
+    assert set(TaskBoardConfig.model_fields) == {"enabled"}
+    assert AgentDefaults().task_board == TaskBoardConfig(enabled=True)
+    assert AgentDefaults.model_validate({"taskBoard": {"enabled": False}}).task_board == TaskBoardConfig(enabled=False)
 
-    assert defaults.task_board == TaskBoardConfig(enabled=False, reasoning_effort="medium")
-    assert AgentDefaults().task_board == TaskBoardConfig(enabled=True, reasoning_effort="low")
-    with pytest.raises(ValidationError):
-        TaskBoardConfig(reasoning_effort="minimal")
+
+def test_a_config_still_carrying_an_effort_loads():
+    defaults = AgentDefaults.model_validate({"taskBoard": {"enabled": True, "reasoningEffort": "max"}})
+
+    assert defaults.task_board == TaskBoardConfig(enabled=True)
 
 
 def test_the_turn_binds_the_board_to_its_session(tmp_path, monkeypatch):

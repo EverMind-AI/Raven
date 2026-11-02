@@ -344,6 +344,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             now_fn=now_fn,
             blocklist_reader=lambda: skill_blocklist(self._live_config),
             has_memory_backend=backend is not None,
+            task_board=self._task_board_config.enabled,
         )
         self.sessions = session_manager or SessionManager(workspace)
         # Off switches with no config file behind them: an eval harness that
@@ -457,6 +458,8 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 # either missing or stale by the time a turn asks for it.
                 list_subagents=lambda: self.subagents.list_agents(),
                 get_tool_notices=self._mcp_tool_notices,
+                # Read at call time: the board is wired further down this constructor.
+                get_session_notices=lambda key: self.task_board.turn_notes(key) if self.task_board else [],
                 now_fn=now_fn,
                 # The factory uses these to assemble the unified engine's
                 # SkillForgeRouter + EverOS recall lane.
@@ -470,6 +473,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 # scent menu screen against the list on disk now, so a skill
                 # switched off -- or back on -- reaches the next turn.
                 blocklist_reader=lambda: skill_blocklist(self._live_config),
+                task_board=self._task_board_config.enabled,
             )
 
         # The four strategy roles this generation runs on. Assembled here
@@ -558,6 +562,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             retry_delays=tuple(self._recovery_limits.llm_error_retry_delays),
             retry_after_output=bool(self._recovery_limits.llm_retry_after_output),
             provider_pool=self._provider_pool,
+            task_board=self._task_board_config.enabled,
         )
         # Reads the live direct chats through a lambda for the reason the identity
         # segment does: the manager is rebuilt on a hot config apply.

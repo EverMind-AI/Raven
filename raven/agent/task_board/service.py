@@ -21,14 +21,22 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.agent.task_board.board import Board, UpdateRejectedError, board_to_dict, drop_turns, set_group_status
+from raven.agent.task_board.board import (
+    Board,
+    UpdateRejectedError,
+    board_to_dict,
+    drop_turns,
+    ignore_question,
+    set_group_status,
+)
 from raven.agent.task_board.lineage import board_lineage
+from raven.agent.task_board.notes import add_move_on, add_note, load_notes, note_line, save_notes
 from raven.agent.task_board.store import load_board, save_board
 
 if TYPE_CHECKING:
     from raven.session.manager import SessionManager
 
-READER_STATUSES = ("completed", "active")
+READER_STATUSES = ("completed", "idle")
 
 Sink = Callable[[str, dict[str, Any]], Awaitable[None]]
 
@@ -44,6 +52,7 @@ class TaskBoardService:
         self._queues: dict[str, asyncio.Lock] = {}
         self._generation: dict[str, int] = {}
         self._dropped: dict[str, set[str]] = {}
+        self._shown: dict[str, int] = {}
         self._sink: Sink | None = None
         self.now_ms = now_ms
 
@@ -98,6 +107,8 @@ class TaskBoardService:
         """Empty the board, as clearing the conversation does."""
         async with self.lock(session_key):
             self._generation[session_key] = self.generation(session_key) + 1
+            self._shown.pop(session_key, None)
+            save_notes(self.session_dir(session_key), [])
             await self.write(session_key, Board([], []))
 
     async def drop_turns(self, session_key: str, removed: set[str]) -> Board:
@@ -114,11 +125,52 @@ class TaskBoardService:
                 await self.write(session_key, kept)
         return kept
 
+    async def ignore_question(self, session_key: str, group_id: str, step_id: str, question: str) -> Board:
+        """The reader sets one question aside; nothing is written when the step no longer lists it."""
+        async with self.lock(session_key):
+            board = self.load(session_key)
+            after = ignore_question(board, group_id, step_id, question, now_ms=self.now_ms())
+            if after is not board:
+                await self.write(session_key, after)
+                title = next(g.title for g in after.groups if g.id == group_id)
+                add_note(self.session_dir(session_key), title, question)
+        return after
+
     async def set_status(self, session_key: str, group_id: str, status: str) -> Board:
         """The reader's two actions: mark a group completed, or reopen it."""
         if status not in READER_STATUSES:
             raise UpdateRejectedError(f"a group can only be marked completed or reopened, not {status!r}")
         async with self.lock(session_key):
-            board = set_group_status(self.load(session_key), group_id, status, now_ms=self.now_ms())
+            before = self.load(session_key)
+            board = set_group_status(before, group_id, status, now_ms=self.now_ms())
             await self.write(session_key, board)
+            # Ignore on a group that named no question puts it down from waiting:
+            # the same set-aside as one question's, for the whole of what it asked.
+            was = next(g for g in before.groups if g.id == group_id)
+            if was.status == "needs_you" and status == "idle":
+                add_note(self.session_dir(session_key), was.title)
         return board
+
+    async def move_on(self, session_key: str, group_id: str) -> None:
+        """The reader's next message moves this group on; ``KeyError`` for a group the board lacks."""
+        async with self.lock(session_key):
+            group = next((g for g in self.load(session_key).groups if g.id == group_id), None)
+            if group is None:
+                raise KeyError(group_id)
+            add_move_on(self.session_dir(session_key), group.id, group.title, group.summary)
+
+    def turn_notes(self, session_key: str) -> list[str]:
+        """The reader's set-asides the turn being assembled is told of, remembered as
+        shown until that turn acknowledges them; read again within it, they stay."""
+        notes = load_notes(self.session_dir(session_key))
+        self._shown[session_key] = max((n.seq for n in notes), default=0)
+        return [note_line(n) for n in notes]
+
+    async def ack_turn_notes(self, session_key: str) -> None:
+        """A turn that showed the notes has run: drop those, keep any made since."""
+        shown = self._shown.pop(session_key, 0)
+        if not shown:
+            return
+        async with self.lock(session_key):
+            directory = self.session_dir(session_key)
+            save_notes(directory, [n for n in load_notes(directory) if n.seq > shown])

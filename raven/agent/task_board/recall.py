@@ -1,7 +1,12 @@
 """Reading the Task Board back to the model: a listing, one group's thread, or a search.
 
+A group that waits on the user names, in both readings, the questions it still
+asks: its latest step's, less any the user set aside.
+
 Search is keyword retrieval (:mod:`raven.utils.bm25`, which tokenizes Chinese by
-ideograph) over each group's title, steps and linked Task summaries. A completed
+ideograph) over each group's title and summary, its steps' titles and summaries,
+and its linked Task summaries. A step's summary is read back only here: the page
+shows its title. A completed
 group still answers, at a lower weight, so a matter that is still open wins a tie
 with one that is done.
 """
@@ -17,6 +22,9 @@ from raven.utils.tokens import estimate_message_tokens
 
 COMPLETED_RECALL_WEIGHT = 0.5
 RUNNERS_UP = 2
+CUT = " [... cut]"
+# The least a turn is cut down to; past that, the oldest turns are left out instead.
+TURN_FLOOR_TOKENS = 100
 
 
 def _age(now_ms: int, then_ms: int) -> str:
@@ -35,14 +43,25 @@ def _open_first(groups: Sequence[TaskGroup]) -> list[TaskGroup]:
     return [g for g in newest if g.status != "completed"] + [g for g in newest if g.status == "completed"]
 
 
+def _unanswered(group: TaskGroup, indent: str) -> list[str]:
+    """What a group waiting on the user still asks: its latest step's questions,
+    numbered as the user's board numbers them. An earlier step's were answered by
+    the turns after it, and a group no longer waiting asks nothing."""
+    questions = group.steps[-1].questions if group.status == "needs_you" and group.steps else []
+    if not questions:
+        return []
+    return [f"{indent}Unanswered questions:"] + [f"{indent}{n}. {q}" for n, q in enumerate(questions, 1)]
+
+
 def list_groups(board: Board, *, now_ms: int) -> str:
     if not board.groups:
         return "The task board is empty."
     done = sum(1 for g in board.groups if g.status == "completed")
     lines = [f"Task board: {len(board.groups)} groups ({len(board.groups) - done} open, {done} completed)."]
     for group in _open_first(board.groups):
-        last = group.steps[-1].text if group.steps else ""
-        lines.append(f"- {group.id} [{group.status}] {group.title} -- last: {last} ({_age(now_ms, group.updated_at)})")
+        about = group.summary or (group.steps[-1].title if group.steps else "")
+        lines.append(f"- {group.id} [{group.status}] {group.title} -- {about} ({_age(now_ms, group.updated_at)})")
+        lines += _unanswered(group, "  ")
     return "\n".join(lines)
 
 
@@ -60,14 +79,15 @@ def thread_text(
     continued: dict[str, list[str]] = {}
     for child, parent in lineage.items():
         continued.setdefault(parent, []).append(child)
-    lines = [f"{group.id} [{group.status}] {group.title}"]
+    lines = [f"{group.id} [{group.status}] {group.title}" + (f" -- {group.summary}" if group.summary else "")]
     for step in group.steps:
-        lines.append(f"- {step.turn_at}: {step.text}")
+        lines.append(f"- {step.turn_at}: {step.title} -- {step.summary}")
         for link in step.tasks:
             line = f"    {link.kind}:{link.id} ({link.summary}): {status_of(link)}"
             if link.kind == "dag" and (children := sorted(continued.get(link.id, []))):
                 line += "; continued as " + ", ".join(f"dag:{c}" for c in children)
             lines.append(line)
+    lines += _unanswered(group, "")
     return "\n".join(lines)
 
 
@@ -77,7 +97,11 @@ def rank(board: Board, query: str) -> list[TaskGroup]:
         return []
     documents = [
         tokenize(
-            " ".join([g.title, g.title] + [s.text for s in g.steps] + [t.summary for s in g.steps for t in s.tasks])
+            " ".join(
+                [g.title, g.title, g.summary]
+                + [part for s in g.steps for part in (s.title, s.summary)]
+                + [t.summary for s in g.steps for t in s.tasks]
+            )
         )
         for g in board.groups
     ]
@@ -120,30 +144,83 @@ def _text(content: Any) -> str:
     return ""
 
 
-def turn_texts(messages: Sequence[Mapping[str, Any]], turn_ats: Sequence[str], *, max_tokens: int = 4000) -> str:
-    """Each named turn's opening message and final reply, inside a token budget it reports when it binds."""
-    position = {m.get("timestamp"): i for i, m in enumerate(messages)}
-    blocks: list[str] = []
-    used = 0
-    for count, turn_at in enumerate(turn_ats):
-        at = position.get(turn_at)
-        if at is None:
-            block = f"{turn_at}: gone from the log"
+def _tokens(text: str) -> int:
+    return estimate_message_tokens({"role": "user", "content": text})
+
+
+def _fill(needs: Sequence[int], budget: int) -> list[int]:
+    """``budget`` shared out: a need that fits an even share is met whole, and what
+    is left is split evenly among the larger ones."""
+    shares = [0] * len(needs)
+    left = max(0, budget)
+    for done, i in enumerate(sorted(range(len(needs)), key=lambda i: needs[i])):
+        shares[i] = min(needs[i], left // (len(needs) - done))
+        left -= shares[i]
+    return shares
+
+
+def _cut(text: str, budget: int) -> str:
+    """``text`` whole when it fits ``budget`` tokens, else the longest head that fits with the cut mark."""
+    if _tokens(text) <= budget:
+        return text
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if _tokens(text[:mid] + CUT) <= budget:
+            lo = mid
         else:
-            reply = ""
-            for message in messages[at + 1 :]:
-                if message.get("role") == "user":
-                    break
-                if message.get("role") == "assistant" and _text(message.get("content")).strip():
-                    reply = _text(message.get("content"))
-            block = f"{turn_at}:\n  asked: {_text(messages[at].get('content'))}\n  replied: {reply or '(no reply)'}"
-        cost = estimate_message_tokens({"role": "user", "content": block})
-        if used + cost > max_tokens:
-            if not blocks:
-                blocks.append(block[: max_tokens * 3])
-                count += 1
-            blocks.append(f"[token budget of {max_tokens} reached; {len(turn_ats) - count} turn(s) left out]")
+            hi = mid - 1
+    return text[:lo].rstrip() + CUT
+
+
+def _turn(messages: Sequence[Mapping[str, Any]], at: int | None) -> tuple[str, str] | None:
+    """The turn opened by message ``at``: what was asked, and the last reply before the next opening."""
+    if at is None:
+        return None
+    reply = ""
+    for message in messages[at + 1 :]:
+        if message.get("role") == "user":
             break
-        used += cost
-        blocks.append(block)
+        if message.get("role") == "assistant" and _text(message.get("content")).strip():
+            reply = _text(message.get("content"))
+    return _text(messages[at].get("content")), reply or "(no reply)"
+
+
+def _block(turn_at: str, turn: tuple[str, str] | None) -> str:
+    if turn is None:
+        return f"{turn_at}: gone from the log"
+    return f"{turn_at}:\n  asked: {turn[0]}\n  replied: {turn[1]}"
+
+
+def turn_texts(messages: Sequence[Mapping[str, Any]], turn_ats: Sequence[str], *, max_tokens: int = 4000) -> str:
+    """Each named turn's opening message and final reply, inside a token budget.
+
+    Every turn is read, each cut rather than one long turn crowding out the rest: a
+    turn that fits an even share stays whole, the long ones split what is left
+    evenly, and within a turn its question and its reply share the same way. Only
+    when even a turn cut to ``TURN_FLOOR_TOKENS`` each will not fit are the oldest
+    left out, and the reading opens by saying how many.
+    """
+    if not turn_ats:
+        return ""
+    note = ""
+    if len(turn_ats) * TURN_FLOOR_TOKENS > max_tokens:
+        keep = max(1, (max_tokens - _tokens(f"[{len(turn_ats)} earlier turn(s) left out]") - 16) // TURN_FLOOR_TOKENS)
+        note = f"[{len(turn_ats) - keep} earlier turn(s) left out to fit a budget of {max_tokens} tokens]"
+        turn_ats = turn_ats[-keep:]
+    position = {m.get("timestamp"): i for i, m in enumerate(messages)}
+    turns = [_turn(messages, position.get(at)) for at in turn_ats]
+    # The frame each block keeps whatever it is cut to, a little slack on each
+    # joint, since a whole tokenizes a token or two apart from its parts.
+    frame = sum(_tokens(_block(at, ("", "") if t else None)) + 4 for at, t in zip(turn_ats, turns))
+    room = max_tokens - frame - (_tokens(note) + 2 if note else 0)
+    sizes = [(_tokens(t[0]), _tokens(t[1])) if t else (0, 0) for t in turns]
+    shares = _fill([a + r for a, r in sizes], room)
+    blocks = [note] if note else []
+    for at, turn, size, share in zip(turn_ats, turns, sizes, shares):
+        if turn is None:
+            blocks.append(_block(at, None))
+            continue
+        asked_room, reply_room = _fill(list(size), share)
+        blocks.append(_block(at, (_cut(turn[0], asked_room), _cut(turn[1], reply_room))))
     return "\n\n".join(blocks)

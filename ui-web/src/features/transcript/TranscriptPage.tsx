@@ -1199,7 +1199,7 @@ const AnswerView = memo(function AnswerView({ lane, seg, showFoot = true }: {
     return list
   }
   return (
-    <div className="answer in" ref={ctxRef(items)}>
+    <div className="answer in" data-answer={seg.id} ref={ctxRef(items)}>
       <div className="prose" dangerouslySetInnerHTML={{ __html: html }} />
       {showFoot ? <AnswerFoot lane={lane} seg={seg} /> : null}
     </div>
@@ -1390,7 +1390,7 @@ const DeliveredView = memo(function DeliveredView({ lane, seg }: { lane: Lane; s
   const { cls, key } = deliveredVerdict(seg)
   const name = seg.isDag ? t('gui.deleg.dag_title') : seg.label
   return (
-    <div className={'sdlv' + cls + (seg.shown ? ' open' : '')}>
+    <div className={'sdlv' + cls + (seg.shown ? ' open' : '')} data-delivered={seg.id}>
       <div className="sdhd">
         <Ico d={SDLV_ICO} cls="ic" />
         {/* The whole name, in the tooltip: a long task sentence must not push
