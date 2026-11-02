@@ -1852,13 +1852,14 @@
         },
         {
           "name": "scope",
-          "summary": "How far a model or permissions.mode switch reaches: this conversation, or what new ones start on.",
+          "summary": "How far a model or permissions.mode switch reaches: this conversation, what new ones start on, or (model only) both at once.",
           "required": false,
           "schema": {
             "type": "string",
             "enum": [
               "session",
-              "default"
+              "default",
+              "both"
             ]
           }
         }
@@ -1893,7 +1894,8 @@
               "type": "string",
               "enum": [
                 "session",
-                "default"
+                "default",
+                "both"
               ]
             },
             "session_id": {

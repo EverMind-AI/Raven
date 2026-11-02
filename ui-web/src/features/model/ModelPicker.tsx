@@ -390,7 +390,7 @@ function Pick(): JSX.Element {
           </button>
         ) : null}
       </div>
-      {at.scope === 'session' && !at.offer.title ? <TierRow /> : null}
+      {at.scope !== 'default' && !at.offer.title ? <TierRow /> : null}
       {at.footer ? (
         <div className="foot">
           <button

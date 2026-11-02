@@ -472,6 +472,101 @@ async def test_config_set_model_is_scoped_to_the_session_that_asked(fake_home: P
     )
 
 
+async def test_a_composer_pick_moves_the_session_and_the_default_together(fake_home: Path, monkeypatch) -> None:
+    """The web composer's pick means both: this conversation switches now, and
+    a conversation created afterwards starts on the same model.
+
+    It is one write, not two, because a client cannot undo half of it -- a
+    session binding written and a default refused leaves the chip rolling back
+    to a model the session no longer runs.
+    """
+    import raven.rpc.methods.config as config_mod
+
+    (fake_home / ".raven").mkdir()
+    (fake_home / ".raven" / "config.json").write_text(
+        json.dumps({"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5", "provider": "anthropic"}}})
+    )
+
+    new_provider = SimpleNamespace(name="new-prov")
+    loop = _FakeLoop("old-prov", "anthropic/claude-sonnet-4-5")
+    monkeypatch.setattr(config_mod, "make_provider", lambda _cfg: new_provider)
+    monkeypatch.setattr(
+        config_mod,
+        "load_runtime_config",
+        lambda *a, **k: SimpleNamespace(agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))),
+    )
+
+    result = await config_set(
+        {
+            "key": "model",
+            "value": "anthropic/claude-opus-4-8",
+            "provider": "anthropic",
+            "session_id": "web:session",
+            "scope": "both",
+        },
+        agent_loop_factory=lambda: loop,
+    )
+
+    assert result["applied"] is True
+    assert result["scope"] == "both"
+    assert result["session_id"] == "web:session"
+    assert result["applies_to_session"] is True
+    assert result["previous"] == "anthropic/claude-sonnet-4-5"
+    assert loop.session_bindings["web:session"].model == "anthropic/claude-opus-4-8"
+    assert "web:other" not in loop.session_bindings, "another session must not move"
+    # set_default_binding, not a bare attribute assignment: it also re-points
+    # the subagent manager, the context engine and the consolidator.
+    assert loop.switches == [(new_provider, "anthropic/claude-opus-4-8")]
+
+    on_disk = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert on_disk["agents"]["defaults"]["model"] == "anthropic/claude-opus-4-8"
+    assert on_disk["agents"]["defaults"]["provider"] == "anthropic"
+
+
+async def test_a_composer_pick_on_a_draft_writes_the_default(fake_home: Path) -> None:
+    """A pick made before the first message has no session to bind yet.
+
+    The default it writes is what the conversation minted from the draft reads,
+    so the next session starts on the picked model. The reply says the pick was
+    staged, because there is still no conversation running it.
+    """
+    _pin(fake_home, "anthropic", {"anthropic": {"apiKey": "sk-ant"}})
+
+    result = await config_set(
+        {"key": "model", "value": "claude-opus-4-8", "provider": "anthropic", "scope": "both"},
+        agent_loop_factory=_first_run_factory,
+    )
+
+    assert result["applied"] is True
+    assert result["scope"] == "both"
+    assert result["needs_restart"] is True
+    written = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert written["agents"]["defaults"]["model"] == "anthropic/claude-opus-4-8"
+    assert written["agents"]["defaults"]["provider"] == "anthropic"
+
+
+async def test_a_composer_pick_with_no_loop_refuses_instead_of_half_writing(fake_home: Path) -> None:
+    """With a session named but no loop, neither half lands.
+
+    The default could be written alone, but then the reply would be a refusal
+    for the conversation while a new session quietly started on another model
+    -- exactly the partial outcome the single scope exists to prevent.
+    """
+    cfg = fake_home / ".raven"
+    cfg.mkdir(exist_ok=True)
+    (cfg / "config.json").write_text(json.dumps({"providers": {"deepseek": {"apiKey": "sk-deep"}}}), encoding="utf-8")
+
+    result = await config_set(
+        {"key": "model", "value": "deepseek-chat", "provider": "deepseek", "session_id": "s1", "scope": "both"},
+        agent_loop_factory=_first_run_factory,
+    )
+
+    assert result["applied"] is False
+    assert result["scope"] == "both"
+    assert "needs_restart" not in result
+    assert "agents" not in json.loads((cfg / "config.json").read_text())
+
+
 async def test_config_set_model_is_not_refused_mid_turn(fake_home: Path, monkeypatch) -> None:
     """The running turn holds the binding it started on, so the switch lands on
     the session's next turn rather than being rejected.
@@ -1133,6 +1228,14 @@ async def test_scope_session_without_a_session_is_refused(fake_home: Path) -> No
         await config_set({"key": "permissions.mode", "value": "full", "scope": "session"})
     with pytest.raises(ConfigValidationError):
         await config_set({"key": "permissions.mode", "value": "full", "scope": "session", "session_id": None})
+
+
+async def test_scope_both_is_refused_for_a_permission_mode(fake_home: Path) -> None:
+    """``both`` is the model switch's third scope; a permission mode has no
+    "new conversations start on this" half to write twice, and accepting the
+    value would silently treat it as a session write."""
+    with pytest.raises(ConfigValidationError):
+        await config_set({"key": "permissions.mode", "value": "full", "scope": "both", "session_id": "s-1"})
 
 
 async def test_a_conversation_mode_before_the_first_message_writes_no_session_file(tmp_path, own_mode) -> None:
