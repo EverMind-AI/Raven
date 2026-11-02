@@ -3028,6 +3028,28 @@ def test_scancode_login_node_missing_retry_then_present(tmp_env: Path, monkeypat
     assert data["channels"]["whatsapp"]["enabled"] is True
 
 
+def test_scancode_login_says_the_whatsapp_wait_is_bounded(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The shared line must not promise an unbounded wait: WhatsApp gives up
+    after five minutes, and the wizard says so before the scan starts."""
+    monkeypatch.setattr(onboard_channels, "_node_runtime_missing", lambda _channel: False)
+    monkeypatch.setattr(
+        "raven.channels.adapters.whatsapp.channel.WhatsAppChannel.login",
+        _async_return(True),
+    )
+
+    onboard_channels._scancode_login("whatsapp")
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "five minutes" in out
+
+
+def test_the_whatsapp_wait_note_is_translated() -> None:
+    note = " WhatsApp stops waiting after five minutes."
+    assert zh_catalog.MESSAGES[note] != note
+
+
 # --------------------------------------------------------------------------- multi-provider add/remove
 
 
