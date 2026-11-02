@@ -4009,6 +4009,10 @@ export interface ModelAddModelParams {
   capabilities?: string[];
   input_modalities?: string[];
   output_modalities?: string[];
+  /**
+   * The reasoning-effort words this model accepts, least first. Omit to leave a stored declaration alone; [] clears it.
+   */
+  reasoning_efforts?: string[];
   session_id?: string;
 }
 /**
@@ -4870,6 +4874,10 @@ export interface SessionSetEffortParams {
    * Drop the session's own pick and follow the default again. Wins over effort when both are given.
    */
   clear?: boolean;
+  /**
+   * The model to answer for when the caller has no session yet (a draft). Omit for a session's own model.
+   */
+  model?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

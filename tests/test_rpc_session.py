@@ -3512,6 +3512,22 @@ def _filed(mgr: SessionManager, key: str) -> None:
     mgr.save(mgr.get_or_create(key))
 
 
+@pytest.fixture(autouse=True)
+def levels(monkeypatch):
+    """Keep the effort tests off the real LiteLLM table; a test may narrow it."""
+
+    def use(words):
+        monkeypatch.setattr(
+            session_module,
+            "effort_levels",
+            SimpleNamespace(levels_for=lambda model, declared=(): None if words is None else tuple(words)),
+            raising=False,
+        )
+
+    use(["minimal", "low", "medium", "high"])
+    return use
+
+
 async def test_an_effort_read_reports_no_pick_the_default_and_the_words(tmp_path, monkeypatch) -> None:
     _configured_effort(monkeypatch, "low")
     loop = _EffortLoop(tmp_path)
@@ -4480,3 +4496,61 @@ async def test_delete_of_an_imported_conversation(tmp_path: Path) -> None:
     assert not state.exists()
     assert state.resolve() not in tidx._INDEXERS
     assert await session_delete({"session_id": key}) == {"deleted": None, "still_on_disk": False}
+
+
+async def test_effort_options_come_from_the_models_declared_levels(tmp_path, monkeypatch, levels):
+    _configured_effort(monkeypatch, "low")
+    levels(["medium", "high", "xhigh"])
+    loop = _EffortLoop(tmp_path)
+    result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert result["options"] == ["medium", "high", "xhigh"]
+
+
+async def test_a_declared_level_is_refused_when_the_model_does_not_carry_it(tmp_path, monkeypatch, levels):
+    from raven.rpc.errors import ConfigValidationError
+
+    _configured_effort(monkeypatch, "low")
+    levels(["medium", "high", "xhigh"])
+    loop = _EffortLoop(tmp_path)
+    with pytest.raises(ConfigValidationError):
+        await session_module.session_set_effort(
+            {"session_key": "tui:1", "effort": "minimal"}, agent_loop_factory=lambda: loop
+        )
+
+
+async def test_a_draft_read_names_the_model_it_asks_about(tmp_path, monkeypatch):
+    _configured_effort(monkeypatch, "low")
+    seen = {}
+
+    def resolve(model, declared=()):
+        seen["model"] = model
+        return ("low", "high")
+
+    monkeypatch.setattr(session_module.effort_levels, "levels_for", resolve)
+    loop = _EffortLoop(tmp_path)
+    result = await session_module.session_set_effort(
+        {"session_key": "", "model": "openai/gpt-5.5-pro"}, agent_loop_factory=lambda: loop
+    )
+    assert seen["model"] == "openai/gpt-5.5-pro"
+    assert result["options"] == ["low", "high"]
+
+
+async def test_a_model_that_declares_no_reasoning_offers_no_words(tmp_path, monkeypatch, levels):
+    _configured_effort(monkeypatch, "low")
+    levels([])
+    loop = _EffortLoop(tmp_path)
+    result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert result["options"] == []
+
+
+async def test_the_reported_pick_is_clamped_to_the_model(tmp_path, monkeypatch, levels):
+    _configured_effort(monkeypatch, "low")
+    levels(["medium", "high", "xhigh"])
+    loop = _EffortLoop(tmp_path)
+    _filed(loop.sessions, "tui:1")
+    await session_module.session_set_effort(
+        {"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop
+    )
+    levels(["medium"])
+    result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert result["effort"] is None and result["default"] is None

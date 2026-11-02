@@ -40,6 +40,8 @@ from raven.agent import session_effort
 from raven.config.loader import drain_migration_notices, load_config, raven_home
 from raven.config.raven import load_raven_config
 from raven.config.schema import REASONING_EFFORTS
+from raven.providers import effort_levels
+from raven.providers.overlay import overlay_for
 from raven.providers.rates import resolve_context_window
 from raven.providers.usage import reported_cost, token_count
 from raven.rpc.errors import (
@@ -278,7 +280,7 @@ async def _default_session_info(
         "running": bool(session_key) and turn_module.is_session_answering(session_key),
         # What this session's own calls think at, for the status bar beside the
         # model: its own pick, else what it would run at without one.
-        "reasoning_effort": _effort_in_force(agent_loop, config, session_key),
+        "reasoning_effort": _effort_in_force(agent_loop, config, session_key, model_id),
     }
 
     # Nudge the status bar to run `raven upgrade` when the cached latest release
@@ -577,10 +579,28 @@ def _default_effort(agent_loop: object, config: Any, session_key: str | None) ->
     return session_effort.in_force(None, _mode_effort(agent_loop, session_key), _configured_effort(config))
 
 
-def _effort_in_force(agent_loop: object, config: Any, session_key: str | None) -> str | None:
+def _effort_levels(model_id: str, config: Any) -> tuple[str, ...] | None:
+    """What this model declares, with the provider's overlay as the authority."""
+    from raven.providers.registry import canonical_provider_name, split_model_id
+
+    provider, _rest = split_model_id(model_id)
+    section = getattr(config, "providers", {}).get(canonical_provider_name(provider)) if provider else None
+    overlay = overlay_for(section, provider, model_id) if section is not None else None
+    declared = tuple(getattr(overlay, "reasoning_efforts", ()) or ())
+    return effort_levels.levels_for(model_id, declared)
+
+
+def _effort_in_force(
+    agent_loop: object,
+    config: Any,
+    session_key: str | None,
+    model_id: str | None = None,
+) -> str | None:
     """The effort this session's own calls run at: its pick over the default, by the one rule."""
+    model_id = model_id or _session_model(agent_loop, config, session_key)
     picked = session_effort.read(manager_for(agent_loop, config), session_key) if session_key else None
-    return session_effort.in_force(picked, _mode_effort(agent_loop, session_key), _configured_effort(config))
+    value = session_effort.in_force(picked, _mode_effort(agent_loop, session_key), _configured_effort(config))
+    return session_effort.clamp(value, _effort_levels(model_id, config))
 
 
 def _read_knowledge(agent_loop: object, config: object, session_key: str | None) -> tuple[str, ...]:
@@ -1657,27 +1677,41 @@ async def session_set_effort(
     session_key = str(params.get("session_key") or "")
     raw = params.get("effort")
     wanted = str(raw) if isinstance(raw, str) and raw else None
+    requested_model = params.get("model")
     loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
     mgr = manager_for(loop, config)
+    model_id = (
+        str(requested_model)
+        if isinstance(requested_model, str) and requested_model
+        else _session_model(loop, config, session_key)
+    )
+    model_levels = _effort_levels(model_id, config)
 
-    def _reply(effort: str | None) -> dict:
+    def _reply(stored: str | None) -> dict:
         return {
             "session_key": session_key,
-            "effort": effort,
-            "default": _default_effort(loop, config, session_key or None),
-            "options": list(REASONING_EFFORTS),
+            "effort": session_effort.clamp(stored, model_levels),
+            "default": session_effort.clamp(_default_effort(loop, config, session_key or None), model_levels),
+            "options": list(model_levels) if model_levels is not None else list(REASONING_EFFORTS),
         }
 
     if wanted is None and not params.get("clear"):
-        # A draft asks too, with no key: the default and the words are what
-        # its first turn will run at, and the row is drawn before it is sent.
+        # A draft asks too, with no key: the model, the default and the words
+        # are what its first turn will run at, and the row is drawn before it
+        # is sent.
         return _reply(session_effort.read(mgr, session_key) if session_key else None)
     if not session_key:
         raise ConfigValidationError("session_key is required to set or clear a reasoning effort")
     effort = None if params.get("clear") else wanted
-    if effort is not None and effort not in REASONING_EFFORTS:
-        raise ConfigValidationError(f"no reasoning effort {effort!r}; the words are {', '.join(REASONING_EFFORTS)}")
+    if effort is not None:
+        allowed = model_levels if model_levels is not None else REASONING_EFFORTS
+        if not allowed:
+            raise ConfigValidationError(f"{model_id} declares no reasoning effort")
+        if effort not in allowed:
+            raise ConfigValidationError(
+                f"no reasoning effort {effort!r} for {model_id}; the words are {', '.join(allowed)}"
+            )
     previous = session_effort.read(mgr, session_key)
     session_effort.write(mgr, session_key, effort)
     if previous != effort:

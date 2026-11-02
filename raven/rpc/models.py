@@ -3578,6 +3578,11 @@ class SessionSetEffortParams(_Strict):
         False,
         description="Drop the session's own pick and follow the default again. Wins over effort when both are given.",
     )
+    model: str | None = Field(
+        None,
+        description="The model to answer for when the caller has no session yet (a draft). "
+        "Omit for a session's own model.",
+    )
 
 
 class SessionSetEffortResult(_Strict):
