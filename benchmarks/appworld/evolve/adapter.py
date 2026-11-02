@@ -36,6 +36,7 @@ from __future__ import annotations
 import glob
 import hashlib
 import json
+import logging
 import os
 import re
 import subprocess
@@ -66,6 +67,12 @@ MODE_INCOMPLETE = "INCOMPLETE"  # stopped early / empty response
 MODE_INFRA = "INFRA"  # env/proxy/timeout
 
 _TRIAL_SUFFIX_RE = re.compile(r"_k\d+\.json$")
+_TRIAL_INDEX_RE = re.compile(r"_k(\d+)\.json$")
+
+#: The SOP infra-rerun ladder's rung numbers (see ``eval_with_infra_rerun``).
+_LADDER_RERUNS = (1, 2)
+
+_LOG = logging.getLogger(__name__)
 
 
 def _selection_digest(task_ids: list[str] | None) -> str:
@@ -82,6 +89,97 @@ def _selection_digest(task_ids: list[str] | None) -> str:
         digest.update(task_id.encode("utf-8"))
         digest.update(b"\0")
     return digest.hexdigest()[:16]
+
+
+def _content_digest(path: Path) -> str:
+    """Digest of the subject config's bytes; the path alone cannot pin identity.
+
+    ``evolver/launch/config.py`` only compares the YAML value, so editing the
+    file at the same path leaves that drift gate green.
+    """
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:16]
+    except OSError:
+        return "unreadable"
+
+
+def _read_trial(path: Path) -> dict | None:
+    try:
+        with open(path) as f:
+            record = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def _results_complete(out_dir: Path, task_ids: list[str] | None, k: int, n: int | None) -> bool:
+    """Whether ``out_dir`` holds every trial the requested selection asked for.
+
+    A marker alone cannot prove the set is whole: ``batch.py`` resumes file by
+    file, so a deleted or corrupt trial would otherwise vanish from the
+    measurement, and from ``cold_start_done``'s count, which only sees this
+    directory. Unparseable files do not count — the batch re-runs those.
+    """
+    out_dir = Path(out_dir)
+    if task_ids:
+        return all(_read_trial(out_dir / f"{tid}_k{i}.json") is not None for tid in task_ids for i in range(k))
+    if not n or n <= 0:
+        return False
+    counts: dict[str, int] = {}
+    for name in glob.glob(str(out_dir / "*_k*.json")):
+        match = _TRIAL_INDEX_RE.search(name)
+        if match is None or int(match.group(1)) >= k:
+            continue
+        record = _read_trial(Path(name))
+        if record is None:
+            continue
+        tid = _task_id_of(record, name)
+        counts[tid] = counts.get(tid, 0) + 1
+    return len(counts) == n and all(count == k for count in counts.values())
+
+
+def _select_tasks(evals: dict[str, TaskEval], task_ids: list[str] | None) -> dict[str, TaskEval]:
+    """Restrict a whole-directory read to the tasks this call asked for."""
+    if not task_ids:
+        return evals
+    wanted = set(task_ids)
+    return {tid: ev for tid, ev in evals.items() if tid in wanted}
+
+
+def _ladder_dirs(out_dir: Path) -> list[Path]:
+    """The base out-dir and its SOP infra-rerun siblings, existing or not."""
+    out_dir = Path(out_dir)
+    return [out_dir] + [out_dir.parent / f"{out_dir.name}_infra_rerun{i}" for i in _LADDER_RERUNS]
+
+
+def _discard_stale_trials(out_dir: Path) -> None:
+    """Clear trial files left by a different identity, ladder siblings included.
+
+    A mismatched marker means this out-dir does not hold the requested
+    measurement, but ``batch.py`` would still resume every parseable file it
+    finds. The infra-rerun siblings feed ``read_kept_out_dir``, so they carry
+    the same stale identity.
+
+    A result file that cannot be removed is raised, not ignored: carrying on
+    would silently score the old measurement under the new identity. Nothing
+    has been paid for yet, so refusing here is cheaper than a wrong number.
+    """
+    failed: list[Path] = []
+    for directory in _ladder_dirs(Path(out_dir)):
+        if not directory.is_dir():
+            continue
+        for path in directory.glob("*_k*.json"):
+            try:
+                path.unlink()
+            except OSError:
+                failed.append(path)
+        for path in directory.glob("*_k*.stderr"):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+    if failed:
+        raise OSError(f"could not clear {len(failed)} stale trial file(s) under {out_dir}: {failed[0]}")
 
 
 @dataclass(frozen=True)
@@ -213,10 +311,8 @@ def read_out_dir(out_dir: str | Path) -> dict[str, TaskEval]:
 def ladder_out_dirs(out_dir: str | Path) -> list[Path]:
     """The base out-dir plus its SOP §0 infra-rerun ladder siblings that exist
     (``<name>_infra_rerun{1,2}``, written by ``eval_with_infra_rerun``)."""
-    out_dir = Path(out_dir)
     dirs = []
-    for name in (out_dir.name, f"{out_dir.name}_infra_rerun1", f"{out_dir.name}_infra_rerun2"):
-        d = out_dir.parent / name
+    for d in _ladder_dirs(Path(out_dir)):
         if d.exists() and list(d.glob("*_k*.json")):
             dirs.append(d)
     return dirs
@@ -271,27 +367,43 @@ def run_eval(
 
     A successful batch writes a trial-identity marker into ``out_dir``
     (``evolver.runmark``) recording the experiment name, its split/K, the
-    requested task selection, and a digest of the harness tree at ``cwd``. With
-    ``reuse_complete=True``, a marker matching all of those values short-circuits
-    the batch and re-reads the existing results — the idempotency the cold-start
-    and confirm paths rely on when a run is resumed. A different selection of the
-    same size does not match.
+    requested task selection, the subject config's content digest, the extra
+    batch args, and a digest of the tree the batch ran in (``cwd``, or
+    ``aw.appworld_root`` when ``cwd`` is None). With ``reuse_complete=True`` a
+    marker matching all of those values *and* a complete set of trial files
+    short-circuits the batch and re-reads the existing results — the idempotency
+    the cold-start and confirm paths rely on when a run is resumed. A different
+    selection of the same size does not match.
+
+    A marker that does not match means this out-dir's files came from a
+    different identity, so they are discarded before the batch runs: the batch
+    resumes parseable trial files one by one and would otherwise return the old
+    measurement. A partial or corrupt set under a *matching* marker is kept and
+    refilled by the batch, so the base directory always ends up whole.
+
+    A marker that cannot be written degrades to a warning: the trial is already
+    paid for, and the worst case is a later run re-measuring it.
     """
     out_dir = aw.out_dir_root / experiment
     out_dir.mkdir(parents=True, exist_ok=True)
+    harness_dir = Path(cwd) if cwd is not None else aw.appworld_root
     expected = {
         "split": aw.split,
         "k": K,
         "n": aw.n,
         "tasks": _selection_digest(task_ids),
+        "config": _content_digest(aw.config_path),
+        "extra_args": list(aw.extra_args),
     }
-    if reuse_complete and runmark.is_complete(out_dir, run_id=experiment, harness_dir=cwd, expected=expected):
-        try:
-            return read_out_dir(out_dir)
-        except FileNotFoundError:
-            # The marker says complete but the trial files are gone (manual
-            # cleanup, partial restore): re-run rather than fail the resume.
-            pass
+    if reuse_complete:
+        matched = runmark.is_complete(out_dir, run_id=experiment, harness_dir=harness_dir, expected=expected)
+        if matched and _results_complete(out_dir, task_ids, K, aw.n):
+            try:
+                return _select_tasks(read_out_dir(out_dir), task_ids)
+            except FileNotFoundError:
+                pass
+        elif not matched and runmark.read_mark(out_dir) is not None:
+            _discard_stale_trials(out_dir)
     tasklist_path: Path | None = None
     if task_ids:
         tasklist_path = out_dir / "tasklist.txt"
@@ -305,8 +417,11 @@ def run_eval(
         tasklist_path=tasklist_path,
     )
     subprocess.run(argv, cwd=str(cwd or aw.appworld_root), env=dict(os.environ), check=True, timeout=timeout)
-    evals = read_out_dir(out_dir)
-    runmark.mark_complete(out_dir, run_id=experiment, harness_dir=cwd, extra=expected)
+    evals = _select_tasks(read_out_dir(out_dir), task_ids)
+    try:
+        runmark.mark_complete(out_dir, run_id=experiment, harness_dir=harness_dir, extra=expected)
+    except OSError as exc:
+        _LOG.warning("could not write the trial marker in %s: %s", out_dir, exc)
     return evals
 
 

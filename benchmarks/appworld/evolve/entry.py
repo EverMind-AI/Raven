@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from benchmarks.appworld.evolve import adapter as aw_adapter
@@ -126,9 +127,10 @@ def _make_cold_start_eval(cfg: aw_adapter.AppWorldConfig, *, repo_root: Path, ba
     """
 
     def base_eval(_node, task_ids, k, job_name, *, split="train"):
+        eval_cfg = cfg if split == cfg.split else replace(cfg, split=split)
         with git_ops.worktree_at(Path(repo_root), base_sha) as wt:
             return aw_adapter.run_eval(
-                cfg,
+                eval_cfg,
                 K=k,
                 experiment=job_name,
                 task_ids=task_ids,
