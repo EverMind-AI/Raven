@@ -10,7 +10,7 @@ Silence is something the model chooses, by answering with a marker. It is not:
 
 The rule depends on who the turn is for and whether its prompt taught the marker, and
 ``is_silence`` is the one place that picks it, so the lanes cannot drift apart. A proactive turn
-whose prompt carries ``SILENCE_INSTRUCTION`` (the cron reminder, a sub-agent's unprompted report) is
+whose prompt ends with ``SILENCE_INSTRUCTION`` (the cron reminder, a sub-agent's unprompted report) is
 told to answer ``[SILENT]`` when nothing is new, and models reliably vary the spelling and wrap it in
 a short note on why they stayed quiet, so it reads the whole marker set by two rules: the strict one
 (``is_exact_silence``), a reply that is exactly a marker, and the loose one (``is_loose_silence``),
@@ -106,12 +106,17 @@ def is_loose_silence(text: object) -> bool:
 
 
 def teaches_silence(prompt: object) -> bool:
-    """Whether a turn's prompt taught the model the marker: it carries ``SILENCE_INSTRUCTION``.
+    """Whether a turn's prompt taught the model the marker: it ends with ``SILENCE_INSTRUCTION``.
 
     Read off the prompt rather than a flag beside it, so an entry that teaches the marker cannot
     forget to say so, and one that never named it cannot claim the loose rule.
+
+    The end, not anywhere in the prompt: a relayed sub-agent result is an untaught turn whose prompt
+    embeds that result inside an untrusted fence, followed by the host's own instructions. Matching
+    the whole prompt would let a result that quotes the lesson widen the rule and turn a reply the
+    host wrote into silence. Every producer that means to teach appends the lesson last.
     """
-    return isinstance(prompt, str) and SILENCE_INSTRUCTION in prompt
+    return isinstance(prompt, str) and prompt.rstrip().endswith(SILENCE_INSTRUCTION)
 
 
 def reads_loose_silence(origin: Origin | None, *, taught: bool) -> bool:

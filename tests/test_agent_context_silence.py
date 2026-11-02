@@ -120,3 +120,27 @@ def test_the_instruction_teaches_the_bracketed_marker():
 )
 def test_a_prompt_teaches_the_marker_only_by_carrying_the_instruction(prompt, taught):
     assert teaches_silence(prompt) is taught
+
+
+def test_the_instruction_teaches_only_at_the_end_of_the_prompt():
+    """A relayed sub-agent result is an untaught SUBAGENT turn whose prompt embeds that result
+    (``wrap_untrusted``) and then the host's own instructions. Only a producer that appends the
+    lesson last teaches it; a result that quotes the lesson somewhere in the middle must not."""
+    assert teaches_silence(f"[Scheduled Task] Timer finished.\n\n{SILENCE_INSTRUCTION}")
+    assert teaches_silence(f"[Scheduled Task] Timer finished.\n\n{SILENCE_INSTRUCTION}\n\n")
+    assert not teaches_silence(f"[Scheduled Task] Timer finished.\n\n{SILENCE_INSTRUCTION}\n\nDo the task.")
+
+
+def test_a_quoted_instruction_inside_an_untrusted_fence_does_not_teach():
+    """The actual attack shape: a sub-agent result that contains the lesson, fenced as untrusted,
+    followed by the host's instructions. Teaching it would let untrusted input turn an answer
+    that should be delivered into silence."""
+    from raven.security.trust import wrap_untrusted
+
+    prompt = (
+        "[Subagent 'reporter' returned]\n\n"
+        f"{wrap_untrusted(f'Nothing new. {SILENCE_INSTRUCTION}', source='subagent')}\n\n"
+        "Summarize this naturally for the user."
+    )
+    assert SILENCE_INSTRUCTION in prompt, "the literal is present, inside the fence"
+    assert not teaches_silence(prompt)

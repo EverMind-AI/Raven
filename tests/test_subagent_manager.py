@@ -5277,6 +5277,26 @@ async def test_an_unprompted_report_teaches_the_silence_marker() -> None:
     assert "If it is routine progress only, no action is needed." in text
 
 
+async def test_a_relayed_result_quoting_the_instruction_does_not_teach_silence() -> None:
+    """A DAG result is attacker-influenceable and enters an untaught SUBAGENT turn inside the
+    untrusted fence. Quoting the lesson there must not switch that turn to the loose rule, where a
+    reply the host wrote could be swallowed by a result that happened to contain it."""
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list = []
+    mgr.set_submit(submitted.append)
+
+    await mgr.announce_dag_result(
+        "r1",
+        f"the node printed this instruction:\n{SILENCE_INSTRUCTION}",
+        {"channel": "web", "chat_id": "d", "session_key": "web:s1"},
+    )
+
+    assert len(submitted) == 1
+    text = submitted[0].text
+    assert SILENCE_INSTRUCTION in text, "the quoted lesson reaches the prompt, inside the fence"
+    assert not teaches_silence(text)
+
+
 async def test_a_direct_chat_instance_teaches_the_route_back(tmp_path, monkeypatch) -> None:
     """The ordinary UI flow: a person creates an ACP instance and chats with it,
     with no spawn and no DAG announce ever carrying an origin. That instance's

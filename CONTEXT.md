@@ -815,12 +815,13 @@ _Avoid_: "shadow git" as the term — Checkpoint is the per-turn snapshot it pro
 What a model answers with to say a turn has nothing to report: `[SILENT]`, `SILENT`, `NO_REPLY`
 or `NO REPLY` (`SILENCE_MARKERS`); `SILENCE_INSTRUCTION` is the two sentences that teach the
 bracketed form. The turn's `Origin`, and whether its prompt taught the marker, pick the rule, in one
-place (`is_silence`). A turn whose prompt does not carry `SILENCE_INSTRUCTION` (`teaches_silence`)
-honours only `[SILENT]` itself with nothing but whitespace around it: a `USER` turn, one with no
-origin, and a proactive one that was never taught -- a heartbeat task, a sub-agent's relayed result,
-a sentinel notice. There a one-word answer such as `Silent.` or `No reply.`, or a reply ending on
-one, is the model's answer, and is delivered. A turn from a proactive origin (`PROACTIVE_ORIGINS`)
-whose prompt carries it -- the cron reminder and a sub-agent's unprompted report --
+place (`is_silence`). A turn whose prompt does not end with `SILENCE_INSTRUCTION`
+(`teaches_silence`) honours only `[SILENT]` itself with nothing but whitespace around it: a `USER`
+turn, one with no origin, and a proactive one that was never taught -- a heartbeat task, a
+sub-agent's relayed result, a sentinel notice. There a one-word answer such as `Silent.` or
+`No reply.`, or a reply ending on one, is the model's answer, and is delivered. A turn from a
+proactive origin (`PROACTIVE_ORIGINS`) whose prompt ends with it -- the cron reminder, a cron wake,
+and a sub-agent's unprompted report --
 reads the whole set by two rules (`reads_loose_silence`): the strict one (`is_exact_silence`), a reply that is exactly a
 marker, with case, edge whitespace and stray edge punctuation forgiven up to `SILENCE_MAX_CHARS`;
 and the loose one (`is_loose_silence`): nobody is waiting on such a turn and models wrap the marker
