@@ -97,6 +97,7 @@ class ContextAssembler(ContextEngine):
         get_tool_notices: Callable[[], list[str]] | None = None,
         scent: "ScentMenu | None" = None,
         *,
+        get_session_notices: Callable[[str], list[str]] | None = None,
         owns_compaction: bool = True,
         mints_source_refs: bool = False,
         turn_scratch: bool = True,
@@ -114,6 +115,7 @@ class ContextAssembler(ContextEngine):
         self._phase_b = [b for b in self._builders if b.needs_prefix]
         self.get_tool_definitions = get_tool_definitions
         self.get_tool_notices = get_tool_notices
+        self.get_session_notices = get_session_notices
         self._turn_scratch = turn_scratch
         self._now_fn = now_fn or datetime.now
 
@@ -328,6 +330,16 @@ class ContextAssembler(ContextEngine):
             if setter is not None:
                 setter(tokens)
 
+    def _session_notices(self, session_key: str) -> list[str] | None:
+        """This conversation's own notices; a reader that fails costs them, never the turn."""
+        if self.get_session_notices is None:
+            return None
+        try:
+            return self.get_session_notices(session_key)
+        except Exception:
+            logger.opt(exception=True).error("Notices for {} failed; assembling without them", session_key)
+            return None
+
     def _build_user(self, ctx: AssemblyContext) -> dict[str, Any]:
         """The single structural user message: runtime context + content.
 
@@ -345,7 +357,12 @@ class ContextAssembler(ContextEngine):
         """
         notices = self.get_tool_notices() if self.get_tool_notices is not None else None
         runtime_ctx = render.build_runtime_context(
-            self._now_fn, ctx.channel, ctx.chat_id, surface=ctx.surface, tool_notices=notices
+            self._now_fn,
+            ctx.channel,
+            ctx.chat_id,
+            surface=ctx.surface,
+            tool_notices=notices,
+            session_notices=self._session_notices(ctx.session_key),
         )
         if ctx.scent_text:
             scent = re.sub(r"\n{2,}", "\n", ctx.scent_text.strip())

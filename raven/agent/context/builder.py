@@ -33,9 +33,11 @@ class ContextBuilder:
         start_watcher: bool = True,
         blocklist_reader: Callable[[], frozenset[str]] | None = None,
         has_memory_backend: bool = False,
+        task_board: bool = False,
     ):
         self.workspace = workspace
         self._has_memory_backend = has_memory_backend
+        self._task_board = task_board
         self.memory = MemoryStore(workspace)
         self.skills = LocalSkillCatalog(
             workspace,
@@ -178,11 +180,16 @@ Skills with available="false" need dependencies installed first - you can try in
         Delegates to the request path's renderer so the estimation prompt
         (this class) and the real per-turn prompt can never drift apart.
         Imported lazily: ``context_engine`` imports this module back via
-        its factory, so a module-level import would be circular.
+        its factory, so a module-level import would be circular. Knowing no
+        channel, the estimate reads the board the way the served page does.
         """
         from raven.context_engine.segments import render
 
-        return render.identity_text(self.workspace, has_memory_backend=self._has_memory_backend)
+        return render.identity_text(
+            self.workspace,
+            has_memory_backend=self._has_memory_backend,
+            board_shown=render.board_on_page(self._task_board, render.PAGE_CHANNEL, None),
+        )
 
     def _build_runtime_context(self, channel: str | None, chat_id: str | None) -> str:
         """Build untrusted runtime metadata block for injection before the user message."""

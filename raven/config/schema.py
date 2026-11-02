@@ -179,6 +179,16 @@ class CompactionConfig(Base):
     preserve_recent_tokens: int | None = None
 
 
+class TaskBoardConfig(Base):
+    """The host's Task Board: one extra call after every turn that keeps it.
+
+    The switch is all there is to set: the call runs at the model and effort the
+    turn's own last call ran at, so the main model's settings govern it.
+    """
+
+    enabled: bool = True
+
+
 class AgentDefaults(Base):
     """Default agent configuration."""
 
@@ -204,6 +214,7 @@ class AgentDefaults(Base):
     context_window_tokens: int | None = None
     # In-turn transcript compaction knobs; factory-off (see CompactionConfig).
     compaction: CompactionConfig = Field(default_factory=CompactionConfig)
+    task_board: TaskBoardConfig = Field(default_factory=TaskBoardConfig)
     temperature: float = 0.1
     # Per-call wall-clock cap (seconds) for every LLM request (main loop and
     # sub-agents). Bounds a stalled backend that trickles bytes without ever

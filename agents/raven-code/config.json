@@ -19,6 +19,9 @@
       "llmCallTimeout": 1800,
       "compaction": {
         "enabled": true
+      },
+      "taskBoard": {
+        "enabled": false
       }
     }
   },

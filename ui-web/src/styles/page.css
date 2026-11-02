@@ -953,6 +953,14 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    quiet one: the list reads as a list of names, with the icons as marks against
    them rather than as a second column of equal weight. */
 .navi svg { width: 16px; height: 16px; }
+/* How many Task Groups wait on the owner, at the row's far end: the one count
+   in the strip, so it takes the accent rather than the row's quiet ink. */
+.chrome-nav-badge {
+  margin-left: auto; min-width: 18px; padding: 0 6px; border-radius: 999px;
+  background: var(--amber); color: var(--ink-on-accent);
+  font-size: 11px; font-weight: 600; line-height: 17px; text-align: center;
+  font-variant-numeric: tabular-nums;
+}
 .navi:hover, .sess:hover { background: var(--rail-hover); color: var(--rail-ink-on); }
 /* Selected and hovered are the same move at two depths -- one flat step of
    ground, --hover then --selected -- and the weight of the label carries the
@@ -6316,6 +6324,10 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    the same 36px gutters `.dock` gives it, so the grid's edges line up with the
    input box the reader just left rather than sitting inside a narrower one. */
 #extAgentsPage .wrap, #connectionsPage .wrap { max-width: calc(var(--col) + 72px); padding-left: 36px; padding-right: 36px; }
+/* The task board is a workspace too: its columns are the content, and the
+   reading column's cap left a wide window's sides empty while they squeezed
+   into the middle. */
+#tasksBoardPage .wrap { max-width: none; }
 #kbPage .wrap {
   max-width: none; height: 100%; min-height: 0;
   display: flex; flex-direction: column; padding: 18px 22px 22px;

@@ -933,3 +933,661 @@
 .tkless:hover { color: var(--text); }
 .tkless:focus-visible { outline: 1.5px solid var(--amber); outline-offset: 1px; }
 .tkless svg { transform: rotate(180deg); }
+
+/* ── the task board (BoardList.tsx) ───────────────────────────────────────
+   One card per Task Group on a quiet ground -- the Task Board page's own
+   language, so a group reads the same in both places. The card's head is the
+   button that opens its thread, and the thread opens inside the card. */
+/* Its own list, not the flat list's `.salist.tasks`, which packs rows tight:
+   the cards need room between them. */
+.tkboard { display: flex; flex-direction: column; gap: 8px; padding: 10px; background: var(--surface); min-height: 100%; }
+.tkgcard {
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: var(--paper);
+  box-shadow: 0 1px 2px var(--ring-2);
+}
+.tkgcard:hover { border-color: var(--line); }
+/* The ring the page's keyboard focus draws belongs on the card, not on the
+   head inside it, where it would cut the card in two. */
+.tkgroup:focus-visible { outline: none; }
+.tkgcard:has(> .tkgroup:focus-visible) { box-shadow: 0 0 0 2px var(--amber-dp); }
+.tkgroup {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: 11px 12px 10px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tkghead { display: flex; align-items: center; gap: 8px; }
+.tkgmeta { margin-left: auto; flex: none; font-size: 11px; color: var(--faint); white-space: nowrap; }
+.tkgroup .nm { margin-top: 7px; font-size: 14px; font-weight: 600; line-height: 1.4; }
+.tkgroup.tkdone .nm { color: var(--muted); font-weight: 500; }
+.tkgroup .st {
+  display: -webkit-box;
+  margin-top: 2px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+/* While a group needs the reader: the questions its latest event asked, framed
+   under the card's head, then Ignore and Answer -- Answer in the group's amber. */
+.tkask { margin: -2px 12px 10px; }
+.tkasklist { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; counter-reset: tkq; }
+/* One box per question, its number drawn from the list, its own Ignore at the right. */
+.tkq {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 8px 7px 10px;
+  border: 1px solid color-mix(in oklab, var(--amber) 45%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--amber) 6%, var(--paper));
+  counter-increment: tkq;
+}
+.tkqtext { flex: 1; min-width: 0; color: var(--text); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.tkqtext::before { content: counter(tkq) ". "; color: var(--muted); }
+.tkqignore {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tkqignore:hover { border-color: var(--faint); color: var(--text); }
+.tkaskacts { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+.tkaskbtn {
+  padding: 3px 12px;
+  white-space: nowrap;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.tkaskbtn:hover { border-color: var(--faint); }
+.tkaskbtn[data-kind="answer"] { border-color: var(--amber); background: var(--amber); color: var(--ink-on-accent); }
+.tkaskbtn[data-kind="answer"]:hover { border-color: var(--amber-dp); background: var(--amber-dp); }
+/* The folded card's foot, under the head and outside it: the counters, and
+   Move on at the right. */
+.tkgfoot { display: flex; align-items: center; gap: 8px; margin: -2px 12px 10px; font-size: 11px; color: var(--faint); }
+.tkgfoot .tkmove { margin-left: auto; }
+/* Move on: a quiet button whose arrow says the next message goes on with the
+   group -- in a folded card's foot, in an open thread's last row, and at the
+   end of a Task Board page card or row. */
+.tkmove {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  padding: 1px 7px 1px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--paper);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 18px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tkmove:hover { border-color: var(--faint); color: var(--text); }
+/* The Move on bar, at the top of the composer card: what the next message
+   moves on, under a quiet rule -- the title with its id, then the summary, one
+   line each -- and a cross that puts it away. */
+.tkmoveon {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 10px 2px;
+  padding: 6px 4px 6px 10px;
+  border-left: 2px solid var(--faint);
+  border-radius: 0 8px 8px 0;
+  background: var(--raised);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.tkmoveonbody { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.tkmoveonhead { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.tkmoveonlab { flex: none; color: var(--faint); }
+.tkmoveontitle { min-width: 0; overflow: hidden; color: var(--text); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.tkmoveonid { flex: none; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+.tkmoveonsum { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tkmoveonx {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+}
+.tkmoveonx:hover { background: var(--line-soft); color: var(--text); }
+.tkgsep { width: 1px; height: 11px; background: var(--line); }
+
+/* A group's type in words on a tinted pill, the Task Board page's four and
+   its colours: amber needs the owner, a turning sky ring still runs, moss is
+   idle, and done is the quiet grey. */
+.tkpill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.tkpilldot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.tkpill[data-tone="needs_you"] { background: color-mix(in oklab, var(--amber) 14%, var(--paper)); color: var(--amber); }
+.tkpill[data-tone="running"] { background: color-mix(in oklab, var(--sky) 12%, var(--paper)); color: var(--sky); }
+.tkpill[data-tone="idle"] { background: color-mix(in oklab, var(--moss) 12%, var(--paper)); color: var(--moss); }
+.tkpillring {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  box-sizing: border-box;
+  border: 1.6px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: tkrunspin 1.1s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) { .tkpillring { animation: none; } }
+
+/* The thread, under a hairline inside the card: one rail, a mark per event --
+   a moss tick when done, a clay "!" when a Task failed, a turning ring while
+   one still runs. */
+.tkthread { display: flex; flex-direction: column; margin: 0 12px; padding: 10px 0; border-top: 1px solid var(--line-soft); }
+.tksteps { list-style: none; margin: 0; padding: 0; }
+.tkstep { position: relative; padding: 0 0 12px 22px; }
+.tkstep:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  left: 6.25px;
+  top: 19px;
+  bottom: 1px;
+  width: 1.5px;
+  background: var(--line);
+}
+/* The event its group waits on keeps the rail going under its mark, in amber,
+   down beside its summary: every vertical line of a thread stands in this one
+   column. */
+.tkstep[data-asks]::after {
+  content: '';
+  position: absolute;
+  left: 6.25px;
+  top: 19px;
+  bottom: 1px;
+  width: 1.5px;
+  background: var(--amber);
+}
+.tkmark {
+  position: absolute;
+  left: 0;
+  top: 2px;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  color: var(--ink-on-accent);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+.tkstep[data-st="ok"] .tkmark { background: var(--moss); }
+.tkstep[data-st="error"] .tkmark { background: var(--clay); }
+.tkstep[data-st="run"] .tkmark {
+  border: 1.8px solid var(--sky);
+  border-right-color: transparent;
+  animation: tkrunspin 1.1s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) { .tkstep[data-st="run"] .tkmark { animation: none; } }
+.tksr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.tksteptext {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+}
+.tksteptext:hover .tkstept { text-decoration: underline; text-underline-offset: 2px; }
+/* The summary of the event its group waits on: a tinted block under the
+   title, inside the same button, so it too takes the reader to the reply. Its
+   amber line is the rail beside it, not an edge of its own. A summary is
+   written for recall and runs long; five lines here, the rest in the reply.
+   The clamp sits on the inner text, not on the padded block, whose bottom
+   padding would otherwise show the top of a sixth line. */
+.tkstepsum {
+  display: block;
+  margin-top: 5px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--amber) 8%, var(--paper));
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.tkstepsum > span {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+}
+.tkstepmeta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 3px; font-size: 11px; color: var(--faint); }
+.tkstepmeta time { font-family: var(--mono); font-size: 10.5px; }
+/* A Task the event started: a quiet tag whose kind is set apart, which opens
+   the Task's pane. */
+.tkchip {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 0 6px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tkchip:hover { border-color: var(--line); color: var(--text); }
+.tkchipk { font-family: var(--mono); font-size: 10.5px; color: var(--sky); }
+.tkchip[data-st="running"] .tkchipk { color: var(--moss); }
+.tkchip[data-gone] { border-style: dashed; color: var(--faint); cursor: default; }
+.tkchip[data-gone] .tkchipk { color: var(--faint); }
+/* The thread's last row: Mark completed on its own at the right, or at the
+   left with Ignore and Answer beside the questions of a group that waits.
+   Too narrow for one line, the pair wraps above it -- wrap-reverse -- so it
+   stays right under the questions and Mark completed closes the card. */
+.tkthreadacts {
+  display: flex;
+  flex-wrap: wrap-reverse;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+.tkthreadacts .tkgroupact:not(:only-child) { margin-right: auto; }
+.tkaskpair { display: inline-flex; gap: 6px; }
+.tkthread .tkasklist { margin-bottom: 8px; }
+.tkgroupact {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  white-space: nowrap;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.tkgroupact:hover { border-color: var(--faint); }
+
+/* The two folds: the Tasks no step places, at the top, and the finished
+   groups, at the bottom -- quiet rows whose arrow turns as they open. */
+.tkunassigned,
+.tkdonefold {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.tkunassigned:hover,
+.tkdonefold:hover { color: var(--text); }
+.tkunassigned svg,
+.tkdonefold svg { flex: none; transition: transform .15s; }
+.tkunassigned[aria-expanded="true"] svg,
+.tkdonefold[aria-expanded="true"] svg { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .tkunassigned svg, .tkdonefold svg { transition: none; } }
+
+/* The Task Board page's board: a column per category, a card per Task Group.
+   The board is its own size container because the rail beside the page can
+   be dragged wider, so the window's width says little about the board's. Four
+   columns pair up before they stack; three stack at once. */
+.tkbboard {
+  container-type: inline-size;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 14px;
+}
+.tkbcol {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 10px;
+  border-radius: 12px;
+  background: var(--raised);
+}
+@container (max-width: 920px) {
+  .tkbboard[data-cols="4"] > .tkbcol { flex-basis: calc(50% - 7px); }
+}
+@container (max-width: 680px) {
+  .tkbboard[data-cols] > .tkbcol { flex-basis: 100%; }
+}
+.tkbhead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 4px 6px 10px;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: .8px;
+  color: var(--muted);
+}
+.tkbhead svg { flex: none; }
+.tkbcol[data-cat="needs_you"] .tkbhead svg { color: var(--amber); }
+.tkbcol[data-cat="running"] .tkbhead svg { color: var(--sky); }
+.tkbcol[data-cat="idle"] .tkbhead svg { color: var(--moss); }
+.tkbcol[data-cat="completed"] .tkbhead svg { color: var(--faint); }
+.tkbname { font-weight: 600; }
+.tkbn {
+  margin-left: auto;
+  padding: 0 7px;
+  border-radius: 6px;
+  background: var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.tkbempty { margin: 2px 6px 6px; font-size: 12px; color: var(--faint); }
+/* A card is a frame: its face is the button that unfolds it, and the thread
+   opens under the face, inside the frame -- the sidebar card's shape. */
+.tkbcard {
+  margin: 0 0 9px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--paper);
+  box-shadow: 0 1px 2px var(--ring-2);
+}
+.tkbcard:last-child { margin-bottom: 0; }
+.tkbcard:hover { border-color: var(--line); }
+.tkbface {
+  display: block;
+  width: 100%;
+  padding: 12px 13px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+/* The focus ring goes round the frame, not round the face inside it, where it
+   would cut an unfolded card in two. A row's is drawn inside it: the list
+   clips what spills past its rounded edge. */
+.tkbface:focus-visible { outline: none; }
+.tkbcard:has(> .tkbface:focus-visible) { box-shadow: 0 0 0 2px var(--amber-dp); }
+.tkbrow:has(> .tkbface:focus-visible) { box-shadow: inset 0 0 0 2px var(--amber-dp); }
+.tkbcard > .tkthread { margin: 0 13px; }
+/* The face stops at the summary; its foot is a row of its own under it, so
+   Move on is a press apart from the one that unfolds the card. */
+.tkbcard > .tkbface { padding-bottom: 0; }
+.tkbcard > .tkbfoot { padding: 0 13px 12px; }
+.tkbcnt .tkmove { margin-left: -2px; }
+.tkbconv {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 6px;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.tkbconv svg { flex: none; }
+.tkbconvt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tkbtitle { display: block; margin-bottom: 4px; font-size: 14px; font-weight: 600; }
+.tkbsum {
+  display: -webkit-box;
+  margin-bottom: 10px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+/* Status and counters share a line while they fit; in a narrow column the
+   counters drop beneath, whole, rather than the status breaking mid-phrase. */
+.tkbfoot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.tkbst { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.tkbcnt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  flex: none;
+  font-size: 12px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+.tkbsep { width: 1px; height: 14px; background: var(--line); }
+/* The type marks, the sidebar pill's colours: amber needs the owner, moss is
+   idle, grey is done, and a run still going turns -- the ring the sidebar's
+   running event wears. */
+.tkbdot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.tkbdot[data-cat="needs_you"] { background: var(--amber); }
+.tkbdot[data-cat="idle"] { background: var(--moss); }
+.tkbring[data-st="run"] {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 1.8px solid var(--sky);
+  border-right-color: transparent;
+  animation: tkrunspin 1.1s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) { .tkbring[data-st="run"] { animation: none; } }
+
+/* The list: chips that pick a category, then a section per category -- the
+   board's order -- with a row per Task Group; Completed closes it, folded. */
+.tkbchips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.tkbchip {
+  padding: 4px 11px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.tkbchip:hover { color: var(--text); }
+.tkbchip[aria-pressed="true"] { background: var(--raised); color: var(--text); font-weight: 500; }
+.tkbchipn { margin-left: 4px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.tkbsec { margin-bottom: 18px; }
+.tkbsechead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px 2px;
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.tkbsechead .tkbname { color: var(--text); }
+.tkbsecn { font-variant-numeric: tabular-nums; }
+.tkbrows { border: 1px solid var(--line); border-radius: 10px; background: var(--paper); overflow: hidden; }
+.tkbrow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  border-top: 1px solid var(--line-soft);
+}
+.tkbrow:first-child { border-top: 0; }
+.tkbrow > .tkmove { margin: 10px 14px 0 0; }
+.tkbrow > .tkbface {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 11px 14px;
+  border-radius: 0;
+}
+.tkbrow > .tkbface:hover { background: var(--surface); }
+/* Under the title, past the mark's column, across the Move on column too. */
+.tkbrow > .tkthread { grid-column: 1 / -1; margin: 0 14px 0 42px; }
+.tkbmark { display: flex; justify-content: center; flex: none; width: 16px; padding-top: 4px; }
+.tkbbody { flex: 1; min-width: 0; }
+.tkbline { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.tkbrow .tkbtitle { flex: none; max-width: 70%; margin: 0; overflow: hidden; font-size: 13.5px; text-overflow: ellipsis; white-space: nowrap; }
+.tkbline .tkbconvt { font-size: 11.5px; color: var(--faint); }
+.tkbsum1 {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  font-size: 12.5px;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tkbmeta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: none;
+  padding-top: 2px;
+  font-size: 12px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+.tkbmeta .tkbcnt { margin-left: 0; }
+.tkbfold {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 4px;
+  border: 0;
+  border-top: 1px dashed var(--line);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.tkbfold:hover { color: var(--text); }
+.tkbfold svg { flex: none; transform: rotate(-90deg); transition: transform .15s; }
+.tkbfold[aria-expanded="true"] { margin-bottom: 8px; }
+.tkbfold[aria-expanded="true"] svg { transform: none; }
+@media (prefers-reduced-motion: reduce) { .tkbfold svg { transition: none; } }
+
+/* The page around both views, and its toolbar: the title, the conversation
+   filter, the completed switch at the right, and the Board / List segments. */
+.tkbpage { display: flex; flex-direction: column; gap: 18px; }
+.tkbbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.tkbh { margin: 0; font-size: 18px; font-weight: 600; color: var(--text); }
+.tkbconvsel {
+  max-width: 220px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--paper);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+}
+.tkbswitch {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.tkbswitch:hover { color: var(--text); }
+/* The house switch (styles/page.css's .swi) at the toolbar's size. */
+.tkbknob {
+  position: relative;
+  flex: none;
+  width: 28px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  background: var(--raised);
+  transition: background .16s;
+}
+.tkbknob::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 12px;
+  height: 12px;
+  border-radius: 99px;
+  background: var(--paper);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
+  transition: transform .16s;
+}
+.tkbswitch[aria-checked="true"] .tkbknob { background: var(--amber); border-color: var(--amber); }
+.tkbswitch[aria-checked="true"] .tkbknob::after { transform: translateX(12px); }
+@media (prefers-reduced-motion: reduce) { .tkbknob, .tkbknob::after { transition: none; } }
+.tkbseg { display: flex; padding: 3px; border-radius: 9px; background: var(--raised); }
+.tkbseg button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.tkbseg button[aria-pressed="true"] { background: var(--paper); color: var(--text); box-shadow: 0 1px 2px var(--ring-2); }
+.tkberr { margin: 0; font-size: 12.5px; color: var(--clay); }

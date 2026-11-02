@@ -26,6 +26,14 @@ const openKey = (): string => sessionCurrent() || ''
 export const tasksSource: TasksSource = {
   list: (sessionKey: string) =>
     gateway().call('tasks.list', { session_key: sessionKey }).then((r) => r.tasks || []),
+  board: (sessionKey: string) => gateway().call('tasks.board', { session_key: sessionKey }),
+  boards: (includeCompleted: boolean) => gateway().call('tasks.boards', { include_completed: includeCompleted }),
+  setGroupStatus: (sessionKey: string, groupId: string, status: 'completed' | 'idle') =>
+    gateway().call('tasks.set_group_status', { session_key: sessionKey, group_id: groupId, status }),
+  ignoreQuestion: (sessionKey: string, groupId: string, stepId: string, question: string) =>
+    gateway().call('tasks.ignore_question', { session_key: sessionKey, group_id: groupId, step_id: stepId, question }),
+  moveOn: (sessionKey: string, groupId: string) =>
+    gateway().call('tasks.move_on', { session_key: sessionKey, group_id: groupId }),
   one: (kind: TaskKind, id: string) =>
     gateway().call('tasks.list', { session_key: openKey(), kind, id })
       .then((r) => (r.tasks && r.tasks[0]) || null),

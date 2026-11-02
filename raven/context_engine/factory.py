@@ -85,6 +85,7 @@ def build_context_engine(
     get_tool_definitions: Callable[[], list[dict]],
     list_subagents: "Callable[[], list[AgentMeta]] | None" = None,
     get_tool_notices: Callable[[], list[str]] | None = None,
+    get_session_notices: Callable[[str], list[str]] | None = None,
     now_fn: Callable[[], datetime] | None = None,
     backend: "MemoryBackend | None" = None,
     memory_config: "MemoryConfig | None" = None,
@@ -93,6 +94,7 @@ def build_context_engine(
     skill_hub_client: "SkillHubClient | None" = None,
     provider_pool: "ProviderPool | None" = None,
     blocklist_reader: "Callable[[], frozenset[str]] | None" = None,
+    task_board: bool = False,
 ) -> ContextEngine:
     """Build the one :class:`ContextAssembler` from a flat SegmentBuilder list.
 
@@ -154,6 +156,7 @@ def build_context_engine(
             list_subagents=list_subagents,
             get_tool_definitions=get_tool_definitions,
             has_memory_backend=backend is not None,
+            task_board=task_board,
         ),
         BootstrapSegmentBuilder(workspace),
         MemorySegmentBuilder(
@@ -243,6 +246,7 @@ def build_context_engine(
         get_tool_definitions,
         now_fn=now_fn,
         get_tool_notices=get_tool_notices,
+        get_session_notices=get_session_notices,
         scent=scent,
         owns_compaction=strategy.owns_compaction,
         mints_source_refs=strategy.mints_source_refs and not history_dropped,

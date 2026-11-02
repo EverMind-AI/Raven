@@ -315,3 +315,40 @@ describe('an imported conversation', () => {
     expect(h.sends()).toEqual([])
   })
 })
+
+/* A message sent with a Move on above the composer: the board is told which
+   matter it moves on before the message goes, so the turn it opens is told too,
+   and it waits for a turn of its own rather than joining one already running,
+   which was told about something else. */
+describe('a message that moves a task on', () => {
+  it('goes once the board is told, and is sent as it always was', async () => {
+    const h = await harness()
+    h.runtime.lendBeforeSend({
+      pending: (key) => key === 's1',
+      /* Told only after a round trip, so a send that did not wait for it
+         would land first. */
+      spend: async (key) => { await Promise.resolve(); h.asked.push(['spend', key]) },
+    })
+
+    h.runtime.send('the next step')
+    await h.tick()
+    await h.tick()
+
+    expect(h.asked.filter(([m]) => m === 'spend' || m === 'turn.send').map(([m]) => m)).toEqual(['spend', 'turn.send'])
+    expect(h.sends()[0]).toEqual({ session_key: 's1', content: 'the next step' })
+    h.runtime.lendBeforeSend(null)
+  })
+
+  it('waits for a turn of its own instead of joining the one running', async () => {
+    const h = await harness()
+    h.runtime.lendBeforeSend({ pending: () => true, spend: async () => {} })
+    turn.dispatch({ type: 'stream', cancellable: true })
+
+    h.runtime.send('the next step')
+    await h.tick()
+
+    expect(h.sends()).toEqual([])
+    expect(h.queue).toEqual(['the next step'])
+    h.runtime.lendBeforeSend(null)
+  })
+})

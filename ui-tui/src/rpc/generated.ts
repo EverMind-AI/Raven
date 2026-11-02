@@ -86,7 +86,15 @@ export type TurnEvent =
   | CronMissedEvent
   | MediaEvent
   | SessionTitledEvent
-  | SessionNamingEndedEvent;
+  | SessionNamingEndedEvent
+  | TasksBoardUpdatedEvent;
+/**
+ * Where a Task Group stands. needs_you: the reply asks the user to answer, confirm or decide about it, an error only the user can resolve included, even while a run it started still works. running: a run it started is still working. idle: nothing is in flight and nothing is asked. completed: finished, or dropped by the user -- nothing further moves it.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TaskGroupStatus".
+ */
+export type TaskGroupStatus = 'needs_you' | 'running' | 'idle' | 'completed';
 /**
  * Which delegation path made a task: a spawn call, or a run_subagent_dag run (a playbook run is one).
  *
@@ -2324,6 +2332,94 @@ export interface MediaEvent {
   };
 }
 /**
+ * A conversation's Task Board after a write -- the post-turn update or the reader's own action. Not replayed: a client that reconnects reads tasks.board.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksBoardUpdatedEvent".
+ */
+export interface TasksBoardUpdatedEvent {
+  type: 'tasks.board_updated';
+  payload: TasksBoardUpdatedPayload;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksBoardUpdatedPayload".
+ */
+export interface TasksBoardUpdatedPayload {
+  session_key: string;
+  board: TaskBoard;
+  /**
+   * Each run that continued a placed run without a tool call of its own (a replan's successor, a later stint round), mapped to the placed run it descends from.
+   */
+  lineage: {
+    [k: string]: string;
+  };
+}
+/**
+ * One host conversation's Task Board: its Task Groups and any dispatch still waiting for a place.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TaskBoard".
+ */
+export interface TaskBoard {
+  version: number;
+  groups: TaskGroup[];
+  unassigned: PendingDispatch[];
+}
+/**
+ * One matter a conversation is pushing, spanning any number of turns, with its Progress Steps in time order. summary says where the matter stands; any turn may rewrite it.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TaskGroup".
+ */
+export interface TaskGroup {
+  id: string;
+  title: string;
+  summary: string;
+  status: TaskGroupStatus;
+  created_at: number;
+  updated_at: number;
+  steps: ProgressStep[];
+}
+/**
+ * One turn's advance on one Task Group: a title, and a summary of what moved and what is next or awaited -- on a step that left its group needs_you, opening with what the user is asked. questions: each question that step's reply asked the user about the matter, empty on every other step. turn_at is the timestamp the session log stores on the message that opened the turn.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ProgressStep".
+ */
+export interface ProgressStep {
+  id: string;
+  turn_at: string;
+  turn_id?: string | null;
+  title: string;
+  summary: string;
+  questions: string[];
+  tasks: TaskLinkRef[];
+}
+/**
+ * A Task a Progress Step started, in the address tasks.list rows use (spawn: node id, dag: run id), with the summary the dispatching call gave.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TaskLinkRef".
+ */
+export interface TaskLinkRef {
+  kind: TaskKind;
+  id: string;
+  summary: string;
+}
+/**
+ * A dispatch whose turn's board update never landed; the next update has to place it.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PendingDispatch".
+ */
+export interface PendingDispatch {
+  handle: string;
+  summary: string;
+  turn_at: string;
+  turn_id?: string | null;
+}
+/**
  * One base as the list view needs it.
  *
  * ``embedding_model`` and ``dimensions`` are the base's own, recorded when it
@@ -3378,6 +3474,26 @@ export interface MachineRow {
    * The agent entries on the machine that are switched off, by name: they still hold the machine for the add, so the card says so instead of counting them nowhere.
    */
   agents_off_here: string[];
+}
+/**
+ * One Task Group on the Task Board page: where it came from, what it is, and what it needs. running_since_ms is set only on a running card: the earliest start among its running runs.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TaskBoardCard".
+ */
+export interface TaskBoardCard {
+  session_key: string;
+  session_title: string;
+  group_id: string;
+  title: string;
+  summary: string;
+  status: TaskGroupStatus;
+  created_at: number;
+  updated_at: number;
+  category: 'needs_you' | 'running' | 'idle' | 'completed';
+  running_since_ms?: number | null;
+  events: number;
+  sub_agents: number;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -7979,6 +8095,108 @@ export interface TasksListParams {
  */
 export interface TasksListResult {
   tasks: TaskRow[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksBoardParams".
+ */
+export interface TasksBoardParams {
+  /**
+   * Whose board to read.
+   */
+  session_key: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksBoardResult".
+ */
+export interface TasksBoardResult {
+  board: TaskBoard;
+  /**
+   * Each run that continued a placed run without a tool call of its own (a replan's successor, a later stint round), mapped to the placed run it descends from.
+   */
+  lineage: {
+    [k: string]: string;
+  };
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksBoardsParams".
+ */
+export interface TasksBoardsParams {
+  /**
+   * Also return the completed cards. The counts are returned either way.
+   */
+  include_completed?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksBoardsResult".
+ */
+export interface TasksBoardsResult {
+  cards: TaskBoardCard[];
+  completed_count: number;
+  needs_you_count: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksSetGroupStatusParams".
+ */
+export interface TasksSetGroupStatusParams {
+  session_key: string;
+  group_id: string;
+  status: 'completed' | 'idle';
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksSetGroupStatusResult".
+ */
+export interface TasksSetGroupStatusResult {
+  board: TaskBoard;
+  /**
+   * Each run that continued a placed run without a tool call of its own (a replan's successor, a later stint round), mapped to the placed run it descends from.
+   */
+  lineage: {
+    [k: string]: string;
+  };
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksIgnoreQuestionParams".
+ */
+export interface TasksIgnoreQuestionParams {
+  session_key: string;
+  group_id: string;
+  step_id: string;
+  question: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksIgnoreQuestionResult".
+ */
+export interface TasksIgnoreQuestionResult {
+  board: TaskBoard;
+  /**
+   * Each run that continued a placed run without a tool call of its own (a replan's successor, a later stint round), mapped to the placed run it descends from.
+   */
+  lineage: {
+    [k: string]: string;
+  };
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksMoveOnParams".
+ */
+export interface TasksMoveOnParams {
+  session_key: string;
+  group_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksMoveOnResult".
+ */
+export interface TasksMoveOnResult {
+  noted: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

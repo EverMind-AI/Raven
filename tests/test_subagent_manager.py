@@ -105,11 +105,12 @@ async def _settle(predicate, *, tries: int = 2000) -> None:
     raise AssertionError("condition never reached")
 
 
-def _make_manager(max_concurrent: int) -> SubagentManager:
+def _make_manager(max_concurrent: int, **over) -> SubagentManager:
     return SubagentManager(
         provider=_StubProvider(),
         workspace=Path("/tmp"),
         max_concurrent=max_concurrent,
+        **over,
     )
 
 
@@ -6529,3 +6530,19 @@ async def test_an_unprompted_report_carries_no_link_whatever_span_it_is_sent_fro
 
     (report,) = submitted
     assert report.dispatch_link is None
+
+
+async def test_a_dag_notice_on_the_page_leaves_open_decisions_to_the_board() -> None:
+    """With the Task Board on, a graph's notice into a conversation the served page draws
+    carries only the section rule; into any other channel it still carries both."""
+    from raven.context_engine.segments.render import reply_rules_note
+
+    mgr = _make_manager(max_concurrent=1, task_board=True)
+    submitted: list[object] = []
+    mgr.set_submit(submitted.append)
+
+    await mgr.announce_dag_result("r1", "done", {"channel": "tui", "chat_id": "d", "session_key": "tui:s1"})
+    await mgr.announce_dag_result("r2", "done", {"channel": "weixin", "chat_id": "d", "session_key": "weixin:s2"})
+
+    assert submitted[0].text.endswith(reply_rules_note(board_shown=True))
+    assert submitted[1].text.endswith(reply_rules_note())

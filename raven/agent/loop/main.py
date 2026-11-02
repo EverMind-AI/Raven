@@ -211,6 +211,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         skill_forge_router_config = engine.skill_forge_router_config
         memory_config = engine.memory_config
         compaction_config = engine.compaction_config
+        task_board_config = engine.task_board_config
         backend = engine.backend
         playbook_config = engine.playbook_config
         max_iterations = policy.max_iterations
@@ -221,7 +222,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         cron_service = host.cron_service
         channels_config = host.channels_config
         from raven.agent.hook import CompositeHook
-        from raven.config.schema import A2aConfig, AskUserToolConfig, CompactionConfig, ExecToolConfig
+        from raven.config.schema import A2aConfig, AskUserToolConfig, CompactionConfig, ExecToolConfig, TaskBoardConfig
         from raven.token_wise.registry import StrategyRegistry
 
         self.channels_config = channels_config
@@ -287,6 +288,12 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self.ask_user_config = ask_user_config or AskUserToolConfig()
         self.a2a_config = a2a_config or A2aConfig()
         self._compaction = compaction_config or CompactionConfig()
+        # Off unless the shell wires the config: the runtime passes
+        # `agents.defaults.taskBoard` (on by default there), while a loop built
+        # without it -- an embedding, a test -- makes no extra call per turn.
+        self._task_board_config = task_board_config or TaskBoardConfig(enabled=False)
+        # Set by `_register_orchestration_tools` on the host only; a sub-agent never keeps a board.
+        self.task_board = None
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
         # TokenWise strategies — empty registry acts as pure pass-through.
@@ -337,6 +344,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             now_fn=now_fn,
             blocklist_reader=lambda: skill_blocklist(self._live_config),
             has_memory_backend=backend is not None,
+            task_board=self._task_board_config.enabled,
         )
         self.sessions = session_manager or SessionManager(workspace)
         # Off switches with no config file behind them: an eval harness that
@@ -450,6 +458,8 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 # either missing or stale by the time a turn asks for it.
                 list_subagents=lambda: self.subagents.list_agents(),
                 get_tool_notices=self._mcp_tool_notices,
+                # Read at call time: the board is wired further down this constructor.
+                get_session_notices=lambda key: self.task_board.turn_notes(key) if self.task_board else [],
                 now_fn=now_fn,
                 # The factory uses these to assemble the unified engine's
                 # SkillForgeRouter + EverOS recall lane.
@@ -463,6 +473,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 # scent menu screen against the list on disk now, so a skill
                 # switched off -- or back on -- reaches the next turn.
                 blocklist_reader=lambda: skill_blocklist(self._live_config),
+                task_board=self._task_board_config.enabled,
             )
 
         # The four strategy roles this generation runs on. Assembled here
@@ -551,6 +562,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             retry_delays=tuple(self._recovery_limits.llm_error_retry_delays),
             retry_after_output=bool(self._recovery_limits.llm_retry_after_output),
             provider_pool=self._provider_pool,
+            task_board=self._task_board_config.enabled,
         )
         # Reads the live direct chats through a lambda for the reason the identity
         # segment does: the manager is rebuilt on a hot config apply.

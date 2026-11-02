@@ -15,7 +15,9 @@ Bodies stay where they are: a node's messages, output and rendered prompt are
 
 from __future__ import annotations
 
+import asyncio
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -26,7 +28,15 @@ from raven.agent.subagent.dag_reader import branch_fields, registry_outcome
 from raven.agent.subagent.dag_store import REGISTRY_FILENAME, RUNNING, UNRECORDED, node_live_key
 from raven.agent.subagent.history import dag_root, nodes_root, session_history_root, spawn_live_key
 from raven.agent.subagent.instances import get_registry
+from raven.agent.task_board.board import Board, UpdateRejectedError, board_to_dict
+from raven.agent.task_board.lineage import board_lineage
+from raven.agent.task_board.overview import Rows, Session
+from raven.agent.task_board.overview import answer as board_answer
+from raven.agent.task_board.overview import scan as scan_boards
+from raven.agent.task_board.store import load_board
 from raven.config.agent_names import canonical_agent_name
+from raven.config.loader import load_config
+from raven.rpc.errors import InvalidParamsError
 from raven.rpc.methods.instances import _graph_of
 from raven.rpc.methods.session import _safe_invoke_factory
 from raven.rpc.methods.subagent import (
@@ -38,6 +48,7 @@ from raven.rpc.methods.subagent import (
     _session_dir,
     _spawn_node_ids,
 )
+from raven.session.resolve import manager_for
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
@@ -212,7 +223,12 @@ def _live_spawn_handles(agent_loop_factory: "AgentLoopFactory | None", session_k
         return set()
 
 
-def _spawn_row(files: "_NodeFiles", agent_loop_factory: "AgentLoopFactory | None", session_key: str) -> dict[str, Any]:
+def _spawn_row(
+    files: "_NodeFiles",
+    agent_loop_factory: "AgentLoopFactory | None",
+    session_key: str,
+    live: set[tuple[str, str]] | None = None,
+) -> dict[str, Any]:
     meta = _read_meta(files)
     raw_status = str(meta.get("status") or "")
     error_present = files.path("error.md").is_file()
@@ -223,7 +239,9 @@ def _spawn_row(files: "_NodeFiles", agent_loop_factory: "AgentLoopFactory | None
         status = "failed" if error_present else ("completed" if has_output else "running")
     agent = str(meta.get("agent") or "")
     handle = str(meta.get("handle") or "")
-    if status == "running" and (agent, handle) not in _live_spawn_handles(agent_loop_factory, session_key):
+    if live is None:
+        live = _live_spawn_handles(agent_loop_factory, session_key)
+    if status == "running" and (agent, handle) not in live:
         status = "interrupted"
 
     # `.error.md` and `.out.md` are written by the same `finish`, never both --
@@ -275,13 +293,19 @@ def _spawn_row(files: "_NodeFiles", agent_loop_factory: "AgentLoopFactory | None
 
 
 def _spawn_rows(
-    session_dir: Path, agent_loop_factory: "AgentLoopFactory | None", session_key: str, only_id: str | None
+    session_dir: Path,
+    agent_loop_factory: "AgentLoopFactory | None",
+    session_key: str,
+    only_id: str | None,
+    *,
+    live: set[tuple[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
+    """One row per spawn; ``live`` stands in for asking the loop which are in flight (see ``_Running``)."""
     root = nodes_root(session_dir)
     ids = _spawn_node_ids(session_dir)
     if only_id is not None:
         ids = [nid for nid in ids if nid == only_id]
-    return [_spawn_row(_NodeFiles(root, nid), agent_loop_factory, session_key) for nid in ids]
+    return [_spawn_row(_NodeFiles(root, nid), agent_loop_factory, session_key, live) for nid in ids]
 
 
 def _dag_node_state(
@@ -465,7 +489,11 @@ def _dag_rows(
     session_key: str,
     agent_loop_factory: "AgentLoopFactory | None",
     only_id: str | None,
+    *,
+    live_runs: set[str] | None = None,
+    instance_rows: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
+    """One row per graph run; the two keywords stand in for reading the loop's own state (see ``_Running``)."""
     try:
         run_dirs = sorted(
             (p for p in dag_root(session_dir).iterdir() if p.is_dir()), key=lambda p: p.name, reverse=True
@@ -479,11 +507,13 @@ def _dag_rows(
 
     registry = _read_json(session_history_root(session_dir) / REGISTRY_FILENAME)
     registry_nodes = registry.get("nodes") if isinstance(registry.get("nodes"), dict) else {}
-    try:
-        instance_rows = get_registry().list_instances(session_key)
-    except Exception:  # noqa: BLE001 - the overlay is an improvement, not a dependency
-        instance_rows = []
-    live_runs = _live_dag_run_ids(agent_loop_factory)
+    if instance_rows is None:
+        try:
+            instance_rows = get_registry().list_instances(session_key)
+        except Exception:  # noqa: BLE001 - the overlay is an improvement, not a dependency
+            instance_rows = []
+    if live_runs is None:
+        live_runs = _live_dag_run_ids(agent_loop_factory)
     nodes_dir = nodes_root(session_dir)
 
     rows = (_dag_row(session_dir, run_dir, registry_nodes, instance_rows, nodes_dir, live_runs) for run_dir in run_dirs)
@@ -525,6 +555,157 @@ async def tasks_list(
     return {"tasks": tasks}
 
 
+def _board_answer(session_dir: Path, board: Board) -> dict[str, Any]:
+    return {"board": board_to_dict(board), "lineage": board_lineage(session_dir, board)}
+
+
+async def tasks_board(
+    params: dict[str, Any],
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict[str, Any]:
+    """One conversation's Task Board and the lineage of the runs it places.
+
+    Read off disk, so a page reloaded with no agent loop up still draws it; an
+    absent or unknown session is an empty board, as ``tasks.list`` answers one.
+    """
+    session_key = str(params.get("session_key") or "")
+    empty = {"board": board_to_dict(Board([], [])), "lineage": {}}
+    if not session_key:
+        return empty
+    try:
+        session_dir = _session_dir(session_key, agent_loop_factory)
+    except OSError:
+        return empty
+    return _board_answer(session_dir, load_board(session_dir))
+
+
+@dataclass(frozen=True)
+class _Running:
+    """What this process is running, read on the event loop for a worker thread to build rows with.
+
+    The task index and the instance registry belong to the loop -- the registry's
+    writes are serialised by an ``asyncio.Lock``, and a worker reloading its cache
+    could hand a later flush a map without that write -- so they are read here,
+    once per answer, and the rows are built from files alone.
+    """
+
+    runs: set[str]
+    spawns: dict[str, set[tuple[str, str]]]
+    instances: dict[str, list[dict[str, Any]]]
+
+    @classmethod
+    def capture(cls, agent_loop_factory: "AgentLoopFactory | None", keys: list[str]) -> "_Running":
+        registry = get_registry()
+        instances: dict[str, list[dict[str, Any]]] = {}
+        for key in keys:
+            try:
+                instances[key] = registry.list_instances(key)
+            except Exception:  # noqa: BLE001 - the overlay is an improvement, not a dependency
+                instances[key] = []
+        return cls(
+            runs=_live_dag_run_ids(agent_loop_factory),
+            spawns={key: _live_spawn_handles(agent_loop_factory, key) for key in keys},
+            instances=instances,
+        )
+
+    def rows_of(self, session: Session) -> Rows:
+        """One session's rows as ``tasks.list`` builds them, keyed ``(kind, id)``."""
+        rows = _spawn_rows(session.session_dir, None, session.key, None, live=self.spawns.get(session.key, set()))
+        rows += _dag_rows(
+            session.session_dir,
+            session.key,
+            None,
+            None,
+            live_runs=self.runs,
+            instance_rows=self.instances.get(session.key, []),
+        )
+        return {(row["kind"], row["id"]): row for row in rows}
+
+
+async def tasks_boards(
+    params: dict[str, Any],
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict[str, Any]:
+    """Every host conversation's Task Groups as cards, for the Task Board page.
+
+    The boards are read on a worker thread (a walk plus any changed transcript,
+    and the page asks every few seconds); what is running is read here, on the
+    loop that owns it; and each linked run is built on a worker exactly as
+    ``tasks.list`` builds it, so a card and the sidebar never disagree about
+    whether something still runs.
+    """
+    sessions_dir = manager_for(_safe_invoke_factory(agent_loop_factory), load_config()).sessions_dir
+    sessions = await asyncio.to_thread(scan_boards, sessions_dir)
+    running = _Running.capture(agent_loop_factory, [s.key for s in sessions if s.links])
+    return await asyncio.to_thread(
+        board_answer, sessions, running.rows_of, include_completed=bool(params.get("include_completed"))
+    )
+
+
+async def tasks_set_group_status(
+    params: dict[str, Any],
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict[str, Any]:
+    """The reader's two actions on a Task Group: mark it completed, or reopen it."""
+    session_key = str(params.get("session_key") or "")
+    group_id = str(params.get("group_id") or "")
+    status = str(params.get("status") or "")
+    loop = _safe_invoke_factory(agent_loop_factory)
+    service = getattr(loop, "task_board", None) if loop is not None else None
+    if service is None:
+        raise InvalidParamsError("this runtime keeps no task board")
+    try:
+        board = await service.set_status(session_key, group_id, status)
+    except KeyError:
+        raise InvalidParamsError(f"no group {group_id!r} on this conversation's board") from None
+    except UpdateRejectedError as exc:
+        raise InvalidParamsError(str(exc)) from None
+    return _board_answer(service.session_dir(session_key), board)
+
+
+async def tasks_ignore_question(
+    params: dict[str, Any],
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict[str, Any]:
+    """The reader sets one of a step's questions aside; a group asking nothing more goes idle."""
+    session_key = str(params.get("session_key") or "")
+    group_id = str(params.get("group_id") or "")
+    step_id = str(params.get("step_id") or "")
+    question = str(params.get("question") or "")
+    loop = _safe_invoke_factory(agent_loop_factory)
+    service = getattr(loop, "task_board", None) if loop is not None else None
+    if service is None:
+        raise InvalidParamsError("this runtime keeps no task board")
+    try:
+        board = await service.ignore_question(session_key, group_id, step_id, question)
+    except KeyError:
+        raise InvalidParamsError(f"no step {step_id!r} of group {group_id!r} on this conversation's board") from None
+    return _board_answer(service.session_dir(session_key), board)
+
+
+async def tasks_move_on(
+    params: dict[str, Any],
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict[str, Any]:
+    """The reader's next message moves a Task Group on: the next turn is told which, by id and summary."""
+    session_key = str(params.get("session_key") or "")
+    group_id = str(params.get("group_id") or "")
+    loop = _safe_invoke_factory(agent_loop_factory)
+    service = getattr(loop, "task_board", None) if loop is not None else None
+    if service is None:
+        raise InvalidParamsError("this runtime keeps no task board")
+    try:
+        await service.move_on(session_key, group_id)
+    except KeyError:
+        raise InvalidParamsError(f"no group {group_id!r} on this conversation's board") from None
+    return {"noted": True}
+
+
 def register_tasks_methods(
     dispatcher: "Dispatcher",
     *,
@@ -533,7 +714,35 @@ def register_tasks_methods(
     async def _list(params: dict) -> dict:
         return await tasks_list(params, agent_loop_factory=agent_loop_factory)
 
+    async def _board(params: dict) -> dict:
+        return await tasks_board(params, agent_loop_factory=agent_loop_factory)
+
+    async def _boards(params: dict) -> dict:
+        return await tasks_boards(params, agent_loop_factory=agent_loop_factory)
+
+    async def _set_group_status(params: dict) -> dict:
+        return await tasks_set_group_status(params, agent_loop_factory=agent_loop_factory)
+
+    async def _ignore_question(params: dict) -> dict:
+        return await tasks_ignore_question(params, agent_loop_factory=agent_loop_factory)
+
+    async def _move_on(params: dict) -> dict:
+        return await tasks_move_on(params, agent_loop_factory=agent_loop_factory)
+
     dispatcher.register("tasks.list", _list)
+    dispatcher.register("tasks.board", _board)
+    dispatcher.register("tasks.boards", _boards)
+    dispatcher.register("tasks.set_group_status", _set_group_status)
+    dispatcher.register("tasks.ignore_question", _ignore_question)
+    dispatcher.register("tasks.move_on", _move_on)
 
 
-__all__ = ["register_tasks_methods", "tasks_list"]
+__all__ = [
+    "register_tasks_methods",
+    "tasks_board",
+    "tasks_boards",
+    "tasks_ignore_question",
+    "tasks_list",
+    "tasks_move_on",
+    "tasks_set_group_status",
+]

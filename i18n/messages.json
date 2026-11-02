@@ -4463,6 +4463,22 @@
       "en": "just now",
       "zh": "刚刚"
     },
+    "gui.time.for_d": {
+      "en": "{n}d",
+      "zh": "{n} 天"
+    },
+    "gui.time.for_h": {
+      "en": "{n}h",
+      "zh": "{n} 小时"
+    },
+    "gui.time.for_m": {
+      "en": "{n}m",
+      "zh": "{n} 分钟"
+    },
+    "gui.time.for_now": {
+      "en": "<1m",
+      "zh": "不到 1 分钟"
+    },
     "gui.time.dbyest": {
       "en": "2 days ago",
       "zh": "前天"
@@ -7675,11 +7691,71 @@
     },
     "gui.tasks.running": {
       "en": "Running",
-      "zh": "进行中"
+      "zh": "运行中"
     },
     "gui.tasks.settled": {
       "en": "Finished",
       "zh": "已结束"
+    },
+    "gui.tasks.board.completed": {
+      "en": "Completed · {n}",
+      "zh": "已完成 · {n}"
+    },
+    "gui.tasks.board.unassigned": {
+      "en": "Unassigned",
+      "zh": "未归类"
+    },
+    "gui.tasks.board.mark_completed": {
+      "en": "Mark completed",
+      "zh": "标为已完成"
+    },
+    "gui.tasks.board.reopen": {
+      "en": "Reopen",
+      "zh": "重新打开"
+    },
+    "gui.tasks.board.questions": {
+      "en": "Questions for you",
+      "zh": "需要你回答的问题"
+    },
+    "gui.tasks.board.answer": {
+      "en": "Answer",
+      "zh": "回答"
+    },
+    "gui.tasks.board.ignore": {
+      "en": "Ignore",
+      "zh": "忽略"
+    },
+    "gui.tasks.board.ignore_question": {
+      "en": "Ignore question {n}",
+      "zh": "忽略问题 {n}"
+    },
+    "gui.tasks.board.move_on": {
+      "en": "Move on",
+      "zh": "推进"
+    },
+    "gui.tasks.board.move_on_bar": {
+      "en": "The task your next message moves on",
+      "zh": "下一条消息要推进的任务"
+    },
+    "gui.tasks.board.move_on_clear": {
+      "en": "Don't move this task on",
+      "zh": "不推进这个任务"
+    },
+    "gui.tasks.board.answer_head": {
+      "en": "On \"{title}\":",
+      "zh": "关于「{title}」："
+    },
+    "gui.tasks.board.answer_slot": {
+      "en": "Answer: ",
+      "zh": "答："
+    },
+    "gui.tasks.board.running": {
+      "en": "{n} sub-agents running",
+      "zh": "{n} 个子代理在跑"
+    },
+    "gui.tasks.board.dag": {
+      "en": "DAG {done}/{total}",
+      "zh": "DAG {done}/{total}"
     },
     "gui.tasks.files_n": {
       "en": "{n} files changed",
@@ -11269,6 +11345,10 @@
       "en": "Knowledge",
       "zh": "知识库"
     },
+    "gui.nav.tasks_board": {
+      "en": "Task board",
+      "zh": "任务看板"
+    },
     "gui.nav.import": {
       "en": "Import conversation",
       "zh": "导入会话"
@@ -11280,6 +11360,94 @@
     "gui.page.knowledge": {
       "en": "Knowledge",
       "zh": "知识库"
+    },
+    "gui.page.tasks_board": {
+      "en": "Task board",
+      "zh": "任务看板"
+    },
+    "gui.tasks.page.badge": {
+      "en": "{n} need you",
+      "zh": "{n} 个需要你回答"
+    },
+    "gui.tasks.page.col_needs_you": {
+      "en": "Needs you",
+      "zh": "需要你回答"
+    },
+    "gui.tasks.page.col_running": {
+      "en": "Running",
+      "zh": "运行中"
+    },
+    "gui.tasks.page.col_idle": {
+      "en": "Idle",
+      "zh": "闲置"
+    },
+    "gui.tasks.page.col_completed": {
+      "en": "Completed",
+      "zh": "已完成"
+    },
+    "gui.tasks.page.foot_needs_you": {
+      "en": "Needs you · {t}",
+      "zh": "需要你回答 · {t}"
+    },
+    "gui.tasks.page.foot_running": {
+      "en": "Running · {t}",
+      "zh": "运行中 · {t}"
+    },
+    "gui.tasks.page.foot_idle": {
+      "en": "Idle · {t}",
+      "zh": "闲置 · {t}"
+    },
+    "gui.tasks.page.foot_completed": {
+      "en": "Completed · took {t}",
+      "zh": "已完成 · 用时 {t}"
+    },
+    "gui.tasks.page.events": {
+      "en": "events {n}",
+      "zh": "事件 {n}"
+    },
+    "gui.tasks.page.sub_agents": {
+      "en": "sub-agents {n}",
+      "zh": "子代理 {n}"
+    },
+    "gui.tasks.page.empty_col": {
+      "en": "Nothing here",
+      "zh": "暂无"
+    },
+    "gui.tasks.page.all": {
+      "en": "All",
+      "zh": "全部"
+    },
+    "gui.tasks.page.title": {
+      "en": "Task board",
+      "zh": "任务看板"
+    },
+    "gui.tasks.page.all_conversations": {
+      "en": "All conversations",
+      "zh": "全部会话"
+    },
+    "gui.tasks.page.conversation": {
+      "en": "Conversation",
+      "zh": "会话"
+    },
+    "gui.tasks.page.show_completed": {
+      "en": "Show completed {n}",
+      "zh": "显示已完成 {n}"
+    },
+    "gui.tasks.page.view_board": {
+      "en": "Board",
+      "zh": "看板"
+    },
+    "gui.tasks.page.view_list": {
+      "en": "List",
+      "zh": "列表"
+    },
+    "gui.tasks.page.error": {
+      "en": "Could not refresh; showing the last answer",
+      "zh": "刷新失败，显示的是上一次的结果"
+    },
+    "gui.tasks.page.card_label": {
+      "en": "{title}, {cat}, {conv}",
+      "zh": "{title}，{cat}，{conv}"
     },
     "gui.knowledge.tab_all": {
       "en": "All",

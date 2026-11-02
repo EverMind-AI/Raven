@@ -1004,6 +1004,9 @@ class TurnPathMixin:
         iteration = 0
         final_content = None
         tools_used: list[str] = []
+        last_tool_defs: list[dict] | None = None
+        last_model: str | None = None
+        last_effort: str | None = None
         effective_model = model or self.model
 
         # Track whether the turn was a normal exit or a max-iter interruption.
@@ -1467,6 +1470,7 @@ class TurnPathMixin:
             call_overrides = pending_gen_overrides
             pending_gen_overrides = None
             call_reasoning_effort = gen_overrides.get("reasoning_effort")
+            last_tool_defs, last_model, last_effort = tool_defs, active_model, call_reasoning_effort
             call_messages, call_tools, call_model = await first_call.stage(
                 "the before_llm_call strategies",
                 self.strategies.before_llm_call(
@@ -1878,7 +1882,10 @@ class TurnPathMixin:
                         called = self.tools.get(tool_call.name)
                         reached = called.metadata_owner(tool_call.arguments or {}) if called is not None else None
                         if reached is not None and reached.name in render.DISPATCH_TOOLS:
-                            watch_note += render.reply_rules_note()
+                            channel = (session_key or "").partition(":")[0]
+                            watch_note += render.reply_rules_note(
+                                board_shown=render.board_on_page(self._task_board_config.enabled, channel, None)
+                            )
                     # The registry already unwrapped any ToolResult: `result` is
                     # the model-facing text, with the optional display string
                     # riding along on it (ToolOutput). The model always gets the
@@ -2737,7 +2744,14 @@ class TurnPathMixin:
         # pipeline can gate on completion.
 
         outcome = LoopOutcome(
-            status=status, error=error_detail, error_full=error_full, no_output=no_output, silent=silent
+            status=status,
+            error=error_detail,
+            error_full=error_full,
+            no_output=no_output,
+            silent=silent,
+            last_tools=last_tool_defs,
+            last_model=last_model,
+            last_effort=last_effort,
         )
         checkpoint = self._turn_checkpoint()
         if checkpoint is not None:
@@ -3293,6 +3307,7 @@ class TurnPathMixin:
             pending.update(rerun=bool(retries_left) and bool(reasons) and not spent, reasons=reasons)
             return pending["rerun"]
 
+        turn_window: list[dict] = []
         try:
             # The tier this turn dispatches sub-agents at, frozen here for the
             # same reason the iteration cap is read once: a switch arriving mid-turn
@@ -3301,7 +3316,7 @@ class TurnPathMixin:
             # file the user attached is handing it over, one that names any other
             # .pptx is not, and only the turn knows which is which.
             with turn_tier(self.session_tier(key)), turn_attachments(req.media), spend.collecting():
-                final_content, _, _, outcome = await _attempt(initial_messages, attempt_no)
+                final_content, _, turn_window, outcome = await _attempt(initial_messages, attempt_no)
                 # The conditional rerun. A dead turn has no answer to damage -- "empty
                 # implies wrong" is a scoring rule, so the count of right answers among
                 # dead turns starts at zero and a second attempt can only raise it. It
@@ -3327,7 +3342,7 @@ class TurnPathMixin:
                         # attempt this is: the loop serves every agent, and the
                         # budget allows more reruns than the one.
                         await on_progress("That attempt produced no answer; running the turn again.")
-                    final_content, _, _, outcome = await _attempt(
+                    final_content, _, turn_window, outcome = await _attempt(
                         _seed_for_the_rerun(live["log"].messages()), attempt_no
                     )
                 # Session-level because this turn may persist no assistant row at
@@ -3532,6 +3547,15 @@ class TurnPathMixin:
             _t4.add_done_callback(self._consolidation_tasks.discard)
         # ── End Step 4 ──────────────────────────────────────────────────────
 
+        # ── Step 5: the host's task board (background, after the reply) ──────
+        # Scheduled, never awaited: the reply is already the caller's, and the
+        # board settles a few seconds after it.
+        if self.task_board is not None:
+            await self.task_board.ack_turn_notes(key)
+            self._schedule_task_board(
+                key, turn_window, outcome, live["log"].added(), turn_received_at, req.turn_id, fallback_models
+            )
+
         if origin is Origin.USER:
             self._maybe_annotate_tail(session, _turn_start())
 
@@ -3560,6 +3584,71 @@ class TurnPathMixin:
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info("Response to {}:{}: {}", channel, sender_id, preview)
         return (final_content, [])
+
+    def _schedule_task_board(
+        self,
+        key: str,
+        window: list[dict],
+        outcome: LoopOutcome | None,
+        turn_added: list[dict],
+        turn_at: str,
+        turn_id: str | None,
+        fallback_models: list[str] | None,
+    ) -> None:
+        """Start the host's post-turn task board call for the turn that just ended.
+
+        It sends the tools array, model, effort and tool choice the turn's last call
+        carried, through the same strategies, so it runs at the main model's settings
+        and shares that call's cached prefix up to the reply; only the instruction
+        after it is new. Nothing forces the tool: a forced choice voids Anthropic's
+        cached messages and several providers refuse one outright. The dispatches
+        come from what the turn added -- a spawn still in the history belongs to the
+        turn that made it.
+        """
+        from raven.agent.task_board.dispatches import turn_dispatches
+        from raven.agent.task_board.runner import run_post_turn, should_run
+
+        board = self.task_board
+        dispatches = turn_dispatches(turn_added)
+        if board is None or outcome is None or outcome.last_tools is None or not window:
+            return
+        if not should_run(outcome.status, dispatches):
+            return
+        tools, model = outcome.last_tools, outcome.last_model or self.model
+        # The turn's own effort, or none at all: an explicit None would switch the
+        # provider's default off rather than leave it standing.
+        effort = {} if outcome.last_effort is None else {"reasoning_effort": outcome.last_effort}
+        # A turn whose array lacked the tool -- withheld by a deploy's disabledTools --
+        # leaves the model nothing to answer the instruction with.
+        if not any((t.get("function") or {}).get("name") == "task_board" for t in tools):
+            return
+
+        async def call(rows: list[dict]) -> LLMResponse:
+            with _llm_purpose("task_board"), usage_context.bind(key):
+                call_messages, call_tools, call_model = await self.strategies.before_llm_call(rows, tools, model)
+                return await self.provider.chat_with_retry(
+                    messages=merge_mid_turn(call_messages),
+                    tools=call_tools,
+                    model=call_model,
+                    fallback_models=fallback_models,
+                    **effort,
+                )
+
+        task = asyncio.create_task(
+            run_post_turn(
+                board,
+                session_key=key,
+                call=call,
+                window=list(window),
+                dispatches=dispatches,
+                turn_at=turn_at,
+                turn_id=turn_id,
+                now_ms=board.now_ms,
+                generation=board.generation(key),
+            )
+        )
+        self._consolidation_tasks.add(task)
+        task.add_done_callback(self._consolidation_tasks.discard)
 
     def _save_broken_turn(
         self,

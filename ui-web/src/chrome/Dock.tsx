@@ -42,8 +42,10 @@
  *     placeholder).
  *   - div#atts, which is not in the markup: it exists only once something is
  *     staged and the composer inserts it before .field. React never re-orders
- *     these children -- none of them is conditional -- so a node put between
- *     two of them stays between them.
+ *     these children, so a node put between two of them stays between them.
+ *     The one that comes and goes, the Task Board's Move on bar, is inserted
+ *     before .field as well, so the two only ever trade places with each
+ *     other.
  *   - the children of #sheetRack, #queued and #slashList. Each is shared
  *     ground: the sheet rack and the composer's own roots fill them, and
  *     page.css reads `.dock .sheets:has(>*)` off the rack, so it renders with
@@ -58,6 +60,7 @@
 
 import { useSyncExternalStore } from 'react'
 
+import { MoveOnBar } from '../features/tasks/MoveOnBar'
 import { TaskRuns } from '../features/tasks/TasksPage'
 import { t } from '../i18n/t'
 import * as lang from '../state/lang'
@@ -77,6 +80,8 @@ function DockIn(): JSX.Element {
   return (
     <div className="dock-in">
       <div className="queued" id="queued" />
+      {/* The Task Group the next message moves on, while one is picked. */}
+      <MoveOnBar />
       <div className="field">
         <textarea id="ta" rows={1} placeholder={t('gui.composer_ph')} />
       </div>

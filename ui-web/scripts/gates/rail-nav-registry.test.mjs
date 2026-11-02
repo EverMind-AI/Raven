@@ -40,9 +40,9 @@ function declared() {
 describe('the rail nav registry', () => {
   it('declares every button once, in the page table', () => {
     const buttons = declared()
-    /* The three the page has: the draft row, the one row both connection
-       pages light (state/hub.ts), and knowledge. */
-    expect([...buttons].sort()).toEqual(['agentsBtn', 'knowledgeBtn', 'newBtn'])
+    /* The four the page has: the draft row, the one row both connection
+       pages light (state/hub.ts), knowledge, and the task board. */
+    expect([...buttons].sort()).toEqual(['agentsBtn', 'boardsBtn', 'knowledgeBtn', 'newBtn'])
   })
 
   it('has the mark walk that table rather than a list of its own', () => {

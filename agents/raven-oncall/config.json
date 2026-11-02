@@ -17,7 +17,10 @@
       "maxTokens": 32768,
       "contextWindowTokens": 400000,
       "maxToolIterations": 150,
-      "llmCallTimeout": 1800
+      "llmCallTimeout": 1800,
+      "taskBoard": {
+        "enabled": false
+      }
     }
   },
   "tools": {

@@ -122,6 +122,10 @@ export function dropSeg(id: number): boolean {
   return store.dropSeg(mainLane(), id)
 }
 
+export function tagTurn(id: number, turnId: string): void {
+  store.tagTurn(mainLane(), id, turnId)
+}
+
 export function step(): StepHandle {
   return store.newStep(mainLane())
 }
@@ -201,6 +205,7 @@ export function history(messages: HistoryMessage[]): void {
 
 export function delivered(p: {
   label: string; isDag: boolean; status?: string; open: () => void; body?: string; output?: string; outputTruncated?: boolean | null
+  at?: number; turnId?: string
 }): void {
   store.delivered(mainLane(), p)
 }

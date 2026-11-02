@@ -10437,6 +10437,239 @@
       "errors": []
     },
     {
+      "name": "tasks.board",
+      "summary": "One conversation's Task Board: its matters, each turn's advance on them, and the Tasks each advance started.",
+      "description": "Read off disk, so a reloaded page draws it with no agent loop up. lineage maps each run that continued a placed run to that run, so a client can show it under the same step. An empty or unknown key answers with an empty board, not an error.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "Whose board to read."
+          }
+        }
+      ],
+      "result": {
+        "name": "TasksBoardResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "board",
+            "lineage"
+          ],
+          "properties": {
+            "board": {
+              "$ref": "#/components/schemas/TaskBoard"
+            },
+            "lineage": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Each run that continued a placed run without a tool call of its own (a replan's successor, a later stint round), mapped to the placed run it descends from."
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "tasks.boards",
+      "summary": "Every host conversation's Task Groups as cards, sorted for the Task Board page.",
+      "description": "Read off disk, newest first. A card's category is decided here, once: a group marked needs_you or completed reads as marked; every other group is running while a run it links still runs, read as tasks.list reads it (what this process executes included), and idle otherwise. Completed cards come only with include_completed; completed_count and needs_you_count always count every card. Step summaries are never sent.",
+      "params": [
+        {
+          "name": "include_completed",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "description": "Also return the completed cards. The counts are returned either way."
+          }
+        }
+      ],
+      "result": {
+        "name": "TasksBoardsResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cards",
+            "completed_count",
+            "needs_you_count"
+          ],
+          "properties": {
+            "cards": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/TaskBoardCard"
+              }
+            },
+            "completed_count": {
+              "type": "integer"
+            },
+            "needs_you_count": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "tasks.set_group_status",
+      "summary": "The reader's two actions on a Task Group: mark it completed, or reopen it.",
+      "description": "Takes the same per-conversation lock as the post-turn update and announces the write as tasks.board_updated. invalid_params for an unknown group, for a status other than completed or idle, and on a runtime that keeps no board.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "group_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "status",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "idle"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "TasksSetGroupStatusResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "board",
+            "lineage"
+          ],
+          "properties": {
+            "board": {
+              "$ref": "#/components/schemas/TaskBoard"
+            },
+            "lineage": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Each run that continued a placed run without a tool call of its own (a replan's successor, a later stint round), mapped to the placed run it descends from."
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "tasks.ignore_question",
+      "summary": "The reader sets one of a Progress Step's questions aside.",
+      "description": "The question leaves its step, so it leaves the card and the answer draft; a group that waits on the user goes idle once its latest step asks nothing more. Takes the same per-conversation lock as the post-turn update and announces the write as tasks.board_updated. invalid_params for an unknown group or step, and on a runtime that keeps no board; a question the step no longer lists changes nothing.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "group_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "step_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "question",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "TasksIgnoreQuestionResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "board",
+            "lineage"
+          ],
+          "properties": {
+            "board": {
+              "$ref": "#/components/schemas/TaskBoard"
+            },
+            "lineage": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Each run that continued a placed run without a tool call of its own (a replan's successor, a later stint round), mapped to the placed run it descends from."
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "tasks.move_on",
+      "summary": "The reader's next message moves a Task Group on.",
+      "description": "Notes, beside the conversation's board, that the reader's next message is about this group; the next turn's runtime context names it by id, title and summary, and the note is dropped once a turn that showed it has run. A later move-on replaces one not yet shown. invalid_params for an unknown group, and on a runtime that keeps no board.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "group_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "TasksMoveOnResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "noted"
+          ],
+          "properties": {
+            "noted": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
       "name": "import.scan",
       "summary": "Scan the other AI tools on this machine for importable memory files and conversations, per platform, and say whether an import can run at all.",
       "description": "Runs the cold-start scanners (raven.importer.scanners.scan_all) and aggregates the ScanResult counts per platform. Every platform the importer knows is listed; `scannable` is false for one that ships no scanner yet. `ready` is false when no memory backend is configured for the import to feed -- the same gate the CLI wizard's import step applies -- and `reason` then says why.",
@@ -16380,6 +16613,9 @@
           },
           {
             "$ref": "#/components/schemas/SessionNamingEndedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/TasksBoardUpdatedEvent"
           }
         ],
         "discriminator": {
@@ -16409,7 +16645,8 @@
             "cron.missed": "#/components/schemas/CronMissedEvent",
             "media": "#/components/schemas/MediaEvent",
             "session.titled": "#/components/schemas/SessionTitledEvent",
-            "session.naming_ended": "#/components/schemas/SessionNamingEndedEvent"
+            "session.naming_ended": "#/components/schemas/SessionNamingEndedEvent",
+            "tasks.board_updated": "#/components/schemas/TasksBoardUpdatedEvent"
           }
         }
       },
@@ -18665,6 +18902,283 @@
               "type": "string"
             },
             "description": "The agent entries on the machine that are switched off, by name: they still hold the machine for the add, so the card says so instead of counting them nowhere."
+          }
+        }
+      },
+      "TaskGroupStatus": {
+        "description": "Where a Task Group stands. needs_you: the reply asks the user to answer, confirm or decide about it, an error only the user can resolve included, even while a run it started still works. running: a run it started is still working. idle: nothing is in flight and nothing is asked. completed: finished, or dropped by the user -- nothing further moves it.",
+        "type": "string",
+        "enum": [
+          "needs_you",
+          "running",
+          "idle",
+          "completed"
+        ]
+      },
+      "TaskLinkRef": {
+        "description": "A Task a Progress Step started, in the address tasks.list rows use (spawn: node id, dag: run id), with the summary the dispatching call gave.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "id",
+          "summary"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/TaskKind"
+          },
+          "id": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      },
+      "ProgressStep": {
+        "description": "One turn's advance on one Task Group: a title, and a summary of what moved and what is next or awaited -- on a step that left its group needs_you, opening with what the user is asked. questions: each question that step's reply asked the user about the matter, empty on every other step. turn_at is the timestamp the session log stores on the message that opened the turn.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "turn_at",
+          "title",
+          "summary",
+          "questions",
+          "tasks"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "turn_at": {
+            "type": "string"
+          },
+          "turn_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskLinkRef"
+            }
+          }
+        }
+      },
+      "TaskGroup": {
+        "description": "One matter a conversation is pushing, spanning any number of turns, with its Progress Steps in time order. summary says where the matter stands; any turn may rewrite it.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "title",
+          "summary",
+          "status",
+          "created_at",
+          "updated_at",
+          "steps"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TaskGroupStatus"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "integer"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProgressStep"
+            }
+          }
+        }
+      },
+      "PendingDispatch": {
+        "description": "A dispatch whose turn's board update never landed; the next update has to place it.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "handle",
+          "summary",
+          "turn_at"
+        ],
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "turn_at": {
+            "type": "string"
+          },
+          "turn_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "TaskBoard": {
+        "description": "One host conversation's Task Board: its Task Groups and any dispatch still waiting for a place.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "groups",
+          "unassigned"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer"
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskGroup"
+            }
+          },
+          "unassigned": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PendingDispatch"
+            }
+          }
+        }
+      },
+      "TaskBoardCard": {
+        "description": "One Task Group on the Task Board page: where it came from, what it is, and what it needs. running_since_ms is set only on a running card: the earliest start among its running runs.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "session_key",
+          "session_title",
+          "group_id",
+          "title",
+          "summary",
+          "status",
+          "created_at",
+          "updated_at",
+          "category",
+          "events",
+          "sub_agents"
+        ],
+        "properties": {
+          "session_key": {
+            "type": "string"
+          },
+          "session_title": {
+            "type": "string"
+          },
+          "group_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TaskGroupStatus"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "integer"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "needs_you",
+              "running",
+              "idle",
+              "completed"
+            ]
+          },
+          "running_since_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "events": {
+            "type": "integer"
+          },
+          "sub_agents": {
+            "type": "integer"
+          }
+        }
+      },
+      "TasksBoardUpdatedPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "session_key",
+          "board",
+          "lineage"
+        ],
+        "properties": {
+          "session_key": {
+            "type": "string"
+          },
+          "board": {
+            "$ref": "#/components/schemas/TaskBoard"
+          },
+          "lineage": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Each run that continued a placed run without a tool call of its own (a replan's successor, a later stint round), mapped to the placed run it descends from."
+          }
+        }
+      },
+      "TasksBoardUpdatedEvent": {
+        "description": "A conversation's Task Board after a write -- the post-turn update or the reader's own action. Not replayed: a client that reconnects reads tasks.board.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "payload"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "tasks.board_updated"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/TasksBoardUpdatedPayload"
           }
         }
       }

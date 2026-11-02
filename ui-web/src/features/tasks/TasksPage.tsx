@@ -26,6 +26,7 @@ import * as desk from '../desk/store'
 import { hasDiffBody } from '../workspace/store'
 import * as workspace from '../workspace/store'
 import { BoardCard, selectionText } from './BoardCard'
+import { BoardList } from './BoardList'
 import { fitChips } from './chipFit'
 import { Answer, StepList } from './NodeRecord'
 import * as store from './store'
@@ -183,7 +184,7 @@ function Row({ row, now, open, graphColumn, onOpen }: {
             {failed ? <ErrorTag /> : null}
             {isGraph(row) ? <GraphTag /> : failed && graphColumn ? <GraphSlot /> : null}
           </div>
-          <s className="st">{line}</s>
+          <span className="st">{line}</span>
         </div>
       </button>
     </div>
@@ -208,40 +209,44 @@ function Group({ label, list, now, openIds, graphColumn, onOpen }: {
   )
 }
 
-function List(): JSX.Element {
+function List({ only }: { only?: TaskRow[] }): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
+  /* The board hands in a subset -- the rows no step places -- and the whole
+     list when the conversation has no group yet. */
+  const list = only ?? s.rows
   const deskState = useSyncExternalStore(desk.subscribe, desk.get)
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
-    if (!store.running(s.rows).length) return
+    if (!store.running(list).length) return
     const id = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(id)
-  }, [s.rows])
+  }, [list])
   const openIds = new Set(deskState.panes.filter((p) => p.kind === 'task').map((p) => p.id))
   /* Across both groups: they share one width, so a column that lines up in one has
      to line up with the other. */
-  const graphColumn = s.rows.some(isGraph)
+  const graphColumn = list.some(isGraph)
   return (
     <div className="salist tasks">
       <Group
-        label={t('gui.tasks.running')} list={store.running(s.rows)} now={now}
+        label={t('gui.tasks.running')} list={store.running(list)} now={now}
         openIds={openIds} graphColumn={graphColumn} onOpen={desk.openDeskTask}
       />
       <Group
-        label={t('gui.tasks.settled')} list={store.settled(s.rows)} now={now}
+        label={t('gui.tasks.settled')} list={store.settled(list)} now={now}
         openIds={openIds} graphColumn={graphColumn} onOpen={desk.openDeskTask}
       />
     </div>
   )
 }
 
-export function TasksApp(): JSX.Element {
+export function TasksPanel(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
-  /* The language the page resolved, so a pick repaints this island: every
+  /* The language the page resolved, so a pick repaints this panel: every
      word below is a t(key) read at render time. */
   useSyncExternalStore(lang.subscribe, lang.get)
   useEffect(() => { if (!s.loaded) void store.refresh() }, [s.loaded])
-  return <List />
+  useEffect(() => { if (!s.boardLoaded) void store.refreshBoard() }, [s.boardLoaded])
+  return <BoardList flat={(only) => <List only={only} />} openTask={desk.openDeskTask} />
 }
 
 /* ── the strip above the composer ─────────────────────────────────────── */

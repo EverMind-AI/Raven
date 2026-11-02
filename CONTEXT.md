@@ -713,6 +713,54 @@ Registry, without the live graph tool; the row's status is derived from its node
 _Avoid_: "task" for a spine `TurnRequest`, an asyncio task, or the `task` text handed to a
 sub-agent -- those are a Turn, a coroutine, and a prompt.
 
+**Task Board** (`raven/agent/task_board/`, `<session_dir>/task_board.json`):
+one host session's set of Task Groups, kept by the host model in one extra call after every
+turn and read back through the `task_board` tool. Only the Raven host keeps one; a sub-agent
+or product agent never does (`docs/specs/2026-10-29-task-board-design.md`).
+_Avoid_: "task list" (that is `tasks.list`), "todo" (Raven-Code's Checklist).
+
+**Task Group**:
+one matter a conversation is pushing, spanning any number of turns -- a bug fix, a release
+note. Carries a title (at most 20 words, a CJK character counting as one), a summary of
+where the matter stands (at most 50; any turn may rewrite it), a status and its Progress
+Steps. The status is one of four the model sets after each turn: `needs_you` (the reply asks
+the user to answer, confirm or decide about it -- an error only the user can resolve included
+-- even while a run it started still works),
+`running` (a run it started is still working), `idle` (nothing in flight, nothing asked) and
+`completed` (finished or dropped; nothing further moves it). Chinese surfaces -- the zh
+prompt pack, the conversation -- call it 任务.
+_Avoid_: "task" for this in English -- a Task is one delegated unit, and hangs under a step;
+where a Task Group is 任务, a delegated unit is a 子代理 or a DAG run.
+
+**Board category** (`raven/agent/task_board/overview.py` `category_of`, `tasks.boards`;
+`categoryOf` in `ui-web/src/features/tasks/boards.ts`):
+the type a Task Group is shown as, everywhere one is shown -- the Task Board page's columns
+and list, the rail badge, the sidebar's tasks tab -- one of *Needs you*, *Running*, *Idle* and
+*Completed*, after the status of the same name. `needs_you` and `completed` stand as written.
+Between the other two the live runs decide, not the model: a group is *Running* while a Task
+it links is one the sidebar's `tasks.list` reads as `running` -- so never a run this gateway
+no longer executes -- and *Idle* otherwise. Chinese surfaces: 需要你回答 / 运行中 / 闲置 / 已完成.
+_Avoid_: "Waiting on you" and "Stuck" -- *Needs you* is one type for a question and an error
+alike; "Archived" for a completed Task Group -- an archived conversation is the rail's, and
+its groups are left off the page altogether.
+
+**Progress Step**:
+one turn's advance on one Task Group: a title the page shows (at most 20 words) and a
+summary of any length that recall reads back, keyed by the timestamp of the message that
+opened the turn, with the Tasks that turn dispatched for it. A turn that
+advanced three groups writes three steps. The step that leaves its group `needs_you` opens its
+summary with what the user is asked and lists each question about the matter; while the group
+waits, the page shows that summary under the step and frames each question in a box of its own
+on the card, with an Ignore that sets that one question aside (`tasks.ignore_question`; the
+last one set aside leaves the group idle; the host is told at its next turn, as declined, so it
+does not ask again), one Answer, and Move on, which names the group the next message is about in
+that message's turn (a reply drafted in the composer); recall reads the
+ones still open back to the host. Because the page lists them, the host's reply rules stop asking open questions again on every reply for a reader of
+the page with the board on (`render.board_on_page`); other channels and the terminal still do. Chinese surfaces call it 事件. The page marks it running while a Task it started runs, failed when one failed, and
+done otherwise; clicking it scrolls the transcript to that turn's reply.
+_Avoid_: "subtask" (it records progress, it is not a unit of work), "step" alone (the node
+record's steps are another thing).
+
 **Instance Title** / **Run Title** (`InstanceRow.title` / `InstanceRow.runTitle`):
 what one instance was asked, and what the graph it belongs to was asked. Computed by
 `subagents.instances` rather than stored, the way `resumable` is and for the same reason:

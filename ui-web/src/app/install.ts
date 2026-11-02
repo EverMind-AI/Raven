@@ -15,7 +15,7 @@ import { show as showScrollbar } from '../chrome/behaviour/scrollbars'
 import { onFrameBytes, onFrameJson, browserSource } from '../features/browser/source'
 import { open as approveSheet } from '../features/composer/approve'
 import { closeCredential, openCredential } from '../features/composer/credential'
-import { askInChat, startTaskWith } from '../features/composer/startTaskWith'
+import { answerInChat, askInChat, focusChat, startTaskWith } from '../features/composer/startTaskWith'
 import { connSource } from '../features/connections/source'
 import { cronSource } from '../features/cron/source'
 import { openDeskTask } from '../features/desk/store'
@@ -39,10 +39,12 @@ import { MemoryStepBody, ModelStepBody, WebStepBody } from '../features/settings
 import { bannerSource, memoryStepDone, modelStepDone, settingsSource, webStepDone } from '../features/settings/source'
 import * as settingsStore from '../features/settings/store'
 import { agentsSource, startAgentHeartbeat } from '../features/subagents/source'
+import { onBoardEvent, refresh as refreshBoards } from '../features/tasks/boards'
 import { tasksSource } from '../features/tasks/source'
 import {
-  byKey as taskByKey, onNodeUpdated, onRunCompleted, onRunReplanned, onRunStarted, onSubagentStatus,
-  refresh as refreshTasks, reset as resetTasks,
+  byKey as taskByKey, lendAnswer as lendTaskAnswer, lendFocus as lendTaskFocus, moveOnPending, onBoardUpdated,
+  onNodeUpdated, onRunCompleted, onRunReplanned, onRunStarted, onSubagentStatus, refresh as refreshTasks,
+  refreshBoard as refreshTaskBoard, reset as resetTasks, spendMoveOn,
 } from '../features/tasks/store'
 import * as trajectoryDetails from '../features/trajectory/detailStore'
 import * as trajectoryPoll from '../features/trajectory/poll'
@@ -70,7 +72,7 @@ import {
   clarifyRequest, dispatch, installPipeline, registerCredentialCard, replayPendingApprovals, replayPendingCredentials,
 } from '../state/session/pipeline'
 import { reconnect, switchToDraft } from '../state/session/registry'
-import { installComposerActions, installSlashActions } from '../state/session/runtime'
+import { installComposerActions, installSlashActions, lendBeforeSend } from '../state/session/runtime'
 import * as settingsDialog from '../state/settings'
 import { ds, sources } from '../state/sources'
 import { show as toast } from '../state/toast'
@@ -249,6 +251,11 @@ export function installSources(): void {
       return true
     },
     onRunStarted, onNodeUpdated, onRunCompleted, onRunReplanned, onSubagentStatus,
+    /* The sidebar's board, and the Task Board page when it is open. */
+    onBoardUpdated: (p) => {
+      onBoardUpdated(p)
+      onBoardEvent()
+    },
   }
   sources.extAgents = extAgentsSource
   sources.machines = machinesSource
@@ -332,6 +339,9 @@ export function installPushes(): void {
   registerCredentialCard({ open: openCredential, close: closeCredential })
   extAgentsStore.lendAskRaven(startTaskWith)
   settingsStore.lendAskInChat(askInChat)
+  lendTaskAnswer(answerInChat)
+  lendTaskFocus(focusChat)
+  lendBeforeSend({ pending: moveOnPending, spend: spendMoveOn })
   installPipeline()
 
   gateway().on('system.update_available', onUpdateAvailable)
@@ -350,6 +360,11 @@ export function installPushes(): void {
      the running rows is rendered in the first frame, before any of this, so the
      ask it makes for itself finds no source and is not the one that lands. */
   void refreshTasks()
+  void refreshTaskBoard()
+  /* The rail's task board badge asks on that first frame too, and finds no
+     source the same way; left to its own minute-long poll, the count would not
+     show for a minute after every load. */
+  void refreshBoards()
 }
 
 /* ── the actions: controls whose answer belongs to the session ────────────── */
@@ -428,7 +443,7 @@ export function installActions(): void {
      own "not loaded yet" effect would otherwise fire under the session being
      left. Ownership changing is what should trigger the re-read, not `loaded`
      happening to be false. */
-  onSessionChange(() => { void refreshTasks() })
+  onSessionChange(() => { void refreshTasks(); void refreshTaskBoard() })
 
   $('#newBtn')!.onclick = () => {
     if (openModelsForMissingProvider()) return

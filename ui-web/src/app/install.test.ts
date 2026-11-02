@@ -9,7 +9,7 @@
  */
 
 import { act } from 'react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { fakeGateway, loadPart, looseQuery } from '../../scripts/module-harness.mjs'
 
@@ -73,7 +73,10 @@ describe('the tasks seam installSources grows', () => {
 
     wiring.installSources()
     const { set: setTasks } = await import('../features/tasks/store')
-    setTasks({ rows: [row], loaded: true, nodes: {}, tabByPane: {}, nodeVersions: {}, folds: {} })
+    setTasks({
+      rows: [row], loaded: true, nodes: {}, tabByPane: {}, nodeVersions: {}, folds: {},
+      board: null, lineage: {}, boardLoaded: false, focus: null, moveOn: null,
+    })
 
     const found = sources.tasks!.openByNode!('node-9')
     const missing = sources.tasks!.openByNode!('no-such-node')
@@ -320,5 +323,43 @@ describe('the trajectory pane follows the list (installActions)', () => {
     _resetForTests()
     list._resetForTests()
     pane._resetForTests()
+  })
+})
+
+describe('the task board badge reads once its seam is on (installPushes)', () => {
+  it('asks for the count after the sources install, though the rail asked first and found none', async () => {
+    vi.useFakeTimers()
+    try {
+      const wiring = await loadPart(() => import('./install'), {
+        fakes: {
+          'src/lib/dom': { $: looseQuery() },
+          'src/lib/session': { current: () => 's1' },
+          'src/state/session/runtime': { mediaOf: () => ({}) },
+          'src/features/transcript/mount': { agentStage: () => {} },
+          'src/features/subagents/store': { directEvent: () => {} },
+        },
+      }) as Install
+      const asked: string[] = []
+      await fakeGateway((method: string) => {
+        asked.push(method)
+        return Promise.resolve(method === 'tasks.boards' ? { cards: [], completed_count: 0, needs_you_count: 2 } : {})
+      })
+      const boards = await import('../features/tasks/boards')
+      const { setSources } = await import('../state/sources')
+
+      boards.startBadge()
+      expect(asked).not.toContain('tasks.boards')
+
+      setSources({ composer: { slash: [] }, rail: {}, transcript: {} } as unknown as Partial<Sources>)
+      wiring.installSources()
+      wiring.installPushes()
+      await act(async () => {})
+
+      expect(asked.filter((m) => m === 'tasks.boards')).toHaveLength(1)
+      expect(boards.get().needsYouCount).toBe(2)
+      boards._resetForTests()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
