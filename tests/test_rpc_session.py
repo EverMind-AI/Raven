@@ -4548,9 +4548,7 @@ async def test_the_reported_pick_is_clamped_to_the_model(tmp_path, monkeypatch, 
     levels(["medium", "high", "xhigh"])
     loop = _EffortLoop(tmp_path)
     _filed(loop.sessions, "tui:1")
-    await session_module.session_set_effort(
-        {"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop
-    )
+    await session_module.session_set_effort({"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop)
     levels(["medium"])
     result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
     assert result["effort"] is None and result["default"] is None
@@ -4567,9 +4565,7 @@ async def test_the_bundle_reports_the_clamped_effort(tmp_path, monkeypatch, leve
     loop.session_policy = _EffortLoop(tmp_path).session_policy
     _filed(loop.sessions, "tui:1")
     config = session_module.load_config()
-    await session_module.session_set_effort(
-        {"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop
-    )
+    await session_module.session_set_effort({"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop)
     levels(["low", "medium"])
     info = await session_module._default_session_info(loop, config, "tui:1")
     assert info["reasoning_effort"] is None

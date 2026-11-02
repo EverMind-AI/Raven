@@ -538,9 +538,7 @@ class WiringMixin:
         from raven.providers.registry import canonical_provider_name, find_by_model, split_model_id
 
         model_id = (
-            self.session_model(session_key)
-            if session_key and self.has_session_binding(session_key)
-            else self.model
+            self.session_model(session_key) if session_key and self.has_session_binding(session_key) else self.model
         )
         value = session_effort.in_force(
             pick, self.session_policy(session_key or "").reasoning_effort, self.default_reasoning_effort
@@ -550,9 +548,7 @@ class WiringMixin:
             spec = find_by_model(model_id)
             provider = getattr(spec, "name", "") if spec else ""
         section = (
-            (self._live_config.get("providers") or {}).get(canonical_provider_name(provider))
-            if provider
-            else None
+            (self._live_config.get("providers") or {}).get(canonical_provider_name(provider)) if provider else None
         )
         overlay = overlay_for(section, provider, model_id) if section is not None else None
         return session_effort.clamp(value, effort_levels.levels_for(model_id, declared_efforts(overlay)))
