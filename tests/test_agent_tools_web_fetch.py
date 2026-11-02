@@ -328,3 +328,68 @@ async def test_size_limited_html_is_available_when_jina_fails(transport):
     assert result["truncated"] is True
     assert result["text"] == "x" * 50000
     assert stream.closed
+
+
+@pytest.fixture
+def resolved(monkeypatch):
+    """The real URL checks over a stubbed resolver and transport: ``answers`` is what every name resolves to."""
+    import socket
+
+    calls = []
+    responses = {}
+    answers = ["103.102.166.224", "2001::1"]
+    client_type = httpx.AsyncClient
+
+    def handle(request):
+        calls.append(request)
+        return responses[request.url.host]
+
+    def resolve(host, port, *args, **kwargs):
+        return [
+            (socket.AF_INET6 if ":" in ip else socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port or 0))
+            for ip in answers
+        ]
+
+    monkeypatch.setattr(
+        web.httpx,
+        "AsyncClient",
+        lambda **kwargs: client_type(**kwargs, transport=httpx.MockTransport(handle)),
+    )
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
+    return responses, calls, answers
+
+
+async def test_a_poisoned_name_is_read_through_the_vendor_alone(resolved):
+    """A poisoned resolver answers a blocked site with reserved space beside its address: this
+    process may not connect to what it said, and the vendor, which reads from its own network,
+    still can."""
+    responses, calls, _ = resolved
+    responses["r.jina.ai"] = httpx.Response(200, text="Jina article")
+
+    result = json.loads(await web.WebFetchTool().execute("https://en.wikipedia.org/wiki/Foo"))
+
+    assert result["text"] == "Jina article"
+    assert [call.url.host for call in calls] == ["r.jina.ai"]
+
+
+async def test_a_poisoned_name_the_vendor_fails_says_why_no_direct_read_was_made(resolved):
+    responses, calls, _ = resolved
+    responses["r.jina.ai"] = httpx.Response(451)
+
+    result = json.loads(await web.WebFetchTool().execute("https://en.wikipedia.org/wiki/Foo"))
+
+    assert result["error"] == "Jina Reader answered HTTP 451"
+    assert result["detail"].startswith("Direct fetch skipped: Blocked: en.wikipedia.org resolves to")
+    assert [call.url.host for call in calls] == ["r.jina.ai"]
+
+
+async def test_a_name_resolving_inward_is_sent_nowhere(resolved):
+    responses, calls, answers = resolved
+    answers[:] = ["93.184.216.34", "10.0.0.7"]
+    responses["r.jina.ai"] = httpx.Response(200, text="Jina article")
+
+    result = json.loads(await web.WebFetchTool().execute("https://intranet.example/admin"))
+
+    assert result["error"] == "URL validation failed"
+    assert "10.0.0.7" in result["detail"]
+    assert calls == []

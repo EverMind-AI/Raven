@@ -23,7 +23,7 @@ from lxml import etree, html
 
 from raven.config.schema import WEB_VENDOR_ENV_VARS
 from raven.contracts.tool import Tool
-from raven.security.network import guarded_fetch, validate_url_target
+from raven.security.network import guarded_fetch, judge_reader_target, validate_url_target
 
 
 @dataclass(frozen=True)
@@ -929,7 +929,8 @@ class WebFetchTool(Tool):
     description = (
         "Fetch a URL. XML, JSON and plain text are read directly (up to maxChars and a 2 MiB download cap). "
         "HTML is extracted through a third-party service (Jina by default), which receives the full URL; "
-        "direct reading is used as a fallback when the service fails."
+        "direct reading is used as a fallback when the service fails. A site this machine cannot reach "
+        "directly is read through the service alone."
     )
     parameters = {
         "type": "object",
@@ -1024,14 +1025,18 @@ class WebFetchTool(Tool):
     async def execute(self, url: str, maxChars: int | None = None, **kwargs: Any) -> str:  # noqa: N803  (LLM tool schema uses camelCase)
         max_chars = maxChars or self.max_chars
         is_valid, error_msg = validate_url_target(url)
-        if not is_valid:
+        # This process may not connect, but the vendor reads from its own network:
+        # a name the local resolver answers only with reserved space (a poisoned
+        # resolver's 2001::1 for every Wikipedia) is read through the vendor alone.
+        if not is_valid and not (await asyncio.to_thread(judge_reader_target, url))[0]:
             # The same rule as the handlers below: most of these reasons name the
             # hostname, and a reader whose every target is refused is one cause.
             return json.dumps({"error": "URL validation failed", "detail": error_msg, "url": url}, ensure_ascii=False)
         direct = None
-        direct_error = ""
+        direct_error = "" if is_valid else f"Direct fetch skipped: {error_msg}"
         try:
-            direct = await self._direct_fetch(url)
+            if is_valid:
+                direct = await self._direct_fetch(url)
         except httpx.HTTPStatusError as exc:
             direct_error = f"Direct fetch answered HTTP {exc.response.status_code}"
         except _ProviderPageError as exc:
