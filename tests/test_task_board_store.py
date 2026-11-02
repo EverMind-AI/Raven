@@ -334,6 +334,23 @@ def test_a_groups_entry_must_change_something_it_may_change():
         )
 
 
+def test_a_group_takes_one_step_per_update():
+    """A second step would win the status and leave the first one's questions on a
+    step the page no longer reads as the latest."""
+    board = _one_group()
+    args = {
+        "steps": [
+            {"group": "g_1", **STEP, "status": "needs_you", "questions": ASKED[:1]},
+            {"group": "g_1", **STEP, "status": "running"},
+        ]
+    }
+
+    with pytest.raises(UpdateRejectedError) as exc:
+        apply_update(board, args, [], turn_at="T2", turn_id=None, now_ms=9)
+
+    assert str(exc.value) == "g_1 appears twice in steps; give each group one step per turn"
+
+
 def test_set_group_status_completes_and_reopens():
     board = _one_group()
 
