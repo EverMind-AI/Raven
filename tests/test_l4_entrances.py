@@ -173,6 +173,19 @@ def test_every_seat_the_contract_names_is_something_the_guard_can_walk() -> None
         assert _python_files(name), name
 
 
+def test_every_package_beside_the_loop_shell_is_seated_as_cargo() -> None:
+    """`agent/` holds two seats, and a package added beside the loop is cargo: a
+    contract breaks only on an edge it names, so one left off the cargo list may
+    import the shell with every lint run still green."""
+    data = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
+    contracts = data["tool"]["importlinter"]["contracts"]
+    cargo = next(c for c in contracts if c["name"] == "cargo does not import the loop shell")
+    packages = {f"raven.agent.{p.parent.name}" for p in (REPO / "raven" / "agent").glob("*/__init__.py")}
+
+    assert "raven.agent.tools" in packages, "the walk found the agent's packages"
+    assert sorted(packages - {"raven.agent.loop"} - set(cargo["source_modules"])) == []
+
+
 def _facade_strays(pkg_root, sibling: str, facade: set[str]):
     """Every import of `sibling` from the surface at `pkg_root` that is not on its
     `facade` roster, as ``file:line`` strays.
