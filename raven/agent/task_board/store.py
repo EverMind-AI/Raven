@@ -10,7 +10,6 @@ all may have nothing wrong with it, and is left where it is.
 from __future__ import annotations
 
 import json
-import shutil
 import time
 from pathlib import Path
 
@@ -62,7 +61,6 @@ def copy_board(src: Path, dst: Path) -> None:
     source = Path(src) / BOARD_FILENAME
     if not source.is_file():
         return
-    Path(dst).mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source, Path(dst) / BOARD_FILENAME)
+    files.write_bytes(Path(dst) / BOARD_FILENAME, files.read_bytes(source))
     if (notes := Path(src) / NOTES_FILENAME).is_file():
-        shutil.copyfile(notes, Path(dst) / NOTES_FILENAME)
+        files.write_bytes(Path(dst) / NOTES_FILENAME, files.read_bytes(notes))

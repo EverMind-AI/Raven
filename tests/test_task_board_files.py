@@ -13,9 +13,10 @@ from pathlib import Path
 
 import pytest
 
+from raven.agent.task_board import files
 from raven.agent.task_board.board import Board, ProgressStep, TaskGroup
 from raven.agent.task_board.notes import NOTES_FILENAME, Note, load_notes, save_notes
-from raven.agent.task_board.store import BOARD_FILENAME, load_board, reset_board, save_board
+from raven.agent.task_board.store import BOARD_FILENAME, copy_board, load_board, reset_board, save_board
 
 
 def _board(title: str) -> Board:
@@ -195,3 +196,59 @@ def test_an_unreadable_board_held_throughout_stays_and_reads_as_empty(tmp_path, 
 
     assert load_board(tmp_path).groups == []
     assert (tmp_path / BOARD_FILENAME).read_text(encoding="utf-8") == "{not json"
+
+
+def _hold_open(monkeypatch, path: Path, times: int) -> None:
+    """A reader holds ``path``: opening it, by any route, is refused ``times`` times."""
+    import builtins
+    import io
+
+    left = {"times": times}
+
+    def refusing(opener):
+        def open_(file, *args, **kwargs):
+            if Path(str(file)) == path and left["times"] > 0:
+                left["times"] -= 1
+                raise PermissionError(13, "Access is denied", str(file))
+            return opener(file, *args, **kwargs)
+
+        return open_
+
+    monkeypatch.setattr(builtins, "open", refusing(builtins.open))
+    monkeypatch.setattr(io, "open", refusing(io.open))
+
+
+def test_a_board_copy_waits_out_a_reader(tmp_path, monkeypatch):
+    """A branch copies the board while a post-turn save may be replacing it."""
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    save_board(src, _board("Kept"))
+    save_notes(src, [Note(1, "Kept")])
+    _hold_open(monkeypatch, src / BOARD_FILENAME, 2)
+
+    copy_board(src, dst)
+
+    assert load_board(dst).groups[0].title == "Kept"
+    assert [n.title for n in load_notes(dst)] == ["Kept"]
+
+
+def test_a_board_copy_keeps_the_bytes_of_a_board_that_does_not_parse(tmp_path):
+    """A branch must not fail on a board its source has not set aside yet; the copy is
+    set aside on its own first read, as the source would be."""
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    src.mkdir()
+    (src / BOARD_FILENAME).write_bytes(b"\xff{not utf-8")
+
+    copy_board(src, dst)
+
+    assert (dst / BOARD_FILENAME).read_bytes() == b"\xff{not utf-8"
+
+
+def test_a_bytes_write_is_moved_into_place_past_a_reader(tmp_path, monkeypatch):
+    """A copy lands like any other write: whole, beside the target, then moved in."""
+    sources = _refuse_replace(monkeypatch, BOARD_FILENAME, 2)
+
+    files.write_bytes(tmp_path / BOARD_FILENAME, b"\xff raw")
+
+    assert (tmp_path / BOARD_FILENAME).read_bytes() == b"\xff raw"
+    assert len(sources) == 3 and all(Path(s).name.endswith(".tmp") for s in sources)
+    assert _leftovers(tmp_path) == []

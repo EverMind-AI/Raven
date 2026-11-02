@@ -1,4 +1,4 @@
-"""Reading, writing, moving and removing the task board's own files the way Windows allows.
+"""Reading, writing, copying, moving and removing the task board's own files the way Windows allows.
 
 Windows will not replace or remove a file another handle has open: ``os.replace``
 raises ``PermissionError`` (WinError 5) and ``unlink`` WinError 32, and opening a
@@ -39,16 +39,29 @@ def read_text(path: Path) -> str:
     return _held_off(lambda: path.read_text(encoding="utf-8"))
 
 
-def write_text(path: Path, text: str) -> None:
+def read_bytes(path: Path) -> bytes:
+    return _held_off(path.read_bytes)
+
+
+def _replace_with(path: Path, write: Callable[[Path], object]) -> None:
     """Write the whole file beside ``path``, then move it into place."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
     try:
-        tmp.write_text(text, encoding="utf-8")
+        write(tmp)
         _held_off(lambda: os.replace(tmp, path))
     finally:
         with contextlib.suppress(OSError):
             tmp.unlink(missing_ok=True)
+
+
+def write_text(path: Path, text: str) -> None:
+    _replace_with(path, lambda tmp: tmp.write_text(text, encoding="utf-8"))
+
+
+def write_bytes(path: Path, data: bytes) -> None:
+    """As :func:`write_text`, byte for byte: a copy keeps a file it could not decode."""
+    _replace_with(path, lambda tmp: tmp.write_bytes(data))
 
 
 def remove(path: Path) -> None:

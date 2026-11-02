@@ -95,7 +95,9 @@ already holds the session's subagent records beside its transcript. Written atom
 remove or open a file another handle holds, and the page reads boards on a worker thread, so
 every read, write, move and removal of the board's files (`raven/agent/task_board/files.py`)
 is tried five times, 50 ms apart, before its error goes to the caller; a failed write leaves no
-temporary file, and each write's temporary file has a name of its own. A file that does not
+temporary file, and each write's temporary file has a name of its own. A branch copies the board
+and its notes the same way, byte for byte, so a file that does not parse is copied rather than
+failing the branch. A file that does not
 parse reads as an empty board, and is first set aside as `task_board.json.unreadable-<ms>`,
 since the next write would replace the only copy; one that cannot be opened at all may have
 nothing wrong with it, and stays where it is.
