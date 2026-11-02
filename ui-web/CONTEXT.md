@@ -477,10 +477,12 @@ the questions that step asked at its bottom, after that step, each in a box of i
 Ignore that sets that question aside (the last one leaves the group idle), and one Answer (a
 draft in the
 composer, a slot under each question, from `composer/startTaskWith.ts` `answerInChat`, lent
-at boot); clicking a step scrolls
+at boot, which holds the group for that message as Move on does); clicking a step scrolls
 the transcript to that turn's reply (`transcript/source.ts` `revealTurnAt`). Finished groups
 fold away at the bottom, and Tasks no step places sit in an Unassigned fold at the top. A conversation whose
-board holds no group draws the flat list of Tasks it always had. The terms are the Runtime's
+board holds no group draws the flat list of Tasks it always had, and the desk's tab says it is
+empty only with no Task and no group (`desk/DeskPalette.tsx` `TasksNav`, which reads the board
+itself): a conversation that delegated nothing still has its matters. The terms are the Runtime's
 (`CONTEXT.md`: Task Board, Task Group, Progress Step, Board category).
 _Avoid_: "task list" for this -- that is the flat list it falls back to.
 

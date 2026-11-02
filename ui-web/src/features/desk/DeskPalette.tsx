@@ -216,10 +216,13 @@ function DeliverablesNav(): JSX.Element {
    direct chat still live there. */
 function TasksNav(): JSX.Element {
   const state = useSyncExternalStore(tasksStore.subscribe, tasksStore.get)
-  useEffect(() => { void tasksStore.refresh() }, [])
+  useEffect(() => { void tasksStore.refresh(); void tasksStore.refreshBoard() }, [])
   /* Answered here rather than inside the view: in the desk, one nothing has to
-     look like the other two, and TasksPanel's own note belongs to the panel. */
-  if (!state.rows.length) {
+     look like the other two, and TasksPanel's own note belongs to the panel.
+     Nothing is no Task and no group: a conversation that delegated nothing
+     still has the matters its board keeps, and the Task Board page opens them
+     here. */
+  if (!state.rows.length && !state.board?.groups.length) {
     return <DeskEmpty kind="tasks" title={t('gui.ws.tasks_none')} />
   }
   return <TasksPanel />

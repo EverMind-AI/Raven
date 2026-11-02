@@ -424,7 +424,9 @@ generated into `ui-web/src/rpc/generated` (`npm run gen`); `tests/test_rpc_schem
 
 The tasks tab's list view in `features/tasks/TasksPage.tsx` becomes the board. The rest of
 the domain stays: the docked task pane with its graph and node record, the task strip above
-the composer, and the tab's running-count badge.
+the composer, and the tab's running-count badge. The desk's tab shows its empty state only with
+no Task and no group, reading the board itself: a conversation that delegated nothing still has
+its matters, and the Task Board page opens them there.
 
 5.1 **Cards.** Open groups first, by `created_at` descending, one card each. The card's head
 is a button with `aria-expanded`, operable from the keyboard: the group's type on a tinted
