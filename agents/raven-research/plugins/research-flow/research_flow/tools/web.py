@@ -60,7 +60,7 @@ import httpx
 from loguru import logger
 
 from raven.contracts.tool import Tool
-from raven.security.network import validate_url_target
+from raven.security.network import judge_reader_target
 from research_flow.support.evidence_round import EvidenceRound
 from research_flow.support.harness_text import search_closed_notice
 from research_flow.support.ledger import ledger_append as _ledger_append
@@ -1538,7 +1538,7 @@ with it."""
 
 
 def _judge_fetch_target(url: str) -> tuple[bool, str]:
-    """The trunk validator's verdict, minus the refusal on a resolver failure.
+    """The trunk's reader verdict, minus the refusal on a resolver failure.
 
     The reader service opens the connection to ``url`` from its own network;
     this process never does, so a local resolution failure carries no
@@ -1546,12 +1546,18 @@ def _judge_fetch_target(url: str) -> tuple[bool, str]:
     feeds is vacuous either way. Resolvers fail under load (``EAI_AGAIN``) as
     readily as for a name that does not exist and the caller cannot tell the
     two apart from a ``gaierror``, so refusing here reports load to the model as
-    "this URL is bad". The private-address block still applies whenever the
+    "this URL is bad". The internal-address block still applies whenever the
     name resolves; only the refusal-on-failure is dropped, which is what the
     fork got from ``validate_url_target(url, strict_dns=False)``. The trunk
     validator carries no such knob, so the tolerance lives on this side of it.
+
+    The verdict is ``judge_reader_target``'s, not ``validate_url_target``'s: a
+    poisoned resolver answers a blocked site with reserved space beside the
+    real address (``2001::1`` for every Wikipedia), and the egress check that
+    refuses all non-public space turned each such page into a refusal although
+    the reader would have read it.
     """
-    is_valid, error_msg = validate_url_target(url)
+    is_valid, error_msg = judge_reader_target(url)
     if not is_valid and error_msg.startswith(_UNRESOLVED_REFUSAL):
         return True, ""
     return is_valid, error_msg

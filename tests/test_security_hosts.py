@@ -101,3 +101,55 @@ def test_a_public_destination_stays_public_in_translation(spelling: str) -> None
 def test_the_two_questions_about_localhost() -> None:
     assert hosts.is_local_name("localhost") and hosts.names_this_machine("localhost")
     assert not hosts.is_local_name("evil.localhost") and hosts.names_this_machine("evil.localhost")
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "127.0.0.1",
+        "10.1.2.3",
+        "172.16.5.5",
+        "192.168.1.1",
+        "100.64.0.1",
+        "169.254.169.254",
+        "0.0.0.0",
+        "255.255.255.255",
+        "224.0.0.1",
+        "::",
+        "::1",
+        "fe80::1",
+        "fec0::1",
+        "fc00::1",
+        "ff02::1",
+        "::ffff:10.0.0.1",
+        "::169.254.169.254",
+        "64:ff9b::a00:1",
+        "64:ff9b:1::7f00:1",
+        "2002:a00:1::",
+    ],
+)
+def test_may_be_internal_names_every_address_of_a_network_here(spelling: str) -> None:
+    assert hosts.may_be_internal(ipaddress.ip_address(spelling))
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "2001::1",  # what a poisoned resolver answers for every Wikipedia
+        "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+        "2001:db8::1",
+        "100::1",
+        "192.0.0.1",
+        "192.0.2.1",
+        "198.18.0.1",
+        "240.0.0.1",
+    ],
+)
+def test_reserved_space_no_network_routes_is_not_internal(spelling: str) -> None:
+    addr = ipaddress.ip_address(spelling)
+    assert hosts.not_public(addr) and not hosts.may_be_internal(addr)
+
+
+@pytest.mark.parametrize("spelling", ["93.184.216.34", "2606:4700::1111", "64:ff9b::808:808"])
+def test_a_public_destination_is_not_internal(spelling: str) -> None:
+    assert not hosts.may_be_internal(ipaddress.ip_address(spelling))

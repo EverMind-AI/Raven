@@ -20,12 +20,13 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Protocol
 from urllib.parse import urljoin, urlparse
 
 from loguru import logger
 
-from raven.security.hosts import not_public
+from raven.security.hosts import Address, may_be_internal, names_this_machine, not_public
 
 if TYPE_CHECKING:
     import httpx
@@ -49,6 +50,34 @@ def judge_url_target(url: str) -> tuple[bool, str, tuple[str, ...]]:
     one of them is connecting to what was actually checked. Empty when the
     target needs no pin (a literal-IP URL) or the verdict is a refusal.
     """
+    return _judge_target(url, not_public)
+
+
+def judge_reader_target(url: str) -> tuple[bool, str]:
+    """Judge a URL that a remote reader opens from its own network.
+
+    :func:`judge_url_target` asks whether this process may connect to what the
+    local resolver says. A reader service never does: it resolves the name
+    itself. So a name is refused here only when an answer may name a host on a
+    network this machine sits on (:func:`~raven.security.hosts.may_be_internal`),
+    and reserved space a poisoned resolver answers with does not refuse it. The
+    scheme, hostname and literal-address rules, and their refusal wording, are
+    :func:`judge_url_target`'s; one rule is added in front of them, with its own
+    wording: a name for this machine (``localhost``, ``*.localhost``) is refused
+    whatever the resolver answers.
+    """
+    try:
+        host = urlparse(url).hostname
+    except Exception as e:
+        return False, str(e)
+    if host and names_this_machine(host):
+        return False, f"Blocked: {host} names this machine"
+    ok, err, _ = _judge_target(url, may_be_internal)
+    return ok, err
+
+
+def _judge_target(url: str, refuses: Callable[[Address], bool]) -> tuple[bool, str, tuple[str, ...]]:
+    """The checks both judges share; ``refuses`` decides on each address a hostname resolves to."""
     try:
         p = urlparse(url)
     except Exception as e:
@@ -83,7 +112,7 @@ def judge_url_target(url: str) -> tuple[bool, str, tuple[str, ...]]:
             addr = ipaddress.ip_address(info[4][0])
         except ValueError:
             continue
-        if not_public(addr):
+        if refuses(addr):
             return False, f"Blocked: {hostname} resolves to private/internal address {addr}", ()
         addrs.append(str(addr))
 

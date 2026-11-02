@@ -41,6 +41,14 @@ _BLOCKED_NETWORKS = [
     ipaddress.ip_network("fec0::/10"),
 ]
 
+# Beyond _BLOCKED_NETWORKS, what may_be_internal also counts as this site's own:
+# limited broadcast, and NAT64's local-use prefix (RFC 8215), which a site points
+# at its own translator.
+_SITE_OWN_NETWORKS = [
+    ipaddress.ip_network("255.255.255.255/32"),
+    ipaddress.ip_network("64:ff9b:1::/48"),
+]
+
 # Forms that carry an IPv4 address in their low 32 bits. Spelled this way an
 # internal IPv4 destination is the same destination, so the inner address is
 # judged too -- ``::ffff:169.254.169.254`` reached the cloud metadata service
@@ -219,6 +227,27 @@ def not_public(addr: Address) -> bool:
     return any(not is_public(inner) for inner in embedded_v4(addr))
 
 
+def may_be_internal(addr: Address) -> bool:
+    """True when ``addr`` can name a host on a network this machine sits on.
+
+    Narrower than :func:`not_public` on purpose. That one also refuses reserved
+    and special-purpose space that no network routes to (``2001::/23``, the
+    documentation and benchmarking ranges, ``240.0.0.0/4``), which is what a
+    poisoned resolver answers for a blocked site (``2001::1`` beside the real
+    address). Such an answer is nobody's destination, so it says nothing about
+    the target to a party that resolves the name on its own network. What that
+    party must still never be handed is a name for something here: loopback,
+    link-local, private, shared, unique-local or site-local space, the
+    unspecified, broadcast and multicast addresses, NAT64's local-use prefix
+    (a site's own translator), in any spelling.
+    """
+    if addr.is_unspecified or addr.is_multicast or addr.is_loopback or addr.is_link_local:
+        return True
+    if any(addr in net for net in (*_BLOCKED_NETWORKS, *_SITE_OWN_NETWORKS)):
+        return True
+    return any(may_be_internal(inner) for inner in embedded_v4(addr))
+
+
 __all__ = [
     "Address",
     "LOCAL_NAMES",
@@ -230,6 +259,7 @@ __all__ = [
     "is_public",
     "legacy_ipv4",
     "mapped_host",
+    "may_be_internal",
     "names_this_machine",
     "not_public",
 ]

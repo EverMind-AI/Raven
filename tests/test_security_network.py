@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import socket
+
 import httpx
 import pytest
 
@@ -474,3 +476,69 @@ async def test_a_plain_http_pin_carries_host_but_no_sni(public_dns) -> None:
     assert rec.requested == ["http://93.184.216.34/a.png"]
     assert rec.kwargs[0]["headers"]["Host"] == "cdn.example.test"
     assert "extensions" not in rec.kwargs[0]
+
+
+# ---------------------------------------------------------------------------
+# judge_reader_target: a URL a remote reader opens from its own network
+# ---------------------------------------------------------------------------
+
+READER_REFUSED = [
+    a
+    for a in DANGEROUS
+    if a[0]
+    not in {
+        "192.0.0.1",
+        "198.18.0.1",
+        "240.0.0.1",
+        "100::1",
+        "2001:db8::1",
+        "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+    }
+]
+
+
+def _mock_resolve_all(monkeypatch: pytest.MonkeyPatch, *ips: str) -> None:
+    monkeypatch.setattr("socket.getaddrinfo", lambda *a, **k: [(0, 0, 0, "", (ip, 0)) for ip in ips])
+
+
+@pytest.mark.parametrize("addr,reason", READER_REFUSED, ids=[c[0] for c in READER_REFUSED])
+def test_a_reader_is_never_handed_a_name_for_a_host_here(
+    addr: str, reason: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mock_resolve_all(monkeypatch, "93.184.216.34", addr)
+
+    ok, err = net.judge_reader_target("https://attacker.example/latest/meta-data/")
+
+    assert not ok, f"allowed {addr}: {reason}"
+    assert "private/internal address" in err
+
+
+@pytest.mark.parametrize("answers", [("103.102.166.224", "2001::1"), ("2001::1",), ("31.13.94.41", "2001::1")])
+def test_a_poisoned_answer_does_not_refuse_a_reader(answers: tuple[str, ...], monkeypatch: pytest.MonkeyPatch) -> None:
+    """A blocked site resolves locally to reserved space beside (or instead of) its address;
+    the reader resolves the name on its own network, so the answer says nothing."""
+    _mock_resolve_all(monkeypatch, *answers)
+
+    assert net.judge_reader_target("https://en.wikipedia.org/wiki/Teredo_tunneling") == (True, "")
+    assert not net.validate_url_target("https://en.wikipedia.org/wiki/Teredo_tunneling")[0]
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://[2001::1]/", "http://10.0.0.1/", "ftp://example.com/f", "http://localhost/", "http://x.localhost/"],
+)
+def test_a_reader_keeps_the_literal_scheme_and_local_name_rules(url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    _mock_resolve_all(monkeypatch, "2001::1")
+
+    ok, err = net.judge_reader_target(url)
+
+    assert not ok and err
+
+
+def test_a_reader_refusal_on_an_unresolvable_name_keeps_the_trunk_wording(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(*_a, **_k):
+        raise socket.gaierror("no such name")
+
+    monkeypatch.setattr("socket.getaddrinfo", fail)
+
+    assert net.judge_reader_target("https://example.com/") == (False, "Cannot resolve hostname: example.com")

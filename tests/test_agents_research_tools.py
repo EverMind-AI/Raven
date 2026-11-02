@@ -44,7 +44,7 @@ from research_flow.tools.web import (  # noqa: E402
 from raven.agent.loop.failure_streak import failure_class, is_hard_tool_failure  # noqa: E402
 from raven.agent.tools.params import cast_params, validate_params  # noqa: E402
 from raven.plugins.context import PluginContext, ServiceLocator  # noqa: E402
-from raven.security.network import validate_url_target  # noqa: E402
+from raven.security.network import judge_reader_target  # noqa: E402
 
 # The gates that need a model. Off, so a context with no provider still installs
 # the flow and these tests measure the key rather than the provider.
@@ -177,7 +177,7 @@ async def test_one_transport_fault_on_two_hosts_is_one_streak_class(monkeypatch)
     stays in the envelope for the model to read; it just does not decide the class.
     """
     _patch_client(monkeypatch, _DeadTransport())
-    monkeypatch.setattr(web_mod, "validate_url_target", lambda url: (True, ""))
+    monkeypatch.setattr(web_mod, "judge_reader_target", lambda url: (True, ""))
     # A dead transport is retried with a backoff, and what this pins is the envelope
     # the last attempt writes rather than the waiting on the way to it.
     monkeypatch.setattr(web_mod, "_RETRY_BACKOFF_S", (0.0, 0.0))
@@ -210,7 +210,7 @@ async def test_a_vendor_that_answered_without_a_page_keeps_its_own_class(monkeyp
         async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, request=request, json=self._payload)
 
-    monkeypatch.setattr(web_mod, "validate_url_target", lambda url: (True, ""))
+    monkeypatch.setattr(web_mod, "judge_reader_target", lambda url: (True, ""))
     set_current_session("t")
 
     _patch_client(monkeypatch, _NoPage({"code": 401, "message": "bad key"}))
@@ -465,7 +465,7 @@ def test_the_trunk_refusal_wording_is_the_one_the_tolerance_keys_on(monkeypatch)
         raise socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution")
 
     monkeypatch.setattr(socket, "getaddrinfo", _no_resolver)
-    is_valid, error_msg = validate_url_target("https://example.com/a")
+    is_valid, error_msg = judge_reader_target("https://example.com/a")
 
     assert not is_valid and error_msg.startswith(_UNRESOLVED_REFUSAL)
 
@@ -499,6 +499,43 @@ async def test_a_private_address_is_still_refused(monkeypatch):
     answer = await WebFetchTool().execute(url="http://127.0.0.1:8080/admin")
 
     assert "URL validation failed" in answer
+
+
+@pytest.mark.asyncio
+async def test_a_poisoned_resolver_answer_does_not_refuse_the_reader(monkeypatch):
+    """A blocked site resolves here to reserved space beside its real address
+    (``2001::1`` for every Wikipedia). The reader resolves the name on its own
+    network, so that answer is no reason to refuse: the page is read."""
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda host, port, *a, **k: [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("103.102.166.224", port or 0)),
+            (socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("2001::1", port or 0, 0, 0)),
+        ],
+    )
+    _patch_client(monkeypatch, _PageTransport())
+    set_current_session("t")
+
+    answer = await WebFetchTool().execute(url="https://en.wikipedia.org/wiki/Foo")
+
+    assert "URL validation failed" not in answer
+    assert "page body" in answer
+
+
+@pytest.mark.asyncio
+async def test_a_name_resolving_inward_is_still_refused_to_the_reader(monkeypatch):
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda host, port, *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("10.0.0.7", 0))],
+    )
+    _patch_client(monkeypatch, _PageTransport())
+    set_current_session("t")
+
+    answer = await WebFetchTool().execute(url="https://intranet.example/admin")
+
+    assert "URL validation failed" in answer and "10.0.0.7" in answer
 
 
 @pytest.mark.asyncio
