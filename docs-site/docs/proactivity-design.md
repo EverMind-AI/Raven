@@ -203,9 +203,10 @@ check-and-reserve transaction:
   execution path, not a second pass through ProactiveSpawn for every action.
 - Cron is explicitly user-scheduled and bypasses `check()`. With a Sentinel
   runner wired, successful fires update its shared counters and topic ledger,
-  except a run the model ends with `[SILENT]`: it nudged no one, so it records
-  nothing. This helps suppress overlapping Sentinel reminders; it is not a
-  guarantee of semantic deduplication across all messages.
+  except a run the model ends with `[SILENT]` before any tool reached the user
+  (a message sent, files delivered): it nudged no one, so it records nothing.
+  This helps suppress overlapping Sentinel reminders; it is not a guarantee of
+  semantic deduplication across all messages.
 
 ## State and feedback
 
@@ -284,9 +285,10 @@ broadcast. `raven/core/cron_stack.py` submits the work as a `CRON` turn in
 Successful recurring fires increase `silent_fire_count`; matching user
 activity resets it. Reaching `silent_fire_limit` (default `12`) disables the
 job. This counts fires without user activity, not failures. A run the model
-ends with `[SILENT]` is not counted either: it sent the user nothing to
-respond to, so a check that mostly stays quiet is not disabled for it. Cron's
-feedback record is marked neutral so it does not lower Sentinel's learned
+ends with `[SILENT]` before any tool reached the user (a message sent, files
+delivered) is not counted either: it sent the user nothing to respond to, so a
+check that mostly stays quiet is not disabled for it. Cron's feedback record is
+marked neutral so it does not lower Sentinel's learned
 acceptance rate. Fixed-delay `every` schedules compute their next run from
 completion, not from the previous due time.
 
@@ -297,10 +299,12 @@ while user work is busy. Wake drives Heartbeat, not Sentinel's tick loop.
 
 A successful Cron turn that explicitly replies uses the Spine's delivery
 path and does not enqueue a completion event or wake Heartbeat to repeat the
-reminder. The reminder also teaches the `[SILENT]` marker. Cron is a
-proactive origin, so a marker alone on the first or last line, or `[SILENT]`
-opening the reply, counts too, and a note on why the model stayed quiet does
-not defeat it. A run that ends this way is recorded as a success and delivers
+reminder. The reminder also teaches the `[SILENT]` marker, and a proactive
+turn whose prompt teaches it reads the marker loosely: a marker alone on the
+first or last line, or `[SILENT]` opening the reply, counts too, and a note on
+why the model stayed quiet does not defeat it. A proactive turn that was never
+taught the marker (a heartbeat task, a relayed sub-agent result, a sentinel
+notice) honours only an exact `[SILENT]`. A run that ends this way is recorded as a success and delivers
 nothing: it enqueues no event and wakes no Heartbeat. A run in which the model
 produced no output after every retry is recorded as failed, delivers nothing,
 and does not wake Heartbeat either. Every other failure still wakes

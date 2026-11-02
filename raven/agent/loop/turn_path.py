@@ -8,7 +8,7 @@ import contextlib
 import functools
 from typing import TYPE_CHECKING
 
-from raven.agent.context.silence import is_silence
+from raven.agent.context.silence import is_silence, reads_loose_silence, teaches_silence
 from raven.agent.loop._shared import (
     _ABORTED_ACTION_REPLY,
     _CONTEXT_USED_KEY,
@@ -140,8 +140,9 @@ from raven.providers.base import bound_llm_detail, canonical_llm_error, llm_erro
 from raven.providers.first_byte import first_byte_budget
 from raven.providers.tool_calls import openai_tool_call
 from raven.session.refs import TOOL_RESULT_TRUNCATION_MARKER, tool_result_view
+from raven.session.turn_shape import REPLIED_VIA_TOOL, TakeBack, TakeBackStep
 from raven.spine.events import bound_failure_text
-from raven.spine.turn import PROACTIVE_ORIGINS, AnswerlessTurnError
+from raven.spine.turn import AnswerlessTurnError
 from raven.token_wise import usage_context
 from raven.token_wise.turn_spend import TurnSpend
 from raven.tracing import config as tracing_config
@@ -486,6 +487,52 @@ def _file_unanswered(messages: list[dict]) -> None:
             return
     text, notice = filing
     messages.append({"role": "assistant", "content": text, _NOTICE_KEY: notice})
+
+
+def _delivered_files(turn_rows: list[dict]) -> bool:
+    """Whether a tool handed the reader files this turn: a call that left a delivery manifest with files."""
+    for row in turn_rows:
+        metadata = row.get(_TOOL_METADATA_KEY)
+        delivery = metadata.get("raven_delivery") if isinstance(metadata, dict) else None
+        if isinstance(delivery, dict) and delivery.get("files"):
+            return True
+    return False
+
+
+def _taken_back_whole(messages: list[dict], skip: int) -> bool:
+    """Whether the session list and the ACP replay will take back the row that closes this turn.
+
+    Asked of the rule they read a transcript with (``TakeBack``), over the rows as ``_save_turn``
+    will store them: a recovery nudge is never stored, and the turn's own rows carry their marks
+    under the live names. ``skip`` is where the turn's new rows start; the row that opened it may be
+    older, filed by the opening write.
+    """
+    # Every user row sets the rule's state afresh, so reading from the last one before the turn's new
+    # rows reads what the whole transcript would, without walking a long session on every save.
+    start = next(
+        (
+            i
+            for i in range(skip - 1, -1, -1)
+            if messages[i].get("role") == "user" and not messages[i].get("_recovery_synthetic")
+        ),
+        0,
+    )
+    take_back = TakeBack()
+    taken = False
+    for index, row in enumerate(messages[start:], start):
+        if row.get("_recovery_synthetic"):
+            continue
+        step = take_back.read(
+            {
+                "role": row.get("role"),
+                "origin": row.get(_ORIGIN_KEY) or row.get("origin"),
+                "silent": row.get(_SILENT_KEY) or row.get("silent"),
+                REPLIED_VIA_TOOL: row.get(_REPLIED_VIA_TOOL_KEY) or row.get(REPLIED_VIA_TOOL),
+            }
+        )
+        if index >= skip and row.get("role") == "assistant":
+            taken = step is TakeBackStep.TAKES_BACK
+    return taken
 
 
 def _turn_trace_id() -> str | None:
@@ -933,12 +980,14 @@ class TurnPathMixin:
         rungs_used: set[str] | None = None,
         reply_awaited: bool = False,
         window_reading: dict[str, int] | None = None,
+        silence_taught: bool = False,
     ) -> tuple[str | None, list[str], list[dict], LoopOutcome]:
         """Run the agent iteration loop.
 
         ``origin`` is the turn's: the watch-work judgement reads the owner's
         request off the messages, and a turn the runtime re-injected has none
-        to read (``watch_work.asked_for``). It also picks the silence rule a
+        to read (``watch_work.asked_for``). With ``silence_taught``, whether
+        the turn's prompt taught the marker, it also picks the silence rule a
         reply is read by -- unless ``reply_awaited`` says the caller waits on
         the turn's text, as an inbound A2A call's peer does: such a turn takes
         no part in the silence protocol, so nothing is held back for a marker
@@ -1026,6 +1075,15 @@ class TurnPathMixin:
         # Set when the turn's last reply is a silence marker: the model's own choice to say
         # nothing, which the caller does not deliver.
         silent = False
+        # What the silence gates have put in front of the reader in the step drawn now: one model
+        # call with its cut answer's continuations, or the wrap-up. A reply read as the marker
+        # reports it (``LoopOutcome.shown``), for a client to take back that much and no more.
+        step_shown: list[str] = []
+
+        async def _shown(delta: str) -> None:
+            step_shown.append(delta)
+            if on_token_delta is not None:
+                await on_token_delta(delta)
 
         # The turn's window bookkeeping: the last billed context size, the retry
         # budgets every shrink draws on, and the picture window. Held here and
@@ -1285,7 +1343,7 @@ class TurnPathMixin:
             nonlocal messages, status, silent
             final = self._strip_think("".join(recovery.parts)) or ""
             held = carried_gate.handed_over() if carried_gate is not None else None
-            silent = not reply_awaited and is_silence(final, origin)
+            silent = not reply_awaited and is_silence(final, origin, taught=silence_taught)
             if silent:
                 if held is not None:
                     held.discard()
@@ -1329,6 +1387,8 @@ class TurnPathMixin:
             # group this call's reasoning + text + tools into a single step. Not
             # for the continuation of a cut answer: a boundary there would show
             # the reader one answer as two steps.
+            if not merge_episode:
+                step_shown.clear()
             if on_episode_start is not None and not merge_episode:
                 # A bounded per-outlet queue with a wedged worker behind it parks
                 # here forever; the boundary is a grouping hint, so losing one is
@@ -1496,7 +1556,7 @@ class TurnPathMixin:
                 if reply_room := self._reply_room(call_messages, call_tools, call_model):
                     gen_overrides["max_tokens"] = min(gen_overrides.get("max_tokens", reply_room), reply_room)
             # A reply that is a silence marker is shown to no one, so the start of one is
-            # held until the loop has read the reply. A turn from a proactive origin holds the
+            # held until the loop has read the reply. A turn that reads the loose rule holds the
             # whole call, because its marker may close a report and only the end of the call
             # shows that. The gates below deliver into this one.
             if on_token_delta is None or reply_awaited:
@@ -1504,7 +1564,7 @@ class TurnPathMixin:
             elif carried_gate is not None:
                 silence_gate = carried_gate.handed_over()
             else:
-                silence_gate = SilenceGate(on_token_delta, hold_all=origin in PROACTIVE_ORIGINS)
+                silence_gate = SilenceGate(_shown, hold_all=reads_loose_silence(origin, taught=silence_taught))
             downstream = silence_gate or on_token_delta
             # A hook can send this whole response back, and a rollback pops the
             # history the stream has already left -- so where hooks are installed
@@ -1530,33 +1590,50 @@ class TurnPathMixin:
                 usage_context.bind(session_key) if session_key else contextlib.nullcontext(),
             ):
                 unstreamed, unstreamed_next = unstreamed_next, False
-                response = await self.harness.action.decide(
-                    ActionRequest(
-                        provider=self.provider,
-                        messages=call_messages,
-                        tools=call_tools,
-                        model=call_model,
-                        # An unstreamed resend is still the streamed turn's call: the provider's
-                        # own chain is not walked, and a model switch stays the loop's to make.
-                        fallback_models=[] if unstreamed else list(fallbacks_left),
-                        # The one streaming call that asks for a cut answer back: a
-                        # continuation (``ReplyKind.NETWORK_CUT``) follows it. The
-                        # wrap-up and the watch-work judgement call the same method
-                        # and have nothing to follow them.
-                        stream_call=functools.partial(self._llm_call_stream, hand_back_partial=True),
-                        # Spliced here rather than inside the module: the gates are
-                        # the shell's own, and which sink a delta reaches is not a
-                        # strategy decision. The module reads the field it is handed,
-                        # so the stream/retry branch stays exactly the one the loop
-                        # took -- no gate is built unless ``on_token_delta``
-                        # already is, so the spliced value is None on exactly the
-                        # turns the raw sink was, and a reasoning sink alone still
-                        # streams.
-                        on_token_delta=None if unstreamed else (draft or gate or downstream),
-                        on_reasoning_delta=None if unstreamed else on_reasoning_delta,
-                        generation_overrides=gen_overrides,
+                continuing = bool(recovery.parts)
+                try:
+                    response = await self.harness.action.decide(
+                        ActionRequest(
+                            provider=self.provider,
+                            messages=call_messages,
+                            tools=call_tools,
+                            model=call_model,
+                            # An unstreamed resend is still the streamed turn's call: the provider's
+                            # own chain is not walked, and a model switch stays the loop's to make.
+                            fallback_models=[] if unstreamed else list(fallbacks_left),
+                            # The one streaming call that asks for a cut answer back: a
+                            # continuation (``ReplyKind.NETWORK_CUT``) follows it. The
+                            # wrap-up and the watch-work judgement call the same method
+                            # and have nothing to follow them.
+                            stream_call=functools.partial(self._llm_call_stream, hand_back_partial=True),
+                            # Spliced here rather than inside the module: the gates are
+                            # the shell's own, and which sink a delta reaches is not a
+                            # strategy decision. The module reads the field it is handed,
+                            # so the stream/retry branch stays exactly the one the loop
+                            # took -- no gate is built unless ``on_token_delta``
+                            # already is, so the spliced value is None on exactly the
+                            # turns the raw sink was, and a reasoning sink alone still
+                            # streams.
+                            on_token_delta=None if unstreamed else (draft or gate or downstream),
+                            on_reasoning_delta=None if unstreamed else on_reasoning_delta,
+                            generation_overrides=gen_overrides,
+                        )
                     )
-                )
+                except Exception as exc:
+                    if not continuing:
+                        raise
+                    # A continuation can fail by raising rather than by answering with an error
+                    # (``LiteLLMProvider.chat_stream`` raises its HTTP errors), once the stream's
+                    # own reconnects are spent. The reader holds the answer so far either way, so
+                    # either way the turn ends on it, as a continuation that errored does.
+                    logger.warning(
+                        "empty-recovery: the continuation of a cut answer raised; ending the turn on the "
+                        "{} chars that streamed: {}",
+                        sum(len(part) for part in recovery.parts),
+                        exc,
+                    )
+                    final_content = await _end_on_the_partial(response)
+                    break
                 # Read inside the bind: the count belongs to it and ends with it.
                 recorded_at_seam = usage_record.recorded_inbound()
             if unstreamed and response.finish_reason != "error":
@@ -2266,6 +2343,7 @@ class TurnPathMixin:
                     prev_had_tool_calls=prev_had_tool_calls,
                     streamed=streamed_call,
                     reply_awaited=reply_awaited,
+                    silence_taught=silence_taught,
                 )
                 if kind in (ReplyKind.EMPTY, ReplyKind.POST_TOOL_EMPTY):
                     recovery.empty_streak.append(EmptyAttempt.of(response, call_model))
@@ -2516,7 +2594,15 @@ class TurnPathMixin:
                 # continued rather than judged on its fragment, so after one -- or when one can
                 # no longer be continued -- the joined text is what may be the marker.
                 if recovery.parts or kind is ReplyKind.NETWORK_CUT:
-                    ends_silent = not reply_awaited and is_silence(clean, origin)
+                    ends_silent = not reply_awaited and is_silence(clean, origin, taught=silence_taught)
+                    if own_marker and not ends_silent and not reply_awaited:
+                        # Dropping a continuation that is only the marker rests on the reader already
+                        # holding what streamed, which a turn holding its whole call never showed. So
+                        # the marker is read with what came before it, on its own line, as the same
+                        # reply uncut would be; only the loose rule can find it there.
+                        with_marker = clean + "\n" + (response.content or "").strip()
+                        if is_silence(with_marker, origin, taught=silence_taught):
+                            clean, ends_silent = with_marker, True
                 else:
                     ends_silent = action is RecoveryAction.SILENT
                 dropped_marker = own_marker and not ends_silent
@@ -2631,8 +2717,10 @@ class TurnPathMixin:
             # The wrap-up is the turn's last reply, so it may be a Silence Marker as an
             # answer may: its stream is held back as the answering call's is, and a
             # marker ends the turn silent.
+            # The wrap-up streams into the last call's step, after the narration that step keeps.
+            step_shown.clear()
             wrap_up_gate = (
-                SilenceGate(on_token_delta, hold_all=origin in PROACTIVE_ORIGINS)
+                SilenceGate(_shown, hold_all=reads_loose_silence(origin, taught=silence_taught))
                 if on_token_delta is not None and not reply_awaited
                 else None
             )
@@ -2653,7 +2741,7 @@ class TurnPathMixin:
                 ),
                 synthesis_policy=turn_synthesis(turn_meta),
             )
-            silent = not reply_awaited and is_silence(final_content, origin)
+            silent = not reply_awaited and is_silence(final_content, origin, taught=silence_taught)
             await _settle_silence(wrap_up_gate, silent=silent)
             # Persist the wrap-up into history like any normal final reply.
             # Persistence downstream reads only the returned ``messages`` list,
@@ -2737,7 +2825,12 @@ class TurnPathMixin:
         # pipeline can gate on completion.
 
         outcome = LoopOutcome(
-            status=status, error=error_detail, error_full=error_full, no_output=no_output, silent=silent
+            status=status,
+            error=error_detail,
+            error_full=error_full,
+            no_output=no_output,
+            silent=silent,
+            shown="".join(step_shown) if silent else "",
         )
         checkpoint = self._turn_checkpoint()
         if checkpoint is not None:
@@ -2778,7 +2871,7 @@ class TurnPathMixin:
         origin: Origin | None = None,
         drain: Drain | None = None,
         hook_sink: dict[str, str] | None = None,
-        silence: dict[str, bool] | None = None,
+        silence: dict[str, bool | str] | None = None,
         reply_awaited: bool = False,
     ) -> tuple[str | None, list[str]] | None:
         """Process a single turn request and return its reply.
@@ -2792,7 +2885,11 @@ class TurnPathMixin:
         reply: a streamed reply has already left as deltas by then, so the
         caller has to send that tail itself. ``silence``, when given, receives
         ``"silent": True`` for the last of those: a turn the model ended on a
-        marker, and that nothing replaced with a reply of its own.
+        marker, and that nothing replaced with a reply of its own -- and, when
+        that reply had streamed anything first, ``"shown"`` (``LoopOutcome.shown``).
+        It receives ``"delivered_files": True`` for a turn a tool handed the
+        reader files in: those went out with the call, so such a turn answered
+        whatever it ends on, and is never a Silent Turn.
         ``reply_awaited`` keeps a turn whose caller waits on its text out of
         the silence protocol (``_run_agent_loop``).
         """
@@ -3236,6 +3333,7 @@ class TurnPathMixin:
                 rungs_used=rungs_used,
                 reply_awaited=reply_awaited,
                 window_reading=reading,
+                silence_taught=teaches_silence(content),
             )
 
         # Taken BEFORE the first attempt, because the loop appends to the list it is
@@ -3488,8 +3586,11 @@ class TurnPathMixin:
             # A hook composed the reply the reader is sent in place of the marker. A turn the
             # message tool answered sends no reply of its own, so its marker row stays.
             _file_composed_reply(turn_msgs, final_content)
-        if sent_by_tool:
+        delivered_files = _delivered_files(turn_msgs[turn_start_idx:])
+        if sent_by_tool or delivered_files:
             _stamp_replied_via_tool(turn_msgs, turn_start_idx)
+        if delivered_files and silence is not None:
+            silence["delivered_files"] = True
         if len(self.hooks) > 0:
             _stamp_turn_observers(turn_msgs, turn_hook_meta, turn_start_idx)
 
@@ -3551,10 +3652,18 @@ class TurnPathMixin:
                 )
             return None
 
+        if silent and delivered_files:
+            # The files reached the reader with the call that delivered them, so the turn answered,
+            # by the verdict filed above: not a Silent Turn, and the marker is no reply to send.
+            logger.info("Turn for {}:{} delivered files and ended on the silence marker", channel, sender_id)
+            return None
+
         if silent:
             logger.info("Silent turn for {}:{}: the model chose not to reply", channel, sender_id)
             if silence is not None:
                 silence["silent"] = True
+                if outcome.shown:
+                    silence["shown"] = outcome.shown
             return None
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
@@ -3830,8 +3939,11 @@ class TurnPathMixin:
 
         # Both exits that persist a turn come through here, so a question noted
         # on the turn is filed once whichever exit runs. The early inbound write
-        # also comes through, before any question, and files nothing.
-        _file_unanswered(messages)
+        # also comes through, before any question, and files nothing. A turn the
+        # session list and the ACP replay take back whole files none: a notice
+        # after its marker would outlive the take-back as an orphan.
+        if not _taken_back_whole(messages, skip):
+            _file_unanswered(messages)
         first_user_pending = received_at is not None
         # The turn's first user entry is the inbound message; hooks may have
         # rewritten what the model saw (a memo prepended, a reminder appended),
@@ -4144,7 +4256,7 @@ class TurnPathMixin:
 
         streamed = False
         hook_sink: dict[str, str] = {}
-        silence: dict[str, bool] = {}
+        silence: dict[str, bool | str] = {}
 
         async def on_token(text: str) -> None:
             nonlocal streamed
@@ -4327,9 +4439,11 @@ class TurnPathMixin:
                 await emit(StreamDelta(delta=hook_sink["appended"]))
             if text_sink is not None and reply_content:
                 text_sink["text"] = reply_content
-        silent = silence.get("silent", False)
+        silent = silence.get("silent", False) is True
         if silent:
-            await emit(Notice(kind=NoticeKind.SILENT_TURN))
+            # Named so a client that drew the reply's think block takes back that and no more.
+            shown = silence.get("shown")
+            await emit(Notice(kind=NoticeKind.SILENT_TURN, detail=shown if isinstance(shown, str) and shown else None))
 
         usage = Usage(
             prompt_tokens=int(usage_sink.get("prompt_tokens", 0) or 0),
@@ -4337,6 +4451,7 @@ class TurnPathMixin:
             total_tokens=int(usage_sink.get("total_tokens", 0) or 0),
         )
         # A message-tool reply returns None from _process_message but did reply,
-        # so it counts as an explicit reply too.
-        replied_via_tool = isinstance(message_tool, MessageTool) and message_tool.sent_in_turn
+        # so it counts as an explicit reply too, and so do files a tool delivered.
+        sent_by_tool = isinstance(message_tool, MessageTool) and message_tool.sent_in_turn
+        replied_via_tool = sent_by_tool or silence.get("delivered_files") is True
         return TurnOutcome(usage=usage, explicit_reply=out is not None or replied_via_tool, silent=silent)

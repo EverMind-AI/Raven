@@ -60,7 +60,7 @@ def test_a_delegated_report_preserves_the_sending_agents_text():
 
 
 class TestOrder:
-    def test_a_whole_conversation_replays_in_the_order_it_happened(self):
+    def test_a_whole_conversation_replays_in_the_order_it_happened(self, tmp_path):
         transcript = [
             {"role": "system", "text": "you are raven"},
             {"role": "user", "text": "read a.py and fix it"},
@@ -74,7 +74,7 @@ class TestOrder:
             {"role": "assistant", "text": "Done."},
         ]
 
-        updates = _valid(replay(transcript, session_id="acp:s1", cwd="/work"))
+        updates = _valid(replay(transcript, session_id="acp:s1", cwd=str(tmp_path)))
 
         assert _kinds(updates) == [
             "user_message_chunk",
@@ -145,18 +145,18 @@ class TestToolCalls:
         assert updates[0]["_meta"] == {"raven.toolName": "todowrite"}
         assert updates[0]["kind"] == "other"
 
-    def test_stored_arguments_are_parsed_so_the_row_can_be_labelled(self):
+    def test_stored_arguments_are_parsed_so_the_row_can_be_labelled(self, tmp_path):
         """They are kept as the JSON string the provider sent, so a title or a
         location needs them parsed."""
         updates = replay(
             [{"role": "assistant", "tool_calls": [{"id": "c1", "name": "read_file", "arguments": '{"path":"a.py"}'}]}],
             session_id="acp:s1",
-            cwd="/work",
+            cwd=str(tmp_path),
         )
 
         assert updates[0]["title"] == "read_file: a.py"
         assert updates[0]["kind"] == "read"
-        assert updates[0]["locations"] == [{"path": "/work/a.py"}]
+        assert updates[0]["locations"] == [{"path": str(tmp_path / "a.py")}]
 
     def test_arguments_that_will_not_parse_still_produce_a_row(self):
         """Guessing at half-parsed arguments would put a fragment of JSON on a
@@ -217,17 +217,17 @@ class TestToolCalls:
 
         assert updates == [{"sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "completed"}]
 
-    def test_arguments_already_parsed_are_used_as_they_are(self):
+    def test_arguments_already_parsed_are_used_as_they_are(self, tmp_path):
         """A live-cache message holds them as a mapping rather than as the JSON
         string a stored one carries, and both shapes reach here."""
         updates = replay(
             [{"role": "assistant", "tool_calls": [{"id": "c1", "name": "read_file", "arguments": {"path": "a.py"}}]}],
             session_id="acp:s1",
-            cwd="/work",
+            cwd=str(tmp_path),
         )
 
         assert updates[0]["title"] == "read_file: a.py"
-        assert updates[0]["locations"] == [{"path": "/work/a.py"}]
+        assert updates[0]["locations"] == [{"path": str(tmp_path / "a.py")}]
 
     @pytest.mark.parametrize("arguments", [None, [], 5, "", "   ", "[1, 2]", '"a string"'])
     def test_arguments_of_an_unusable_shape_leave_the_row_unlabelled(self, arguments):
@@ -422,13 +422,12 @@ class TestRuntimeMarks:
         "arguments,result",
         [
             pytest.param({}, "Error sending message: the channel is down", id="a_send_that_failed"),
-            pytest.param({"chat_id": "c2"}, "Message sent to acp:c2", id="sent_to_another_chat"),
         ],
     )
     def test_a_runtime_turn_whose_message_call_answered_nobody_replays_as_nothing(self, arguments, result):
-        """A message call is not an answer by being made: the live turn counted it only when it
-        sent to the turn's own chat, and filed that verdict on the row that closes the turn. A
-        turn that closes on the marker without it is a Silent Turn, taken out whole."""
+        """A message call is not an answer by being made: the live turn counted it only when the send
+        went out, and filed that verdict on the row that closes the turn. A turn that closes on the
+        marker without it is a Silent Turn, taken out whole."""
         said = json.dumps({"content": "The build finished with 3 failing tests.", **arguments})
         calls = [{"id": "m1", "type": "function", "function": {"name": "message", "arguments": said}}]
         stored = [

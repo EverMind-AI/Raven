@@ -375,6 +375,7 @@ def reply_kind(
     prev_had_tool_calls: bool,
     streamed: bool,
     reply_awaited: bool = False,
+    silence_taught: bool = False,
 ) -> ReplyKind:
     """What a reply that carries no tool call is, by the first of these rules it meets.
 
@@ -383,14 +384,15 @@ def reply_kind(
     not read as a marker. A refusal is named before text because the text is the model's explanation
     of it, and thinking before a cut because a reply that thought and was cut is thinking-only:
     TRUNCATED is a cut with no reasoning behind it. ``reply_awaited`` is a turn whose caller waits on
-    its text, where a marker is text like any other.
+    its text, where a marker is text like any other. ``silence_taught`` says the turn's prompt taught
+    the marker, which with ``origin`` picks the rule a marker is read by (``is_silence``).
     """
     has_text = bool(visible and visible.strip())
     # Only a stream that died carries ``STREAM_CUT``. A clean close without a terminal chunk, and a body
     # that names no finish, read ``unknown`` and are whole answers.
     if has_text and streamed and response.finish_reason == STREAM_CUT:
         return ReplyKind.NETWORK_CUT
-    if has_text and not reply_awaited and is_silence(visible, origin):
+    if has_text and not reply_awaited and is_silence(visible, origin, taught=silence_taught):
         return ReplyKind.SILENT
     if response.finish_reason in DECLINED_FINISH_REASONS:
         return ReplyKind.REFUSAL
@@ -744,8 +746,8 @@ class SilenceGate:
     """Holds the start of a reply back while it could still turn out to be a silence marker.
 
     A marker is the model saying nothing, so a surface that streams must never show it and then
-    take it back. On a person's turn, which honours only ``[SILENT]`` with whitespace around it
-    (:func:`is_silence`), deltas are held while the text so far could still become that, and go
+    take it back. On a turn that honours only ``[SILENT]`` with whitespace around it
+    (:func:`is_silence`), a person's or a proactive one never taught the marker, deltas are held while the text so far could still become that, and go
     out together with everything after them the moment it cannot -- which a reply that begins with
     anything but whitespace or the marker's bracket does at its first delta, so an ordinary answer
     waits for nothing. The loop reads a reply with its inline think blocks taken out
@@ -753,9 +755,10 @@ class SilenceGate:
     streams as it arrives, each delta of it out the moment it comes, only the opening tag waiting for
     the delta that completes it; what follows the block is held while it could still be the marker.
     Each delta is read on its own against what the ones before it left, so a long hold costs a delta
-    no more than a short one. A turn from a proactive origin (``hold_all``) is read by the loose
-    rule, whose marker may close a report on its last line, and only the whole call can show that,
-    so every delta waits for :meth:`release` or :meth:`discard`.
+    no more than a short one. A turn that reads the loose rule (``hold_all``: a proactive turn whose
+    prompt taught the marker, ``reads_loose_silence``) may close a report with its marker on the
+    last line, and only the whole call can show that, so every delta waits for :meth:`release` or
+    :meth:`discard`.
 
     The loop decides once it has read the reply: ``discard`` for a marker, which goes to no one,
     ``release`` for anything else, and for a reply that ends in tool calls, whose words are not a

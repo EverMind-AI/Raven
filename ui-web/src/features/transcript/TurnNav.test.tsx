@@ -359,7 +359,7 @@ describe('the turn nav', () => {
       const st = mount.step()
       st.sayDelta('Checking the logs.')
       st.seal()
-      st.dropReply()
+      st.dropReply('')
       mount.note('Raven chose not to reply.', '', { quiet: true })
       mount.finishTurn(null, [st], '3s', true)
       mount.ask('and now?')

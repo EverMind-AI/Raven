@@ -25,6 +25,7 @@ from unittest.mock import patch
 
 import pytest
 
+from raven.agent.context.silence import SILENCE_INSTRUCTION
 from raven.agent.hook import AgentHook
 from raven.agent.loop import AgentLoop, recovery, turn_path
 from raven.agent.loop._shared import _MAX_ITER_STATIC_FALLBACK
@@ -65,6 +66,7 @@ from raven.agent.loop.recovery import (
 from raven.agent.window import shrink
 from raven.config.schema import CompactionConfig
 from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
+from raven.contracts.tool import Tool
 from raven.providers import rates
 from raven.providers.base import (
     ChatDelta,
@@ -85,6 +87,10 @@ from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
 def workspace():
     with tempfile.TemporaryDirectory() as td:
         yield Path(td)
+
+
+# A prompt that teaches the marker, as the cron reminder's does: only such a proactive turn reads the loose rule.
+_TAUGHT = f"[Scheduled Task] Timer finished.\n\n{SILENCE_INSTRUCTION}"
 
 
 def _turn(text: str = "hi", origin: Origin = Origin.USER) -> TurnRequest:
@@ -186,11 +192,21 @@ def test_limits_from_defaults_uses_defaults_for_missing_attrs():
 # --------------------------------------------------------------------------- #
 
 
-def _kind(content, finish="stop", *, origin=Origin.USER, streamed=False, prev_had_tool_calls=False, **fields):
-    """``reply_kind`` asked the way the loop asks it, of the text left once think blocks are out."""
+def _kind(
+    content, finish="stop", *, origin=Origin.USER, streamed=False, prev_had_tool_calls=False, taught=True, **fields
+):
+    """``reply_kind`` asked the way the loop asks it, of the text left once think blocks are out, on a
+    turn whose prompt taught the marker unless ``taught`` says otherwise."""
     response = LLMResponse(content=content or None, finish_reason=finish, **fields)
     visible = (strip_think_blocks(content) or None) if content else None
-    return reply_kind(response, visible, origin=origin, prev_had_tool_calls=prev_had_tool_calls, streamed=streamed)
+    return reply_kind(
+        response,
+        visible,
+        origin=origin,
+        prev_had_tool_calls=prev_had_tool_calls,
+        streamed=streamed,
+        silence_taught=taught,
+    )
 
 
 @pytest.mark.parametrize(
@@ -268,6 +284,13 @@ def _kind(content, finish="stop", *, origin=Origin.USER, streamed=False, prev_ha
 )
 def test_reply_kind(content, finish, extra, origin, streamed, kind):
     assert _kind(content, finish, origin=origin, streamed=streamed, **extra) is kind
+
+
+@pytest.mark.parametrize("origin", [Origin.CRON, Origin.HEARTBEAT, Origin.SENTINEL, Origin.SUBAGENT])
+def test_reply_kind_reads_a_loose_marker_as_text_on_a_turn_never_taught_it(origin):
+    assert _kind("No reply.", origin=origin, taught=False) is ReplyKind.TEXT
+    assert _kind("nothing new\n\n[SILENT]", origin=origin, taught=False) is ReplyKind.TEXT
+    assert _kind("[SILENT]", origin=origin, taught=False) is ReplyKind.SILENT
 
 
 def test_an_empty_reply_after_tools_is_its_own_kind():
@@ -2433,6 +2456,82 @@ async def test_a_continuation_that_errors_outright_delivers_what_streamed_with_t
     assert "".join(sink.text) == final, "the note reached the reader once, after the words"
 
 
+class _ContinuationRaises(LLMProvider):
+    """Streams its words and dies; every call asked to continue them then raises, as
+    ``LiteLLMProvider.chat_stream`` does with an HTTP error, instead of answering with an error."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    async def chat(self, *args, **kwargs):  # pragma: no cover - the streaming path is under test
+        raise AssertionError("the streaming path is the one under test")
+
+    async def chat_stream(self, messages, tools=None, model=None, **_kw):
+        self.calls += 1
+        if self.calls == 1:
+            yield ChatDelta(content="The answer is 42.")
+            raise ConnectionError("connection reset by peer")
+        raise RuntimeError("the gateway refused the request")
+        yield  # pragma: no cover - makes this an async generator
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+async def test_a_continuation_that_raises_delivers_what_streamed_with_the_note(workspace, monkeypatch):
+    """A continuation can fail by raising rather than by answering with an error; the reader holds the
+    answer so far either way, so either way the turn ends on it, said to be partial, not as a failure."""
+    provider = _ContinuationRaises()
+    agent = _make_agent(workspace, provider)
+    _recorded_sleeps(monkeypatch)
+    sink = _Sink()
+
+    final, _used, messages, outcome = await agent._run_agent_loop(_seed(), on_token_delta=sink.delta)
+
+    note = "\n\n" + PARTIAL_STREAM_NOTE
+    assert final == "The answer is 42." + note
+    assert outcome.status == "interrupted" and outcome.error is None
+    assert "".join(sink.text) == final
+    assert (messages[-1]["role"], messages[-1]["content"]) == ("assistant", final)
+
+
+class _ToolThenRaises(LLMProvider):
+    """Calls a tool, then raises on the call after it, with no cut answer behind that call."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    async def chat(self, *args, **kwargs):  # pragma: no cover - the streaming path is under test
+        raise AssertionError("the streaming path is the one under test")
+
+    async def chat_stream(self, messages, tools=None, model=None, **_kw):
+        self.calls += 1
+        if self.calls == 1:
+            call = {"index": 0, "id": "t1", "function": {"name": "no_such_tool", "arguments": "{}"}}
+            yield ChatDelta(content=None, tool_call_delta={"tool_calls": [call]})
+            yield ChatDelta(content=None, finish_reason="tool_calls")
+            return
+        raise RuntimeError("the gateway refused the request")
+        yield  # pragma: no cover - makes this an async generator
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+async def test_a_call_that_raises_with_no_cut_behind_it_still_fails_the_turn(workspace, monkeypatch):
+    """The control: only a continuation ends on what streamed. A call with no cut answer behind it has
+    nothing to end on, so its error is the turn's, as it always was."""
+    agent = _make_agent(workspace, _ToolThenRaises())
+    _recorded_sleeps(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="the gateway refused the request"):
+        await agent._run_agent_loop(_seed(), on_token_delta=_Sink().delta)
+
+
 @pytest.mark.asyncio
 async def test_an_error_before_any_cut_still_waits_and_fails_as_it_did(workspace, monkeypatch):
     """The control: with no cut answer behind it, the same error is the turn's to wait out."""
@@ -2536,12 +2635,45 @@ def _empty_finish() -> _Stream:
 
 
 async def _ends_on(agent: AgentLoop, origin: Origin, **kwargs):
-    """Run the loop on a streamed turn and return what it ended on, what was filed and what streamed."""
+    """Run the loop on a streamed turn whose prompt taught the marker, and return what it ended on,
+    what was filed and what streamed."""
     sink = _Sink()
     final, _used, messages, outcome = await agent._run_agent_loop(
-        _seed(), on_token_delta=sink.delta, origin=origin, **kwargs
+        _seed(), on_token_delta=sink.delta, origin=origin, silence_taught=True, **kwargs
     )
     return final, outcome, messages[-1], sink.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "origin,continuation,silent,shown",
+    [
+        pytest.param(Origin.CRON, "[SILENT]", True, "", id="proactive_note_then_marker"),
+        pytest.param(Origin.CRON, "nothing new\n\n[SILENT]", True, "", id="proactive_note_then_a_noted_marker"),
+        pytest.param(
+            Origin.CRON,
+            " Two files changed.",
+            False,
+            "Here is the update: Two files changed.",
+            id="proactive_note_then_more",
+        ),
+        pytest.param(Origin.USER, "[SILENT]", False, "Here is the update:", id="person_note_then_marker"),
+    ],
+)
+async def test_a_marker_continuing_a_held_note_is_read_with_it(
+    workspace, monkeypatch, origin, continuation, silent, shown
+):
+    """A proactive turn holds its whole call, so nothing of a cut note was shown, and a continuation that
+    is only the marker is read together with the note, as the same reply uncut ("note", then the marker on
+    its own line) is: silent. A person's turn saw the note already, and only a whole ``[SILENT]`` is silence
+    there, so the note stays its answer."""
+    _served(monkeypatch, [_DyingStream("Here is the update:"), _finished_stream(continuation)])
+
+    final, outcome, last, streamed = await _ends_on(_litellm_agent(workspace), origin)
+
+    assert outcome.silent is silent
+    assert "".join(streamed).replace("\n\n" + PARTIAL_STREAM_NOTE, "") == shown
+    assert bool(last.get("_silent")) is silent
 
 
 @pytest.mark.asyncio
@@ -2624,13 +2756,25 @@ async def test_a_no_reply_cut_that_goes_on_to_a_summary_is_delivered_whole(works
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("origin", [Origin.USER, Origin.CRON])
-async def test_a_marker_after_a_held_cut_shows_what_streamed_and_drops_the_marker(workspace, monkeypatch, origin):
-    """A continuation that is a marker adds nothing, so what streamed is the answer: a start that was held
-    across the cut goes out, and the marker after it does not."""
+async def test_a_proactive_marker_cut_and_started_over_ends_silent(workspace, monkeypatch):
+    """A proactive turn cut inside its marker, whose continuation starts the marker over, said nothing:
+    the fragment and the marker are read together, and neither reaches the reader."""
     _served(monkeypatch, [_DyingStream("[SIL"), _finished_stream("[SILENT]")])
 
-    final, outcome, last, streamed = await _ends_on(_litellm_agent(workspace), origin)
+    final, outcome, last, streamed = await _ends_on(_litellm_agent(workspace), Origin.CRON)
+
+    assert outcome.silent is True and last.get("_silent") is True
+    assert streamed == []
+
+
+@pytest.mark.asyncio
+async def test_a_marker_after_a_held_cut_shows_what_streamed_and_drops_the_marker(workspace, monkeypatch):
+    """On a person's turn a continuation that is a marker adds nothing, so what streamed is the answer: a
+    start that was held across the cut goes out, and the marker after it does not. A proactive turn reads
+    the two together instead (``test_a_marker_continuing_a_held_note_is_read_with_it``)."""
+    _served(monkeypatch, [_DyingStream("[SIL"), _finished_stream("[SILENT]")])
+
+    final, outcome, last, streamed = await _ends_on(_litellm_agent(workspace), Origin.USER)
 
     assert final == "[SIL" and outcome.silent is False
     assert "_silent" not in last
@@ -2789,25 +2933,52 @@ async def test_a_proactive_turn_shows_only_the_answer_a_thought_was_prefilled_in
 
 
 @pytest.mark.asyncio
+async def test_a_marker_its_continuation_finished_reports_the_thought_its_step_showed(workspace, monkeypatch):
+    """A cut answer's continuation is drawn in the step the cut call opened, so what that step showed
+    before the marker -- here the thought, ahead of a marker the cut split -- counts across both calls."""
+    _served(monkeypatch, [_DyingStream("<think>a</think> [SIL"), _finished_stream("ENT]")])
+    started: list[int] = []
+
+    async def _step(index: int) -> None:
+        started.append(index)
+
+    final, outcome, _last, streamed = await _ends_on(_litellm_agent(workspace), Origin.USER, on_episode_start=_step)
+
+    assert outcome.silent is True and len(started) == 1
+    assert "".join(streamed) == outcome.shown == "<think>a</think>"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "script",
+    "script,shown,steps",
     [
-        pytest.param(lambda: [_finished_stream("<think>a", "b</think>", "[SILENT]")], id="uncut"),
         pytest.param(
-            lambda: [_DyingStream("<think>a"), _DyingStream("b</think>"), _finished_stream("[SILENT]")], id="cut"
+            lambda: [_finished_stream("<think>a", "b</think>", "[SILENT]")], "<think>ab</think>", 1, id="uncut"
+        ),
+        pytest.param(
+            lambda: [_DyingStream("<think>a"), _DyingStream("b</think>"), _finished_stream("[SILENT]")], "", 2, id="cut"
         ),
     ],
 )
-async def test_a_marker_after_a_thought_the_cuts_closed_is_the_reply(workspace, monkeypatch, script):
+async def test_a_marker_after_a_thought_the_cuts_closed_is_the_reply(workspace, monkeypatch, script, shown, steps):
     """With nothing but a thought before it, the marker that continues it is the whole reply, not a
-    continuation that adds nothing: the turn ends silent as the uncut reply does."""
+    continuation that adds nothing: the turn ends silent as the uncut reply does. What the reply
+    reports having shown is its own step's: uncut, the thought it opened with; cut, nothing, since a
+    thought the cuts closed is answered as a thinking-only reply, and the marker comes in a call and
+    a step of its own."""
     _served(monkeypatch, script())
+    started: list[int] = []
 
-    final, outcome, last, streamed = await _ends_on(_litellm_agent(workspace), Origin.USER)
+    async def _step(index: int) -> None:
+        started.append(index)
+
+    final, outcome, last, streamed = await _ends_on(_litellm_agent(workspace), Origin.USER, on_episode_start=_step)
 
     assert final == "[SILENT]" and outcome.silent is True
     assert last.get("_silent") is True
-    assert "[SIL" not in "".join(streamed)
+    assert "".join(streamed) == "<think>ab</think>"
+    assert len(started) == steps
+    assert outcome.shown == shown
 
 
 @pytest.mark.asyncio
@@ -4374,7 +4545,7 @@ async def test_a_marker_wrapped_in_punctuation_is_silent_on_a_proactive_turn(wor
     sink = _Sink()
 
     final, _used, messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
-        _seed(), on_token_delta=sink.delta, origin=Origin.CRON
+        _seed(), on_token_delta=sink.delta, origin=Origin.CRON, silence_taught=True
     )
 
     assert outcome.silent is True and final == "".join(deltas)
@@ -4455,9 +4626,103 @@ async def test_a_proactive_turn_still_reads_a_loosely_spelled_marker_as_silence(
     agent = _litellm_agent(workspace)
     silence: dict[str, bool] = {}
 
-    out = await agent._process_message(_turn(origin=Origin.CRON), session_key="s1", origin=Origin.CRON, silence=silence)
+    out = await agent._process_message(
+        _turn(_TAUGHT, origin=Origin.CRON), session_key="s1", origin=Origin.CRON, silence=silence
+    )
 
     assert out is None and silence == {"silent": True}
+
+
+class _RewritesTheInbound(AgentHook):
+    """A user-inbound hook that hands the model its own text in place of what was sent."""
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    @property
+    def name(self) -> str:
+        return "RewritesTheInbound"
+
+    async def before_user_inbound(self, ctx):
+        from raven.agent.hook import HookDecision
+
+        return HookDecision(modified_content=self._text)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sent,read,silent",
+    [(_TAUGHT, "Timer finished.", False), ("Timer finished.", _TAUGHT, True)],
+    ids=["lesson_rewritten_out", "lesson_rewritten_in"],
+)
+async def test_the_lesson_is_read_off_the_prompt_the_model_read(workspace, monkeypatch, sent, read, silent):
+    """A hook may rewrite the inbound before the model reads it, so whether the turn was taught the
+    marker is read off the text the model got, not the request that carried it."""
+    calls = _served(monkeypatch, [_reply("No reply.")])
+    agent = _litellm_agent(workspace, hooks=[_RewritesTheInbound(read)])
+    silence: dict[str, bool] = {}
+
+    out = await agent._process_message(
+        _turn(sent, origin=Origin.CRON), session_key="s1", origin=Origin.CRON, silence=silence
+    )
+
+    asked = calls[0]["messages"][-1]["content"]
+    assert read in str(asked) and (SILENCE_INSTRUCTION in str(asked)) is silent
+    assert (out is None) is silent and silence == ({"silent": True} if silent else {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", [Origin.HEARTBEAT, Origin.SUBAGENT, Origin.SENTINEL])
+@pytest.mark.parametrize("reply", ["No reply.", "Silent", "Checked the queue twice.\n\nNo reply"])
+async def test_a_proactive_turn_never_taught_the_marker_delivers_a_reply_that_looks_like_one(
+    workspace, monkeypatch, origin, reply
+):
+    """Heartbeat, a sub-agent's relayed result and a sentinel notice never tell the model the marker,
+    so a reply that is, or ends on, one of its spellings is the model's answer and reaches the reader."""
+    _served(monkeypatch, [_reply(reply)])
+    agent = _litellm_agent(workspace)
+    silence: dict[str, bool] = {}
+
+    out = await agent._process_message(
+        _turn("Summarize this naturally for the user.", origin=origin),
+        session_key="s1",
+        origin=origin,
+        silence=silence,
+    )
+
+    assert out is not None and out[0] == reply and silence == {}
+
+
+@pytest.mark.asyncio
+async def test_a_proactive_turn_never_taught_the_marker_still_honours_the_bracketed_one(workspace, monkeypatch):
+    _served(monkeypatch, [_reply("[SILENT]")])
+    agent = _litellm_agent(workspace)
+    silence: dict[str, bool] = {}
+
+    out = await agent._process_message(
+        _turn("Summarize this naturally for the user.", origin=Origin.SUBAGENT),
+        session_key="s1",
+        origin=Origin.SUBAGENT,
+        silence=silence,
+    )
+
+    assert out is None and silence == {"silent": True}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("taught,shown", [(False, ["Checked ", "the queue.\n\n", "No reply"]), (True, [])])
+async def test_only_a_taught_proactive_turn_holds_its_whole_call(workspace, monkeypatch, taught, shown):
+    """The loose rule's marker may close a report, so a taught turn holds every delta until the call
+    ends; a turn that reads the bracketed marker alone streams each one as a person's turn does."""
+    _served(monkeypatch, [_finished_stream("Checked ", "the queue.\n\n", "No reply")])
+    sink = _Sink()
+
+    final, _used, _messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=sink.delta, origin=Origin.HEARTBEAT, silence_taught=taught
+    )
+
+    assert final == "Checked the queue.\n\nNo reply" and outcome.silent is taught
+    assert sink.text == shown
 
 
 @pytest.mark.asyncio
@@ -4472,7 +4737,7 @@ async def test_a_wrap_up_that_closes_a_note_with_the_marker_is_read_by_its_turns
     sink = _Sink()
 
     final, _used, messages, outcome = await _litellm_agent(workspace, max_iterations=1)._run_agent_loop(
-        _seed(), on_token_delta=sink.delta, origin=origin
+        _seed(), on_token_delta=sink.delta, origin=origin, silence_taught=True
     )
 
     assert final == wrap_up and outcome.silent is silent
@@ -4487,7 +4752,7 @@ async def test_a_wrap_up_that_spells_a_marker_loosely_is_read_by_its_turns_rule(
     sink = _Sink()
 
     final, _used, messages, outcome = await _litellm_agent(workspace, max_iterations=1)._run_agent_loop(
-        _seed(), on_token_delta=sink.delta, origin=origin
+        _seed(), on_token_delta=sink.delta, origin=origin, silence_taught=True
     )
 
     assert final == "No reply." and outcome.silent is silent
@@ -4496,12 +4761,26 @@ async def test_a_wrap_up_that_spells_a_marker_loosely_is_read_by_its_turns_rule(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("taught,shown", [(False, ["Checked ", "twice.\n\n", "No reply"]), (True, [])])
+async def test_only_a_taught_proactive_wrap_up_holds_its_whole_call(workspace, monkeypatch, taught, shown):
+    _served(monkeypatch, [_tool_stream(), _finished_stream("Checked ", "twice.\n\n", "No reply")])
+    sink = _Sink()
+
+    final, _used, _messages, outcome = await _litellm_agent(workspace, max_iterations=1)._run_agent_loop(
+        _seed(), on_token_delta=sink.delta, origin=Origin.HEARTBEAT, silence_taught=taught
+    )
+
+    assert final == "Checked twice.\n\nNo reply" and outcome.silent is taught
+    assert sink.text == shown
+
+
+@pytest.mark.asyncio
 async def test_a_cron_turn_may_put_the_marker_on_its_last_line(workspace, monkeypatch):
     _served(monkeypatch, [_finished_stream("2 deals ", "filtered\n\n", "[SILENT]")])
     sink = _Sink()
 
     final, _used, messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
-        _seed(), on_token_delta=sink.delta, origin=Origin.CRON
+        _seed(), on_token_delta=sink.delta, origin=Origin.CRON, silence_taught=True
     )
 
     assert outcome.silent is True and final == "2 deals filtered\n\n[SILENT]"
@@ -4539,7 +4818,7 @@ async def test_a_reply_that_is_no_marker_is_shown_whole(workspace, monkeypatch, 
     sink = _Sink()
 
     final, _used, _messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
-        _seed(), on_token_delta=sink.delta, origin=origin
+        _seed(), on_token_delta=sink.delta, origin=origin, silence_taught=True
     )
 
     assert final == "2 deals filtered" and outcome.silent is False
@@ -4698,7 +4977,7 @@ async def test_a_stream_cut_right_after_a_marker_is_continued_not_ended_silent(w
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("origin", [Origin.USER, Origin.CRON])
+@pytest.mark.parametrize("origin", [Origin.USER])
 @pytest.mark.parametrize(
     "continuation",
     [
@@ -4709,9 +4988,10 @@ async def test_a_stream_cut_right_after_a_marker_is_continued_not_ended_silent(w
 async def test_a_continuation_that_is_a_marker_ends_the_turn_as_an_empty_one_does(
     workspace, monkeypatch, origin, continuation
 ):
-    """After a cut answer the reader holds, a continuation that is a marker under the turn's rule has
-    nothing to add, as an empty one has not: what streamed is the answer, with the same row, status
-    and stream as the empty continuation leaves."""
+    """After a cut answer the reader holds -- a person's turn, which shows what streams -- a continuation
+    that is a marker under the turn's rule has nothing to add, as an empty one has not: what streamed is
+    the answer, with the same row, status and stream as the empty continuation leaves. A proactive turn
+    showed nothing and reads the two together (``test_a_marker_continuing_a_held_note_is_read_with_it``)."""
 
     async def run(second):
         _served(monkeypatch, [_DyingStream("Hello "), second])
@@ -4842,6 +5122,38 @@ async def test_a_marker_reply_returns_nothing_and_files_a_flagged_row(workspace,
     rows = agent.sessions.get_or_create("s1").messages
     assert [(m["role"], m["content"]) for m in rows] == [("user", "hi"), ("assistant", "[SILENT]")]
     assert rows[-1]["silent"] is True and "silent" not in rows[0]
+
+
+@pytest.mark.asyncio
+async def test_a_silent_wrap_up_names_only_what_it_showed_not_the_narration_before_it(workspace, monkeypatch):
+    """An exhausted turn's wrap-up shares the reader's step with the last call's narration, and a call whose
+    only tool sent nothing leaves no tool row to mark where that narration ends. The notice names what the
+    wrap-up itself showed, so a client takes back the think block and keeps the narration."""
+    from raven.spine.events import Notice, StreamDelta
+
+    narrated = _Stream(
+        [_chunk("Let me check the queue."), *_tool_stream()._chunks], received_finish_reason="tool_calls"
+    )
+    _served(monkeypatch, [narrated, _finished_stream("<think>still nothing</think>", "\n[SILENT]")])
+    agent = _litellm_agent(workspace, max_iterations=1)
+
+    async def _noop(**_kw) -> None:
+        return None
+
+    agent._start_executor = _noop
+    agent._connect_mcp = _noop
+    events: list = []
+
+    async def emit(event) -> None:
+        events.append(event)
+
+    outcome = await agent.run_turn(_turn("anything new?"), emit, lambda: [])
+
+    assert outcome.silent is True
+    streamed = "".join(e.delta for e in events if isinstance(e, StreamDelta))
+    assert streamed == "Let me check the queue.<think>still nothing</think>"
+    silent = [e.detail for e in events if isinstance(e, Notice) and e.kind is NoticeKind.SILENT_TURN]
+    assert silent == ["<think>still nothing</think>"]
 
 
 @pytest.mark.asyncio
@@ -5054,7 +5366,7 @@ async def test_a_proactive_turn_that_skips_after_send_stays_silent(workspace, mo
     silence: dict[str, bool] = {}
 
     out = await _litellm_agent(workspace, hooks=[sees])._process_message(
-        _turn(origin=Origin.SENTINEL), session_key="s1", origin=Origin.SENTINEL, silence=silence
+        _turn(_TAUGHT, origin=Origin.SENTINEL), session_key="s1", origin=Origin.SENTINEL, silence=silence
     )
 
     assert out is None and silence == {"silent": True}
@@ -5067,14 +5379,14 @@ async def test_a_proactive_turn_that_skips_after_send_stays_silent(workspace, mo
     [
         pytest.param(_SEND, False, True, id="sent_to_its_own_chat"),
         pytest.param(_SEND, True, False, id="a_send_that_failed"),
-        pytest.param('{"content": "here is your answer", "chat_id": "c2"}', False, False, id="sent_to_another_chat"),
+        pytest.param('{"content": "here is your answer", "chat_id": "c2"}', False, True, id="sent_naming_another_chat"),
     ],
 )
 async def test_a_stored_turn_reads_the_message_tools_live_verdict(workspace, monkeypatch, arguments, fails, answered):
     """A turn the runtime opened calls the message tool and closes on the marker. The live turn counts it
-    answered only when the tool sent to the turn's own chat (``MessageTool.sent_in_turn``); the session
-    list and an ACP replay read the stored turn by that same verdict, so a send that failed or went to
-    another chat leaves a Silent Turn there too, and is taken back whole."""
+    answered when the send went out (``MessageTool.sent_in_turn``) -- the tool hands every send to the
+    turn's own reader, whatever chat the call names -- and the session list and an ACP replay read the
+    stored turn by that same verdict. Only a send that failed leaves a Silent Turn there, taken back whole."""
     from raven.acp.replay import replay
     from raven.rpc.methods.session import _map_to_wire
 
@@ -5101,6 +5413,67 @@ async def test_a_stored_turn_reads_the_message_tools_live_verdict(workspace, mon
     assert bool(replayed) is answered, "a Silent Turn the runtime opened replays as nothing"
     [listed] = agent.sessions.list_sessions()
     assert bool(listed["last_message_at"]) is answered, "and does not move the session list"
+
+
+class _DeliversAFile(Tool):
+    """Hands the reader one file, leaving its manifest for the turn stream as ``deliver_files`` does."""
+
+    @property
+    def name(self) -> str:
+        return "deliver_files"
+
+    @property
+    def description(self) -> str:
+        return "delivers files"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}}
+
+    async def execute(self, **_) -> str:
+        return "Delivered report.txt (1 KB)"
+
+    def take_metadata(self) -> dict:
+        return {"raven_delivery": {"message": "", "files": [{"name": "report.txt", "size": 1024}], "invalid": []}}
+
+
+@pytest.mark.asyncio
+async def test_a_silent_runtime_turn_that_delivered_files_is_not_taken_back(workspace, monkeypatch):
+    """Files a turn delivered are in front of the reader, as a message the tool sent is: a turn that hands
+    over a file and closes on the marker is no Silent Turn live, and the session list and the ACP replay
+    keep it by the same verdict."""
+    from raven.acp.replay import replay
+    from raven.rpc.methods.session import _map_to_wire
+
+    _served(monkeypatch, [_tool_reply("deliver_files", "{}"), _reply("[SILENT]")])
+    agent = _litellm_agent(workspace)
+    agent.tools.register(_DeliversAFile())
+    silence: dict[str, bool | str] = {}
+
+    out = await agent._process_message(
+        _turn("check the build", Origin.CRON), session_key="cron:job", origin=Origin.CRON, silence=silence
+    )
+
+    assert out is None, "the marker is no reply to send"
+    assert silence == {"delivered_files": True}, "the live verdict"
+    rows = agent.sessions.get_or_create("cron:job").messages
+    assert rows[-1]["silent"] is True and rows[-1].get("replied_via_tool") is True
+    assert replay(_map_to_wire(rows, "cron:job"), session_id="cron:job"), "the turn replays"
+    [listed] = agent.sessions.list_sessions()
+    assert listed["last_message_at"], "and stands in the session list"
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_delivered_files_still_sends_the_words_it_ends_on(workspace, monkeypatch):
+    """The files went out with the call that delivered them, so they are not the turn's reply the way a
+    message the tool sent is: a turn that delivers and then answers in words still sends the words."""
+    _served(monkeypatch, [_tool_reply("deliver_files", "{}"), _reply("Here is the report.")])
+    agent = _litellm_agent(workspace)
+    agent.tools.register(_DeliversAFile())
+
+    out = await agent._process_message(_turn("send me the report"), session_key="s1")
+
+    assert out is not None and out[0] == "Here is the report."
 
 
 @pytest.mark.asyncio
@@ -5153,6 +5526,50 @@ async def test_the_verdict_rides_the_last_row_with_text_or_a_call_and_never_a_no
         (m["tool_calls"][0]["function"]["name"] if m.get("tool_calls") else "notice", bool(m.get("replied_via_tool")))
         for m in assistants
     ] == [("message", False), ("list_dir", True), ("notice", False)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "origin,first,last,noticed",
+    [
+        (Origin.CRON, None, "[SILENT]", False),
+        (Origin.CRON, None, "Report.", True),
+        (Origin.CRON, "message", "[SILENT]", True),
+        (Origin.USER, None, "[SILENT]", True),
+    ],
+    ids=["silent", "answered", "silent_after_the_message_tool_sent", "a_persons_silent_turn"],
+)
+async def test_a_silent_runtime_turn_files_no_unanswered_notice(workspace, monkeypatch, origin, first, last, noticed):
+    """A runtime-opened turn that ends silent is taken back whole by the session list and the ACP replay.
+    A notice filed after its marker outlived that take-back: an orphan question row in the replay, and the
+    session list moved by a turn it otherwise hides. Such a turn files none; one that answered still does,
+    and so does a person's silent turn, which both keep: its notice is what the next turn reads."""
+    import raven.permissions.turn as permissions_turn
+    from raven.acp.replay import _without_silent_runtime_turns
+
+    asked: list[str] = []
+    filing = ("A question went unanswered.", {"kind": permissions_turn.UNANSWERED_KIND, "text": "q"})
+    monkeypatch.setattr(permissions_turn, "unanswered_filing", lambda: filing if asked else None)
+    _served(monkeypatch, [_tool_reply("message", _SEND) if first else _tool_reply(), _reply(last)])
+    agent = _litellm_agent(workspace)
+    if first:
+        _wire_message_tool(agent)
+    real_execute = agent.tools.execute
+
+    async def execute(name, arguments, **kwargs):
+        asked.append(name)
+        return await real_execute(name, arguments, **kwargs)
+
+    monkeypatch.setattr(agent.tools, "execute", execute)
+
+    await agent._process_message(_turn(origin=origin), session_key="s1")
+
+    rows = agent.sessions.get_or_create("s1").messages
+    notices = [m for m in rows if isinstance(m.get("notice"), dict)]
+    assert asked, "the turn met its question"
+    assert bool(notices) is noticed
+    kept = _without_silent_runtime_turns([dict(m) for m in rows if m.get("role")])
+    assert any(m.get("role") == "user" for m in kept) is noticed, "a notice is filed exactly where the turn stays"
 
 
 @pytest.mark.asyncio
