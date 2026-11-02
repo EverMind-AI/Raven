@@ -4,11 +4,15 @@ One extra call, after the reply has gone out: the turn's own window and tools
 array plus one instruction asking for a ``task_board`` call. Nothing forces the
 tool -- the choice stays the turn's own -- so an answer in text is asked again. The
 arguments are checked whole by :func:`apply_update`; a refusal goes back to the
-model with its reason, up to :data:`MAX_ATTEMPTS` times. When no update can be
-had, the turn's dispatches are parked in ``unassigned`` and the next update has
-to place them first -- a dispatch is never silently dropped. A turn known to be
-about some groups -- a delegated result's, a Move on's -- has its update
-confined to them, and to wherever it places its dispatches, before it is checked.
+model with every fault it found, up to :data:`MAX_ATTEMPTS` times. When every
+attempt is refused, the last update the model sent is still written as far as
+the board can take it -- see :func:`salvage` -- and only a fault in a step or in
+where its work goes leaves no update to be had. Then the turn's dispatches are
+parked in ``unassigned`` and the next update has to place them first -- a
+dispatch is never silently dropped. A turn known to be about some groups -- a
+delegated result's, a Move on's -- has its update confined to them, and to
+wherever it places its dispatches, before it is checked. Each refusal is logged,
+and each update that never landed.
 
 Updates of one session run one at a time, so the next turn's update is built
 on this one's result. Nothing here touches the session's messages.
@@ -31,6 +35,7 @@ from raven.agent.task_board.board import (
     board_to_dict,
     confine_update,
     owning_groups,
+    salvage,
 )
 from raven.agent.task_board.service import TaskBoardService
 from raven.agent.task_board.tool import TOOL_NAME
@@ -44,6 +49,10 @@ SCOPE_TEMPLATE = "task_board_scope"
 
 _PROSE = "Answer with a task_board call (action=update), not with text."
 _NOT_UPDATE = "Only action=update is accepted here; the board is already in the instruction above."
+_REFUSED = (
+    "Rejected, and nothing was written. Call task_board again with action=update, sending the whole update with"
+    " each of these fixed:"
+)
 
 
 def should_run(status: str, dispatches: Sequence[Dispatch], *, silent: bool = False) -> bool:
@@ -101,6 +110,18 @@ def _assistant_row(response: LLMResponse, call: ToolCallRequest) -> dict[str, An
     return row
 
 
+def _refusal(exc: UpdateRejectedError) -> str:
+    return "\n".join([_REFUSED, *(f"{n}. {problem}" for n, problem in enumerate(exc.problems, 1))])
+
+
+def _faults(exc: UpdateRejectedError) -> str:
+    return " | ".join(map(str, exc.problems))
+
+
+def _refused(session_key: str, attempt: int, why: str) -> None:
+    logger.info("Task board update for {}, attempt {} of {}, refused: {}", session_key, attempt, MAX_ATTEMPTS, why)
+
+
 def _park(board: Board, dispatches: Sequence[Dispatch], turn_at: str, turn_id: str | None) -> Board:
     pending = {p.handle for p in board.unassigned}
     fresh = [Pending(d.handle, d.summary, turn_at, turn_id) for d in dispatches if d.handle not in pending]
@@ -118,14 +139,18 @@ async def _ask(
     turn_id: str | None,
     now_ms: Callable[[], int],
     owners: list[str],
-) -> dict[str, Any] | None:
-    """Up to MAX_ATTEMPTS asks; the arguments of an update the board accepted, or ``None``.
+) -> tuple[dict[str, Any], bool] | None:
+    """Up to MAX_ATTEMPTS asks; the arguments of an update the board accepted and whether
+    they are a salvage, whose text past a limit stands, or ``None``.
 
     A turn that belongs to ``owners`` has its update confined to them before it is
-    checked, so what would be dropped anyway never costs a refusal.
+    checked, so what would be dropped anyway never costs a refusal. When the last
+    attempt is refused too, the last update sent is salvaged: its work is placed and
+    its steps written unless a fault lies there.
     """
     rows = list(window) + [{"role": "user", "content": build_instruction(board, dispatches, owners)}]
-    for _ in range(MAX_ATTEMPTS):
+    last: dict[str, Any] | None = None
+    for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
             response = await call(rows)
         except Exception as exc:
@@ -136,28 +161,39 @@ async def _ask(
             return None
         tool_call = next((c for c in response.tool_calls if c.name == TOOL_NAME), None)
         if tool_call is None:
+            _refused(session_key, attempt, "answered in text")
             rows += [{"role": "assistant", "content": response.content or ""}, {"role": "user", "content": _PROSE}]
             continue
         args = tool_call.arguments if isinstance(tool_call.arguments, dict) else {}
         if args.get("action") != "update":
+            _refused(session_key, attempt, f"called action={args.get('action')}")
             result = _NOT_UPDATE
         else:
             confined = confine_update(args, owners)
             try:
                 apply_update(board, confined, dispatches, turn_at=turn_at, turn_id=turn_id, now_ms=now_ms())
             except UpdateRejectedError as exc:
-                result = f"Rejected: {exc}. Call task_board again with action=update."
+                _refused(session_key, attempt, _faults(exc))
+                last = confined
+                result = _refusal(exc)
             else:
                 if confined != args:
                     logger.info(
                         "Task board update for {} kept to {}; the rest was about other matters", session_key, owners
                     )
-                return confined
+                return confined, False
         rows += [
             _assistant_row(response, tool_call),
             {"role": "tool", "tool_call_id": tool_call.id, "name": TOOL_NAME, "content": result},
         ]
-    return None
+    if last is None:
+        return None
+    kept = salvage(board, last)
+    try:
+        apply_update(board, kept, dispatches, turn_at=turn_at, turn_id=turn_id, now_ms=now_ms(), allow_long=True)
+    except UpdateRejectedError:
+        return None
+    return kept, True
 
 
 async def run_post_turn(
@@ -196,7 +232,7 @@ async def run_post_turn(
     async with service.queue(session_key):
         try:
             board = service.load(session_key)
-            args = await _ask(
+            answer = await _ask(
                 board,
                 session_key=session_key,
                 call=call,
@@ -209,22 +245,38 @@ async def run_post_turn(
             )
         except Exception:
             logger.opt(exception=True).warning("Task board update for {} failed", session_key)
-            args = None
+            answer = None
         async with service.lock(session_key):
             if service.generation(session_key) != generation or service.was_dropped(session_key, turn_at):
                 return None
             board = service.load(session_key)
             try:
-                if args is not None:
+                if answer is not None:
+                    args, salvaged = answer
                     try:
                         updated = apply_update(
-                            board, args, dispatches, turn_at=turn_at, turn_id=turn_id, now_ms=now_ms()
+                            board,
+                            args,
+                            dispatches,
+                            turn_at=turn_at,
+                            turn_id=turn_id,
+                            now_ms=now_ms(),
+                            allow_long=salvaged,
                         )
-                    except UpdateRejectedError:
+                    except UpdateRejectedError as exc:
+                        logger.warning(
+                            "Task board update for {} no longer fits the board: {}", session_key, _faults(exc)
+                        )
                         updated = None
                     if updated is not None:
                         if board_to_dict(updated) != board_to_dict(board):
                             await service.write(session_key, updated)
+                        if salvaged:
+                            logger.warning(
+                                "Task board update for {} was never accepted; its last attempt is written without"
+                                " the groups changes it got wrong, and any text past its limit as it stands",
+                                session_key,
+                            )
                         return updated
                 parked = _park(board, dispatches, turn_at, turn_id)
                 if parked is not board:
@@ -234,6 +286,8 @@ async def run_post_turn(
                         len(parked.unassigned) - len(board.unassigned),
                     )
                     await service.write(session_key, parked)
+                else:
+                    logger.warning("Task board update for {} never landed; nothing new to park", session_key)
             except Exception:
                 logger.opt(exception=True).warning("Task board for {} could not be written", session_key)
             return None

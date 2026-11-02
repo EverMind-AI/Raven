@@ -24,6 +24,7 @@ from raven.agent.task_board.board import (
     drop_turns,
     ignore_question,
     owning_groups,
+    salvage,
     set_group_status,
     word_count,
 )
@@ -72,6 +73,10 @@ def _one_group(status: str = "idle") -> Board:
 
 def _words(n: int) -> str:
     return " ".join(["word"] * n)
+
+
+OVER_20 = r"; the limit is 20: "
+OVER_50 = r"; the limit is 50: "
 
 
 def test_new_title_opens_a_group_holding_the_step():
@@ -203,21 +208,21 @@ def test_a_step_names_its_group_once_and_carries_a_title_and_a_summary():
         return str(exc.value)
 
     assert rejected({"group": "g_1", **NEW, **STEP, "status": "idle"}) == (
-        "a step needs exactly one of group and new_title"
+        "steps[0]: a step needs exactly one of group and new_title"
     )
-    assert rejected({**STEP, "status": "idle"}) == "a step needs exactly one of group and new_title"
-    assert rejected({"group": "g_x", **STEP, "status": "idle"}) == "unknown group: g_x"
+    assert rejected({**STEP, "status": "idle"}) == "steps[0]: a step needs exactly one of group and new_title"
+    assert rejected({"group": "g_x", **STEP, "status": "idle"}) == "steps[0]: unknown group: g_x"
     assert (
         rejected({"group": "g_1", **STEP, "status": "done"})
-        == "unknown status: done; use needs_you, running, idle or completed"
+        == "steps[0]: unknown status: done; use needs_you, running, idle or completed"
     )
-    assert rejected({**NEW, "new_title": "   ", **STEP, "status": "idle"}) == "new_title is empty"
-    assert rejected({"new_title": "Fix bug B", **STEP, "status": "idle"}) == "new_summary is empty"
+    assert rejected({**NEW, "new_title": "   ", **STEP, "status": "idle"}) == "steps[0]: new_title is empty"
+    assert rejected({"new_title": "Fix bug B", **STEP, "status": "idle"}) == "steps[0]: new_summary is empty"
     assert rejected({"group": "g_1", "new_summary": "x", **STEP, "status": "idle"}) == (
-        "new_summary goes with new_title; change an existing group's summary in groups"
+        "steps[0]: new_summary goes with new_title; change an existing group's summary in groups"
     )
-    assert rejected({"group": "g_1", **STEP, "title": "  ", "status": "idle"}) == "title is empty"
-    assert rejected({"group": "g_1", "title": "Moved it", "status": "idle"}) == "summary is empty"
+    assert rejected({"group": "g_1", **STEP, "title": "  ", "status": "idle"}) == "steps[0]: title is empty"
+    assert rejected({"group": "g_1", "title": "Moved it", "status": "idle"}) == "steps[0]: summary is empty"
 
 
 def test_word_count_counts_each_word_of_a_spaced_script_once():
@@ -251,9 +256,9 @@ def test_titles_and_group_summaries_keep_to_their_word_limits():
     assert fits.groups[1].steps[0].summary == ("x " * 2500).strip(), "a step's summary has no limit"
 
     for step, refusal in [
-        ({**NEW, "new_title": _words(21), **STEP}, r"^new_title is 21 words long; the limit is 20: word word"),
-        ({**NEW, "new_summary": _words(51), **STEP}, r"^new_summary is 51 words long; the limit is 50: word word"),
-        ({"group": "g_1", **STEP, "title": _words(21)}, r"^title is 21 words long; the limit is 20: word word"),
+        ({**NEW, "new_title": _words(21), **STEP}, rf"^steps\[0\]: new_title is 21 words long{OVER_20}word word"),
+        ({**NEW, "new_summary": _words(51), **STEP}, rf"^steps\[0\]: new_summary is 51 words long{OVER_50}word"),
+        ({"group": "g_1", **STEP, "title": _words(21)}, rf"^steps\[0\]: title is 21 words long{OVER_20}word word"),
     ]:
         with pytest.raises(UpdateRejectedError, match=refusal):
             apply({"steps": [{**step, "status": "idle"}]})
@@ -313,24 +318,26 @@ def test_a_groups_entry_must_change_something_it_may_change():
             apply_update(board, args, [], turn_at="T2", turn_id=None, now_ms=9)
         return str(exc.value)
 
-    assert rejected({"groups": [{"group": "g_9", "summary": "x"}]}) == "unknown group: g_9"
-    assert rejected({"groups": [{"group": "g_1"}]}) == "a groups entry needs at least one of title, summary and status"
+    assert rejected({"groups": [{"group": "g_9", "summary": "x"}]}) == "groups[0]: unknown group: g_9"
+    assert rejected({"groups": [{"group": "g_1"}]}) == (
+        "groups[0]: a groups entry needs at least one of title, summary and status"
+    )
     assert (
         rejected({"groups": [{"group": "g_1", "status": "done"}]})
-        == "unknown status: done; use needs_you, running, idle or completed"
+        == "groups[0]: unknown status: done; use needs_you, running, idle or completed"
     )
-    assert rejected({"groups": [{"group": "g_1", "summary": " "}]}) == "groups summary is empty"
+    assert rejected({"groups": [{"group": "g_1", "summary": " "}]}) == "groups[0]: summary is empty"
     assert rejected({"groups": [{"group": "g_1", "summary": "a"}, {"group": "g_1", "title": "b"}]}) == (
-        "g_1 appears twice in groups"
+        "groups[1]: g_1 appears twice in groups"
     )
     assert rejected(
         {"steps": [{"group": "g_1", **STEP, "status": "idle"}], "groups": [{"group": "g_1", "status": "idle"}]}
-    ) == ("g_1 has a step this turn; set its status on the step")
-    with pytest.raises(UpdateRejectedError, match=r"^groups title is 21 words long; the limit is 20: "):
+    ) == ("groups[0]: g_1 has a step this turn; set its status on the step")
+    with pytest.raises(UpdateRejectedError, match=rf"^groups\[0\]: title is 21 words long{OVER_20}"):
         apply_update(
             board, {"groups": [{"group": "g_1", "title": _words(21)}]}, [], turn_at="T2", turn_id=None, now_ms=9
         )
-    with pytest.raises(UpdateRejectedError, match=r"^groups summary is 51 words long; the limit is 50: "):
+    with pytest.raises(UpdateRejectedError, match=rf"^groups\[0\]: summary is 51 words long{OVER_50}"):
         apply_update(
             board, {"groups": [{"group": "g_1", "summary": _words(51)}]}, [], turn_at="T2", turn_id=None, now_ms=9
         )
@@ -350,7 +357,130 @@ def test_a_group_takes_one_step_per_update():
     with pytest.raises(UpdateRejectedError) as exc:
         apply_update(board, args, [], turn_at="T2", turn_id=None, now_ms=9)
 
-    assert str(exc.value) == "g_1 appears twice in steps; give each group one step per turn"
+    assert str(exc.value) == "steps[1]: g_1 appears twice in steps; give each group one step per turn"
+
+
+def test_a_refusal_names_every_rule_the_update_breaks_not_only_the_first():
+    """Told one fault per refusal, the model meets the next only on its next call, and
+    three calls end the update: a fault behind an over-long summary surfaced on the last."""
+    args = {
+        "steps": [{"group": "g_1", **STEP, "status": "running", "tasks": [DAG.handle]}],
+        "groups": [{"group": "g_1", "status": "running", "summary": _words(89)}],
+    }
+
+    with pytest.raises(UpdateRejectedError) as exc:
+        apply_update(_one_group(), args, [DAG], turn_at="T2", turn_id=None, now_ms=9)
+
+    first, second = str(exc.value).splitlines()
+    assert first == "groups[0]: summary is 89 words long; the limit is 50: word word word word word..."
+    assert second == "groups[0]: g_1 has a step this turn; set its status on the step"
+
+
+def test_a_refusal_names_the_entry_each_fault_is_in():
+    args = {"steps": [{"group": "g_1", **STEP, "status": "idle"}, {**NEW, **STEP, "title": " ", "status": "idle"}]}
+
+    with pytest.raises(UpdateRejectedError) as exc:
+        apply_update(_one_group(), args, [], turn_at="T2", turn_id=None, now_ms=9)
+
+    assert str(exc.value) == "steps[1]: title is empty"
+
+
+def test_a_step_of_an_unknown_status_is_not_also_refused_for_its_questions():
+    """Questions are judged against the status; an unknown one has nothing to judge them by."""
+    step = {"group": "g_1", **STEP, "status": "waiting", "questions": ["Which fix should I apply?"]}
+
+    with pytest.raises(UpdateRejectedError) as exc:
+        apply_update(_one_group(), {"steps": [step]}, [], turn_at="T2", turn_id=None, now_ms=9)
+
+    assert str(exc.value) == "steps[0]: unknown status: waiting; use needs_you, running, idle or completed"
+
+
+def test_a_group_of_the_wrong_type_is_refused_not_raised():
+    args = {
+        "steps": [{"group": ["g_1"], **STEP, "status": "idle"}],
+        "groups": [{"group": {"id": "g_1"}, "summary": "Moved"}],
+    }
+
+    with pytest.raises(UpdateRejectedError) as exc:
+        apply_update(_one_group(), args, [], turn_at="T2", turn_id=None, now_ms=9)
+
+    assert str(exc.value).splitlines() == [
+        "steps[0]: unknown group: ['g_1']",
+        "groups[0]: unknown group: {'id': 'g_1'}",
+    ]
+
+
+def test_allow_long_takes_text_past_its_limit_as_written_and_lets_no_other_fault_by():
+    args = {
+        "steps": [
+            {
+                "group": "g_1",
+                "title": _words(25),
+                "summary": "Asked.",
+                "status": "needs_you",
+                "questions": [_words(60)],
+            },
+            {**NEW, "new_title": _words(22), "new_summary": _words(55), **STEP, "status": "idle"},
+        ],
+        "groups": [{"group": "g_1", "summary": _words(70)}],
+    }
+
+    after = apply_update(_one_group(), args, [], turn_at="T2", turn_id=None, now_ms=9, allow_long=True)
+
+    fix, new = after.groups
+    assert (fix.summary, fix.steps[-1].title, fix.steps[-1].questions) == (_words(70), _words(25), [_words(60)])
+    assert (new.title, new.summary) == (_words(22), _words(55))
+    with pytest.raises(UpdateRejectedError) as exc:
+        apply_update(
+            _one_group(),
+            {**args, "groups": [{"group": "g_1", "status": "idle"}]},
+            [],
+            turn_at="T2",
+            turn_id=None,
+            now_ms=9,
+            allow_long=True,
+        )
+    assert str(exc.value) == "groups[0]: g_1 has a step this turn; set its status on the step"
+
+
+def test_a_salvage_keeps_the_step_and_its_work_and_drops_only_the_groups_field_at_fault():
+    """A status the step already sets is let go; the summary written beside it stays."""
+    board = _one_group()
+    last = {
+        "steps": [{"group": "g_1", **STEP, "status": "running", "tasks": [DAG.handle]}],
+        "groups": [{"group": "g_1", "status": "running", "summary": _words(60)}],
+    }
+
+    kept = salvage(board, last)
+
+    assert kept == {**last, "groups": [{"group": "g_1", "summary": _words(60)}]}
+    group = apply_update(board, kept, [DAG], turn_at="T2", turn_id=None, now_ms=9, allow_long=True).groups[0]
+    assert (group.status, group.summary, group.steps[-1].tasks[0].id) == ("running", _words(60), DAG.handle[4:])
+
+
+def test_a_salvage_keeps_one_entry_per_group_and_none_for_a_group_the_board_lacks():
+    last = {
+        "steps": [],
+        "groups": [
+            {"group": "g_9", "summary": "Gone"},
+            {"group": "g_1", "status": "needs_you", "title": "Fix the blank page"},
+            {"group": "g_1", "summary": "A second entry"},
+            "not an entry",
+        ],
+    }
+
+    assert salvage(_one_group(), last)["groups"] == [{"group": "g_1", "title": "Fix the blank page"}]
+
+
+def test_a_salvage_leaves_a_fault_in_a_step_or_a_placement_to_be_refused():
+    board = _one_group()
+    last = {"steps": [{"group": "g_1", **STEP, "status": "idle"}], "groups": [{"group": "g_1", "status": "idle"}]}
+
+    kept = salvage(board, last)
+
+    assert kept["groups"] == []
+    with pytest.raises(UpdateRejectedError, match=r"^not placed: dag:20261029T100213Z-3eb3b470$"):
+        apply_update(board, kept, [DAG], turn_at="T2", turn_id=None, now_ms=9, allow_long=True)
 
 
 def test_set_group_status_completes_and_reopens():
@@ -512,7 +642,7 @@ def test_malformed_updates_are_refused_not_raised():
     assert rejected({"groups": "g_1"}) == "groups must be a list"
     assert rejected({"groups": ["g_1"]}) == "each groups entry must be an object"
     assert rejected({"steps": [{"group": "g_1", **STEP, "status": "idle", "tasks": "spawn:a"}]}) == (
-        "tasks must be a list of handles"
+        "steps[0]: tasks must be a list of handles"
     )
 
 
@@ -626,7 +756,7 @@ def test_a_status_from_before_the_four_is_refused(former):
     board = _one_group()
 
     with pytest.raises(
-        UpdateRejectedError, match=rf"^unknown status: {former}; use needs_you, running, idle or completed$"
+        UpdateRejectedError, match=rf"^steps\[0\]: unknown status: {former}; use needs_you, running, idle or completed$"
     ):
         apply_update(
             board,
@@ -639,7 +769,9 @@ def test_a_status_from_before_the_four_is_refused(former):
 
 
 def test_needs_you_goes_on_a_step_never_in_groups():
-    with pytest.raises(UpdateRejectedError, match=r"^g_1: needs_you goes on a step, with the questions it asks$"):
+    with pytest.raises(
+        UpdateRejectedError, match=r"^groups\[0\]: needs_you goes on a step, with the questions it asks$"
+    ):
         apply_update(
             _one_group(),
             {"groups": [{"group": "g_1", "status": "needs_you"}]},
@@ -675,21 +807,27 @@ def test_a_step_from_before_questions_reads_none():
 @pytest.mark.parametrize(
     ("step", "refusal"),
     [
-        ({"status": "needs_you"}, r"^a needs_you step lists the questions its reply asked the user in questions$"),
+        (
+            {"status": "needs_you"},
+            r"^steps\[0\]: a needs_you step lists the questions its reply asked the user in questions$",
+        ),
         (
             {"status": "needs_you", "questions": []},
-            r"^a needs_you step lists the questions its reply asked the user in questions$",
+            r"^steps\[0\]: a needs_you step lists the questions its reply asked the user in questions$",
         ),
         (
             {"status": "running", "questions": ["Which fix?"]},
-            r"^questions go only with needs_you: a reply that asks the user something is needs_you$",
+            r"^steps\[0\]: questions go only with needs_you: a reply that asks the user something is needs_you$",
         ),
-        ({"status": "needs_you", "questions": "Which fix?"}, r"^questions must be a list of questions$"),
-        ({"status": "needs_you", "questions": ["Which fix?", 3]}, r"^questions must be a list of questions$"),
-        ({"status": "needs_you", "questions": ["Which fix?", " "]}, r"^a question is empty$"),
+        ({"status": "needs_you", "questions": "Which fix?"}, r"^steps\[0\]: questions must be a list of questions$"),
+        (
+            {"status": "needs_you", "questions": ["Which fix?", 3]},
+            r"^steps\[0\]: questions must be a list of questions$",
+        ),
+        ({"status": "needs_you", "questions": ["Which fix?", " "]}, r"^steps\[0\]: questions\[1\] is empty$"),
         (
             {"status": "needs_you", "questions": [_words(51)]},
-            r"^a question is 51 words long; the limit is 50: word word",
+            rf"^steps\[0\]: questions\[0\] is 51 words long{OVER_50}word word",
         ),
     ],
 )

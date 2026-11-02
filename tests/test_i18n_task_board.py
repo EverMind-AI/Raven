@@ -47,9 +47,15 @@ def test_a_chinese_title_and_summary_keep_to_twenty_and_fifty_characters():
     board = apply_update(Board([], []), update(twenty, fifty), [], turn_at="T1", turn_id=None, now_ms=1)
     assert (board.groups[0].title, board.groups[0].summary) == (twenty, fifty)
 
-    with pytest.raises(UpdateRejectedError, match=r"^new_title is 21 words long; the limit is 20: "):
+    with pytest.raises(
+        UpdateRejectedError,
+        match=r"^steps\[0\]: new_title is 21 words long; the limit is 20: ",
+    ):
         apply_update(Board([], []), update(twenty + "幕", fifty), [], turn_at="T1", turn_id=None, now_ms=1)
-    with pytest.raises(UpdateRejectedError, match=r"^new_summary is 51 words long; the limit is 50: "):
+    with pytest.raises(
+        UpdateRejectedError,
+        match=r"^steps\[0\]: new_summary is 51 words long; the limit is 50: ",
+    ):
         apply_update(Board([], []), update(twenty, fifty + "中"), [], turn_at="T1", turn_id=None, now_ms=1)
 
 

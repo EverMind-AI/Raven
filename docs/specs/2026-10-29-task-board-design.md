@@ -232,7 +232,8 @@ character is one, each word of any other script is one, so one limit reads as ch
 Chinese writer and as words to an English one. A title -- a group's or a step's -- is at most
 20; a group's summary and each question at most 50; a step's summary has no limit. An update over a limit is
 refused with the measured length and the start of the text, and the model rewrites it within
-the same three attempts (6.1); nothing is cut silently.
+the same three attempts (6.1). Nothing is cut silently: a last attempt still over a limit is
+written as it stands (6.1).
 
 **recall**, during any turn:
 
@@ -343,10 +344,11 @@ nothing to answer the instruction with.
 - every `group` names an existing group, and every `new_title` is non-empty and capped;
 - `steps` is empty only when there were no handles to place.
 
-A rejected update returns the precise reason as the tool result -- "not placed:
-`dag:2026...-3eb3b470`" -- and the runner asks again with the transcript of the attempt
-appended, up to three attempts. An accepted update is written, then announced as
-`tasks.board_updated` (4).
+A rejected update returns every fault it breaks as the tool result, numbered, each naming the
+entry it is in -- "groups[0]: summary is 89 words long; the limit is 50: ...", "not placed:
+`dag:2026...-3eb3b470`". Named one at a time, a fault behind another would wait a whole
+attempt to be heard of. The runner asks again with the transcript of the attempt appended, up
+to three attempts. An accepted update is written, then announced as `tasks.board_updated` (4).
 
 **What it leaves behind.** Nothing in the session's messages: the post-turn exchange is
 neither appended to the turn nor persisted. It is traced as its own span and its usage is
@@ -514,10 +516,17 @@ prefix and the page's existing colour variables (`--amber`, `--sky`, `--moss`, `
 
 ### 6. Failure and edge cases
 
-6.1 **The update cannot be had.** When the post-turn call fails after the provider's retries,
-or three attempts all fail validation, the turn's handles are appended to `unassigned` with
-the turn's id, a warning is logged, and the next turn's update must place them before its
-own. Until then the page shows them under Unassigned (5.5).
+6.1 **The update cannot be had.** When the third attempt is refused too, the last update the
+model sent is salvaged before anything is parked: each `groups` entry keeps only the fields
+that pass on their own -- a status the step on its group already sets goes, the summary
+written beside it stays -- and a text past its limit stands as written. Its steps and its
+placement are kept whole, so the turn's steps are still written and its work placed; only a
+fault there -- an unknown group, a handle left out -- leaves no update to be had. Then, as
+when the post-turn call fails after the provider's retries, the turn's handles are appended
+to `unassigned` with the turn's id, a warning is logged, and the next turn's update must place
+them before its own. Until then the page shows them under Unassigned (5.5). Every refused
+attempt is logged with its faults, a salvage with a warning, and an update that never landed
+with a warning even when it left nothing new to park.
 
 6.2 **An answer in text.** With the tool choice left to the model, a reply may carry text, or
 another tool's call, instead of `task_board`. It counts as a failed attempt under 3's limit:
@@ -557,8 +566,9 @@ the extra call per turn.
 ### 8. Tests
 
 - Python, under `tests/` per AGENTS.md 5: the store (atomic write, ids, the five statuses,
-  undo/clear/branch), validation (every refusal reason, the three-attempt limit, `unassigned`
-  carried into the next update), recall (listing, lookup, BM25 with the completed weight,
+  undo/clear/branch), validation (every refusal reason, all of an update's faults in one
+  refusal, the three-attempt limit and the salvage after it, `unassigned` carried into the next
+  update), recall (listing, lookup, BM25 with the completed weight,
   `include_turns` budget), registration (host only; absent under `RAVEN_SUBAGENT` and with
   `enabled: false`), the post-turn runner (no messages persisted, same tools array as the
   turn's last call, lock ordering, usage counted), the tool-surface token cost pinned, and

@@ -1,7 +1,7 @@
 """The Task Board's model, and the rules an update has to keep before it is applied.
 
 Everything here is pure: an update is checked whole against the board and the
-turn's dispatches, and either refused with a reason the model can act on or
+turn's dispatches, and either refused with every fault the model has to fix or
 applied to a copy. Nothing is half-applied, and the board handed in is never
 changed.
 """
@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import secrets
 import unicodedata
+from collections import Counter
 from collections.abc import Callable, Collection, Mapping, Sequence, Set
 from dataclasses import dataclass, field
 from typing import Any
@@ -102,8 +103,23 @@ class Board:
     version: int = 1
 
 
+@dataclass(frozen=True)
+class Problem:
+    """One rule an update breaks, worded for the model; ``where`` names the entry it is in, ``steps[0]`` or ``groups[1]``."""
+
+    text: str
+    where: str = ""
+
+    def __str__(self) -> str:
+        return f"{self.where}: {self.text}" if self.where else self.text
+
+
 class UpdateRejectedError(ValueError):
-    """An update the board refuses; ``str(exc)`` is what the model is told."""
+    """An update the board refuses, with every rule it breaks in ``problems``; ``str(exc)`` reads them one to a line."""
+
+    def __init__(self, problems: str | Sequence[Problem]) -> None:
+        self.problems = (Problem(problems),) if isinstance(problems, str) else tuple(problems)
+        super().__init__("\n".join(map(str, self.problems)))
 
 
 def new_id(prefix: str) -> str:
@@ -136,120 +152,153 @@ def word_count(text: str) -> int:
     return count
 
 
-def _filled(raw: Mapping[str, Any], key: str, name: str) -> str:
-    value = str(raw.get(key) or "").strip()
-    if not value:
-        raise UpdateRejectedError(f"{name} is empty")
-    return value
+class _Rules:
+    """The faults of one update, gathered whole: one refusal names all the model has to fix.
+
+    Stopped at the first, each further fault would wait a whole call to be named, and
+    an update has three. With ``allow_long`` a text past its limit is taken as written.
+    """
+
+    def __init__(self, *, allow_long: bool = False) -> None:
+        self.allow_long = allow_long
+        self.problems: list[Problem] = []
+
+    def refuse(self, text: str, where: str = "") -> None:
+        self.problems.append(Problem(text, where))
+
+    def filled(self, value: Any, name: str, where: str, limit: int | None = None) -> None:
+        value = str(value or "").strip()
+        if not value:
+            self.refuse(f"{name} is empty", where)
+            return
+        words = word_count(value)
+        if limit is None or words <= limit or self.allow_long:
+            return
+        shown = value if len(value) <= _SNIPPET else value[:_SNIPPET] + "..."
+        self.refuse(f"{name} is {words} words long; the limit is {limit}: {shown}", where)
 
 
-def _within(text: str, limit: int, name: str) -> None:
-    words = word_count(text)
-    if words > limit:
-        shown = text if len(text) <= _SNIPPET else text[:_SNIPPET] + "..."
-        raise UpdateRejectedError(f"{name} is {words} words long; the limit is {limit}: {shown}")
+def _status_fault(status: Any) -> str | None:
+    return None if status in STATUSES else f"unknown status: {status}; use needs_you, running, idle or completed"
 
 
 def _check_status(status: Any) -> str:
-    if status not in STATUSES:
-        raise UpdateRejectedError(f"unknown status: {status}; use needs_you, running, idle or completed")
+    if fault := _status_fault(status):
+        raise UpdateRejectedError(fault)
     return status
 
 
-def _check_questions(questions: Any, status: str) -> None:
+def _check_questions(rules: _Rules, questions: Any, status: str, where: str) -> None:
     """A ``needs_you`` step names what its reply asked the user; a step of any other status names nothing."""
     if questions is not None and (not isinstance(questions, list) or not all(isinstance(q, str) for q in questions)):
-        raise UpdateRejectedError("questions must be a list of questions")
-    if not questions:
+        rules.refuse("questions must be a list of questions", where)
+    elif not questions:
         if status == "needs_you":
-            raise UpdateRejectedError("a needs_you step lists the questions its reply asked the user in questions")
-        return
-    if status != "needs_you":
-        raise UpdateRejectedError("questions go only with needs_you: a reply that asks the user something is needs_you")
-    for question in questions:
-        if not question.strip():
-            raise UpdateRejectedError("a question is empty")
-        _within(question.strip(), QUESTION_WORDS, "a question")
+            rules.refuse("a needs_you step lists the questions its reply asked the user in questions", where)
+    elif status != "needs_you":
+        rules.refuse("questions go only with needs_you: a reply that asks the user something is needs_you", where)
+    else:
+        for index, question in enumerate(questions):
+            rules.filled(question, f"questions[{index}]", where, QUESTION_WORDS)
 
 
-def _objects(value: Any, field: str, item_error: str) -> list[Mapping[str, Any]]:
-    """A list of objects from the model's arguments, or a refusal it can act on."""
+def _objects(rules: _Rules, value: Any, field: str, item_error: str) -> list[Mapping[str, Any]] | None:
+    """A list of objects from the model's arguments, or ``None`` and a refusal it can act on."""
     if value is None:
         return []
     if not isinstance(value, list):
-        raise UpdateRejectedError(f"{field} must be a list")
+        rules.refuse(f"{field} must be a list")
+        return None
     if not all(isinstance(item, Mapping) for item in value):
-        raise UpdateRejectedError(item_error)
+        rules.refuse(item_error)
+        return None
     return value
 
 
-def _check_steps(steps: Sequence[Mapping[str, Any]], groups: Set[str]) -> None:
+def _check_steps(rules: _Rules, steps: Sequence[Mapping[str, Any]], groups: Set[str]) -> None:
     seen: set[str] = set()
-    for raw in steps:
+    for index, raw in enumerate(steps):
+        where = f"steps[{index}]"
         group = raw.get("group")
         new_title = raw.get("new_title")
         if bool(group) == (new_title is not None):
-            raise UpdateRejectedError("a step needs exactly one of group and new_title")
-        if new_title is not None:
-            _within(_filled(raw, "new_title", "new_title"), TITLE_WORDS, "new_title")
-            _within(_filled(raw, "new_summary", "new_summary"), GROUP_SUMMARY_WORDS, "new_summary")
-        elif group not in groups:
-            raise UpdateRejectedError(f"unknown group: {group}")
+            rules.refuse("a step needs exactly one of group and new_title", where)
+        elif new_title is not None:
+            rules.filled(new_title, "new_title", where, TITLE_WORDS)
+            rules.filled(raw.get("new_summary"), "new_summary", where, GROUP_SUMMARY_WORDS)
+        elif not isinstance(group, str) or group not in groups:
+            rules.refuse(f"unknown group: {group}", where)
         elif group in seen:
-            raise UpdateRejectedError(f"{group} appears twice in steps; give each group one step per turn")
+            rules.refuse(f"{group} appears twice in steps; give each group one step per turn", where)
         elif raw.get("new_summary") is not None:
-            raise UpdateRejectedError("new_summary goes with new_title; change an existing group's summary in groups")
-        if group:
+            rules.refuse("new_summary goes with new_title; change an existing group's summary in groups", where)
+        if isinstance(group, str):
             seen.add(group)
-        status = _check_status(raw.get("status"))
-        _within(_filled(raw, "title", "title"), TITLE_WORDS, "title")
-        _filled(raw, "summary", "summary")
-        _check_questions(raw.get("questions"), status)
+        status = raw.get("status")
+        if fault := _status_fault(status):
+            rules.refuse(fault, where)
+        rules.filled(raw.get("title"), "title", where, TITLE_WORDS)
+        rules.filled(raw.get("summary"), "summary", where)
+        if not fault:
+            _check_questions(rules, raw.get("questions"), status, where)
         tasks = raw.get("tasks")
         if tasks is not None and (not isinstance(tasks, list) or not all(isinstance(h, str) for h in tasks)):
-            raise UpdateRejectedError("tasks must be a list of handles")
+            rules.refuse("tasks must be a list of handles", where)
 
 
-def _check_changes(changes: Sequence[Mapping[str, Any]], groups: Set[str], stepped: Set[str]) -> None:
+def _check_changes(rules: _Rules, changes: Sequence[Mapping[str, Any]], groups: Set[str], stepped: Set[str]) -> None:
     """A ``groups`` entry rewrites an existing group's own title, summary or status.
 
     The status of a group that also has a step this turn is the step's to set, so
     the two can never disagree.
     """
     seen: set[str] = set()
-    for raw in changes:
+    for index, raw in enumerate(changes):
+        where = f"groups[{index}]"
         group = raw.get("group")
-        if group not in groups:
-            raise UpdateRejectedError(f"unknown group: {group}")
+        if not isinstance(group, str) or group not in groups:
+            rules.refuse(f"unknown group: {group}", where)
+            continue
         if group in seen:
-            raise UpdateRejectedError(f"{group} appears twice in groups")
+            rules.refuse(f"{group} appears twice in groups", where)
+            continue
         seen.add(group)
         if all(raw.get(key) is None for key in ("title", "summary", "status")):
-            raise UpdateRejectedError("a groups entry needs at least one of title, summary and status")
+            rules.refuse("a groups entry needs at least one of title, summary and status", where)
         if raw.get("title") is not None:
-            _within(_filled(raw, "title", "groups title"), TITLE_WORDS, "groups title")
+            rules.filled(raw["title"], "title", where, TITLE_WORDS)
         if raw.get("summary") is not None:
-            _within(_filled(raw, "summary", "groups summary"), GROUP_SUMMARY_WORDS, "groups summary")
-        if raw.get("status") is not None:
-            _check_status(raw["status"])
-            if group in stepped:
-                raise UpdateRejectedError(f"{group} has a step this turn; set its status on the step")
-            if raw["status"] == "needs_you":
-                raise UpdateRejectedError(f"{group}: needs_you goes on a step, with the questions it asks")
+            rules.filled(raw["summary"], "summary", where, GROUP_SUMMARY_WORDS)
+        status = raw.get("status")
+        if status is None:
+            continue
+        if fault := _status_fault(status):
+            rules.refuse(fault, where)
+        elif group in stepped:
+            rules.refuse(f"{group} has a step this turn; set its status on the step", where)
+        elif status == "needs_you":
+            rules.refuse("needs_you goes on a step, with the questions it asks", where)
 
 
-def _check_placement(placed: Sequence[str], required: Sequence[str]) -> None:
-    seen: set[str] = set()
-    for handle in placed:
-        if handle in seen:
-            raise UpdateRejectedError(f"placed more than once: {handle}")
-        seen.add(handle)
-    for handle in placed:
+def _stepped(steps: Sequence[Mapping[str, Any]]) -> set[str]:
+    return {raw["group"] for raw in steps if isinstance(raw.get("group"), str)}
+
+
+def _tasks(raw: Mapping[str, Any]) -> list[str]:
+    tasks = raw.get("tasks")
+    return [h for h in tasks if isinstance(h, str)] if isinstance(tasks, list) else []
+
+
+def _check_placement(rules: _Rules, placed: Sequence[str], required: Sequence[str]) -> None:
+    for handle, times in Counter(placed).items():
+        if times > 1:
+            rules.refuse(f"placed more than once: {handle}")
+    for handle in dict.fromkeys(placed):
         if handle not in required:
-            raise UpdateRejectedError(f"not dispatched this turn: {handle}")
-    missing = [handle for handle in required if handle not in seen]
+            rules.refuse(f"not dispatched this turn: {handle}")
+    missing = [handle for handle in required if handle not in placed]
     if missing:
-        raise UpdateRejectedError("not placed: " + ", ".join(missing))
+        rules.refuse("not placed: " + ", ".join(missing))
 
 
 def apply_update(
@@ -261,27 +310,36 @@ def apply_update(
     turn_id: str | None,
     now_ms: int,
     mint: Callable[[str], str] = new_id,
+    allow_long: bool = False,
 ) -> Board:
-    """The board after one turn's update, or :class:`UpdateRejectedError` saying why not.
+    """The board after one turn's update, or :class:`UpdateRejectedError` naming every rule it breaks.
 
     Every handle this turn dispatched, and every one an earlier failed update
-    left pending, has to be placed on exactly one step of this update.
+    left pending, has to be placed on exactly one step of this update. With
+    ``allow_long``, a :func:`salvage`'s, text past its limit is taken as written.
     """
-    steps = _objects(args.get("steps"), "steps", "each step must be an object")
-    changes = _objects(args.get("groups"), "groups", "each groups entry must be an object")
+    rules = _Rules(allow_long=allow_long)
+    steps = _objects(rules, args.get("steps"), "steps", "each step must be an object")
+    changes = _objects(rules, args.get("groups"), "groups", "each groups entry must be an object")
     known = {g.id for g in board.groups}
+    required = list(dict.fromkeys([d.handle for d in dispatches] + [p.handle for p in board.unassigned]))
 
-    _check_steps(steps, known)
-    _check_changes(changes, known, {raw["group"] for raw in steps if raw.get("group")})
+    if steps is not None:
+        _check_steps(rules, steps, known)
+    if changes is not None:
+        _check_changes(rules, changes, known, _stepped(steps or []))
+    if steps is not None:
+        if not steps and required:
+            rules.refuse("steps may be empty only when nothing was dispatched")
+        else:
+            _check_placement(rules, [h for raw in steps for h in _tasks(raw)], required)
+    if rules.problems:
+        raise UpdateRejectedError(rules.problems)
 
+    steps, changes = steps or [], changes or []
     summaries = {p.handle: p.summary for p in board.unassigned}
     summaries.update({d.handle: d.summary for d in dispatches})
-    required = list(dict.fromkeys([d.handle for d in dispatches] + [p.handle for p in board.unassigned]))
-    if not steps and required:
-        raise UpdateRejectedError("steps may be empty only when nothing was dispatched")
-    placed = [str(h) for raw in steps for h in (raw.get("tasks") or [])]
-    _check_placement(placed, required)
-
+    placed = [h for raw in steps for h in _tasks(raw)]
     out = copy.deepcopy(board)
     by_id = {g.id: g for g in out.groups}
     touched = list(dict.fromkeys([raw["group"] for raw in steps if raw.get("group")] + [c["group"] for c in changes]))
@@ -362,6 +420,40 @@ def confine_update(args: Mapping[str, Any], owners: Collection[str]) -> dict[str
     if isinstance(changes, list) and all(isinstance(raw, Mapping) for raw in changes):
         moved = owned + [raw.get("group") for raw in out["steps"]]
         out["groups"] = [raw for raw in changes if raw.get("group") in moved]
+    return out
+
+
+def salvage(board: Board, args: Mapping[str, Any]) -> dict[str, Any]:
+    """The last update a model never got accepted, cut back to what the board can still take.
+
+    Each ``groups`` entry keeps only the fields that pass on their own -- a status the
+    step on its group already sets goes, the summary written beside it stays -- and a
+    group keeps its first such entry. Applied with ``allow_long``, its text past a
+    limit stands as written. Steps are left whole: a fault in one, or in where the work
+    is placed, is still refused, and the work parked.
+    """
+    out = dict(args)
+    changes = args.get("groups")
+    if changes is None:
+        return out
+    steps = args.get("steps")
+    stepped = _stepped([raw for raw in steps if isinstance(raw, Mapping)]) if isinstance(steps, list) else set()
+    known = {g.id for g in board.groups}
+    kept: list[dict[str, Any]] = []
+    for raw in changes if isinstance(changes, list) else []:
+        if not isinstance(raw, Mapping) or any(entry["group"] == raw.get("group") for entry in kept):
+            continue
+        fields = {}
+        for key in ("title", "summary", "status"):
+            if raw.get(key) is None:
+                continue
+            rules = _Rules(allow_long=True)
+            _check_changes(rules, [{"group": raw.get("group"), key: raw[key]}], known, stepped)
+            if not rules.problems:
+                fields[key] = raw[key]
+        if fields:
+            kept.append({"group": raw["group"], **fields})
+    out["groups"] = kept
     return out
 
 

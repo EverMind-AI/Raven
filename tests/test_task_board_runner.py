@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 
+from loguru import logger
+
 from raven.agent.task_board.board import (
     Board,
     Dispatch,
@@ -28,6 +30,10 @@ from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
 from raven.session.manager import SessionManager
 
 KEY = "web:alpha"
+REFUSED = (
+    "Rejected, and nothing was written. Call task_board again with action=update, sending the whole update with"
+    " each of these fixed:"
+)
 SPAWN = Dispatch("spawn:locate_login_bug", "Locate the blank-page bug")
 WINDOW = [
     {"role": "system", "content": "You are Raven."},
@@ -159,7 +165,7 @@ async def test_a_rejected_update_is_asked_again_with_its_reason(tmp_path):
     second = call.seen[1]
     assert second[-2]["role"] == "assistant" and second[-2]["tool_calls"][0]["id"] == "t0"
     assert second[-1]["role"] == "tool" and second[-1]["tool_call_id"] == "t0"
-    assert second[-1]["content"].startswith("Rejected: not placed: spawn:locate_login_bug")
+    assert second[-1]["content"] == f"{REFUSED}\n1. not placed: spawn:locate_login_bug"
 
 
 async def test_prose_three_times_parks_the_handles_in_unassigned(tmp_path):
@@ -360,7 +366,7 @@ async def test_malformed_arguments_are_asked_again_not_raised(tmp_path):
     board = await _run(_service(tmp_path), call)
 
     assert board is not None
-    assert call.seen[1][-1]["content"].startswith("Rejected: each step must be an object")
+    assert call.seen[1][-1]["content"] == f"{REFUSED}\n1. each step must be an object"
 
 
 def _gated(reply: LLMResponse) -> tuple[asyncio.Event, object]:
@@ -622,3 +628,153 @@ def test_an_unscoped_instruction_has_no_scope_paragraph():
     text = build_instruction(Board([], []), [])
 
     assert text[text.index("[END DISPATCHES]") : text.index("How to write the update:")] == "[END DISPATCHES]\n\n"
+
+
+def _words(n: int) -> str:
+    return " ".join(["word"] * n)
+
+
+REVIEW = Dispatch("dag:20261029T110000Z-0badf00d", "Review the fix")
+
+
+def _review_with_groups_faults() -> LLMResponse:
+    """A turn on g_a that places its review right, then rewrites g_a's summary past the
+    limit and repeats in groups the status its step already sets."""
+    step = {"group": "g_a", "title": "Sent a review", "summary": "Reviewing.", "status": "running"}
+    return _update_with(
+        [{**step, "tasks": [REVIEW.handle]}], groups=[{"group": "g_a", "status": "running", "summary": _words(89)}]
+    )
+
+
+def _logged(level: str = "INFO") -> tuple[list[str], int]:
+    lines: list[str] = []
+    sink = logger.add(lambda m: lines.append(f"{m.record['level'].name} {m.record['message']}"), level=level)
+    return lines, sink
+
+
+async def test_a_refusal_lists_every_fault_numbered(tmp_path):
+    service = _service(tmp_path)
+    _two_matters(service)
+    placed = _update_with(
+        [
+            {
+                "group": "g_a",
+                "title": "Sent a review",
+                "summary": "Reviewing.",
+                "status": "running",
+                "tasks": [REVIEW.handle],
+            }
+        ]
+    )
+    call = Scripted(_review_with_groups_faults(), placed)
+
+    await _run(service, call, dispatches=[REVIEW])
+
+    assert call.seen[1][-1]["content"].splitlines() == [
+        REFUSED,
+        "1. groups[0]: summary is 89 words long; the limit is 50: word word word word word...",
+        "2. groups[0]: g_a has a step this turn; set its status on the step",
+    ]
+
+
+async def test_an_update_refused_to_its_last_attempt_for_groups_faults_still_places_its_work(tmp_path):
+    """Each attempt placed the run right; only what it said in groups broke a rule. The
+    step is written and the run placed, the repeated status dropped, the long summary kept."""
+    service = _service(tmp_path)
+    _two_matters(service)
+    call = Scripted(_review_with_groups_faults())
+
+    board = await _run(service, call, dispatches=[REVIEW])
+
+    assert len(call.seen) == MAX_ATTEMPTS
+    stored = load_board(service.session_dir(KEY))
+    fix = stored.groups[0]
+    assert (fix.status, fix.summary, fix.steps[-1].title) == ("running", _words(89), "Sent a review")
+    assert [t.id for t in fix.steps[-1].tasks] == ["20261029T110000Z-0badf00d"]
+    assert stored.unassigned == []
+    assert board is not None and board_to_dict(board) == board_to_dict(stored)
+
+
+async def test_an_update_refused_to_its_last_attempt_for_a_placement_fault_parks_its_work(tmp_path):
+    service = _service(tmp_path)
+    _two_matters(service)
+    unplaced = _update_with([{"group": "g_a", "title": "Sent a review", "summary": "Reviewing.", "status": "running"}])
+
+    assert await _run(service, Scripted(unplaced), dispatches=[REVIEW]) is None
+
+    stored = load_board(service.session_dir(KEY))
+    assert [p.handle for p in stored.unassigned] == [REVIEW.handle]
+    assert [len(g.steps) for g in stored.groups] == [1, 1]
+
+
+async def test_each_refusal_and_an_update_that_never_landed_with_nothing_to_park_are_logged(tmp_path):
+    service = _service(tmp_path)
+    _two_matters(service)
+    lines, sink = _logged()
+    try:
+        bad = _update_with([{"group": "g_9", "title": "Moved", "summary": "Moved.", "status": "idle"}])
+        assert await _run(service, Scripted(bad), dispatches=()) is None
+    finally:
+        logger.remove(sink)
+
+    refused = [line for line in lines if "refused" in line]
+    assert len(refused) == MAX_ATTEMPTS
+    assert all(line.startswith("INFO ") and "steps[0]: unknown group: g_9" in line for line in refused)
+    assert f"WARNING Task board update for {KEY} never landed; nothing new to park" in lines
+
+
+async def test_an_update_kept_from_its_last_refused_attempt_says_so(tmp_path):
+    service = _service(tmp_path)
+    _two_matters(service)
+    lines, sink = _logged("WARNING")
+    try:
+        await _run(service, Scripted(_review_with_groups_faults()), dispatches=[REVIEW])
+    finally:
+        logger.remove(sink)
+
+    assert lines == [
+        f"WARNING Task board update for {KEY} was never accepted; its last attempt is written without the groups"
+        " changes it got wrong, and any text past its limit as it stands"
+    ]
+
+
+async def test_an_update_the_board_moved_under_is_logged_with_why_it_no_longer_fits(tmp_path):
+    """An undo of the turn that made g_a removes the group while this update is in its call."""
+    service = _service(tmp_path)
+    _two_matters(service)
+    gate, call = _gated(
+        _update_with(
+            [
+                {
+                    "group": "g_a",
+                    "title": "Sent a review",
+                    "summary": "Reviewing.",
+                    "status": "running",
+                    "tasks": [REVIEW.handle],
+                }
+            ]
+        )
+    )
+    lines, sink = _logged("WARNING")
+    try:
+        run = asyncio.create_task(_run(service, call, dispatches=[REVIEW]))
+        await asyncio.sleep(0.01)
+        await service.drop_turns(KEY, {"T0"})
+        gate.set()
+        assert await run is None
+    finally:
+        logger.remove(sink)
+
+    assert lines[0] == f"WARNING Task board update for {KEY} no longer fits the board: steps[0]: unknown group: g_a"
+    assert [p.handle for p in load_board(service.session_dir(KEY)).unassigned] == [REVIEW.handle]
+
+
+async def test_a_salvaged_update_keeps_to_the_groups_its_turn_belongs_to(tmp_path):
+    """The salvage starts from the update as it was confined, not as the model sent it."""
+    service = _service(tmp_path)
+    _two_matters(service)
+    stray = _update_with(_steps_on("g_a", "g_b", status="running"), groups=[{"group": "g_a", "status": "running"}])
+
+    await _run(service, Scripted(stray), dispatches=(), delegated=[SPAWN.handle])
+
+    assert [len(g.steps) for g in load_board(service.session_dir(KEY)).groups] == [2, 1]
