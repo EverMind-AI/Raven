@@ -8,12 +8,12 @@ rather than taking the conversation down with it.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 from pathlib import Path
 
 from loguru import logger
 
+from raven.agent.task_board import files
 from raven.agent.task_board.board import Board, board_from_dict, board_to_dict
 from raven.agent.task_board.notes import NOTES_FILENAME
 
@@ -23,7 +23,7 @@ BOARD_FILENAME = "task_board.json"
 def load_board(session_dir: Path) -> Board:
     path = Path(session_dir) / BOARD_FILENAME
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(files.read_text(path))
         if not isinstance(data, dict):
             raise ValueError("not a JSON object")
         return board_from_dict(data)
@@ -35,17 +35,13 @@ def load_board(session_dir: Path) -> Board:
 
 
 def save_board(session_dir: Path, board: Board) -> None:
-    directory = Path(session_dir)
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / BOARD_FILENAME
-    tmp = directory / f"{BOARD_FILENAME}.{os.getpid()}.tmp"
-    tmp.write_text(json.dumps(board_to_dict(board, revisions=True), ensure_ascii=False, indent=1), encoding="utf-8")
-    os.replace(tmp, path)
+    text = json.dumps(board_to_dict(board, revisions=True), ensure_ascii=False, indent=1)
+    files.write_text(Path(session_dir) / BOARD_FILENAME, text)
 
 
 def reset_board(session_dir: Path) -> None:
-    (Path(session_dir) / BOARD_FILENAME).unlink(missing_ok=True)
-    (Path(session_dir) / NOTES_FILENAME).unlink(missing_ok=True)
+    files.remove(Path(session_dir) / BOARD_FILENAME)
+    files.remove(Path(session_dir) / NOTES_FILENAME)
 
 
 def copy_board(src: Path, dst: Path) -> None:
