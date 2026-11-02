@@ -8,6 +8,8 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
+from raven.agent.task_board.board import Board, TaskGroup
+from raven.agent.task_board.store import BOARD_FILENAME, save_board
 from raven.cli.commands import app
 from raven.cli.session_commands import (
     resolve_session_cross_channel,
@@ -300,6 +302,20 @@ def test_delete_by_full_key(two_sessions: list[str], patched_workspace: Path, ma
     r = runner.invoke(session_app, ["delete", f"cli:{cid}"])
     assert r.exit_code == 0
     assert not manager.exists(f"cli:{cid}")
+
+
+def test_delete_takes_the_conversations_task_board_along(
+    two_sessions: list[str], patched_workspace: Path, manager: SessionManager
+) -> None:
+    """The CLI deletes from a process of its own, where no host's delete observer is
+    attached: it removes the board itself, or a chat that takes the key again inherits it."""
+    key = f"cli:{two_sessions[0]}"
+    save_board(manager.session_dir(key), Board([TaskGroup("g_a", "Fix bug A", "", "idle", 1, 1, [])], []))
+
+    r = runner.invoke(session_app, ["delete", key])
+
+    assert r.exit_code == 0
+    assert not (manager.session_dir(key) / BOARD_FILENAME).exists()
 
 
 def test_delete_unknown_id_nonzero(patched_workspace: Path) -> None:

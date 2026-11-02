@@ -10,6 +10,7 @@ from raven.agent.task_board.notes import NOTES_FILENAME
 from raven.agent.task_board.service import TaskBoardService
 from raven.agent.task_board.store import BOARD_FILENAME, copy_board, load_board, reset_board, save_board
 from raven.agent.task_board.tool import REFUSED_UPDATE, TOOL_NAME, TaskBoardTool
+from raven.contracts.session_events import SessionObserver
 from raven.session.manager import SessionManager
 
 KEY = "web:alpha"
@@ -316,3 +317,21 @@ async def test_an_ack_the_disk_refuses_still_says_what_the_turn_was_shown(sessio
     monkeypatch.setattr(board_service, "save_notes", refuse)
 
     assert [n.group for n in await service.ack_turn_notes(KEY)] == ["g_a"]
+
+
+async def test_a_deleted_conversation_takes_its_board_and_notes_with_it(sessions):
+    """A conversation that later takes the same key -- a channel's chat, deleted and then
+    written to again -- starts with no board; an update still on its way writes nothing."""
+    service = TaskBoardService(sessions)
+    save_board(sessions.session_dir(KEY), Board([_waiting("g_a", "Fix bug A", ["Which fix?"])], []))
+    await service.ignore_question(KEY, "g_a", "s_g_a", "Which fix?")
+    service.turn_notes(KEY)
+    before = service.generation(KEY)
+
+    service.on_session_deleted(KEY, True)
+
+    assert isinstance(service, SessionObserver)
+    assert not (sessions.session_dir(KEY) / BOARD_FILENAME).exists()
+    assert not (sessions.session_dir(KEY) / NOTES_FILENAME).exists()
+    assert service.generation(KEY) == before + 1
+    assert await service.ack_turn_notes(KEY) == [], "the notes it was shown went with it"

@@ -23,6 +23,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from raven.agent.task_board.store import reset_board
 from raven.cli._log_silence import mute_subsystem_logs_unless_debug
 from raven.config.paths import get_workspace_path
 from raven.session.export import default_export_path, write_transcript
@@ -223,6 +224,8 @@ def session_delete(
         raise typer.Exit(code=1)
 
     if manager.delete(key):
+        # This process attaches no host's delete observer, so the board goes here.
+        reset_board(manager.session_dir(key))
         console.print(f"[green]✓[/green] Deleted session {_bare_id(key)}")
     else:
         console.print(f"[red]Failed to delete session {id_or_key!r}[/red]")

@@ -111,6 +111,15 @@ class TaskBoardService:
             save_notes(self.session_dir(session_key), [])
             await self.write(session_key, Board([], []))
 
+    def on_session_deleted(self, session_key: str, removed: bool) -> None:
+        """The session store's delete observer: the board and its notes go with the
+        conversation, so one that later takes the same key starts with none. Called
+        synchronously by the store, so it takes no lock: the clear it records is what
+        turns away an update still on its way, which checks it and writes in one step."""
+        self._generation[session_key] = self.generation(session_key) + 1
+        self._shown.pop(session_key, None)
+        reset_board(self.session_dir(session_key))
+
     async def drop_turns(self, session_key: str, removed: set[str]) -> Board:
         """Drop what the board recorded for the turns an undo removed.
 

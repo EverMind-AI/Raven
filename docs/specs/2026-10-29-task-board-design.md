@@ -521,8 +521,11 @@ A group that stays gets back each field a removed turn changed, newest turn firs
 `revisions` -- but only a field still holding what that turn wrote: a later writer's value,
 the reader's own Mark completed, stays. `session.clear` and `/new`, the two ways a conversation is
 cleared under its own key, empty the board and its notes through one helper (`reset_for`), so an
-update still on its way finds the clear and writes nothing; `session.branch` copies the board with
-the transcript. Compaction leaves the board alone -- surviving compaction is part of its purpose.
+update still on its way finds the clear and writes nothing. A deleted conversation takes its
+board and notes along, so a chat that later takes the same key starts with none: the host's
+service is the session store's delete observer (`on_session_deleted`, attached by a resident
+host with the plugins' observers), and `raven session delete`, which runs where no observer is
+attached, removes them itself. `session.branch` copies the board with the transcript. Compaction leaves the board alone -- surviving compaction is part of its purpose.
 
 6.4 **Sessions from before the board.** No file: `tasks.board` answers an empty board and
 the page draws the session's Tasks as the old flat list (5.5). No backfill.

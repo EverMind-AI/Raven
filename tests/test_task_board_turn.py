@@ -501,3 +501,30 @@ async def test_an_update_still_on_its_way_at_new_writes_nothing(tmp_path, monkey
     await _drain(agent)
 
     assert load_board(agent.sessions.session_dir(KEY)).groups == []
+
+
+async def test_a_resident_host_removes_a_deleted_conversations_board(tmp_path):
+    agent = _agent(tmp_path, Recording([LLMResponse(content=ANSWER)]))
+    _placed_and_another(agent)
+    await agent.start_plugin_services()
+    try:
+        agent.sessions.delete(KEY)
+    finally:
+        await agent.stop_plugin_services()
+
+    assert not (agent.sessions.session_dir(KEY) / BOARD_FILENAME).exists()
+
+
+async def test_an_update_still_on_its_way_at_delete_writes_nothing(tmp_path):
+    gate = asyncio.Event()
+    agent = _agent(tmp_path, Recording([LLMResponse(content=ANSWER), BOARD_REPLY], gate=gate))
+    await agent.start_plugin_services()
+    try:
+        await agent._process_message(_turn(), session_key=KEY)
+        agent.sessions.delete(KEY)
+        gate.set()
+        await _drain(agent)
+    finally:
+        await agent.stop_plugin_services()
+
+    assert not (agent.sessions.session_dir(KEY) / BOARD_FILENAME).exists()

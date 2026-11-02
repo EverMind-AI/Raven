@@ -1795,7 +1795,8 @@ class WiringMixin:
 
         The contributed session observers ride this same lifecycle: attached
         to the session store here, detached in :meth:`stop_plugin_services`
-        (paper: contracts/session_events.py).
+        (paper: contracts/session_events.py). The host's own task board joins
+        them, so a deleted conversation's board goes with it.
         """
         if self._plugin_services_started:
             return
@@ -1814,7 +1815,8 @@ class WiringMixin:
                 continue
             started.append(service)
         self._started_services = tuple(started)
-        self.sessions.set_delete_observers(self.session_observers)
+        board = (self.task_board,) if self.task_board is not None else ()
+        self.sessions.set_delete_observers((*self.session_observers, *board))
 
     async def stop_plugin_services(self) -> None:
         """Stop started services, newest first; idempotent, loud on error.
