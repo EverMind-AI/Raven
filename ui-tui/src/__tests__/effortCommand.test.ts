@@ -69,7 +69,7 @@ describe('/effort', () => {
     await flush()
 
     expect(rpc).toHaveBeenCalledWith('session.set_effort', { session_key: 's1' }, { quiet: true })
-    expect(lines).toEqual(['reasoning effort: default (low)'])
+    expect(lines).toEqual(['reasoning effort: default (low; words: minimal, low, medium, high)'])
   })
 
   it('names the provider when no effort is configured anywhere', async () => {
@@ -77,7 +77,7 @@ describe('/effort', () => {
     const { lines } = run('', rpc)
     await flush()
 
-    expect(lines).toEqual(["reasoning effort: default (the provider's own)"])
+    expect(lines).toEqual(["reasoning effort: default (the provider's own; words: minimal, low, medium, high)"])
     expect(getUiState().info?.reasoning_effort).toBe('')
   })
 
@@ -87,7 +87,7 @@ describe('/effort', () => {
     await flush()
 
     expect(rpc).toHaveBeenCalledWith('session.set_effort', { session_key: 's1', effort: 'high' }, { quiet: true })
-    expect(lines).toEqual(['reasoning effort: high (this conversation; default is low)'])
+    expect(lines).toEqual(['reasoning effort: high (this conversation; default is low; words: minimal, low, medium, high)'])
     expect(getUiState().info?.reasoning_effort).toBe('high')
   })
 
@@ -99,7 +99,7 @@ describe('/effort', () => {
     await flush()
 
     expect(rpc).toHaveBeenCalledWith('session.set_effort', { session_key: 's1', clear: true }, { quiet: true })
-    expect(lines).toEqual(['reasoning effort: default (medium)'])
+    expect(lines).toEqual(['reasoning effort: default (medium; words: minimal, low, medium, high)'])
     expect(getUiState().info?.reasoning_effort).toBe('medium')
   })
 
@@ -129,4 +129,24 @@ describe('/effort', () => {
     expect(lines).toEqual(["error: no reasoning effort 'turbo'; the words are minimal, low, medium, high"])
     expect(getUiState().info?.reasoning_effort).toBe('low')
   })
+})
+
+
+it('reports the words the model declares', async () => {
+  const rpc = vi.fn(() => Promise.resolve({
+    session_key: 's1', effort: 'high', default: 'medium',
+    options: ['medium', 'high', 'xhigh'],
+  }))
+  const { lines } = run('', rpc)
+  await flush()
+  expect(lines.join('\n')).toContain('medium, high, xhigh')
+})
+
+it('says so when the model declares no reasoning effort', async () => {
+  const rpc = vi.fn(() => Promise.resolve({
+    session_key: 's1', effort: null, default: null, options: [],
+  }))
+  const { lines } = run('', rpc)
+  await flush()
+  expect(lines.join('\n')).toContain('declares no reasoning effort')
 })

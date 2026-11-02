@@ -634,9 +634,9 @@ export const sessionCommands: SlashCommand[] = [
   },
 
   {
-    help: 'show or set how much the model thinks for this conversation [minimal|low|medium|high|default]',
+    help: 'show or set how much the model thinks for this conversation [word]',
     name: 'effort',
-    usage: '/effort [minimal|low|medium|high|default]   -- default/reset/clear follow the global setting again',
+    usage: '/effort [word]   -- default/reset/clear follow the global setting again; the words are the ones the model declares',
     run: (arg, ctx) => {
       if (!ctx.sid) {
         return ctx.transcript.sys('no active session')
@@ -675,11 +675,17 @@ export const sessionCommands: SlashCommand[] = [
           ctx.guarded<SessionSetEffortResult>(r => {
             const fallback = r.default ?? null
             const fallbackLabel = fallback ?? "the provider's own"
-            ctx.transcript.sys(
-              r.effort
-                ? `reasoning effort: ${r.effort} (this conversation; default is ${fallbackLabel})`
-                : `reasoning effort: default (${fallbackLabel})`
-            )
+            const options = r.options ?? []
+            if (options.length === 0) {
+              ctx.transcript.sys('reasoning effort: this model declares no reasoning effort')
+            } else {
+              const words = options.join(', ')
+              ctx.transcript.sys(
+                r.effort
+                  ? `reasoning effort: ${r.effort} (this conversation; default is ${fallbackLabel}; words: ${words})`
+                  : `reasoning effort: default (${fallbackLabel}; words: ${words})`
+              )
+            }
             // The status bar shows what the next turn runs at, as session.info
             // reports it: the pick, else the default.
             patchUiState(state => ({

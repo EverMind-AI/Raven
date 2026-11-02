@@ -303,6 +303,15 @@ All notable changes to Raven are documented here.
 
 ### Changed
 
+- A conversation's reasoning-effort choices now come from the model it runs on:
+  LiteLLM's declaration first, a provider-scoped
+  `model_overlay.reasoningEfforts` for models it does not carry, and no control
+  at all for a model that declares none. The turn and the status bar clamp a
+  stored pick to the current model, so switching models cannot send a level the
+  new model does not accept; the pick itself is kept and applies again if a
+  later model declares it. The global `agents.defaults.reasoningEffort` is
+  unchanged.
+
 - Empty and abnormal model replies are handled the way Hermes Agent handles
   them. A reply that is only the silence marker `[SILENT]` ends the turn with
   nothing sent; a scheduled run, a sub-agent's report or a Sentinel notice

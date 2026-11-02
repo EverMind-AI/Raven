@@ -51,9 +51,11 @@ raven agent --continue -m "Expand the previous summary; do not modify files"
 
 ## 设置思考深度 { #set-the-reasoning-effort }
 
-思考深度是模型每次回答前思考多少。可选的词是 `minimal`、`low`、`medium`、`high`。
-各厂商把它们映射成自己的请求参数（Anthropic 的自适应思考强度与思考预算，OpenAI 风格
-接口的 `reasoning_effort` 字段），没有思考能力的模型会忽略它。不设置时使用厂商自己的默认值。
+思考深度是模型每次回答前思考多少。可选的词由当前模型声明：多数模型是 `minimal`、
+`low`、`medium`、`high`，厂商提供时还会有 `xhigh`、`max`；没有声明任何档位的模型
+不会出现这一行。各厂商把这些词映射成自己的请求参数（Anthropic 的自适应思考强度与
+思考预算，OpenAI 风格接口的 `reasoning_effort` 字段），没有思考能力的模型会忽略它。
+不设置时使用厂商自己的默认值。
 
 两处可以设置：
 
@@ -64,6 +66,9 @@ raven agent --continue -m "Expand the previous summary; do not modify files"
   或 TUI 里的 `/effort <词>`。单独输入 `/effort` 查看当前生效的档位，`/effort default`
   让这个对话重新跟随全局设置。在与某个子智能体实例直聊时这条命令会被拒绝：这个选择
   属于主对话，实例自己没有思考深度可设。
+
+LiteLLM 未收录的模型，可以在该厂商的 `model_overlay.reasoningEfforts` 里声明可用档位
+（设置页该厂商的「高级」→「显示名」下的「添加」）。留空则回退到 LiteLLM 的声明。
 
 单个对话的选择优先于全局设置和该对话的模式。它记录在对话自己的档案里，网关重启后仍在，
 恢复对话时一并带回，从下一轮开始生效。它只影响 Raven 自己的模型调用；子智能体仍按全局
