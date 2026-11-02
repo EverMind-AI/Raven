@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
-/* The composer's height seam: a drag from the card's top edge sets the field's
- * height between its resting size and half the visual viewport, the dragged
- * height takes precedence over the content fit, and the lift the transcript
- * reserves is published inside the move rather than after the paint that
- * follows it.
+/* The composer's height seam: a drag from the card's top edge sets the tallest
+ * the field may get, between its resting size and half the visual viewport,
+ * while the content still decides the height it actually takes; the lift the
+ * transcript reserves is published inside the move rather than after the paint
+ * that follows it.
  *
  * happy-dom does no layout and loads no stylesheet, so the field's min-height
  * is stated inline (the value page.css gives it) and its scroll height and
@@ -75,6 +75,10 @@ function moveTo(el: HTMLElement, y: number): void {
   el.dispatchEvent(new PointerEvent('pointermove', { clientY: y, bubbles: true, pointerId: 1 }))
 }
 
+function release(el: HTMLElement): void {
+  el.dispatchEvent(new PointerEvent('pointerup', { clientY: 0, bubbles: true, pointerId: 1 }))
+}
+
 function key(el: HTMLElement, name: string, shiftKey = false): void {
   el.dispatchEvent(new KeyboardEvent('keydown', { key: name, shiftKey, bubbles: true, cancelable: true }))
 }
@@ -141,12 +145,26 @@ describe('the composer height seam', () => {
 })
 
 describe('a dragged height against the content fit', () => {
-  it('wins over the content, in both directions', () => {
+  it('caps the content fit without fixing the height', () => {
     const ta = mount()
     resizeField(200)
     content(ta, 60)
     fitField()
+    expect(ta.style.height).toBe('60px')
+    content(ta, 900)
+    fitField()
     expect(ta.style.height).toBe('200px')
+  })
+
+  it('keeps the cap while the content moves under it', () => {
+    const ta = mount()
+    resizeField(200)
+    content(ta, 900)
+    fitField()
+    expect(ta.style.height).toBe('200px')
+    content(ta, 60)
+    fitField()
+    expect(ta.style.height).toBe('60px')
     content(ta, 900)
     fitField()
     expect(ta.style.height).toBe('200px')
@@ -154,6 +172,7 @@ describe('a dragged height against the content fit', () => {
 
   it('is re-clamped under a window that shrank, and restored when it grows back', () => {
     const ta = mount()
+    content(ta, 900)
     resizeField(350)
     viewport(400)
     fitField()
@@ -178,9 +197,33 @@ describe('a dragged height against the content fit', () => {
   })
 })
 
+describe('a drag against the content', () => {
+  it('previews the drag while the pointer moves and settles back to the content on release', () => {
+    const ta = mount()
+    gripDrag(grip())
+    press(grip(), 500)
+    moveTo(grip(), 300)
+    expect(ta.style.height).toBe('252px')
+    release(grip())
+    expect(ta.style.height).toBe('52px')
+  })
+
+  it('keeps the dragged height on release when the content is taller', () => {
+    const ta = mount()
+    content(ta, 900)
+    gripDrag(grip())
+    press(grip(), 500)
+    moveTo(grip(), 300)
+    expect(ta.style.height).toBe('252px')
+    release(grip())
+    expect(ta.style.height).toBe('252px')
+  })
+})
+
 describe('the seam by keyboard', () => {
   it('moves ten pixels a press and forty with Shift', () => {
     const ta = mount()
+    content(ta, 900)
     gripDrag(grip())
     key(grip(), 'ArrowUp')
     expect(ta.style.height).toBe('62px')
@@ -188,6 +231,17 @@ describe('the seam by keyboard', () => {
     expect(ta.style.height).toBe('102px')
     key(grip(), 'ArrowDown')
     expect(ta.style.height).toBe('92px')
+  })
+
+  it('leaves the field free to shrink after a key sets a cap', () => {
+    const ta = mount()
+    content(ta, 900)
+    gripDrag(grip())
+    key(grip(), 'ArrowUp')
+    expect(ta.style.height).toBe('62px')
+    content(ta, 60)
+    fitField()
+    expect(ta.style.height).toBe('60px')
   })
 
   it('leaves every other key alone', () => {
@@ -211,6 +265,7 @@ describe('resizing without a pointer', () => {
 describe('a soft keyboard over the field', () => {
   it('pulls a dragged height down with the keyboard and gives it back when it closes', () => {
     const ta = mount()
+    content(ta, 900)
     resizeField(350)
     expect(ta.style.height).toBe('350px')
     keyboard(400)

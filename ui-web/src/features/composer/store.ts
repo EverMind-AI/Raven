@@ -252,9 +252,11 @@ const fieldCeiling = (): number =>
    rather than repeated, so the two cannot drift. */
 const fieldFloor = (e: HTMLTextAreaElement): number => parseFloat(getComputedStyle(e).minHeight) || 52
 
-/* The height a drag left the field at, or null while the field still follows
-   its content. Nothing renders from it -- the field carries the result -- so
-   it is module state rather than a store key. */
+/* The tallest a drag (or an arrow key) has allowed the field to get, or null
+   while only the viewport ceiling applies. The content still decides the height
+   the field actually takes, so this is a cap rather than a height; nothing
+   renders from it directly, which is why it is module state rather than a
+   store key. */
 let manualHeight: number | null = null
 
 function fieldBounds(e: HTMLTextAreaElement): { max: number; min: number } {
@@ -263,27 +265,35 @@ function fieldBounds(e: HTMLTextAreaElement): { max: number; min: number } {
 }
 
 /* A textarea cannot size itself to its content, so the height is set here.
-   Once the reader has dragged one, that height wins over the content and is
-   re-clamped on each pass, so a window that shrank pulls the field back under
-   the smaller ceiling instead of leaving it taller than half of one. */
+   The box is reset to auto before `scrollHeight` is read, because a box taller
+   than its content reports the box rather than the content. A dragged height is
+   the tallest the field may get, not a fixed height: the content still decides
+   what it takes, so removing text shrinks it back. The cap and the content are
+   both re-clamped on every pass, so a window that shrank pulls the field back
+   under the smaller ceiling instead of leaving it taller than half of one.
+   This reads `manualHeight` and never writes it, so a keyboard that clamps the
+   field for its duration gives the height back when it closes. */
 export function fitField(): void {
   const e = field()
   if (!e) return
-  if (manualHeight !== null) {
-    const { max, min } = fieldBounds(e)
-    e.style.height = Math.round(Math.min(max, Math.max(min, manualHeight))) + 'px'
+  e.style.height = 'auto'
+  if (manualHeight === null) {
+    e.style.height = Math.min(fieldCeiling(), e.scrollHeight) + 'px'
     dockLift()
     return
   }
-  e.style.height = 'auto'
-  e.style.height = Math.min(fieldCeiling(), e.scrollHeight) + 'px'
+  const { max, min } = fieldBounds(e)
+  const cap = Math.min(manualHeight, max)
+  e.style.height = Math.round(Math.max(min, Math.min(cap, e.scrollHeight))) + 'px'
   dockLift()
 }
 
-/* A drag step: the height the pointer asked for, clamped and written at once.
-   The write and the lift below happen inside the move handler rather than on
-   the next paint, so the transcript's reserve and the sheets stacked over the
-   card travel with the pointer instead of a frame behind it. */
+/* A drag step: the tallest the field may get, clamped and written at once so
+   the reader sees the drag under the pointer. `fitField` settles the resting
+   height once the gesture ends. The write and the lift below happen inside the
+   move handler rather than on the next paint, so the transcript's reserve and
+   the sheets stacked over the card travel with the pointer instead of a frame
+   behind it. */
 export function resizeField(px: number): void {
   const e = field()
   if (!e) return
@@ -293,9 +303,11 @@ export function resizeField(px: number): void {
   dockLift()
 }
 
-/* The seam on the card's top edge: up grows the field, down shrinks it. The
-   pointer is captured on the handle and the move writes the height directly,
-   with no state and no re-render, for the reason `resizeField` gives. */
+/* The seam on the card's top edge: up raises the cap, down lowers it. While the
+   pointer moves the field renders at the drag value so the gesture is visible;
+   on release it settles to what the content needs under that cap. The pointer
+   is captured on the handle and the move writes the height directly, with no
+   state and no re-render, for the reason `resizeField` gives. */
 export function gripDrag(el: HTMLElement): void {
   el.tabIndex = 0
   el.addEventListener('pointerdown', (e) => {
@@ -319,13 +331,15 @@ export function gripDrag(el: HTMLElement): void {
       el.removeEventListener('pointercancel', up)
       delete el.dataset.drag
       document.body.style.userSelect = ''
+      fitField()
     }
     el.addEventListener('pointermove', move)
     el.addEventListener('pointerup', up)
     el.addEventListener('pointercancel', up)
   })
   /* The handle is a separator, so arrows move it: ten pixels a press, forty
-     with Shift, the same step the pane grips take. */
+     with Shift, the same step the pane grips take. A press only moves the cap;
+     the field still settles to its content, so no press can pin it. */
   el.addEventListener('keydown', (e) => {
     const ta = field()
     if (!ta) return
@@ -333,6 +347,7 @@ export function gripDrag(el: HTMLElement): void {
     e.preventDefault()
     const base = manualHeight ?? ta.getBoundingClientRect().height
     resizeField(base + (e.key === 'ArrowUp' ? (e.shiftKey ? 40 : 10) : -(e.shiftKey ? 40 : 10)))
+    fitField()
   })
 }
 
