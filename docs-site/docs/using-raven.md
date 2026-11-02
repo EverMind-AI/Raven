@@ -80,10 +80,11 @@ Two places set it:
   direct chat with a sub-agent instance the command is refused: the pick is
   the main conversation's, and an instance has none of its own.
 
-A model LiteLLM does not describe can be given its words in the provider's
+A model's words can also be declared in the provider's
 `model_overlay.reasoningEfforts` (Settings, then *Advanced* on the provider,
-*Add* under display names). Leave it blank to fall back to what LiteLLM
-declares.
+*Add* under display names). A non-empty declaration outranks LiteLLM's table
+for that model, including a route the table marks as not reasoning; leave it
+blank to fall back to the table.
 
 A pick made for one conversation outranks the global setting and the
 conversation's mode. It is kept on the conversation's own record, so it survives

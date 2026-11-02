@@ -67,8 +67,9 @@ raven agent --continue -m "Expand the previous summary; do not modify files"
   让这个对话重新跟随全局设置。在与某个子智能体实例直聊时这条命令会被拒绝：这个选择
   属于主对话，实例自己没有思考深度可设。
 
-LiteLLM 未收录的模型，可以在该厂商的 `model_overlay.reasoningEfforts` 里声明可用档位
-（设置页该厂商的「高级」→「显示名」下的「添加」）。留空则回退到 LiteLLM 的声明。
+也可以在厂商的 `model_overlay.reasoningEfforts` 里声明某个模型的可用档位
+（设置页该厂商的「高级」→「显示名」下的「添加」）。非空声明优先于 LiteLLM 的表，
+包括表里标为不支持 reasoning 的路由；留空则回退到表。
 
 单个对话的选择优先于全局设置和该对话的模式。它记录在对话自己的档案里，网关重启后仍在，
 恢复对话时一并带回，从下一轮开始生效。它只影响 Raven 自己的模型调用；子智能体仍按全局
