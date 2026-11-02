@@ -39,14 +39,17 @@ _BLOCKED_NETWORKS = [
     # it: is_private, is_reserved and is_global all call fec0::1 a perfectly
     # good public destination, so this line is the only thing refusing it.
     ipaddress.ip_network("fec0::/10"),
+    # NAT64 local-use (RFC 8215): a site points it at its own translator, so
+    # it reaches the site's IPv4 networks. is_global depends on the
+    # interpreter here: 3.12.1 calls 64:ff9b:1::7f00:1 global, while 3.9.25,
+    # 3.10.12 and 3.11.15 do not.
+    ipaddress.ip_network("64:ff9b:1::/48"),
 ]
 
 # Beyond _BLOCKED_NETWORKS, what may_be_internal also counts as this site's own:
-# limited broadcast, and NAT64's local-use prefix (RFC 8215), which a site points
-# at its own translator.
+# limited broadcast.
 _SITE_OWN_NETWORKS = [
     ipaddress.ip_network("255.255.255.255/32"),
-    ipaddress.ip_network("64:ff9b:1::/48"),
 ]
 
 # Forms that carry an IPv4 address in their low 32 bits. Spelled this way an
@@ -184,10 +187,10 @@ def embedded_v4(addr: Address) -> list[ipaddress.IPv4Address]:
 
     The low-32-bit reading covers the prefixes with no standard-library
     accessor of their own. Two embeddings are deliberately not read: Teredo
-    (``2001::/32``) and NAT64's local-use prefix (``64:ff9b:1::/48``, RFC
-    8215), because ``is_global`` refuses both prefixes whole; reading them
-    could not change a verdict, and each refusal is pinned by its own row in
-    the threat table.
+    (``2001::/32``), which ``is_global`` refuses whole, and NAT64's local-use
+    prefix (``64:ff9b:1::/48``, RFC 8215), which ``_BLOCKED_NETWORKS`` refuses
+    whole; reading them could not change a verdict, and each refusal is
+    pinned by its own row in the threat table.
     """
     if not isinstance(addr, ipaddress.IPv6Address):
         return []
