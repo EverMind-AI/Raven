@@ -1153,4 +1153,34 @@ describe('the warm read', () => {
     expect(initial).toEqual([false, true])
     expect(store.get().rows).toBe(newer)
   })
+
+  it('lets one read through at a time when several wait out the same warm', async () => {
+    /* Every waiter resumed together when the warm settled, so two reads ran at
+       once on the catalogue's shared rows, and a slower one asked earlier
+       landed over the answer asked for last. */
+    const last = [chan({ on: true, running: true })]
+    const answers = [[chan({ on: false })], [chan({ on: true })], last]
+    const takes = [30, 20, 5]
+    let calls = 0
+    let live = 0
+    let peak = 0
+    install(last, {
+      rows: async () => {
+        const mine = calls++
+        const answer = answers[mine]
+        if (!answer) throw new Error(`an unexpected read #${mine + 1}`)
+        live += 1
+        peak = Math.max(peak, live)
+        await new Promise((resolve) => setTimeout(resolve, takes[mine]))
+        live -= 1
+        return answer
+      },
+    })
+
+    await Promise.all([store.warm(), store.refresh(true), store.refresh(false)])
+
+    expect(calls).toBe(3)
+    expect(peak).toBe(1)
+    expect(store.get().rows).toBe(last)
+  })
 })

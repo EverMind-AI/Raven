@@ -60,8 +60,10 @@ async function read(initial: boolean, quiet: boolean): Promise<void> {
   /* The status read mutates the catalogue's own row objects, so two of them
      must not interleave: a warm still in flight when the reader opens the
      module is waited out, then the open reads again on top of it. That keeps
-     the later answer the one on the objects as well as in the state. */
-  if (pending) await pending.catch(() => {})
+     the later answer the one on the objects as well as in the state. A loop,
+     not a single wait: every caller waiting on one read resumes when it
+     settles, and the first of them to start has to be waited out in turn. */
+  while (pending) await pending.catch(() => {})
   const mine = (async () => {
     try {
       const rows = await source().rows(initial)
