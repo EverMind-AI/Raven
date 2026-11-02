@@ -292,16 +292,20 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
 
 
 def _launchable(entry: dict[str, Any]) -> dict[str, Any]:
-    """``entry`` with this install's interpreter written into a ``{PYTHON}`` command.
+    """``entry`` with this install's interpreter written into a bundled shim's command.
 
     A bundled shim runs on the interpreter Raven itself runs on, which differs
-    per install and so cannot be spelled in the table. Expanded when a preset is
-    read -- the add path, the Test button and the agents page all read it here --
-    so the row written into config carries the absolute path, the same rule
-    ``raven agents new --register`` follows for a folder's manifest.
+    per install and so cannot be spelled in the table. Which rows those are is
+    declared in :data:`BUNDLED_SHIM_PRESETS`, not inferred from the command's
+    text. Expanded when a preset is read -- the add path, the Test button and the
+    agents page all read it here -- so the row written into config carries the
+    absolute path, the same rule ``raven agents new --register`` follows for a
+    folder's manifest.
     """
+    if entry.get("preset") not in BUNDLED_SHIM_PRESETS:
+        return entry
     command = entry.get("command")
-    if not isinstance(command, str) or "{PYTHON}" not in command:
+    if not isinstance(command, str):
         return entry
     return {**entry, "command": resolve_subagent_command(command, python=_resolved_python(), subagent_dir="")}
 

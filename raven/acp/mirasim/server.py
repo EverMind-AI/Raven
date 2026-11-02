@@ -1564,12 +1564,14 @@ def read_prompt(blocks: Any, *, images: bool) -> PromptInput:
     if not isinstance(blocks, list) or not blocks:
         raise RefusalError(INVALID_PARAMS, "prompt is a non-empty list of content blocks")
     texts: list[str] = []
+    kinds: list[str] = []
     attachments: list[str] = []
     paths: list[str] = []
     for block in blocks:
         kind = block.get("type") if isinstance(block, dict) else None
         if kind == "text":
             texts.append(_raw(block.get("text")))
+            kinds.append("text")
         elif kind == "image":
             if not images:
                 raise RefusalError(
@@ -1587,6 +1589,7 @@ def read_prompt(blocks: Any, *, images: bool) -> PromptInput:
             path = _local_file(uri)
             if path is None:
                 texts.append(f"\n[{_raw(block.get('name')) or 'link'}]({uri})\n")
+                kinds.append("link")
             elif images and (inline := _inline_image(path, _raw(block.get("mimeType")))) is not None:
                 attachments.append(inline)
             else:
@@ -1594,15 +1597,30 @@ def read_prompt(blocks: Any, *, images: bool) -> PromptInput:
         elif kind == "resource" and isinstance(block.get("resource"), dict) and "text" in block["resource"]:
             resource = block["resource"]
             texts.append(f"\n[{_raw(resource.get('uri')) or 'resource'}]\n{_raw(resource.get('text'))}\n")
+            kinds.append("resource")
         else:
             raise RefusalError(
                 INVALID_PARAMS, f"content block {kind!r} is not supported; send text, an image or a resource_link"
             )
-    text = "".join(texts).strip()
+    pieces = [(kind, part) for kind, part in zip(kinds, texts) if part.strip()]
+    joined: list[str] = []
+    for index, (kind, part) in enumerate(pieces):
+        if index and kind == "text" and pieces[index - 1][0] == "text":
+            joined.append("\n\n")
+        joined.append(part)
+    text = "".join(joined).strip()
     if not text and (attachments or paths):
         text = "See the attached files."
-    if not text:
+    if not text.strip():
         raise RefusalError(INVALID_PARAMS, "the prompt carries no text")
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        raise RefusalError(
+            INVALID_PARAMS, "the prompt carries an unpaired surrogate, which cannot be sent to the host"
+        ) from None
+    if "\x00" in text:
+        raise RefusalError(INVALID_PARAMS, "the prompt carries a NUL byte")
     return PromptInput(text=text, attachments=tuple(attachments), paths=tuple(paths))
 
 

@@ -184,7 +184,8 @@ your local installation has passed a live task.
 
 GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi also
 have preset entries. Adapter versions and exact commands are maintained in
-`raven/agent/subagent/presets.py` and `raven/agent/subagent/acp_registry_presets.py`.
+`raven/agent/subagent/presets.py`, `raven/agent/subagent/acp_registry_presets.py`,
+and `raven/agent/subagent/mirasim_presets.py`.
 Prefer the installed version's preset instead of reconstructing its flags.
 
 The `mirasim_*` presets reach the agents Mirasim runs, one
