@@ -73,6 +73,28 @@ and Raven-Code's CLI hosting start a native product launcher explicitly. A
 successful readiness probe or delegation receipt is not evidence that the task
 completed; inspect the result, files, and tests or report artifacts.
 
+### Sharing memory with the host { #sharing-memory-with-the-host }
+
+Each native agent runs as a Raven process of its own. Three settings under
+`subagents.runtime` in the host's `config.json` keep that from costing a whole
+Raven per agent. All three are on by default and are read live, so a change
+applies to the next launch.
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `idleCloseS` | `600` | Closes an agent's process once it has been idle this many seconds: no request in flight either way and nothing said. An agent that still holds an armed reminder or a running plugin service is kept. Only an agent that can reload its sessions is closed, so the next turn resumes the conversation in a fresh process. `0` or `null` keeps agents until the host exits. |
+| `llmRelay` | `true` | The host makes a native agent's LiteLLM calls, so the agent never loads LiteLLM. The agent still builds each request, retries and records usage itself. An agent whose own `env` sets an LLM endpoint, a cloud credential, a proxy or a CA bundle makes its calls itself. |
+| `forkTemplate` | `true` | On Linux, native agents are forked from one process that has already loaded Raven, and share those pages instead of each loading its own copy. Other systems launch agents as before. |
+
+The template loads ahead only the modules at least two native agents share --
+one agent's own modules are imported by that agent after the fork -- so it
+grows with what the agents have in common, not with how many kinds there are.
+It is a process too, so it saves memory once two or more native agents run at
+the same time; with a single agent it costs somewhat more than it saves. Set
+`forkTemplate` to `false` on a device that only ever runs one. An agent the
+relay or the template cannot serve -- the host cannot be reached, or the agent
+runs on another interpreter -- starts the ordinary way.
+
 ### Minimal ACP invocation { #minimal-acp-invocation }
 
 Each shipped entry is started by its launcher. Use the corresponding command:
