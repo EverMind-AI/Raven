@@ -505,6 +505,88 @@ def test_drop_turns_removes_only_the_named_turns():
     assert drop_turns(board, {"T9"}).groups == board.groups
 
 
+def _asked_on_t2(board: Board) -> Board:
+    """T2 leaves the T1 group waiting on the user, under a summary it rewrote."""
+    return apply_update(
+        board,
+        {
+            "steps": [{"group": "g_1", **STEP, "status": "needs_you", "questions": ASKED[:1]}],
+            "groups": [{"group": "g_1", "summary": "Cause found; which fix?"}],
+        },
+        [],
+        turn_at="T2",
+        turn_id=None,
+        now_ms=9,
+    )
+
+
+def test_an_undo_puts_back_what_the_undone_turn_changed_on_a_group():
+    before = _one_group()
+
+    undone = drop_turns(_asked_on_t2(before), {"T2"})
+
+    group = undone.groups[0]
+    assert (group.status, group.summary, group.updated_at) == ("idle", "Blank page after login; the cause is found", 5)
+    assert board_to_dict(undone, revisions=True) == board_to_dict(before, revisions=True)
+
+
+def test_an_undo_keeps_what_the_reader_set_after_the_undone_turn():
+    completed = set_group_status(_asked_on_t2(_one_group()), "g_1", "completed", now_ms=12)
+
+    group = drop_turns(completed, {"T2"}).groups[0]
+
+    assert (group.status, group.updated_at) == ("completed", 12)
+    assert group.summary == "Blank page after login; the cause is found"
+
+
+def test_an_undo_puts_back_a_groups_entry_the_turn_made_without_a_step():
+    renamed = apply_update(
+        _one_group(),
+        {"groups": [{"group": "g_1", "title": "Fix the login bug"}]},
+        [],
+        turn_at="T2",
+        turn_id=None,
+        now_ms=9,
+    )
+
+    group = drop_turns(renamed, {"T2"}).groups[0]
+
+    assert (group.title, group.updated_at) == ("Fix bug A", 5)
+
+
+def test_an_undo_of_two_turns_unwinds_both():
+    t3 = apply_update(
+        _asked_on_t2(_one_group()),
+        {
+            "steps": [{"group": "g_1", **STEP, "status": "running"}],
+            "groups": [{"group": "g_1", "title": "Fix the login bug"}],
+        },
+        [],
+        turn_at="T3",
+        turn_id=None,
+        now_ms=11,
+    )
+
+    group = drop_turns(t3, {"T2", "T3"}).groups[0]
+
+    assert (group.title, group.summary, group.status, group.updated_at) == (
+        "Fix bug A",
+        "Blank page after login; the cause is found",
+        "idle",
+        5,
+    )
+
+
+def test_revisions_live_in_the_file_and_stay_off_the_wire(tmp_path):
+    board = _asked_on_t2(_one_group())
+
+    save_board(tmp_path, board)
+
+    assert "revisions" not in board_to_dict(board)["groups"][0]
+    assert load_board(tmp_path).groups[0].revisions == board.groups[0].revisions
+    assert drop_turns(load_board(tmp_path), {"T2"}).groups[0].status == "idle"
+
+
 def test_a_group_with_no_status_on_file_reads_idle():
     data = board_to_dict(_one_group())
     del data["groups"][0]["status"]

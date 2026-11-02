@@ -112,6 +112,13 @@ already holds the session's sub-agent records beside its transcript. Written ato
           "questions": ["Which of the three fixes should I apply?"],
           "tasks": [{"kind": "spawn", "id": "locate_login_bug", "summary": "Locate the blank-page bug"}]
         }
+      ],
+      "revisions": [
+        {
+          "turn_at": "2026-10-29T12:30:41.204871",
+          "before": {"status": "needs_you", "updated_at": 1793253600000},
+          "after": {"status": "completed", "updated_at": 1793262600000}
+        }
       ]
     }
   ],
@@ -120,6 +127,10 @@ already holds the session's sub-agent records beside its transcript. Written ato
 ```
 
 - `id`s are minted by the store, never by the model.
+- A group's `revisions` record, per turn whose update changed a group that already stood,
+  each field it changed -- `title`, `summary`, `status`, `updated_at` -- before and after:
+  what an undo of that turn puts back (6.3). They live in the file only; the wire leaves
+  them out.
 - `turn_at` is the timestamp of the message that opened the turn, the ISO string exactly as
   the session log stores it. It is the step's turn key: what `session.undo` matches against
   (6.3), and how the page finds a turn read back from history (5.3). `turn_id` is the id the
@@ -474,9 +485,10 @@ the reply is kept as text -- another tool's call is never run -- and the model i
 answer with the call.
 
 6.3 **History edits.** A step never points at a turn the log no longer holds. `session.undo`
-drops the steps whose `turn_at` belongs to a turn it removed, and groups left with no steps;
-`session.clear`
-empties the board; `session.branch` copies it with the transcript. Compaction leaves the
+drops the steps whose `turn_at` belongs to a turn it removed, and groups left with no steps.
+A group that stays gets back each field a removed turn changed, newest turn first, from its
+`revisions` -- but only a field still holding what that turn wrote: a later writer's value,
+the reader's own Mark completed, stays. `session.clear` empties the board; `session.branch` copies it with the transcript. Compaction leaves the
 board alone -- surviving compaction is part of its purpose.
 
 6.4 **Sessions from before the board.** No file: `tasks.board` answers an empty board and
