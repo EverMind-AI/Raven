@@ -44,11 +44,11 @@ async def test_mutation_during_inflight_run_fires_once_and_leaves_no_claim(tmp_p
         # Registered after start(): start() recomputes every 'at' job against
         # its own clock read and drops a past-due one as a missed reminder, so
         # a deadline chosen before start() can expire during start() itself.
-        # The schedule stays far out; making it due on the store keeps the
-        # fire independent of how long any call in between takes.
+        # The deadline is a fixed far-future instant no clock read can pass,
+        # and the test then makes the job due on the store instead of waiting.
         job = svc.add_job(
             name="oneshot",
-            schedule=CronSchedule(kind="at", at_ms=_now_ms() + 60_000),
+            schedule=CronSchedule(kind="at", at_ms=2**62),
             message="fire exactly once",
             channel="tui",
             to="direct",
