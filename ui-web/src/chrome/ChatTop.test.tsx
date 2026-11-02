@@ -493,14 +493,14 @@ describe('the header band', () => {
     /* The blur layer carries no ground: an engine that paints the element's
        background over the filtered backdrop would hide the blur entirely. */
     const blur = (css.match(/\.chat > \.top::before\s*\{([\s\S]*?)\}/) as RegExpMatchArray)[1] as string
-    expect(blur).toMatch(/-webkit-backdrop-filter: blur\(44px\) saturate\(1\.4\)/)
-    expect(blur).toMatch(/backdrop-filter: blur\(44px\) saturate\(1\.4\)/)
+    expect(blur).toMatch(/-webkit-backdrop-filter: blur\(16px\) saturate\(1\.4\)/)
+    expect(blur).toMatch(/backdrop-filter: blur\(16px\) saturate\(1\.4\)/)
     expect(blur).toMatch(/height: var\(--topbar-h\)/)
     expect(blur).not.toMatch(/background:/)
-    /* V4: the top quarter holds nearly full strength, then falls into the
-       lower edge. */
-    expect(blur).toMatch(/rgba\(0, 0, 0, \.9\) 25%/)
-    expect(blur).toMatch(/rgba\(0, 0, 0, \.3\) 75%/)
+    /* The ramp holds near full strength through the first third, declines
+       through the middle, and lands at none on the row's lower edge. */
+    expect(blur).toMatch(/rgba\(0, 0, 0, \.92\) 30%/)
+    expect(blur).toMatch(/rgba\(0, 0, 0, \.55\) 80%/)
     /* The ramp lands at the element's lower edge, not above it. */
     expect(blur).toMatch(/rgba\(0, 0, 0, 0\) 100%\)/)
 
