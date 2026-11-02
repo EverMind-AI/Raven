@@ -42,6 +42,14 @@
      is neutral now, which is what moves --ink, --surface, --raised, --line and
      the three text greys below as well as the names introduced here. */
   --page:     #fafaf8;   /* the ground a module page is read on */
+  /* The chat header's frost ground and the halo its controls sit on. The tint
+     is deliberately weak: the transcript underneath has to stay visible as
+     colour and shape, the way a title bar shows the window behind it. The halo
+     is what keeps the name and the corner icons legible when a dark bubble
+     passes under them, so the tint does not have to. */
+  --topbar-tint: rgba(250, 250, 248, .3);
+  --topbar-halo: rgba(255, 255, 255, .75);
+  --topbar-plate: rgba(250, 250, 248, .82);
   /* One height and one radius for a row of controls, and the focus glow that
      goes with the amber edge (the control standard above input[type]). */
   --ctl-h: 32px;
@@ -189,6 +197,11 @@
   --rail: 264px;
   --wsw: 420px;
   --chat-min: 430px;
+  /* The chat header's row. It floats over the transcript rather than sitting
+     above it (see .top), so the scroller's resting top inset reads this one
+     number, and the frost's range is this row. The desktop shell swaps in the
+     title bar it measured. */
+  --topbar-h: 52px;
   /* In px, not ch: a ch unit resolves against the font of whatever element
      uses it, so the banner (12.5px) and the transcript column (14.5px)
      computed different widths from the same token and their edges never
@@ -282,6 +295,9 @@
 
     /* The dark counterparts of the light block's surfaces -- see there. */
     --page:     #141414;
+    --topbar-tint: rgba(20, 20, 20, .3);
+    --topbar-halo: rgba(0, 0, 0, .65);
+    --topbar-plate: rgba(20, 20, 20, .8);
     --wash:     linear-gradient(180deg, #151515, #121212);
     --side-bg:  #333333;
     --paper:    #202020;
@@ -359,6 +375,7 @@
   --link: #86abe4; --amber: #e8cf49; --amber-dp: #6f6114; --moss: #7fbf6a;
   --clay: #d96a5b; --gold: #e0a030; --sky: #6fa8d6; --shadow: 0 18px 40px -24px #000c;
   --page: #141414; --wash: linear-gradient(180deg, #151515, #121212);
+  --topbar-tint: rgba(20, 20, 20, .3); --topbar-halo: rgba(0, 0, 0, .65); --topbar-plate: rgba(20, 20, 20, .8);
   --side-bg: #333333; --paper: #202020; --hover: #242424;
   --selected: #2e2e2e; --text-3: #9b9b9b; --ph: #6e6e6e; --black: #e8e8e6;
   --traj-glass: rgba(34, 34, 34, .58); --traj-edge: rgba(255, 255, 255, .07);
@@ -399,6 +416,7 @@
   --traj-line: rgba(31, 35, 40, .09);
   --traj-hover: rgba(255, 255, 255, .52);
   --traj-rule: rgba(31, 35, 40, .12); --traj-solid: #fbfaf8;
+  --topbar-tint: rgba(250, 250, 248, .3); --topbar-halo: rgba(255, 255, 255, .75); --topbar-plate: rgba(250, 250, 248, .82);
   --wash:
     radial-gradient(60% 55% at 85% 0%, rgba(195, 212, 237, .62) 0%, rgba(195, 212, 237, 0) 70%),
     radial-gradient(55% 50% at 20% 100%, rgba(244, 230, 200, .80) 0%, rgba(244, 230, 200, 0) 70%),
@@ -598,7 +616,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    the shell, and the fallbacks match a standard macOS title bar. */
 :root[data-shell="1"] .railtop { height: var(--tl-row, 38px); padding-top: 0; padding-bottom: 0;
   padding-left: var(--tl-pad, 78px); }
-:root[data-shell="1"] .top { height: var(--tl-row, 38px); }
+:root[data-shell="1"] { --topbar-h: var(--tl-row, 38px); }
 /* In the shell this band IS the title bar: it drags the window (see the
    pointerdown handler by the popover closers), so its text must not be
    selectable or every drag attempt starts a selection instead. */
@@ -609,6 +627,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .ghost-ic {
   flex: none; color: var(--muted); width: 28px; height: 28px; border-radius: 7px;
   display: grid; place-items: center; line-height: 1;
+  background: var(--ghost-bg, transparent);
 }
 .ghost-ic:hover { color: var(--text); background: var(--hover); }
 /* The buttons written in markup size their own glyph; the ones built with ico()
@@ -986,11 +1005,91 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    sheet; on the wash that ramp is a flat white band across a gradient, which is
    the seam it was put there to hide. The ground is continuous now, so the
    header needs nothing to blend into it.
-   `position: relative; z-index: 2` stays: the header's own popovers anchor
-   against it, and code blocks in the scroller are positioned too. */
-.top {
+
+   Out of the flow, though, because a band that ENDS where the scroller begins
+   can only clip what reaches it: a message scrolled up was cut at the header's
+   edge. Absolute over the whole column, the transcript travels underneath it
+   and is seen through the frost -- the title bar the design draws. The scroller
+   gives back the same height as top padding, so the resting frame is unchanged
+   and only a scrolled one passes under.
+
+   The frost is the row itself, and its strength falls continuously from the
+   top down: fully blurred at the top, weaker behind the lower controls, and
+   clear at the row's lower edge. A bubble that scrolls up is eaten more the
+   higher it sits under the title bar, and is sharp again below it, instead of
+   meeting a hard edge.
+
+   Two layers, because the tint and the blur have to fade independently. The
+   blur layer carries no ground: an engine that draws the element's own
+   background over the filtered backdrop -- the order the spec describes --
+   would hide the blur entirely under an opaque one, leaving only a paler sheet
+   of sharp text. With no ground, what that layer paints IS the blurred
+   transcript, and its mask walks the blur down from full (behind the controls)
+   to none at the lower edge.
+
+   The tint layer is deliberately WEAK --topbar-tint, under a third of --page,
+   fading out toward the row's lower edge. It is not there to hide the
+   transcript: the
+   point of the effect is that a bubble under the title bar is still seen as
+   colour and shape, the way a title bar shows the window behind it. Measured in
+   Chrome, a mask of 0 leaves the backdrop untouched and a mask of 1 draws the
+   full blur, so the blur layer's ramp is what makes the gradient; the tint
+   only unifies the tone over it.
+
+   The ground is a plain rgba token, not a color-mix: engines without color-mix
+   (Chrome < 111, Safari < 16.2) keep the tint, and @supports below only has to
+   answer for backdrop-filter.
+
+   Legibility over a dark bubble is the halo's job, not the tint's:
+   --topbar-halo is a soft shadow behind the name, the chip and the corner
+   glyphs, so a dark smear under the controls cannot swallow them. Raising the
+   tint instead would take the transcript's colour away, which is the effect
+   the frost is for.
+
+   `z-index: 2` stays -- the header's own popovers anchor against it, and code
+   blocks in the scroller are positioned too. Both layers sit behind the
+   controls, one and two z-steps, and a fade on .top itself would take the
+   bottom of the buttons' glyphs with it.
+
+   Where backdrop-filter is unsupported the blur layer paints nothing, and the
+   fallback below turns the tint layer into the opaque ground the page had
+   before: content is hidden down to the same lower edge the reader's jumps
+   clear, rather than shown through a blurless fade. */
+.chat > .top {
   display: flex; align-items: center; gap: 10px; padding: 0 16px 0 20px;
-  height: 52px; flex: none; position: relative; z-index: 2;
+  height: var(--topbar-h); position: absolute; top: 0; left: 0; right: 0; z-index: 2;
+  /* The corner buttons sit on the page's own colour so a dark bubble under the
+     transparent title bar cannot swallow them; :hover and the pressed toggle
+     override it at their own specificity. */
+  --ghost-bg: var(--topbar-plate);
+}
+.chat > .top::before {
+  content: ''; position: absolute; inset: 0 0 auto 0; height: var(--topbar-h);
+  z-index: -2; pointer-events: none;
+  -webkit-backdrop-filter: blur(44px) saturate(1.4);
+  backdrop-filter: blur(44px) saturate(1.4);
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .9) 25%, rgba(0, 0, 0, .62) 50%, rgba(0, 0, 0, .3) 75%, rgba(0, 0, 0, 0) 100%);
+  mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .9) 25%, rgba(0, 0, 0, .62) 50%, rgba(0, 0, 0, .3) 75%, rgba(0, 0, 0, 0) 100%);
+}
+.chat > .top::after {
+  content: ''; position: absolute; inset: 0 0 auto 0; height: var(--topbar-h);
+  z-index: -1; pointer-events: none;
+  background: var(--topbar-tint);
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .7) 25%, rgba(0, 0, 0, .45) 50%, rgba(0, 0, 0, .2) 75%, rgba(0, 0, 0, 0) 100%);
+  mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .7) 25%, rgba(0, 0, 0, .45) 50%, rgba(0, 0, 0, .2) 75%, rgba(0, 0, 0, 0) 100%);
+}
+/* Over a dark bubble the frost's own contrast can vanish; the halo keeps the
+   name, the chip and the corner glyphs off it without making the band opaque. */
+.chat > .top h1,
+.chat > .top .chrome-wd-tag { text-shadow: 0 0 2px var(--topbar-halo), 0 0 9px var(--topbar-halo); }
+.chat > .top .ghost-ic svg { filter: drop-shadow(0 0 3px var(--topbar-halo)); }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .chat > .top::before { display: none; }
+  .chat > .top::after {
+    background: var(--page);
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
 }
 /* The name is its own rename control: a text cursor and a quiet frame on
    hover say it can be typed into, and a click swaps it for the field below.
@@ -1205,7 +1304,18 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* The default folder is said, but said quietly: no fill, just the word. */
 .chrome-wd-tag.chrome-wd-default { background: none; color: var(--faint); padding-left: 2px; }
 
-.scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; scroll-behavior: smooth; scrollbar-gutter: stable; }
+/* The header overlays this box now (see .top), so content is free to pass
+   under it. The same height of top padding keeps the first line exactly where
+   it was at rest, and because padding on a scroll container travels with its
+   content, that clearance is gone the moment the reader scrolls -- which is
+   what lets a bubble reach the frost instead of stopping at its edge.
+
+   Padding and scroll-padding are both the row's height: the frost does not
+   reach below the row, so a scrollIntoView that brings a control to the top
+   edge only has to clear the title bar. The frost's own fade is inside the
+   row, so it never needs room in the scroller. */
+.scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; scroll-behavior: smooth; scrollbar-gutter: stable;
+  padding-top: var(--topbar-h); scroll-padding-top: var(--topbar-h); }
 /* The transcript stops being painted before it reaches the composer instead of
    sliding under it. The card is opaque (see .dock-in), so a line arriving at
    its top edge was cut mid-glyph, and the 22px of gutter below the card left
@@ -2012,11 +2122,10 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
   stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
 }
 .backpill[hidden] { display: none; }
-/* The up pill mirrors the other end: same circle, hung under the header instead
-   of above the composer. 52px is .top's height, the number .scroll[data-parked]
-   already insets by; a shell measures its title bar into --tl-row. */
-.chrome-toppill { top: calc(52px + 12px); bottom: auto; }
-:root[data-shell="1"] .chrome-toppill { top: calc(var(--tl-row, 38px) + 12px); }
+/* The up pill mirrors the other end: same circle, hung under the title bar
+   instead of above the composer. It clears the row, whose frost is the only
+   glass in the column. */
+.chrome-toppill { top: calc(var(--topbar-h) + 12px); bottom: auto; }
 
 /* mid-turn narration: what the agent said on the way, set between the process
    lines and the answer. It used to sit a step under the reply and a step over
@@ -2875,15 +2984,23 @@ textarea:focus, textarea:focus-visible,
 /* The trajectory view (features/trajectory/). The scroller is parked, not
    removed: out of the flow at the size it had, invisible and deaf to the
    pointer, so its scroll position survives and the transcript keeps streaming
-   into it underneath. The 52px is .top's height, so the parked box still
-   starts where the live one did. The trajectory's box takes the flex space
-   and reserves --lift below, the same inset .col reserves, so its last row
-   clears the composer the way the last message does. The pill and the turn
-   nav belong to the scroller and go with it. */
-.scroll[data-parked] { position: absolute; inset: 52px 0 0; visibility: hidden; pointer-events: none; }
+   into it underneath. Inset 0 is the live box's geometry, padding included,
+   so the parked copy keeps the size and content offset the live one had.
+   The trajectory's box takes the flex space and reserves --lift below, the
+   same inset .col reserves, so its last row clears the composer the way the
+   last message does. The pill and the turn nav belong to the scroller and go
+   with it.
+
+   #trajHost is the waterfall's glass island. .top no longer takes the row out
+   of the column, so in this view the host reserves the title bar as a top
+   margin: the island has to float below the row with its own inset visible,
+   and a padding would push the rows down while the card's top edge stayed
+   under the header. */
+.scroll[data-parked] { position: absolute; inset: 0; visibility: hidden; pointer-events: none; }
 .scroll[data-parked] ~ .backpill { display: none; }
 .scroll[data-parked] ~ #turnNav { display: none; }
-#trajHost { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-bottom: var(--lift, 96px); }
+#trajHost { flex: 1; min-height: 0; display: flex; flex-direction: column;
+  padding-top: 0; padding-bottom: var(--lift, 96px); }
 #trajHost[hidden] { display: none; }
 /* The glass itself: the conversation's own wash is painted on the column and
    the island floats on it, inset far enough that the colour reads around all
@@ -2895,7 +3012,9 @@ textarea:focus, textarea:focus-visible,
 html[data-traj] .chat { background: var(--wash) }
 html[data-traj] #trajHost {
   position: relative;
-  margin: 6px 14px 14px; padding-bottom: 0;
+  /* The title bar plus the same 6px inset the sides and bottom keep, so the
+     card's top edge and rounded corners are visible below it, not under it. */
+  margin: calc(var(--topbar-h) + 6px) 14px 14px; padding-bottom: 0;
   border: 1px solid var(--traj-edge); border-radius: 16px; overflow: hidden;
   box-shadow: var(--traj-shadow);
 }

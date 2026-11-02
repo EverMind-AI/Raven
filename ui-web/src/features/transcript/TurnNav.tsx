@@ -20,6 +20,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 
 import { t } from '../../i18n/t'
 import { ago } from '../../lib/ago'
+import { HEADER_LEAD, headerBand } from '../../lib/dom'
 import { shownLane } from './mount'
 import * as store from './store'
 import * as tail from './tail'
@@ -27,13 +28,11 @@ import * as tail from './tail'
 import type { AskData, Lane, Seg } from './types'
 import type { JSX } from 'react'
 
-/* The reading line, as a fraction of the scroller's height: the last question
-   scrolled past it is the turn being read. Below the top edge, so a question
-   that has just come into view counts as reached before it is under the
-   header. */
+/* The reading line, as a fraction of the height the header leaves visible:
+   the last question scrolled past it is the turn being read. Below the band,
+   so a question that has just come into view counts as reached before it is
+   under the header. */
 const READ_LINE = 0.35
-/* How far below the scroller's top edge a click puts the question. */
-const LEAD = 16
 /* How much of a question a mark's accessible name carries. */
 const NAME_MAX = 200
 
@@ -75,7 +74,11 @@ function goTo(seg: AskData): void {
   const question = questionOf(seg)
   if (!scroll || !question) return
   tail.setStuck(false)
-  const top = scroll.scrollTop + question.getBoundingClientRect().top - scroll.getBoundingClientRect().top - LEAD
+  /* The header floats over the scroller, so the question is put under the
+     title bar's lower edge rather than at the scroller's own top (lib/dom.ts,
+     headerBand), with the same lead the up pill leaves. */
+  const top = scroll.scrollTop + question.getBoundingClientRect().top - scroll.getBoundingClientRect().top
+    - headerBand(scroll) - HEADER_LEAD
   scroll.scrollTo({ top: Math.max(0, top) })
 }
 
@@ -110,9 +113,10 @@ export function TurnNav(): JSX.Element | null {
     const measure = (): void => {
       frame = 0
       const box = scroll.getBoundingClientRect()
+      const band = headerBand(scroll)
       const tops = asks.map((seg) => questionOf(seg)?.getBoundingClientRect().top ?? Infinity)
       const atEnd = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 4
-      setReading(readingTurn(tops, box.top + box.height * READ_LINE, atEnd))
+      setReading(readingTurn(tops, box.top + band + (box.height - band) * READ_LINE, atEnd))
     }
     const soon = (): void => {
       if (!frame) frame = requestAnimationFrame(measure)

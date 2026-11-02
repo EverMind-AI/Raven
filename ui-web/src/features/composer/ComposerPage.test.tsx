@@ -897,7 +897,8 @@ describe('the quick-jump pills', () => {
     const scrollTo = vi.fn()
     sc.scrollTo = scrollTo
     store.topClick()
-    expect(scrollTo).toHaveBeenCalledWith({ top: 400, behavior: 'smooth' })
+    /* 600 - 200, less the lead every jump keeps under the band. */
+    expect(scrollTo).toHaveBeenCalledWith({ top: 384, behavior: 'smooth' })
     expect(tail.isStuck()).toBe(false)
   })
 
