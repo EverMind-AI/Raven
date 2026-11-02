@@ -121,8 +121,10 @@ already holds the session's sub-agent records beside its transcript. Written ato
 
 - `id`s are minted by the store, never by the model.
 - `turn_at` is the timestamp of the message that opened the turn, the ISO string exactly as
-  the session log stores it. It is the step's turn key: how the page finds the turn it scrolls the transcript to (5.3) and what
-  `session.undo` matches against (6.3). `turn_id` rides along for tracing and may be absent.
+  the session log stores it. It is the step's turn key: what `session.undo` matches against
+  (6.3), and how the page finds a turn read back from history (5.3). `turn_id` is the id the
+  turn's opening frame named, by which the page finds a turn opened on the open page (5.3);
+  it may be absent.
 - A step's `tasks` entries carry `{kind, id}` in exactly the address `tasks.list` uses -- a
   spawn's `node_id`, a DAG run's `run_id` (`raven/rpc/methods/tasks.py:264`, `:447`) -- and
   the `summary` the dispatching call gave, so recall and an inert chip (5.2) still have a
@@ -429,9 +431,13 @@ have started.
 the transcript to what Raven said in that turn: the last answer between the turn's opening and
 the next turn's, or the opening itself while the turn has no answer on the stage. A turn opens
 with a question someone asked or with a delegated result re-entering (its delivered row); a
-message merged into a running turn opens nothing. The turn is the one whose opening is nearest
-the step's `turn_at`, within five minutes: a turn read back from history carries that very
-timestamp, one opened on the open page the browser's clock.
+message merged into a running turn opens nothing. The turn is the one whose opening carries
+the step's `turn_id` -- an opening drawn on the open page is filed under the id its frame named
+(`message.start`, `turn.started`) -- or else the untagged opening nearest the step's `turn_at`,
+within five minutes: a turn read back from history carries no id, but carries that very
+timestamp. Time alone would miss a turn opened on the open page whenever the browser's time
+zone is not the server's: `turn_at` is the server's clock with no zone, that opening the
+browser's.
 
 5.4 **Completed.** Below the open groups, a fold `Completed - N` / `已完成 - N`, collapsed by
 default. Expanded, it lists completed groups by `created_at` descending, dimmed, each
