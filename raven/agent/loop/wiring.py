@@ -44,6 +44,7 @@ from raven.agent.subagent import charter as charter_mod
 from raven.agent.subagent.role import is_subagent_process
 from raven.agent.tools.ask_user import DEFAULT_TIMEOUT_S
 from raven.contracts.token_strategy import UsageSnapshot
+from raven.providers import effort_levels
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -533,10 +534,28 @@ class WiringMixin:
         nothing imports anything new.
         """
         from raven.agent import session_effort
+        from raven.providers.overlay import declared_efforts, overlay_for
+        from raven.providers.registry import canonical_provider_name, find_by_model, split_model_id
 
-        return session_effort.in_force(
+        model_id = (
+            self.session_model(session_key)
+            if session_key and self.has_session_binding(session_key)
+            else self.model
+        )
+        value = session_effort.in_force(
             pick, self.session_policy(session_key or "").reasoning_effort, self.default_reasoning_effort
         )
+        provider, _rest = split_model_id(model_id)
+        if not provider:
+            spec = find_by_model(model_id)
+            provider = getattr(spec, "name", "") if spec else ""
+        section = (
+            (self._live_config.get("providers") or {}).get(canonical_provider_name(provider))
+            if provider
+            else None
+        )
+        overlay = overlay_for(section, provider, model_id) if section is not None else None
+        return session_effort.clamp(value, effort_levels.levels_for(model_id, declared_efforts(overlay)))
 
     @property
     def personalization_enabled(self) -> bool:

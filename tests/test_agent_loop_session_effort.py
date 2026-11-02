@@ -406,3 +406,43 @@ async def test_the_watch_work_judgement_is_handed_the_sessions_effort(tmp_path):
 
     assert out is not None
     assert handed == ["max"], handed
+
+
+@pytest.fixture(autouse=True)
+def _fake_model_declares_every_level(monkeypatch):
+    from raven.agent.loop import wiring
+
+    monkeypatch.setattr(
+        wiring.effort_levels,
+        "levels_for",
+        lambda model, declared=(): ("minimal", "low", "medium", "high", "xhigh", "max"),
+    )
+
+
+async def test_a_pick_the_model_does_not_declare_is_dropped(tmp_path, monkeypatch):
+    from raven.agent.loop import wiring
+
+    monkeypatch.setattr(
+        wiring.effort_levels,
+        "levels_for",
+        lambda model, declared=(): ("medium", "high"),
+    )
+    loop = _loop(tmp_path, _ScriptedProvider([_text("ok")]))
+    assert loop.session_reasoning_effort("cli:c", "minimal") is None
+    assert loop.session_reasoning_effort("cli:c", "high") == "high"
+
+
+async def test_a_model_that_declares_no_reasoning_drops_the_pick(tmp_path, monkeypatch):
+    from raven.agent.loop import wiring
+
+    monkeypatch.setattr(wiring.effort_levels, "levels_for", lambda model, declared=(): ())
+    loop = _loop(tmp_path, _ScriptedProvider([_text("ok")]))
+    assert loop.session_reasoning_effort("cli:c", "high") is None
+
+
+async def test_an_unreadable_table_keeps_the_pick(tmp_path, monkeypatch):
+    from raven.agent.loop import wiring
+
+    monkeypatch.setattr(wiring.effort_levels, "levels_for", lambda model, declared=(): None)
+    loop = _loop(tmp_path, _ScriptedProvider([_text("ok")]))
+    assert loop.session_reasoning_effort("cli:c", "high") == "high"

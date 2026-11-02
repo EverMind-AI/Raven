@@ -41,7 +41,7 @@ from raven.config.loader import drain_migration_notices, load_config, raven_home
 from raven.config.raven import load_raven_config
 from raven.config.schema import REASONING_EFFORTS
 from raven.providers import effort_levels
-from raven.providers.overlay import overlay_for
+from raven.providers.overlay import declared_efforts, overlay_for
 from raven.providers.rates import resolve_context_window
 from raven.providers.usage import reported_cost, token_count
 from raven.rpc.errors import (
@@ -586,8 +586,7 @@ def _effort_levels(model_id: str, config: Any) -> tuple[str, ...] | None:
     provider, _rest = split_model_id(model_id)
     section = getattr(config, "providers", {}).get(canonical_provider_name(provider)) if provider else None
     overlay = overlay_for(section, provider, model_id) if section is not None else None
-    declared = tuple(getattr(overlay, "reasoning_efforts", ()) or ())
-    return effort_levels.levels_for(model_id, declared)
+    return effort_levels.levels_for(model_id, declared_efforts(overlay))
 
 
 def _effort_in_force(
