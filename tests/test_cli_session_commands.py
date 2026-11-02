@@ -334,7 +334,8 @@ def test_delete_that_cannot_remove_the_board_still_deletes_and_says_where_it_sta
 
     assert r.exit_code == 0
     assert not manager.exists(key)
-    assert "task board" in r.output and "Access is denied" in r.output
+    said = " ".join(r.output.split())
+    assert "task board" in said and "Access is denied" in said, "Rich wraps the path at the console's width"
 
 
 def test_delete_unknown_id_nonzero(patched_workspace: Path) -> None:
