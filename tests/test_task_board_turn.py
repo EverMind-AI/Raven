@@ -10,6 +10,7 @@ import pytest
 
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
+from raven.agent.task_board import service as board_service
 from raven.agent.task_board.store import BOARD_FILENAME, load_board
 from raven.config.schema import TaskBoardConfig
 from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
@@ -354,3 +355,37 @@ async def test_a_question_set_aside_opens_the_next_turn_once_and_stays_out_of_th
     assert note not in _text(turns[2]["messages"][-1])
     stored = agent.sessions.get_or_create(KEY).messages
     assert not any("set aside" in _text(m) for m in stored if m.get("role") == "user")
+
+
+async def test_a_note_ack_the_disk_refuses_leaves_the_reply_and_shows_the_note_again(tmp_path, monkeypatch):
+    provider = Recording(
+        [
+            LLMResponse(content=ANSWER),
+            BOARD_REPLY,
+            LLMResponse(content="Noted, moving on."),
+            _update(steps=[]),
+            LLMResponse(content="Nothing else is open."),
+            _update(steps=[]),
+        ]
+    )
+    agent = _agent(tmp_path, provider)
+    await agent._process_message(_turn(), session_key=KEY)
+    await _drain(agent)
+    group = load_board(agent.sessions.session_dir(KEY)).groups[0]
+    await agent.task_board.ignore_question(KEY, group.id, group.steps[-1].id, "Which fix should I apply?")
+    save_notes = board_service.save_notes
+
+    def disk_full(*_args: Any) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(board_service, "save_notes", disk_full)
+    result = await agent._process_message(_turn("Anything else?"), session_key=KEY)
+    await _drain(agent)
+    monkeypatch.setattr(board_service, "save_notes", save_notes)
+    await agent._process_message(_turn("And now?"), session_key=KEY)
+    await _drain(agent)
+
+    assert result is not None and "Noted, moving on." in str(result)
+    turns = [r for r in provider.requests if r["purpose"] != "task_board"]
+    note = 'the user set aside "Which fix should I apply?" (Fix bug A)'
+    assert note in _text(turns[2]["messages"][-1]), "a note never acknowledged is shown again"

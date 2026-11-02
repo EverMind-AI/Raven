@@ -167,10 +167,15 @@ class TaskBoardService:
         return [note_line(n) for n in notes]
 
     async def ack_turn_notes(self, session_key: str) -> None:
-        """A turn that showed the notes has run: drop those, keep any made since."""
+        """A turn that showed the notes has run: drop those, keep any made since. The
+        turn awaits this after its reply, so a write the disk refuses is logged, not
+        raised: the notes stay, and the next turn is shown them again."""
         shown = self._shown.pop(session_key, 0)
         if not shown:
             return
         async with self.lock(session_key):
             directory = self.session_dir(session_key)
-            save_notes(directory, [n for n in load_notes(directory) if n.seq > shown])
+            try:
+                save_notes(directory, [n for n in load_notes(directory) if n.seq > shown])
+            except OSError as exc:
+                logger.warning("Task board notes for {} were not acknowledged: {}", session_key, exc)
