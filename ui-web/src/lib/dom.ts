@@ -32,8 +32,9 @@ export const HEADER_LEAD = 16
  * title bar it measured, so a resize and shell mode both reach the band without
  * a second number here. `scroll` scopes the header lookup to the conversation
  * that owns it, so two chat columns cannot measure each other's. Without a
- * header in the document the band is zero, which is also what keeps the
- * layout-free tests on their old numbers.
+ * header in the document the band is zero: the turn nav's layout-free tests
+ * keep their old numbers there, while the up pill gained the shared lead, so
+ * its tests moved by that much.
  */
 export function headerBand(scroll?: HTMLElement | null): number {
   const top = scroll?.closest('.chat')?.querySelector<HTMLElement>('.top') ?? $('.chat > .top')
