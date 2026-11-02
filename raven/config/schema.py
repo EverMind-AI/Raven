@@ -360,6 +360,7 @@ class ModelOverlay(Base):
     capabilities: list[str] = Field(default_factory=list)
     input_modalities: list[str] = Field(default_factory=list)
     output_modalities: list[str] = Field(default_factory=list)
+    reasoning_efforts: list[str] = Field(default_factory=list)
 
 
 class ProviderEndpoint(Base):

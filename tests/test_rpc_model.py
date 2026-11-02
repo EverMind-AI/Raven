@@ -2243,3 +2243,45 @@ async def test_add_model_preserves_metadata_under_a_bare_id(fake_home: Path) -> 
     assert row["label"] == "Team model"
     assert row["description"] == "Keep this description"
     assert row["capabilities"] == ["reasoning"]
+
+
+async def test_add_model_stores_declared_effort_levels(fake_home: Path) -> None:
+    await model_add_model({
+        "slug": "anthropic",
+        "model": "mine",
+        "reasoning_efforts": ["low", "high", "xhigh"],
+    })
+    raw = json.loads((fake_home / ".raven" / "config.json").read_text())
+    overlay = raw["providers"]["anthropic"]["modelOverlay"]["anthropic/mine"]
+    assert overlay["reasoningEfforts"] == ["low", "high", "xhigh"]
+
+
+async def test_add_model_refuses_an_unknown_effort(fake_home: Path) -> None:
+    with pytest.raises(ConfigValidationError):
+        await model_add_model({
+            "slug": "anthropic",
+            "model": "mine",
+            "reasoning_efforts": ["turbo"],
+        })
+
+
+async def test_add_model_with_an_empty_list_clears_the_declaration(fake_home: Path) -> None:
+    await model_add_model({
+        "slug": "anthropic",
+        "model": "mine",
+        "reasoning_efforts": ["high"],
+    })
+    await model_add_model({"slug": "anthropic", "model": "mine", "reasoning_efforts": []})
+    raw = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert "anthropic/mine" not in (raw["providers"]["anthropic"].get("modelOverlay") or {})
+
+
+async def test_model_options_label_carries_declared_efforts(fake_home: Path) -> None:
+    await model_add_model({
+        "slug": "anthropic",
+        "model": "mine",
+        "reasoning_efforts": ["low", "high"],
+    })
+    result = await model_options({"include_providers": True})
+    provider = next(p for p in result["providers"] if p["slug"] == "anthropic")
+    assert provider["model_labels"]["anthropic/mine"]["reasoning_efforts"] == ["low", "high"]

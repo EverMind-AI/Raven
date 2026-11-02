@@ -769,3 +769,11 @@ def test_the_qwen_vendor_is_shelved_under_the_cloud_that_runs_it() -> None:
     from raven.providers.registry import find_by_model
 
     assert find_by_model("dashscope/qwen-plus") is spec
+
+
+def test_describe_carries_the_overlay_effort_levels() -> None:
+    from raven.config.schema import ModelOverlay
+    from raven.providers.catalog import describe
+
+    row = describe("hosted_vllm", "mine", overlay=ModelOverlay(reasoning_efforts=["low", "high"]))
+    assert row.reasoning_efforts == ("low", "high")

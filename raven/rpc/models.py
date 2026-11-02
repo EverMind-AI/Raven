@@ -2309,6 +2309,7 @@ class ModelAddModelParams(_Strict):
     capabilities: list[str] | None = None
     input_modalities: list[str] | None = None
     output_modalities: list[str] | None = None
+    reasoning_efforts: list[str] | None = None
     session_id: str | None = None
 
 

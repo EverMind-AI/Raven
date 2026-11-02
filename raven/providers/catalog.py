@@ -69,6 +69,7 @@ class ModelRow:
     capabilities: tuple[str, ...] = ()
     input_modalities: tuple[str, ...] = ()
     output_modalities: tuple[str, ...] = ()
+    reasoning_efforts: tuple[str, ...] = ()
 
     @property
     def described(self) -> bool:
@@ -215,6 +216,7 @@ def _with_overlay(row: ModelRow, overlay: "ModelOverlay | None") -> ModelRow:
         "capabilities": clean_tags(overlay.capabilities, CAPABILITIES) or row.capabilities,
         "input_modalities": clean_tags(overlay.input_modalities, MODALITIES) or row.input_modalities,
         "output_modalities": clean_tags(overlay.output_modalities, MODALITIES) or row.output_modalities,
+        "reasoning_efforts": tuple(overlay.reasoning_efforts) if overlay.reasoning_efforts else row.reasoning_efforts,
     }
     described = row.described or bool(overlay.label or overlay.description)
     return replace(row, **changed, source=SOURCE_OVERLAY if described else row.source)
