@@ -197,6 +197,10 @@ export interface AskData {
   /* When it was said, in epoch ms: what the date line between two questions
      far apart is measured from. 0 when the entry carried no usable stamp. */
   at: number
+  /* The turn it opened, by the id that turn's `message.start` named: set on a
+     bubble drawn on this page, absent on one read back from history, whose
+     stored entry carries no id. */
+  turnId?: string
   expanded: boolean
   clipped: boolean
   clipOpen: boolean
@@ -249,6 +253,9 @@ export interface DeliveredData {
      page's clock for one drawn live. The turn it opens is found by it -- a
      task board step keyed by that turn names it the way it names a question's. */
   at: number
+  /* The turn it opened, by the id its `turn.started` named; absent on a row
+     read back from history, as on a question. */
+  turnId?: string
   label: string
   isDag: boolean
   status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled'

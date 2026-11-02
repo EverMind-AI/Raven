@@ -133,6 +133,11 @@ export class SessionRuntime {
      conversation. */
   lastAsk = ''
 
+  /* The bubble a send drew for a turn whose `message.start` has not arrived:
+     that frame files the turn's id on it, and a task board step finds the
+     turn by that id. Null once filed. */
+  asked: number | null = null
+
   /* The wait for a generated title: the opening line to fall back to, and the
      backstop timer. */
   naming: { fallback: string; timer: ReturnType<typeof setTimeout> } | null = null
@@ -361,7 +366,7 @@ export function send(text: string): void {
   /* What a retry re-sends. Recorded after the attachment note is folded in, so
      the second attempt carries the same message as the first. */
   rt.lastAsk = text
-  ask(text)
+  rt.asked = ask(text)
   turn.dispatch({ type: 'send' })
   dropStaleSteps(rt)
   reset(rt)

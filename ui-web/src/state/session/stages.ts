@@ -32,7 +32,7 @@ import { hasToolOk } from '../../rpc/capabilities'
 import { session as sheetSession } from '../sheetRack'
 import { ds, sources } from '../sources'
 import { show as toast } from '../toast'
-import { ask, noteRow, unask } from './conversation'
+import { ask, noteRow, tagTurn, unask } from './conversation'
 import { applyUsage } from './ctxReport'
 import { namingEnded, settleNaming } from './naming'
 import { rereadChips, viewRuntime } from './registry'
@@ -99,8 +99,14 @@ export const STAGES: readonly Stage[] = [
     if ((!turn.busy() || held) && p.content) {
       const drawn = rt.injected.get(p.turn_id)
       if (drawn !== undefined) { unask(drawn); rt.injected.delete(p.turn_id) }
-      ask(p.content)
+      rt.asked = ask(p.content)
     }
+    /* The question this turn opens on -- drawn just above, or by this window's
+       own send -- is filed under the turn's id. A task board step names its
+       turn by that id and by a time on the server's clock, which a bubble drawn
+       here does not carry: across time zones the time alone misses it. */
+    if (rt.asked !== null && p.turn_id) tagTurn(rt.asked, p.turn_id)
+    rt.asked = null
     if (p.content) touchSession(sessionCurrent(), p.content)
     rt.openedTurn = null
     rt.turnId = p.turn_id
@@ -147,6 +153,7 @@ export const STAGES: readonly Stage[] = [
         body: d.content || '',
         output: d.output,
         outputTruncated: d.output_truncated,
+        turnId: p.turn_id,
         open: () => {
           if (isDag) { ds('transcript').openDagRun!(d.run_id || d.label || ''); return }
           ds('transcript').openSpawn!(d.node_id || '')

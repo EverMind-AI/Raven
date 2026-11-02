@@ -39,7 +39,7 @@ const NOW = Date.parse('2026-10-29T12:00:00Z')
 const group = (id: string, created: number, status: TaskGroup['status'], links: [TaskRow['kind'], string][] = [], titles = [`moved ${id}`], summary = `where ${id} stands`): TaskGroup => ({
   id, title: `Matter ${id}`, summary, status, created_at: created, updated_at: created,
   steps: titles.map((title, i) => ({
-    id: `s_${id}_${i}`, turn_at: new Date(created + i * 60_000).toISOString(), turn_id: null, title,
+    id: `s_${id}_${i}`, turn_at: new Date(created + i * 60_000).toISOString(), turn_id: `t_${id}_${i}`, title,
     summary: `what ${title} moved`, questions: [],
     tasks: i === titles.length - 1 ? links.map(([kind, tid]) => ({ kind, id: tid, summary: `summary of ${tid}` })) : [],
   })),
@@ -235,7 +235,7 @@ describe('the task board', () => {
     fireEvent.click(groupButtons()[0]!)
 
     fireEvent.click(document.querySelector('.tksteptext') as HTMLElement)
-    expect(revealTurnAt).toHaveBeenCalledWith(board.groups[0]!.steps[0]!.turn_at)
+    expect(revealTurnAt).toHaveBeenCalledWith(board.groups[0]!.steps[0]!.turn_at, 't_a_0')
   })
 
   it('shows, under a needs_you group s latest event, that event s summary', async () => {
@@ -266,7 +266,7 @@ describe('the task board', () => {
     fireEvent.click(groupButtons()[0]!)
 
     fireEvent.click(document.querySelector('.tkstepsum') as HTMLElement)
-    expect(revealTurnAt).toHaveBeenCalledWith(board.groups[0]!.steps[0]!.turn_at)
+    expect(revealTurnAt).toHaveBeenCalledWith(board.groups[0]!.steps[0]!.turn_at, 't_a_0')
   })
 
   it('frames, on a needs_you card, the questions its latest event asked -- folded or open', async () => {

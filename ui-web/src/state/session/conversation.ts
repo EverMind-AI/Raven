@@ -14,7 +14,7 @@
  * stylesheet, which takes the composer away and the header's verbs with it.
  */
 
-import { ask as drawAsk, dropSeg, note as drawNote } from '../../features/transcript/mount'
+import { ask as drawAsk, dropSeg, note as drawNote, tagTurn as tagSeg } from '../../features/transcript/mount'
 import { setStuck } from '../../features/transcript/tail'
 import { readMessage } from '../../lib/attachments'
 import { makeStore } from '../store'
@@ -87,6 +87,11 @@ export function ask(text: string, when?: string, opts?: { midTurn?: boolean } | 
 /* Take a drawn bubble back off the stage. */
 export function unask(id: number): void {
   dropSeg(id)
+}
+
+/* File the id of the turn a drawn bubble opened on it. */
+export function tagTurn(id: number, turnId: string): void {
+  tagSeg(id, turnId)
 }
 
 /* Writes what the row shows and what it can give back, together; `row` is the

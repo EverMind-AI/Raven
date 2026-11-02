@@ -159,10 +159,11 @@ export function branch(): void {
     .catch((e) => toast(t('gui.op.branch_failed', { detail: (e as Error).message || e })))
 }
 
-/* How far a task board step's time may sit from a turn's opening question and
-   still name it. A turn read back from history carries the timestamp the step
-   was keyed by, so it matches exactly; one asked on this page carries the
-   browser's clock, which is seconds off the server's. */
+/* How far a task board step's time may sit from a turn's opening and still
+   name it, for an opening that carries no turn id. One read back from history
+   carries the timestamp the step was keyed by, so it matches exactly; one drawn
+   here without its turn's id carries the browser's clock, which is near only
+   when the browser and the server share a time zone. */
 const TURN_NEAR_MS = 5 * 60 * 1000
 
 /* Where a turn begins: a question someone asked, or a delegated result
@@ -184,19 +185,29 @@ function replyOf(segs: readonly Seg[], opening: Opening): AnswerData | null {
 const rowOf = (attr: string, id: number): HTMLElement | null =>
   document.querySelector<HTMLElement>(`#stage [data-${attr}="${id}"]`)
 
-/** Scroll the transcript to what Raven said in the turn a task board step names
- *  by its opening message's timestamp -- the reply the turn ended on, or where
- *  the turn begins while it has none; whether a turn near enough was on the stage. */
-export function revealTurnAt(turnAt: string): boolean {
+/* The opening nearest a step's time. When the step names its turn, an opening
+   filed under another turn's id is not it, however near. */
+function nearest(segs: readonly Seg[], turnAt: string, turnId: string | null | undefined): Opening | null {
   const target = new Date(turnAt).getTime()
-  const lane = shownLane()
-  if (!lane || Number.isNaN(target)) return false
+  if (Number.isNaN(target)) return null
   let best = null as Opening | null
-  for (const seg of lane.segs) {
-    if (!opens(seg) || !seg.at) continue
+  for (const seg of segs) {
+    if (!opens(seg) || !seg.at || (turnId && seg.turnId)) continue
     if (!best || Math.abs(seg.at - target) < Math.abs(best.at - target)) best = seg
   }
-  if (!best || Math.abs(best.at - target) > TURN_NEAR_MS) return false
+  return best && Math.abs(best.at - target) <= TURN_NEAR_MS ? best : null
+}
+
+/** Scroll the transcript to what Raven said in the turn a task board step names
+ *  -- by the turn's id where the opening drawn here carries it, else by the
+ *  opening message's timestamp -- to the reply the turn ended on, or where the
+ *  turn begins while it has none; whether that turn was on the stage. */
+export function revealTurnAt(turnAt: string, turnId?: string | null): boolean {
+  const lane = shownLane()
+  if (!lane) return false
+  const best = (turnId ? lane.segs.find((seg): seg is Opening => opens(seg) && seg.turnId === turnId) : undefined)
+    ?? nearest(lane.segs, turnAt, turnId)
+  if (!best) return false
   const reply = replyOf(lane.segs, best)
   const row = reply ? rowOf('answer', reply.id) : best.kind === 'sdlv' ? rowOf('delivered', best.id) : null
   if (row) bringUp(row)

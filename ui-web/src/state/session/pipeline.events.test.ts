@@ -36,6 +36,7 @@ async function harness({
   const steps: Step[] = []
   const bubbles: Array<{ id: number; text: string; midTurn: boolean }> = []
   let bubbleId = 0
+  let busyNow = busy
   document.body.innerHTML = '<div id="stage"></div><div id="cronPage"></div>'
   const step = (): Step => {
     const st: Step = {
@@ -72,6 +73,7 @@ async function harness({
           const at = bubbles.findIndex((b) => b.id === id)
           if (at >= 0) bubbles.splice(at, 1)
         },
+        tagTurn: (id: number, turnId: string) => log.push(['tagTurn', id, turnId]),
         noteRow: (labelText: string, detail: string, opts?: Record<string, unknown>) =>
           log.push(['noteRow', labelText, detail, opts ? Object.keys(opts).sort() : null]),
       },
@@ -90,7 +92,7 @@ async function harness({
         goPaint: () => log.push(['goState']),
         queueShift: () => { log.push(['queueShift']); return undefined },
         turn: {
-          busy: () => busy,
+          busy: () => busyNow,
           phase: () => phase,
           dispatch: (event: { type: string; cancellable?: boolean }) =>
             log.push(['dispatch', event.type, event.cancellable]),
@@ -169,6 +171,10 @@ async function harness({
   }
   return {
     dispatch: pipeline.dispatch,
+    send: runtime.send,
+    /* What the send's own `turn.dispatch` does to the machine, which the fake
+       composer leaves to the test. */
+    setBusy: (on: boolean) => { busyNow = on },
     log,
     steps,
     bubbles,
@@ -224,6 +230,46 @@ describe('message.start', () => {
     expect(watching.did('ask')).toEqual([])
     expect(watching.did('dispatch')).toEqual([['dispatch', 'stream', true]])
   })
+
+  /* A task board step names its turn by this id; the step's time is the
+     server's clock, which a bubble drawn here does not carry. */
+  it('files the turn s id on the question it draws', async () => {
+    const h = await harness({ rows: [{ id: 's1' }] })
+
+    h.dispatch({ type: 'message.start', payload: { turn_id: 't-1', content: 'do the thing' } })
+
+    expect(h.did('tagTurn')).toEqual([['tagTurn', 1, 't-1']])
+  })
+
+  it('files it on the question this window drew when it sent the message', async () => {
+    const h = await harness({ rows: [{ id: 's1' }] })
+    h.send('do the thing')
+    h.setBusy(true)
+
+    h.dispatch({ type: 'message.start', payload: { turn_id: 't-sent', content: 'do the thing' } })
+
+    expect(h.did('ask')).toEqual([['ask', 'do the thing']])
+    expect(h.did('tagTurn')).toEqual([['tagTurn', 1, 't-sent']])
+  })
+
+  it('files it once: the next turn does not re-file the last question', async () => {
+    const h = await harness({ rows: [{ id: 's1' }] })
+    h.send('do the thing')
+    h.setBusy(true)
+    h.dispatch({ type: 'message.start', payload: { turn_id: 't-sent', content: 'do the thing' } })
+
+    h.dispatch({ type: 'message.start', payload: { turn_id: 't-next', content: '' } })
+
+    expect(h.did('tagTurn')).toEqual([['tagTurn', 1, 't-sent']])
+  })
+
+  it('files nothing in a busy window that drew nothing for the turn', async () => {
+    const h = await harness({ busy: true, rows: [{ id: 's1' }] })
+
+    h.dispatch({ type: 'message.start', payload: { turn_id: 't-1', content: 'do the thing' } })
+
+    expect(h.did('tagTurn')).toEqual([])
+  })
 })
 
 describe('message.injected', () => {
@@ -268,6 +314,7 @@ describe('message.injected', () => {
     expect(h.bubbles).toEqual([{ id: 2, text: 'only the last quarter', midTurn: false }])
     expect(h.did('advanceTurn')).toHaveLength(1)
     expect(h.did('dispatch')).toEqual([['dispatch', 'stream', true]])
+    expect(h.did('tagTurn')).toEqual([['tagTurn', 2, 't-inject']])
   })
 
   it('re-files it once, however many windows announced it', async () => {
@@ -311,7 +358,7 @@ describe('turn.started', () => {
     expect(h.did('advanceTurn')).toHaveLength(1)
     const delivered = h.did('delivered') as Array<[string, Record<string, unknown>]>
     const row = delivered[0]![1]
-    expect(row).toMatchObject({ label: 'qc', isDag: true, status: 'ok', body: 'done' })
+    expect(row).toMatchObject({ label: 'qc', isDag: true, status: 'ok', body: 'done', turnId: 't-reentry' })
     expect(typeof row.open).toBe('function')
     /* The stamps are re-anchored here, because no send ran to move them. */
     expect(h.live.startedAt).toBeGreaterThan(0)
