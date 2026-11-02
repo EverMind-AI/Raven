@@ -3026,7 +3026,13 @@ class SubagentsUpdateParams(_Strict):
         default=None,
         description="The Raven providers whose key an acp agent is started with; [] lends none.",
     )
-    model: str | None = None
+    model: str | None = Field(
+        default=None,
+        description=(
+            "A model from the row's `model_choices`. On an acp row the move re-measures the effort menu on the "
+            "new model, and a stored `effort` that menu does not offer is dropped; it is kept when the read fails."
+        ),
+    )
     provider: str | None = Field(
         default=None,
         description=(
@@ -3044,7 +3050,8 @@ class SubagentsUpdateParams(_Strict):
         description=(
             "A reasoning effort from the row's `effort_choices`, sent on every turn through the agent's "
             "thought_level option, or as a session mode on an agent whose modes are its effort menu, where an "
-            "instance's own mode override takes its place. Refused when the row's menu does not offer it."
+            "instance's own mode override takes its place. Refused when the row's menu does not offer it. Sent "
+            "with a model move, it is judged on the new model's menu, and refused when that menu could not be read."
         ),
     )
     clear_effort: bool = Field(

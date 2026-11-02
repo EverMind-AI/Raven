@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from loguru import logger
@@ -809,30 +809,133 @@ def _host_pair(model: str) -> str | None:
     return stored_model_id(listing, model)
 
 
-def _put_the_rows_menu_back(name: str, measured_name: str, previous: Any, measured_at_ms: int) -> None:
+@dataclass(frozen=True)
+class _MenuMove:
+    """One handshake taken for a row's model move, and what undoing it needs.
+
+    ``key`` is the name the measurement was stored under and ``stamp`` its
+    ``measured_at_ms``; ``previous`` is the record a refusal restores under that
+    key, ``None`` when there was none to restore. ``destination`` is the
+    measurement when it reached the new model's menu, ``None`` when it did not,
+    with ``detail`` saying why.
+    """
+
+    key: str
+    previous: Any
+    stamp: int
+    destination: Any
+    detail: str
+
+
+async def _measure_the_move(name: str, row_before: dict, target: dict) -> _MenuMove:
+    """Measure ``target`` on the model the row moves to.
+
+    ``record_capabilities`` does not raise for a handshake that failed: it answers
+    an unusable snapshot, and the record it writes keeps the previous model's
+    menus under that verdict. So the measurement only speaks for the new model
+    when it is usable and read the menu -- the test ``subagents.refresh_models``
+    applies -- and otherwise the move is unmeasured.
+    """
+    before = acp_snapshot_for(_as_configs([row_before])[0])
+    cfg = _as_configs([target])[0]
+    try:
+        measured = await record_capabilities(cfg)
+    except Exception as exc:  # noqa: BLE001 - a move nothing measured is judged as one
+        logger.warning("subagents: {!r} effort menu not re-measured after a model move: {}", name, exc)
+        return _MenuMove(key=cfg.name, previous=None, stamp=0, destination=None, detail=str(exc) or type(exc).__name__)
+    key = str(getattr(measured, "agent", "") or cfg.name)
+    reached = bool(getattr(measured, "usable", False) and getattr(measured, "model_menu_measured", False))
+    return _MenuMove(
+        key=key,
+        previous=before if before is not None and getattr(before, "agent", None) == key else None,
+        stamp=int(getattr(measured, "measured_at_ms", 0) or 0),
+        destination=measured if reached else None,
+        detail="" if reached else str(getattr(measured, "detail", "") or getattr(measured, "status", "")),
+    )
+
+
+def _put_the_rows_menu_back(name: str, move: _MenuMove) -> None:
     """Undo a capability measurement taken for a model a refused write never adopted.
 
-    The update measures the row's new model before the same call's effort check
-    and the re-key gate can refuse. When one does, the row keeps the model it
-    had, so the store has to describe that model again rather than the one the
-    refused call would have written; with nothing recorded before, the row this
-    call wrote is dropped instead.
+    The row keeps the model it had, so the store has to describe that model again
+    rather than the one the refused call would have written; with nothing
+    recorded under the measurement's key before, the record this call wrote is
+    dropped instead.
 
-    A rename is the same rule in the key: the measurement went to the name the
-    refused write never stored, so that row goes and the stored name is
-    untouched. Stamped, so a measurement a Test or a refresh recorded in the
+    By the key the measurement wrote, not by the name the request used: a
+    built-in row answers to every name it has had, and a rename measures under
+    the new name. Stamped, so a measurement a Test or a refresh recorded in the
     meantime is left to stand.
     """
     from raven.acp_client.capabilities import SnapshotStore
 
     try:
-        store = SnapshotStore()
-        if measured_name != name:
-            store.forget(measured_name)
-        else:
-            store.restore(name, previous, only_if_stamp=measured_at_ms)
+        SnapshotStore().restore(move.key, move.previous, only_if_stamp=move.stamp)
     except Exception as exc:  # noqa: BLE001 - the refusal is the answer; a cache undo is not
         logger.warning("subagents: {!r} capability menu not put back after a refused model move: {}", name, exc)
+
+
+async def _apply_the_effort(params: dict, target: dict, name: str, move: _MenuMove | None) -> None:
+    """Write this call's ``effort`` or ``clear_effort`` onto ``target``, or refuse it.
+
+    A pick is judged against the menu of the model the row ends this call on:
+    ``move``'s measurement when the call moves the row, else the stored record.
+    """
+    if target.get("kind") != "acp":
+        raise ConfigFieldReadonlyError(
+            f"effort is not editable for kind {target.get('kind')!r}: only an acp agent advertises a thought_level menu",
+            data={"field": "effort", "name": name},
+        )
+    if params.get("clear_effort"):
+        target["effort"] = None
+        return
+    cfg = _as_configs([target])[0]
+    if move is not None:
+        if move.destination is None:
+            raise _effort_menu_unread(name, target.get("model"), move.detail)
+        snapshot = move.destination
+    else:
+        snapshot = acp_snapshot_for(cfg)
+        if snapshot is None:
+            # A menu never measured is not "offers none": the thought_level
+            # option rides the same session response as the model menu, which
+            # the free handshake already takes.
+            try:
+                snapshot = await record_capabilities(cfg)
+            except Exception as exc:  # noqa: BLE001 - judged on what is recorded, as the model pick is
+                logger.debug("subagents: {!r} effort menu not measured for a pick: {}", name, exc)
+    choices = [c.value for c in agent_meta(cfg, snapshot=snapshot).effort_choices]
+    proposed = str(params["effort"])
+    if proposed not in choices:
+        raise _no_such_effort(name, proposed, choices)
+    target["effort"] = proposed
+
+
+def _drop_an_effort_the_move_lacks(target: dict, move: _MenuMove) -> None:
+    """Clear ``target``'s stored effort when the model it moved to does not offer it.
+
+    Judged like a pick, against the menu just measured: a rung the new model
+    lacks is refused by the agent on every turn, and with no menu the page hides
+    the picker, so the value could be neither seen nor cleared. Left alone when
+    the read failed -- there is nothing to judge it by.
+    """
+    effort = target.get("effort")
+    if move.destination is None or not effort:
+        return
+    offered = agent_meta(_as_configs([target])[0], snapshot=move.destination).effort_choices
+    if effort not in [c.value for c in offered]:
+        target["effort"] = None
+
+
+def _effort_menu_unread(name: str, model: Any, detail: str) -> ConfigValidationError:
+    """The refusal of an effort picked with a model move whose menu could not be read."""
+    on = f"on {model!r}" if model else "on its own model"
+    why = f" ({detail})" if detail else ""
+    return ConfigValidationError(
+        f"could not read {name!r}'s reasoning effort menu {on}{why}, so the effort was not checked "
+        "and nothing was changed; test the agent, then pick again",
+        data={"field": "effort", "name": name},
+    )
 
 
 async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
@@ -909,6 +1012,14 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
                 data={"field": "new_name", "name": name},
             )
         target["name"] = new_name
+        if new_name != name_before:
+            # Refused now rather than at the write: the capability store keys a
+            # record by agent name, so a handshake below taken under a name another
+            # row holds would write over that row's record.
+            try:
+                validate_agents(entries, config_path=get_config_path())
+            except (ValueError, ValidationError) as exc:
+                _raise_config_error(exc)
     if "description" in params:
         description = params["description"]
         # Blank, whitespace-only or explicit ``null`` all revert to the factory
@@ -936,7 +1047,6 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
                 "only an acp agent can be started with Raven's keys", data={"field": "lend_keys", "name": name}
             )
         target["lendKeys"] = _lend_keys(target.get("preset"), list(params["lend_keys"]))
-    measured_for_effort = False
     model_moved = params.get("clear_model") or params.get("model") is not None
     if model_moved:
         cfg_for_meta = _as_configs([target])[0]
@@ -948,7 +1058,6 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
             # and the caller launched a whole run to make it record some.
             try:
                 snapshot = await record_capabilities(cfg_for_meta)
-                measured_for_effort = True
             except Exception as exc:  # noqa: BLE001 - judged on what is recorded, as before
                 logger.debug("subagents: {!r} menu not measured for a model pick: {}", name, exc)
         meta = agent_meta(cfg_for_meta, snapshot=snapshot)
@@ -1005,71 +1114,33 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
                 target["model"] = stored
     # A row moved to another model is on that model's effort menu, and nothing
     # else marks the record stale: the model is not a launch field, so no read
-    # re-measures it. Measured here, once the move is settled, so the menu this
-    # same call validates against and the one the picker draws next are the new
-    # model's. Best effort, like the never-measured branch above: a failed read
-    # leaves the old menu in place rather than undoing the write.
+    # re-measures it. So the move is measured on the model it moves to, and the
+    # menu an effort in this same call is judged against, the stored effort the
+    # row keeps or drops, and the menu the picker draws next are all that model's.
+    #
+    # When depends on what the call carries. An effort is judged before the
+    # connect gate below spends a prompt on the agent. A move without one is
+    # measured after the gate, so an agent that does not start is waited out once,
+    # by the gate, rather than by a handshake and then by the gate again.
     #
     # The measurement describes a model this call may still refuse to write, so
     # every step that can refuse runs inside one guard: a refusal puts the
     # previous record back rather than leaving the store describing a model the
     # row never moved to.
-    measured_name = str(target.get("name") or name)
-    previous_menu = None
-    moved_at = 0
-    re_measured_the_move = False
     moved_the_row = bool(model_moved and target.get("kind") == "acp" and target.get("model") != model_before)
+    picks_effort = params.get("effort") is not None and not params.get("clear_effort")
+    move: _MenuMove | None = None
     committed = False
     try:
-        if moved_the_row:
-            # The never-measured branch above measured the model this row is
-            # leaving, so its answer cannot speak for the one it moves to. Only a
-            # read of the settled target may satisfy the effort check.
-            measured_for_effort = False
-            previous_menu = acp_snapshot_for(_as_configs([row_before])[0])
-            try:
-                moved = await record_capabilities(_as_configs([target])[0])
-                measured_for_effort = True
-                re_measured_the_move = True
-                moved_at = int(getattr(moved, "measured_at_ms", 0) or 0)
-            except Exception as exc:  # noqa: BLE001 - the write stands on the old menu
-                logger.warning("subagents: {!r} effort menu not re-measured after a model move: {}", name, exc)
+        if moved_the_row and picks_effort:
+            move = await _measure_the_move(name, row_before, target)
         if params.get("clear_effort") or params.get("effort") is not None:
-            if target.get("kind") != "acp":
-                raise ConfigFieldReadonlyError(
-                    f"effort is not editable for kind {target.get('kind')!r}: only an acp agent advertises a thought_level menu",
-                    data={"field": "effort", "name": name},
-                )
-            cfg_for_meta = _as_configs([target])[0]
-            snapshot = acp_snapshot_for(cfg_for_meta)
-            if (snapshot is None or (model_moved and not measured_for_effort)) and params.get("effort") is not None:
-                # A menu never measured is not "offers none": the thought_level
-                # option rides the same session response as the model menu, which
-                # the free handshake already takes. A model moved in this same call
-                # is the other case: the stored snapshot describes the model the row
-                # had before it, and OpenCode's effort rungs are model-specific.
-                try:
-                    snapshot = await record_capabilities(cfg_for_meta)
-                    if moved_the_row:
-                        # This read is taken on the settled target, so a refusal
-                        # below has to put the pre-move record back as well.
-                        measured_for_effort = True
-                        re_measured_the_move = True
-                        moved_at = int(getattr(snapshot, "measured_at_ms", 0) or 0)
-                except Exception as exc:  # noqa: BLE001 - judged on what is recorded, as the model pick is
-                    logger.debug("subagents: {!r} effort menu not measured for a pick: {}", name, exc)
-            choices = [c.value for c in agent_meta(cfg_for_meta, snapshot=snapshot).effort_choices]
-            if params.get("clear_effort"):
-                target["effort"] = None
-            else:
-                proposed = str(params["effort"])
-                if proposed not in choices:
-                    raise _no_such_effort(name, proposed, choices)
-                target["effort"] = proposed
+            await _apply_the_effort(params, target, name, move)
         # A form saves every field it shows, so an edit can leave a folder's entry as
         # it found it, and a stored copy would then outlive the manifest it was taken
         # from. What is stored -- the switch, or nothing -- stands.
         if materialized_discovered and shipped is not None and _is_switch_row(target, shipped):
+            committed = True
             return {"updated": True, "name": target["name"]}
         # A credential or a model swapped under a row that is already on is a
         # connect nobody gated: the row goes on serving dispatches with something
@@ -1084,6 +1155,9 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
             entries, target = _merged_over_the_ping(
                 target, row_before, name_before, materialized=materialized_discovered
             )
+        if moved_the_row and move is None:
+            move = await _measure_the_move(name, row_before, target)
+            _drop_an_effort_the_move_lacks(target, move)
         try:
             reject_unsupported_openai_fields([target])
             reject_unsupported_acp_fields([target])
@@ -1096,8 +1170,8 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
         # as a refused one, and CancelledError is not an Exception. `committed`
         # separates the two outcomes -- a discarded write restores the record,
         # a landed one keeps the measurement that describes it.
-        if not committed and re_measured_the_move:
-            _put_the_rows_menu_back(name, measured_name, previous_menu, moved_at)
+        if not committed and move is not None and move.stamp:
+            _put_the_rows_menu_back(name, move)
     _hot_apply(agent_loop_factory)
     return {"updated": True, "name": target["name"]}
 

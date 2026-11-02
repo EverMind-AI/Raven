@@ -3417,6 +3417,9 @@ export interface SubagentsUpdateParams {
   mcps?: string[];
   allow_mcp_secrets?: boolean;
   lend_keys?: string[];
+  /**
+   * A model from the row's model_choices. On an acp row the move re-measures the effort menu on the new model, and a stored effort that menu does not offer is dropped; it is kept when the read fails.
+   */
   model?: string;
   /**
    * The provider whose credential serves model, for the built-in row: the id is stored naming it, the way config.set model stores the host's. Ignored for an acp row, whose values are the agent's own.
@@ -3427,7 +3430,7 @@ export interface SubagentsUpdateParams {
    */
   clear_model?: boolean;
   /**
-   * A reasoning effort from the row's effort_choices, sent on every turn through the agent's thought_level option, or as a session mode on an agent whose modes are its effort menu, where an instance's own mode override takes its place. Refused when the row's menu does not offer it.
+   * A reasoning effort from the row's effort_choices, sent on every turn through the agent's thought_level option, or as a session mode on an agent whose modes are its effort menu, where an instance's own mode override takes its place. Refused when the row's menu does not offer it. Sent with a model move, it is judged on the new model's menu, and refused when that menu could not be read.
    */
   effort?: string;
   /**

@@ -8,6 +8,7 @@ description reset, none of which the existing file's fixture or helpers touch.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,7 +22,7 @@ from raven.acp_client.capabilities import (
     snapshot_fingerprint,
 )
 from raven.config.agent_names import GENERIC_AGENT
-from raven.rpc.errors import ConfigFieldReadonlyError, ConfigValidationError
+from raven.rpc.errors import ConfigFieldReadonlyError, ConfigValidationError, SubagentNotReadyError
 from raven.rpc.methods.subagents import _as_configs, subagents_list, subagents_update
 
 
@@ -347,8 +348,9 @@ async def test_a_same_call_effort_is_judged_on_the_new_model_when_the_move_read_
 ) -> None:
     """The never-measured branch measures the model the row is leaving, so its
     answer cannot stand for the model the same call moves to. When the move's
-    own read fails, the effort check has to read the new model again rather than
-    trust the old menu -- and the refusal puts the old record back."""
+    own read fails, nothing measured the new model: the effort is refused as
+    unchecked rather than judged on the old menu, the failing launch is not
+    tried a second time, and the refusal puts the old record back."""
     raw = json.loads(config_path.read_text())
     raw["subagents"]["agents"][0]["model"] = "vendor/reasoner"
     config_path.write_text(json.dumps(raw), encoding="utf-8")
@@ -368,12 +370,10 @@ async def test_a_same_call_effort_is_judged_on_the_new_model_when_the_move_read_
 
     monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", fake_record)
 
-    with pytest.raises(ConfigValidationError, match="offers none"):
+    with pytest.raises(ConfigValidationError, match="could not read"):
         await subagents_update({"name": "Hermes Agent", "model": "vendor/flash", "effort": "high"})
 
-    assert measured == ["vendor/reasoner", "vendor/flash", "vendor/flash"], (
-        "the old model's read is not reused for the new one"
-    )
+    assert measured == ["vendor/reasoner", "vendor/flash"], "the old model's read is not reused for the new one"
     entry = next(entry for entry in _stored(config_path) if entry["name"] == "Hermes Agent")
     assert entry["model"] == "vendor/reasoner", "the refused call writes nothing"
     rows = (await subagents_list({"probe": False}))["rows"]
@@ -401,6 +401,184 @@ async def test_a_refused_move_drops_a_menu_the_row_never_adopted(
     entry = next(entry for entry in _stored(config_path) if entry["name"] == "Hermes Agent")
     assert entry["model"] == "vendor/reasoner"
     assert SnapshotStore().load([_as_configs([entry])[0]], allow_stale=True) == {}
+
+
+def _set_row(config_path: Path, **fields: object) -> dict:
+    raw = json.loads(config_path.read_text())
+    raw["subagents"]["agents"][0].update(fields)
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    return raw["subagents"]["agents"][0]
+
+
+def _failing_handshake(monkeypatch: pytest.MonkeyPatch) -> list[str | None]:
+    """The real ``record_capabilities`` over a handshake that never gets as far as
+    ``session/new``: ``verify_agent`` does not raise, it answers an unusable
+    snapshot, and ``_test_record`` keeps the previous record's menus under it."""
+    from raven.agent.subagent.probe import record_capabilities
+
+    tried: list[str | None] = []
+
+    async def verify(cfg, **_kw):
+        tried.append(getattr(cfg, "model", None))
+        return replace(
+            _measured_snapshot(cfg, ()), status="attention", detail="the agent did not start", measured_at_ms=2
+        )
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", record_capabilities)
+    monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", verify)
+    return tried
+
+
+async def test_a_move_whose_handshake_fails_does_not_judge_the_effort_on_the_old_menu(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed handshake is an answer, not an exception, and the record it leaves
+    still carries the old model's rungs. Reading that as the new model's menu let
+    `high` through onto a model that takes none. Nothing measured the new model,
+    so the pick is refused as unchecked, once, and the store is put back."""
+    row = _set_row(config_path, model="vendor/reasoner")
+    SnapshotStore().record(_measured_snapshot(_as_configs([row])[0], _MENUS["vendor/reasoner"]))
+    _gate_answers(monkeypatch)
+    tried = _failing_handshake(monkeypatch)
+
+    with pytest.raises(ConfigValidationError, match="could not read") as refused:
+        await subagents_update({"name": "Hermes Agent", "model": "vendor/flash", "effort": "high"})
+
+    assert refused.value.data == {"field": "effort", "name": "Hermes Agent"}
+    assert tried == ["vendor/flash"], "one handshake, not a second launch of the one that failed"
+    entry = next(entry for entry in _stored(config_path) if entry["name"] == "Hermes Agent")
+    assert (entry["model"], entry.get("effort")) == ("vendor/reasoner", None), "the refused call writes nothing"
+    restored = SnapshotStore().load([_as_configs([entry])[0]], allow_stale=True)["Hermes Agent"]
+    assert (restored.status, restored.measured_at_ms) == ("ready", 1), "the pre-move record is back"
+
+
+async def test_a_model_only_move_drops_a_stored_effort_the_new_model_does_not_take(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The move re-measures the menu, so the stored pick is judged against it. A
+    rung the new model lacks would be refused by the agent on every turn, and
+    with no menu the page hides the picker, leaving a value nobody can see or
+    clear. One the new model does take is kept."""
+    row = _set_row(config_path, model="vendor/reasoner", effort="high")
+    SnapshotStore().record(_measured_snapshot(_as_configs([row])[0], _MENUS["vendor/reasoner"]))
+    _gate_answers(monkeypatch)
+    _measures_per_model(monkeypatch)
+
+    await subagents_update({"name": "Hermes Agent", "model": "vendor/flash"})
+    entry = next(entry for entry in _stored(config_path) if entry["name"] == "Hermes Agent")
+    assert (entry["model"], entry.get("effort")) == ("vendor/flash", None)
+
+    _set_row(config_path, effort="high")
+    await subagents_update({"name": "Hermes Agent", "model": "vendor/reasoner"})
+    entry = next(entry for entry in _stored(config_path) if entry["name"] == "Hermes Agent")
+    assert (entry["model"], entry.get("effort")) == ("vendor/reasoner", "high"), "a rung the new model takes stays"
+
+
+async def test_a_model_only_move_whose_handshake_fails_keeps_the_stored_effort(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a measurement of the new model there is nothing to judge the pick
+    against, so it is left as it was rather than dropped on a guess."""
+    row = _set_row(config_path, model="vendor/reasoner", effort="high")
+    SnapshotStore().record(_measured_snapshot(_as_configs([row])[0], _MENUS["vendor/reasoner"]))
+    _gate_answers(monkeypatch)
+    _failing_handshake(monkeypatch)
+
+    await subagents_update({"name": "Hermes Agent", "model": "vendor/flash"})
+
+    entry = next(entry for entry in _stored(config_path) if entry["name"] == "Hermes Agent")
+    assert (entry["model"], entry.get("effort")) == ("vendor/flash", "high")
+
+
+async def test_an_enabled_rows_model_only_move_asks_the_agent_before_measuring_it(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The connect gate launches the agent too. Measuring first meant an agent that
+    does not start was waited out twice -- the handshake, then the prompt -- before
+    the move was refused. A move that carries no effort needs no menu before the
+    gate, so the gate goes first and a refusal spends one wait. A move that does
+    carry one is judged before the gate spends a prompt on it."""
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    row = _set_row(config_path, model="vendor/reasoner")
+    SnapshotStore().record(_measured_snapshot(_as_configs([row])[0], _MENUS["vendor/reasoner"]))
+    _gate_answers(monkeypatch)
+    order: list[str] = []
+    answers = {"ok": True}
+
+    async def ping(cfg):
+        order.append("ping")
+        return PingResult(answers["ok"], "it ran and replied" if answers["ok"] else "it did not start")
+
+    async def record(cfg):
+        order.append(f"measure {cfg.model}")
+        snapshot = _measured_snapshot(cfg, _MENUS.get(cfg.model or "", ()))
+        SnapshotStore().record(snapshot)
+        return snapshot
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", ping)
+    monkeypatch.setattr(subagents_mod, "record_capabilities", record)
+
+    await subagents_update({"name": "Hermes Agent", "model": "vendor/flash"})
+    assert order == ["ping", "measure vendor/flash"]
+
+    order.clear()
+    await subagents_update({"name": "Hermes Agent", "model": "vendor/reasoner", "effort": "high"})
+    assert order == ["measure vendor/reasoner", "ping"]
+
+    order.clear()
+    answers["ok"] = False
+    with pytest.raises(SubagentNotReadyError):
+        await subagents_update({"name": "Hermes Agent", "model": "vendor/flash"})
+    assert order == ["ping"], "a move the agent cannot answer is refused without a handshake"
+
+
+async def test_a_rename_onto_a_taken_name_is_refused_before_anything_is_measured(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The store keys a capability record by agent name, so a measurement taken
+    under the new name before the duplicate check wrote over the other row's
+    record, and the rollback then deleted it. The duplicate is refused first."""
+    raw = json.loads(config_path.read_text())
+    raw["subagents"]["agents"][0]["model"] = "vendor/reasoner"
+    raw["subagents"]["agents"].append({"name": "Other", "kind": "acp", "command": "other acp", "enabled": True})
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    other = next(c for c in _as_configs(raw["subagents"]["agents"]) if c.name == "Other")
+    SnapshotStore().record(replace(_measured_snapshot(other, ("low",)), measured_at_ms=5))
+    _gate_answers(monkeypatch)
+    measured = _measures_per_model(monkeypatch)
+
+    with pytest.raises(ConfigValidationError, match="duplicate"):
+        await subagents_update({"name": "Hermes Agent", "new_name": "Other", "model": "vendor/flash"})
+
+    assert measured == [], "nothing was launched for a write that could never land"
+    kept = SnapshotStore().load([other], allow_stale=True)["Other"]
+    assert (kept.measured_at_ms, [c.value for c in kept.effort_choices]) == (5, ["low"])
+
+
+async def test_a_refused_move_under_an_alias_spelling_puts_the_rows_record_back(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A built-in row is addressed under any name it has had, so the request's
+    name need not be the key its record is stored under. The rollback goes by the
+    key the measurement wrote: the pre-move record is restored, not dropped."""
+    raw = json.loads(config_path.read_text())
+    raw["subagents"]["agents"] = [
+        {"name": GENERIC_AGENT, "kind": "acp", "command": "raven acp", "model": "vendor/reasoner", "enabled": True}
+    ]
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    cfg = _as_configs(raw["subagents"]["agents"])[0]
+    SnapshotStore().record(replace(_measured_snapshot(cfg, _MENUS["vendor/reasoner"]), measured_at_ms=5))
+    _gate_answers(monkeypatch)
+    _measures_per_model(monkeypatch)
+
+    with pytest.raises(ConfigValidationError, match="offers none"):
+        await subagents_update({"name": "Raven", "model": "vendor/flash", "effort": "high"})
+
+    restored = SnapshotStore().load([cfg], allow_stale=True).get(GENERIC_AGENT)
+    assert restored is not None and restored.measured_at_ms == 5
+    assert [c.value for c in restored.effort_choices] == ["low", "high", "max"]
 
 
 def _with_providers(config_path: Path, providers: dict) -> None:
