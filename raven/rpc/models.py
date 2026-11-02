@@ -2298,6 +2298,11 @@ class ModelAddModelParams(_Strict):
     carries the icon row every other model has. Names outside the published
     vocabulary are refused rather than stored -- a surface draws one icon per
     name and has nothing to draw for a name it has never heard of.
+
+    ``reasoning_efforts`` is not display data: it is this model's declaration
+    for the per-conversation effort picker, and the server validates it against
+    the effort ladder. ``None`` leaves a stored declaration alone; ``[]`` clears
+    it.
     """
 
     slug: str
