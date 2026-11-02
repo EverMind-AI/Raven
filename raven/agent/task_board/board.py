@@ -18,8 +18,11 @@ from typing import Any
 
 STATUSES: tuple[str, ...] = ("needs_you", "running", "idle", "completed")
 TITLE_WORDS = 20
-GROUP_SUMMARY_WORDS = 50
-QUESTION_WORDS = 50
+# The instruction asks for summaries and questions of at most 50 words; the board refuses
+# only past 100. A stated length is overshot, by some models by half again, and every
+# refusal costs a whole call -- while a higher stated number makes some models write longer.
+GROUP_SUMMARY_WORDS = 100
+QUESTION_WORDS = 100
 _SNIPPET = 24
 
 

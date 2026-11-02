@@ -76,7 +76,7 @@ def _words(n: int) -> str:
 
 
 OVER_20 = r"; the limit is 20: "
-OVER_50 = r"; the limit is 50: "
+OVER_100 = r"; the limit is 100: "
 
 
 def test_new_title_opens_a_group_holding_the_step():
@@ -234,7 +234,7 @@ def test_word_count_counts_each_word_of_a_spaced_script_once():
 
 
 def test_titles_and_group_summaries_keep_to_their_word_limits():
-    assert (TITLE_WORDS, GROUP_SUMMARY_WORDS) == (20, 50)
+    assert (TITLE_WORDS, GROUP_SUMMARY_WORDS) == (20, 100)
     board = _one_group()
 
     def apply(args: dict) -> Board:
@@ -245,7 +245,7 @@ def test_titles_and_group_summaries_keep_to_their_word_limits():
             "steps": [
                 {
                     "new_title": _words(20),
-                    "new_summary": _words(50),
+                    "new_summary": _words(100),
                     "title": _words(20),
                     "summary": "x " * 2500,
                     "status": "idle",
@@ -257,7 +257,7 @@ def test_titles_and_group_summaries_keep_to_their_word_limits():
 
     for step, refusal in [
         ({**NEW, "new_title": _words(21), **STEP}, rf"^steps\[0\]: new_title is 21 words long{OVER_20}word word"),
-        ({**NEW, "new_summary": _words(51), **STEP}, rf"^steps\[0\]: new_summary is 51 words long{OVER_50}word"),
+        ({**NEW, "new_summary": _words(101), **STEP}, rf"^steps\[0\]: new_summary is 101 words long{OVER_100}word"),
         ({"group": "g_1", **STEP, "title": _words(21)}, rf"^steps\[0\]: title is 21 words long{OVER_20}word word"),
     ]:
         with pytest.raises(UpdateRejectedError, match=refusal):
@@ -337,9 +337,9 @@ def test_a_groups_entry_must_change_something_it_may_change():
         apply_update(
             board, {"groups": [{"group": "g_1", "title": _words(21)}]}, [], turn_at="T2", turn_id=None, now_ms=9
         )
-    with pytest.raises(UpdateRejectedError, match=rf"^groups\[0\]: summary is 51 words long{OVER_50}"):
+    with pytest.raises(UpdateRejectedError, match=rf"^groups\[0\]: summary is 101 words long{OVER_100}"):
         apply_update(
-            board, {"groups": [{"group": "g_1", "summary": _words(51)}]}, [], turn_at="T2", turn_id=None, now_ms=9
+            board, {"groups": [{"group": "g_1", "summary": _words(101)}]}, [], turn_at="T2", turn_id=None, now_ms=9
         )
 
 
@@ -365,14 +365,14 @@ def test_a_refusal_names_every_rule_the_update_breaks_not_only_the_first():
     three calls end the update: a fault behind an over-long summary surfaced on the last."""
     args = {
         "steps": [{"group": "g_1", **STEP, "status": "running", "tasks": [DAG.handle]}],
-        "groups": [{"group": "g_1", "status": "running", "summary": _words(89)}],
+        "groups": [{"group": "g_1", "status": "running", "summary": _words(130)}],
     }
 
     with pytest.raises(UpdateRejectedError) as exc:
         apply_update(_one_group(), args, [DAG], turn_at="T2", turn_id=None, now_ms=9)
 
     first, second = str(exc.value).splitlines()
-    assert first == "groups[0]: summary is 89 words long; the limit is 50: word word word word word..."
+    assert first == "groups[0]: summary is 130 words long; the limit is 100: word word word word word..."
     assert second == "groups[0]: g_1 has a step this turn; set its status on the step"
 
 
@@ -418,18 +418,18 @@ def test_allow_long_takes_text_past_its_limit_as_written_and_lets_no_other_fault
                 "title": _words(25),
                 "summary": "Asked.",
                 "status": "needs_you",
-                "questions": [_words(60)],
+                "questions": [_words(110)],
             },
-            {**NEW, "new_title": _words(22), "new_summary": _words(55), **STEP, "status": "idle"},
+            {**NEW, "new_title": _words(22), "new_summary": _words(105), **STEP, "status": "idle"},
         ],
-        "groups": [{"group": "g_1", "summary": _words(70)}],
+        "groups": [{"group": "g_1", "summary": _words(130)}],
     }
 
     after = apply_update(_one_group(), args, [], turn_at="T2", turn_id=None, now_ms=9, allow_long=True)
 
     fix, new = after.groups
-    assert (fix.summary, fix.steps[-1].title, fix.steps[-1].questions) == (_words(70), _words(25), [_words(60)])
-    assert (new.title, new.summary) == (_words(22), _words(55))
+    assert (fix.summary, fix.steps[-1].title, fix.steps[-1].questions) == (_words(130), _words(25), [_words(110)])
+    assert (new.title, new.summary) == (_words(22), _words(105))
     with pytest.raises(UpdateRejectedError) as exc:
         apply_update(
             _one_group(),
@@ -448,14 +448,14 @@ def test_a_salvage_keeps_the_step_and_its_work_and_drops_only_the_groups_field_a
     board = _one_group()
     last = {
         "steps": [{"group": "g_1", **STEP, "status": "running", "tasks": [DAG.handle]}],
-        "groups": [{"group": "g_1", "status": "running", "summary": _words(60)}],
+        "groups": [{"group": "g_1", "status": "running", "summary": _words(130)}],
     }
 
     kept = salvage(board, last)
 
-    assert kept == {**last, "groups": [{"group": "g_1", "summary": _words(60)}]}
+    assert kept == {**last, "groups": [{"group": "g_1", "summary": _words(130)}]}
     group = apply_update(board, kept, [DAG], turn_at="T2", turn_id=None, now_ms=9, allow_long=True).groups[0]
-    assert (group.status, group.summary, group.steps[-1].tasks[0].id) == ("running", _words(60), DAG.handle[4:])
+    assert (group.status, group.summary, group.steps[-1].tasks[0].id) == ("running", _words(130), DAG.handle[4:])
 
 
 def test_a_salvage_keeps_one_entry_per_group_and_none_for_a_group_the_board_lacks():
@@ -826,8 +826,8 @@ def test_a_step_from_before_questions_reads_none():
         ),
         ({"status": "needs_you", "questions": ["Which fix?", " "]}, r"^steps\[0\]: questions\[1\] is empty$"),
         (
-            {"status": "needs_you", "questions": [_words(51)]},
-            rf"^steps\[0\]: questions\[0\] is 51 words long{OVER_50}word word",
+            {"status": "needs_you", "questions": [_words(101)]},
+            rf"^steps\[0\]: questions\[0\] is 101 words long{OVER_100}word word",
         ),
     ],
 )
@@ -836,8 +836,8 @@ def test_questions_come_with_needs_you_and_only_with_it(step, refusal):
         apply_update(Board([], []), {"steps": [{**NEW, **STEP, **step}]}, [], turn_at="T1", turn_id=None, now_ms=1)
 
 
-def test_a_question_of_fifty_words_is_kept():
-    question = _words(50)
+def test_a_question_of_a_hundred_words_is_kept():
+    question = _words(100)
 
     board = apply_update(
         Board([], []),

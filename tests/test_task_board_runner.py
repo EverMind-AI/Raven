@@ -8,6 +8,8 @@ import json
 from loguru import logger
 
 from raven.agent.task_board.board import (
+    GROUP_SUMMARY_WORDS,
+    QUESTION_WORDS,
     Board,
     Dispatch,
     Pending,
@@ -277,6 +279,16 @@ def test_the_instruction_states_the_update_shape_limits_and_statuses():
         "completed",
     ):
         assert word in text, word
+
+
+def test_the_instruction_asks_for_half_of_what_the_board_takes():
+    """A stated length is overshot, by some models by half again, and every refusal costs a
+    whole call; one model writes longer the higher the number it is given. So the
+    instruction asks for 50 and the board refuses only past 100."""
+    text = build_instruction(Board([], []), [])
+
+    assert "a group's summary and each question at most 50;" in text
+    assert (GROUP_SUMMARY_WORDS, QUESTION_WORDS) == (100, 100)
 
 
 def test_the_instructions_example_is_an_update_the_board_accepts():
@@ -642,7 +654,7 @@ def _review_with_groups_faults() -> LLMResponse:
     limit and repeats in groups the status its step already sets."""
     step = {"group": "g_a", "title": "Sent a review", "summary": "Reviewing.", "status": "running"}
     return _update_with(
-        [{**step, "tasks": [REVIEW.handle]}], groups=[{"group": "g_a", "status": "running", "summary": _words(89)}]
+        [{**step, "tasks": [REVIEW.handle]}], groups=[{"group": "g_a", "status": "running", "summary": _words(130)}]
     )
 
 
@@ -672,7 +684,7 @@ async def test_a_refusal_lists_every_fault_numbered(tmp_path):
 
     assert call.seen[1][-1]["content"].splitlines() == [
         REFUSED,
-        "1. groups[0]: summary is 89 words long; the limit is 50: word word word word word...",
+        "1. groups[0]: summary is 130 words long; the limit is 100: word word word word word...",
         "2. groups[0]: g_a has a step this turn; set its status on the step",
     ]
 
@@ -689,7 +701,7 @@ async def test_an_update_refused_to_its_last_attempt_for_groups_faults_still_pla
     assert len(call.seen) == MAX_ATTEMPTS
     stored = load_board(service.session_dir(KEY))
     fix = stored.groups[0]
-    assert (fix.status, fix.summary, fix.steps[-1].title) == ("running", _words(89), "Sent a review")
+    assert (fix.status, fix.summary, fix.steps[-1].title) == ("running", _words(130), "Sent a review")
     assert [t.id for t in fix.steps[-1].tasks] == ["20261029T110000Z-0badf00d"]
     assert stored.unassigned == []
     assert board is not None and board_to_dict(board) == board_to_dict(stored)

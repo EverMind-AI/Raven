@@ -227,13 +227,16 @@ task_board(
 )
 ```
 
-**Lengths.** Counted the way a Chinese word count reads text (`word_count`): each CJK
-character is one, each word of any other script is one, so one limit reads as characters to a
-Chinese writer and as words to an English one. A title -- a group's or a step's -- is at most
-20; a group's summary and each question at most 50; a step's summary has no limit. An update over a limit is
-refused with the measured length and the start of the text, and the model rewrites it within
-the same three attempts (6.1). Nothing is cut silently: a last attempt still over a limit is
-written as it stands (6.1).
+**Lengths.** Counted the way a Chinese word count reads text (`word_count`): each CJK character
+is one, each word of any other script is one, so one limit reads as characters to a Chinese
+writer and as words to an English one. A title -- a group's or a step's -- is at most 20; a
+step's summary has no limit. A group's summary and each question are asked for at most 50 but
+refused only past 100: a stated length is overshot, by some models by half again, and every
+refusal costs a whole call over the turn's window, while a higher stated number makes some
+models write longer. An update over a limit is refused with the measured length and the start
+of the text, and the model rewrites it within the same three attempts (6.1). Nothing is cut
+silently: a last attempt still over a limit is written as it stands (6.1), and the card shows a
+summary in two lines (5.1).
 
 **recall**, during any turn:
 
@@ -345,7 +348,7 @@ nothing to answer the instruction with.
 - `steps` is empty only when there were no handles to place.
 
 A rejected update returns every fault it breaks as the tool result, numbered, each naming the
-entry it is in -- "groups[0]: summary is 89 words long; the limit is 50: ...", "not placed:
+entry it is in -- "groups[0]: summary is 130 words long; the limit is 100: ...", "not placed:
 `dag:2026...-3eb3b470`". Named one at a time, a fault behind another would wait a whole
 attempt to be heard of. The runner asks again with the transcript of the attempt appended, up
 to three attempts. An accepted update is written, then announced as `tasks.board_updated` (4).

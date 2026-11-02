@@ -8,6 +8,8 @@ import pytest
 
 import raven.i18n as i18n
 from raven.agent.task_board.board import (
+    GROUP_SUMMARY_WORDS,
+    QUESTION_WORDS,
     Board,
     Dispatch,
     ProgressStep,
@@ -38,25 +40,25 @@ def test_word_count_counts_each_chinese_character_and_each_english_word():
     assert word_count("2026年10月") == 4
 
 
-def test_a_chinese_title_and_summary_keep_to_twenty_and_fifty_characters():
+def test_a_chinese_title_and_summary_keep_to_twenty_and_a_hundred_characters():
     def update(new_title: str, new_summary: str) -> dict:
         step = {"title": "定位原因", "summary": "恢复会话时 token 为空", "status": "idle"}
         return {"steps": [{"new_title": new_title, "new_summary": new_summary, **step}]}
 
-    twenty, fifty = "把输入框改成可以拖拽调高并且限制最高半屏", "进展" * 25
-    board = apply_update(Board([], []), update(twenty, fifty), [], turn_at="T1", turn_id=None, now_ms=1)
-    assert (board.groups[0].title, board.groups[0].summary) == (twenty, fifty)
+    twenty, hundred = "把输入框改成可以拖拽调高并且限制最高半屏", "进展" * 50
+    board = apply_update(Board([], []), update(twenty, hundred), [], turn_at="T1", turn_id=None, now_ms=1)
+    assert (board.groups[0].title, board.groups[0].summary) == (twenty, hundred)
 
     with pytest.raises(
         UpdateRejectedError,
         match=r"^steps\[0\]: new_title is 21 words long; the limit is 20: ",
     ):
-        apply_update(Board([], []), update(twenty + "幕", fifty), [], turn_at="T1", turn_id=None, now_ms=1)
+        apply_update(Board([], []), update(twenty + "幕", hundred), [], turn_at="T1", turn_id=None, now_ms=1)
     with pytest.raises(
         UpdateRejectedError,
-        match=r"^steps\[0\]: new_summary is 51 words long; the limit is 50: ",
+        match=r"^steps\[0\]: new_summary is 101 words long; the limit is 100: ",
     ):
-        apply_update(Board([], []), update(twenty, fifty + "中"), [], turn_at="T1", turn_id=None, now_ms=1)
+        apply_update(Board([], []), update(twenty, hundred + "中"), [], turn_at="T1", turn_id=None, now_ms=1)
 
 
 def test_a_chinese_query_finds_its_matter():
@@ -84,6 +86,13 @@ def test_the_zh_update_instruction_renders_the_board_and_handles(zh):
     assert "{board}" not in text and "{dispatches}" not in text
     assert text.index("[BEGIN BOARD RECORD]") < text.index("修复登录白屏") < text.index("[END BOARD RECORD]")
     assert text.index("[BEGIN DISPATCHES]") < text.index("定位白屏原因") < text.index("[END DISPATCHES]")
+
+
+def test_the_zh_instruction_asks_for_half_of_what_the_board_takes(zh):
+    text = build_instruction(Board([], []), [])
+
+    assert "任务摘要和每个问题不超过 50 个字" in text
+    assert (GROUP_SUMMARY_WORDS, QUESTION_WORDS) == (100, 100)
 
 
 def test_the_zh_instruction_puts_a_question_to_the_user_ahead_of_running_work(zh):
