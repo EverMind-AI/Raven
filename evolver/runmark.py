@@ -1,57 +1,77 @@
-"""Trial identity: was this rollout finished, and by this configuration?
+"""Trial identity: did this trial finish, and on which harness?
 
-Completion is recorded explicitly by the code that observed the run return;
-presence of output is not enough. The marker also fingerprints the harness
-that produced the rollout, so a rollout from a different configuration is
-never reused.
+A trial directory is only complete when the code that observed the run return
+writes a marker into it. The marker records the trial id it belongs to and a
+digest of the harness tree that produced it, so a resumed run can reuse a
+finished trial only when it was produced by the same configuration.
 
-A rollout is only considered finished when the runner that observed it
-records a completion marker, and the marker carries a digest of the harness
-tree that produced it.
+The marker is an on-disk contract: ``.trial_complete`` inside the trial's
+output directory. It is written through :mod:`raven.utils.atomic_io`, which
+serializes concurrent writers and renames into place, so a crash never leaves
+a half-written marker that a later run would misread.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import os
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
-MARK = ".adapt_complete"
+from raven.utils.atomic_io import atomic_replace
+
+MARK = ".trial_complete"
 
 VERSION = 1
 
+#: Payload keys this module derives; supplemental metadata cannot replace them.
+RESERVED = ("version", "run_id", "at", "harness")
+
 
 def _ignored(p: Path) -> bool:
-    """Byproducts that are not part of the harness and must not change its identity."""
-    return ".git" in p.parts or "__pycache__" in p.parts or p.suffix == ".pyc" or p.name == ".DS_Store"
+    """Paths that are not harness content and must not change its identity."""
+    name = p.name
+    return (
+        ".git" in p.parts
+        or "__pycache__" in p.parts
+        or p.suffix == ".pyc"
+        or name == ".DS_Store"
+        or name == MARK
+        or name.startswith(MARK + ".")
+        or (".lock" in p.parts)
+    )
 
 
 def fingerprint(harness_dir: Path | None) -> str:
-    """A stable digest of the harness tree that produced a rollout.
+    """A stable digest of the harness tree that produced a trial.
 
-    ``None`` means a base rollout on the inherited harness and digests to the
-    shared value ``"base"``.
+    ``None`` is the inherited/base harness and digests to the shared value
+    ``"base"``. Paths are hashed in POSIX spelling and sorted on that spelling,
+    so the digest does not change with the host's path separator or the
+    case-folding of the platform's path ordering.
     """
     if harness_dir is None:
         return "base"
     root = Path(harness_dir)
     if not root.is_dir():
         return "absent"
-    h = hashlib.sha1()
-    for p in sorted(root.rglob("*")):
-        if not p.is_file() or p.name == MARK or _ignored(p):
+
+    def rel(p: Path) -> str:
+        return p.relative_to(root).as_posix()
+
+    digest = hashlib.sha256()
+    for p in sorted(root.rglob("*"), key=rel):
+        if not p.is_file() or _ignored(p):
             continue
-        h.update(p.relative_to(root).as_posix().encode())
-        h.update(b"\0")
+        digest.update(rel(p).encode("utf-8"))
+        digest.update(b"\0")
         try:
-            h.update(p.read_bytes())
+            digest.update(p.read_bytes())
         except OSError:
-            h.update(b"<unreadable>")
-        h.update(b"\0")
-    return h.hexdigest()[:16]
+            digest.update(b"<unreadable>")
+        digest.update(b"\0")
+    return digest.hexdigest()[:16]
 
 
 def mark_complete(
@@ -59,43 +79,45 @@ def mark_complete(
     *,
     run_id: str,
     harness_dir: Path | None = None,
-    extra: dict[str, Any] | None = None,
+    extra: Mapping[str, Any] | None = None,
 ) -> Path:
-    """Record that ``run_id`` finished. Call only after the runner returned normally.
+    """Record that the trial ``run_id`` finished in ``where``.
 
-    Writes atomically via a temp file + ``os.replace`` so a crash mid-write
-    never leaves a half-written marker. Keys in ``extra`` are supplemental
-    metadata; they cannot replace the reserved identity fields (``version``,
-    ``run_id``, ``at``, ``harness``) the marker derives itself.
+    Call this only after the trial runner returned normally. ``extra`` is
+    supplemental metadata; it cannot replace the reserved identity fields
+    (:data:`RESERVED`) this function derives.
     """
-    d = Path(where)
-    d.mkdir(parents=True, exist_ok=True)
-    payload = {
-        **(extra or {}),
-        "version": VERSION,
-        "run_id": run_id,
-        "at": time.time(),
-        "harness": fingerprint(harness_dir),
-    }
-    tmp = d / f"{MARK}.{os.getpid()}.tmp"
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True))
-    final = d / MARK
-    os.replace(tmp, final)
-    return final
+    payload: dict[str, Any] = dict(extra or {})
+    for key in RESERVED:
+        payload.pop(key, None)
+    payload.update(
+        {
+            "version": VERSION,
+            "run_id": run_id,
+            "at": time.time(),
+            "harness": fingerprint(harness_dir),
+        }
+    )
+
+    where = Path(where)
+    where.mkdir(parents=True, exist_ok=True)
+    path = where / MARK
+    atomic_replace(path, json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True))
+    return path
 
 
 def read_mark(where: Path) -> dict[str, Any] | None:
-    """Return the parsed marker at ``where``, or ``None`` if absent/invalid."""
+    """Return the marker at ``where``, or ``None`` when it is absent or invalid."""
     path = Path(where) / MARK
-    if not path.is_file():
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, ValueError):
         return None
     try:
-        data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(text)
+    except ValueError:
         return None
-    if not isinstance(data, dict):
-        return None
-    return data
+    return data if isinstance(data, dict) else None
 
 
 def is_complete(
@@ -103,24 +125,27 @@ def is_complete(
     *,
     run_id: str | None = None,
     harness_dir: Path | None = None,
+    expected: Mapping[str, Any] | None = None,
 ) -> bool:
-    """Whether ``where`` holds a valid completion marker.
+    """Whether ``where`` holds a marker that matches this trial.
 
-    When ``run_id`` is given, the marker must record that same run id.
-    When ``harness_dir`` is given, the marker's harness fingerprint must
-    match the digest of that directory (so a rollout produced by a different
-    harness configuration is never reused).
+    ``run_id`` must match when given. ``harness_dir=None`` means the inherited
+    harness, so a marker must have been written for the inherited harness too;
+    a marker produced by a concrete harness tree does not satisfy a cwd-less
+    check. ``expected`` checks supplemental metadata the caller recorded in
+    ``extra`` (for example ``split``, ``k`` and the requested task count).
     """
     data = read_mark(where)
-    if data is None:
-        return False
-    if data.get("version") != VERSION:
+    if data is None or data.get("version") != VERSION:
         return False
     if run_id is not None and data.get("run_id") != run_id:
         return False
-    if harness_dir is not None and data.get("harness") != fingerprint(harness_dir):
+    if data.get("harness") != fingerprint(harness_dir):
         return False
+    for key, value in (expected or {}).items():
+        if data.get(key) != value:
+            return False
     return True
 
 
-__all__ = ["MARK", "VERSION", "fingerprint", "mark_complete", "read_mark", "is_complete"]
+__all__ = ["MARK", "VERSION", "RESERVED", "fingerprint", "mark_complete", "read_mark", "is_complete"]
