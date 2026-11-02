@@ -43,6 +43,7 @@ from raven.acp.modes import SessionModes, build_session_modes
 from raven.acp.replay import replay
 from raven.acp.updates import AcpSession, TurnAlreadyRunningError, UpdateTranslator
 from raven.config import load_config
+from raven.providers.usage import reported_cost
 from raven.security import redact
 from raven.session.manager import BUDGET_STOP_TURN_AT, OUTPUT_LIMIT_TURN_AT
 
@@ -408,7 +409,8 @@ class AcpMethods:
         from ``session.usage``, the account that outlives the process, once per
         session opened rather than per turn: it walks every day of telemetry
         since the session began. Unreadable, the session sends no cost at all; a
-        total counted from here would understate it.
+        total counted from here would understate it. An answer whose spend is
+        not an amount by ``reported_cost`` is unreadable too.
         """
         try:
             spent = await self._call("session.usage", {"session_id": session.session_key})
@@ -417,8 +419,13 @@ class AcpMethods:
             session.cost_known = False
             return
         cost = spent.get("cost_usd") if isinstance(spent, dict) else None
-        if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0:
-            session.cost_usd = float(cost)
+        if cost is None:
+            return
+        if (amount := reported_cost(cost)) is None:
+            logger.warning("acp: what session {} had spent is not an amount: {!r}", session.session_id, cost)
+            session.cost_known = False
+            return
+        session.cost_usd = amount
 
     async def _session_resume(self, params: dict[str, Any]) -> dict[str, Any]:
         """Reopen a stored session for its own state, without replaying it.
