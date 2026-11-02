@@ -1001,6 +1001,13 @@ class _SessionState:
     mode_pushed: str = ""
     model_baseline: str = ""
     model_pushed: str = ""
+    efforts: tuple[str, ...] | None = None
+    """The rungs this session's own model offers, as its latest response listed them.
+
+    ``None`` until a response lists the session's config options at all; then a
+    tuple, empty for a model with no effort option. Per session because an
+    instance can be moved to a model other than the row's, whose menu the row's
+    effort was never checked against."""
 
 
 _SESSION_STATE: weakref.WeakKeyDictionary[Any, dict[str, _SessionState]] = weakref.WeakKeyDictionary()
@@ -1024,6 +1031,19 @@ def _session_state(client: Any, session_id: str) -> _SessionState:
     if state is None:
         state = sessions[session_id] = _SessionState()
     return state
+
+
+def _forget_session(client: Any, session_id: str | None) -> None:
+    """Drop the record of a session no route can reach again.
+
+    A pooled connection lives as long as its agent process, so a record left
+    for every session a stateless agent ever opened would grow with every spawn.
+    A session an instance can still resume keeps its record: the clear on its
+    next turn is what reads it.
+    """
+    sessions = _SESSION_STATE.get(client)
+    if sessions is not None and session_id:
+        sessions.pop(session_id, None)
 
 
 class AcpAgentBackend:
@@ -1299,11 +1319,15 @@ class AcpAgentBackend:
         if not session_id:
             return
         state = _session_state(client, session_id)
-        option, current, _choices = read_session_effort(result)
+        option, current, choices = read_session_effort(result)
         if option:
             state.option = option
         if current and not state.baseline:
             state.baseline = current
+        if isinstance(result, dict) and isinstance(result.get("configOptions"), list):
+            # A response that lists the session's options names its effort menu
+            # even by leaving it out: that model has none.
+            state.efforts = tuple(choice.value for choice in choices)
 
     def _relearn_menus(self, result: Any) -> None:
         """Take the modes and models a session response advertises over the cached ones.
@@ -1901,7 +1925,10 @@ class AcpAgentBackend:
                         # stateless agent would leak it.
                         if client.take_unsettled_cancel(session_id) and self.is_stateful:
                             await self._registry.unbind(skey, self.name, handle)
-                        elif not resumed and self.is_stateful:
+                            _forget_session(client, session_id)
+                        elif not self.is_stateful:
+                            _forget_session(client, session_id)
+                        elif not resumed:
                             # A cancel that SETTLED leaves a live session holding the
                             # partial exchange, and the deferred commit below is
                             # unreachable from here -- so an instance whose *first*
@@ -1922,6 +1949,10 @@ class AcpAgentBackend:
                             await self._write_steps(span, collector, started)
                         raise
                     except Exception:
+                        if not resumed:
+                            # Nothing bound this session: a stateless agent never
+                            # does, and a first turn binds only once it answers.
+                            _forget_session(client, session_id)
                         # The prompt ended with no answer of its own -- its
                         # deadline passed, or the connection went under it. What
                         # the agent said and ran until then is on the collector
@@ -2006,6 +2037,7 @@ class AcpAgentBackend:
                 # its first-turn binding -- and they go however this ends: a
                 # cancel during the booking, or anything the checks raise,
                 # since a turn that ended badly is the one worth reading.
+                bound = resumed
                 try:
                     # Before the checks below: a turn that answered nothing usable
                     # still spent what it spent.
@@ -2070,8 +2102,11 @@ class AcpAgentBackend:
                         # never produced anything. A settled cancel binds it above
                         # instead -- that session did produce something, and is the one
                         # the next turn has to continue.
+                        bound = True
                         await self._registry.commit(skey, self.name, handle, session_id, kind="acp")
                 finally:
+                    if not bound:
+                        _forget_session(client, session_id)
                     await self._write_steps(span, collector, started)
 
                 reply = await self._finished(collector.reply, stop_reason=stop_reason, span=span, sink=on_delta)
@@ -2393,9 +2428,14 @@ class AcpAgentBackend:
                         self._note_session_model(client, known, loaded)
                         self._note_session_effort(client, known, loaded)
                         self._note_session_mode(client, known, loaded)
-                    await self._set_mode(client, known, mode, budget=budget)
-                    await self._set_model(client, known, session_model, budget=budget)
-                    await self._set_effort(client, known, session_effort, fallback_mode=mode, budget=budget)
+                    await self._settle_session(
+                        client,
+                        known,
+                        mode=mode,
+                        session_model=session_model,
+                        session_effort=session_effort,
+                        budget=budget,
+                    )
                     return known, True
                 except AcpRemoteError as exc:
                     # The agent's own store may have pruned this id, and the
@@ -2411,6 +2451,7 @@ class AcpAgentBackend:
                         exc.message,
                     )
                     await self._registry.unbind(skey, self.name, handle)
+                    _forget_session(client, known)
                     lost = exc.message
                 except AcpError:
                     # A transport-level failure is not evidence the session was
@@ -2425,9 +2466,14 @@ class AcpAgentBackend:
         self._note_session_model(client, session_id, result)
         self._note_session_effort(client, session_id, result)
         self._note_session_mode(client, session_id, result)
-        await self._set_mode(client, session_id, mode, budget=budget)
-        await self._set_model(client, session_id, session_model, budget=budget)
-        await self._set_effort(client, session_id, session_effort, fallback_mode=mode, budget=budget)
+        await self._settle_session(
+            client,
+            session_id,
+            mode=mode,
+            session_model=session_model,
+            session_effort=session_effort,
+            budget=budget,
+        )
         if lost is not None:
             self._resume_lost[(skey, handle)] = (
                 f"Instance {handle!r} could not pick up its earlier conversation ({lost}), "
@@ -2564,13 +2610,22 @@ class AcpAgentBackend:
         state = _session_state(client, session_id)
         option = state.option or str(getattr(self._snapshot, "effort_option", "") or "")
         if not option:
-            snapshot = self._snapshot
-            mode_efforts = getattr(snapshot, "mode_efforts", None)
-            if not callable(mode_efforts) or not mode_efforts():
-                return
-            await self._set_mode_effort(client, session_id, effort, fallback_mode=fallback_mode, budget=budget)
+            if self._effort_rides_modes(client, session_id):
+                await self._set_mode_effort(client, session_id, effort, fallback_mode=fallback_mode, budget=budget)
             return
         pushed = state.pushed
+        if effort and state.efforts is not None and effort not in state.efforts:
+            # The row's effort was checked against the row's model; an instance
+            # moved to another one is on that model's menu, which its session
+            # response named. Sent anyway, the agent would refuse it every turn.
+            self._say_effort_refused(
+                effort,
+                "acp agent {!r}: session {} is on a model that offers no effort {!r}; running on its default",
+                self.name,
+                session_id,
+                effort,
+            )
+            return
         if effort:
             target = effort
         elif not pushed:
@@ -2608,8 +2663,8 @@ class AcpAgentBackend:
                 target,
                 "acp agent {!r}: could not set effort {!r} on session {} ({}); running on its default",
                 self.name,
-                session_id,
                 target,
+                session_id,
                 exc,
             )
             return
@@ -2661,6 +2716,10 @@ class AcpAgentBackend:
                 target,
                 exc.message,
             )
+            if effort and fallback_mode and fallback_mode != target:
+                # The tier was not sent ahead of an effort on this channel, so a
+                # refused effort leaves the session where the tier would have.
+                await self._set_mode(client, session_id, fallback_mode, budget=budget)
             return
         except AcpError as exc:
             self._say_effort_refused(
@@ -2673,6 +2732,36 @@ class AcpAgentBackend:
             )
             return
         state.mode_pushed = target if effort else ""
+
+    def _effort_rides_modes(self, client: Any, session_id: str) -> bool:
+        """Whether this session's effort goes out as a mode: no ``thought_level``
+        option, and a mode menu made of effort levels."""
+        if _session_state(client, session_id).option or getattr(self._snapshot, "effort_option", ""):
+            return False
+        mode_efforts = getattr(self._snapshot, "mode_efforts", None)
+        return callable(mode_efforts) and bool(mode_efforts())
+
+    async def _settle_session(
+        self,
+        client: Any,
+        session_id: str,
+        *,
+        mode: str | None,
+        session_model: str | None,
+        session_effort: str | None,
+        budget: float,
+    ) -> None:
+        """Put a session on the mode, model and effort this dispatch runs on.
+
+        Where the effort rides the mode channel it is sent instead of the tier,
+        not after it: the two are one setting there, so sending both switched
+        the session twice a turn. :meth:`_set_mode_effort` falls back to the tier
+        when the agent refuses the effort.
+        """
+        if not (session_effort and self._effort_rides_modes(client, session_id)):
+            await self._set_mode(client, session_id, mode, budget=budget)
+        await self._set_model(client, session_id, session_model, budget=budget)
+        await self._set_effort(client, session_id, session_effort, fallback_mode=mode, budget=budget)
 
     def _say_effort_refused(self, value: str, message: str, *args: Any) -> None:
         first = value not in self._effort_refused

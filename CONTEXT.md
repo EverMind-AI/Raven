@@ -265,8 +265,8 @@ has. An agent that converges on the ladder plus an id of its own still clamps on
 overlap, and an exact hit is honoured in any vocabulary that spells the rung the same way.
 Two things outrank it. A person's standing override on a named instance
 (`subagents.instance.set_mode`), which `resolve_mode` sends in its place; and, on an agent
-whose mode menu is its effort menu, the **Row Effort**, sent after it on the same channel.
-Of those two the instance override ranks first. There is no per-dispatch mode -- the model composing a
+whose mode menu is its effort menu, the **Row Effort**, sent in its place on the same
+channel -- the tier goes out only when there is none, or when the agent refuses it. Of those two the instance override ranks first. There is no per-dispatch mode -- the model composing a
 `spawn` cannot know what the operator chose, so `resolve_mode` takes no such argument and
 the spawn schema offers none.
 The three built-in descriptions are `raven.i18n` message ids resolved in
@@ -287,16 +287,21 @@ The reasoning effort an operator sets on one acp row, sent to every session that
 dispatches open; a spawn, a direct chat and a DAG node all resolve it through
 `session_effort_for`. It travels on the channel the agent advertises effort on: its
 `thought_level` config option (OpenCode 1.19.4, the Mirasim adapter), or, on an agent whose
-mode menu is made only of level names (Pi, Grok, Kimi, DSH; `mode_efforts`),
-`session/set_mode`, where it is sent after the **Session Tier** and so outranks it. On that
+mode menu is made only of level names with at least one besides `default` and `none` (Pi,
+Grok, Kimi, DSH; `mode_efforts`), `session/set_mode`, where it is sent in place of the
+**Session Tier** and so outranks it. On that
 shared channel a person's standing mode override on a named instance outranks the Row
 Effort in turn, and the row's value is withheld for that instance; on a `thought_level`
 agent the two are separate channels and both are sent. The menu it is picked from is the
 one the probe measured on the row's own model (`verify_agent` puts the row's model on its
 throwaway session first), and moving a row to another model re-measures it there
-(`subagents.update`); the menu a live session reports after a model switch belongs to that
-session and never rewrites the row's. A cleared Row Effort sends the session back to
-what it would otherwise be on, from a record held per connection (`_SESSION_STATE`).
+(`subagents.update`): a stored Row Effort that menu lacks is dropped, and kept when the
+read fails, since nothing measured then says otherwise. The menu a live session reports
+after a model switch belongs to that session and never rewrites the row's, but it decides
+what that session is sent: an instance moved to a model whose menu lacks the Row Effort is
+not sent it. A cleared Row Effort sends the session back to what it would otherwise be on,
+from a record held per connection (`_SESSION_STATE`) for as long as an instance can resume
+that session.
 
 **Subagent** (`agent/subagent/`):
 A background agent task spawned by `SubagentManager`. Runs with its own tool set; its result

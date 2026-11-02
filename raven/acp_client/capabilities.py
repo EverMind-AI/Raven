@@ -134,6 +134,9 @@ class AcpModelChoice:
 EFFORT_MODE_IDS = frozenset({"off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "default", "none"})
 """Mode ids that name a reasoning effort, so a mode menu made only of them can be offered as effort."""
 
+_NEUTRAL_MODE_IDS = frozenset({"default", "none"})
+"""Ids an effort menu may carry beside its levels, but which name no level on their own."""
+
 
 def mode_effort_choices(modes: tuple["AcpMode", ...]) -> tuple["AcpEffortChoice", ...]:
     """``modes`` as reasoning-effort choices, when every mode is an effort level.
@@ -142,10 +145,14 @@ def mode_effort_choices(modes: tuple["AcpMode", ...]) -> tuple["AcpEffortChoice"
     editor/permission modes; the names are the only signal. So this takes a menu
     as effort only when *every* id is a level name: one ``acceptEdits`` or
     ``plan`` makes it a mode menu, and offering a permission mode as a reasoning
-    level is worse than offering no effort menu at all.
+    level is worse than offering no effort menu at all. It also needs one id
+    that is a level rather than a neutral ``default`` or ``none``: a menu of
+    those alone offers no level to pick.
     """
     ids = [mode.id for mode in modes]
     if not ids or any(mode_id not in EFFORT_MODE_IDS for mode_id in ids):
+        return ()
+    if all(mode_id in _NEUTRAL_MODE_IDS for mode_id in ids):
         return ()
     return tuple(AcpEffortChoice(value=mode.id, name=mode.name or mode.id) for mode in modes if mode.id)
 

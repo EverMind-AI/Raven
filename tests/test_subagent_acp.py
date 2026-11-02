@@ -306,6 +306,30 @@ def test_a_mode_menu_of_effort_levels_is_offered_as_reasoning_effort() -> None:
     assert agent_meta(cfg, snapshot=permission_modes).effort_choices == ()
 
 
+@pytest.mark.parametrize(
+    "modes",
+    [
+        (AcpMode("default", "Default"),),
+        (AcpMode("none", "None"),),
+        (AcpMode("default", "Default"), AcpMode("none", "None")),
+    ],
+)
+def test_a_mode_menu_naming_no_level_is_not_an_effort_menu(modes: tuple[AcpMode, ...]) -> None:
+    """``default`` and ``none`` are in the level vocabulary because a real effort
+    menu may carry them beside its levels. On their own they name no level at
+    all: an agent whose only mode is ``default`` would otherwise grow an Effort
+    picker offering ``default``, and an instance mode override on it would
+    withhold the row's effort."""
+    neutral = CapabilitySnapshot(
+        agent="a", fingerprint="fp", status="ready", detail="", measured_at_ms=1, available_modes=modes
+    )
+    assert neutral.mode_efforts() == ()
+    assert agent_meta(stub_config("a"), snapshot=neutral).effort_choices == ()
+
+    with_a_level = replace(neutral, available_modes=(*modes, AcpMode("high", "High")))
+    assert [c.value for c in with_a_level.mode_efforts()] == [*(m.id for m in modes), "high"]
+
+
 def test_one_derivation_names_a_snapshots_menus_and_the_channel_its_effort_takes() -> None:
     """A refresh, the roster and the dispatch resolver all read a row's menus
     through ``acp_menus``. The channel is part of the answer: a mode menu that is
@@ -471,6 +495,128 @@ async def test_effort_refusals_and_missing_baselines_do_not_escape() -> None:
     await mode_backend._set_effort(mode_client, "s2", "high", budget=1)
 
     assert calls  # every attempt reached the wire; none escaped as an exception
+
+
+async def test_a_transport_failure_setting_an_effort_names_the_effort_and_the_session() -> None:
+    """The warning a reader debugs an unapplied effort from must put each value
+    in its own slot: the session id is not an effort, and the effort is not a
+    session."""
+    snapshot = CapabilitySnapshot(
+        agent="a",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        effort_choices=(AcpEffortChoice("high", "High"),),
+        effort_option="effort",
+    )
+
+    class _Client:
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            raise AcpError("broken")
+
+    backend = AcpAgentBackend(name="a", command="unused", snapshot=snapshot)
+    with _loguru_capture("WARNING") as captured:
+        await backend._set_effort(_Client(), "sess-123", "high", budget=1)
+
+    assert any("could not set effort 'high' on session sess-123" in line for line in captured), captured
+
+
+async def test_an_effort_the_sessions_own_model_does_not_take_is_not_pushed() -> None:
+    """The row's effort is checked against the row's own model, but an instance
+    can be moved to another one. The model switch answers with that model's
+    options, so the session knows its own menu: an effort it does not hold is
+    said once and not sent, rather than refused by the agent on every turn. A
+    rung the new model does take still goes out."""
+    snapshot = CapabilitySnapshot(
+        agent="a",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        effort_choices=(AcpEffortChoice("low", "Low"), AcpEffortChoice("max", "Max")),
+        effort_option="effort",
+    )
+    sent: list[tuple[str, dict]] = []
+
+    class _Client:
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            sent.append((method, params))
+            return {}
+
+    backend = AcpAgentBackend(name="a", command="unused", snapshot=snapshot)
+    client = _Client()
+    backend._note_session_effort(client, "s1", _menu_reply(efforts=[{"value": "low"}, {"value": "max"}]))
+    no_rungs = _menu_reply(models=[{"value": "prov/B", "name": "B"}])
+    backend._note_session_effort(client, "s1", no_rungs)
+
+    with _loguru_capture("WARNING") as captured:
+        await backend._set_effort(client, "s1", "max", budget=1)
+        await backend._set_effort(client, "s1", "max", budget=1)
+    assert sent == [], "the session's model offers no effort, so nothing is sent"
+    assert len([line for line in captured if "offers no effort 'max'" in line]) == 1, captured
+
+    backend._note_session_effort(client, "s1", _menu_reply(efforts=[{"value": "low"}]))
+    await backend._set_effort(client, "s1", "max", budget=1)
+    assert sent == [], "a menu without the rung is the same answer"
+
+    backend._note_session_effort(client, "s1", _menu_reply(efforts=[{"value": "max"}]))
+    await backend._set_effort(client, "s1", "max", budget=1)
+    assert sent == [("session/set_config_option", {"sessionId": "s1", "configId": "effort", "value": "max"})]
+
+    unknown = AcpAgentBackend(name="b", command="unused", snapshot=snapshot)
+    other = _Client()
+    await unknown._set_effort(other, "s9", "max", budget=1)
+    assert sent[-1][1]["sessionId"] == "s9", "a session that never named its menu is sent the pick as before"
+
+
+@pytest.mark.parametrize(
+    ("effort", "refuse", "expected"),
+    [
+        ("low", (), ["low"]),
+        ("low", ("low",), ["low", "medium"]),
+        (None, (), ["medium"]),
+    ],
+)
+async def test_an_effort_on_the_mode_channel_is_the_only_mode_its_session_is_put_on(
+    tmp_path: Path, effort: str | None, refuse: tuple[str, ...], expected: list[str]
+) -> None:
+    """On an agent whose mode menu is its effort menu, the tier and the effort go
+    out on one channel and the effort is sent last, so sending the tier first
+    switched every turn's session twice for nothing. The tier is sent only when
+    there is no effort, or when the agent refuses the one there is."""
+    modes = (AcpMode("low", "Low"), AcpMode("medium", "Medium"), AcpMode("high", "High"))
+    snapshot = CapabilitySnapshot(
+        agent="pi", fingerprint="fp", status="ready", detail="", measured_at_ms=1, available_modes=modes
+    )
+    put_on: list[str] = []
+
+    class _Client:
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            if method == "session/new":
+                menu = [{"id": m.id, "name": m.name} for m in modes]
+                return {"sessionId": "s1", "modes": {"currentModeId": "high", "availableModes": menu}}
+            if method == "session/set_mode":
+                put_on.append(params["modeId"])
+                if params["modeId"] in refuse:
+                    raise AcpRemoteError("session/set_mode", -32602, "no such mode")
+            return {}
+
+    backend = AcpAgentBackend(
+        name="pi", command="unused", snapshot=snapshot, registry=InstanceRegistry(path=tmp_path / "i.json")
+    )
+    await backend._open_session(
+        _Client(),
+        cwd=str(tmp_path),
+        skey="s",
+        handle="h1",
+        budget=1,
+        mcp_servers=[],
+        mode="medium",
+        session_effort=effort,
+    )
+
+    assert put_on == expected
 
 
 async def test_an_instance_mode_override_is_the_last_mode_its_session_is_put_on(
@@ -3791,6 +3937,29 @@ async def test_a_pruned_session_falls_back_to_a_fresh_one(tmp_path: Path) -> Non
     assert await backend.run("go", task_id="t1", workspace=tmp_path, session_key="s", instance="work", executor=None)
     rebound = await registry.lookup("s", "a", "work", kind="acp")
     assert rebound is not None and rebound != "pruned-session"
+
+
+async def test_a_pruned_session_takes_its_record_with_it(tmp_path: Path) -> None:
+    """The binding is dropped when the agent no longer holds the session, and
+    nothing can route into that id again, so its record goes too."""
+    cfg = stub_config("pruned")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    await registry.commit("s", "pruned", "work", "pruned-session", kind="acp")
+    backend = AcpAgentBackend(
+        name="pruned",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("pruned", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+    connection = await get_pool().acquire(
+        name="pruned", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    _session_state(connection.client, "pruned-session").model_pushed = "stub:model-b"
+
+    await backend.run("go", task_id="t1", workspace=tmp_path, session_key="s", instance="work", executor=None)
+
+    assert "pruned-session" not in (_SESSION_STATE.get(connection.client) or {})
 
 
 async def test_a_pruned_session_says_its_reply_starts_over(tmp_path: Path) -> None:
@@ -8338,6 +8507,103 @@ async def test_clearing_a_model_survives_a_backend_replacement(tmp_path: Path) -
     frames = [ln for ln in connection.client.stderr_tail(4000).splitlines() if "set_config_option" in ln]
     # The stub opens every session on model-a, so that is the baseline to restore.
     assert frames[-1].endswith("model=stub:model-a"), f"the restore, got {frames!r}"
+
+
+async def test_a_session_nothing_can_resume_leaves_no_record_behind(tmp_path: Path) -> None:
+    """Each session's model, effort and mode records are held per connection so
+    a backend replacement cannot lose them, and a pooled connection lives as
+    long as its agent process. A session no route can reach again -- every turn
+    of a stateless agent -- has to take its record with it, or the connection
+    carries one per spawn for its whole life. A session an instance can resume
+    keeps its record: the clear on its next turn is what reads it."""
+    once = stub_config("oneshot")
+    stateless = AcpAgentBackend(
+        name="oneshot",
+        command=once.command,
+        env=dict(once.env),
+        snapshot=_snapshot("oneshot", once, can_resume=False),
+        registry=InstanceRegistry(path=tmp_path / "once.json"),
+    )
+    for task_id in ("t1", "t2", "t3"):
+        await stateless.run("ping", task_id=task_id, workspace=tmp_path, executor=None, session_model="stub:model-b")
+    connection = await get_pool().acquire(
+        name="oneshot", command=once.command, cwd=str(tmp_path), env=dict(once.env), ready_timeout_s=15.0
+    )
+    assert not _SESSION_STATE.get(connection.client), "no record outlives a session nothing can resume"
+
+    kept = stub_config("kept")
+    stateful = AcpAgentBackend(
+        name="kept",
+        command=kept.command,
+        env=dict(kept.env),
+        snapshot=_snapshot("kept", kept, can_resume=True, can_load=True),
+        registry=InstanceRegistry(path=tmp_path / "kept.json"),
+    )
+    await stateful.run(
+        "ping",
+        task_id="t4",
+        workspace=tmp_path,
+        executor=None,
+        session_key="s",
+        instance="h1",
+        session_model="stub:model-b",
+    )
+    connection = await get_pool().acquire(
+        name="kept", command=kept.command, cwd=str(tmp_path), env=dict(kept.env), ready_timeout_s=15.0
+    )
+    records = _SESSION_STATE.get(connection.client) or {}
+    assert [state.model_pushed for state in records.values()] == ["stub:model-b"], "the resumable one is kept"
+
+
+@pytest.mark.parametrize(
+    ("mode", "cancel", "stateful", "kept"),
+    [
+        ("kimi_refuses", False, False, 0),
+        ("kimi_refuses", False, True, 0),
+        ("cancel_aware", True, False, 0),
+        ("cancel_aware", True, True, 1),
+        ("cancel_deaf", True, True, 0),
+    ],
+)
+async def test_a_turn_that_ends_without_an_answer_keeps_a_record_only_for_a_bound_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str, cancel: bool, stateful: bool, kept: int
+) -> None:
+    """The same rule on the turns that never reach the booking: a prompt the agent
+    refused, and a cancel. A first turn that failed bound nothing, so its session
+    goes; a cancelled first turn of a resumable agent is bound on the cancel, so
+    its session stays -- unless the cancel never settled, which unbinds it."""
+    from raven.acp_client import client as client_mod
+
+    monkeypatch.setattr(client_mod, "_CANCEL_SETTLE_S", 0.3)
+    cfg = stub_config(f"{mode}{int(stateful)}", mode=mode)
+    backend = AcpAgentBackend(
+        name=cfg.name,
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot(cfg.name, cfg, can_resume=stateful, can_load=stateful),
+        registry=InstanceRegistry(path=tmp_path / "instances.json"),
+    )
+    turn = asyncio.create_task(
+        backend.run(
+            "ping",
+            task_id="t1",
+            workspace=tmp_path,
+            executor=None,
+            session_key="s",
+            instance="h1",
+            session_model="stub:model-b",
+        )
+    )
+    if cancel:
+        await asyncio.sleep(0.8)
+        turn.cancel()
+    with pytest.raises(BaseException):  # noqa: B017 - a refusal or a cancel, either ends the turn
+        await turn
+
+    connection = await get_pool().acquire(
+        name=cfg.name, command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    assert len(_SESSION_STATE.get(connection.client) or {}) == kept
 
 
 async def test_a_picker_refresh_that_recomposes_the_table_keeps_the_model_record(
