@@ -34,6 +34,7 @@ bench-agnostic above this seam.
 from __future__ import annotations
 
 import glob
+import hashlib
 import json
 import os
 import re
@@ -65,6 +66,22 @@ MODE_INCOMPLETE = "INCOMPLETE"  # stopped early / empty response
 MODE_INFRA = "INFRA"  # env/proxy/timeout
 
 _TRIAL_SUFFIX_RE = re.compile(r"_k\d+\.json$")
+
+
+def _selection_digest(task_ids: list[str] | None) -> str:
+    """Stable digest of the requested task selection, or ``"all"`` for the full split.
+
+    A count is not enough: two same-sized selections (``["t1"]`` vs ``["t2"]``)
+    must not reuse each other's completed batch. Sorting makes the digest
+    independent of the caller's list order.
+    """
+    if not task_ids:
+        return "all"
+    digest = hashlib.sha256()
+    for task_id in sorted(task_ids):
+        digest.update(task_id.encode("utf-8"))
+        digest.update(b"\0")
+    return digest.hexdigest()[:16]
 
 
 @dataclass(frozen=True)
@@ -253,19 +270,28 @@ def run_eval(
     unnecessary: the committed code is already the candidate.
 
     A successful batch writes a trial-identity marker into ``out_dir``
-    (``evolver.runmark``) recording the experiment name and a digest of the
-    harness tree at ``cwd``. With ``reuse_complete=True``, a marker matching the
-    same experiment and the same harness tree short-circuits the batch and
-    re-reads the existing results — the idempotency the cold-start and confirm
-    paths rely on when a run is resumed.
+    (``evolver.runmark``) recording the experiment name, its split/K, the
+    requested task selection, and a digest of the harness tree at ``cwd``. With
+    ``reuse_complete=True``, a marker matching all of those values short-circuits
+    the batch and re-reads the existing results — the idempotency the cold-start
+    and confirm paths rely on when a run is resumed. A different selection of the
+    same size does not match.
     """
     out_dir = aw.out_dir_root / experiment
     out_dir.mkdir(parents=True, exist_ok=True)
-    expected = {"split": aw.split, "k": K}
-    if task_ids:
-        expected["n_tasks"] = len(task_ids)
+    expected = {
+        "split": aw.split,
+        "k": K,
+        "n": aw.n,
+        "tasks": _selection_digest(task_ids),
+    }
     if reuse_complete and runmark.is_complete(out_dir, run_id=experiment, harness_dir=cwd, expected=expected):
-        return read_out_dir(out_dir)
+        try:
+            return read_out_dir(out_dir)
+        except FileNotFoundError:
+            # The marker says complete but the trial files are gone (manual
+            # cleanup, partial restore): re-run rather than fail the resume.
+            pass
     tasklist_path: Path | None = None
     if task_ids:
         tasklist_path = out_dir / "tasklist.txt"

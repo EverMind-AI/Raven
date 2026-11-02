@@ -44,12 +44,30 @@ def test_run_eval_writes_marker_and_reuses_complete_batch(aw, monkeypatch):
     data = read_mark(out_dir)
     assert data is not None
     assert data["harness"] == "base"
-    assert data["n_tasks"] == 1
+    assert data["tasks"] == adapter._selection_digest(["t1"])
     assert len(calls) == 1
 
     # second call with reuse_complete=True: no subprocess, same results
     again = adapter.run_eval(aw, K=1, experiment="vanilla", task_ids=["t1"], reuse_complete=True)
     assert again["t1"].passes == 1
+    assert len(calls) == 1
+
+
+def test_run_eval_reruns_when_task_selection_changes_same_count(aw, monkeypatch):
+    calls: list[list[str]] = []
+    _fake_batch(monkeypatch, calls=calls)
+
+    adapter.run_eval(aw, K=1, experiment="confirm", task_ids=["t1"])
+    adapter.run_eval(aw, K=1, experiment="confirm", task_ids=["t2"], reuse_complete=True)
+    assert len(calls) == 2
+
+
+def test_run_eval_reuses_same_selection_in_different_order(aw, monkeypatch):
+    calls: list[list[str]] = []
+    _fake_batch(monkeypatch, calls=calls)
+
+    adapter.run_eval(aw, K=1, experiment="confirm", task_ids=["t1", "t2"])
+    adapter.run_eval(aw, K=1, experiment="confirm", task_ids=["t2", "t1"], reuse_complete=True)
     assert len(calls) == 1
 
 
@@ -68,6 +86,16 @@ def test_run_eval_reruns_when_task_set_changes(aw, monkeypatch):
 
     adapter.run_eval(aw, K=1, experiment="confirm", task_ids=["t1"])
     adapter.run_eval(aw, K=1, experiment="confirm", task_ids=["t1", "t2"], reuse_complete=True)
+    assert len(calls) == 2
+
+
+def test_run_eval_reruns_when_marker_exists_but_results_are_gone(aw, monkeypatch):
+    calls: list[list[str]] = []
+    _fake_batch(monkeypatch, calls=calls)
+
+    adapter.run_eval(aw, K=1, experiment="vanilla", task_ids=["t1"])
+    (aw.out_dir_root / "vanilla" / "t1_k1.json").unlink()
+    adapter.run_eval(aw, K=1, experiment="vanilla", task_ids=["t1"], reuse_complete=True)
     assert len(calls) == 2
 
 
