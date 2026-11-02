@@ -3518,10 +3518,9 @@ def levels(monkeypatch):
 
     def use(words):
         monkeypatch.setattr(
-            session_module,
-            "effort_levels",
-            SimpleNamespace(levels_for=lambda model, declared=(): None if words is None else tuple(words)),
-            raising=False,
+            session_module.effort_levels,
+            "levels_for",
+            lambda model, declared=(): None if words is None else tuple(words),
         )
 
     use(["minimal", "low", "medium", "high"])
