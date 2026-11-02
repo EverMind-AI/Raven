@@ -1010,27 +1010,50 @@ class _SessionState:
     effort was never checked against."""
 
 
-_SESSION_STATE: weakref.WeakKeyDictionary[Any, dict[str, _SessionState]] = weakref.WeakKeyDictionary()
-"""Each live connection's session records, by session id.
+_SESSION_STATE: dict[tuple[str, str], dict[str, _SessionState]] = {}
+"""Pooled connections' session records, by pool slot and then by session id.
 
-Keyed by the connection's client, not by agent name: the pool holds one
-connection per parent binding under a name, each a process that numbers its own
-sessions, so two of them can both hold ``s1`` -- and a record shared between
-them let clearing one forget what was pushed to the other. A hot apply keeps
-the pooled connection, so its records survive the backend's replacement; a
-relaunch is a new process whose sessions start on their own defaults, and
-weakly held, the old connection's records go with it."""
+The slot is the agent's name and the parent binding (``AcpClient.session_identity``).
+Not the name alone: the pool holds one process per binding under a name, each
+numbering its own sessions, so two of them can both hold ``s1``, and a record
+shared between them let clearing one forget what was pushed to the other. Not
+the client either: the pool closes an idle agent that can reload its sessions
+and relaunches it into the same slot, where the instance's next turn reloads
+the same session -- a record held by the closed client would be gone exactly
+when the clear that reads it arrives. A hot apply keeps the slot too, so the
+records also survive the backend's replacement.
+
+A session opened fresh starts on an empty record (``_fresh_session_state``), so
+a relaunched process handing out an id an earlier one used inherits nothing,
+and a record goes when no instance can resume its session (``_forget_session``)."""
+
+_UNPOOLED_STATE: weakref.WeakKeyDictionary[Any, dict[str, _SessionState]] = weakref.WeakKeyDictionary()
+"""Records of a client the pool did not hand out, which has no slot: held for that client's life."""
+
+
+def _records_of(client: Any) -> dict[str, _SessionState]:
+    """The session records kept for ``client``'s pool slot, or for the client itself when unpooled."""
+    identity = getattr(client, "session_identity", None)
+    if identity is not None:
+        return _SESSION_STATE.setdefault(identity, {})
+    sessions = _UNPOOLED_STATE.get(client)
+    if sessions is None:
+        sessions = _UNPOOLED_STATE[client] = {}
+    return sessions
 
 
 def _session_state(client: Any, session_id: str) -> _SessionState:
-    """The record for ``session_id`` on ``client``'s connection, created on first use."""
-    sessions = _SESSION_STATE.get(client)
-    if sessions is None:
-        sessions = _SESSION_STATE[client] = {}
+    """The record for ``session_id`` on ``client``'s pool slot, created on first use."""
+    sessions = _records_of(client)
     state = sessions.get(session_id)
     if state is None:
         state = sessions[session_id] = _SessionState()
     return state
+
+
+def _fresh_session_state(client: Any, session_id: str) -> None:
+    """Start ``session_id`` on an empty record: a session just opened has had nothing pushed."""
+    _records_of(client)[session_id] = _SessionState()
 
 
 def _forget_session(client: Any, session_id: str | None) -> None:
@@ -1041,9 +1064,8 @@ def _forget_session(client: Any, session_id: str | None) -> None:
     A session an instance can still resume keeps its record: the clear on its
     next turn is what reads it.
     """
-    sessions = _SESSION_STATE.get(client)
-    if sessions is not None and session_id:
-        sessions.pop(session_id, None)
+    if session_id:
+        _records_of(client).pop(session_id, None)
 
 
 class AcpAgentBackend:
@@ -1088,8 +1110,9 @@ class AcpAgentBackend:
         self._snapshot = snapshot
         # What each live session's model, effort and mode were before this host
         # touched them, and what this host last set them to, live in
-        # `_SESSION_STATE`, held per connection: a hot apply replaces this
-        # instance while the session it describes continues. It has to survive
+        # `_SESSION_STATE`, held per pool slot: a hot apply replaces this
+        # instance, and an idle close the process, while the session it
+        # describes continues. It has to survive
         # because the agent takes a value and never an "unset", so the only way
         # back to its own choice is to send that choice again -- and nothing
         # else remembers what it was.
@@ -2463,6 +2486,7 @@ class AcpAgentBackend:
         session_id = (result or {}).get("sessionId") if isinstance(result, dict) else None
         if not isinstance(session_id, str) or not session_id:
             raise AcpEmptyTurnError(f"acp agent {self.name!r}: session/new returned no sessionId")
+        _fresh_session_state(client, session_id)
         self._note_session_model(client, session_id, result)
         self._note_session_effort(client, session_id, result)
         self._note_session_mode(client, session_id, result)

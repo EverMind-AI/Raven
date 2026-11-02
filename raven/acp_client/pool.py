@@ -568,6 +568,7 @@ class AcpConnectionPool:
                 # shutdown cannot find it either.
                 await client.close()
                 raise
+            client.session_identity = (name, bkey)
             # After the handshake, so a call's own range starts where its own
             # work does and a reader can still find the handshake at [0, here).
             connection = _Connection(

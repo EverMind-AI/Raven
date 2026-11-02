@@ -300,8 +300,9 @@ read fails, since nothing measured then says otherwise. The menu a live session 
 after a model switch belongs to that session and never rewrites the row's, but it decides
 what that session is sent: an instance moved to a model whose menu lacks the Row Effort is
 not sent it. A cleared Row Effort sends the session back to what it would otherwise be on,
-from a record held per connection (`_SESSION_STATE`) for as long as an instance can resume
-that session.
+from a record held per agent and parent binding (`_SESSION_STATE`) for as long as an
+instance can resume that session -- across the pool closing the idle agent and reloading
+the session in a new process, though not across a Raven restart.
 
 **Subagent** (`agent/subagent/`):
 A background agent task spawned by `SubagentManager`. Runs with its own tool set; its result

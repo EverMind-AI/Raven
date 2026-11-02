@@ -28,7 +28,13 @@ from unittest.mock import patch
 import pytest
 from loguru import logger
 
-from raven.acp_client.acp_agent import _SESSION_STATE, AcpAgentBackend, AcpEmptyTurnError, _session_state
+from raven.acp_client.acp_agent import (
+    _SESSION_STATE,
+    AcpAgentBackend,
+    AcpEmptyTurnError,
+    _records_of,
+    _session_state,
+)
 from raven.acp_client.acp_dialects import ToolCall
 from raven.acp_client.capabilities import (
     AcpEffortChoice,
@@ -79,9 +85,9 @@ async def _no_pooled_connections():
     The pool is process state by design (two backends of one agent must share a
     connection), so without this a stub process would outlive its test and the
     next test would be handed a connection configured for a different mode.
-    The effort map is module state for the same reason -- a hot apply replaces
-    the backend while the session continues -- held per connection, and it is
-    cleared with the pool so no record outlives the test that made it.
+    The session records are module state for the same reason -- a hot apply
+    replaces the backend while the session continues -- held per pool slot, and
+    they are cleared with the pool so no record outlives the test that made it.
     """
     _SESSION_STATE.clear()
     yield
@@ -3959,7 +3965,7 @@ async def test_a_pruned_session_takes_its_record_with_it(tmp_path: Path) -> None
 
     await backend.run("go", task_id="t1", workspace=tmp_path, session_key="s", instance="work", executor=None)
 
-    assert "pruned-session" not in (_SESSION_STATE.get(connection.client) or {})
+    assert "pruned-session" not in (_records_of(connection.client) or {})
 
 
 async def test_a_pruned_session_says_its_reply_starts_over(tmp_path: Path) -> None:
@@ -8510,11 +8516,11 @@ async def test_clearing_a_model_survives_a_backend_replacement(tmp_path: Path) -
 
 
 async def test_a_session_nothing_can_resume_leaves_no_record_behind(tmp_path: Path) -> None:
-    """Each session's model, effort and mode records are held per connection so
-    a backend replacement cannot lose them, and a pooled connection lives as
-    long as its agent process. A session no route can reach again -- every turn
-    of a stateless agent -- has to take its record with it, or the connection
-    carries one per spawn for its whole life. A session an instance can resume
+    """Each session's model, effort and mode records are held per pool slot so
+    a backend replacement cannot lose them, and a slot lives as long as the
+    agent does. A session no route can reach again -- every turn of a stateless
+    agent -- has to take its record with it, or the slot carries one per spawn
+    for its whole life. A session an instance can resume
     keeps its record: the clear on its next turn is what reads it."""
     once = stub_config("oneshot")
     stateless = AcpAgentBackend(
@@ -8529,7 +8535,7 @@ async def test_a_session_nothing_can_resume_leaves_no_record_behind(tmp_path: Pa
     connection = await get_pool().acquire(
         name="oneshot", command=once.command, cwd=str(tmp_path), env=dict(once.env), ready_timeout_s=15.0
     )
-    assert not _SESSION_STATE.get(connection.client), "no record outlives a session nothing can resume"
+    assert not _records_of(connection.client), "no record outlives a session nothing can resume"
 
     kept = stub_config("kept")
     stateful = AcpAgentBackend(
@@ -8551,7 +8557,7 @@ async def test_a_session_nothing_can_resume_leaves_no_record_behind(tmp_path: Pa
     connection = await get_pool().acquire(
         name="kept", command=kept.command, cwd=str(tmp_path), env=dict(kept.env), ready_timeout_s=15.0
     )
-    records = _SESSION_STATE.get(connection.client) or {}
+    records = _records_of(connection.client) or {}
     assert [state.model_pushed for state in records.values()] == ["stub:model-b"], "the resumable one is kept"
 
 
@@ -8603,7 +8609,73 @@ async def test_a_turn_that_ends_without_an_answer_keeps_a_record_only_for_a_boun
     connection = await get_pool().acquire(
         name=cfg.name, command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
     )
-    assert len(_SESSION_STATE.get(connection.client) or {}) == kept
+    assert len(_records_of(connection.client) or {}) == kept
+
+
+@pytest.mark.parametrize(
+    ("first", "restore"),
+    [
+        ({"session_model": "stub:model-b"}, "model=stub:model-a"),
+        ({"session_effort": "high"}, "effort=default"),
+    ],
+)
+async def test_a_cleared_pin_is_sent_back_after_the_pool_closes_the_idle_agent(
+    tmp_path: Path, first: dict[str, str], restore: str
+) -> None:
+    """The pool closes an idle agent that can reload its sessions, and the
+    instance's next turn reopens the same session with ``session/load`` in a new
+    process. The record of what this host pushed has to outlive that process,
+    or a cleared pin finds nothing pushed and is never sent back -- and an agent
+    that keeps a session's settings across a reload runs on the cleared pin."""
+    cfg = stub_config("idleclose")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    backend = AcpAgentBackend(
+        name="idleclose",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("idleclose", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+    await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, session_key="s", instance="h1", **first)
+    bound = await registry.lookup("s", "idleclose", "h1", kind="acp")
+    assert await get_pool().close_idle(0.0) == ["idleclose"]
+
+    await backend.run("ping", task_id="t2", workspace=tmp_path, executor=None, session_key="s", instance="h1")
+
+    assert await registry.lookup("s", "idleclose", "h1", kind="acp") == bound, "the second turn resumed it"
+    connection = await get_pool().acquire(
+        name="idleclose", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    frames = [ln for ln in connection.client.stderr_tail(4000).splitlines() if "set_config_option" in ln]
+    assert frames and frames[-1].endswith(restore), f"the restore on the new process, got {frames!r}"
+
+
+async def test_a_fresh_session_starts_on_an_empty_record_whatever_its_id() -> None:
+    """Session ids are numbered per process, so a process started after another
+    can hand out an id the earlier one used. A new session has pushed nothing:
+    a record left under its id belongs to a session that is gone, and clearing
+    on it would send that session's baseline to this one."""
+    sent: list[tuple[str, dict]] = []
+
+    class _Client:
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            sent.append((method, params))
+            if method == "session/new":
+                return {"sessionId": "s1"}
+            return {}
+
+    client = _Client()
+    stale = _session_state(client, "s1")
+    stale.model_baseline, stale.model_pushed = "prov/old-base", "prov/old-pin"
+    stale.option, stale.baseline, stale.pushed = "effort", "low", "max"
+    backend = AcpAgentBackend(name="fresh", command="unused")
+
+    await backend._open_session(
+        client, cwd="/tmp", skey="s", handle="h1", budget=1, mcp_servers=[], session_model=None, session_effort=None
+    )
+
+    assert [method for method, _ in sent] == ["session/new"], "nothing of the earlier session is sent back"
+    assert (_session_state(client, "s1").model_pushed, _session_state(client, "s1").pushed) == ("", "")
 
 
 async def test_a_picker_refresh_that_recomposes_the_table_keeps_the_model_record(
