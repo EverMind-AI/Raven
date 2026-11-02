@@ -89,7 +89,11 @@ and is what hangs under a step.
 One JSON file per session, `<session_dir>/task_board.json`, where `session_dir` is
 `SessionManager.session_dir(key)` (`raven/session/manager.py`) -- the directory that
 already holds the session's sub-agent records beside its transcript. Written atomically
-(temporary file + rename) by a single writer per session (2.4).
+(temporary file + rename) by a single writer per session (2.4). Windows refuses to replace,
+remove or open a file another handle holds, and the page reads boards on a worker thread, so
+every read, write and removal of the board's files (`raven/agent/task_board/files.py`) is
+tried five times, 50 ms apart, before its error goes to the caller; a failed write leaves no
+temporary file, and each write's temporary file has a name of its own.
 
 ```json
 {

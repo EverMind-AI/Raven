@@ -12,11 +12,12 @@ run.
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from loguru import logger
+
+from raven.agent.task_board import files
 
 NOTES_FILENAME = "task_board_notes.json"
 
@@ -37,7 +38,7 @@ class Note:
 def load_notes(session_dir: Path) -> list[Note]:
     path = Path(session_dir) / NOTES_FILENAME
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(files.read_text(path))
         return [
             Note(
                 int(n["seq"]),
@@ -57,15 +58,11 @@ def load_notes(session_dir: Path) -> list[Note]:
 
 
 def save_notes(session_dir: Path, notes: list[Note]) -> None:
-    directory = Path(session_dir)
-    path = directory / NOTES_FILENAME
+    path = Path(session_dir) / NOTES_FILENAME
     if not notes:
-        path.unlink(missing_ok=True)
+        files.remove(path)
         return
-    directory.mkdir(parents=True, exist_ok=True)
-    tmp = directory / f"{NOTES_FILENAME}.{os.getpid()}.tmp"
-    tmp.write_text(json.dumps([asdict(n) for n in notes], ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
+    files.write_text(path, json.dumps([asdict(n) for n in notes], ensure_ascii=False))
 
 
 def add_note(session_dir: Path, title: str, question: str | None = None) -> None:
