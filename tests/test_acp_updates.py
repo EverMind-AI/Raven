@@ -488,6 +488,10 @@ class TestUsage:
         what was reported stands, and before any price there is none to send."""
         assert self._costs(_session(), None, 0.01, None) == pytest.approx([None, 0.01, 0.01])
 
+    def test_a_cost_that_is_no_finite_amount_leaves_the_total_where_it_was(self):
+        """``inf`` added once would be the session's total for good."""
+        assert self._costs(_session(), 0.01, float("inf"), 0.02) == pytest.approx([0.01, 0.01, 0.03])
+
     def test_a_session_that_was_resumed_counts_on_from_its_earlier_spend(self):
         session = _session()
         session.cost_usd = 1.5

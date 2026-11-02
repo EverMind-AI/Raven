@@ -642,6 +642,28 @@ class TestSessionCost:
 
         assert session.cost_known is False
 
+    @pytest.mark.parametrize("reported", [float("inf"), float("nan"), -1.0, True, "1.5"])
+    async def test_a_spend_that_is_no_amount_is_as_unreadable_as_a_failed_read(self, rig, reported):
+        """``session.usage`` answered, but not with an amount ``reported_cost`` accepts.
+
+        An infinite baseline used to be adopted, and every later total was then
+        an infinity the update drops, so the session sent no cost again while
+        still claiming to know it; a nan or a negative was skipped, and the total
+        counted from zero understated what the session had spent.
+        """
+        rig.stack.usage_result = {"cost_usd": reported}
+
+        session = await self._opened(rig, "session/load")
+
+        assert (session.cost_usd, session.cost_known) == (None, False)
+
+    async def test_a_session_that_priced_nothing_yet_counts_from_here(self, rig):
+        rig.stack.usage_result = {"cost_usd": None}
+
+        session = await self._opened(rig, "session/load")
+
+        assert (session.cost_usd, session.cost_known) == (None, True)
+
     async def test_a_new_session_has_spent_nothing_and_asks_nobody(self, rig):
         await rig.handshake()
         response = await rig.call("session/new", {"cwd": str(rig.tmp_path / "project"), "mcpServers": []})
