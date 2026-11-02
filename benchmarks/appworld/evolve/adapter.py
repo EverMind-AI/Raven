@@ -261,7 +261,10 @@ def run_eval(
     """
     out_dir = aw.out_dir_root / experiment
     out_dir.mkdir(parents=True, exist_ok=True)
-    if reuse_complete and runmark.is_complete(out_dir, run_id=experiment, harness_dir=cwd):
+    expected = {"split": aw.split, "k": K}
+    if task_ids:
+        expected["n_tasks"] = len(task_ids)
+    if reuse_complete and runmark.is_complete(out_dir, run_id=experiment, harness_dir=cwd, expected=expected):
         return read_out_dir(out_dir)
     tasklist_path: Path | None = None
     if task_ids:
@@ -277,12 +280,7 @@ def run_eval(
     )
     subprocess.run(argv, cwd=str(cwd or aw.appworld_root), env=dict(os.environ), check=True, timeout=timeout)
     evals = read_out_dir(out_dir)
-    runmark.mark_complete(
-        out_dir,
-        run_id=experiment,
-        harness_dir=cwd,
-        extra={"split": aw.split, "k": K, "n_tasks": len(evals)},
-    )
+    runmark.mark_complete(out_dir, run_id=experiment, harness_dir=cwd, extra=expected)
     return evals
 
 

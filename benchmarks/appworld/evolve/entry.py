@@ -35,6 +35,7 @@ from pathlib import Path
 from benchmarks.appworld.evolve import adapter as aw_adapter
 from evolver.launch.contract import BenchBundle, LaunchContext, validate_whitelist
 from evolver.orchestrator.scoring import eval_with_infra_rerun
+from evolver.tree import git_ops
 
 _KNOWN_KEYS = {
     "config_path",
@@ -253,7 +254,19 @@ def build(ctx: LaunchContext) -> BenchBundle:
             make_precheck()()
 
         def base_eval(_node, task_ids, k, job_name, *, split="train"):
-            return aw_adapter.run_eval(cfg, K=k, experiment=job_name, task_ids=task_ids, reuse_complete=True)
+            # The base arm is the inherited harness at the pinned root commit,
+            # not whatever the live checkout happens to contain: running it in
+            # a worktree gives the marker a real harness digest and keeps the
+            # control arm comparable to the candidate arms.
+            with git_ops.worktree_at(Path(spec.repo_root), spec.base_sha) as wt:
+                return aw_adapter.run_eval(
+                    cfg,
+                    K=k,
+                    experiment=job_name,
+                    task_ids=task_ids,
+                    cwd=wt,
+                    reuse_complete=True,
+                )
 
         eval_with_infra_rerun(base_eval, None, train_ids, k_confirm, van_exp)
 

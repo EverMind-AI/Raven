@@ -53,6 +53,24 @@ def test_run_eval_writes_marker_and_reuses_complete_batch(aw, monkeypatch):
     assert len(calls) == 1
 
 
+def test_run_eval_reruns_when_k_changes(aw, monkeypatch):
+    calls: list[list[str]] = []
+    _fake_batch(monkeypatch, calls=calls)
+
+    adapter.run_eval(aw, K=1, experiment="confirm", task_ids=["t1"])
+    adapter.run_eval(aw, K=3, experiment="confirm", task_ids=["t1"], reuse_complete=True)
+    assert len(calls) == 2
+
+
+def test_run_eval_reruns_when_task_set_changes(aw, monkeypatch):
+    calls: list[list[str]] = []
+    _fake_batch(monkeypatch, calls=calls)
+
+    adapter.run_eval(aw, K=1, experiment="confirm", task_ids=["t1"])
+    adapter.run_eval(aw, K=1, experiment="confirm", task_ids=["t1", "t2"], reuse_complete=True)
+    assert len(calls) == 2
+
+
 def test_run_eval_reruns_when_harness_changes(aw, monkeypatch, tmp_path: Path):
     calls: list[list[str]] = []
     _fake_batch(monkeypatch, calls=calls)
