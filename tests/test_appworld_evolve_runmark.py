@@ -8,7 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from benchmarks.appworld.evolve import adapter
+from benchmarks.appworld.evolve import adapter, entry
+from benchmarks.appworld.evolve import eval as aw_eval
 from evolver.runmark import is_complete, read_mark
 
 
@@ -118,3 +119,57 @@ def test_run_eval_reruns_when_harness_changes(aw, monkeypatch, tmp_path: Path):
     (harness / "harness.py").write_text("x = 2\n")
     adapter.run_eval(aw, K=1, experiment="confirm", task_ids=["t1"], cwd=harness, reuse_complete=True)
     assert len(calls) == 2
+
+
+class _Worktree:
+    def __init__(self, path: Path):
+        self.path = path
+
+    def __enter__(self) -> Path:
+        return self.path
+
+    def __exit__(self, *exc) -> bool:
+        return False
+
+
+def test_cold_start_eval_runs_in_the_base_worktree_with_reuse(aw, monkeypatch, tmp_path: Path):
+    seen: dict = {}
+    wt = tmp_path / "base-wt"
+
+    def fake_run_eval(cfg, **kwargs):
+        seen.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(entry.git_ops, "worktree_at", lambda root, sha: _Worktree(wt))
+    monkeypatch.setattr(entry.aw_adapter, "run_eval", fake_run_eval)
+
+    base_eval = entry._make_cold_start_eval(aw, repo_root=tmp_path, base_sha="deadbeef")
+    base_eval(None, ["t1"], 3, "vanilla")
+
+    assert seen["experiment"] == "vanilla"
+    assert seen["task_ids"] == ["t1"]
+    assert seen["K"] == 3
+    assert seen["cwd"] == wt
+    assert seen["reuse_complete"] is True
+
+
+def test_candidate_eval_runs_in_the_candidate_worktree_with_reuse(aw, monkeypatch, tmp_path: Path):
+    seen: dict = {}
+    wt = tmp_path / "candidate-wt"
+
+    def fake_run_eval(cfg, **kwargs):
+        seen.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(aw_eval.git_ops, "worktree_at", lambda root, sha: _Worktree(wt))
+    monkeypatch.setattr(aw_eval.aw_adapter, "run_eval", fake_run_eval)
+
+    eval_fn = aw_eval.make_appworld_eval_fn(aw, tmp_path)
+    node = SimpleNamespace(git_commit_sha="deadbeef")
+    eval_fn(node, ["t1"], 3, "confirm")
+
+    assert seen["experiment"] == "confirm"
+    assert seen["task_ids"] == ["t1"]
+    assert seen["K"] == 3
+    assert seen["cwd"] == wt
+    assert seen["reuse_complete"] is True

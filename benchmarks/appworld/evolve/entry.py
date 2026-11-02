@@ -117,6 +117,28 @@ def _task_ids(bc: dict, prefix: str, base_dir: Path) -> list[str]:
     return ids
 
 
+def _make_cold_start_eval(cfg: aw_adapter.AppWorldConfig, *, repo_root: Path, base_sha: str):
+    """The base arm's eval: the inherited harness at the pinned root commit.
+
+    Running it in a worktree gives the marker a real harness digest and keeps
+    the control arm comparable to the candidate arms, which also run from
+    worktrees.
+    """
+
+    def base_eval(_node, task_ids, k, job_name, *, split="train"):
+        with git_ops.worktree_at(Path(repo_root), base_sha) as wt:
+            return aw_adapter.run_eval(
+                cfg,
+                K=k,
+                experiment=job_name,
+                task_ids=task_ids,
+                cwd=wt,
+                reuse_complete=True,
+            )
+
+    return base_eval
+
+
 def build(ctx: LaunchContext) -> BenchBundle:
     spec = ctx.spec
     bc = dict(spec.bench_config)
@@ -253,22 +275,13 @@ def build(ctx: LaunchContext) -> BenchBundle:
             # rounds have their own per-round Gate0.
             make_precheck()()
 
-        def base_eval(_node, task_ids, k, job_name, *, split="train"):
-            # The base arm is the inherited harness at the pinned root commit,
-            # not whatever the live checkout happens to contain: running it in
-            # a worktree gives the marker a real harness digest and keeps the
-            # control arm comparable to the candidate arms.
-            with git_ops.worktree_at(Path(spec.repo_root), spec.base_sha) as wt:
-                return aw_adapter.run_eval(
-                    cfg,
-                    K=k,
-                    experiment=job_name,
-                    task_ids=task_ids,
-                    cwd=wt,
-                    reuse_complete=True,
-                )
-
-        eval_with_infra_rerun(base_eval, None, train_ids, k_confirm, van_exp)
+        eval_with_infra_rerun(
+            _make_cold_start_eval(cfg, repo_root=spec.repo_root, base_sha=spec.base_sha),
+            None,
+            train_ids,
+            k_confirm,
+            van_exp,
+        )
 
     def build_orchestrator():
         from benchmarks.appworld.evolve.run import build_appworld_orchestrator
