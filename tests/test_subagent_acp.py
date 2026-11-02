@@ -2861,6 +2861,35 @@ async def test_a_turn_that_reported_no_usage_is_not_read_as_one_that_spent_nothi
     assert excinfo.value.tokens is None
 
 
+async def test_an_empty_turn_whose_count_is_no_count_still_ends_as_empty(tmp_path: Path) -> None:
+    """A total that is no count leaves the empty turn's error intact.
+
+    ``Infinity`` is valid to the frame parser, and read as a token count it
+    used to raise from inside the empty-turn branch, so the turn ended on an
+    ``OverflowError`` that named neither the agent nor its stderr.
+    """
+    backend = build_third_party_backend(stub_config("a", mode="empty_turn_unreadable_tokens"))
+    with pytest.raises(AcpEmptyTurnError) as excinfo:
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    assert "no content" in str(excinfo.value)
+    assert "reported 0 tokens" not in str(excinfo.value)
+    assert excinfo.value.tokens is None
+
+
+def test_a_reported_total_is_a_count_by_the_rule_the_ledger_reads() -> None:
+    """The empty turn's total is read by ``token_count``, like the same answer's ledger counts.
+
+    A flag, a negative, a string, a fraction or a non-finite amount is no
+    count: ``false`` or ``"0"`` read as zero would say the model was never
+    reached when the agent said nothing of the kind.
+    """
+    from raven.acp_client.acp_agent import _tokens_reported
+
+    for value in (float("inf"), float("nan"), True, False, -1, "0", 12.7):
+        assert _tokens_reported({"usage": {"totalTokens": value}}) is None, value
+    assert _tokens_reported({"usage": {"totalTokens": 2034}}) == 2034
+
+
 def test_a_count_nobody_reported_is_not_read_as_one() -> None:
     """The count comes off the agent's own answer, so an answer without one says nothing.
 

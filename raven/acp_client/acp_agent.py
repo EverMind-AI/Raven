@@ -172,7 +172,9 @@ def _tokens_reported(result: Any) -> int | None:
 
     Read off the prompt answer's ``usage``, in either spelling of the field the
     contract and the adapters use. An agent that reports no usage is not read
-    as one that spent nothing: the absence of a number is not a number.
+    as one that spent nothing: the absence of a number is not a number. What
+    counts as a number is ``token_count``'s rule, the one the same answer's
+    ledger counts are read by.
     """
     if not isinstance(result, dict):
         return None
@@ -181,13 +183,7 @@ def _tokens_reported(result: Any) -> int | None:
         return None
     for key in ("totalTokens", "total_tokens"):
         if key in usage:
-            value = usage[key]
-            if value is None:
-                return None
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                return None
+            return token_count(usage[key])
     return None
 
 
