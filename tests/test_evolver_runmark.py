@@ -63,13 +63,14 @@ def test_fingerprint_ignores_git_metadata(tmp_path: Path):
 def test_fingerprint_orders_names_platform_independently(tmp_path: Path):
     # Pinned digest for README.md, agent.py, sub/x.py hashed in POSIX-name
     # order. A case-folding sort (Windows Path ordering) puts agent.py first
-    # and produces a different digest.
+    # and produces a different digest. Write bytes explicitly: Path.write_text
+    # translates "\n" to "\r\n" on Windows, and fingerprint hashes raw bytes.
     d = tmp_path / "harness"
     d.mkdir()
-    (d / "README.md").write_text("r\n")
-    (d / "agent.py").write_text("a\n")
+    (d / "README.md").write_bytes(b"r\n")
+    (d / "agent.py").write_bytes(b"a\n")
     (d / "sub").mkdir()
-    (d / "sub" / "x.py").write_text("x\n")
+    (d / "sub" / "x.py").write_bytes(b"x\n")
     assert fingerprint(d) == "1d0448a1475ad04c"
 
 
