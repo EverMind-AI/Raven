@@ -76,6 +76,17 @@ function DockIn(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
     <div className="dock-in">
+      {/* The height seam: dragged from the card's top edge between the field's
+          resting height and half the visual viewport (features/composer/store.ts).
+          No interior of its own. */}
+      <div
+        className="chrome-composer-grip"
+        id="composerGrip"
+        role="separator"
+        aria-orientation="horizontal"
+        title={lang.attr('gui.composer.resize')}
+        aria-label={lang.attr('gui.composer.resize')}
+      />
       <div className="queued" id="queued" />
       <div className="field">
         <textarea id="ta" rows={1} placeholder={t('gui.composer_ph')} />

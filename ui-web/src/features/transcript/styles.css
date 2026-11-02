@@ -12,9 +12,13 @@
    36px of side padding is wider than the strip, so no text runs under it.
 
    The full-height box is deaf to the pointer and only the list hears it, so
-   the band above and below the marks stays the transcript's. */
+   the band above and below the marks stays the transcript's.
+
+   Its level is above the composer's dock (5, page.css): the card hangs half
+   its height below a mark near the band's bottom, and it floats over the
+   input box rather than being painted under its glass. */
 .transcript-nav {
-  position: absolute; z-index: 4; top: var(--topbar-h); bottom: var(--lift, 96px);
+  position: absolute; z-index: 6; top: var(--topbar-h); bottom: var(--lift, 96px);
   right: max(14px, calc(var(--desk-reserve, 0px) - 4px));
   display: flex; flex-direction: column; justify-content: center;
   pointer-events: none;

@@ -135,6 +135,7 @@ div.app
         div.dock
           div#sheetRack.sheets
           div.dock-in
+            div#composerGrip.chrome-composer-grip
             div#queued.queued
             div.field
               textarea#ta
