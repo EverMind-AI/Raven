@@ -15,8 +15,11 @@ reports): the configured default underneath, a Session Mode's own
 override over the lot (``_run_agent_loop``'s ``gen_overrides``). Raven's own
 calls only: a sub-agent is told the configured default, as before.
 
-The words are ``REASONING_EFFORTS`` (``config/schema.py``); the provider maps
-each to its own wire, and a model with no thinking to move ignores it.
+The words are ``REASONING_EFFORT_LADDER`` (``contracts/llm_provider.py``); the
+provider maps each to its own wire, and a model with no thinking to move
+ignores it. The install-wide ``agents.defaults.reasoningEffort`` keeps its
+four-word ``REASONING_EFFORTS`` list; this module accepts the six-word ladder
+because a session pick may now be ``xhigh``/``max``.
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ from typing import Any
 
 from loguru import logger
 
-from raven.config.schema import REASONING_EFFORTS
+from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
 
 #: Where the pick is kept on a session: the metadata dict ``model`` lives in.
 #: Null, not absent, once cleared -- a metadata patch can set a key and not
@@ -36,14 +39,14 @@ METADATA_KEY = "reasoning_effort"
 def of(metadata: Any) -> str | None:
     """The pick a session record carries, or None while it follows the default.
 
-    A word outside ``REASONING_EFFORTS`` reads as none: a record written by a
-    later raven is not a request this one can send, and the turn is better off
-    at the default than refused by the provider.
+    A word outside ``REASONING_EFFORT_LADDER`` reads as none: a record written
+    by a later raven is not a request this one can send, and the turn is better
+    off at the default than refused by the provider.
     """
     if not isinstance(metadata, dict):
         return None
     stored = metadata.get(METADATA_KEY)
-    return stored if isinstance(stored, str) and stored in REASONING_EFFORTS else None
+    return stored if isinstance(stored, str) and stored in REASONING_EFFORT_LADDER else None
 
 
 def in_force(pick: str | None, mode_effort: str | None, configured: str | None) -> str | None:
@@ -65,6 +68,18 @@ def in_force(pick: str | None, mode_effort: str | None, configured: str | None) 
     inputs and this is the one place they are ranked.
     """
     return pick or mode_effort or configured or None
+
+
+def clamp(value: str | None, levels: tuple[str, ...] | None) -> str | None:
+    """The value if this model declares it; None otherwise.
+
+    ``None`` levels mean the table could not be read, which is not a model
+    answer: the caller's value is left alone (fail open). An empty tuple means
+    the model declares no reasoning at all, so even a valid word is dropped.
+    """
+    if levels is None:
+        return value
+    return value if value in levels else None
 
 
 def read(sessions: Any, session_key: str | None) -> str | None:
