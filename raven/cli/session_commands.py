@@ -224,9 +224,12 @@ def session_delete(
         raise typer.Exit(code=1)
 
     if manager.delete(key):
-        # This process attaches no host's delete observer, so the board goes here.
-        reset_board(manager.session_dir(key))
         console.print(f"[green]✓[/green] Deleted session {_bare_id(key)}")
+        # This process attaches no host's delete observer, so the board goes here.
+        try:
+            reset_board(manager.session_dir(key))
+        except OSError as exc:
+            console.print(f"[yellow]Its task board stays in {manager.session_dir(key)}: {exc}[/yellow]")
     else:
         console.print(f"[red]Failed to delete session {id_or_key!r}[/red]")
         raise typer.Exit(code=1)

@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from raven.agent.task_board.board import Board, TaskGroup
 from raven.agent.task_board.store import BOARD_FILENAME, save_board
+from raven.cli import session_commands
 from raven.cli.commands import app
 from raven.cli.session_commands import (
     resolve_session_cross_channel,
@@ -316,6 +317,24 @@ def test_delete_takes_the_conversations_task_board_along(
 
     assert r.exit_code == 0
     assert not (manager.session_dir(key) / BOARD_FILENAME).exists()
+
+
+def test_delete_that_cannot_remove_the_board_still_deletes_and_says_where_it_stays(
+    two_sessions: list[str], patched_workspace: Path, manager: SessionManager, monkeypatch
+) -> None:
+    """The session is gone by then; a board a reader still holds is no reason to report a failure."""
+    key = f"cli:{two_sessions[0]}"
+
+    def held(_session_dir: Path) -> None:
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr(session_commands, "reset_board", held)
+
+    r = runner.invoke(session_app, ["delete", key])
+
+    assert r.exit_code == 0
+    assert not manager.exists(key)
+    assert "task board" in r.output and "Access is denied" in r.output
 
 
 def test_delete_unknown_id_nonzero(patched_workspace: Path) -> None:
