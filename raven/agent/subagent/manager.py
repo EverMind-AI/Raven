@@ -1249,6 +1249,9 @@ class SubagentManager:
                             **optional_keyword(
                                 backend, "session_model", self.session_model_for(session_key, agent, handle)
                             ),
+                            **optional_keyword(
+                                backend, "session_effort", self.session_effort_for(session_key, agent, handle)
+                            ),
                             **optional_keyword(backend, "authored_task", text),
                             **kwargs,
                         )
@@ -1349,6 +1352,19 @@ class SubagentManager:
         """Which mode this instance's turns run in, or ``None`` for the agent's own."""
         return self._instance_modes.get((session_key or "", canonical_agent_name(agent), handle))
 
+    def _instance_mode_override(self, session_key: str | None, agent: str | None, instance: str | None) -> str | None:
+        """This named instance's mode override, or ``None`` when it has none.
+
+        Not the mode a dispatch runs under: the session tier can still step in on
+        a miss, and :meth:`resolve_mode` is where that fallback lives. This
+        answers the override alone because :meth:`session_effort_for` needs to
+        know whether a person named a mode here -- a tier standing in for a
+        missing override would read as their choice.
+        """
+        if not instance:
+            return None
+        return self.instance_mode(session_key, agent or "", instance)
+
     def resolve_mode(
         self,
         session_key: str | None,
@@ -1374,11 +1390,13 @@ class SubagentManager:
         falls back to a fresh task or node id, which nobody could have set a mode
         against and which is not this conversation's name. The same gate its
         ``instance_state`` sibling takes, for the same reason.
+
+        The override itself is read in one place, :meth:`_instance_mode_override`;
+        this method adds the tier its miss falls back to.
         """
-        if instance:
-            override = self.instance_mode(session_key, agent or "", instance)
-            if override:
-                return override
+        override = self._instance_mode_override(session_key, agent, instance)
+        if override:
+            return override
         return self._tier_for(session_key, agent or "")
 
     def _tier_for(self, session_key: str | None, agent: str) -> str | None:
@@ -1464,6 +1482,42 @@ class SubagentManager:
             if override:
                 return override
         return self.row_default_model(agent)
+
+    def row_default_effort(self, agent: str) -> str | None:
+        """The row's own reasoning effort, or ``None`` for the agent's default.
+
+        The row's operator setting, through the agent's ``thought_level`` option
+        or, on an agent whose mode menu is its effort menu, through its modes.
+        :meth:`session_effort_for` is what every lane resolves through, so a
+        spawn, a direct chat and a DAG node cannot disagree.
+        """
+        row = self.registry.get(agent or "")
+        if row is None or row.kind != "acp":
+            return None
+        return getattr(row.config, "effort", None)
+
+    def session_effort_for(self, session_key: str | None, agent: str | None, instance: str | None) -> str | None:
+        """The reasoning effort one acp dispatch runs on, or ``None`` for the agent's own.
+
+        The effort counterpart to :meth:`session_model_for`, and ranked the way
+        it and :meth:`resolve_mode` rank theirs: a person's standing override on
+        a named instance outranks the row. There is no effort override of its
+        own, but on an agent whose mode menu is its effort menu (Pi, Grok, Kimi,
+        DSH) an instance's mode override IS its effort, and the two would go out
+        on one channel with the row's value sent last. So the row's effort is
+        withheld there, and the override ``_instance_mode_override`` returned is
+        the mode the session stays on. Where effort is a ``thought_level`` option
+        of its own, the two channels are separate and both are sent.
+
+        ``instance``, not the dispatch's handle, for the reason ``resolve_mode``
+        takes it that way: a call naming no instance has no override to find.
+        """
+        agent = agent or ""
+        if self._instance_mode_override(session_key, agent, instance):
+            row = self.registry.get(agent)
+            if row is not None and row.caps.effort_via_modes:
+                return None
+        return self.row_default_effort(agent)
 
     def set_instance_model(
         self,
@@ -1877,6 +1931,11 @@ class SubagentManager:
                                 backend,
                                 "session_model",
                                 self.session_model_for(session_key, agent, origin.get("instance")),
+                            ),
+                            **optional_keyword(
+                                backend,
+                                "session_effort",
+                                self.session_effort_for(session_key, agent, origin.get("instance")),
                             ),
                             **optional_keyword(backend, "authored_task", origin.get("authored_task")),
                             **({"mcp_grant": mcp_grant} if mcp_grant is not None else {}),

@@ -116,6 +116,18 @@
           "title": "Description",
           "type": "string"
         },
+        "effort": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effort"
+        },
         "enabled": {
           "default": true,
           "title": "Enabled",

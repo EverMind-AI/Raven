@@ -407,6 +407,25 @@
    stands after the value, always drawn. */
 .extAgents-pill-fixed .extAgents-mx { position: static; display: block; width: 24px; background: none; }
 .extAgents-pill-fixed.extAgents-pill-clearable .extAgents-pm { padding-right: 0; }
+/* The pill and its re-read sit on one line; the read is drawn even when the
+   pill has no frame (an agent whose menu was never measured), because that is
+   exactly the state the button is there to fix. */
+.extAgents-mrow { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
+.extAgents-mrf {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; flex: none; padding: 0;
+  border: 0; border-radius: 8px; background: none; color: var(--faint); cursor: pointer;
+}
+.extAgents-mrf:hover { color: var(--text); background: var(--raised); }
+.extAgents-mrf:disabled { cursor: default; opacity: .55; background: none; }
+.extAgents-mrf svg {
+  width: 14px; height: 14px; fill: none; stroke: currentColor;
+  stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
+}
+.extAgents-mrf .extAgents-spin { margin-right: 0; }
+/* What the last re-read said when it did not land: the menu above it is the
+   previous one, and the reader is told why rather than silently shown it. */
+.extAgents-mnote { margin-top: 6px; font-size: 12px; color: var(--clay); }
 
 /* The shared picker, sized to hang under the pill inside the 520px sheet: the
    settings dialog's 720x560 would neither fit below the pill nor above it. */
@@ -432,6 +451,9 @@
 .extAgents-card-new .extAgents-t { font-size: 14px; font-weight: 600; }
 .extAgents-mtile-new { background: transparent; border: 1px dashed var(--line); }
 .extAgents-ctl .extAgents-ctag { display: inline-flex; align-items: center; gap: 5px; }
+/* The reasoning-effort select shares the framed field look; its own class is
+   the hook the sheet and its tests read it by. */
+.extAgents-effort { font-family: var(--sans); cursor: pointer; }
 .extAgents-fld > .extAgents-in {
   width: 100%; height: var(--ctl-h); padding: 0 10px; box-sizing: border-box; outline: 0;
   background: var(--paper); border: 1px solid var(--line); border-radius: var(--ctl-r);
@@ -479,7 +501,11 @@
    The frameless pill of an agent with nothing to pick keeps this rule's padding, which
    puts its words at the x the framed ones start at. */
 .extAgents-pickpill { flex: none; display: flex; width: 168px; }
-.extAgents-pickpill .extAgents-pill { width: 100%; height: 28px; }
+/* The re-read shares this column with the pill: the pill takes what is left of
+   the 168px rather than pushing the button out of the drawer row. */
+.extAgents-pickpill .extAgents-mrow { width: 100%; }
+.extAgents-pickpill .extAgents-mrow .extAgents-pill { flex: 1 1 auto; min-width: 0; width: auto; height: 28px; }
+.extAgents-pickpill .extAgents-pill { height: 28px; }
 .extAgents-pickpill .extAgents-pm { padding: 0 8px 0 9px; gap: 5px; }
 .extAgents-pickpill .extAgents-mid { font-size: 11.5px; }
 /* Wide enough for the pending face, ring and all, in either language, so the

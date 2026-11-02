@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 248 methods, 138 component schemas.
+// 249 methods, 138 component schemas.
 
 /* eslint-disable */
 /**
@@ -989,6 +989,23 @@ export interface SubagentRow {
    * What subagents.update accepts for model on this row, by rule rather than by kind, and not ownership, which is own: raven for the built-in row and for one of raven's own acp rows whose handshake advertised no menu -- both pick from raven's own provider catalogue; agent for an acp row picking from the choices its handshake advertised (model_choices); fixed for an openai row, whose model is a plain config value, and for a cli row, which has no menu at all. The menu, not the whole vocabulary: one of raven's own acp rows also accepts a host-qualified id under either rule, since it runs on raven's providers whatever it advertised.
    */
   model_source?: 'raven' | 'agent' | 'fixed';
+  /**
+   * The reasoning effort this row sends, or null to use the agent's own. A value from effort_choices; set through the agent's thought_level config option, separately from model, or as a session mode on an agent whose modes are its effort menu.
+   */
+  effort?: string | null;
+  /**
+   * The reasoning efforts this row's agent offers on the row's own model: its thought_level option, or its mode menu when every mode is a reasoning level. Empty when it offers neither. An agent that packs effort into model ids instead has no such menu.
+   */
+  effort_choices?: {
+    /**
+     * The value the agent takes back, e.g. low, high or max.
+     */
+    value: string;
+    /**
+     * What the agent asked to be shown, usually the same word.
+     */
+    name?: string;
+  }[];
 }
 export interface ModelOptionProvider {
   slug: string;
@@ -3409,6 +3426,14 @@ export interface SubagentsUpdateParams {
    * Drop the row's own model, reverting to the agent's default. Wins over model when both are sent.
    */
   clear_model?: boolean;
+  /**
+   * A reasoning effort from the row's effort_choices, sent on every turn through the agent's thought_level option, or as a session mode on an agent whose modes are its effort menu, where an instance's own mode override takes its place. Refused when the row's menu does not offer it.
+   */
+  effort?: string;
+  /**
+   * Drop the row's own effort, reverting to the agent's default. Wins over effort when both are sent.
+   */
+  clear_effort?: boolean;
 }
 export interface SubagentsUpdateResult {
   updated: boolean;
@@ -3461,6 +3486,51 @@ export interface SubagentsTestCancelParams {
 }
 export interface SubagentsTestCancelResult {
   cancelled: boolean;
+}
+export interface SubagentsRefreshModelsParams {
+  name: string;
+  source?: 'config' | 'preset' | 'vendored';
+  force?: boolean;
+}
+export interface SubagentsRefreshModelsResult {
+  /**
+   * Whether the handshake answered and reported the menu. False leaves the recorded menu in place.
+   */
+  ok: boolean;
+  /**
+   * Why the menu could not be read, when it could not.
+   */
+  detail?: string;
+  /**
+   * The menu now recorded for the agent, which is the previous one when this read failed.
+   */
+  models: {
+    /**
+     * The id the agent takes back.
+     */
+    value: string;
+    /**
+     * What the agent asked to be shown, usually far shorter than the value.
+     */
+    name?: string;
+    /**
+     * The agent's own bucketing, a provider typically. Empty when it offered none.
+     */
+    group?: string;
+  }[];
+  /**
+   * The effort menu recorded by the same read, in subagents.list's shape.
+   */
+  effort_choices?: {
+    /**
+     * The value the agent takes back, e.g. low, high or max.
+     */
+    value: string;
+    /**
+     * What the agent asked to be shown, usually the same word.
+     */
+    name?: string;
+  }[];
 }
 export interface SubagentsInstancesParams {
   session_key: string;
@@ -6519,6 +6589,7 @@ export interface RpcMethods {
   'subagents.probe': { params: SubagentsProbeParams; result: SubagentsProbeResult };
   'subagents.test': { params: SubagentsTestParams; result: SubagentsTestResult };
   'subagents.test_cancel': { params: SubagentsTestCancelParams; result: SubagentsTestCancelResult };
+  'subagents.refresh_models': { params: SubagentsRefreshModelsParams; result: SubagentsRefreshModelsResult };
   'subagents.instances': { params: SubagentsInstancesParams; result: SubagentsInstancesResult };
   'subagents.instance.create': { params: SubagentsInstanceCreateParams; result: SubagentsInstanceCreateResult };
   'subagents.instance.history': { params: SubagentsInstanceHistoryParams; result: SubagentsInstanceHistoryResult };
@@ -6945,6 +7016,7 @@ export const RPC_METHODS = [
   "subagents.list",
   "subagents.presets",
   "subagents.probe",
+  "subagents.refresh_models",
   "subagents.remove",
   "subagents.test",
   "subagents.test_cancel",
