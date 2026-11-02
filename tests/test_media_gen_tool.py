@@ -1936,6 +1936,36 @@ def _minimax_answer(*, pictures: list[str] | None = None, failed: str = "0", **e
     return httpx.Response(200, json={**body, **extra})
 
 
+async def test_minimax_voice_design_posts_prompt_and_voice_id(monkeypatch) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={"voice_id": "custom-voice", "base_resp": {"status_code": 0, "status_msg": "success"}},
+        )
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+    tool = SpeechGenerateTool(
+        SimpleNamespace(
+            provider="minimax",
+            api_base="https://api.minimax.io/v1",
+            api_key="mm-key",
+            model="",
+        )
+    )
+
+    out = json.loads(await tool.execute("", operation="voice_design", prompt="Warm and calm", voice_id="custom-voice"))
+
+    assert out == {"success": True, "voice_id": "custom-voice"}
+    assert [str(request.url) for request in seen] == ["https://api.minimax.io/v1/voice_design"]
+    assert seen[0].headers["authorization"] == "Bearer mm-key"
+    assert json.loads(seen[0].content) == {"prompt": "Warm and calm", "voice_id": "custom-voice"}
+
+
 @pytest.mark.parametrize(
     ("provider", "model", "url"),
     [
