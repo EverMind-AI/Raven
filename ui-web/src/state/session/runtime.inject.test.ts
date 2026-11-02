@@ -352,4 +352,3 @@ describe('a message that moves a task on', () => {
     h.runtime.lendBeforeSend(null)
   })
 })
-
