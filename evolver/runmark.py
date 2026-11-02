@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from typing import Any, Mapping
 
-from raven.utils.atomic_io import atomic_replace
+from raven.utils.atomic_io import atomic_replace, write_transaction
 
 MARK = ".trial_complete"
 
@@ -107,10 +107,19 @@ def mark_complete(
 
 
 def read_mark(where: Path) -> dict[str, Any] | None:
-    """Return the marker at ``where``, or ``None`` when it is absent or invalid."""
+    """Return the marker at ``where``, or ``None`` when it is absent or invalid.
+
+    Reads under the same sidecar lock ``atomic_replace`` writes under: on
+    Windows a replace onto a file another handle holds open fails with a
+    sharing violation, so a bare read here could make a concurrent
+    ``mark_complete`` fail after the trial has already been paid for.
+    """
     path = Path(where) / MARK
+    if not path.is_file():
+        return None
     try:
-        text = path.read_text(encoding="utf-8")
+        with write_transaction(path):
+            text = path.read_text(encoding="utf-8")
     except (OSError, ValueError):
         return None
     try:

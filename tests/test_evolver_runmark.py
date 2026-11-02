@@ -136,6 +136,38 @@ def test_read_mark_invalid_utf8(tmp_path: Path):
     assert is_complete(where) is False
 
 
+def test_read_mark_does_not_collide_with_a_concurrent_write(tmp_path: Path):
+    """read_mark takes the write sidecar lock, so a reader cannot hold the
+    marker open while mark_complete replaces it (a Windows sharing violation)."""
+    import threading
+
+    where = tmp_path / "trial"
+    mark_complete(where, run_id="run-1")
+    errors: list[BaseException] = []
+
+    def writer() -> None:
+        try:
+            for _ in range(50):
+                mark_complete(where, run_id="run-1")
+        except BaseException as exc:  # noqa: BLE001 - surfaced below
+            errors.append(exc)
+
+    def reader() -> None:
+        try:
+            for _ in range(50):
+                assert is_complete(where, run_id="run-1") is True
+        except BaseException as exc:  # noqa: BLE001 - surfaced below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=writer), threading.Thread(target=reader)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+
+
 def test_extra_cannot_override_reserved_fields(tmp_path: Path):
     where = tmp_path / "trial"
     mark_complete(
