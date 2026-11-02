@@ -180,7 +180,7 @@ class CompactionConfig(Base):
 
 
 class TaskBoardConfig(Base):
-    """The host's Task Board: one extra call after every turn that keeps it.
+    """The host's Task Board: one extra call, after each turn that answered or dispatched work, keeps it.
 
     The switch is all there is to set: the call runs at the model and effort the
     turn's own last call ran at, so the main model's settings govern it.

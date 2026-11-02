@@ -18,7 +18,7 @@ flat, newest first -- so it shows the delegated work units but not the matter ea
 served, and it shows nothing at all for a turn that advanced a matter without delegating.
 
 This design adds a **Task Board** to the Raven host: a per-session record, kept by the
-host model itself after every turn, that groups the conversation into **Task Groups** (one
+host model itself as each turn ends, that groups the conversation into **Task Groups** (one
 per matter) and records each turn's advance on a group as a **Progress Step**, with the
 turn's Tasks hung under the step that started them. The tasks tab draws the board; the host
 model can recall any group's thread through the same tool that maintains it.
