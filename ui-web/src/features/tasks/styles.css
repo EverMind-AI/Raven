@@ -1426,7 +1426,7 @@
 @media (prefers-reduced-motion: reduce) { .tkbring[data-st="run"] { animation: none; } }
 
 /* The list: chips that pick a category, then a section per category -- the
-   board's order -- with a row per Task Group; Archived closes it, folded. */
+   board's order -- with a row per Task Group; Completed closes it, folded. */
 .tkbchips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
 .tkbchip {
   padding: 4px 11px;
@@ -1519,7 +1519,7 @@
 @media (prefers-reduced-motion: reduce) { .tkbfold svg { transition: none; } }
 
 /* The page around both views, and its toolbar: the title, the conversation
-   filter, the archived switch at the right, and the Board / List segments. */
+   filter, the completed switch at the right, and the Board / List segments. */
 .tkbpage { display: flex; flex-direction: column; gap: 18px; }
 .tkbbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .tkbh { margin: 0; font-size: 18px; font-weight: 600; color: var(--text); }

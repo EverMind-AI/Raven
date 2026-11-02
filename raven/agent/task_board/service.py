@@ -160,8 +160,9 @@ class TaskBoardService:
             add_move_on(self.session_dir(session_key), group.id, group.title, group.summary)
 
     def turn_notes(self, session_key: str) -> list[str]:
-        """The reader's set-asides the turn being assembled is told of, remembered as
-        shown until that turn acknowledges them; read again within it, they stay."""
+        """The reader's notes -- set-asides and a move-on -- the turn being assembled is
+        told of, remembered as shown until that turn acknowledges them; read again
+        within it, they stay."""
         notes = load_notes(self.session_dir(session_key))
         self._shown[session_key] = max((n.seq for n in notes), default=0)
         return [note_line(n) for n in notes]
