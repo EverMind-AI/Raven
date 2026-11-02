@@ -1289,15 +1289,20 @@ def test_settings_quality_wins_only_where_it_names_one(section: dict, expected: 
         ("custom/gpt-image-2", "medium"),
         ("custom/gpt-image-2.5", None),
     ],
-    ids=["gpt-image-2-keeps-its-default", "other-families-send-none"],
+    ids=["gpt-image-2-has-a-default", "gpt-image-2.5-has-no-default"],
 )
-def test_no_quality_anywhere_resolves_like_an_unset_section(model: str, expected: str | None) -> None:
-    """With the picker's ``quality: ""`` and no quality on the call, resolution
-    lands where a section that never had the key lands: the gpt-image-2 default
-    (medium), and nothing for a family without the knob."""
+@pytest.mark.parametrize(
+    "section",
+    [{}, {"quality": ""}],
+    ids=["unset", "picker-saved-empty"],
+)
+def test_no_quality_anywhere_resolves_like_an_unset_section(model: str, expected: str | None, section: dict) -> None:
+    """With nothing on the call either, an empty Settings value lands where a
+    section that never had the key lands: gpt-image-2's medium default, and
+    nothing for the other gpt-image ids."""
     from raven.config.schema import ImageToolConfig
 
-    config = ImageToolConfig(model=model, provider="custom", quality="")
+    config = ImageToolConfig(model=model, provider="custom", **section)
 
     assert ImageGenerateTool(config).effective_quality(None) == expected
 
@@ -1330,6 +1335,50 @@ async def test_an_empty_settings_quality_leaves_the_call_s_quality_in_the_reques
     named = ImageToolConfig(model="openai/gpt-image-2.5", quality="low", api_key="k")
     assert json.loads(await ImageGenerateTool(named, workspace=tmp_path).execute("a kitten", quality="high"))["success"]
     assert seen[-1]["quality"] == "low"
+
+
+async def test_an_empty_settings_quality_reaches_a_custom_generations_route(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The report's shape: a Custom provider section the picker saved with
+    ``quality: ""``, read live from the config file. That base's generation
+    route is a different quality-injection site from OpenRouter's ``/images``,
+    so the call's own value is checked where the report's request went."""
+    from raven.config.schema import MediaToolConfig
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    source = tmp_path / "host.json"
+    source.write_text(
+        json.dumps(
+            {
+                "tools": {
+                    "media": {
+                        "image": {
+                            "apiBase": "https://custom.example/v1",
+                            "apiKey": "custom-key",
+                            "model": "openai/gpt-image-2.5",
+                            "quality": "",
+                        }
+                    }
+                }
+            }
+        )
+    )
+    tool = _image_tool(monkeypatch, handler, model="", workspace=tmp_path)
+    tool._config_static = MediaToolConfig(selection_config=str(source))
+
+    result = json.loads(await tool.execute("a kitten", quality="high"))
+
+    assert result["success"] and result["model"] == "openai/gpt-image-2.5"
+    assert seen[-1].url.path == "/v1/images/generations"
+    body = json.loads(seen[-1].content)
+    assert body["model"] == "openai/gpt-image-2.5"
+    assert body["quality"] == "high"
 
 
 @pytest.mark.parametrize(
