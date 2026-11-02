@@ -148,6 +148,7 @@ async def run_post_turn(
     turn_at: str,
     turn_id: str | None,
     now_ms: Callable[[], int],
+    generation: int,
 ) -> Board | None:
     """Keep the board for the turn that just ended; the board written, or ``None`` when no update was had.
 
@@ -157,9 +158,12 @@ async def run_post_turn(
     provider, the model's arguments, the disk -- ends with this turn's dispatches
     parked rather than with an exception in a background task nobody awaits,
     unless a clear or an undo removed the turn meanwhile: then nothing is written.
+
+    ``generation`` is the service's count of clears as the turn ended, read by
+    the caller when it schedules this update: an update still waiting for the
+    queue when a clear lands belongs to the cleared conversation too.
     """
     async with service.queue(session_key):
-        generation = service.generation(session_key)
         try:
             args = await _ask(
                 service.load(session_key),

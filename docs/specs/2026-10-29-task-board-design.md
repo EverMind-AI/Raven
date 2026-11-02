@@ -335,7 +335,9 @@ result; the next turn itself never waits. The write lock covers only reading, ch
 writing the file, for every writer -- the update's last step on a fresh read, the reader's
 two actions, clear and undo -- so none of those waits on a model call. A clear moves the
 session's generation and an undo marks the turns it removed; an update still on its way
-checks both before it writes, and writes nothing for a turn that is gone.
+checks both before it writes, and writes nothing for a turn that is gone. The generation an
+update is checked against is read when its turn schedules it, not when it reaches the queue:
+an update still waiting behind another when a clear lands is the cleared conversation's too.
 
 ### 4. Wire surface
 
