@@ -38,7 +38,8 @@ from loguru import logger
 from raven.agent import session_effort
 from raven.agent.task_board.board import drop_turns
 from raven.agent.task_board.dispatches import dag_run_id_of, spawn_task_id_of
-from raven.agent.task_board.store import copy_board, load_board, reset_board, save_board
+from raven.agent.task_board.service import reset_for
+from raven.agent.task_board.store import copy_board, load_board, save_board
 from raven.config.loader import drain_migration_notices, load_config, raven_home
 from raven.config.raven import load_raven_config
 from raven.config.schema import REASONING_EFFORTS
@@ -1256,10 +1257,7 @@ async def session_clear(
             mgr.save(session)
         except Exception:
             logger.warning("session.clear: failed to persist cleared {}", session_key)
-    if (board := _task_board(agent_loop)) is not None:
-        await board.reset(session_key)
-    else:
-        reset_board(mgr.session_dir(session_key))
+    await reset_for(_task_board(agent_loop), session_key, mgr.session_dir(session_key))
     return {"session_id": session_key, "cleared": True}
 
 

@@ -3048,6 +3048,9 @@ class TurnPathMixin:
             session.clear()
             self.sessions.save(session)
             self.sessions.invalidate(session.key)
+            from raven.agent.task_board.service import reset_for
+
+            await reset_for(self.task_board, session.key, self.sessions.session_dir(session.key))
             return ("New session started.", [])
         if cmd == "/help":
             lines = [

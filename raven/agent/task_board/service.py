@@ -31,7 +31,7 @@ from raven.agent.task_board.board import (
 )
 from raven.agent.task_board.lineage import board_lineage
 from raven.agent.task_board.notes import Note, add_move_on, add_note, load_notes, note_line, save_notes
-from raven.agent.task_board.store import load_board, save_board
+from raven.agent.task_board.store import load_board, reset_board, save_board
 
 if TYPE_CHECKING:
     from raven.session.manager import SessionManager
@@ -184,3 +184,13 @@ class TaskBoardService:
             except OSError as exc:
                 logger.warning("Task board notes for {} were not acknowledged: {}", session_key, exc)
         return shown
+
+
+async def reset_for(service: TaskBoardService | None, session_key: str, session_dir: Path) -> None:
+    """Empty a conversation's board and notes, as every clear of it does -- `/new` and
+    ``session.clear`` alike. Through the host's service when one runs here, since the clear
+    it records turns away an update still on its way; on disk when none does."""
+    if service is not None:
+        await service.reset(session_key)
+    else:
+        reset_board(session_dir)

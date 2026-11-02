@@ -263,6 +263,18 @@ async def test_clear_empties_the_board(workspace):
     assert [e["type"] for e in loop.heard] == ["tasks.board_updated"]
 
 
+async def test_clear_where_no_board_is_kept_still_removes_the_one_on_disk(workspace):
+    """A board written while the feature was on outlives turning it off; a clear must
+    not leave it behind for the day it is turned on again."""
+    loop = _Loop(workspace)
+    loop.task_board = None
+    save_board(_dir(workspace), _board())
+
+    await session_clear({"session_id": KEY}, agent_loop_factory=lambda: loop)
+
+    assert load_board(_dir(workspace)).groups == []
+
+
 async def test_undo_drops_the_undone_turns_steps(workspace):
     loop = _Loop(workspace)
     session = loop.sessions.get_or_create(KEY)

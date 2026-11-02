@@ -468,3 +468,36 @@ async def test_a_turn_the_user_started_with_nothing_picked_keeps_every_group_it_
 
     assert _scope(_text(provider.requests[1]["messages"][-1])) == "[END DISPATCHES]\n\n"
     assert [len(g.steps) for g in load_board(agent.sessions.session_dir(KEY)).groups] == [2, 2]
+
+
+async def _consolidated(_session) -> bool:
+    return True
+
+
+async def test_new_starts_the_next_conversation_with_an_empty_board(tmp_path, monkeypatch):
+    """`/new` clears the conversation in place, under the same key: the board and the
+    notes beside it go with the messages, or the next turn's update, recall and the page
+    would carry the last conversation's matters into this one."""
+    agent = _agent(tmp_path, Recording([LLMResponse(content=ANSWER)]))
+    monkeypatch.setattr(agent.memory_consolidator, "consolidate_unconsolidated", _consolidated)
+    _placed_and_another(agent)
+    await agent.task_board.move_on(KEY, "g_b")
+
+    reply = await agent._process_message(_turn("/new"), session_key=KEY)
+
+    assert reply == ("New session started.", [])
+    assert load_board(agent.sessions.session_dir(KEY)).groups == []
+    assert agent.task_board.turn_notes(KEY) == []
+
+
+async def test_an_update_still_on_its_way_at_new_writes_nothing(tmp_path, monkeypatch):
+    gate = asyncio.Event()
+    agent = _agent(tmp_path, Recording([LLMResponse(content=ANSWER), BOARD_REPLY], gate=gate))
+    monkeypatch.setattr(agent.memory_consolidator, "consolidate_unconsolidated", _consolidated)
+
+    await agent._process_message(_turn(), session_key=KEY)
+    await agent._process_message(_turn("/new"), session_key=KEY)
+    gate.set()
+    await _drain(agent)
+
+    assert load_board(agent.sessions.session_dir(KEY)).groups == []
