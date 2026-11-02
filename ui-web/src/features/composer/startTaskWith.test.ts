@@ -120,4 +120,3 @@ describe('focusChat', () => {
     expect(ta().value).toBe('half a thought')
   })
 })
-

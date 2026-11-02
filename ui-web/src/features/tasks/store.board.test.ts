@@ -213,4 +213,3 @@ describe('moving a group on', () => {
     expect(store.moveOnFor('s1')).toBeNull()
   })
 })
-
