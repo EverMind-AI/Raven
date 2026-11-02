@@ -66,8 +66,10 @@ def _service(tmp_path):
     return TaskBoardService(SessionManager(tmp_path), now_ms=lambda: 1_000)
 
 
-async def _run(service, call, dispatches=(SPAWN,), turn_at="2026-10-29T10:02:13"):
-    return await run_post_turn(
+def _run(service, call, dispatches=(SPAWN,), turn_at="2026-10-29T10:02:13"):
+    """The update as the turn path schedules it: its generation is read here, at
+    scheduling, not once the task first runs."""
+    return run_post_turn(
         service,
         session_key=KEY,
         call=call,
@@ -76,6 +78,7 @@ async def _run(service, call, dispatches=(SPAWN,), turn_at="2026-10-29T10:02:13"
         turn_at=turn_at,
         turn_id="turn-1",
         now_ms=service.now_ms,
+        generation=service.generation(KEY),
     )
 
 
@@ -393,6 +396,24 @@ async def test_an_update_that_outlives_a_clear_is_dropped(tmp_path):
     gate.set()
 
     assert await run is None
+    assert load_board(service.session_dir(KEY)).groups == []
+
+
+async def test_an_update_still_queued_at_a_clear_is_dropped_too(tmp_path):
+    """One update is in its call and the next waits for the queue when the clear lands:
+    both belong to the cleared conversation, so neither may write."""
+    service = _service(tmp_path)
+    gate, call = _gated(GOOD)
+    running = asyncio.create_task(_run(service, call, turn_at="T1"))
+    await asyncio.sleep(0.01)
+    queued = asyncio.create_task(_run(service, Scripted(GOOD), turn_at="T2"))
+    await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(service.reset(KEY), timeout=1)
+    gate.set()
+
+    assert await running is None
+    assert await queued is None
     assert load_board(service.session_dir(KEY)).groups == []
 
 

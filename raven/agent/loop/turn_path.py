@@ -3644,6 +3644,7 @@ class TurnPathMixin:
                 turn_at=turn_at,
                 turn_id=turn_id,
                 now_ms=board.now_ms,
+                generation=board.generation(key),
             )
         )
         self._consolidation_tasks.add(task)
