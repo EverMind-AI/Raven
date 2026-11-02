@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
-import { depths, layout, layers, ordered, shape, summary } from './graph'
+import { depths, formatAttemptAgents, layout, layers, ordered, shape, summary } from './graph'
 
 import type { Dims } from './graph'
 import type { DagNode, DagRun } from './types'
@@ -280,5 +280,27 @@ describe('dag ordering', () => {
     const d = run([node('a'), node('b')])
     d.order.push('ghost')
     expect(ordered(d).map((n) => n.id)).toEqual(['a', 'b'])
+  })
+})
+
+describe('formatAttemptAgents', () => {
+  it('collapses consecutive equal entries only', () => {
+    expect(formatAttemptAgents(['alpha', 'alpha', 'beta', 'alpha'])).toBe('alpha x2 -> beta -> alpha')
+  })
+
+  it('names a single attempt alone', () => {
+    expect(formatAttemptAgents(['alpha'])).toBe('alpha')
+  })
+
+  it('counts an uninterrupted run through the same agent', () => {
+    expect(formatAttemptAgents(['codex', 'codex', 'codex'])).toBe('codex x3')
+  })
+
+  it('says nothing for no attempt at all', () => {
+    expect(formatAttemptAgents([])).toBe('')
+  })
+
+  it('never folds a return to an earlier agent into the first run', () => {
+    expect(formatAttemptAgents(['a', 'b', 'a', 'a'])).toBe('a -> b -> a x2')
   })
 })

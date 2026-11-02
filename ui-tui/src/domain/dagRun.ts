@@ -36,6 +36,10 @@ export interface DagRunNode {
    * and on a run whose dir predates the fields. */
   startedAt?: number
   endedAt?: number
+  /** Normalised, validated attempt history: the agent of each attempt, in order.
+   * Absent -- not empty -- on a node no reassignment touched, so presence is
+   * what says the history exists. */
+  attemptAgents?: string[]
   /** Shared stateful handle; nodes naming the same one ran sequentially. */
   instance?: string
   status: DagRunNodeStatus
@@ -129,29 +133,124 @@ const outcomeOf = (source: {
   ...(source.route_evidence !== undefined ? { routeEvidence: source.route_evidence } : {})
 })
 
+/** A frame's or a manifest row's attempt fields, normalised. */
+interface AttemptReport {
+  history?: string[]
+  instance?: string
+  instanceGiven: boolean
+  subagent?: string
+}
+
+/** The attempt history a frame or a snapshot row carries, validated.
+ *
+ * Absent and malformed are the same answer: `undefined`. A half-valid list
+ * would silently drop or misplace an attempt, which is the one thing a history
+ * exists to prevent -- so a node keeps whatever history it already had. */
+const attemptAgentsOf = (value: unknown): string[] | undefined =>
+  Array.isArray(value) && value.every(agent => typeof agent === 'string' && agent) ? [...value] : undefined
+
+const attemptReportOf = (source: {
+  attempt_agents?: string[] | null
+  instance?: string | null
+  subagent?: string | null
+}): AttemptReport => ({
+  history: attemptAgentsOf(source.attempt_agents),
+  instance: source.instance ?? undefined,
+  // Presence, not value: a present null clears the handle a stateless retry
+  // left behind, while an absent key says this frame does not speak for it.
+  instanceGiven: Object.hasOwn(source, 'instance'),
+  subagent: source.subagent ?? undefined
+})
+
+/**
+ * Fold one report of a reassigned node's attempt onto the node it is about.
+ *
+ * Identity, status and timing belong to one attempt, so they move together. A
+ * report that cannot claim a newer attempt than the node holds -- it names none,
+ * or fewer -- is from an attempt the node has moved past: the frames of the
+ * attempt that gave up can still be in flight when the next one starts. `null`
+ * answers that case, and the caller keeps its node.
+ *
+ * A newer attempt's start and end are its own, so a report carrying neither
+ * clears what the previous attempt left rather than dating the new one with it.
+ * Within one attempt the established policy stands: a frame without a timestamp
+ * does not erase the one an earlier frame reported.
+ */
+const foldAttemptReport = (
+  node: DagRunNode,
+  report: AttemptReport,
+  status: DagRunNodeStatus,
+  times: { endedAt?: number; startedAt?: number }
+): DagRunNode | null => {
+  const held = node.attemptAgents
+
+  if (held !== undefined && (report.history === undefined || report.history.length < held.length)) {
+    return null
+  }
+
+  const newer = report.history !== undefined && (held === undefined || report.history.length > held.length)
+  const next: DagRunNode = { ...node, status }
+
+  if (newer) {
+    delete next.startedAt
+    delete next.endedAt
+  }
+
+  if (times.startedAt !== undefined) {
+    next.startedAt = times.startedAt
+  }
+
+  if (times.endedAt !== undefined) {
+    next.endedAt = times.endedAt
+  }
+
+  if (report.subagent !== undefined) {
+    next.subagent = report.subagent
+  }
+
+  if (report.instanceGiven) {
+    if (report.instance !== undefined) {
+      next.instance = report.instance
+    } else {
+      delete next.instance
+    }
+  }
+
+  if (report.history !== undefined) {
+    next.attemptAgents = report.history
+  }
+
+  return next
+}
+
 const withNodeStatus = (
   run: DagRunState,
   id: string,
   status: DagRunNodeStatus,
   times: { endedAt?: number; startedAt?: number } = {},
-  outcome: Pick<DagRunNode, 'reason' | 'routeEvidence' | 'selectedRoutes'> = {}
-): DagRunState => ({
-  ...run,
-  nodes: run.nodes.map(node =>
-    node.id === id
-      ? {
-          ...node,
-          status,
-          // A later frame carrying no timestamp does not erase one an earlier
-          // frame reported: `ended_at` rides only the terminal frame, and
-          // `started_at` only the one that started the node.
-          ...(times.startedAt !== undefined ? { startedAt: times.startedAt } : {}),
-          ...(times.endedAt !== undefined ? { endedAt: times.endedAt } : {}),
-          ...outcome
-        }
-      : node
-  )
-})
+  outcome: Pick<DagRunNode, 'reason' | 'routeEvidence' | 'selectedRoutes'> = {},
+  report: AttemptReport = attemptReportOf({})
+): DagRunState => {
+  let changed = false
+
+  const nodes = run.nodes.map(node => {
+    if (node.id !== id) {
+      return node
+    }
+
+    const folded = foldAttemptReport(node, report, status, times)
+
+    if (!folded) {
+      return node
+    }
+
+    changed = true
+
+    return { ...folded, ...outcome }
+  })
+
+  return changed ? { ...run, nodes } : run
+}
 
 const fromCompletion = (run: DagRunState, payload: DagRunCompletedEvent['payload']): DagRunState => {
   const byNode = new Map(payload.files.map(file => [file.node, file]))
@@ -166,10 +265,18 @@ const fromCompletion = (run: DagRunState, payload: DagRunCompletedEvent['payload
 
       // The manifest is authoritative for a node it names; one it does not name
       // keeps whatever the last update said, except that `running` can no longer
-      // be true of a run that has closed.
+      // be true of a run that has closed. A row of an attempt the node has
+      // already moved past is a third case -- one this client missed the
+      // reassignment of -- and leaving it out whole is what keeps its output and
+      // failure text from being attributed to an attempt it never described.
+      const folded = file ? foldAttemptReport(node, attemptReportOf(file), file.status, {}) : null
+
+      if (file && !folded) {
+        return node
+      }
+
       return {
-        ...node,
-        status: file ? file.status : node.status === 'running' ? 'interrupted' : node.status,
+        ...(folded ?? { ...node, status: node.status === 'running' ? 'interrupted' : node.status }),
         ...(file?.output_file ? { outputFile: file.output_file } : {}),
         ...(file?.error ? { error: file.error } : {}),
         ...(file ? outcomeOf(file) : {})
@@ -256,7 +363,8 @@ export const foldDagEvent = (
         event.payload.node,
         event.payload.status,
         { endedAt: event.payload.ended_at, startedAt: event.payload.started_at },
-        outcomeOf(event.payload)
+        outcomeOf(event.payload),
+        attemptReportOf(event.payload)
       )
     : prev
 }
@@ -288,6 +396,18 @@ export const foldDagSnapshot = (prev: DagRunState | null, snapshot: DagRunSnapsh
     const before = prev?.nodes.find(node => node.id === file.node)
     const template = file.prompt_template ?? before?.promptTemplate
     const summary = file.node_summary ?? before?.nodeSummary
+    const report = attemptReportOf(file)
+    // A read issued before a reassignment landed answers with the node as it
+    // was: no history, or a shorter one than the live frames have already
+    // moved. Everything in that row belongs to the attempt the node has moved
+    // past, so the node keeps its own word entire -- not just its identity.
+    if (
+      before !== undefined &&
+      before.attemptAgents !== undefined &&
+      (report.history === undefined || report.history.length < before.attemptAgents.length)
+    ) {
+      return before
+    }
 
     return {
       id: file.node,
@@ -297,6 +417,7 @@ export const foldDagSnapshot = (prev: DagRunState | null, snapshot: DagRunSnapsh
       status: file.status,
       ...(file.started_at !== undefined ? { startedAt: file.started_at } : {}),
       ...(file.ended_at !== undefined ? { endedAt: file.ended_at } : {}),
+      ...(report.history !== undefined ? { attemptAgents: report.history } : {}),
       ...(template ? { promptTemplate: template } : {}),
       ...(summary ? { nodeSummary: summary } : {}),
       ...(file.output_file ? { outputFile: file.output_file } : {}),

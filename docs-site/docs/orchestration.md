@@ -261,7 +261,7 @@ running a graph with external effects.
 | `pending` | Not yet dispatched; dependencies or execution capacity may be outstanding |
 | `running` | The node is active |
 | `completed` | Accepted by the configured completion path |
-| `exception` | Unsuccessful work awaiting a continue, abandon, or replan decision |
+| `exception` | Unsuccessful work awaiting a continue, abandon, reassign, or replan decision |
 | `failed` | Failure is final for this node |
 | `skipped` | A prerequisite failed or execution stopped before dispatch |
 | `not_executed` | A branch left the node out: its guard was false or unknown, or none of its dependencies in the graph was executed. Never dispatched, no output |
@@ -277,12 +277,19 @@ has no route to fall back to, so it fails instead (see
 [Conditional branches](#conditional-branches)).
 
 For an exception, `resolve_dag_node` can continue with corrective instructions,
-abandon the node, or replan. A continue message becomes part of the node's task:
-the next attempt is judged against the prompt as that message changed it, so a
-deliverable the user swaps after an attempt falls short is the one judged.
-Replanning finalizes the old run and starts a new one; reuse completed outputs by
-reference and assign fresh ids to replacement nodes. Failed prerequisites
-eventually skip their dependents; nodes that do not depend on them need not be discarded.
+abandon the node, `reassign` it to another agent on the roster, or replan. A
+continue message becomes part of the node's task: the next attempt is judged
+against the prompt as that message changed it, so a deliverable the user swaps
+after an attempt falls short is the one judged. A `reassign` keeps the node's id,
+task and dependencies and runs it again on the agent named in `agent`; the new
+agent opens on the visible conversation so far as plain text, without the earlier
+agent's tool calls or tool output, so the message has to say what went wrong. It
+spends one continuation like a continue, and a node on an `instance` takes the
+run's other unfinished nodes on that instance with it, which needs a `[stateful]`
+target when the instance was shared. Replanning finalizes the old run and starts a
+new one; reuse completed outputs by reference and assign fresh ids to replacement
+nodes. Failed prerequisites eventually skip their dependents; nodes that do not
+depend on them need not be discarded.
 
 The `subagentDag` settings default to a 180-second judge timeout, a 600-second
 background adjudication window, and two continuations per node. These bound

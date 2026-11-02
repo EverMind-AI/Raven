@@ -9085,6 +9085,10 @@
       "en": "Route evidence",
       "zh": "选路依据"
     },
+    "gui.tasks.node_attempts": {
+      "en": "Attempts",
+      "zh": "尝试过的智能体"
+    },
     "gui.tasks.node_sel_none": {
       "en": "(none)",
       "zh": "（无）"

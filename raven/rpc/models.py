@@ -319,6 +319,30 @@ class InstanceRow(_Strict):
             "instance that came from no orchestration, so its presence is what says the row has a source."
         ),
     )
+    attempt_agents: list[str] | None = Field(
+        default=None,
+        alias="attemptAgents",
+        description=(
+            "The agent of each attempt of this DAG node, in order. Present only on the row of a node that "
+            "was reassigned, so its presence is what marks one; a run without a move carries no key."
+        ),
+    )
+    node_instance: str | None = Field(
+        default=None,
+        alias="nodeInstance",
+        description=(
+            "The handle of the node's last attempt -- null when that attempt kept no session. Rides beside "
+            "attemptAgents because the row's own handle is the node's name, not a conversation."
+        ),
+    )
+    node_instance_auto: bool | None = Field(
+        default=None,
+        alias="nodeInstanceAuto",
+        description=(
+            "Whether the node's current handle was minted for it rather than named by the graph. Present "
+            "with attemptAgents; absent on every row of a run that never reassigned a node."
+        ),
+    )
     turn_started_at_ms: int | None = Field(
         default=None,
         alias="turnStartedAtMs",
@@ -1078,6 +1102,31 @@ class DagNodeUpdatedPayload(_FromAStint):
         default=None,
         description="The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.",
     )
+    subagent: str | None = Field(
+        default=None,
+        description=(
+            "The agent running the node now. Sent with every frame of a reassigned node from its new "
+            "attempt's running update on, so a client that missed the reassignment still learns who has it."
+        ),
+    )
+    instance: str | None = Field(
+        default=None,
+        description=(
+            "The handle that attempt runs on, or null for an agent that keeps no session. A present null "
+            "clears the handle a client was showing; an absent key means this frame does not speak for it."
+        ),
+    )
+    instance_auto: bool | None = Field(
+        default=None,
+        description="Whether that handle was minted for the node rather than named by the graph.",
+    )
+    attempt_agents: list[str] | None = Field(
+        default=None,
+        description=(
+            "The agent of each attempt of this node, in order, sent on every frame of a reassigned node. "
+            "A client uses the length to place a delayed frame in the attempt it belongs to."
+        ),
+    )
 
 
 class DagNodeUpdatedEvent(_Strict):
@@ -1153,6 +1202,25 @@ class DagRunFile(_Strict):
         default=None,
         description="The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.",
     )
+    subagent: str | None = Field(
+        default=None,
+        description=(
+            "The agent the node's last attempt ran on. Sent only for a node that was reassigned: every "
+            "other node's frame already named it, and an unchanged one would only repeat that."
+        ),
+    )
+    instance: str | None = Field(
+        default=None,
+        description="The handle that attempt ran on, or null when it kept no session. Sent with subagent.",
+    )
+    instance_auto: bool | None = Field(
+        default=None,
+        description="Whether that handle was minted for the node rather than named by the graph. Sent with subagent.",
+    )
+    attempt_agents: list[str] | None = Field(
+        default=None,
+        description="The agent of each attempt of this node, in order. Present only on a node that was reassigned.",
+    )
 
 
 class DagRunCompletedPayload(_FromAStint):
@@ -1185,6 +1253,20 @@ class DagSnapshotNode(_Strict):
     subagent: str | None = None
     depends_on: list[str] | None = None
     instance: str | None = None
+    instance_auto: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the node's current handle was minted for it rather than named by the graph. Present "
+            "only for a node that was reassigned, whose handle may have changed under it."
+        ),
+    )
+    attempt_agents: list[str] | None = Field(
+        default=None,
+        description=(
+            "The agent of each attempt of this node, in order. Present only for a node that was "
+            "reassigned; an empty list on every node would claim a move that never happened."
+        ),
+    )
     status: DagSnapshotNodeStatus
     started_at: int | None = None
     ended_at: int | None = None
@@ -1378,6 +1460,20 @@ class TaskNode(_Strict):
     node_summary: str | None = None
     agent: str
     instance: str | None = None
+    instance_auto: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the node's current handle was minted for it rather than named by the graph. Present "
+            "only for a node that was reassigned, whose handle may have changed under it."
+        ),
+    )
+    attempt_agents: list[str] | None = Field(
+        default=None,
+        description=(
+            "The agent of each attempt of this node, in order. Present only for a node that was "
+            "reassigned; an empty list on every node would claim a move that never happened."
+        ),
+    )
     status: DagSnapshotNodeStatus
     depends_on: list[str]
     started_at: int | None = None
@@ -2827,6 +2923,17 @@ class SubagentCall(_Strict):
     )
     agent: str | None = Field(default=None, description="The external agent that ran it, or null for a raven subagent.")
     instance: str | None = Field(default=None, description="The handle sharing one stateful agent session, if any.")
+    instance_auto: bool | None = Field(
+        default=None,
+        description=(
+            "dag rows only: whether the node's current handle was minted for it rather than named by the "
+            "graph. Present only for a node that was reassigned."
+        ),
+    )
+    attempt_agents: list[str] | None = Field(
+        default=None,
+        description="dag rows only: the agent of each attempt of the node, in order. Present only after a reassignment.",
+    )
     started_at: str | None = Field(default=None, description="ISO 8601; the record stores epoch millis.")
     ended_at: str | None = Field(default=None, description="Absent while it is still running.")
     message_count: int = Field(..., description="What was asked, plus the answer once there is one.")

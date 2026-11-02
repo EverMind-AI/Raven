@@ -5,19 +5,29 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, SubagentWiring, ToolWiring, TurnPolicy
-from raven.agent.subagent.dag_graph import DagNodeSpec
+from raven.agent.subagent.dag_adjudication import REASSIGN, AdjudicationDesk, ReassignPlan
+from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec, parse_dag_spec
+from raven.agent.subagent.dag_runner import ReassignmentState, run_dag
+from raven.agent.subagent.dag_tool import RunSubmission
+from raven.agent.subagent.dag_verdict import Verdict
+from raven.agent.subagent.delegate import DelegateTable, Worker, delegate_scope
+from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.tools.load_playbook import LoadPlaybookTool
 from raven.config.agent_names import GENERIC_AGENT
 from raven.config.raven import CheckpointConfig, RuntimeConfig
 from raven.config.schema import BuiltinAgentConfig, PlaybookConfig
-from raven.playbook.agent_generator import PERSONA_TOOL, TASK_TOOL
-from raven.playbook.agent_spec import AgentPlaybookSpec, DelegateEntry
+from raven.playbook.agent_generator import PERSONA_TOOL, TASK_TOOL, HarnessResolution, build_table
+from raven.playbook.agent_spec import AgentPlaybookSpec, CoordinatorEntry, DelegateEntry
+from raven.playbook.run_record import PlaybookRunCapture, record_completed_dag, rewrite_completed_dag
+from raven.playbook.runtime import validation_errors
 from raven.playbook.store import PlaybookStore
 from raven.playbook.unified import PlaybookMatch, UnifiedPlaybookSpec, WorkflowSpec
 from raven.playbook.workflow_compiler import EMIT_WORKFLOW
@@ -194,6 +204,31 @@ async def test_whole_turn_saves_a_composite_ready_playbook(tmp_path) -> None:
     records = list((playbook_root / ".runs").glob("*.json"))
     assert len(records) == 1
     assert '"status": "completed"' in records[0].read_text(encoding="utf-8")
+
+    body = (playbook_root / "evidence-brief" / "playbook.md").read_text(encoding="utf-8")
+    assert "subagent: researcher" in body
+    assert loaded.workflow.nodes[0].prompt_template == "Return WORKER_EVIDENCE_OK"
+    assert loaded.harness.delegate[0].label == "researcher"
+    assert validation_errors(loaded, [GENERIC_AGENT]) == []
+
+    record = json.loads(records[0].read_text(encoding="utf-8"))
+    assert record["status"] == "completed"
+    assert record["savedPlaybook"] == "evidence-brief"
+    [evidence] = record["dags"]
+    assert set(evidence) == {"runId", "spec"}, "a run without a reassignment gains no audit keys"
+    assert evidence["spec"]["nodes"][0]["subagent"] == "researcher"
+    assert evidence["spec"] == SubAgentDagSpec(
+        task_summary="Build evidence brief",
+        confirm=False,
+        nodes=[
+            DagNodeSpec(
+                id="research",
+                subagent="researcher",
+                node_summary="Collect evidence",
+                prompt_template="Return WORKER_EVIDENCE_OK",
+            )
+        ],
+    ).model_dump(by_alias=True, exclude_none=True)
 
 
 async def _emit(*args, **kwargs) -> None:
@@ -1405,3 +1440,606 @@ async def test_a_failed_turns_record_says_why_it_failed(tmp_path) -> None:
     saved = json.loads(records[0].read_text(encoding="utf-8"))
     assert saved["status"] == "failed"
     assert saved["error"] == "RuntimeError: the model connection dropped"
+
+
+# --------------------------------------------------------------------------- #
+# Capturing a reassigned run                                                    #
+# --------------------------------------------------------------------------- #
+
+
+def _role_harness(*roles: tuple[str, str], name: str = "research-team") -> AgentPlaybookSpec:
+    """One Harness whose roles name ``(label, agent)`` pairs, all on alpha."""
+    return AgentPlaybookSpec(
+        name=name,
+        description="A focused research team",
+        coordinator=CoordinatorEntry(brief="Own the turn", playbook={"memory": {"systemPrompt": "Coordinate."}}),
+        delegate=[
+            DelegateEntry(**{"as": label, "name": agent, "brief": f"The {label} role", "playbook": None})
+            for label, agent in roles
+        ],
+    )
+
+
+def _draft_dag() -> SubAgentDagSpec:
+    return SubAgentDagSpec(
+        task_summary="Write the brief",
+        nodes=[DagNodeSpec(id="draft", subagent="writer", node_summary="Draft", prompt_template="Write the draft")],
+    )
+
+
+def _draft_projection() -> tuple[SubAgentDagSpec, AgentPlaybookSpec, AgentPlaybookSpec]:
+    """The submitted graph, plus the projected graph and extended Harness the capture records."""
+    harness = _role_harness(("writer", "alpha"), ("analyst", "alpha"), name="evidence-brief")
+    submitted = _draft_dag()
+    projected, extended = rewrite_completed_dag(
+        submitted,
+        harness=harness,
+        workers={"draft": Worker("writer", "alpha", "Write the draft")},
+        named_instance_groups={},
+        execution_nodes={"draft": submitted.nodes[0].model_copy(update={"subagent": "beta"})},
+        instance_assignments={},
+    )
+    assert extended is not None and extended is not harness
+    return projected, extended, harness
+
+
+class _EchoWorkflowProvider(LLMProvider):
+    """Answers the compiler with the accepted graph it was handed, unchanged."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+        self.calls: list[dict] = []
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs) -> LLMResponse:
+        return await self._answer(messages, tools)
+
+    async def chat_with_retry(self, messages, tools=None, model=None, **kwargs) -> LLMResponse:
+        self.calls.append({"messages": messages, "tools": tools})
+        payload = json.loads(messages[1]["content"])
+        accepted = payload["acceptedDag"]
+        return LLMResponse(
+            content="",
+            tool_calls=[
+                ToolCallRequest(
+                    id="compile",
+                    name=EMIT_WORKFLOW,
+                    arguments={
+                        "name": payload.get("nameHint") or "compiled-workflow",
+                        "description": "Replay the proven work",
+                        "match": {"summary": "Replay the proven work", "keywords": ["proven work"]},
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {},
+                            "required": [],
+                            "additionalProperties": False,
+                        },
+                        "workflow": {
+                            "summary": accepted["taskSummary"],
+                            "confirm": accepted["confirm"],
+                            "nodes": accepted["nodes"],
+                        },
+                    },
+                )
+            ],
+            finish_reason="tool_calls",
+        )
+
+
+def _capture_loop(tmp_path: Path, provider: LLMProvider, playbook_root: Path) -> AgentLoop:
+    return AgentLoop(
+        provider=provider,
+        workspace=tmp_path,
+        model="stub",
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
+        engine=EngineWiring(
+            runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="never")),
+            playbook_config=PlaybookConfig(enabled=True, dir=str(playbook_root), agentHarness="generate"),
+        ),
+    )
+
+
+def _evidence(spec: SubAgentDagSpec, harness: AgentPlaybookSpec | None, run_id: str, history: dict[str, list[str]]):
+    capture = PlaybookRunCapture(query="write the brief", capture_workflow=True)
+    record_completed_dag(spec, run_id, capture, harness=harness, attempt_agents=history)
+    return capture.dags[-1]
+
+
+def _task_resolution(harness: AgentPlaybookSpec, *, persisted: bool, selected: str | None = None) -> HarnessResolution:
+    return HarnessResolution(
+        disposition="runtime_and_artifact",
+        spec=harness,
+        artifact_name="evidence-brief",
+        capture_workflow=True,
+        active=True,
+        description="A reusable evidence workflow",
+        generation_mode="task",
+        persisted=persisted,
+        selected_playbook=selected,
+    )
+
+
+@pytest.mark.parametrize("persisted", [True, False], ids=["persisted", "new-artifact"])
+@pytest.mark.asyncio
+async def test_finishing_a_turn_compiles_and_stores_the_evidence_local_harness(tmp_path, persisted) -> None:
+    """Both save paths hand the compiler and the artifact the projected Harness,
+    not the turn's original one: a derived role only exists in the evidence."""
+    playbook_root = tmp_path / "playbooks"
+    projected, extended, harness = _draft_projection()
+    store = PlaybookStore(playbook_root)
+    if persisted:
+        store.save(
+            UnifiedPlaybookSpec(
+                name="evidence-brief",
+                description="The turn's own Harness",
+                match=PlaybookMatch(summary="Write the brief", keywords=["write the brief"]),
+                harness=harness,
+                workflow=WorkflowSpec(summary="Write the brief", confirm=False, nodes=_draft_dag().nodes),
+            )
+        )
+    provider = _EchoWorkflowProvider()
+    loop = _capture_loop(tmp_path, provider, playbook_root)
+    capture = PlaybookRunCapture(query="write the brief", capture_workflow=True)
+    record_completed_dag(
+        projected,
+        "run-1",
+        capture,
+        harness=extended,
+        attempt_agents={"draft": ["alpha", "beta"]},
+    )
+
+    await loop._finish_playbook_turn(
+        _task_resolution(harness, persisted=persisted),
+        capture,
+        SimpleNamespace(provider=provider, model="stub"),
+    )
+
+    assert len(provider.calls) == 1
+    payload = json.loads(provider.calls[0]["messages"][1]["content"])
+    assert payload["acceptedDag"] == projected.model_dump(by_alias=True, exclude_none=True)
+    assert payload["workerAliases"] == [entry.label for entry in extended.delegate]
+    assert "writer--reassign-1" in payload["workerAliases"]
+    loaded = store.load("evidence-brief")
+    assert isinstance(loaded, UnifiedPlaybookSpec)
+    assert loaded.workflow is not None and loaded.harness is not None
+    assert loaded.workflow.nodes[0].subagent == "writer--reassign-1"
+    assert loaded.harness == extended, "the stored artifact carries the same evidence-local Harness"
+    record = json.loads(next((playbook_root / ".runs").glob("*.json")).read_text(encoding="utf-8"))
+    assert record["savedPlaybook"] == "evidence-brief"
+    assert record["dags"][0]["harness"] == extended.model_dump(by_alias=True, exclude_none=True)
+    assert record["dags"][0]["attemptAgents"] == {"draft": ["alpha", "beta"]}
+
+
+@pytest.mark.asyncio
+async def test_a_capture_takes_only_the_last_dags_evidence_local_harness(tmp_path) -> None:
+    """A later table binding, an earlier DAG and the turn's own Harness are all
+    outside the evidence: only the selected DAG's projected Harness may compile."""
+    playbook_root = tmp_path / "playbooks"
+    projected, extended, harness = _draft_projection()
+    earlier_spec = SubAgentDagSpec(
+        task_summary="Earlier graph",
+        nodes=[DagNodeSpec(id="earlier", subagent="writer", node_summary="Earlier", prompt_template="Earlier")],
+    )
+    earlier_harness = _role_harness(("writer", "gamma"))
+    earlier = _evidence(earlier_spec, earlier_harness, "run-earlier", {"earlier": ["gamma"]})
+    selected = _evidence(projected, extended, "run-last", {"draft": ["alpha", "beta"]})
+    capture = PlaybookRunCapture(query="write the brief", capture_workflow=True)
+    capture.dags = [earlier, selected]
+    provider = _EchoWorkflowProvider()
+    loop = _capture_loop(tmp_path, provider, playbook_root)
+    intruder = DelegateTable(workers={"intruder": Worker("intruder", "delta", "Do something else")})
+
+    with delegate_scope(intruder):
+        await loop._finish_playbook_turn(
+            _task_resolution(harness, persisted=False),
+            capture,
+            SimpleNamespace(provider=provider, model="stub"),
+        )
+
+    assert len(provider.calls) == 1
+    payload = json.loads(provider.calls[0]["messages"][1]["content"])
+    assert payload["acceptedDag"] == selected.spec.model_dump(by_alias=True, exclude_none=True)
+    assert payload["workerAliases"] == [entry.label for entry in selected.harness.delegate]
+    assert "intruder" not in payload["workerAliases"]
+    assert "gamma" not in payload["workerAliases"]
+    loaded = PlaybookStore(playbook_root).load("evidence-brief")
+    assert isinstance(loaded, UnifiedPlaybookSpec)
+    assert loaded.harness is not None and loaded.harness.delegate == selected.harness.delegate
+
+
+@pytest.mark.asyncio
+async def test_a_private_loaded_playbook_captures_no_workflow(tmp_path) -> None:
+    """The library copy the turn loaded is not evidence for a Workflow."""
+    playbook_root = tmp_path / "playbooks"
+    projected, extended, harness = _draft_projection()
+    store = PlaybookStore(playbook_root)
+    store.save(
+        UnifiedPlaybookSpec(
+            name="evidence-brief",
+            description="The loaded copy",
+            match=PlaybookMatch(summary="Write the brief", keywords=["write the brief"]),
+            harness=harness,
+            workflow=WorkflowSpec(summary="Write the brief", confirm=False, nodes=_draft_dag().nodes),
+        )
+    )
+    before = store.path_for("evidence-brief").read_bytes()
+    provider = _EchoWorkflowProvider()
+    loop = _capture_loop(tmp_path, provider, playbook_root)
+    capture = PlaybookRunCapture(query="write the brief", capture_workflow=True)
+    record_completed_dag(projected, "run-1", capture, harness=extended, attempt_agents={"draft": ["alpha", "beta"]})
+
+    await loop._finish_playbook_turn(
+        _task_resolution(harness, persisted=False, selected="evidence-brief"),
+        capture,
+        SimpleNamespace(provider=provider, model="stub"),
+    )
+
+    assert provider.calls == []
+    assert store.path_for("evidence-brief").read_bytes() == before
+    record = json.loads(next((playbook_root / ".runs").glob("*.json")).read_text(encoding="utf-8"))
+    assert record["dags"][0]["attemptAgents"] == {"draft": ["alpha", "beta"]}
+
+
+class _ReplyBackend:
+    """A sub-agent backend that records its dispatch and answers with one line."""
+
+    def __init__(self, reply: str) -> None:
+        self.reply = reply
+        self.calls: list[dict] = []
+
+    async def run(self, task: str, *, task_id: str, instance: str | None = None, **kwargs: Any) -> str:
+        self.calls.append({"task_id": task_id, "instance": instance, "prompt": task})
+        from raven.agent.subagent import activity
+
+        activity.note_closing(self.reply)
+        return self.reply
+
+
+@pytest.mark.asyncio
+async def test_a_completed_sibling_of_a_moved_group_replays_as_one_shared_session(tmp_path) -> None:
+    """The group's final owner names every member on replay, including the member
+    that finished before the move -- and the submitted graph.json never moves."""
+    spec = parse_dag_spec(
+        {
+            "task_summary": "Write the report",
+            "nodes": [
+                {
+                    "id": "survey",
+                    "subagent": "alpha",
+                    "node_summary": "Survey the docs",
+                    "prompt_template": "survey the docs",
+                    "instance": "shared",
+                },
+                {
+                    "id": "write",
+                    "subagent": "alpha",
+                    "node_summary": "Write the report",
+                    "prompt_template": "write the report",
+                    "instance": "shared",
+                    "depends_on": ["survey"],
+                },
+            ],
+        }
+    )
+    alpha = _ReplyBackend("surveyed the docs")
+    beta = _ReplyBackend("wrote the report")
+    backends = {"alpha": alpha, "beta": beta}
+    desk = AdjudicationDesk()
+    state = ReassignmentState()
+    verdicts = [
+        Verdict(accomplished=True),
+        Verdict(accomplished=False, what_is_missing="a writer"),
+        Verdict(accomplished=True),
+    ]
+    graph_bytes: list[str] = []
+    run_dir = tmp_path / "runs" / "run-fixed"
+
+    async def judge(**_kwargs: Any):
+        return verdicts.pop(0) if verdicts else Verdict(accomplished=True)
+
+    async def announce(_run_id, node_id, _report, _origin, *, awaiting_decision, **_kwargs: Any) -> None:
+        if not awaiting_decision:
+            return
+        waiter = desk.waiter(node_id)
+        desk.resolve(
+            node_id,
+            REASSIGN,
+            "use the other writer",
+            agent="beta",
+            expected_waiter=waiter,
+            reassignment=ReassignPlan(
+                node_id=node_id,
+                source_agent="alpha",
+                source_instance="shared",
+                target_agent="beta",
+                target_stateful=True,
+                target_instance="shared",
+                instance_auto=False,
+                revision=1,
+                waiter=waiter,
+                nodes=(spec.nodes[1],),
+                backends={node_id: beta},
+                notices=(),
+            ),
+        )
+
+    async def publish(_name: str, _payload: dict) -> None:
+        graph_bytes.append((run_dir / "graph.json").read_text(encoding="utf-8"))
+
+    async def build(node: DagNodeSpec) -> tuple[DagNodeSpec, Any]:
+        return node, backends[node.subagent]
+
+    result = await run_dag(
+        spec,
+        resolve=lambda node: backends.get(node.subagent),
+        build_reassigned=build,
+        reassignment_state=state,
+        backend=LocalFileBackend(),
+        workdir=str(tmp_path / "wd"),
+        run_root=str(tmp_path / "runs"),
+        nodes_root=str(tmp_path / "nodes"),
+        history_root=str(tmp_path),
+        subagents_root=str(tmp_path / "subagents"),
+        run_id="run-fixed",
+        desk=desk,
+        judge_node=judge,
+        announce_exception=announce,
+        adjudication_timeout_s=5,
+        progress_publisher=publish,
+        origin={"channel": "test", "chat_id": "group", "session_key": "test:group"},
+    )
+
+    assert state.attempt_agents == {"survey": ["alpha"], "write": ["alpha", "beta"]}
+    assert result.instance_assignments == {("alpha", "shared"): ("beta", "shared")}
+    assert result.execution_nodes["survey"].subagent == "alpha", "the finished sibling keeps its own attempt"
+    submission = RunSubmission(
+        submitted=spec,
+        harness=None,
+        workers={},
+        named_instance_groups={"survey": ("alpha", "shared"), "write": ("alpha", "shared")},
+    )
+    captured, harness = rewrite_completed_dag(
+        submission.submitted,
+        harness=submission.harness,
+        workers=submission.workers,
+        named_instance_groups=submission.named_instance_groups,
+        execution_nodes=result.execution_nodes,
+        instance_assignments=result.instance_assignments,
+    )
+
+    assert harness is None
+    assert [(node.subagent, node.instance) for node in captured.nodes] == [
+        ("beta", "shared"),
+        ("beta", "shared"),
+    ]
+    assert [node.prompt_template for node in captured.nodes] == ["survey the docs", "write the report"]
+    assert (run_dir / "graph.json").read_text(encoding="utf-8") == spec.model_dump_json()
+    assert graph_bytes and set(graph_bytes) == {spec.model_dump_json()}, (
+        "graph.json is byte-identical before and after the reassignment"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_colliding_harness_save_restamps_the_extended_harness_name(tmp_path) -> None:
+    """The artifact saved under a suffixed name carries that name on its Harness
+    too, even when the frozen table was built before the collision was known."""
+    playbook_root = tmp_path / "playbooks"
+    store = PlaybookStore(playbook_root)
+    store.save(
+        UnifiedPlaybookSpec(
+            name="evidence-brief",
+            description="An existing playbook",
+            match=PlaybookMatch(summary="Write the brief", keywords=["write the brief"]),
+            harness=_role_harness(("writer", "alpha")),
+            workflow=WorkflowSpec(summary="Write the brief", confirm=False, nodes=_draft_dag().nodes),
+        )
+    )
+    provider = _EchoWorkflowProvider()
+    loop = _capture_loop(tmp_path, provider, playbook_root)
+    harness = _role_harness(("writer", "alpha"), ("analyst", "alpha"), name="evidence-brief")
+    submitted = _draft_dag()
+    projected, extended = rewrite_completed_dag(
+        submitted,
+        harness=harness,
+        workers={"draft": Worker("writer", "alpha", "Write the draft")},
+        named_instance_groups={},
+        execution_nodes={"draft": submitted.nodes[0].model_copy(update={"subagent": "beta"})},
+        instance_assignments={},
+    )
+    resolution = HarnessResolution(
+        disposition="runtime_and_artifact",
+        spec=harness,
+        table=build_table(harness, {}),
+        artifact_name="evidence-brief",
+        capture_workflow=True,
+        active=True,
+        description="A reusable evidence workflow",
+        generation_mode="task",
+    )
+
+    persisted = loop._persist_generated_harness(resolution, "write the brief")
+
+    assert persisted.persisted
+    assert persisted.artifact_name == "evidence-brief-2"
+    assert persisted.spec is not None and persisted.spec.name == "evidence-brief-2"
+    assert persisted.table is not None and persisted.table.harness is not None
+    assert persisted.table.harness.name == "evidence-brief", "the table froze the proposed name"
+
+    capture = PlaybookRunCapture(query="write the brief", capture_workflow=True)
+    record_completed_dag(projected, "run-1", capture, harness=extended, attempt_agents={"draft": ["alpha", "beta"]})
+    await loop._finish_playbook_turn(persisted, capture, SimpleNamespace(provider=provider, model="stub"))
+
+    loaded = store.load("evidence-brief-2")
+    assert isinstance(loaded, UnifiedPlaybookSpec)
+    assert loaded.name == "evidence-brief-2"
+    assert loaded.harness is not None and loaded.harness.name == "evidence-brief-2"
+    assert loaded.harness.delegate[-1].label == "writer--reassign-1"
+    assert loaded.workflow is not None and loaded.workflow.nodes[0].subagent == "writer--reassign-1"
+    record = json.loads(next((playbook_root / ".runs").glob("*.json")).read_text(encoding="utf-8"))
+    assert record["dags"][0]["harness"]["name"] == "evidence-brief", "the audit keeps the Harness as it was frozen"
+
+
+@pytest.mark.asyncio
+async def test_a_derived_worker_row_survives_capture_save_and_reload(tmp_path) -> None:
+    """The worker route end to end: a real run moves a labelled node to another
+    agent, the capture derives a Harness row for that pair, the artifact is
+    saved and reloaded, and the reloaded table dispatches the node on the agent
+    that actually finished it -- not the one the graph submitted."""
+    playbook_root = tmp_path / "playbooks"
+    submitted = SubAgentDagSpec(
+        task_summary="Write the brief",
+        nodes=[
+            DagNodeSpec(
+                id="draft",
+                subagent="writer",
+                node_summary="Draft the brief",
+                prompt_template="Return WORKER_DRAFT_OK",
+            )
+        ],
+    )
+    run_spec = submitted.model_copy(update={"nodes": [submitted.nodes[0].model_copy(update={"subagent": "alpha"})]})
+    alpha = _ReplyBackend("a rough draft")
+    beta = _ReplyBackend("a finished brief")
+    backends = {"alpha": alpha, "beta": beta}
+    desk = AdjudicationDesk()
+    state = ReassignmentState()
+    verdicts = [Verdict(accomplished=False, what_is_missing="a writer"), Verdict(accomplished=True)]
+
+    async def judge(**_kwargs: Any):
+        return verdicts.pop(0) if verdicts else Verdict(accomplished=True)
+
+    async def announce(_run_id, node_id, _report, _origin, *, awaiting_decision, **_kwargs: Any) -> None:
+        if not awaiting_decision:
+            return
+        waiter = desk.waiter(node_id)
+        desk.resolve(
+            node_id,
+            REASSIGN,
+            "use the other writer",
+            agent="beta",
+            expected_waiter=waiter,
+            reassignment=ReassignPlan(
+                node_id=node_id,
+                source_agent="alpha",
+                source_instance=None,
+                target_agent="beta",
+                target_stateful=False,
+                target_instance=None,
+                instance_auto=False,
+                revision=1,
+                waiter=waiter,
+                nodes=(run_spec.nodes[0].model_copy(update={"subagent": "beta"}),),
+                backends={node_id: beta},
+                notices=(),
+            ),
+        )
+
+    async def build(node: DagNodeSpec) -> tuple[DagNodeSpec, Any]:
+        return node, backends[node.subagent]
+
+    (tmp_path / "wd").mkdir(parents=True, exist_ok=True)
+    result = await run_dag(
+        run_spec,
+        resolve=lambda node: backends.get(node.subagent),
+        build_reassigned=build,
+        reassignment_state=state,
+        backend=LocalFileBackend(),
+        workdir=str(tmp_path / "wd"),
+        run_root=str(tmp_path / "runs"),
+        nodes_root=str(tmp_path / "nodes"),
+        history_root=str(tmp_path),
+        subagents_root=str(tmp_path / "subagents"),
+        run_id="run-fixed",
+        desk=desk,
+        judge_node=judge,
+        announce_exception=announce,
+        adjudication_timeout_s=5,
+        origin={"channel": "test", "chat_id": "group", "session_key": "test:group"},
+    )
+    assert result.execution_nodes["draft"].subagent == "beta"
+
+    harness = _role_harness(("writer", "alpha"), name="evidence-brief")
+    captured, extended = rewrite_completed_dag(
+        submitted,
+        harness=harness,
+        workers={"draft": Worker("writer", "alpha", "Write the draft")},
+        named_instance_groups={},
+        execution_nodes=result.execution_nodes,
+        instance_assignments=result.instance_assignments,
+    )
+    assert extended is not None and extended is not harness
+    label = captured.nodes[0].subagent
+    assert label.startswith("writer--reassign"), label
+    derived = next(row for row in extended.delegate if row.label == label)
+    assert (derived.name, derived.brief) == ("beta", "The writer role")
+    original = next(row for row in extended.delegate if row.label == "writer")
+    assert original.name == "alpha", "the original row is left alone for the nodes still using it"
+
+    provider = _EchoWorkflowProvider()
+    loop = _capture_loop(tmp_path, provider, playbook_root)
+    resolution = HarnessResolution(
+        disposition="runtime_and_artifact",
+        spec=harness,
+        table=build_table(harness, {}),
+        artifact_name="evidence-brief",
+        capture_workflow=True,
+        active=True,
+        description="A reusable evidence workflow",
+        generation_mode="task",
+    )
+    persisted = loop._persist_generated_harness(resolution, "write the brief")
+    assert persisted.persisted
+    capture = PlaybookRunCapture(query="write the brief", capture_workflow=True)
+    record_completed_dag(
+        captured,
+        "run-fixed",
+        capture,
+        harness=extended,
+        attempt_agents={"draft": ["alpha", "beta"]},
+    )
+    await loop._finish_playbook_turn(persisted, capture, SimpleNamespace(provider=provider, model="stub"))
+
+    loaded = PlaybookStore(playbook_root).load("evidence-brief")
+    assert isinstance(loaded, UnifiedPlaybookSpec)
+    assert loaded.harness is not None and loaded.workflow is not None
+    reloaded_label = loaded.workflow.nodes[0].subagent
+    assert reloaded_label == label, "the saved workflow keeps the derived label"
+    reloaded_row = next(row for row in loaded.harness.delegate if row.label == reloaded_label)
+    assert (reloaded_row.name, reloaded_row.brief) == ("beta", "The writer role")
+
+    table = build_table(loaded.harness, {})
+    worker = table.get(reloaded_label)
+    assert worker is not None and worker.agent == "beta", "the reloaded table resolves the label to the finisher"
+
+    replay_alpha = _ReplyBackend("unused")
+    replay_beta = _ReplyBackend("replayed on beta")
+    replayed = await run_dag(
+        parse_dag_spec(
+            {
+                "task_summary": "Replay the brief",
+                "nodes": [
+                    {
+                        "id": "draft",
+                        "subagent": worker.agent,
+                        "node_summary": "Draft the brief",
+                        "prompt_template": "Return WORKER_DRAFT_OK",
+                    }
+                ],
+            }
+        ),
+        resolve=lambda node: {"alpha": replay_alpha, "beta": replay_beta}.get(node.subagent),
+        backend=LocalFileBackend(),
+        workdir=str(tmp_path / "wd"),
+        run_root=str(tmp_path / "replay-runs"),
+        nodes_root=str(tmp_path / "replay-nodes"),
+        history_root=str(tmp_path / "replay-home"),
+        subagents_root=str(tmp_path / "replay-home" / "subagents"),
+        run_id="replay-1",
+        origin={"channel": "test", "chat_id": "group", "session_key": "test:group"},
+    )
+    assert replayed.summary["completed"] == 1
+    assert [call["task_id"] for call in replay_beta.calls] == ["draft"]
+    assert replay_alpha.calls == [], "a reloaded workflow must not replay on the agent that gave up"

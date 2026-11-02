@@ -39,7 +39,10 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from raven.playbook.agent_spec import AgentPlaybookSpec
 
 
 @dataclass(frozen=True)
@@ -74,6 +77,15 @@ class DelegateTable:
     """The workers of one turn, by label."""
 
     workers: Mapping[str, Worker] = field(default_factory=dict)
+
+    harness: "AgentPlaybookSpec | None" = None
+    """The generated Harness this table was rendered from, when it came from one.
+
+    A run may outlive the turn that wrote the table, and a reassignment has to
+    read the authored roles -- briefs, charters, the coordinator -- rather than
+    the rendered charter text each worker carries. Frozen by the producer as a
+    deep copy, so a later turn editing its own spec cannot change this one.
+    """
 
     def get(self, label: str) -> Worker | None:
         return self.workers.get(label)

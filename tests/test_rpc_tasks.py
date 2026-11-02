@@ -582,6 +582,76 @@ async def test_a_finalized_two_node_run_is_one_completed_task(workspace: Path) -
     assert "tool_failure_count" not in n2
 
 
+async def test_a_reassigned_node_reads_back_its_current_agent_and_attempt_history(workspace: Path) -> None:
+    """Before the manifest lands the registry row is the only record of who is
+    running the node; a reader that fell back to ``graph.json`` would name the
+    agent that gave up."""
+    from raven.agent.subagent import instances as instances_mod
+
+    session_dir = _session_dir(workspace)
+    graph = {
+        "task_summary": "moved",
+        "nodes": [{"id": "fix", "subagent": "alpha", "node_summary": "do it", "depends_on": [], "instance": None}],
+    }
+    await _make_run(session_dir, RUN_ID, graph, ["fix"])
+    registry = instances_mod.get_registry()
+    await registry.upsert_dag_node(SESSION, RUN_ID, "fix", "alpha", "exception")
+    await registry.move_dag_node(
+        SESSION,
+        run_id=RUN_ID,
+        node_id="fix",
+        old_agent="alpha",
+        new_agent="beta",
+        status="running",
+        instance="fix-minted",
+        instance_auto=True,
+        attempt_agents=["alpha", "beta"],
+    )
+
+    row = (await tasks_list({"session_key": SESSION}))["tasks"][0]
+
+    (node,) = row["nodes"]
+    assert (node["agent"], node["instance"]) == ("beta", "fix-minted")
+    assert node["instance_auto"] is True
+    assert node["attempt_agents"] == ["alpha", "beta"]
+
+
+async def test_a_finalized_reassigned_run_reads_the_same_identity_from_its_manifest(workspace: Path) -> None:
+    """After finalization the manifest is the record, and it agrees with what the
+    registry said while the run was going: same agent, handle, flag and history."""
+    session_dir = _session_dir(workspace)
+    graph = {"task_summary": "moved", "nodes": [{"id": "fix", "subagent": "alpha", "depends_on": []}]}
+    store = await _make_run(session_dir, RUN_ID, graph, ["fix"])
+    await store.write_manifest(
+        {
+            "fix": _manifest_entry(
+                status="completed",
+                subagent="beta",
+                instance="fix-minted",
+                attempt_agents=["alpha", "beta"],
+            )
+        }
+    )
+
+    row = (await tasks_list({"session_key": SESSION}))["tasks"][0]
+
+    (node,) = row["nodes"]
+    assert (node["agent"], node["instance"]) == ("beta", "fix-minted")
+    assert node["attempt_agents"] == ["alpha", "beta"]
+    assert node["instance_auto"] is False
+
+
+async def test_a_node_that_never_moved_keeps_the_node_keys_it_always_had(workspace: Path) -> None:
+    session_dir = _session_dir(workspace)
+    graph = {"task_summary": "plain", "nodes": [{"id": "fix", "subagent": "Raven", "depends_on": []}]}
+    await _make_run(session_dir, RUN_ID, graph, ["fix"])
+
+    row = (await tasks_list({"session_key": SESSION}))["tasks"][0]
+
+    (node,) = row["nodes"]
+    assert not {"attempt_agents", "instance_auto"} & set(node)
+
+
 async def test_a_hard_stop_reads_cancelled_from_the_node_registry_not_all(workspace: Path) -> None:
     """The v1 bug this replaces: `_mark_stopped` leaves a completed node alone,
     so a run stopped after its first node finishes ends as a *mix* of

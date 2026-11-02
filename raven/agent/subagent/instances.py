@@ -72,6 +72,42 @@ def _dag_origin(existing: dict[str, Any]) -> dict[str, Any]:
     return origin
 
 
+def _attempt_history(attempt_agents: list[str] | None, instance: str | None, instance_auto: bool) -> dict[str, Any]:
+    """The history a reassigned node's row carries, or nothing for any other node.
+
+    ``attempt_agents`` being supplied is what marks the node as reassigned; an
+    empty history on every node would claim a move that never happened. The
+    instance fields ride along because the row's own handle is synthetic.
+    """
+    if attempt_agents is None:
+        return {}
+    return {
+        "attemptAgents": list(attempt_agents),
+        "nodeInstance": instance,
+        "nodeInstanceAuto": bool(instance_auto),
+    }
+
+
+def _carried_outcome(
+    held: dict[str, Any],
+    reason: str | None,
+    selected_routes: list[str] | None,
+    route_evidence: str | None,
+) -> dict[str, Any]:
+    """The branch outcome to write: what the caller supplied, else what the row held.
+
+    A move is a change of agent, not a new branch decision, so the outcome the
+    old row records survives it -- an empty selection included, since a decision
+    that chose nothing has still decided.
+    """
+    fields = {
+        "reason": reason if reason is not None else held.get("reason"),
+        "selectedRoutes": list(selected_routes) if selected_routes is not None else held.get("selectedRoutes"),
+        "routeEvidence": route_evidence if route_evidence is not None else held.get("routeEvidence"),
+    }
+    return {key: value for key, value in fields.items() if value is not None}
+
+
 class InstanceRegistry:
     """Handle-to-session-id store backed by one JSON file."""
 
@@ -276,6 +312,9 @@ class InstanceRegistry:
         reason: str | None = None,
         selected_routes: list[str] | None = None,
         route_evidence: str | None = None,
+        attempt_agents: list[str] | None = None,
+        instance: str | None = None,
+        instance_auto: bool = False,
     ) -> None:
         """Record or update one DAG node's status, and what a branch decided about it.
 
@@ -289,6 +328,15 @@ class InstanceRegistry:
         record of a branch's outcome. The record is rebuilt on every write, so the
         row always says what the latest write said: a write without them leaves
         none behind.
+
+        ``attempt_agents`` is the agents that have tried a node that moved off the
+        one the graph submitted, and it is given only for such a node: a run
+        without a reassignment carries no history at all rather than an empty one
+        on every row. Beside it travel ``nodeInstance`` and ``nodeInstanceAuto`` --
+        the instance the node actually ran on, and whether that handle was minted.
+        The row's own ``handle`` is ``<run>/<node>`` and cannot say either, and the
+        absence of the key on a row written before reassignment existed is a
+        different fact from an explicit null (a stateless attempt).
         """
         agent = canonical_agent_name(agent)
         handle = f"{run_id}/{node_id}"
@@ -309,6 +357,7 @@ class InstanceRegistry:
                     **({"reason": reason} if reason is not None else {}),
                     **({"selectedRoutes": list(selected_routes)} if selected_routes is not None else {}),
                     **({"routeEvidence": route_evidence} if route_evidence is not None else {}),
+                    **_attempt_history(attempt_agents, instance, instance_auto),
                     "createdAtMs": existing.get("createdAtMs", now),
                     "updatedAtMs": now,
                 }
@@ -320,6 +369,75 @@ class InstanceRegistry:
                         "will not survive restart): {}",
                         e,
                     )
+
+    async def move_dag_node(
+        self,
+        session_key: str,
+        *,
+        run_id: str,
+        node_id: str,
+        old_agent: str,
+        new_agent: str,
+        status: str,
+        instance: str | None,
+        instance_auto: bool,
+        attempt_agents: list[str],
+        reason: str | None = None,
+        selected_routes: list[str] | None = None,
+        route_evidence: str | None = None,
+    ) -> None:
+        """Move a node's ``dag-node`` row onto the agent about to run it.
+
+        The row is keyed by agent, so writing the new agent's row alone would
+        leave the old one behind and every reader would list one node twice. Both
+        halves happen in one locked read-modify-write, so another process never
+        sees the pair half-applied -- and a failure leaves the file exactly as it
+        was, because the whole map is written atomically at the end.
+
+        ``createdAtMs`` is carried over: it is when this node's work began, and
+        the move is a change of agent rather than a new piece of work. The
+        branch outcome is carried only for the fields the caller did not supply
+        again. The old row's ``agentId`` is deliberately *not* carried: it binds
+        a native session to the old agent, and the destination has its own.
+
+        Absent ``old_agent`` row is not an error -- a move accepted while the node
+        was still pending writes its first row under the destination.
+
+        Raises:
+            OSError: the file could not be written. The in-process cache is
+                dropped first, so a reader in this process answers from the
+                previous complete file rather than from this unpersisted map.
+        """
+        old_agent = canonical_agent_name(old_agent)
+        new_agent = canonical_agent_name(new_agent)
+        handle = f"{run_id}/{node_id}"
+        async with self._lock:
+            with write_transaction(self._path):
+                records = self._load()
+                previous = records.pop((session_key, old_agent, handle), None)
+                held = previous if previous is not None else records.get((session_key, new_agent, handle)) or {}
+                now = int(time.time() * 1000)
+                records[(session_key, new_agent, handle)] = {
+                    "kind": "dag-node",
+                    "sessionKey": session_key,
+                    "agent": new_agent,
+                    "handle": handle,
+                    "runId": run_id,
+                    "nodeId": node_id,
+                    "status": status,
+                    **_carried_outcome(held, reason, selected_routes, route_evidence),
+                    **_attempt_history(attempt_agents, instance, instance_auto),
+                    "createdAtMs": held.get("createdAtMs", now),
+                    "updatedAtMs": now,
+                }
+                try:
+                    self._flush()
+                except OSError:
+                    # The map in memory now holds a row the file does not. Sharing
+                    # it would make this process answer differently from every
+                    # other reader over the same registry.
+                    self._records = None
+                    raise
 
     async def link_dag_node(self, session_key: str, agent: str, handle: str, run_id: str, node_id: str) -> None:
         """Mark the instance a DAG node is running on as belonging to that node.

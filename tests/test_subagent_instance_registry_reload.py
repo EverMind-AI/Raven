@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from raven.agent.subagent import instances as instances_mod
 from raven.agent.subagent.instances import InstanceRegistry
 from raven.config.agent_names import GENERIC_AGENT
 
@@ -220,3 +221,243 @@ class TestARowWrittenUnderAFormerNameOfItsAgent:
         await registry.upsert_dag_node("s1", "run1", "node1", GENERIC_AGENT, "completed")
         assert len(registry.list_instances("s1")) == 2
         assert {record["agent"] for record in registry.list_instances("s1")} == {GENERIC_AGENT}
+
+
+class TestMovingADagNodeRowToAnotherAgent:
+    """A node's ``dag-node`` row is keyed by agent, so a reassigned node that only
+    wrote a row under its new agent would be listed twice: the old row is still
+    there. The move writes the new row and drops the old one in one transaction.
+
+    The row's ``handle`` is synthetic (``<run>/<node>``) and cannot say which
+    instance the node actually ran on, so a moved row carries ``nodeInstance``
+    and ``nodeInstanceAuto`` beside the attempt history.
+    """
+
+    @staticmethod
+    async def _alpha_row(registry: InstanceRegistry) -> int:
+        await registry.upsert_dag_node("s1", "r1", "fix", "alpha", "exception", selected_routes=[])
+        await registry.link_dag_node("s1", "alpha", "fix-h", "r1", "fix")
+        return int(next(r for r in registry.list_instances("s1") if r.get("kind") == "dag-node")["createdAtMs"])
+
+    @pytest.mark.asyncio
+    async def test_a_move_leaves_one_row_under_the_new_agent_with_its_creation_time_and_history(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "reg.json"
+        registry = InstanceRegistry(path)
+        created_before = await self._alpha_row(registry)
+
+        await registry.move_dag_node(
+            "s1",
+            run_id="r1",
+            node_id="fix",
+            old_agent="alpha",
+            new_agent="beta",
+            status="running",
+            instance="fix-minted",
+            instance_auto=True,
+            attempt_agents=["alpha", "beta"],
+        )
+
+        rows = InstanceRegistry(path).list_instances("s1")
+        moved = [r for r in rows if r.get("kind") == "dag-node" and r.get("nodeId") == "fix"]
+        assert len(moved) == 1
+        moved = moved[0]
+        assert moved["agent"] == "beta"
+        assert moved["createdAtMs"] == created_before
+        assert moved["attemptAgents"] == ["alpha", "beta"]
+        assert moved["selectedRoutes"] == []
+        assert (moved["nodeInstance"], moved["nodeInstanceAuto"]) == ("fix-minted", True)
+
+    @pytest.mark.asyncio
+    async def test_a_move_does_not_carry_the_native_session_binding(self, tmp_path: Path) -> None:
+        """The new agent's session is its own. Transplanting the old ``agentId``
+        would make the destination resume a conversation it never had, so the
+        row the move writes carries none and the new pair binds nothing."""
+        path = tmp_path / "reg.json"
+        _write(
+            path,
+            [
+                {
+                    "kind": "dag-node",
+                    "sessionKey": "s1",
+                    "agent": "alpha",
+                    "handle": "r1/fix",
+                    "runId": "r1",
+                    "nodeId": "fix",
+                    "status": "exception",
+                    "agentId": "alpha-native-session",
+                    "createdAtMs": 1,
+                    "updatedAtMs": 1,
+                }
+            ],
+        )
+        registry = InstanceRegistry(path)
+
+        await registry.move_dag_node(
+            "s1",
+            run_id="r1",
+            node_id="fix",
+            old_agent="alpha",
+            new_agent="beta",
+            status="running",
+            instance="fix-minted",
+            instance_auto=True,
+            attempt_agents=["alpha", "beta"],
+        )
+
+        moved = next(r for r in InstanceRegistry(path).list_instances("s1") if r.get("kind") == "dag-node")
+        assert "agentId" not in moved
+        assert await registry.lookup("s1", "beta", "fix-minted") is None
+        assert await registry.lookup("s1", "beta", "r1/fix", kind="dag-node") is None
+
+    @pytest.mark.asyncio
+    async def test_a_move_keeps_the_branch_outcome_it_was_not_told_again(self, tmp_path: Path) -> None:
+        """A branch's selection is the node's, not the attempt's: the move is a
+        status change and must not erase what the branch already decided."""
+        path = tmp_path / "reg.json"
+        registry = InstanceRegistry(path)
+        await registry.upsert_dag_node(
+            "s1", "r1", "fix", "alpha", "exception", reason="when_false", route_evidence="it said so"
+        )
+        await registry.upsert_dag_node("s1", "r1", "fix", "alpha", "exception", selected_routes=["docs"])
+
+        await registry.move_dag_node(
+            "s1",
+            run_id="r1",
+            node_id="fix",
+            old_agent="alpha",
+            new_agent="beta",
+            status="running",
+            instance=None,
+            instance_auto=False,
+            attempt_agents=["alpha", "beta"],
+        )
+
+        moved = next(r for r in InstanceRegistry(path).list_instances("s1") if r.get("kind") == "dag-node")
+        assert moved["selectedRoutes"] == ["docs"]
+
+    @pytest.mark.asyncio
+    async def test_a_move_does_not_restore_a_stale_snapshot_over_unrelated_writes(self, tmp_path: Path) -> None:
+        """The registry is read-modify-written by several processes. A move made
+        from a cache loaded before another process appended must not flush that
+        older map back and drop the other row."""
+        path = tmp_path / "reg.json"
+        _write(path, [_row("s1", "first")])
+        registry = InstanceRegistry(path)
+        await self._alpha_row(registry)
+        await InstanceRegistry(path).commit("s1", "Raven-Research", "from-elsewhere", "agent-x")
+
+        await registry.move_dag_node(
+            "s1",
+            run_id="r1",
+            node_id="fix",
+            old_agent="alpha",
+            new_agent="beta",
+            status="running",
+            instance=None,
+            instance_auto=False,
+            attempt_agents=["alpha", "beta"],
+        )
+
+        rows = InstanceRegistry(path).list_instances("s1")
+        assert ("Raven-Research", "from-elsewhere") in {(r["agent"], r["handle"]) for r in rows}
+        assert len([r for r in rows if r.get("kind") == "dag-node"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_failed_move_keeps_the_previous_row_and_a_retry_is_idempotent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = tmp_path / "reg.json"
+        registry = InstanceRegistry(path)
+        created_before = await self._alpha_row(registry)
+        real = instances_mod.atomic_replace
+        calls = {"n": 0}
+
+        def failing(target: Path, text: str) -> None:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OSError("no space left on device")
+            real(target, text)
+
+        monkeypatch.setattr(instances_mod, "atomic_replace", failing)
+        arguments = {
+            "run_id": "r1",
+            "node_id": "fix",
+            "old_agent": "alpha",
+            "new_agent": "beta",
+            "status": "running",
+            "instance": "fix-minted",
+            "instance_auto": True,
+            "attempt_agents": ["alpha", "beta"],
+        }
+        with pytest.raises(OSError):
+            await registry.move_dag_node("s1", **arguments)
+
+        def on_disk() -> list[dict[str, object]]:
+            return InstanceRegistry(path).list_instances("s1")
+
+        # The transaction left the file as it was -- and the writer that failed
+        # must not answer from the map it could not persist either, or a reader
+        # sharing this process sees a row no other process can.
+        for rows in (on_disk(), registry.list_instances("s1")):
+            held = [r for r in rows if r.get("kind") == "dag-node"]
+            assert len(held) == 1
+            assert (held[0]["agent"], held[0].get("attemptAgents")) == ("alpha", None)
+
+        await registry.move_dag_node("s1", **arguments)
+
+        moved = [r for r in on_disk() if r.get("kind") == "dag-node"]
+        assert len(moved) == 1
+        assert (moved[0]["agent"], moved[0]["createdAtMs"]) == ("beta", created_before)
+
+    @pytest.mark.asyncio
+    async def test_a_moved_node_that_never_had_a_row_gets_one_under_the_target(self, tmp_path: Path) -> None:
+        """A move accepted while a node was still pending writes its first row
+        under the destination; there is no old row to drop."""
+        path = tmp_path / "reg.json"
+
+        await InstanceRegistry(path).move_dag_node(
+            "s1",
+            run_id="r1",
+            node_id="fix",
+            old_agent="alpha",
+            new_agent="beta",
+            status="running",
+            instance=None,
+            instance_auto=False,
+            attempt_agents=["beta"],
+        )
+
+        (moved,) = InstanceRegistry(path).list_instances("s1")
+        assert (moved["agent"], moved["runId"], moved["nodeId"]) == ("beta", "r1", "fix")
+        assert moved["attemptAgents"] == ["beta"]
+
+
+class TestAttemptHistoryOnAStatusWrite:
+    """``attemptAgents`` and the execution instance travel on the row of a node
+    that moved. A node that never moved keeps exactly the row it always had --
+    an empty history on every node would claim a reassignment that never
+    happened."""
+
+    @pytest.mark.asyncio
+    async def test_a_node_that_never_moved_carries_no_attempt_history(self, tmp_path: Path) -> None:
+        registry = InstanceRegistry(tmp_path / "reg.json")
+
+        await registry.upsert_dag_node("s1", "r1", "plain", "alpha", "completed")
+
+        (row,) = registry.list_instances("s1")
+        assert not {"attemptAgents", "nodeInstance", "nodeInstanceAuto"} & set(row)
+
+    @pytest.mark.asyncio
+    async def test_a_status_write_can_carry_the_attempt_history_and_execution_instance(self, tmp_path: Path) -> None:
+        registry = InstanceRegistry(tmp_path / "reg.json")
+
+        await registry.upsert_dag_node(
+            "s1", "r1", "moved", "beta", "running", attempt_agents=["alpha", "beta"], instance=None, instance_auto=False
+        )
+
+        (row,) = InstanceRegistry(tmp_path / "reg.json").list_instances("s1")
+        assert row["attemptAgents"] == ["alpha", "beta"]
+        assert row["nodeInstance"] is None
+        assert row["nodeInstanceAuto"] is False
