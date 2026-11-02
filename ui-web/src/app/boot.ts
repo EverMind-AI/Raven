@@ -30,6 +30,7 @@ import { setCurrent as sessionSet } from '../lib/session'
 import { hasUpdateFlag } from '../rpc/capabilities'
 import { gateway } from '../rpc/gateway'
 import { draw as drawCtx } from '../state/ctxChip'
+import { load as loadEffort } from '../state/effort'
 import { setRuntime } from '../state/envChip'
 import { bootError } from '../state/failureBar'
 import { load as loadLang } from '../state/lang/pick'
@@ -175,6 +176,8 @@ async function sequence(): Promise<void> {
        restored never changes session, so the chip would stay hidden on the one
        screen where the reader is about to start a conversation. */
     loadTier()
+    /* The effort row's first read, for the same reason. */
+    loadEffort()
     /* The import row's first read. Here rather than with the seam installers:
        those run before the socket opens, and a read there is refused as "not
        connected" -- which left a run the gateway lost to a restart, still in
@@ -217,6 +220,7 @@ export function bootPage(): void {
     ['sessionOpen', (): void => { const first = sessionRows()[0]; if (first) void sessionOpen(first) }],
     ['drawPerm', (): void => drawPerm()],
     ['loadTier', (): void => { void loadTier() }],
+    ['loadEffort', (): void => { void loadEffort() }],
     ['drawCtx', (): void => drawCtx()],
     ['bumpWs', (): void => bumpWs()],
     ['drawSettings', (): void => redrawSettings()],

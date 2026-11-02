@@ -18,6 +18,25 @@ All notable changes to Raven are documented here.
   query's length. The research product, the deck launcher, the sub-agent fetch
   lane and the onboarding wizard resolve the same borrowed key.
 
+- The reasoning effort can be set **per conversation**: the *Reasoning
+  effort* row of the WebUI's model picker, beside the sub-agent tier, and
+  `/effort <minimal|low|medium|high|default>` in the TUI (`/effort` alone
+  reports, `default` returns to the global setting). The pick outranks
+  `agents.defaults.reasoningEffort` and the conversation's mode, is kept on the
+  conversation's own record so it survives a gateway restart and comes back on
+  resume, lands on the next turn, and moves Raven's own model calls only.
+  New RPC `session.set_effort` (report, set or clear; every answer names what
+  the default is on this install and the words), and `session.info` carries
+  `reasoning_effort` for the status bar. The using-raven guide has a section on
+  it. Clearing `agents.defaults.reasoningEffort` (*Provider default*) reaches a
+  running gateway's next turn as well: the turn sends the effort in force on
+  every call, the provider's own default included, instead of leaving a
+  cleared key to the copy the provider took at boot. A fork keeps its
+  parent's pick with its model; the agent's own `raven_config` door accepts
+  null for `agents.defaults.reasoningEffort` as the settings page does; and
+  inside a TUI direct chat with an instance `/effort` is refused rather than
+  moving the main conversation while saying "this conversation".
+
 - The settings dialog's **Skills** and **Plugins** pages have an **Add**
   button. Neither page can install anything -- a skill is fetched from Skill
   Hub by `use_skill` and an MCP server is connected from the PlugHub catalogue
@@ -29,7 +48,6 @@ All notable changes to Raven are documented here.
   with the lead-in after it. The Plugins page says under the button that
   a server the catalogue does not list goes into `tools.mcpServers` in the
   config file by hand, naming the file the gateway reported.
-
 - The history slot is filled by a **history strategy**, `context.history.strategy`:
   `compacting` (the new default) or `curator` (the previous behaviour, one
   setting away). Compacting keeps the conversation verbatim until the window
@@ -555,6 +573,11 @@ All notable changes to Raven are documented here.
   before it, the turn sent no closing text, and the answer was recorded but
   never shown.
 
+- The settings page showed the reasoning effort as **Low** when the key was
+  not set at all, while the provider's own default was what ran. The unset
+  state is now its own rung, *Provider default*, which also clears the key
+  (`agents.defaults.reasoningEffort` accepts null) rather than leaving a word
+  the install never chose.
 - In the TUI on native Windows, typing with a Chinese IME no longer duplicates
   characters. The console was told to re-encode keys through Kitty keyboard /
   modifyOtherKeys, which doubles IME commits before they reach Raven's input

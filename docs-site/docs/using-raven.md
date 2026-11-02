@@ -57,6 +57,33 @@ Use the UI's conversation picker for interactive sessions. A sub-agent
 `instance` continues that child's conversation; it is not the host session id
 or a DAG node id. See [DAG Orchestration](orchestration.md).
 
+## Set the reasoning effort
+
+The reasoning effort is how much the model thinks before each answer. The
+words are `minimal`, `low`, `medium` and `high`. Each provider maps them to its
+own request (Anthropic's adaptive effort and thinking budgets, the
+`reasoning_effort` field of OpenAI-style APIs), and a model with no thinking to
+move ignores them. Left unset, the provider's own default applies.
+
+Two places set it:
+
+- **For every conversation**: in the WebUI, open Settings, then *Parameters* on
+  the *Chat* row, then *Reasoning effort*; or set
+  `agents.defaults.reasoningEffort` in `~/.raven/config.json`. The first rung,
+  *Provider default*, clears the key.
+- **For one conversation**: the *Reasoning effort* row of the model picker in
+  the WebUI (open it from the model chip beside the composer), or `/effort
+  <word>` in the TUI. `/effort` alone reports the effort in force, and
+  `/effort default` returns the conversation to the global setting. Inside a
+  direct chat with a sub-agent instance the command is refused: the pick is
+  the main conversation's, and an instance has none of its own.
+
+A pick made for one conversation outranks the global setting and the
+conversation's mode. It is kept on the conversation's own record, so it survives
+a gateway restart and comes back when the conversation is resumed, and it lands
+on the next turn. It moves Raven's own model calls only; sub-agents keep the
+configured default.
+
 ## Add capability deliberately
 
 Use a skill for reusable instructions, MCP for external tools, and a plugin for

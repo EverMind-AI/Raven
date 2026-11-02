@@ -3532,6 +3532,72 @@
       "errors": []
     },
     {
+      "name": "session.set_effort",
+      "summary": "Report, set or clear the reasoning effort this session's own model calls run at. Neither field reports; clear=true drops the pick so the session follows the default again; effort=<word> runs from the next turn on. Kept on the session's record, so it outlives the gateway. Raven's own calls only: sub-agents keep the configured default.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "effort",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "One of the words in options. Omit it to report without changing."
+          }
+        },
+        {
+          "name": "clear",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "description": "Drop the session's own pick and follow the default again. Wins over effort when both are given."
+          }
+        }
+      ],
+      "result": {
+        "name": "SessionSetEffortResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "session_key"
+          ],
+          "properties": {
+            "session_key": {
+              "type": "string"
+            },
+            "effort": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The session's own pick, or null while it follows the default."
+            },
+            "default": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "What the session runs at with no pick of its own: its mode's effort where the catalogue sets one, else agents.defaults.reasoningEffort, else null for the provider's own default."
+            },
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The words effort accepts, least first."
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
       "name": "session.set_knowledge",
       "summary": "Choose which knowledge bases this session's turns may search.",
       "description": "Replaces the selection rather than adding to it: the picker sends what is ticked, and a call that added would have no way to say that something was unticked. Answers the selection as it now stands, deduplicated with the order kept -- the order is the only thing saying which base the reader reached for first.",
@@ -12331,6 +12397,13 @@
           "running": {
             "type": "boolean",
             "description": "A turn is in flight on this session right now."
+          },
+          "reasoning_effort": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The reasoning effort this session's own model calls run at: its own pick (session.set_effort), else its mode's, else agents.defaults.reasoningEffort; null when the provider's own default stands."
           },
           "read_only": {
             "type": "boolean",

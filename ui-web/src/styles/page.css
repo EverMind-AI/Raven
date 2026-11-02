@@ -2893,9 +2893,10 @@ textarea:focus, textarea:focus-visible,
    the person is declaring it to be. */
 .mpick .model-typed { color: var(--amber); }
 .mpick .model-typed .nm { font-family: var(--mono); font-size: 12.5px; }
-/* The sub-agent tier, as one row of this picker: a setting of the same
-   conversation, drawn where the model is chosen rather than as a chip of its
-   own (state/tier.ts). */
+/* The sub-agent tier and the reasoning effort, as two rows of this picker:
+   settings of the same conversation, drawn where the model is chosen rather
+   than as chips of their own (state/tier.ts, state/effort.ts). The effort row
+   borrows the tier row's rules whole, so the two read as one block. */
 .mpick .model-tier { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; padding: 8px 12px 6px; border-top: 1px solid var(--line-soft); }
 .mpick .model-tier-k { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--faint); }
 .mpick .model-tier-k svg { width: 12px; height: 12px; flex: none; }
@@ -2912,6 +2913,11 @@ textarea:focus, textarea:focus-visible,
 .mpick .model-seg button { font-size: 11px; padding: 2px 9px; border-radius: 5px; color: var(--muted); }
 .mpick .model-seg button[aria-checked="true"] { background: var(--paper); color: var(--text); font-weight: 600;
   box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
+/* The effort row's control takes the line under its label: five rungs do not
+   fit beside a label in 340px, and a label squeezed onto two lines read as two
+   rows. Stretched, so the five share the width as one control. */
+.mpick .model-effort .model-seg { flex: 1 1 100%; }
+.mpick .model-effort .model-seg button { flex: 1; text-align: center; }
 .mpick .foot { border-top: 1px solid var(--line-soft); padding: 7px 12px;
   display: flex; justify-content: space-between; align-items: center; }
 .mpick .foot button { font-size: 11.5px; color: var(--amber); }

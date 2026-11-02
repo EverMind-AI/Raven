@@ -185,6 +185,9 @@ const info = (title: string): InitInfo => ({
      bases is. Sent rather than left out: a field the offline page never sees
      is a field its picker is never drawn against. */
   knowledge_bases: [],
+  /* What the conversation's own calls think at: the settings fixture's
+     configured default, which is what a conversation with no pick runs at. */
+  reasoning_effort: 'medium',
 })
 
 export interface SessionsFixture {

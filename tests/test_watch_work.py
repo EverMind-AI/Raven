@@ -796,7 +796,10 @@ async def test_the_hand_off_judgement_asks_for_the_turns_effort_too():
 
 
 @pytest.mark.asyncio
-async def test_no_pinned_effort_passes_nothing_so_the_provider_default_stands():
+async def test_no_pinned_effort_sends_the_providers_own_default_as_none():
+    """None is sent, not left out: an argument left out is filled by the
+    provider from the copy of the key it took at boot, which is how a default
+    cleared on a running gateway kept running at the old word."""
     loop, state = _loop()
     await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/run.sh"}, "r", "run /tmp/arena")
-    assert loop._llm_kwargs == [{}], "an explicit None would override the provider's sentinel"
+    assert loop._llm_kwargs == [{"reasoning_effort": None}]

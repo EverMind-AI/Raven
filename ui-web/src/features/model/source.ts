@@ -18,6 +18,8 @@ import { remember } from './recent'
 import { beginLoad, current, currentProvider, failLoad, loadStatus, loadToken, open as openPickerAt, setCurrent, statedTags } from './store'
 
 import type { ParamsOf, ResultOf } from '../../rpc/generated'
+import type { EffortSource } from '../../state/effort'
+import type { Staging } from '../../state/session/staging'
 import type { TierReply, TierSource } from '../../state/tier'
 import type { Recent } from './recent'
 import type { ApiProtocol, Kind, ModelSource, Offer, Provider } from './types'
@@ -373,6 +375,64 @@ export const tierSource: TierSource = {
     tierMenu = (r && r.availableModes) || tierMenu
     return r
   },
+}
+
+/* The reasoning effort over the wire: one method for all three calls, every
+   reply carrying the pick, what the session runs at without one and the
+   words. A draft reads with no key -- the handler answers the default a fresh
+   session starts on -- and stages a pick the way it stages a tier, for the
+   send path to write once the first message has minted a session
+   (state/session/runtime.ts, applyStagedEffort). */
+export const effortSource: EffortSource = {
+  read: async (sid, gen) => {
+    /* The conversation named by the caller, else the one on screen: a switch
+       asks before the current session moves over, so "current" there is the
+       conversation being left (see EffortSource). The ticket is the same guard
+       `loadProviders` keeps -- an answer about a view the reader has already
+       left is dropped rather than painted. */
+    const target = sid !== undefined ? sid : sessionCurrent()
+    const ticket = gen !== undefined ? gen : generation()
+    const r = await gateway().call('session.set_effort', { session_key: target || '' })
+    return ticket === generation() ? r : null
+  },
+  set: async (effort: string | null) => {
+    const sid = sessionCurrent()
+    if (!sid) {
+      /* Staged, and echoed back as though written: there is no server state
+         to contradict it yet. Clearing a staged pick is just dropping it --
+         a draft follows the default anyway. Staged BEFORE the read, so a send
+         during the round trip carries it; and put back when the read fails,
+         because the caller then says the pick was not made and repaints the
+         old rung, and a value left staged would run the first turn at a pick
+         the reader was told did not take. The draft's own object, held across
+         the await: a reader who moved to another draft meanwhile has another
+         one, which this must not touch. */
+      const held = staging()
+      held.effort = effort
+      try {
+        const was = await gateway().call('session.set_effort', { session_key: '' })
+        stood.set(held, effort)
+        return { ...was, effort }
+      } catch (e) {
+        if (held.effort === effort) held.effort = stood.get(held) ?? null
+        throw e
+      }
+    }
+    return gateway().call('session.set_effort', effort
+      ? { session_key: sid, effort }
+      : { session_key: sid, clear: true })
+  },
+}
+
+/* The last pick of each draft whose read landed, which is what a failed read
+   puts back: the value staged before the failing call is not it when a second
+   pick went out while the first was in flight and failed too. Keyed by the
+   draft's staging object, so a draft that was left takes its entry with it. */
+const stood = new WeakMap<Staging, string | null>()
+
+/* Read by the send path next to the staged tier. */
+export function stagedEffort(): string | null {
+  return staging().effort
 }
 
 /* Read by the send path, which applies it next to the staged model. The object

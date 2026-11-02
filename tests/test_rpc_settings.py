@@ -1202,6 +1202,7 @@ async def test_settings_set_new_scalar_keys_write_and_refuse(cfg, key, good, bad
     "key",
     [
         "agents.defaults.contextWindowTokens",
+        "agents.defaults.reasoningEffort",
         "context.curatorModel",
         "sessionTitle.provider",
         "sessions.autoArchiveAfterDays",
