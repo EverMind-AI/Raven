@@ -156,7 +156,7 @@ export const SLASH_TEXT: Record<Locale, Record<string, SlashText>> = {
     },
     effort: {
       name: '思考深度',
-      help: '查看或设置本会话的思考深度 [minimal|low|medium|high|default]'
+      help: '查看或设置本会话的思考深度 [word] - 可选词由当前模型声明'
     },
     fast: {
       name: '快速模式',
@@ -266,7 +266,7 @@ export const SLASH_TEXT: Record<Locale, Record<string, SlashText>> = {
     },
     effort: {
       name: 'effort',
-      help: 'show or set how much the model thinks for this conversation [minimal|low|medium|high|default]'
+      help: 'show or set how much the model thinks for this conversation [word] - the words are the ones the model declares'
     },
     lang: {
       name: 'lang',
@@ -1915,6 +1915,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.effort.low': 'Low',
     'gui.effort.medium': 'Medium',
     'gui.effort.high': 'High',
+    'gui.effort.xhigh': 'Extra high',
+    'gui.effort.max': 'Max',
     'gui.effort.scope':
       'How much the model thinks before each answer, for this conversation only. Sub-agents are not affected.',
     'gui.effort.now': 'Default follows the global setting, which is {name} right now.',
@@ -2538,6 +2540,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.providers.remove_label': 'Remove the name for {model}',
     'gui.settings.providers.model_id': 'Model ID',
     'gui.settings.providers.label_ph': 'Shown as',
+    'gui.settings.providers.effort_ph': 'Effort levels (comma-separated)',
     'gui.settings.providers.description_ph': 'Description (optional)',
     'gui.settings.providers.model_first': 'Pick a model first',
     'gui.settings.providers.label_first': 'Enter a display name',
@@ -5395,6 +5398,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.effort.low': '低',
     'gui.effort.medium': '中',
     'gui.effort.high': '高',
+    'gui.effort.xhigh': '极高',
+    'gui.effort.max': '最高',
     'gui.effort.scope': '模型每次回答前思考多少，只作用于本会话，不影响子智能体。',
     'gui.effort.now': '「默认」跟随设置页里的全局值，当前是「{name}」。',
     'gui.effort.provider': '厂商默认',
@@ -5964,6 +5969,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.providers.remove_label': '移除 {model} 的显示名',
     'gui.settings.providers.model_id': '模型 ID',
     'gui.settings.providers.label_ph': '显示成什么',
+    'gui.settings.providers.effort_ph': '思考深度档位（逗号分隔）',
     'gui.settings.providers.description_ph': '说明（可留空）',
     'gui.settings.providers.model_first': '先选一个模型',
     'gui.settings.providers.label_first': '填个显示名',

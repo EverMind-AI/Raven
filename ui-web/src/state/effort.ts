@@ -48,7 +48,7 @@ export interface EffortReply {
    painted its effort on the new view. The source answers null for a read
    whose switch has been overtaken, and null paints nothing. */
 export interface EffortSource {
-  read(sid?: string | null, gen?: number): Promise<EffortReply | null>
+  read(sid?: string | null, gen?: number, model?: string): Promise<EffortReply | null>
   set(effort: string | null): Promise<EffortReply>
 }
 
@@ -86,6 +86,8 @@ const NAME: Record<string, string> = {
   low: 'gui.effort.low',
   medium: 'gui.effort.medium',
   high: 'gui.effort.high',
+  xhigh: 'gui.effort.xhigh',
+  max: 'gui.effort.max',
 }
 
 export function label(id: string): string {
@@ -142,9 +144,9 @@ function absorb(reply: EffortReply | null | undefined): void {
    neither is reading the view as it stands. A failure hides the row: a
    gateway without the method, or one that could not answer, leaves nothing
    honest to draw. */
-export async function load(sid?: string | null, gen?: number): Promise<void> {
+export async function load(sid?: string | null, gen?: number, model?: string): Promise<void> {
   try {
-    absorb(await ds('effort').read(sid, gen))
+    absorb(await ds('effort').read(sid, gen, model))
   } catch {
     store.set(shut)
   }

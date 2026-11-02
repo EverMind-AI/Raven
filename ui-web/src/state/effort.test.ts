@@ -21,12 +21,12 @@ const WORDS = ['minimal', 'low', 'medium', 'high']
 
 let asked: Array<string | null | undefined>
 /* What each read was about: the conversation and the switch it named. */
-let reads: Array<[string | null | undefined, number | undefined]>
+let reads: Array<[string | null | undefined, number | undefined, string | undefined]>
 let answer: (effort: string | null | undefined) => Promise<EffortReply | null>
 
 function source(): void {
   const src: EffortSource = {
-    read: (sid, gen) => { asked.push(undefined); reads.push([sid, gen]); return answer(undefined) },
+    read: (sid, gen, model) => { asked.push(undefined); reads.push([sid, gen, model]); return answer(undefined) },
     set: (id) => { asked.push(id); return answer(id) as Promise<EffortReply> },
   }
   setSources({ effort: src })
@@ -80,11 +80,11 @@ describe('the reasoning effort', () => {
        current session moves over to it: the source is told which, so it does
        not ask about the one being left. */
     await effort.load('cli:two', 7)
-    expect(reads).toEqual([['cli:two', 7]])
+    expect(reads).toEqual([['cli:two', 7, undefined]])
     await effort.load(null, 8)
-    expect(reads).toEqual([['cli:two', 7], [null, 8]])
+    expect(reads).toEqual([['cli:two', 7, undefined], [null, 8, undefined]])
     await effort.load()
-    expect(reads).toEqual([['cli:two', 7], [null, 8], [undefined, undefined]])
+    expect(reads).toEqual([['cli:two', 7, undefined], [null, 8, undefined], [undefined, undefined, undefined]])
   })
 
   it('paints nothing from a read the source dropped, and keeps what it had', async () => {
@@ -111,10 +111,10 @@ describe('the reasoning effort', () => {
   })
 
   it('shows a word this build does not know as the server spelt it', async () => {
-    answer = async () => ({ effort: 'xhigh', default: null, options: [...WORDS, 'xhigh'] })
+    answer = async () => ({ effort: 'turbo', default: null, options: [...WORDS, 'turbo'] })
     await effort.load()
-    expect(names()).toContain('xhigh')
-    expect(ticked()).toEqual(['xhigh'])
+    expect(names()).toContain('turbo')
+    expect(ticked()).toEqual(['turbo'])
   })
 
   it('takes the effort from the reply, not from the rung that was clicked', async () => {
@@ -156,4 +156,21 @@ describe('the reasoning effort', () => {
     effort.pick('')
     expect(asked).toEqual([undefined])
   })
+})
+
+
+it('a reply with no words hides the row', async () => {
+  answer = async () => ({ session_key: 'cli:one', effort: null, default: 'low', options: [] })
+  await effort.load()
+  expect(effort.offered()).toBe(false)
+})
+
+it('labels xhigh and max with their own words', () => {
+  expect(effort.label('xhigh')).toBe('gui.effort.xhigh')
+  expect(effort.label('max')).toBe('gui.effort.max')
+})
+
+it('a read carries the model a draft asked about', async () => {
+  await effort.load('', 3, 'openai/gpt-5.5-pro')
+  expect(reads.at(-1)).toEqual(['', 3, 'openai/gpt-5.5-pro'])
 })

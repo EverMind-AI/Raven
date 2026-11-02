@@ -10,6 +10,7 @@ import { t } from '../../i18n/t'
 import { current as sessionCurrent } from '../../lib/session'
 import { supportsModelSelectionOnly } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
+import { load as loadEffort } from '../../state/effort'
 import { generation } from '../../state/session/generation'
 import { staging } from '../../state/session/staging'
 import { show as toast } from '../../state/toast'
@@ -313,6 +314,10 @@ export async function persistModel(
     // (every view switch does) -- so without this the resolved draft write
     // repaints a chip that has since been loaded correctly for someone else.
     if (!sid && !staging().model && gen === generation()) showModel(m, provider)
+    /* The row describes this model's words; the model just moved, so read it
+       again under the same ticket. A draft has no session to name, so it
+       passes the model it staged. */
+    if (gen === generation()) void loadEffort(sid ?? null, gen, sid ? undefined : m)
     /* The write landed in a process with no agent loop -- a first run, where
        the gateway started before there was a model to build one from. Said
        back so the onboarding wizard can tell the reader, instead of the next
@@ -349,9 +354,11 @@ export async function persistModel(
        reported, because the rollback this needs is the one the catch already
        does, and `data.detail` is the shape it renders. */
     if (r && r.applied === false) throw { data: { detail: t('gui.model.refused') } }
+    void loadEffort(sid, gen)
     return
   }
   staging().model = { model: m, provider }
+  void loadEffort(null, gen, m)
   return 'staged'
 }
 
@@ -411,15 +418,18 @@ export const tierSource: TierSource = {
    send path to write once the first message has minted a session
    (state/session/runtime.ts, applyStagedEffort). */
 export const effortSource: EffortSource = {
-  read: async (sid, gen) => {
+  read: async (sid, gen, model) => {
     /* The conversation named by the caller, else the one on screen: a switch
        asks before the current session moves over, so "current" there is the
        conversation being left (see EffortSource). The ticket is the same guard
        `loadProviders` keeps -- an answer about a view the reader has already
-       left is dropped rather than painted. */
+       left is dropped rather than painted. A draft names the model it staged,
+       because it has no session record for the handler to read one from. */
     const target = sid !== undefined ? sid : sessionCurrent()
     const ticket = gen !== undefined ? gen : generation()
-    const r = await gateway().call('session.set_effort', { session_key: target || '' })
+    const params: { session_key: string; model?: string } = { session_key: target || '' }
+    if (model) params.model = model
+    const r = await gateway().call('session.set_effort', params)
     return ticket === generation() ? r : null
   },
   set: async (effort: string | null) => {
@@ -436,8 +446,11 @@ export const effortSource: EffortSource = {
          one, which this must not touch. */
       const held = staging()
       held.effort = effort
+      const staged = held.model
+      const params: { session_key: string; model?: string } = { session_key: '' }
+      if (staged) params.model = staged.model
       try {
-        const was = await gateway().call('session.set_effort', { session_key: '' })
+        const was = await gateway().call('session.set_effort', params)
         stood.set(held, effort)
         return { ...was, effort }
       } catch (e) {

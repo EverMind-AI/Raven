@@ -76,7 +76,10 @@ async function live({ session = null, answers = null }: Options = {}) {
       'src/state/tier': { load: () => {} },
       /* The effort store's read is recorded, not run: what the staged write's
          re-read is keyed to is the whole of what one case below pins. */
-      'src/state/effort': { load: (sid?: string | null, gen?: number) => calls.push(['loadEffort', { sid, gen }]) },
+      'src/state/effort': {
+        load: (sid?: string | null, gen?: number, model?: string) =>
+          calls.push(['loadEffort', model ? { sid, gen, model } : { sid, gen }]),
+      },
       'src/state/perm': { setFromConfig: (m: string) => calls.push(['setPermMode', m]) },
       'src/state/session/residency': { park: () => {} },
       'src/features/settings/store': {
@@ -147,7 +150,8 @@ async function live({ session = null, answers = null }: Options = {}) {
       return generation()
     },
     gen: () => generation(),
-    effortRead: (sid?: string | null, gen?: number) => model.effortSource.read(sid, gen),
+    effortRead: (sid?: string | null, gen?: number, effortModel?: string) =>
+      model.effortSource.read(sid, gen, effortModel),
     effortSet: (effort: string | null) => model.effortSource.set(effort),
     /* Every read the effort store was asked for, as [conversation, ticket]. */
     effortReads: () => calls.filter((c) => c[0] === 'loadEffort').map((c) => c[1] as { sid: string | null | undefined; gen: number | undefined }),
@@ -282,6 +286,12 @@ describe('the live effort read', () => {
     void h.effortRead(null)
     expect(h.param(1)).toEqual({ session_key: '' })
   })
+
+  it('forwards the model a draft asks about', async () => {
+    const h = await live()
+    void h.effortRead(null, undefined, 'openai/gpt-5.5-pro')
+    expect(h.param(0)).toEqual({ session_key: '', model: 'openai/gpt-5.5-pro' })
+  })
 })
 
 describe('the live model persist', () => {
@@ -298,6 +308,18 @@ describe('the live model persist', () => {
        it. The wizard's model step reads this to say so. */
     const h = await live({ answers: { 'config.set': { applied: true, needs_restart: true } } })
     await expect(h.settings.persistModel('m2', 'minimax', 'default')).resolves.toBe('needs_restart')
+  })
+
+  it('re-reads the effort row with a staged model pick', async () => {
+    const h = await live()
+    await h.settings.persistModel('m2', 'minimax', 'session')
+    expect(h.effortReads().at(-1)).toEqual({ sid: null, gen: h.gen(), model: 'm2' })
+  })
+
+  it('re-reads the effort row of the session it wrote', async () => {
+    const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: true } } })
+    await h.settings.persistModel('m2', 'minimax', 'session')
+    expect(h.effortReads().at(-1)).toEqual({ sid: 'sess-1', gen: h.gen() })
   })
 
   it('rejects a refused session write, because only the caller\'s catch puts the chip back', async () => {
@@ -352,7 +374,10 @@ describe('the live model persist', () => {
   it('a session pick writes under that session and moves no default', async () => {
     const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: true } } })
     await h.settings.persistModel('m2', 'minimax', 'session')
-    expect(h.calls).toEqual([['config.set', { key: 'model', value: 'm2', provider: 'minimax', session_id: 'sess-1' }]])
+    expect(h.calls).toEqual([
+      ['config.set', { key: 'model', value: 'm2', provider: 'minimax', session_id: 'sess-1' }],
+      ['loadEffort', { sid: 'sess-1', gen: h.gen() }],
+    ])
     expect([h.settings.defaultModelLive, h.settings.defaultProviderLive]).toEqual(['', ''])
   })
 
@@ -361,7 +386,7 @@ describe('the live model persist', () => {
     const out = await h.settings.persistModel('m2', 'minimax', 'session')
     expect(out).toBe('staged')
     expect(h.overrides.staged.model).toEqual({ model: 'm2', provider: 'minimax' })
-    expect(h.calls).toEqual([])
+    expect(h.calls).toEqual([['loadEffort', { sid: null, gen: h.gen(), model: 'm2' }]])
   })
 
   /* The composer chip's pick: one write moves this conversation and the
