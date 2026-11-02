@@ -954,6 +954,18 @@ class TurnPathMixin:
             )
             self.context.add_tool_result(messages, call_id, autofill_resolver.TOOL_NAME, row.get("summary", ""))
 
+    def _answered_by_tool(self, turn_rows: list[dict]) -> bool:
+        """Whether this turn's tools already handed the reader its answer.
+
+        Two tools answer for the model: the message tool's send and ``deliver_files``' manifest. Both
+        are live verdicts for this turn, so every reader of "already answered" asks this one question
+        -- the give-up escape, the answerless exit, and the ``replied_via_tool`` mark filed below.
+        """
+        message_tool = self.tools.get("message")
+        if isinstance(message_tool, MessageTool) and message_tool.sent_in_turn:
+            return True
+        return _delivered_files(turn_rows)
+
     async def _run_agent_loop(  # noqa: C901 (cc 100: pre-existing, above the ceiling)
         self,
         initial_messages: list[dict],
@@ -981,6 +993,7 @@ class TurnPathMixin:
         reply_awaited: bool = False,
         window_reading: dict[str, int] | None = None,
         silence_taught: bool = False,
+        turn_start_idx: int = 0,
     ) -> tuple[str | None, list[str], list[dict], LoopOutcome]:
         """Run the agent iteration loop.
 
@@ -2379,17 +2392,17 @@ class TurnPathMixin:
                 )
                 answered_by_tool = False
                 if action in _GIVEN_UP_ONCE_ANSWERED:
-                    mt = self.tools.get("message")
-                    answered_by_tool = isinstance(mt, MessageTool) and mt.sent_in_turn
+                    turn_rows = turn_log.messages() if turn_log is not None else messages
+                    answered_by_tool = self._answered_by_tool(turn_rows[turn_start_idx:])
                 if answered_by_tool:
-                    # The reader already has the answer, sent by the message tool. A
+                    # The reader already has the answer, sent or delivered by a tool. A
                     # reply the instant moves (prefill, nudge, continuation) did not
                     # mend is not worth a backed-off re-ask of the same step, a model
                     # switch, or a verdict on a turn that answered: it ends answered,
                     # with no text of its own, as it did before recovery could tell
                     # the difference.
                     logger.info(
-                        "empty-recovery: the message tool already answered this turn; ending it on a {} reply instead of {}",
+                        "empty-recovery: a tool already answered this turn; ending it on a {} reply instead of {}",
                         kind.name,
                         action.name,
                     )
@@ -3334,6 +3347,7 @@ class TurnPathMixin:
                 reply_awaited=reply_awaited,
                 window_reading=reading,
                 silence_taught=teaches_silence(content),
+                turn_start_idx=turn_start_idx,
             )
 
         # Taken BEFORE the first attempt, because the loop appends to the list it is
@@ -3470,8 +3484,7 @@ class TurnPathMixin:
                 # salvage have all had their say, so what is left is a turn with
                 # no answer: the failure the handler below files and the lane
                 # reports, not a reply for the outlets to deliver.
-                mt = self.tools.get("message")
-                answered = isinstance(mt, MessageTool) and mt.sent_in_turn
+                answered = self._answered_by_tool(live["log"].messages()[turn_start_idx:])
                 if not answered:
                     if outcome.error:
                         raise AnswerlessTurnError(
@@ -3587,7 +3600,7 @@ class TurnPathMixin:
             # message tool answered sends no reply of its own, so its marker row stays.
             _file_composed_reply(turn_msgs, final_content)
         delivered_files = _delivered_files(turn_msgs[turn_start_idx:])
-        if sent_by_tool or delivered_files:
+        if self._answered_by_tool(turn_msgs[turn_start_idx:]):
             _stamp_replied_via_tool(turn_msgs, turn_start_idx)
         if delivered_files and silence is not None:
             silence["delivered_files"] = True
@@ -3650,6 +3663,13 @@ class TurnPathMixin:
                     sender_id,
                     preview,
                 )
+            return None
+
+        if delivered_files and outcome.no_output:
+            # The files reached the reader with the call that delivered them, and the model gave no
+            # words of its own: there is nothing left to send. The fallback text is the record's, not
+            # a reply, and a turn the message tool answered returns None on the same terms.
+            logger.info("Turn for {}:{} delivered files and gave no reply of its own", channel, sender_id)
             return None
 
         if silent and delivered_files:

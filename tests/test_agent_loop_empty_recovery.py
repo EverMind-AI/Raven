@@ -5477,6 +5477,43 @@ async def test_a_turn_that_delivered_files_still_sends_the_words_it_ends_on(work
 
 
 @pytest.mark.asyncio
+async def test_a_turn_that_delivered_files_and_said_nothing_is_answered(workspace, monkeypatch):
+    """The shape the message tool already escapes on: the files are in front of the reader, so an empty
+    reply after the delivery ends the turn answered rather than spending the recovery ladder and failing
+    it. The empty replies past the escape are scripted so the old path's extra calls show up as unused,
+    not as a missing script."""
+    calls = _served(monkeypatch, [_tool_reply("deliver_files", "{}")] + [_reply("")] * 6)
+    agent = _litellm_agent(workspace)
+    agent.tools.register(_DeliversAFile())
+    silence: dict[str, bool | str] = {}
+
+    out = await agent._process_message(_turn("send me the report"), session_key="s1", silence=silence)
+
+    assert out is None, "the delivery answered; there is no reply of the model's to send"
+    assert len(calls) == 3, "the tool call and the two empty replies before the give-up, not six"
+    assert silence == {"delivered_files": True}, "the live verdict the outcome reads"
+    assistants = [m for m in agent.sessions.get_or_create("s1").messages if m["role"] == "assistant"]
+    assert [bool(m.get("replied_via_tool")) for m in assistants] == [True]
+    assert assistants[0]["tool_calls"][0]["function"]["name"] == "deliver_files"
+
+
+@pytest.mark.asyncio
+async def test_with_recovery_off_a_turn_that_delivered_files_and_said_nothing_is_answered(workspace, monkeypatch):
+    """Recovery off takes the empty reply at its word. A delivery before it is still an answer, so the
+    turn files the verdict instead of raising the answerless failure."""
+    calls = _served(monkeypatch, [_tool_reply("deliver_files", "{}"), _reply("")])
+    agent = _litellm_agent(workspace, limits=RecoveryLimits(enabled=False))
+    agent.tools.register(_DeliversAFile())
+
+    out = await agent._process_message(_turn("send me the report"), session_key="s1")
+
+    assert out is None
+    assert len(calls) == 2, "nothing asked the model again: the delivery was the answer"
+    assistants = [m for m in agent.sessions.get_or_create("s1").messages if m["role"] == "assistant"]
+    assert [bool(m.get("replied_via_tool")) for m in assistants] == [True]
+
+
+@pytest.mark.asyncio
 async def test_a_turn_the_message_tool_answered_with_no_reply_of_its_own_files_the_verdict(workspace, monkeypatch):
     """The commonest shape: the tool sends, and the model then says nothing. The empty closing row is not
     filed, so the verdict rides the last assistant row that is: the call that sent."""

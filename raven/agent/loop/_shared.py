@@ -110,8 +110,8 @@ _NOTICE_KEY = "_notice"
 # ``_notice``: ``_save_turn`` writes it as ``silent``.
 _SILENT_KEY = "_silent"
 
-# Marks the last assistant row with text or tool calls of a turn whose reply went out
-# through the message tool, read off ``MessageTool.sent_in_turn``: the live verdict, so a stored
+# Marks the last assistant row with text or tool calls of a turn a tool already answered -- a
+# message sent or files delivered, read off ``_answered_by_tool``: the live verdict, so a stored
 # reader need not guess it from the calls it can see. ``_save_turn`` writes it as
 # ``replied_via_tool``.
 _REPLIED_VIA_TOOL_KEY = "_replied_via_tool"
