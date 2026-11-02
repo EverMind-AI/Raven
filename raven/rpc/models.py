@@ -6904,7 +6904,76 @@ class ImportedUploadResult(_Strict):
     imported_at: str = Field(..., description="When it was imported, ISO 8601 in UTC.")
 
 
+class RobotDraft(_Strict):
+    domain: Literal["personal"]
+    confirm_personal: bool = Field(..., strict=True)
+    name: str = Field(..., min_length=1, max_length=80)
+    type: Literal["sparkbot", "http_device", "robot_dog", "agv", "mobile_manipulator", "other"]
+    connection_mode: Literal["metadata", "http_status"] = "metadata"
+    model: str = Field(default="", max_length=100)
+    location: str = Field(default="", max_length=100)
+    note: str = Field(default="", max_length=500)
+    status_url: str = Field(default="", max_length=300)
+    expected_project: str = Field(default="", max_length=80)
+
+
+class RobotObservation(_Strict):
+    status: Literal["reachable", "not_connected", "unknown", "error"]
+    checked_at: str
+    checked_epoch: float
+    http_status: int | None
+    detail: str
+    observed: dict[str, JsonValue]
+
+
+class RobotRow(_Strict):
+    domain: Literal["personal"]
+    name: str
+    type: Literal["sparkbot", "http_device", "robot_dog", "agv", "mobile_manipulator", "other"]
+    connection_mode: Literal["metadata", "http_status"]
+    model: str
+    location: str
+    note: str
+    status_url: str
+    expected_project: str
+    id: str
+    revision: int
+    status: Literal["reachable", "not_connected", "unknown", "error"]
+    observation: RobotObservation | None
+    stale: bool
+    deleted_at: str | None
+    updated_at: str
+
+
+class RobotsListParams(_Strict):
+    trash: bool = False
+
+
+class RobotsListResult(_Strict):
+    devices: list[RobotRow]
+    status_ttl_seconds: int
+
+
+class RobotsSaveParams(_Strict):
+    device: RobotDraft
+    id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
+    revision: int | None = Field(default=None, ge=1, strict=True)
+
+
+class RobotsIdParams(_Strict):
+    id: str = Field(..., pattern=r"^[a-f0-9]{32}$")
+
+
+class RobotsDeviceResult(_Strict):
+    device: RobotRow
+
+
 METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
+    "robots.list": (RobotsListParams, RobotsListResult),
+    "robots.save": (RobotsSaveParams, RobotsDeviceResult),
+    "robots.remove": (RobotsIdParams, OkResult),
+    "robots.restore": (RobotsIdParams, RobotsDeviceResult),
+    "robots.check": (RobotsIdParams, RobotsDeviceResult),
     # knowledge.* -- bases and their documents, served by the in-process engine
     "knowledge.status": (KnowledgeStatusParams, KnowledgeStatusResult),
     "knowledge.bases.list": (KnowledgeBasesListParams, KnowledgeBasesListResult),

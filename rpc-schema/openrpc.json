@@ -12128,6 +12128,181 @@
           "$ref": "#/components/errors/ImportedBusy"
         }
       ]
+    },
+    {
+      "name": "robots.list",
+      "summary": "List personal robot registrations or recoverable trash without contacting any device.",
+      "params": [
+        {
+          "name": "trash",
+          "required": false,
+          "schema": {
+            "default": false,
+            "type": "boolean"
+          }
+        }
+      ],
+      "result": {
+        "name": "RobotsListResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "devices": {
+              "items": {
+                "$ref": "#/components/schemas/RobotRow"
+              },
+              "type": "array"
+            },
+            "status_ttl_seconds": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "devices",
+            "status_ttl_seconds"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "robots.save",
+      "summary": "Create or update a confirmed personal robot registration; no credentials or control endpoints.",
+      "params": [
+        {
+          "name": "device",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/RobotDraft"
+          }
+        },
+        {
+          "name": "id",
+          "required": false,
+          "schema": {
+            "default": null,
+            "pattern": "^[a-f0-9]{32}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "revision",
+          "required": false,
+          "schema": {
+            "default": null,
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "RobotsDeviceResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "device": {
+              "$ref": "#/components/schemas/RobotRow"
+            }
+          },
+          "required": [
+            "device"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "robots.remove",
+      "summary": "Move a robot registration to recoverable trash without contacting the device.",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "pattern": "^[a-f0-9]{32}$",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "OkResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "robots.restore",
+      "summary": "Restore a registration from trash and discard its previous health observation.",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "pattern": "^[a-f0-9]{32}$",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "RobotsDeviceResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "device": {
+              "$ref": "#/components/schemas/RobotRow"
+            }
+          },
+          "required": [
+            "device"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "robots.check",
+      "summary": "Make one bounded read-only GET to the registered private IPv4 health endpoint; never install or execute a node.",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "pattern": "^[a-f0-9]{32}$",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "RobotsDeviceResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "device": {
+              "$ref": "#/components/schemas/RobotRow"
+            }
+          },
+          "required": [
+            "device"
+          ],
+          "type": "object"
+        }
+      }
     }
   ],
   "components": {
@@ -18667,6 +18842,256 @@
             "description": "The agent entries on the machine that are switched off, by name: they still hold the machine for the add, so the card says so instead of counting them nowhere."
           }
         }
+      },
+      "RobotObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "enum": [
+              "reachable",
+              "not_connected",
+              "unknown",
+              "error"
+            ],
+            "type": "string"
+          },
+          "checked_at": {
+            "type": "string"
+          },
+          "checked_epoch": {
+            "type": "number"
+          },
+          "http_status": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "observed": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "status",
+          "checked_at",
+          "checked_epoch",
+          "http_status",
+          "detail",
+          "observed"
+        ],
+        "type": "object"
+      },
+      "RobotRow": {
+        "additionalProperties": false,
+        "properties": {
+          "domain": {
+            "const": "personal",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "sparkbot",
+              "http_device",
+              "robot_dog",
+              "agv",
+              "mobile_manipulator",
+              "other"
+            ],
+            "type": "string"
+          },
+          "connection_mode": {
+            "enum": [
+              "metadata",
+              "http_status"
+            ],
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "status_url": {
+            "type": "string"
+          },
+          "expected_project": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "reachable",
+              "not_connected",
+              "unknown",
+              "error"
+            ],
+            "type": "string"
+          },
+          "observation": {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "enum": [
+                  "reachable",
+                  "not_connected",
+                  "unknown",
+                  "error"
+                ],
+                "type": "string"
+              },
+              "checked_at": {
+                "type": "string"
+              },
+              "checked_epoch": {
+                "type": "number"
+              },
+              "http_status": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "detail": {
+                "type": "string"
+              },
+              "observed": {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "status",
+              "checked_at",
+              "checked_epoch",
+              "http_status",
+              "detail",
+              "observed"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "domain",
+          "name",
+          "type",
+          "connection_mode",
+          "model",
+          "location",
+          "note",
+          "status_url",
+          "expected_project",
+          "id",
+          "revision",
+          "status",
+          "observation",
+          "stale",
+          "deleted_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "RobotDraft": {
+        "additionalProperties": false,
+        "properties": {
+          "domain": {
+            "const": "personal",
+            "type": "string"
+          },
+          "confirm_personal": {
+            "type": "boolean"
+          },
+          "name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "sparkbot",
+              "http_device",
+              "robot_dog",
+              "agv",
+              "mobile_manipulator",
+              "other"
+            ],
+            "type": "string"
+          },
+          "connection_mode": {
+            "default": "metadata",
+            "enum": [
+              "metadata",
+              "http_status"
+            ],
+            "type": "string"
+          },
+          "model": {
+            "default": "",
+            "maxLength": 100,
+            "type": "string"
+          },
+          "location": {
+            "default": "",
+            "maxLength": 100,
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "maxLength": 500,
+            "type": "string"
+          },
+          "status_url": {
+            "default": "",
+            "maxLength": 300,
+            "type": "string"
+          },
+          "expected_project": {
+            "default": "",
+            "maxLength": 80,
+            "type": "string"
+          }
+        },
+        "required": [
+          "domain",
+          "confirm_personal",
+          "name",
+          "type"
+        ],
+        "type": "object"
       }
     },
     "errors": {

@@ -39,6 +39,7 @@ from raven.rpc.methods.playbooks import register_playbooks_methods
 from raven.rpc.methods.plughub import register_plughub_methods
 from raven.rpc.methods.question import register_question_methods
 from raven.rpc.methods.reload import register_reload_methods
+from raven.rpc.methods.robots import register_robots_methods
 from raven.rpc.methods.session import register_session_methods
 from raven.rpc.methods.setup import register_setup_methods
 from raven.rpc.methods.shell import register_shell_methods
@@ -275,6 +276,7 @@ def register_aligned_methods_except_system(
     # unconditionally: the registry is a file, and the node pool is the
     # process's own.
     register_machines_methods(dispatcher)
+    register_robots_methods(dispatcher)
 
 
 __all__ = [
@@ -294,6 +296,7 @@ __all__ = [
     "register_console_methods",
     "register_knowledge_methods",
     "register_machines_methods",
+    "register_robots_methods",
     "register_memory_methods",
     "register_playbooks_methods",
     "register_plughub_methods",
