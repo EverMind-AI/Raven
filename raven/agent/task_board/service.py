@@ -115,7 +115,14 @@ class TaskBoardService:
         """The session store's delete observer: the board and its notes go with the
         conversation, so one that later takes the same key starts with none. Called
         synchronously by the store, so it takes no lock: the clear it records is what
-        turns away an update still on its way, which checks it and writes in one step."""
+        turns away an update still on its way, which checks it and writes in one step.
+
+        The store calls it with the outcome of every delete it is asked for. One the disk
+        refused leaves the transcript, and the conversation with it, so its board stays;
+        one with no transcript to remove -- never saved, or gone already -- still takes
+        an orphaned board along."""
+        if not removed and self._sessions.exists(session_key):
+            return
         self._generation[session_key] = self.generation(session_key) + 1
         self._shown.pop(session_key, None)
         reset_board(self.session_dir(session_key))

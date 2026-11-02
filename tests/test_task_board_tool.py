@@ -335,3 +335,44 @@ async def test_a_deleted_conversation_takes_its_board_and_notes_with_it(sessions
     assert not (sessions.session_dir(KEY) / NOTES_FILENAME).exists()
     assert service.generation(KEY) == before + 1
     assert await service.ack_turn_notes(KEY) == [], "the notes it was shown went with it"
+
+
+async def test_a_conversation_whose_delete_failed_keeps_its_board_and_notes(sessions):
+    """The store tells observers of a delete it could not carry out (``removed`` false, the
+    transcript still on disk): the conversation is still there, and so is its board."""
+    service = TaskBoardService(sessions)
+    session = sessions.get_or_create(KEY)
+    session.add_message("user", "hi", timestamp="2026-11-02T08:00:00")
+    sessions.save(session)
+    save_board(sessions.session_dir(KEY), Board([_waiting("g_a", "Fix bug A", ["Which fix?"])], []))
+    await service.ignore_question(KEY, "g_a", "s_g_a", "Which fix?")
+    before = service.generation(KEY)
+
+    service.on_session_deleted(KEY, False)
+
+    assert (sessions.session_dir(KEY) / BOARD_FILENAME).exists()
+    assert (sessions.session_dir(KEY) / NOTES_FILENAME).exists()
+    assert service.generation(KEY) == before, "an update on its way still belongs to a live conversation"
+
+
+async def test_a_delete_with_no_transcript_to_remove_still_takes_the_orphan_board(sessions):
+    service = TaskBoardService(sessions)
+    save_board(sessions.session_dir(KEY), Board([_waiting("g_a", "Fix bug A", [])], []))
+
+    service.on_session_deleted(KEY, False)
+
+    assert not (sessions.session_dir(KEY) / BOARD_FILENAME).exists()
+
+
+async def test_the_stores_word_that_it_removed_the_conversation_is_final(sessions):
+    """``removed`` is the outcome; the transcript is looked at only to tell a delete the disk
+    refused from one that had nothing to remove."""
+    service = TaskBoardService(sessions)
+    session = sessions.get_or_create(KEY)
+    session.add_message("user", "hi", timestamp="2026-11-02T08:00:00")
+    sessions.save(session)
+    save_board(sessions.session_dir(KEY), Board([_waiting("g_a", "Fix bug A", [])], []))
+
+    service.on_session_deleted(KEY, True)
+
+    assert not (sessions.session_dir(KEY) / BOARD_FILENAME).exists()

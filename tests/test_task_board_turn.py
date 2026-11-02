@@ -561,3 +561,33 @@ async def test_the_hosts_recall_asks_its_own_loop_what_still_runs(tmp_path, monk
     out = await tool.execute(action="recall", group_id="g_a")
 
     assert f"dag:{run} (Review fixes): running" in out
+
+
+async def test_a_delete_the_disk_refuses_keeps_the_board_and_the_update_on_its_way(tmp_path, monkeypatch):
+    """Refused only the transcript's unlink -- an open handle on Windows -- the store answers
+    false with the conversation intact, and the board stays with it."""
+    import pathlib
+
+    gate = asyncio.Event()
+    agent = _agent(tmp_path, Recording([LLMResponse(content=ANSWER), BOARD_REPLY], gate=gate))
+    await agent.start_plugin_services()
+    try:
+        await agent._process_message(_turn(), session_key=KEY)
+        transcript = agent.sessions.session_path(KEY)
+        real_unlink = pathlib.Path.unlink
+
+        def refuse(self, *args, **kwargs):
+            if self == transcript:
+                raise PermissionError(13, "Access is denied")
+            return real_unlink(self, *args, **kwargs)
+
+        monkeypatch.setattr(pathlib.Path, "unlink", refuse)
+        assert agent.sessions.delete(KEY) is False
+        monkeypatch.undo()
+        gate.set()
+        await _drain(agent)
+    finally:
+        await agent.stop_plugin_services()
+
+    assert transcript.exists()
+    assert load_board(agent.sessions.session_dir(KEY)).groups[0].title == "Fix bug A"

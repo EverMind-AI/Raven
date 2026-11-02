@@ -532,7 +532,9 @@ update still on its way finds the clear and writes nothing. A deleted conversati
 board and notes along, so a chat that later takes the same key starts with none: the host's
 service is the session store's delete observer (`on_session_deleted`, attached by a resident
 host with the plugins' observers), and `raven session delete`, which runs where no observer is
-attached, removes them itself. `session.branch` copies the board with the transcript. Compaction leaves the board alone -- surviving compaction is part of its purpose.
+attached, removes them itself. The store calls the observer with the outcome of every delete it is
+asked for: one the disk refused leaves the transcript, and the board stays with it; one with no
+transcript to remove still takes an orphaned board along. `session.branch` copies the board with the transcript. Compaction leaves the board alone -- surviving compaction is part of its purpose.
 
 6.4 **Sessions from before the board.** No file: `tasks.board` answers an empty board and
 the page draws the session's Tasks as the old flat list (5.5). No backfill.
