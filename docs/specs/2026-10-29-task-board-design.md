@@ -87,7 +87,7 @@ and is what hangs under a step.
 ### 1. The board and where it lives
 
 One JSON file per session, `<session_dir>/task_board.json`, where `session_dir` is
-`SessionManager.session_dir(key)` (`raven/session/manager.py:702`) -- the directory that
+`SessionManager.session_dir(key)` (`raven/session/manager.py`) -- the directory that
 already holds the session's sub-agent records beside its transcript. Written atomically
 (temporary file + rename) by a single writer per session (2.4).
 
@@ -126,7 +126,8 @@ already holds the session's sub-agent records beside its transcript. Written ato
   turn's opening frame named, by which the page finds a turn opened on the open page (5.3);
   it may be absent.
 - A step's `tasks` entries carry `{kind, id}` in exactly the address `tasks.list` uses -- a
-  spawn's `node_id`, a DAG run's `run_id` (`raven/rpc/methods/tasks.py:264`, `:447`) -- and
+  spawn's `node_id`, a DAG run's `run_id` (`_spawn_row` and `_dag_row` in
+  `raven/rpc/methods/tasks.py`) -- and
   the `summary` the dispatching call gave, so recall and an inert chip (5.2) still have a
   name. The page joins them to its `TaskRow`s by the existing `taskKey`.
 - A step's `summary` is what recall reads back. On the step that leaves its group
@@ -160,9 +161,8 @@ because prompt caching matches the request prefix in the order tools, system, me
 second schema present only in the post-turn call would miss the cache from its first token.
 
 **Registration.** Beside the orchestration tools in `_register_orchestration_tools`
-(`raven/agent/loop/wiring.py:1498`), under the same `not is_subagent_process()` gate
-(`:1358`), and only while `agents.defaults.taskBoard.enabled` is true (7). The host sets
-`RAVEN_SUBAGENT` on every child it launches (`raven/home.py:82`, `subagent_role_env`), so a
+(`raven/agent/loop/wiring.py`), under the same `not is_subagent_process()` gate, and only while `agents.defaults.taskBoard.enabled` is true (7). The host sets
+`RAVEN_SUBAGENT` on every child it launches (`raven/home.py`, `subagent_role_env`), so a
 product agent the host runs never sees the tool; the five product configs also set
 `taskBoard.enabled: false`, so a product served standalone does not either. The tool is
 resident under tool-search compaction (`DEFAULT_ALWAYS_VISIBLE`,
@@ -243,17 +243,17 @@ post-turn call itself and hands them to the store. Inside that call the converse
 
 ### 3. The post-turn call
 
-**Where.** `_process_message` (`raven/agent/loop/turn_path.py:2723`), after the turn is
-saved and `harness.memory.after_turn` has run (`:3446`), beside Step 4's post-action
-learning (`:3465`): launched as a background task held in `_consolidation_tasks`, so the
+**Where.** `_process_message` (`raven/agent/loop/turn_path.py`), after the turn is
+saved and `harness.memory.after_turn` has run, beside Step 4's post-action
+learning: launched as a background task held in `_consolidation_tasks`, so the
 reply has already gone out and shutdown drains it like the others.
 
 **Input.** The message list `_run_agent_loop` returned -- the window of the turn's last call
 plus its final answer -- the same tools array and system message that last call sent, and
 one appended user-role instruction rendered from `raven/templates/prompts/{en,zh}/
 task_board_update.md` through `raven.i18n.prompt`. It is the shape the early-exit synthesis
-call already uses (`turn_path.py:755-775`: "the turn's own conversation plus one
-instruction"). The instruction carries:
+call already uses (`_synthesize_final_on_exhaustion` in `turn_path.py`: "the turn's own conversation plus
+one instruction"). The instruction carries:
 
 - the board as it stands: every open group's id, title, status, summary and the titles of
   its last two steps; every completed group's id and title;
@@ -279,7 +279,7 @@ request a matter even when the turn finished it.
 **The dispatch list.** The turn's own tool rows -- what the turn added (`TurnLog.added`),
 never the history it opened with, where every earlier turn's spawns still sit -- read the way
 `session.history` already reads
-them (`raven/rpc/methods/session.py:439-448`): a `run_subagent_dag` or `load_playbook` call
+them (`_map_to_wire` in `raven/rpc/methods/session.py`): a `run_subagent_dag` or `load_playbook` call
 whose receipt names a run id is `dag:<run_id>`; a `spawn` call whose receipt carries the
 manager's started id is `spawn:<node_id>`, the `node_id` taken from the call's arguments,
 because that is the id `tasks.list` addresses a spawn by. A call refused before dispatch has
@@ -372,7 +372,8 @@ generated into `ui-web/src/rpc/generated` (`npm run gen`); `tests/test_rpc_schem
    runtime that keeps no board.
 5. Event `tasks.board_updated` `{session_key, board}`: after every accepted write, from
    either writer. Sent through the emitter the delivery sink already uses
-   (`raven/rpc/bootstrap.py:388`); the TUI binding (`raven/cli/tui_commands.py:412`) drops it.
+   (`build_rpc_stack` in `raven/rpc/bootstrap.py`); the TUI binding (`raven/cli/tui_commands.py`)
+   sets no sink, so it drops it.
 
 ### 5. The page
 
@@ -481,7 +482,7 @@ the page draws the session's Tasks as the old flat list (5.5). No backfill.
 
 ### 7. Configuration
 
-`agents.defaults.taskBoard` in `raven/config/schema.py` (`AgentDefaults`, `:182`):
+`agents.defaults.taskBoard` in `raven/config/schema.py` (`AgentDefaults`):
 
 ```json
 "taskBoard": {"enabled": true}
