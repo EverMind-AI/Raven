@@ -1,4 +1,4 @@
-"""Reading, writing and removing the task board's own files the way Windows allows.
+"""Reading, writing, moving and removing the task board's own files the way Windows allows.
 
 Windows will not replace or remove a file another handle has open: ``os.replace``
 raises ``PermissionError`` (WinError 5) and ``unlink`` WinError 32, and opening a
@@ -53,3 +53,7 @@ def write_text(path: Path, text: str) -> None:
 
 def remove(path: Path) -> None:
     _held_off(lambda: path.unlink(missing_ok=True))
+
+
+def move(path: Path, to: Path) -> None:
+    _held_off(lambda: os.replace(path, to))

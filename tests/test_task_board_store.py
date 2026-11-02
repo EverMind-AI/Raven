@@ -458,7 +458,32 @@ def test_a_corrupt_file_loads_as_an_empty_board_and_says_so(tmp_path):
         logger.remove(sink)
 
     assert board.groups == [] and board.unassigned == []
-    assert any(BOARD_FILENAME in w for w in warnings)
+    assert any(BOARD_FILENAME in w and "set aside as" in w for w in warnings)
+
+
+@pytest.mark.parametrize(
+    "text", ["{not json", '{"groups": [{"title": "no id"}]}', "\udcff"], ids=["json", "shape", "bytes"]
+)
+def test_an_unreadable_board_is_set_aside_not_lost(tmp_path, text):
+    """The next write would replace the only copy; set aside, it can still be read by hand."""
+    path = tmp_path / BOARD_FILENAME
+    path.write_bytes(text.encode("utf-8", "surrogateescape"))
+
+    assert load_board(tmp_path).groups == []
+    save_board(tmp_path, _one_group())
+
+    aside = list(tmp_path.glob(f"{BOARD_FILENAME}.unreadable-*"))
+    assert [p.read_bytes() for p in aside] == [text.encode("utf-8", "surrogateescape")]
+    assert load_board(tmp_path).groups[0].title == "Fix bug A"
+
+
+def test_a_board_that_cannot_be_opened_is_left_where_it_is(tmp_path):
+    """Not a bad file but a bad read: there may be nothing wrong with it."""
+    (tmp_path / BOARD_FILENAME).mkdir()
+
+    assert load_board(tmp_path).groups == []
+    assert (tmp_path / BOARD_FILENAME).is_dir()
+    assert list(tmp_path.glob(f"{BOARD_FILENAME}.unreadable-*")) == []
 
 
 def test_reset_and_copy(tmp_path):

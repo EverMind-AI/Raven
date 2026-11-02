@@ -1,14 +1,17 @@
 """Where a session's Task Board is kept: one JSON file in the session's directory.
 
 Written whole and moved into place, so a reader in another process never sees
-half a board; a file that does not parse reads as an empty board, with a warning,
-rather than taking the conversation down with it.
+half a board. A file that does not parse reads as an empty board rather than taking
+the conversation down with it, and is set aside first, under a name of its own: the
+next write would otherwise replace the only copy of it. One that cannot be opened at
+all may have nothing wrong with it, and is left where it is.
 """
 
 from __future__ import annotations
 
 import json
 import shutil
+import time
 from pathlib import Path
 
 from loguru import logger
@@ -29,8 +32,19 @@ def load_board(session_dir: Path) -> Board:
         return board_from_dict(data)
     except FileNotFoundError:
         return Board([], [])
-    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
-        logger.warning("Task board {} is unreadable; starting from an empty board: {}", path, exc)
+    except OSError as exc:
+        logger.warning("Task board {} could not be read; starting from an empty board: {}", path, exc)
+        return Board([], [])
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        aside = path.with_name(f"{path.name}.unreadable-{int(time.time() * 1000)}")
+        try:
+            files.move(path, aside)
+        except OSError as moving:
+            logger.warning("Task board {} is unreadable ({}) and could not be set aside: {}", path, exc, moving)
+        else:
+            logger.warning(
+                "Task board {} is unreadable ({}); set aside as {}, starting from an empty board", path, exc, aside.name
+            )
         return Board([], [])
 
 

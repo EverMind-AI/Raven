@@ -165,3 +165,33 @@ def test_a_notes_read_waits_out_a_replace_in_flight(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "read_text", read_text)
 
     assert [n.question for n in load_notes(tmp_path)] == ["Which fix?"]
+
+
+def _hold_the_board(monkeypatch, times: int) -> None:
+    """A reader holds the board: replacing it away is refused ``times`` times."""
+    real = os.replace
+    left = {"times": times}
+
+    def replace(src, dst, *args, **kwargs):
+        if Path(str(src)).name == BOARD_FILENAME and left["times"] > 0:
+            left["times"] -= 1
+            raise PermissionError(13, "Access is denied", str(src))
+        return real(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", replace)
+
+
+def test_an_unreadable_board_is_set_aside_once_a_reader_lets_go_of_it(tmp_path, monkeypatch):
+    (tmp_path / BOARD_FILENAME).write_text("{not json", encoding="utf-8")
+    _hold_the_board(monkeypatch, 2)
+
+    assert load_board(tmp_path).groups == []
+    assert [p.read_text(encoding="utf-8") for p in tmp_path.glob(f"{BOARD_FILENAME}.unreadable-*")] == ["{not json"]
+
+
+def test_an_unreadable_board_held_throughout_stays_and_reads_as_empty(tmp_path, monkeypatch):
+    (tmp_path / BOARD_FILENAME).write_text("{not json", encoding="utf-8")
+    _hold_the_board(monkeypatch, 99)
+
+    assert load_board(tmp_path).groups == []
+    assert (tmp_path / BOARD_FILENAME).read_text(encoding="utf-8") == "{not json"
