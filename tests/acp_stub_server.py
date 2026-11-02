@@ -380,17 +380,27 @@ def _empty_answer(request_id) -> None:
 _PROMPTS = 0
 
 
+def _answers_without_a_turn(request_id) -> bool:
+    """The prompts that end the turn before any mode's own script runs.
+
+    ``ACP_STUB_EMPTY_PROMPTS`` applies whatever the mode, so it settles first;
+    a resident prompt then arms its wake and ends.
+    """
+    if _PROMPTS <= int(os.environ.get("ACP_STUB_EMPTY_PROMPTS", "0")):
+        ok(request_id, {"stopReason": "end_turn"})
+        return True
+    if MODE == "resident":
+        arm_wake()
+        ok(request_id, {"stopReason": "end_turn"})
+        return True
+    return False
+
+
 def handle_prompt(request_id, params) -> None:
     global _PROMPTS
     _PROMPTS += 1
     session_id = params.get("sessionId") or "stub-session-1"
-    if _PROMPTS <= int(os.environ.get("ACP_STUB_EMPTY_PROMPTS", "0")):
-        # The first N prompts end with nothing said, whatever the mode.
-        ok(request_id, {"stopReason": "end_turn"})
-        return
-    if MODE == "resident":
-        arm_wake()
-        ok(request_id, {"stopReason": "end_turn"})
+    if _answers_without_a_turn(request_id):
         return
     if MODE == "dies_mid_turn":
         # Half an answer, then the process is gone: the prompt went out and
