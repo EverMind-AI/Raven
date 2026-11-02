@@ -453,8 +453,8 @@ export function createTasks(env: FixtureEnv): TasksFixture {
   boards.set('h', {
     version: 1, unassigned: [],
     groups: spawns.map((r, i) => (r.status === 'running'
-      ? groupOf(`g_h${i}`, [r], 'Sent a sub-agent to do it', 'A sub-agent is on it', 'running')
-      : groupOf(`g_h${i}`, [r], 'Sent a sub-agent to do it', 'Done; waiting on your look', 'needs_you'))),
+      ? groupOf(`g_h${i}`, [r], 'Sent a subagent to do it', 'A subagent is on it', 'running')
+      : groupOf(`g_h${i}`, [r], 'Sent a subagent to do it', 'Done; waiting on your look', 'needs_you'))),
   })
   boards.set('g', {
     version: 1, unassigned: [],

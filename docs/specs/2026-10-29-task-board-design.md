@@ -42,7 +42,7 @@ model can recall any group's thread through the same tool that maintains it.
 
 ## Non-goals
 
-- **Anyone but the Raven host.** Product agents (`agents/raven-*`) and every sub-agent get
+- **Anyone but the Raven host.** Product agents (`agents/raven-*`) and every subagent get
   no board, no tool, no post-turn call.
 - **Surfaces other than the web page.** The TUI and IM channels do not draw the board. The
   host still keeps it and can still recall from it on those channels.
@@ -90,7 +90,7 @@ and is what hangs under a step.
 
 One JSON file per session, `<session_dir>/task_board.json`, where `session_dir` is
 `SessionManager.session_dir(key)` (`raven/session/manager.py`) -- the directory that
-already holds the session's sub-agent records beside its transcript. Written atomically
+already holds the session's subagent records beside its transcript. Written atomically
 (temporary file + rename) by a single writer per session (2.4). Windows refuses to replace,
 remove or open a file another handle holds, and the page reads boards on a worker thread, so
 every read, write, move and removal of the board's files (`raven/agent/task_board/files.py`)
@@ -351,7 +351,7 @@ neither appended to the turn nor persisted. It is traced as its own span and its
 added to the session's usage, so its cost is visible where every other call's is.
 
 **Which turns.** Every completed host turn, whatever opened it -- a user message, a
-returning sub-agent result, a cron firing -- except one that answered with the silence
+returning subagent result, a cron firing -- except one that answered with the silence
 marker and dispatched nothing: the host saying the turn has nothing to show leaves no
 progress to record. A turn that errored or was stopped runs the call only if it dispatched
 something. A turn that dispatched nothing may return an empty update.
@@ -433,10 +433,10 @@ its matters, and the Task Board page opens them there.
 5.1 **Cards.** Open groups first, by `created_at` descending, one card each. The card's head
 is a button with `aria-expanded`, operable from the keyboard: the group's type on a tinted
 pill -- its Board category, the Task Board page's four words and colours (1, Statuses) -- with,
-at the right, either a live badge -- "2 sub-agents running", "DAG 2/4", computed from the
+at the right, either a live badge -- "2 subagents running", "DAG 2/4", computed from the
 group's linked `TaskRow`s that are running -- or the age of the latest step; then the title
 (bold), the group's summary (muted, two lines; no line while a group has none) and, while the
-card is closed, a foot under the head and outside it, counting its events and sub-agents the
+card is closed, a foot under the head and outside it, counting its events and subagents the
 way the Task Board page counts them, with Move on at its right (5.1.1). While a group needs the user, the card lists the questions its latest step asked at
 its bottom -- under the head while it is folded, after that latest step while it is open --
 each in a box of its own with an Ignore that sets that one question aside

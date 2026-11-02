@@ -32,7 +32,7 @@ SPAWN = Dispatch("spawn:locate_login_bug", "Locate the blank-page bug")
 WINDOW = [
     {"role": "system", "content": "You are Raven."},
     {"role": "user", "content": "Why is the page blank?"},
-    {"role": "assistant", "content": "The token is empty; I sent a sub-agent to confirm."},
+    {"role": "assistant", "content": "The token is empty; I sent a subagent to confirm."},
 ]
 
 
@@ -471,16 +471,16 @@ def test_the_instruction_keeps_each_question_with_its_own_matter():
 
 
 def _two_matters(service) -> None:
-    """g_a placed the sub-agent run an earlier turn started; g_b is another matter."""
+    """g_a placed the subagent run an earlier turn started; g_b is another matter."""
     run = TaskLink("spawn", "locate_login_bug", SPAWN.summary)
     fix = TaskGroup(
         "g_a",
         "Fix bug A",
-        "A sub-agent is locating it",
+        "A subagent is locating it",
         "running",
         1,
         1,
-        [ProgressStep("s_a", "T0", None, "Sent a sub-agent", "Dispatched it.", [run])],
+        [ProgressStep("s_a", "T0", None, "Sent a subagent", "Dispatched it.", [run])],
     )
     notes = TaskGroup(
         "g_b",
@@ -524,7 +524,7 @@ async def test_a_turn_a_delegated_result_opened_writes_only_the_group_that_place
 
     stored = load_board(service.session_dir(KEY))
     assert [(g.id, len(g.steps), g.summary) for g in stored.groups] == [
-        ("g_a", 2, "A sub-agent is locating it"),
+        ("g_a", 2, "A subagent is locating it"),
         ("g_b", 1, "Drafting the notes"),
     ]
     assert board is not None and board_to_dict(board) == board_to_dict(stored)

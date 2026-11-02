@@ -218,7 +218,7 @@ class _ReceiptSpawn(Tool):
 
     @property
     def description(self) -> str:
-        return "Start a sub-agent."
+        return "Start a subagent."
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -240,8 +240,8 @@ async def test_a_dispatch_from_an_earlier_turn_is_not_placed_again(tmp_path):
     )
     placed = {
         "new_title": "Fix the blank page",
-        "new_summary": "A sub-agent is locating the cause",
-        "title": "Sent a sub-agent to locate it",
+        "new_summary": "A subagent is locating the cause",
+        "title": "Sent a subagent to locate it",
         "summary": "Dispatched locate_bug.",
         "status": "idle",
         "tasks": ["spawn:locate_bug"],
@@ -249,7 +249,7 @@ async def test_a_dispatch_from_an_earlier_turn_is_not_placed_again(tmp_path):
     provider = Recording(
         [
             LLMResponse(content="", tool_calls=[spawn]),
-            LLMResponse(content="Started a sub-agent on it."),
+            LLMResponse(content="Started a subagent on it."),
             _update(steps=[placed]),
             LLMResponse(content="Here is the email."),
             _update(steps=[]),
@@ -407,12 +407,12 @@ async def test_a_silent_turn_makes_no_board_call(tmp_path):
 
 
 def _placed_and_another(agent: AgentLoop) -> None:
-    """g_a placed the sub-agent run an earlier turn started; g_b is another matter."""
+    """g_a placed the subagent run an earlier turn started; g_b is another matter."""
     run = TaskLink("spawn", "locate_bug", "Locate the bug")
-    placed = ProgressStep("s_a", "T0", None, "Sent a sub-agent", "Dispatched it.", [run])
+    placed = ProgressStep("s_a", "T0", None, "Sent a subagent", "Dispatched it.", [run])
     drafted = ProgressStep("s_b", "T0", None, "Drafted", "Drafted the notes.", [])
     groups = [
-        TaskGroup("g_a", "Fix the blank page", "A sub-agent is locating it", "running", 1, 1, [placed]),
+        TaskGroup("g_a", "Fix the blank page", "A subagent is locating it", "running", 1, 1, [placed]),
         TaskGroup("g_b", "Release notes", "Drafting the notes", "idle", 1, 1, [drafted]),
     ]
     save_board(agent.sessions.session_dir(KEY), Board(groups, []))
@@ -429,7 +429,7 @@ def _scope(instruction: str) -> str:
 
 
 async def test_a_delegated_result_keeps_its_turns_board_to_the_group_that_placed_the_run(tmp_path):
-    provider = Recording([LLMResponse(content="The sub-agent found the empty token."), _both_moved()])
+    provider = Recording([LLMResponse(content="The subagent found the empty token."), _both_moved()])
     agent = _agent(tmp_path, provider)
     _placed_and_another(agent)
     result = TurnRequest(

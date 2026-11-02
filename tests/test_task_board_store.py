@@ -795,7 +795,7 @@ def test_a_question_asked_twice_is_set_aside_only_on_the_step_named():
 
 
 def _two_matters() -> Board:
-    """g_1 placed the sub-agent run, g_2 the graph run; each is its own matter."""
+    """g_1 placed the subagent run, g_2 the graph run; each is its own matter."""
     fix = _one_group().groups[0]
     release = TaskGroup(
         "g_2",

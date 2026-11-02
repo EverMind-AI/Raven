@@ -579,7 +579,7 @@ describe('the group cards', () => {
     expect(statusCalls.at(-1)).toEqual(['s1', 'z', 'idle'])
   })
 
-  it('a folded card counts its events and sub-agents, and an open one shows its thread instead', async () => {
+  it('a folded card counts its events and subagents, and an open one shows its thread instead', async () => {
     rows = [
       task({ id: 'RUN_A', kind: 'dag', status: 'completed', counts: counts({ total: 2 }) }),
       task({ id: 'n1', kind: 'spawn', status: 'completed' }),

@@ -150,9 +150,9 @@ def scan(sessions_dir: Path) -> list[Session]:
 
 
 def _runs(group: TaskGroup, rows: Rows, lineage: dict[str, str]) -> tuple[int, bool, int | None]:
-    """How many sub-agents worked on the group, whether one still runs, and since when (``None``: no clock).
+    """How many subagents worked on the group, whether one still runs, and since when (``None``: no clock).
 
-    A spawn is one sub-agent; a DAG run is each node of it and of the runs that
+    A spawn is one subagent; a DAG run is each node of it and of the runs that
     continued it; a run no row describes any more counts once. A run placed on
     several steps is still one run.
     """

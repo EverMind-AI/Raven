@@ -40,7 +40,7 @@ function stepTime(iso: string, now: number): string {
 }
 
 /* What the row says at its right: a running graph's progress, or how many
-   sub-agents are running for the group, or else how long ago it last moved. */
+   subagents are running for the group, or else how long ago it last moved. */
 function metaOf(group: TaskGroup, rows: TaskRow[], lineage: Record<string, string>, now: number): string {
   const running = group.steps
     .flatMap((s) => store.linkedRows(s, rows, lineage))
@@ -64,7 +64,7 @@ function groupLinks(group: TaskGroup, rows: TaskRow[], lineage: Record<string, s
   return [...seen.values()]
 }
 
-/* A spawn is one sub-agent and a graph run is each of its nodes, as the Task
+/* A spawn is one subagent and a graph run is each of its nodes, as the Task
    Board page counts them; a Task the list no longer holds still counts once. */
 function subAgentsOf(links: LinkedRow[]): number {
   return links.reduce((n, l) => n + (l.row?.kind === 'dag' ? l.row.counts.total || 1 : 1), 0)

@@ -38,7 +38,7 @@ yet (something is running), or nothing at all (idle). Finished ones stay out of 
 3. Two views of the same cards, switched in the page's toolbar: **Board** (columns) and
    **List** (grouped sections).
 4. Each card says where it came from (the conversation), what it is (title and summary),
-   where it stands (category, status and a time), and how big it is (events, sub-agents).
+   where it stands (category, status and a time), and how big it is (events, subagents).
 5. A card unfolds in place into its events and the questions it waits on; an event opens its
    conversation, with the Task Group expanded in the sidebar and the transcript at that
    event's reply.
@@ -50,7 +50,7 @@ yet (something is running), or nothing at all (idle). Finished ones stay out of 
 - Dragging cards between columns, or editing, renaming or creating Task Groups on this page.
   An unfolded card carries the sidebar thread's own buttons (Ignore, Answer, Mark completed)
   and no others.
-- Tasks of sub-agent or product-agent conversations: they keep no board.
+- Tasks of subagent or product-agent conversations: they keep no board.
 - A server push channel for other conversations' board writes (5.3 polls instead; a push
   channel is later work).
 
@@ -67,7 +67,7 @@ Anti-goals -- failures even if everything technically works:
 ### 5.1 What the page lists
 
 All host conversations the session list returns by default (`SessionManager.list_sessions`,
-which already leaves sub-agent transcripts out) whose session directory holds a
+which already leaves subagent transcripts out) whose session directory holds a
 `task_board.json`. Archived conversations (`metadata.archived`) are left out, as the rail
 leaves them out. Every Task Group of every listed conversation is one card.
 
@@ -92,10 +92,10 @@ One rule, applied in one place, for both views and the rail badge:
   a run a restart cut off stays claimed -- so what this process is still executing is read on
   the event loop (the task index, the instance registry) and handed to the row builders.
   Descendant runs count for the run they continue.
-- **events** = the Task Group's Progress Steps. **sub-agents** = the spawned nodes it linked
-  plus the nodes of the DAG runs it linked, counted off those runs' rows (each sub-agent that
+- **events** = the Task Group's Progress Steps. **subagents** = the spawned nodes it linked
+  plus the nodes of the DAG runs it linked, counted off those runs' rows (each subagent that
   worked on the Task Group once); a linked run no row describes any more counts once. My call:
-  the mockup labelled this 子代理, and a DAG run is several sub-agents, not one.
+  the mockup labelled this 子智能体, and a DAG run is several subagents, not one.
 
 ### 5.3 One new RPC: `tasks.boards`
 
@@ -159,7 +159,7 @@ view and the completed switch persist across reloads (my call).
   one quiet line.
 - A card, top to bottom: the conversation (icon, its title on one line, ellipsis); the Task
   Group's title (bold); its summary (two lines, ellipsis); a footer with the status and time on
-  the left and the counters on the right ("events n | sub-agents n" / 事件 n | 子代理 n).
+  the left and the counters on the right ("events n | subagents n" / 事件 n | 子智能体 n).
 - Footer status: the category's mark, then its name and its time, the same words for all
   four -- "Needs you · {since}" (需要你回答), "Running · {elapsed}" (运行中),
   "Idle · {since}" (闲置), "Completed · took {duration}" (已完成 · 用时). The mark is an amber
@@ -235,7 +235,7 @@ colour; the ring respects reduced motion.
 
 - Python: `tasks.boards` -- every category rule (each status; a running spawn, a running DAG
   node, a running descendant run; a failed run), `since_ms` per category, both counters, the
-  conversations listed (no board, sub-agent transcript, archived conversation each left out),
+  conversations listed (no board, subagent transcript, archived conversation each left out),
   `include_completed`, the two counts, and the unchanged-session cache answering the same.
   Models and OpenRPC stay in parity (the existing schema-match tests).
 - Page (vitest): the store's polling starts with the page and stops when it hides; board
@@ -259,7 +259,7 @@ colour; the ring respects reduced motion.
 ## 8. Calls made without the owner
 
 1. Archived conversations' Task Groups are left out (5.1).
-2. sub-agents counts each sub-agent once, DAG nodes included (5.2).
+2. subagents counts each subagent once, DAG nodes included (5.2).
 3. Polling every 10 seconds while visible, plus the events the page does receive; the badge
    alone every 60 seconds otherwise (5.3).
 4. Completed cards fetched only when the switch is on; both counts always returned (5.3).

@@ -1624,7 +1624,7 @@ class WiringMixin:
             )
         )
         # The host's own record of the conversation's matters. Host-only for the
-        # same reason as everything above: a sub-agent's turns are its caller's
+        # same reason as everything above: a subagent's turns are its caller's
         # business, and a board kept there would record the caller's matters twice.
         if self._task_board_config.enabled:
             from raven.agent.task_board.service import TaskBoardService

@@ -792,7 +792,7 @@ one host session's set of Task Groups, kept by the host model in one extra call 
 turn that answered or dispatched work, and read back through the `task_board` tool. A turn
 known to be about a group -- one a delegated result opened, one whose message a Move on or an
 Answer named the group for -- writes only to that group and to wherever it places the work it
-started. Only the Raven host keeps one; a sub-agent or product agent never does
+started. Only the Raven host keeps one; a subagent or product agent never does
 (`docs/specs/2026-10-29-task-board-design.md`).
 _Avoid_: "task list" (that is `tasks.list`), "todo" (Raven-Code's Checklist).
 
@@ -807,7 +807,7 @@ the user to answer, confirm or decide about it -- an error only the user can res
 `completed` (finished or dropped; nothing further moves it). Chinese surfaces -- the zh
 prompt pack, the conversation -- call it 任务.
 _Avoid_: "task" for this in English -- a Task is one delegated unit, and hangs under a step;
-where a Task Group is 任务, a delegated unit is a 子代理 or a DAG run.
+where a Task Group is 任务, a delegated unit is a 子智能体 or a DAG run.
 
 **Board category** (`raven/agent/task_board/overview.py` `category_of`, `tasks.boards`;
 `categoryOf` in `ui-web/src/features/tasks/boards.ts`):

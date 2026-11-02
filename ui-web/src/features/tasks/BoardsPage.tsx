@@ -61,7 +61,7 @@ function Words({ card }: { readonly card: TaskBoardCard }): JSX.Element {
 }
 
 /* The counters at the footer's right: how many events the group has, and how
-   many sub-agents worked on it -- then whatever rides with them, which drops
+   many subagents worked on it -- then whatever rides with them, which drops
    beneath with them, whole, in a narrow column. */
 export function Counters({ card, children }: { readonly card: TaskBoardCard; readonly children?: ReactNode }): JSX.Element {
   return (

@@ -63,7 +63,7 @@ const spawn = (id: string, status: TaskRow['status']): TaskRow => ({
 })
 
 /* g1 waits on two questions its second event asked; its first event started a
-   sub-agent that still runs. */
+   subagent that still runs. */
 const asking = (): TaskGroup => groupOf('g1', 'needs_you', [
   step('s1', T1, { tasks: [{ kind: 'spawn', id: 'n1', summary: 'look' }] }),
   step('s2', T2, { summary: 'Asked which fix', questions: ['Which fix?', 'Ship today?'] }),

@@ -25,7 +25,7 @@
 ## Review Focus
 
 1. A session whose transcript is missing, unreadable, or whose first line is not metadata: the page still answers with every other session's cards. (Task 1)
-2. A card linking a run the node registry no longer holds (pruned history): it counts once as a sub-agent and does not make the card Running. (Task 1)
+2. A card linking a run the node registry no longer holds (pruned history): it counts once as a subagent and does not make the card Running. (Task 1)
 3. Dozens of conversations with boards: a poll with nothing changed re-reads no board file. (Task 1)
 4. The gateway unreachable while the page is open: the cards already shown stay, a quiet error line appears, and polling carries on. (Task 3)
 5. Opening a card whose conversation was deleted or whose task is gone by the time the sidebar loads: the focus request is dropped, never re-applied to a later board. (Task 7)
@@ -185,7 +185,7 @@ Expected: 10 passed. Then `ruff check` and `ruff format` on both files.
 **Interfaces:**
 - Consumes: `boards.get()`, `visible()`, `countsOf()`; `formatDuration` and `ago` (`ui-web/src/lib/ago.ts`) for times.
 - Produces: `function BoardView({ cards, showArchived, open }: { cards: TaskBoardCard[]; showArchived: boolean; open: (c: TaskBoardCard) => void }): JSX.Element`; `function CardFace({ card }): JSX.Element` (shared with Task 6). Class names the tests address: `.tkbcol` (a column, `data-cat` = category), `.tkbcard` (a card, a button), `.tkbconv` (its conversation line), `.tkbbang` (the blocked mark), `.tkbring` (the running ring, `data-st="run"`).
-- i18n keys (en | zh): `gui.tasks.page.col_needs_you` Needs you | 需要你回答; `gui.tasks.page.col_running` Running | 运行中; `gui.tasks.page.col_idle` Idle | 闲置; `gui.tasks.page.col_archived` Archived | 已归档; `gui.tasks.page.waiting` "Waiting on you · {t}" | "等你回复 · {t}"; `gui.tasks.page.stuck` "Stuck · {t}" | "卡住 · {t}"; `gui.tasks.page.idle_for` "Idle {t}" | "闲置 {t}"; `gui.tasks.page.took` "Took {t}" | "用时 {t}"; `gui.tasks.page.events` "events {n}" | "事件 {n}"; `gui.tasks.page.sub_agents` "sub-agents {n}" | "子代理 {n}"; `gui.tasks.page.empty_col` "Nothing here" | "暂无".
+- i18n keys (en | zh): `gui.tasks.page.col_needs_you` Needs you | 需要你回答; `gui.tasks.page.col_running` Running | 运行中; `gui.tasks.page.col_idle` Idle | 闲置; `gui.tasks.page.col_archived` Archived | 已归档; `gui.tasks.page.waiting` "Waiting on you · {t}" | "等你回复 · {t}"; `gui.tasks.page.stuck` "Stuck · {t}" | "卡住 · {t}"; `gui.tasks.page.idle_for` "Idle {t}" | "闲置 {t}"; `gui.tasks.page.took` "Took {t}" | "用时 {t}"; `gui.tasks.page.events` "events {n}" | "事件 {n}"; `gui.tasks.page.sub_agents` "subagents {n}" | "子智能体 {n}"; `gui.tasks.page.empty_col` "Nothing here" | "暂无".
 
 - [ ] **Step 1: Write the failing tests**:
   - `the board shows three columns, archived only with the switch`: column heads read `col_needs_you`, `col_running`, `col_idle` with counts; `showArchived` -> a fourth, `col_archived`.

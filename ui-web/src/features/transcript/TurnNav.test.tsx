@@ -530,9 +530,9 @@ describe('revealTurnAt', () => {
     await settle(() => {
       mount.history([
         { role: 'user', text: 'find the PRs', timestamp: '2026-10-30T09:28:33.706973' },
-        { role: 'assistant', text: 'Sent a sub-agent to look.', timestamp: '2026-10-30T09:29:11.896748' },
+        { role: 'assistant', text: 'Sent a subagent to look.', timestamp: '2026-10-30T09:29:11.896748' },
         {
-          role: 'user', text: 'the sub-agent s report', timestamp: '2026-10-30T09:34:50.345450',
+          role: 'user', text: 'the subagent s report', timestamp: '2026-10-30T09:34:50.345450',
           delegated: { kind: 'spawn', label: 'find the PRs', status: 'ok', node_id: 'n1' },
         },
         { role: 'assistant', text: 'Four PRs set the effort.', timestamp: '2026-10-30T09:35:01.840139' },

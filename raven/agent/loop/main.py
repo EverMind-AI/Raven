@@ -292,7 +292,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # `agents.defaults.taskBoard` (on by default there), while a loop built
         # without it -- an embedding, a test -- makes no extra call per turn.
         self._task_board_config = task_board_config or TaskBoardConfig(enabled=False)
-        # Set by `_register_orchestration_tools` on the host only; a sub-agent never keeps a board.
+        # Set by `_register_orchestration_tools` on the host only; a subagent never keeps a board.
         self.task_board = None
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace

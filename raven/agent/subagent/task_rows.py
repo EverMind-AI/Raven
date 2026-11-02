@@ -191,7 +191,7 @@ def _tool_call_count(source: dict[str, Any]) -> int | None:
 
     A lane that wrote ``tool_calls`` named every call it made, so the length is
     the count rather than an estimate; one that never wrote it leaves the field
-    null. Failures are the sub-agent's to report, so no failure tally is derived
+    null. Failures are the subagent's to report, so no failure tally is derived
     here.
     """
     calls = source.get("tool_calls")

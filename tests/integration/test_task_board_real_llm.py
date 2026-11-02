@@ -2,7 +2,7 @@
 
 Real calls on ``openrouter/z-ai/glm-5.3-flash``. The spawn tool is a stand-in that
 returns the manager's own receipt, so the turn dispatches without starting a
-sub-agent; everything after the receipt -- the dispatch list, the post-turn call,
+subagent; everything after the receipt -- the dispatch list, the post-turn call,
 validation, the write -- is the real path.
 """
 
@@ -59,7 +59,7 @@ class _ReceiptSpawn(Tool):
 
     @property
     def description(self) -> str:
-        return "Start a sub-agent on a task in the background; returns at once with its id."
+        return "Start a subagent on a task in the background; returns at once with its id."
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -107,7 +107,7 @@ async def test_a_live_model_keeps_two_matters_apart_and_places_its_dispatch(tmp_
     await _turn(
         agent,
         "I'm planning my daughter's birthday party for Saturday. Call the spawn tool now with "
-        "node_id 'cake_research' to have a sub-agent find three cake shops nearby; just dispatch "
+        "node_id 'cake_research' to have a subagent find three cake shops nearby; just dispatch "
         "it and tell me it started. Do not ask me anything first.",
     )
     # The precondition, named: placement can only be checked once the live model

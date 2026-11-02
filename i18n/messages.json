@@ -7828,8 +7828,8 @@
       "zh": "答："
     },
     "gui.tasks.board.running": {
-      "en": "{n} sub-agents running",
-      "zh": "{n} 个子代理在跑"
+      "en": "{n} subagents running",
+      "zh": "{n} 个子智能体在跑"
     },
     "gui.tasks.board.dag": {
       "en": "DAG {done}/{total}",
@@ -11508,8 +11508,8 @@
       "zh": "事件 {n}"
     },
     "gui.tasks.page.sub_agents": {
-      "en": "sub-agents {n}",
-      "zh": "子代理 {n}"
+      "en": "subagents {n}",
+      "zh": "子智能体 {n}"
     },
     "gui.tasks.page.empty_col": {
       "en": "Nothing here",
