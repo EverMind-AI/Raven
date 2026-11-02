@@ -46,7 +46,7 @@ const T1 = '2026-11-01T10:00:00Z'
 const T2 = '2026-11-01T11:00:00Z'
 
 const step = (id: string, turnAt: string, over: Partial<ProgressStep> = {}): ProgressStep => ({
-  id, turn_at: turnAt, turn_id: null, title: `moved ${id}`, summary: `what ${id} moved`, questions: [], tasks: [],
+  id, turn_at: turnAt, turn_id: `t-${id}`, title: `moved ${id}`, summary: `what ${id} moved`, questions: [], tasks: [],
   ...over,
 })
 
@@ -471,14 +471,14 @@ describe('the page', () => {
     })
     const refreshList = vi.spyOn(registry, 'refreshList').mockImplementation(async () => { order.push('list') })
     vi.spyOn(ws, 'pick').mockImplementation((view) => { order.push(`pick:${view}`) })
-    vi.mocked(revealTurnAt).mockImplementation((at) => { order.push(`reveal:${at}`); return true })
+    vi.mocked(revealTurnAt).mockImplementation((at, id) => { order.push(`reveal:${at}:${id}`); return true })
     railRows = [{ id: 'web:a', title: 'Chat a' }]
     page.show('tasksBoardPage')
     const root = await mount()
 
     await goToEvent(root, 'g1', 1)
 
-    expect(order).toEqual(['switch:web:a', 'pick:tasks', `reveal:${T2}`])
+    expect(order).toEqual(['switch:web:a', 'pick:tasks', `reveal:${T2}:t-s2`])
     expect(switchTo.mock.calls[0]![0]).toBe(railRows[0])
     expect(refreshList).not.toHaveBeenCalled()
     expect(tasks.focusFor('web:a')).toBe('g1')
@@ -544,7 +544,7 @@ describe('the page', () => {
 
     expect(switchTo).not.toHaveBeenCalled()
     expect(pick).toHaveBeenCalledWith('tasks')
-    expect(revealTurnAt).toHaveBeenCalledWith(T1)
+    expect(revealTurnAt).toHaveBeenCalledWith(T1, 't-s1')
     expect([tasks.focusFor('web:a'), page.get()]).toEqual(['g1', null])
   })
 

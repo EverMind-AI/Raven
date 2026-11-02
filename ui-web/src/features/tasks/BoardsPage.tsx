@@ -305,7 +305,7 @@ function moveOnFrom(card: TaskBoardCard): void {
 function verbsFor(card: TaskBoardCard): ThreadVerbs {
   return {
     reveal: (step: ProgressStep) => {
-      void openCard(card).then((there) => { if (there) revealTurnAt(step.turn_at) })
+      void openCard(card).then((there) => { if (there) revealTurnAt(step.turn_at, step.turn_id) })
     },
     setStatus: (group, status) => { void boards.setGroupStatus(card.session_key, group.id, status) },
     ignore: (group, step, question) => { void boards.ignoreQuestion(card.session_key, group.id, step.id, question) },

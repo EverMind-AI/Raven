@@ -558,4 +558,72 @@ describe('revealTurnAt', () => {
     expect(revealTurnAt('2026-10-29T15:00:00Z')).toBe(false)
     expect(revealTurnAt('not a time')).toBe(false)
   })
+
+  /* A step's time is the server's clock with no zone, read here as this
+     browser's; a turn asked on this page carries the browser's own clock. Across
+     zones the two sit hours apart, so a turn drawn live is found by the id its
+     opening frame named. */
+  it('finds a turn asked on this page by its id, however far the step time sits', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))
+    await settle(() => { mount.tagTurn(mount.ask('first question'), 't-1'); mount.answer('first reply') })
+    vi.setSystemTime(new Date('2026-10-29T10:01:00Z'))
+    await settle(() => { mount.tagTurn(mount.ask('second question'), 't-2'); mount.answer('second reply') })
+    const scroll = $('#scroll') as HTMLElement
+    const moved: number[] = []
+    scroll.scrollTo = ((opts: ScrollToOptions) => { moved.push(Number(opts.top)) }) as typeof scroll.scrollTo
+    pin(scroll, 0)
+    stage().querySelectorAll('[data-ask]').forEach((el, i) => pin(el, [100, 3100][i]!))
+    stage().querySelectorAll('[data-answer]').forEach((el, i) => pin(el, [600, 3600][i]!))
+
+    expect(revealTurnAt('2026-10-29T18:00:30', 't-1')).toBe(true)
+    expect(revealTurnAt('2026-10-29T10:00:00Z', 't-2')).toBe(true)
+    expect(moved).toEqual([600 - 16, 3600 - 16])
+  })
+
+  it('finds a delivered result s turn by its id', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))
+    await settle(() => {
+      mount.delivered({ label: 'the search', isDag: false, open: () => {}, turnId: 't-d' })
+      mount.answer('what the search found')
+    })
+    const scroll = $('#scroll') as HTMLElement
+    const moved: number[] = []
+    scroll.scrollTo = ((opts: ScrollToOptions) => { moved.push(Number(opts.top)) }) as typeof scroll.scrollTo
+    pin(scroll, 0)
+    stage().querySelectorAll('[data-delivered]').forEach((el) => pin(el, 2100))
+    stage().querySelectorAll('[data-answer]').forEach((el) => pin(el, 2600))
+
+    expect(revealTurnAt('2026-10-29T18:00:05', 't-d')).toBe(true)
+    expect(moved).toEqual([2600 - 16])
+  })
+
+  /* An opening that carries another turn's id is not the one named, however
+     near its time: two turns a minute apart are both within reach. */
+  it('never takes a turn tagged with another id for the one named', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))
+    await settle(() => { mount.tagTurn(mount.ask('first question'), 't-1'); mount.answer('first reply') })
+
+    expect(revealTurnAt('2026-10-29T10:00:30Z', 't-other')).toBe(false)
+  })
+
+  it('still matches an untagged opening by time when the step names an id', async () => {
+    await settle(() => {
+      mount.history([
+        { role: 'user', text: 'find the PRs', timestamp: '2026-10-30T09:28:33.706973' },
+        { role: 'assistant', text: 'Looked.', timestamp: '2026-10-30T09:29:11.896748' },
+      ])
+    })
+    const scroll = $('#scroll') as HTMLElement
+    const moved: number[] = []
+    scroll.scrollTo = ((opts: ScrollToOptions) => { moved.push(Number(opts.top)) }) as typeof scroll.scrollTo
+    pin(scroll, 0)
+    stage().querySelectorAll('[data-ask]').forEach((el) => pin(el, 100))
+    stage().querySelectorAll('[data-answer]').forEach((el) => pin(el, 600))
+
+    expect(revealTurnAt('2026-10-30T09:28:33.706973', 't-from-history')).toBe(true)
+    expect(moved).toEqual([600 - 16])
+  })
 })

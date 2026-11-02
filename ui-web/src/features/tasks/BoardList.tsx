@@ -141,7 +141,7 @@ export interface ThreadVerbs {
 }
 
 const HERE: ThreadVerbs = {
-  reveal: (step) => { revealTurnAt(step.turn_at) },
+  reveal: (step) => { revealTurnAt(step.turn_at, step.turn_id) },
   setStatus: (group, status) => { void setStatus(group, status) },
   ignore: (group, step, question) => { void setAside(group, step, question) },
   answer: (group) => store.answer(group),
