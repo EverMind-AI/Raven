@@ -81,7 +81,14 @@ def agent_capabilities() -> dict[str, Any]:
         # turn already in flight -- a person speaking to an agent whose prompt
         # is held open while it waits on its own scheduled work. Advertised by
         # presence, which is how raven's own client reads it.
-        "_meta": {protocol.SESSION_MCP_CAPABILITY: {}, protocol.STEER_CAPABILITY: True},
+        # And ``_raven/residentWork``: whether this process holds work nobody is
+        # asking for yet (an armed cron job, a running plugin service), asked
+        # by raven's client before it closes the agent for idleness.
+        "_meta": {
+            protocol.SESSION_MCP_CAPABILITY: {},
+            protocol.STEER_CAPABILITY: True,
+            protocol.RESIDENT_WORK_CAPABILITY: True,
+        },
         # ``list``, ``resume``, ``close`` and ``delete``, and an empty object is
         # how the schema spells "supported". Each one is declared because the
         # method behind it exists and is honoured: ``_session_resume`` reopens a

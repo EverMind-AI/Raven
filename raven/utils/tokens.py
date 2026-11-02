@@ -4,6 +4,7 @@
 wants a safe filename does not pay for an encoding table.
 """
 
+import contextlib
 import json
 import re
 from collections import Counter
@@ -30,6 +31,22 @@ _TOKEN_BOUNDARY = re.compile(r"(?<=[\r\n])(?=\S)")
 # glues to the text around them, so those four go with the non-space runs.
 _RUN_SLICE = 1_000
 _RUN = re.compile(r"[^\S\x1c-\x1f]+|[\S\x1c-\x1f]+")
+
+
+def encoding() -> tiktoken.Encoding:
+    """The cl100k encoding the estimator counts with, without the Python copy of its ranks.
+
+    tiktoken's registered encoding keeps that copy beside the one its core
+    encodes with and reads it only to pickle an encoding outside the registry --
+    a registered one pickles by name -- so it is dropped once loaded, about
+    20 MiB. LiteLLM's import drops the same copy (``litellm_setup``); this drops
+    it in a process that never imports LiteLLM.
+    """
+    enc = tiktoken.get_encoding(_ENCODING_NAME)
+    if hasattr(enc, "_mergeable_ranks"):
+        with contextlib.suppress(AttributeError):
+            del enc._mergeable_ranks
+    return enc
 
 
 def _encoded_len(encoding: tiktoken.Encoding, text: str) -> int:
@@ -150,7 +167,7 @@ def estimate_prompt_tokens(
             cache.clear()
         return extra_tokens
     try:
-        enc = tiktoken.get_encoding(_ENCODING_NAME)
+        enc = encoding()
         text_tokens = _encoded_len(enc, payload) if cache is None else cache.count(payload, enc)
     except Exception:
         if cache is not None:
@@ -195,7 +212,7 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
     if not payload:
         return max(1, extra_tokens)
     try:
-        enc = tiktoken.get_encoding(_ENCODING_NAME)
+        enc = encoding()
         text_tokens = _encoded_len(enc, payload)
     except Exception:
         text_tokens = len(payload) // 4

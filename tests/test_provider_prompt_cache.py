@@ -376,7 +376,7 @@ def test_every_module_that_writes_the_field_asks_whether_it_may():
 
     writers = {
         "raven/providers/prompt_cache.py",  # the answer itself
-        "raven/providers/litellm_provider.py",
+        "raven/providers/litellm_shape.py",
         # Marks its own system/tool blocks, and asks accepts_cache_control first.
         "raven/providers/anthropic_messages_provider.py",
         "raven/token_wise/cache_optimizer.py",
@@ -590,6 +590,45 @@ def test_the_refusal_verdict_survives_a_provider_that_swallows_the_exception():
     assert LLMProvider.classify_error(None, "Error calling LLM: 400 context_length_exceeded").refuses_prompt_cache is (
         False
     )
+
+
+async def test_a_bare_chat_learns_a_refusal_as_a_stream_does(monkeypatch):
+    """`chat` with no retry layer in front of it learns the downgrade, as `chat_stream` does.
+
+    The LLM relay's host calls it that way, on behalf of an agent whose retry
+    layer suppresses in the agent's own process: without learning here the host
+    marks the agent's stripped resend again and the one downgrade is refused.
+    An unrelated bad request is not taken for a refusal.
+    """
+    import litellm
+
+    from raven.providers import litellm_provider
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    model = "openrouter/anthropic/claude-3-haiku"
+    marked: list[bool] = []
+
+    async def refuse_marks(**kwargs):
+        marked.append("cache_control" in str(kwargs["messages"]))
+        if marked[-1]:
+            raise litellm.BadRequestError(message="400 cache_control is not permitted", model=model, llm_provider="x")
+        raise litellm.BadRequestError(message="400 context_length_exceeded", model=model, llm_provider="x")
+
+    monkeypatch.setattr(litellm_provider, "acompletion", refuse_marks)
+    client = LiteLLMProvider(api_key="k", default_model=model, provider_name="openrouter")
+    messages = [{"role": "system", "content": "You are a careful assistant. " * 200}, {"role": "user", "content": "q"}]
+
+    first = await client.chat(messages=messages)
+    assert first.finish_reason == "error" and first.error_classification.refuses_prompt_cache
+    assert prompt_cache.is_suppressed(model)
+    await client.chat(messages=messages)
+    assert marked == [True, False]
+
+    other = "openrouter/anthropic/claude-3-opus"
+    await LiteLLMProvider(api_key="k", default_model=other, provider_name="openrouter").chat(
+        messages=[{"role": "user", "content": "q"}]
+    )
+    assert not prompt_cache.is_suppressed(other)
 
 
 # --- The probe the construction sites hand to the strategies ---

@@ -30,6 +30,8 @@ import httpx
 from loguru import logger
 
 from raven.providers import model_catalog_cache
+from raven.providers.relay import active as relay_active
+from raven.providers.relay import relayed
 
 #: One home for the window ladder's documented fallback: an unknown model gets
 #: this many tokens of headroom rather than a number invented at the call site.
@@ -212,6 +214,7 @@ def _litellm_price_table() -> dict:
         return {}
 
 
+@relayed()
 def _table_entry(model: str) -> dict | None:
     """The table row keyed exactly by this model id, or None.
 
@@ -229,11 +232,17 @@ def _table_entry(model: str) -> dict | None:
 
 @lru_cache(maxsize=1)
 def _drivers_dir() -> pathlib.Path | None:
-    """Where the installed LiteLLM keeps its per-provider drivers."""
-    try:
-        from raven.providers.litellm_setup import import_litellm
+    """Where the installed LiteLLM keeps its per-provider drivers.
 
-        return pathlib.Path(import_litellm().__file__).parent / "llms"
+    Located, not imported: the package's directory is all this needs, and a
+    process whose model calls go through its host's relay never loads LiteLLM.
+    """
+    try:
+        import importlib.util
+
+        spec = importlib.util.find_spec("litellm")
+        locations = list(spec.submodule_search_locations or []) if spec is not None else []
+        return pathlib.Path(locations[0]) / "llms" if locations else None
     except Exception:
         return None
 
@@ -325,6 +334,7 @@ def _endpoint_metadata_model(model: str) -> str:
     return model
 
 
+@relayed()
 def _may_query_endpoint(model: str) -> bool:
     """Would ``get_model_info`` ask this model's own server rather than a table?
 
@@ -395,6 +405,7 @@ def _candidates(model: str) -> list[str]:
     return metadata_candidates(model)
 
 
+@relayed(shape=lambda value: tuple(value) if isinstance(value, list) else value)
 def _try_litellm_rates(model: str, input_tokens: int, output_tokens: int) -> tuple[float, float] | None:
     """Ask LiteLLM for per-token rates. Returns (prompt_rate, completion_rate) or None."""
     try:
@@ -894,12 +905,16 @@ def _litellm_ready() -> bool:
     import machinery reads to tell a live import from a finished one; a module
     carrying no spec is one no import is still running.
     """
+    if relay_active():
+        # The tables are the host's, already loaded there; asking costs a local round trip.
+        return True
     module = sys.modules.get("litellm")
     if module is None:
         return False
     return not getattr(getattr(module, "__spec__", None), "_initializing", False)
 
 
+@relayed()
 def _try_litellm_max_output(model: str, *, allow_import: bool = True, allow_fetch: bool = True) -> int | None:
     """The model's own output ceiling, from the same metadata as the window.
 
@@ -1055,6 +1070,7 @@ def resolve_max_output_tokens(model: str | None, *, window: int | None = None, a
     return max(1, min(ceiling, room, MAX_OUTPUT_TOKENS_PER_ITERATION))
 
 
+@relayed()
 def _try_litellm_context_window(model: str, *, allow_import: bool = True, allow_fetch: bool = True) -> int | None:
     """LiteLLM's model metadata, covering most mapped providers.
 

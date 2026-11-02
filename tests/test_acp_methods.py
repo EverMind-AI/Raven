@@ -2303,6 +2303,47 @@ class TestHeldTurn:
         assert response["result"]["stopReason"] == "refusal", "only a turn that ended normally can be a wait"
 
 
+class TestResidentWork:
+    """``_raven/residentWork``: what the agent holds that runs with nobody asking.
+
+    A raven client asks it right before closing the agent for idleness: an armed
+    cron job of this agent's partition fires only from this process, and a
+    plugin service lives only as long as the process does.
+    """
+
+    async def test_it_is_advertised(self, rig):
+        response = await rig.handshake()
+        validate_def("InitializeResponse", response["result"])
+        assert response["result"]["agentCapabilities"]["_meta"]["raven.residentWork"] is True
+
+    async def test_an_armed_job_of_its_partition_or_a_running_service_is_resident(self, rig, tmp_path):
+        from raven.proactive_engine.schedulers.cron.service import CronService
+        from raven.proactive_engine.schedulers.cron.types import CronSchedule
+
+        async def answer() -> dict:
+            response = await rig.call("_raven/residentWork", {})
+            assert "result" in response, response
+            return response["result"]
+
+        await rig.handshake()
+        assert await answer() == {"resident": False, "cronJobs": 0, "services": 0}
+
+        cron = CronService(tmp_path / "jobs.json", allowed_channels={"acp"})
+        rig.engine.cron_service = cron
+        cron.add_job("elsewhere", CronSchedule(kind="every", every_ms=60_000), "for feishu", channel="feishu")
+        await cron.start()
+        try:
+            assert (await answer())["resident"] is False, "another partition's job is not this process's to fire"
+            cron.add_job("mine", CronSchedule(kind="every", every_ms=60_000), "remind me", channel="acp")
+            assert await answer() == {"resident": True, "cronJobs": 1, "services": 0}
+        finally:
+            cron.stop()
+        assert (await answer())["resident"] is False, "a stopped scheduler fires nothing"
+
+        rig.engine.running_plugin_services = (object(),)
+        assert await answer() == {"resident": True, "cronJobs": 0, "services": 1}
+
+
 class TestSteer:
     """``_raven/session/steer``: a person's words for a turn already in flight.
     A held prompt counts -- the agent is asleep between its own turns, and the

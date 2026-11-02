@@ -78,6 +78,14 @@ The same names raven's own ACP client uses (raven/acp_client/protocol.py); the
 capability is advertised by presence under ``agentCapabilities._meta``.
 """
 
+RESIDENT_WORK_METHOD = "_raven/residentWork"
+RESIDENT_WORK_CAPABILITY = "raven.residentWork"
+"""raven's resident-work extension: what this agent holds that runs with nobody asking.
+
+Asked by raven's own client before it closes the agent for idleness; same names
+there, advertised the same way as the steer extension.
+"""
+
 STOP_REASONS = frozenset(
     {
         "end_turn",

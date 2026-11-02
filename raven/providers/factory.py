@@ -165,7 +165,7 @@ def make_provider(config: Config, model: str | None = None):
     else:
         from raven.providers.capabilities import wire_overrides
         from raven.providers.endpoints import provider_endpoints
-        from raven.providers.litellm_provider import LiteLLMProvider
+        from raven.providers.relay_provider import litellm_provider
 
         if provider_name and configured_protocol(p, model) is None and inferred_protocol(model) != "chat":
             # The stepping-aside itself, logged where the chat client is built:
@@ -183,7 +183,7 @@ def make_provider(config: Config, model: str | None = None):
             from raven.providers.endpoint_rotor import EndpointRotorProvider
 
             def make_inner(ep):
-                return LiteLLMProvider(
+                return litellm_provider(
                     api_key=ep.api_key,
                     # ``ep.api_base`` already carries the section's flat address
                     # when the endpoint named none of its own (see
@@ -208,7 +208,7 @@ def make_provider(config: Config, model: str | None = None):
             )
         elif eps:
             extra_body = wire_overrides(provider_name, model) or None
-            provider = LiteLLMProvider(
+            provider = litellm_provider(
                 api_key=eps[0].api_key,
                 # Same fallback as ``make_inner`` above: only reached when the
                 # flat address is empty too, for a provider's usable spec
@@ -223,7 +223,7 @@ def make_provider(config: Config, model: str | None = None):
             )
         else:
             extra_body = wire_overrides(provider_name, model) or None
-            provider = LiteLLMProvider(
+            provider = litellm_provider(
                 api_key=p.effective_api_key if p else None,
                 api_base=config.get_api_base(model),
                 default_model=model,
