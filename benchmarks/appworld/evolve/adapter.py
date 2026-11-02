@@ -40,6 +40,7 @@ import logging
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -72,6 +73,10 @@ _TRIAL_INDEX_RE = re.compile(r"_k(\d+)\.json$")
 #: The SOP infra-rerun ladder's rung numbers (see ``eval_with_infra_rerun``).
 _LADDER_RERUNS = (1, 2)
 
+#: Bounded retries for transient Windows sharing violations on a read/unlink.
+_IO_ATTEMPTS = 5
+_IO_BACKOFF = 0.05
+
 _LOG = logging.getLogger(__name__)
 
 
@@ -95,12 +100,21 @@ def _content_digest(path: Path) -> str:
     """Digest of the subject config's bytes; the path alone cannot pin identity.
 
     ``evolver/launch/config.py`` only compares the YAML value, so editing the
-    file at the same path leaves that drift gate green.
+    file at the same path leaves that drift gate green. A transient read
+    failure (a Windows editor or scanner holding the file) is retried before
+    it is reported as ``"unreadable"``; treating it as a new identity would
+    discard paid-for trials that are still valid for the same config.
     """
-    try:
-        return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:16]
-    except OSError:
-        return "unreadable"
+    delay = _IO_BACKOFF
+    for attempt in range(_IO_ATTEMPTS):
+        try:
+            return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:16]
+        except OSError:
+            if attempt + 1 == _IO_ATTEMPTS:
+                return "unreadable"
+            time.sleep(delay)
+            delay *= 2
+    return "unreadable"  # pragma: no cover - the loop always returns
 
 
 def _read_trial(path: Path) -> dict | None:
@@ -152,6 +166,28 @@ def _ladder_dirs(out_dir: Path) -> list[Path]:
     return [out_dir] + [out_dir.parent / f"{out_dir.name}_infra_rerun{i}" for i in _LADDER_RERUNS]
 
 
+def _unlink_with_retry(path: Path) -> None:
+    """Remove ``path``, retrying a transient Windows sharing violation.
+
+    A viewer, indexer or backup tool can hold a result file open; on Windows
+    ``unlink`` then fails with ``PermissionError`` while POSIX would remove it.
+    The denial is retried with bounded backoff, then raised: the caller must
+    not score an old measurement under a new identity.
+    """
+    delay = _IO_BACKOFF
+    for attempt in range(_IO_ATTEMPTS):
+        try:
+            path.unlink()
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if attempt + 1 == _IO_ATTEMPTS:
+                raise
+            time.sleep(delay)
+            delay *= 2
+
+
 def _discard_stale_trials(out_dir: Path) -> None:
     """Clear trial files left by a different identity, ladder siblings included.
 
@@ -170,14 +206,21 @@ def _discard_stale_trials(out_dir: Path) -> None:
             continue
         for path in directory.glob("*_k*.json"):
             try:
-                path.unlink()
+                _unlink_with_retry(path)
             except OSError:
                 failed.append(path)
         for path in directory.glob("*_k*.stderr"):
             try:
-                path.unlink()
+                _unlink_with_retry(path)
             except OSError:
                 pass
+    # The marker described the old identity, and it is what makes the next
+    # retry think a partial refill is still stale. Remove it once its files
+    # are gone, so an interrupted refill can resume instead of being discarded.
+    try:
+        _unlink_with_retry(Path(out_dir) / runmark.MARK)
+    except OSError:
+        failed.append(Path(out_dir) / runmark.MARK)
     if failed:
         raise OSError(f"could not clear {len(failed)} stale trial file(s) under {out_dir}: {failed[0]}")
 
@@ -387,14 +430,15 @@ def run_eval(
     out_dir = aw.out_dir_root / experiment
     out_dir.mkdir(parents=True, exist_ok=True)
     harness_dir = Path(cwd) if cwd is not None else aw.appworld_root
-    expected = {
+    config_digest = _content_digest(aw.config_path)
+    base_expected = {
         "split": aw.split,
         "k": K,
         "n": aw.n,
         "tasks": _selection_digest(task_ids),
-        "config": _content_digest(aw.config_path),
         "extra_args": list(aw.extra_args),
     }
+    expected = {**base_expected, "config": config_digest}
     if reuse_complete:
         matched = runmark.is_complete(out_dir, run_id=experiment, harness_dir=harness_dir, expected=expected)
         if matched and _results_complete(out_dir, task_ids, K, aw.n):
@@ -403,7 +447,15 @@ def run_eval(
             except FileNotFoundError:
                 pass
         elif not matched and runmark.read_mark(out_dir) is not None:
-            _discard_stale_trials(out_dir)
+            same_except_config = runmark.is_complete(
+                out_dir, run_id=experiment, harness_dir=harness_dir, expected=base_expected
+            )
+            if config_digest == "unreadable" and same_except_config:
+                # The config file was transiently unreadable, not different.
+                # Keep the paid-for trials; the batch will resume them.
+                _LOG.warning("config digest unreadable; keeping existing trials in %s", out_dir)
+            else:
+                _discard_stale_trials(out_dir)
     tasklist_path: Path | None = None
     if task_ids:
         tasklist_path = out_dir / "tasklist.txt"

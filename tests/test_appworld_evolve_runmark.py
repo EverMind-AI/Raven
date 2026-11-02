@@ -481,3 +481,65 @@ def test_candidate_eval_runs_in_the_candidate_worktree_with_reuse(aw, monkeypatc
     assert seen["K"] == 3
     assert seen["cwd"] == wt
     assert seen["reuse_complete"] is True
+
+
+def test_unlink_with_retry_survives_a_transient_permission_error(tmp_path: Path, monkeypatch):
+    target = tmp_path / "t1_k0.json"
+    target.write_text("{}")
+    original = Path.unlink
+    attempts = {"n": 0}
+
+    def flaky(self, *args, **kwargs):
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise PermissionError("held open")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", flaky)
+    adapter._unlink_with_retry(target)
+    assert attempts["n"] == 3
+    assert not target.exists()
+
+
+def test_discard_stale_trials_removes_the_old_marker(tmp_path: Path):
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "t1_k0.json").write_text("{}")
+    runmark.mark_complete(out_dir, run_id="old")
+
+    adapter._discard_stale_trials(out_dir)
+
+    assert not (out_dir / "t1_k0.json").exists()
+    assert runmark.read_mark(out_dir) is None
+
+
+def test_unreadable_config_does_not_discard_matching_trials(aw, monkeypatch):
+    calls: list[list[str]] = []
+    _fake_batch(monkeypatch, calls=calls)
+    aw.config_path.write_text('{"model": "a"}')
+    adapter.run_eval(aw, K=1, experiment="vanilla", task_ids=["t1"])
+
+    discarded: list[Path] = []
+    monkeypatch.setattr(adapter, "_content_digest", lambda path: "unreadable")
+    monkeypatch.setattr(adapter, "_discard_stale_trials", lambda out_dir: discarded.append(out_dir))
+
+    adapter.run_eval(aw, K=1, experiment="vanilla", task_ids=["t1"], reuse_complete=True)
+
+    assert discarded == []
+    assert len(calls) == 2
+
+
+def test_content_digest_retries_a_transient_read_failure(aw, monkeypatch):
+    aw.config_path.write_text('{"model": "a"}')
+    original = Path.read_bytes
+    attempts = {"n": 0}
+
+    def flaky(self):
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise PermissionError("held open")
+        return original(self)
+
+    monkeypatch.setattr(Path, "read_bytes", flaky)
+    assert adapter._content_digest(aw.config_path) != "unreadable"
+    assert attempts["n"] == 3
