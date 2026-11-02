@@ -4,18 +4,18 @@
 export const VERB_ROTATION_MS = 2500
 
 export const VERBS = [
-  'circling',
-  'scouting',
-  'gathering',
-  'sifting',
-  'tracing',
-  'turning',
-  'weighing',
-  'prying',
-  'homing',
-  'tallying',
-  'caching',
-  'watching',
-  'perching',
-  'plotting'
+  "circling",
+  "scouting",
+  "gathering",
+  "sifting",
+  "tracing",
+  "turning",
+  "weighing",
+  "prying",
+  "homing",
+  "tallying",
+  "caching",
+  "watching",
+  "perching",
+  "plotting"
 ]

@@ -106,7 +106,8 @@ def resolve_ui_dist() -> Optional[Path]:
                 from loguru import logger
 
                 logger.warning(
-                    "the built page is older than ui-web/src or i18n/messages.json; run `make build-ui` to rebuild it"
+                    "the built page is older than ui-web/src, i18n/messages.json or ui-shared; "
+                    "run `make build-ui` to rebuild it"
                 )
             return candidate
     return None
