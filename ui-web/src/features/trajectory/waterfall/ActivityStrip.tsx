@@ -1,7 +1,8 @@
 /* The activity strip above the ruler: how many calls the session made, over
  * the whole of it, and the window the rows below show.
  *
- * It always draws the whole session on the folded axis, whatever the window:
+ * It always draws the whole session on the folded axis, whatever the window
+ * (a Waterfall Replay hands it only what its playhead has passed):
  * a bar per bucket of real time, the model's calls under the tools', a mark
  * over a bucket that holds a failure, and each folded idle stretch with how
  * long it was, where it is wide enough to say. The window is a brush over it:

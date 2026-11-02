@@ -10,13 +10,13 @@
  * session must mount a screenful, not a session.
  */
 
-import { ArrowDown01Icon, ArrowRight01Icon, BotIcon } from '@hugeicons/core-free-icons'
+import { ArrowDown01Icon, ArrowRight01Icon, BotIcon, PlayIcon, StopIcon } from '@hugeicons/core-free-icons'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 
 import { AgentMark, agentMarkPath } from '../../../components/AgentMark'
 import { Icon } from '../../../components/Icon'
 import { t } from '../../../i18n/t'
-import { formatDuration } from '../../../lib/duration'
+import { formatDuration, widestDurations } from '../../../lib/duration'
 import * as lang from '../../../state/lang'
 import { showBar } from '../../../state/scrollbars'
 import * as details from '../detailStore'
@@ -27,7 +27,8 @@ import { ActivityStrip } from './ActivityStrip'
 import { AxisIndex, TRAIL_PAD, barOf, clampViewport, presetWindow, zoomViewport } from './axis'
 import { clockOf, lengthOf, spanOf, windowText } from './clock'
 import { WaterfallIndex } from './incremental'
-import { busyRuns, entryEnd, entryStart, isLive, turnKey } from './model'
+import { buildWaterfall, busyRuns, entryEnd, entryStart, isLive, turnKey } from './model'
+import { CATCH_UP_RATE, REPLAY_MS, advance, entriesAt, entryAt, startReplay } from './replay'
 import { turnBreakdown, turnSegments } from './segments'
 import { summarize } from './summary'
 import { clockTicks, stepFor, tickLabel } from './ticks'
@@ -35,6 +36,7 @@ import { clockTicks, stepFor, tickLabel } from './ticks'
 import type { TrajectoryEntry } from '../types'
 import type { TimeAxis, Viewport } from './axis'
 import type { Waterfall, WaterfallAgent, WaterfallRow, WaterfallTurn } from './model'
+import type { Replay } from './replay'
 import type { Figures } from './summary'
 import type { ClockTick } from './ticks'
 import type { JSX, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
@@ -146,6 +148,42 @@ function agentSplit(agents: Figures['agents']): string | null {
     agents.sub === 1 ? t('gui.trajectory.stat.sub_one') : agents.sub > 1 ? t('gui.trajectory.stat.sub_n', { n: agents.sub }) : null,
   ].filter((part): part is string => part !== null)
   return parts.length ? parts.join(' \u00b7 ') : null
+}
+
+/** The header's six figures, each with the line that says what it is made of.
+ *  The duration also names every spelling its count passes through at its
+ *  widest, the room a replay keeps for it (`Held`). */
+function statsOf(figures: Figures, agents: number): Array<[string, string, string | null, string[]?]> {
+  const duration = agents ? figures.end - figures.start : 0
+  return [
+    [t('gui.trajectory.stat.duration'), formatDuration(duration),
+      agents ? t('gui.trajectory.stat.span', spanOf(figures.start, figures.end)) : null, widestDurations(duration)],
+    [t('gui.trajectory.stat.agents'), String(agents), agentSplit(figures.agents)],
+    [t('gui.trajectory.stat.turns'), String(figures.turns),
+      figures.medianTurn === null ? null : t('gui.trajectory.stat.median', { duration: formatDuration(figures.medianTurn) })],
+    [t('gui.trajectory.stat.llm'), String(figures.llm),
+      figures.modelShare === null ? null : t('gui.trajectory.stat.model_share', { percent: Math.round(figures.modelShare * 100) })],
+    [t('gui.trajectory.stat.tool'), String(figures.tool),
+      figures.topTools.length
+        ? figures.topTools.map(({ name, share }) => t('gui.trajectory.stat.tool_share', { name: toolLabel(name), percent: Math.round(share * 100) })).join(' \u00b7 ')
+        : null],
+    [t('gui.trajectory.stat.errors'), String(figures.errors), null],
+  ]
+}
+
+/** A figure drawn in the room others take. While a replay runs, each figure in the header
+ *  sits over hidden copies of the whole session's, which set its cell's width: a replayed
+ *  count gaining a digit moves none of its neighbours, and a line that is longer mid-way than
+ *  at the end is cut short rather than widening its cell. The copies follow the whole session,
+ *  so a cell still widens when the session's own figure does, as it would without a replay. */
+function Held({ text, held }: { text: string | null; held: readonly string[] | null }): JSX.Element {
+  if (held === null) return <>{text}</>
+  return (
+    <span className="trajectory-wf-held">
+      <span>{text}</span>
+      {held.map((copy) => <span key={copy} aria-hidden="true">{copy}</span>)}
+    </span>
+  )
 }
 
 /** What a worker was asked to do, the row's name: its task when the door
@@ -272,9 +310,11 @@ const CLICK_PX = 4
  *  with a horizontal bar nobody can use. */
 const lineLeft = (left: number): string => (left >= 1 ? 'calc(100% - 1px)' : percent(left))
 
-function Ticks({ axis, view, pick, onPick, ticks, step, onWidth }: {
+function Ticks({ axis, view, pick, onPick, ticks, step, onWidth, playhead }: {
   axis: TimeAxis; view: Viewport; pick: Pick | null; onPick: (pick: Pick | null) => void
   ticks: readonly ClockTick[]; step: number; onWidth: (width: number) => void
+  /** A running replay's playhead, as a fraction of the view; null when none is on screen. */
+  playhead: number | null
 }): JSX.Element {
   const { from, to } = view
   /* The ruler is the one element that knows how wide the axis really is; the
@@ -404,8 +444,18 @@ function Ticks({ axis, view, pick, onPick, ticks, step, onWidth }: {
           </>
         )
       })()}
+      {playhead === null ? null : <span className="trajectory-ruler-playhead" style={{ left: lineLeft(playhead) }} />}
     </div>
   )
+}
+
+/** What a running replay's button reads beside Stop: the time the first pass has left, in
+ *  whole seconds -- a rate would belie a folded axis, whose idle hours pass in a moment --
+ *  and then the rate the catch-up plays at. */
+function replayReadout(replay: Replay): string {
+  if (replay.pressed === null) return `${CATCH_UP_RATE}\u00d7`
+  const left = Math.max(0, Math.ceil((replay.duration - replay.played) / 1000))
+  return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`
 }
 
 export function Waterfall(): JSX.Element {
@@ -441,8 +491,9 @@ export function Waterfall(): JSX.Element {
   useLayoutEffect(() => {
     const closed = wasOpen.current && !paneOpen
     wasOpen.current = paneOpen
-    /* A tab switch also closes the old pane; that keeps the focus on the strip. */
-    if (!closed || details.get().swapped) return
+    /* A tab switch also closes the old pane; that keeps the focus on the strip.
+       So does a replay as it starts: the focus stays on its button. */
+    if (!closed || details.get().swapped || replayRef.current !== null) return
     box.current?.focus()
   }, [paneOpen])
 
@@ -506,9 +557,10 @@ export function Waterfall(): JSX.Element {
 
   }, [])
 
-  /* The clock the bars are cut at. It ticks only while something is still
-     running: a fresh `Date.now()` every render would rebuild the whole model
-     on every scroll frame, which is what a 500-turn session cannot afford. */
+  /* The clock the bars are cut at, unless a replay cuts them at its playhead
+     (`clock` below). It ticks only while something is still running: a fresh
+     `Date.now()` every render would rebuild the whole model on every scroll
+     frame, which is what a 500-turn session cannot afford. */
   const entries = store.get().entries
   const [now, setNow] = useState(() => Date.now())
   const live = useMemo(() => entries.some((entry) => isLive(entry, now)), [entries, now])
@@ -523,7 +575,7 @@ export function Waterfall(): JSX.Element {
      change) starts them over. */
   const grownFrom = store.get().grownFrom
   const tree = useRef<{ index: WaterfallIndex; built: number; now: number } | null>(null)
-  const waterfall = useMemo(() => {
+  const whole = useMemo(() => {
     const prev = tree.current
     if (prev !== null && grownFrom === prev.built && entries.length >= prev.built) {
       if (prev.now !== now) {
@@ -540,9 +592,25 @@ export function Waterfall(): JSX.Element {
     return index.waterfall()
   }, [entries, grownFrom, now])
 
+  /* A replay, while one runs (`replay.ts`): the rows, the figures and the
+     strip are drawn as the session stood at the playhead, on the axis of the
+     whole session. Its tree is built whole every frame -- the steps running
+     at the playhead are cut somewhere new each time, which an index that
+     only appends cannot follow. */
+  const [replay, setReplay] = useState<Replay | null>(null)
+  const replaying = replay !== null
+  const replayRef = useRef<Replay | null>(null)
+  const replayAt = replay?.at ?? null
+  const clock = replayAt ?? now
+  const shown = useMemo(() => (replayAt === null ? entries : entriesAt(entries, replayAt, now)), [entries, replayAt, now])
+  const replayed = useMemo(() => (replayAt === null ? null : buildWaterfall(shown, replayAt)), [shown, replayAt])
+  const waterfall = replayed ?? whole
+
   /* Agents start folded when there are several -- the session reads as one
-     row per agent -- and a lone agent starts open. */
-  const foldedByDefault = waterfall.agents.length > 1
+     row per agent -- and a lone agent starts open. Counted over the whole
+     session, so a replay does not fold the main agent shut under the reader
+     the moment its first worker appears. */
+  const foldedByDefault = whole.agents.length > 1
   const collapsed = useMemo(
     () => new Set(waterfall.agents.filter((agent) => !(agentFold.get(agent.key) ?? !foldedByDefault)).map((agent) => agent.key)),
     [waterfall, agentFold, foldedByDefault],
@@ -584,6 +652,43 @@ export function Waterfall(): JSX.Element {
   useEffect(() => {
     setZoom(null)
   }, [sessionKey])
+
+  /* The playhead moves once an animation frame, by the wall clock. A frame
+     reads the axis, the rows and the clock of the last render together, so
+     it never pairs one render's axis with another's rows. A replay belongs
+     to the conversation it was started on, and to the reader watching it:
+     the island stays mounted behind the chat, and going back to the chat
+     lets the replay go rather than leave it rebuilding rows out of sight. */
+  const onScreen = store.get().view === 'trajectory'
+  const scene = useRef({ axis, entries, now })
+  scene.current = { axis, entries, now }
+  useEffect(() => {
+    if (!replaying) return
+    let last = performance.now()
+    let frame = requestAnimationFrame(function step(time: number): void {
+      const current = replayRef.current
+      if (current === null) return
+      const next = advance(current, scene.current.axis, time - last, scene.current.entries, scene.current.now)
+      last = time
+      replayRef.current = next
+      setReplay(next)
+      if (next !== null) frame = requestAnimationFrame(step)
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [replaying])
+  useEffect(() => {
+    replayRef.current = null
+    setReplay(null)
+  }, [sessionKey, onScreen])
+  /* The details pane reads a step as it was recorded, not as it stood at the
+     playhead, so the two never share the page: pressing Replay closes the
+     pane, and opening it -- a row, the jump to the first failure -- lets the
+     replay go, the whole session back under it. */
+  useLayoutEffect(() => {
+    if (!paneOpen || replayRef.current === null) return
+    replayRef.current = null
+    setReplay(null)
+  }, [paneOpen])
   /* The picked stretch is the store's: the axis draws it, and the rows below
      are filtered to it. The ruler speaks in fractions of the view it is drawn
      over, so the stretch is handed to it that way and taken back in real time;
@@ -597,20 +702,25 @@ export function Waterfall(): JSX.Element {
       ? null
       : { a: axis.unproject(view.from + viewSpan * next.from), b: axis.unproject(view.from + viewSpan * next.to) })
   }
+  /* Where a running replay has got to, as a fraction of the view, while that is on screen. */
+  const playheadAt = replayAt === null || !(viewSpan > 0) ? null : (axis.project(replayAt) - view.from) / viewSpan
+  const playhead = playheadAt !== null && playheadAt >= 0 && playheadAt <= 1 ? playheadAt : null
   const range = useMemo(
     () => (picked === null ? null : { start: Math.min(picked.a, picked.b), end: Math.max(picked.a, picked.b) }),
     [picked],
   )
   /* Whether the picked stretch keeps this entry: the same overlap the rows are
-     filtered by, so a key can never land on a row the reader cannot see. */
+     filtered by, on the same step -- cut at the playhead while a replay runs --
+     so a key can never land on a row the reader cannot see. */
   const inPick = useCallback((entryId: string): boolean => {
     if (range === null) return true
     const s = store.get()
     const at = s.index[entryId]
     const entry = at === undefined ? undefined : s.entries[at]
-    if (entry === undefined) return false
-    return entryEnd(entry, now) >= range.start && entryStart(entry) <= range.end
-  }, [range, now])
+    const seen = entry === undefined ? null : replayAt === null ? entry : entryAt(entry, replayAt, now)
+    if (seen === null) return false
+    return entryEnd(seen, clock) >= range.start && entryStart(seen) <= range.end
+  }, [range, now, replayAt, clock])
   /* A filtered list is a new list: it starts at its own beginning, not at
      whatever scroll offset the full one happened to be at. */
   useEffect(() => {
@@ -635,7 +745,7 @@ export function Waterfall(): JSX.Element {
     for (const agent of waterfall.agents) {
       for (const turn of agent.turns) {
         for (const row of turn.rows) {
-          const ms = entryEnd(row.entry, now) - entryStart(row.entry)
+          const ms = entryEnd(row.entry, clock) - entryStart(row.entry)
           if (ms > slowestMs) { slowestMs = ms; slowestId = row.entry.entry_id }
         }
       }
@@ -647,7 +757,7 @@ export function Waterfall(): JSX.Element {
     const busy = new Map<string, number>()
     const failures = new Map<string, number[]>()
     for (const agent of waterfall.agents) {
-      const agentRuns = busyRuns(agent, now)
+      const agentRuns = busyRuns(agent, clock)
       runs.set(agent.key, agentRuns)
       busy.set(agent.key, agentRuns.reduce((sum, run) => sum + run.end - run.start, 0))
       const failed = [...agent.turns.flatMap((turn) => turn.rows), ...agent.loose].filter((row) => row.entry.failure_entry)
@@ -675,8 +785,8 @@ export function Waterfall(): JSX.Element {
       const holder = agent.door === null ? undefined : agentOfEntry.get(agent.door.entry_id)
       if (agent.door !== null && holder !== undefined) dispatch.set(agent.key, { holder, at: entryStart(agent.door) })
     }
-    return { nameOfScope, slowestId, runs, busy, failures, sentFrom, dispatch, figures: summarize(waterfall, entries, now) }
-  }, [entries, waterfall, now])
+    return { nameOfScope, slowestId, runs, busy, failures, sentFrom, dispatch, figures: summarize(waterfall, shown, clock) }
+  }, [shown, waterfall, clock])
   const { nameOfScope, slowestId, runs, busy, failures, sentFrom, dispatch, figures } = summary
 
   /* Once the reader narrows the window, a worker whose work lies wholly before
@@ -733,9 +843,9 @@ export function Waterfall(): JSX.Element {
       }
       if (row.kind === 'turn') return row.turnRow !== null && overlaps(row.turnRow.start, row.turnRow.end)
       const entry = row.row?.entry
-      return entry !== undefined && overlaps(entryStart(entry), entryEnd(entry, now))
+      return entry !== undefined && overlaps(entryStart(entry), entryEnd(entry, clock))
     })
-  }, [waterfall, collapsed, open, outside, foldOpen, range, now])
+  }, [waterfall, collapsed, open, outside, foldOpen, range, clock])
   const { first, last } = windowOf(scrollTop, height, rows.length)
 
   /* The rows' bar stays, so it is placed again whenever the list it stands
@@ -912,20 +1022,10 @@ export function Waterfall(): JSX.Element {
     store.selectAcross(figures.firstError, { source: 'click' })
     details.openDetails()
   }
-  const stats: Array<[string, string, string | null]> = [
-    [t('gui.trajectory.stat.duration'), formatDuration(waterfall.agents.length ? figures.end - figures.start : 0),
-      waterfall.agents.length ? t('gui.trajectory.stat.span', spanOf(figures.start, figures.end)) : null],
-    [t('gui.trajectory.stat.agents'), String(waterfall.agents.length), agentSplit(figures.agents)],
-    [t('gui.trajectory.stat.turns'), String(figures.turns),
-      figures.medianTurn === null ? null : t('gui.trajectory.stat.median', { duration: formatDuration(figures.medianTurn) })],
-    [t('gui.trajectory.stat.llm'), String(figures.llm),
-      figures.modelShare === null ? null : t('gui.trajectory.stat.model_share', { percent: Math.round(figures.modelShare * 100) })],
-    [t('gui.trajectory.stat.tool'), String(figures.tool),
-      figures.topTools.length
-        ? figures.topTools.map(({ name, share }) => t('gui.trajectory.stat.tool_share', { name: toolLabel(name), percent: Math.round(share * 100) })).join(' \u00b7 ')
-        : null],
-    [t('gui.trajectory.stat.errors'), String(errors), null],
-  ]
+  const stats = statsOf(figures, waterfall.agents.length)
+  /* While a replay runs, the whole session's figures: each cell keeps the room they take. */
+  const wholeFigures = useMemo(() => (replaying ? summarize(whole, entries, now) : null), [replaying, whole, entries, now])
+  const held = wholeFigures === null ? null : statsOf(wholeFigures, whole.agents.length)
 
   /* The ruler and the rows' grid read the same marks: one per round clock
      time the ruler's width has room to label. */
@@ -951,6 +1051,25 @@ export function Waterfall(): JSX.Element {
     const next = length === null ? null : presetWindow(axis, view, length)
     setZoom(next === null ? null : { session: sessionKey, start: next.start, end: next.end })
     store.setPicked(null)
+  }
+  /* A replay is of the whole session: a narrowed window and a picked stretch
+     are let go, and the list goes back to its top. Pressed again it stops,
+     and the session is drawn as it is now. */
+  const toggleReplay = (): void => {
+    if (replayRef.current !== null) {
+      replayRef.current = null
+      setReplay(null)
+      return
+    }
+    const next = startReplay(axis, entries, now, Date.now())
+    if (next === null) return
+    setZoom(null)
+    store.setPicked(null)
+    if (box.current) box.current.scrollTop = 0
+    setScrollTop(0)
+    replayRef.current = next
+    setReplay(next)
+    details.closeDetails()
   }
   const painted: JSX.Element[] = []
   for (let at = first; at < last; at++) {
@@ -1052,7 +1171,7 @@ export function Waterfall(): JSX.Element {
     }
     if (row.kind === 'turn') {
       const turn = row.turnRow!
-      const parts = turnSegments(turn, now)
+      const parts = turnSegments(turn, clock)
       const openTurn = open.has(turnKey(agent.key, turn.id))
       const turnName = t('gui.trajectory.turn.ordinal', { n: turn.ordinal })
       painted.push(
@@ -1086,7 +1205,7 @@ export function Waterfall(): JSX.Element {
       continue
     }
     const entry = row.row!.entry
-    const bar = barOf(axis, view, entryStart(entry), entryEnd(entry, now))
+    const bar = barOf(axis, view, entryStart(entry), entryEnd(entry, clock))
     painted.push(
       <div key={row.key} id={rowId(at)} className="trajectory-wf-row trajectory-wf-span" data-row="span" data-entry={entry.entry_id}
         role="treeitem" aria-level={row.turn === null ? 2 : 3} aria-selected={entry.entry_id === selectedId}
@@ -1104,7 +1223,7 @@ export function Waterfall(): JSX.Element {
               title={t('gui.trajectory.scope.opens')}
               onClick={(event) => { event.stopPropagation(); locate(entry) }}>{'\u2197'}</button>
           )}
-          <span className="trajectory-wf-busy">{formatDuration(entryEnd(entry, now) - entryStart(entry))}</span>
+          <span className="trajectory-wf-busy">{formatDuration(entryEnd(entry, clock) - entryStart(entry))}</span>
         </span>
         <span className="trajectory-wf-track">
           {bar ? <i className={`trajectory-wf-spanbar ${spanClass(entry)}`} style={{ left: percent(bar.left), width: percent(bar.width) }} /> : null}
@@ -1161,7 +1280,7 @@ export function Waterfall(): JSX.Element {
     const at = hoverTurn === null || rows[hoverTurn.at]?.key !== hoverTurn.key ? -1 : hoverTurn.at
     const turn = at < 0 ? null : rows[at]!.turnRow
     if (turn === null) return null
-    const parts = turnBreakdown(turn, now)
+    const parts = turnBreakdown(turn, clock)
     const share = (ms: number): number => (parts.total > 0 ? Math.round((ms / parts.total) * 100) : 0)
     const calls = (n: number): string => (n === 1 ? t('gui.trajectory.tip.calls_one') : t('gui.trajectory.tip.calls_n', { n }))
     const precision = parts.total < 120_000 ? 'second' : 'minute'
@@ -1196,22 +1315,38 @@ export function Waterfall(): JSX.Element {
   return (
     <div className="trajectory-wf" ref={island}>
       <div className="trajectory-wf-stats">
-        {stats.map(([label, value, sub]) => {
+        {stats.map(([label, value, sub], at) => {
           const errorCell = label === t('gui.trajectory.stat.errors')
+          const keep = held?.[at] ?? null
+          const keepSub = keep?.[2] ?? null
           return (
             <div key={label} className="trajectory-wf-stat">
               <span className="trajectory-wf-statk">{label}</span>
-              <span className="trajectory-wf-statv" data-bad={errorCell && errors > 0 ? '' : undefined}>{value}</span>
-              {sub === null ? null : <span className="trajectory-wf-statsub">{sub}</span>}
+              <span className="trajectory-wf-statv" data-bad={errorCell && errors > 0 ? '' : undefined}>
+                <Held text={value} held={keep === null ? null : keep[3] ?? [keep[1]]} />
+              </span>
+              {sub === null && keepSub === null ? null : (
+                <span className="trajectory-wf-statsub"><Held text={sub} held={keepSub === null ? null : [keepSub]} /></span>
+              )}
               {errorCell && figures.firstError !== null ? (
                 <button type="button" className="trajectory-wf-statsub trajectory-wf-jump" onClick={jumpToFirstError}>
                   {t('gui.trajectory.stat.jump')}
                 </button>
+              ) : errorCell && wholeFigures !== null && wholeFigures.firstError !== null ? (
+                <span className="trajectory-wf-statsub trajectory-wf-jumphold" aria-hidden="true">{t('gui.trajectory.stat.jump')}</span>
               ) : null}
             </div>
           )
         })}
         <div className="trajectory-wf-tools">
+          <button type="button" className="trajectory-wf-tool trajectory-wf-replay" data-playing={replay === null ? undefined : ''}
+            disabled={replay === null && !(axis.end > axis.start)} onClick={toggleReplay}
+            title={replay === null ? t('gui.trajectory.replay.hint', { seconds: REPLAY_MS / 1000 })
+              : replay.pressed === null ? t('gui.trajectory.replay.catching_up', { rate: replayReadout(replay) }) : undefined}>
+            <Icon icon={replay === null ? PlayIcon : StopIcon} size={13} />
+            {replay === null ? t('gui.trajectory.replay.start') : t('gui.trajectory.replay.stop')}
+            {replay === null ? null : <span className="trajectory-wf-readout">{replayReadout(replay)}</span>}
+          </button>
           <div className="trajectory-wf-zoom" role="group" aria-label={t('gui.trajectory.zoom.label')}>
             {PRESETS.map(([name, length]) => (
               <button key={name} type="button" aria-pressed={activePreset === name} onClick={() => choosePreset(length)}>
@@ -1225,7 +1360,7 @@ export function Waterfall(): JSX.Element {
         </div>
       </div>
       {waterfall.agents.length === 0 ? null : (
-        <ActivityStrip axis={axis} entries={entries} start={windowFrom} end={windowTo} zoomed={zoomedView} onWindow={takeWindow} />
+        <ActivityStrip axis={axis} entries={shown} start={windowFrom} end={windowTo} zoomed={zoomedView} onWindow={takeWindow} />
       )}
       <div className="trajectory-wf-head">
         <div className="trajectory-wf-headlabel">
@@ -1241,7 +1376,8 @@ export function Waterfall(): JSX.Element {
           )}
           <span className="trajectory-wf-busyhead">{t('gui.trajectory.busy')}</span>
         </div>
-        <Ticks axis={axis} view={view} pick={pickOnView} onPick={pickFromView} ticks={marks} step={step} onWidth={setRulerWidth} />
+        <Ticks axis={axis} view={view} pick={pickOnView} onPick={pickFromView} ticks={marks} step={step} onWidth={setRulerWidth}
+          playhead={playhead} />
       </div>
       {/* A tree, as the old list was a listbox: the box holds the focus, the
           arrows move the selection, and the selected row is its active
@@ -1258,6 +1394,7 @@ export function Waterfall(): JSX.Element {
               <span key={`grid-${tick.time}`} className="trajectory-wf-grid" data-major={tick.major ? '' : undefined}
                 style={{ left: lineLeft(tick.left) }} />
             ))}
+            {playhead === null ? null : <span className="trajectory-wf-playhead" style={{ left: lineLeft(playhead) }} />}
           </div>
           {links.length === 0 ? null : (
             <svg className="trajectory-wf-dispatch" aria-hidden="true" preserveAspectRatio="none"

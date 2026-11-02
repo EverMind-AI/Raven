@@ -12786,8 +12786,24 @@
       "zh": "15 分钟"
     },
     "gui.trajectory.fold_all": {
-      "en": "Collapse all",
-      "zh": "全部折叠"
+      "en": "Collapse",
+      "zh": "折叠"
+    },
+    "gui.trajectory.replay.start": {
+      "en": "Replay",
+      "zh": "重放"
+    },
+    "gui.trajectory.replay.stop": {
+      "en": "Stop",
+      "zh": "停止"
+    },
+    "gui.trajectory.replay.hint": {
+      "en": "Replay the session from its first step, in at most {seconds} seconds",
+      "zh": "从第一步开始重放整段会话，最长 {seconds} 秒"
+    },
+    "gui.trajectory.replay.catching_up": {
+      "en": "Catching up to the present at {rate} speed",
+      "zh": "正在以 {rate} 速度追到当前进度"
     },
     "gui.trajectory.window.whole": {
       "en": "{from} – {to} · whole session",
