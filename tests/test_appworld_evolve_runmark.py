@@ -543,3 +543,31 @@ def test_content_digest_retries_a_transient_read_failure(aw, monkeypatch):
     monkeypatch.setattr(Path, "read_bytes", flaky)
     assert adapter._content_digest(aw.config_path) != "unreadable"
     assert attempts["n"] == 3
+
+
+def test_failed_stale_clear_keeps_the_marker_for_the_retry(tmp_path: Path, monkeypatch):
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    trial = out_dir / "t1_k0.json"
+    trial.write_text("{}")
+    runmark.mark_complete(out_dir, run_id="old")
+
+    monkeypatch.setattr(adapter, "_IO_ATTEMPTS", 2)
+    monkeypatch.setattr(adapter, "_IO_BACKOFF", 0.001)
+    original = Path.unlink
+
+    def held(self, *args, **kwargs):
+        if self.name == "t1_k0.json":
+            raise PermissionError("held open")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", held)
+    with pytest.raises(OSError):
+        adapter._discard_stale_trials(out_dir)
+    assert trial.exists()
+    assert runmark.read_mark(out_dir) is not None, "the marker must survive a failed clear"
+
+    monkeypatch.setattr(Path, "unlink", original)
+    adapter._discard_stale_trials(out_dir)
+    assert not trial.exists()
+    assert runmark.read_mark(out_dir) is None

@@ -214,15 +214,17 @@ def _discard_stale_trials(out_dir: Path) -> None:
                 _unlink_with_retry(path)
             except OSError:
                 pass
-    # The marker described the old identity, and it is what makes the next
-    # retry think a partial refill is still stale. Remove it once its files
-    # are gone, so an interrupted refill can resume instead of being discarded.
-    try:
-        _unlink_with_retry(Path(out_dir) / runmark.MARK)
-    except OSError:
-        failed.append(Path(out_dir) / runmark.MARK)
+    # Never remove the marker while a scored file from the old identity is
+    # still there: a marker-less directory would be treated as a fresh one on
+    # the next retry, and batch.py would resume the stale JSON under the new
+    # identity. Remove it only after every scored file was cleared, so an
+    # interrupted refill can resume instead of being discarded again.
     if failed:
         raise OSError(f"could not clear {len(failed)} stale trial file(s) under {out_dir}: {failed[0]}")
+    try:
+        _unlink_with_retry(Path(out_dir) / runmark.MARK)
+    except OSError as exc:
+        raise OSError(f"could not remove the stale marker under {out_dir}") from exc
 
 
 @dataclass(frozen=True)
