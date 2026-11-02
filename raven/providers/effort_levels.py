@@ -37,11 +37,16 @@ def levels_for(model: str, declared: Sequence[str] = ()) -> tuple[str, ...] | No
     index = _index()
     if index is None:
         return None
-    by_key, _by_name = index
+    by_key, by_name = index
     route = _route_row(model, by_key)
-    if route is None or route.get("supports_reasoning") is not True:
+    if route is not None and route.get("supports_reasoning") is False:
         return ()
-    return _derive(route)
+    authority = _authority_row(model, by_name)
+    if route is not None and route.get("supports_reasoning") is True:
+        return _derive(_merged(route, authority))
+    if authority is not None and authority.get("supports_reasoning") is True:
+        return _derive(authority)
+    return ()
 
 
 def reset() -> None:
@@ -81,9 +86,9 @@ def _candidates(model: str) -> list[tuple[str, bool]]:
     metadata = metadata_model_id(model)
     if metadata:
         out.append((metadata, False))
-    alternate = provider.replace("-", "_")
-    if alternate and alternate != provider and rest:
-        out.append((f"{alternate}/{rest}", False))
+    raw_head = (model or "").partition("/")[0]
+    if provider and rest and raw_head and raw_head != provider:
+        out.append((f"{provider}/{rest}", False))
     try:
         from litellm.utils import _get_potential_model_names
 
@@ -159,6 +164,64 @@ def _derive(row: dict[str, Any]) -> tuple[str, ...]:
     if row.get("supports_max_reasoning_effort") is True:
         levels.append("max")
     return tuple(levels)
+
+
+def _canonical_vendor(model: str) -> str:
+    from raven.providers.catalog import _vendor_id
+    from raven.providers.registry import canonical_provider_name, find_by_model, split_model_id
+    from raven.providers.registry_data import row_for
+
+    provider, _rest = split_model_id(model)
+    if not provider:
+        spec = find_by_model(model)
+        provider = getattr(spec, "name", "") if spec else ""
+    if not provider:
+        return ""
+    row = row_for(canonical_provider_name(provider), _vendor_id(provider, model))
+    return split_model_id(row.model_id)[0] if row is not None else ""
+
+
+def _row_provider_names(row: dict[str, Any]) -> set[str]:
+    name = row.get("litellm_provider")
+    return _provider_names(name) if isinstance(name, str) and name else set()
+
+
+def _authority_row(
+    model: str,
+    by_name: dict[str, tuple[tuple[str, dict[str, Any]], ...]],
+) -> dict[str, Any] | None:
+    from raven.providers.registry import split_model_id
+
+    route, rest = split_model_id(model)
+    rows = by_name.get(_normalized_name(rest or model), ())
+    declaring = [(key, row) for key, row in rows if row.get("supports_reasoning") is True]
+    if not declaring:
+        return None
+    vendor = _canonical_vendor(model)
+    vendor_names = _provider_names(vendor) if vendor else set()
+    accepted = vendor_names | _provider_names(route)
+    matching = [(key, row) for key, row in declaring if _row_provider_names(row) & accepted]
+    if not matching:
+        return None
+    vendor_rows = [pair for pair in matching if _row_provider_names(pair[1]) & vendor_names]
+    pool = vendor_rows or matching
+    return max(
+        pool,
+        key=lambda pair: (
+            sum(1 for flag in EFFORT_FLAGS if pair[1].get(flag) is not None),
+            pair[0],
+        ),
+    )[1]
+
+
+def _merged(route: dict[str, Any], authority: dict[str, Any] | None) -> dict[str, Any]:
+    merged = dict(route)
+    if authority is None:
+        return merged
+    for flag in ("supports_reasoning", *EFFORT_FLAGS):
+        if merged.get(flag) is None:
+            merged[flag] = authority.get(flag)
+    return merged
 
 
 def _normalized_name(model_id: str) -> str:

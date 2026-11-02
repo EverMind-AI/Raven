@@ -79,3 +79,47 @@ def test_the_pinned_table_declares_the_models_the_spec_names():
     )
     assert effort_levels.levels_for("zai/glm-5") == ("minimal", "low", "medium", "high")
     assert effort_levels.levels_for("zhipu/glm-5.3-flash") == ()
+
+
+def test_a_route_row_inherits_the_vendors_missing_flags(table):
+    table(
+        {
+            "claude-opus-4-6": _row(supports_max_reasoning_effort=True, litellm_provider="anthropic"),
+            "openrouter/anthropic/claude-opus-4.6": {
+                "supports_reasoning": True,
+                "supports_max_reasoning_effort": None,
+            },
+        }
+    )
+    assert "max" in effort_levels.levels_for("openrouter/anthropic/claude-opus-4.6")
+
+
+def test_a_route_that_says_false_is_vetoed_even_when_the_vendor_says_true(table):
+    table(
+        {
+            "claude-opus-4-5": _row(litellm_provider="anthropic"),
+            "perplexity/anthropic/claude-opus-4-5": {"supports_reasoning": False},
+        }
+    )
+    assert effort_levels.levels_for("perplexity/anthropic/claude-opus-4-5") == ()
+    assert "high" in effort_levels.levels_for("anthropic/claude-opus-4-5")
+
+
+def test_a_bare_row_from_an_unrelated_vendor_is_not_borrowed(table):
+    table({"some-model": {**_row(), "litellm_provider": "somevendor"}})
+    assert effort_levels.levels_for("bedrock/some-model") == ()
+
+
+def test_an_unknown_provider_spelling_still_finds_its_row(table):
+    table({"github_copilot/claude-opus-4.5": _row()})
+    assert effort_levels.levels_for("github-copilot/claude-opus-4.5") == (
+        "minimal",
+        "low",
+        "medium",
+        "high",
+    )
+
+
+def test_a_model_with_no_registry_row_uses_its_route_vendor(table):
+    table({"zai/glm-5": {**_row(), "litellm_provider": "zai"}})
+    assert effort_levels.levels_for("bigmodel/glm-5") == ("minimal", "low", "medium", "high")
