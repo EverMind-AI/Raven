@@ -493,14 +493,14 @@ describe('the header band', () => {
     /* The blur layer carries no ground: an engine that paints the element's
        background over the filtered backdrop would hide the blur entirely. */
     const blur = (css.match(/\.chat > \.top::before\s*\{([\s\S]*?)\}/) as RegExpMatchArray)[1] as string
-    expect(blur).toMatch(/-webkit-backdrop-filter: blur\(44px\) saturate\(1\.4\)/)
-    expect(blur).toMatch(/backdrop-filter: blur\(44px\) saturate\(1\.4\)/)
+    expect(blur).toMatch(/-webkit-backdrop-filter: blur\(16px\) saturate\(1\.4\)/)
+    expect(blur).toMatch(/backdrop-filter: blur\(16px\) saturate\(1\.4\)/)
     expect(blur).toMatch(/height: var\(--topbar-h\)/)
     expect(blur).not.toMatch(/background:/)
-    /* V4: the top quarter holds nearly full strength, then falls into the
-       lower edge. */
-    expect(blur).toMatch(/rgba\(0, 0, 0, \.9\) 25%/)
-    expect(blur).toMatch(/rgba\(0, 0, 0, \.3\) 75%/)
+    /* The ramp holds near full strength through the first third, declines
+       through the middle, and lands at none on the row's lower edge. */
+    expect(blur).toMatch(/rgba\(0, 0, 0, \.92\) 30%/)
+    expect(blur).toMatch(/rgba\(0, 0, 0, \.55\) 80%/)
     /* The ramp lands at the element's lower edge, not above it. */
     expect(blur).toMatch(/rgba\(0, 0, 0, 0\) 100%\)/)
 
@@ -570,6 +570,24 @@ describe('the header band', () => {
       expect(ramp.some((s) => s.at > 0 && s.at < 100 && s.alpha > 0 && s.alpha < 1)).toBe(true)
       for (let i = 1; i < ramp.length; i += 1) {
         expect(ramp[i]!.alpha).toBeLessThanOrEqual(ramp[i - 1]!.alpha)
+      }
+    }
+  })
+
+  it('pins both frost ramps stop for stop, in both spellings', () => {
+    styled()
+    const css = source('styles/page.css')
+    const layer = (selector: string): string =>
+      (css.match(new RegExp(`${selector}\\s*\\{([\\s\\S]*?)\\}`)) as RegExpMatchArray)[1] as string
+    const ramps: Record<string, string> = {
+      '\\.chat > \\.top::before':
+        'linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .92) 30%, rgba(0, 0, 0, .8) 58%, rgba(0, 0, 0, .55) 80%, rgba(0, 0, 0, 0) 100%)',
+      '\\.chat > \\.top::after':
+        'linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .82) 34%, rgba(0, 0, 0, .5) 62%, rgba(0, 0, 0, .2) 84%, rgba(0, 0, 0, 0) 100%)',
+    }
+    for (const [selector, ramp] of Object.entries(ramps)) {
+      for (const prop of ['-webkit-mask-image', 'mask-image']) {
+        expect(layer(selector)).toContain(`${prop}: ${ramp};`)
       }
     }
   })
