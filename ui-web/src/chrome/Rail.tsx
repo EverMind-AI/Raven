@@ -37,14 +37,15 @@
  * document, so a value it never changes is a value it never writes again.
  */
 
-import { FileImportIcon, LayoutAlignLeftIcon, PlusSignIcon, Search01Icon, Settings02Icon } from '@hugeicons/core-free-icons'
-import { useSyncExternalStore } from 'react'
+import { FileImportIcon, KanbanIcon, LayoutAlignLeftIcon, PlusSignIcon, Search01Icon, Settings02Icon } from '@hugeicons/core-free-icons'
+import { useEffect, useSyncExternalStore } from 'react'
 
 import { AgentsGlyph, CubeGlyph, Icon } from '../components/Icon'
 import { RavenMark } from '../components/RavenMark'
 import * as imported from '../features/imported/store'
 import { open as openKnowledge } from '../features/knowledge/store'
 import { open as openSettings } from '../features/settings/store'
+import * as boards from '../features/tasks/boards'
 import { t } from '../i18n/t'
 import * as find from '../state/find'
 import * as hub from '../state/hub'
@@ -97,16 +98,18 @@ function RailTop(): JSX.Element {
    that same table (features/rail/store.ts's markNew), which is the pair a page
    used to be able to miss in silence.
 
-   Two destinations, not five. Schedules and memory are set up once and then
+   Three destinations, not six. Schedules and memory are set up once and then
    left alone, so they are sections of the settings dialog, which the foot
    opens; a playbook is not a place a reader goes at all. What is left are the
-   two you go TO: what Raven connects to, agents and channels, one row that
-   goes back to whichever of the two the reader was last on, and knowledge. */
+   three you go TO: what Raven connects to, agents and channels, one row that
+   goes back to whichever of the two the reader was last on; knowledge; and
+   the task board, whose row carries how many Task Groups wait on the owner. */
 const NAV_ROWS: ReadonlyArray<{
   readonly button: NavButton
   readonly key: string
   readonly open: () => void
   readonly icon: JSX.Element
+  readonly badge?: JSX.Element
 }> = [
   {
     button: 'agentsBtn',
@@ -120,7 +123,28 @@ const NAV_ROWS: ReadonlyArray<{
     open: () => openKnowledge(),
     icon: <CubeGlyph />,
   },
+  {
+    button: 'boardsBtn',
+    key: 'gui.nav.tasks_board',
+    open: () => boards.openBoards(),
+    icon: <Icon icon={KanbanIcon} />,
+    badge: <BoardsBadge />,
+  },
 ]
+
+/* The Task Groups waiting on the owner, across every conversation; nothing at
+   zero. Its count comes from the board's own poll, which this starts the first
+   time the rail mounts and which idles while the page polls instead. */
+function BoardsBadge(): JSX.Element | null {
+  const { needsYouCount } = useSyncExternalStore(boards.subscribe, boards.get)
+  useEffect(() => boards.startBadge(), [])
+  if (needsYouCount === 0) return null
+  return (
+    <span className="chrome-nav-badge" aria-label={t('gui.tasks.page.badge', { n: needsYouCount })}>
+      {needsYouCount}
+    </span>
+  )
+}
 
 /* Importing a conversation: not a page you go to, so not one of NAV_ROWS (each
    of which is a page, and state/pages.ts holds that table to them). Its own
@@ -155,6 +179,7 @@ function RailNav(): JSX.Element {
         <button className="navi" id={row.button} key={row.button} onClick={row.open}>
           {row.icon}
           <span>{t(row.key)}</span>
+          {row.badge}
         </button>
       ))}
       <ImportButton />

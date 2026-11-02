@@ -10476,9 +10476,51 @@
       "errors": []
     },
     {
+      "name": "tasks.boards",
+      "summary": "Every host conversation's Task Groups as cards, sorted for the Task Board page.",
+      "description": "Read off disk, newest first. A card's category is decided here, once: a group marked needs_you or completed reads as marked; every other group is running while a run it links still runs, read as tasks.list reads it (what this process executes included), and idle otherwise. Completed cards come only with include_completed; completed_count and needs_you_count always count every card. Step summaries are never sent.",
+      "params": [
+        {
+          "name": "include_completed",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "description": "Also return the completed cards. The counts are returned either way."
+          }
+        }
+      ],
+      "result": {
+        "name": "TasksBoardsResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cards",
+            "completed_count",
+            "needs_you_count"
+          ],
+          "properties": {
+            "cards": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/TaskBoardCard"
+              }
+            },
+            "completed_count": {
+              "type": "integer"
+            },
+            "needs_you_count": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
       "name": "tasks.set_group_status",
       "summary": "The reader's two actions on a Task Group: mark it completed, or reopen it.",
-      "description": "Takes the same per-conversation lock as the post-turn update and announces the write as tasks.board_updated. invalid_params for an unknown group, for a status other than completed or active, and on a runtime that keeps no board.",
+      "description": "Takes the same per-conversation lock as the post-turn update and announces the write as tasks.board_updated. invalid_params for an unknown group, for a status other than completed or idle, and on a runtime that keeps no board.",
       "params": [
         {
           "name": "session_key",
@@ -10501,7 +10543,7 @@
             "type": "string",
             "enum": [
               "completed",
-              "active"
+              "idle"
             ]
           }
         }
@@ -10525,6 +10567,102 @@
                 "type": "string"
               },
               "description": "Each run that continued a placed run without a tool call of its own (a replan's successor, a later stint round), mapped to the placed run it descends from."
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "tasks.ignore_question",
+      "summary": "The reader sets one of a Progress Step's questions aside.",
+      "description": "The question leaves its step, so it leaves the card and the answer draft; a group that waits on the user goes idle once its latest step asks nothing more. Takes the same per-conversation lock as the post-turn update and announces the write as tasks.board_updated. invalid_params for an unknown group or step, and on a runtime that keeps no board; a question the step no longer lists changes nothing.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "group_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "step_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "question",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "TasksIgnoreQuestionResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "board",
+            "lineage"
+          ],
+          "properties": {
+            "board": {
+              "$ref": "#/components/schemas/TaskBoard"
+            },
+            "lineage": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Each run that continued a placed run without a tool call of its own (a replan's successor, a later stint round), mapped to the placed run it descends from."
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "tasks.move_on",
+      "summary": "The reader's next message moves a Task Group on.",
+      "description": "Notes, beside the conversation's board, that the reader's next message is about this group; the next turn's runtime context names it by id, title and summary, and the note is dropped once a turn that showed it has run. A later move-on replaces one not yet shown. invalid_params for an unknown group, and on a runtime that keeps no board.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "group_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "TasksMoveOnResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "noted"
+          ],
+          "properties": {
+            "noted": {
+              "type": "boolean"
             }
           }
         }
@@ -18768,13 +18906,12 @@
         }
       },
       "TaskGroupStatus": {
-        "description": "Where a Task Group stands. completed: finished, or dropped by the user -- nothing further moves it.",
+        "description": "Where a Task Group stands. needs_you: the reply asks the user to answer, confirm or decide about it, an error only the user can resolve included, even while a run it started still works. running: a run it started is still working. idle: nothing is in flight and nothing is asked. completed: finished, or dropped by the user -- nothing further moves it.",
         "type": "string",
         "enum": [
-          "active",
-          "waiting",
-          "blocked",
-          "parked",
+          "needs_you",
+          "running",
+          "idle",
           "completed"
         ]
       },
@@ -18800,13 +18937,15 @@
         }
       },
       "ProgressStep": {
-        "description": "One turn's advance on one Task Group. turn_at is the timestamp the session log stores on the message that opened the turn.",
+        "description": "One turn's advance on one Task Group: a title, and a summary of what moved and what is next or awaited -- on a step that left its group needs_you, opening with what the user is asked. questions: each question that step's reply asked the user about the matter, empty on every other step. turn_at is the timestamp the session log stores on the message that opened the turn.",
         "type": "object",
         "additionalProperties": false,
         "required": [
           "id",
           "turn_at",
-          "text",
+          "title",
+          "summary",
+          "questions",
           "tasks"
         ],
         "properties": {
@@ -18822,8 +18961,17 @@
               "null"
             ]
           },
-          "text": {
+          "title": {
             "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "tasks": {
             "type": "array",
@@ -18834,12 +18982,13 @@
         }
       },
       "TaskGroup": {
-        "description": "One matter a conversation is pushing, spanning any number of turns, with its Progress Steps in time order.",
+        "description": "One matter a conversation is pushing, spanning any number of turns, with its Progress Steps in time order. summary says where the matter stands; any turn may rewrite it.",
         "type": "object",
         "additionalProperties": false,
         "required": [
           "id",
           "title",
+          "summary",
           "status",
           "created_at",
           "updated_at",
@@ -18850,6 +18999,9 @@
             "type": "string"
           },
           "title": {
+            "type": "string"
+          },
+          "summary": {
             "type": "string"
           },
           "status": {
@@ -18920,6 +19072,71 @@
             "items": {
               "$ref": "#/components/schemas/PendingDispatch"
             }
+          }
+        }
+      },
+      "TaskBoardCard": {
+        "description": "One Task Group on the Task Board page: where it came from, what it is, and what it needs. running_since_ms is set only on a running card: the earliest start among its running runs.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "session_key",
+          "session_title",
+          "group_id",
+          "title",
+          "summary",
+          "status",
+          "created_at",
+          "updated_at",
+          "category",
+          "events",
+          "sub_agents"
+        ],
+        "properties": {
+          "session_key": {
+            "type": "string"
+          },
+          "session_title": {
+            "type": "string"
+          },
+          "group_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TaskGroupStatus"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "integer"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "needs_you",
+              "running",
+              "idle",
+              "completed"
+            ]
+          },
+          "running_since_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "events": {
+            "type": "integer"
+          },
+          "sub_agents": {
+            "type": "integer"
           }
         }
       },

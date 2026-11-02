@@ -3,15 +3,16 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { resetTranslator, setTranslator } from '../../i18n/t'
 import { setCurrent } from '../../lib/session'
 import { resetSources, setSources } from '../../state/sources'
 import * as store from './store'
 
 import type { TaskBoard, TaskGroup, TaskRow, TasksBoardResult, TasksSource } from './types'
 
-const group = (id: string, created: number, status: TaskGroup['status'] = 'active', tasks: TaskGroup['steps'][number]['tasks'] = []): TaskGroup => ({
-  id, title: `Matter ${id}`, status, created_at: created, updated_at: created,
-  steps: [{ id: `s_${id}`, turn_at: '2026-10-29T10:02:13', turn_id: null, text: `step of ${id}`, tasks }],
+const group = (id: string, created: number, status: TaskGroup['status'] = 'idle', tasks: TaskGroup['steps'][number]['tasks'] = []): TaskGroup => ({
+  id, title: `Matter ${id}`, summary: `where ${id} stands`, status, created_at: created, updated_at: created,
+  steps: [{ id: `s_${id}`, turn_at: '2026-10-29T10:02:13', turn_id: null, title: `step of ${id}`, summary: `what ${id} moved`, questions: [], tasks }],
 })
 
 const board = (groups: TaskGroup[]): TaskBoard => ({ version: 1, groups, unassigned: [] })
@@ -79,14 +80,14 @@ describe('onBoardUpdated', () => {
 
 describe('ordering', () => {
   it('orders open and completed groups by created_at, newest first', () => {
-    const b = board([group('a', 1), group('b', 3, 'completed'), group('c', 2, 'waiting'), group('d', 4, 'completed')])
+    const b = board([group('a', 1), group('b', 3, 'completed'), group('c', 2, 'needs_you'), group('d', 4, 'completed')])
     expect(store.openGroups(b).map((g) => g.id)).toEqual(['c', 'a'])
     expect(store.completedGroups(b).map((g) => g.id)).toEqual(['d', 'b'])
   })
 })
 
 describe('placement', () => {
-  const placed = board([group('g_1', 1, 'active', [{ kind: 'dag', id: 'RUN_A', summary: 'Review' }])])
+  const placed = board([group('g_1', 1, 'idle', [{ kind: 'dag', id: 'RUN_A', summary: 'Review' }])])
 
   it('links a step to its rows, each descendant after the run it continues', () => {
     const rows = [row('dag', 'RUN_B'), row('dag', 'RUN_A'), row('spawn', 'other')]
@@ -122,6 +123,94 @@ describe('a new run nothing places', () => {
   })
 
   function placed(): TaskBoard {
-    return board([group('g_1', 1, 'active', [{ kind: 'dag', id: 'RUN_A', summary: 'Review' }])])
+    return board([group('g_1', 1, 'idle', [{ kind: 'dag', id: 'RUN_A', summary: 'Review' }])])
   }
 })
+
+/* The draft Answer puts in the composer: the group named, each question its
+   latest event asked with a slot under it, the cursor in the first slot. */
+describe('answering a group that needs the user', () => {
+  beforeEach(() => {
+    setTranslator((key, vars) => (key === 'gui.tasks.board.answer_head' ? `On "${vars?.title}":`
+      : key === 'gui.tasks.board.answer_slot' ? 'Answer: ' : key))
+  })
+  afterEach(() => {
+    resetTranslator()
+    store.lendAnswer(null)
+  })
+
+  const asking = (questions: string[][]): TaskGroup => {
+    const base = group('a', 1, 'needs_you')
+    return { ...base, steps: questions.map((q, i) => ({ ...base.steps[0]!, id: `s_${i}`, questions: q })) }
+  }
+
+  it('drafts each question of the latest event with a slot for its answer, the cursor in the first', () => {
+    const draft = store.answerDraft(asking([['An older one?'], ['Which fix?', 'Clear it too?']]))
+
+    expect(draft.text).toBe('On "Matter a":\n1. Which fix?\nAnswer: \n2. Clear it too?\nAnswer: ')
+    expect(draft.text.slice(0, draft.caret)).toBe('On "Matter a":\n1. Which fix?\nAnswer: ')
+  })
+
+  it('drafts the heading alone when the latest event named no question', () => {
+    expect(store.answerDraft(group('a', 1, 'needs_you'))).toEqual({ text: 'On "Matter a":\n', caret: 15 })
+  })
+
+  it('hands the draft to the verb the composer lends, and does nothing unlent', () => {
+    const seen: [string, number][] = []
+    const g = asking([['Which fix?']])
+    store.answer(g)
+    store.lendAnswer((text, caret) => { seen.push([text, caret]) })
+    store.answer(g)
+
+    const draft = store.answerDraft(g)
+    expect(seen).toEqual([[draft.text, draft.caret]])
+  })
+})
+
+/* Move on: the matter the reader's next message is about, picked on a card and
+   drawn above the composer until the message goes -- when the server is told,
+   before the message itself. */
+describe('moving a group on', () => {
+  const told: [string, string][] = []
+  const fix = { id: 'g_1', title: 'Fix bug A', summary: 'Cause found' }
+
+  beforeEach(() => {
+    told.length = 0
+    source.moveOn = async (key, gid) => { told.push([key, gid]); return { noted: true } }
+  })
+  afterEach(() => { delete source.moveOn })
+
+  it('is held for the conversation it was picked in, and survives the switch that opens it', () => {
+    store.moveOn('s1', fix)
+    expect(store.moveOnFor('s1')).toEqual({ sessionKey: 's1', groupId: 'g_1', title: 'Fix bug A', summary: 'Cause found' })
+    expect(store.moveOnFor('s2')).toBeNull()
+
+    store.reset()
+    expect(store.moveOnFor('s1')?.groupId).toBe('g_1')
+    store.clearMoveOn()
+    expect(store.moveOnFor('s1')).toBeNull()
+  })
+
+  it('tells the server once, as the message about it goes, and is spent', async () => {
+    store.moveOn('s1', fix)
+
+    expect(store.moveOnPending('s2')).toBe(false)
+    await store.spendMoveOn('s2')
+    expect(told).toEqual([])
+    expect(store.moveOnPending('s1')).toBe(true)
+    await store.spendMoveOn('s1')
+    await store.spendMoveOn('s1')
+
+    expect(told).toEqual([['s1', 'g_1']])
+    expect(store.moveOnFor('s1')).toBeNull()
+  })
+
+  it('lets the message go even when the server cannot be told', async () => {
+    source.moveOn = async () => { throw new Error('down') }
+    store.moveOn('s1', fix)
+
+    await expect(store.spendMoveOn('s1')).resolves.toBeUndefined()
+    expect(store.moveOnFor('s1')).toBeNull()
+  })
+})
+

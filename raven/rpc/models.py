@@ -1461,7 +1461,7 @@ class TasksListResult(_Strict):
     tasks: list[TaskRow]
 
 
-TaskGroupStatus = Literal["active", "waiting", "blocked", "parked", "completed"]
+TaskGroupStatus = Literal["needs_you", "running", "idle", "completed"]
 
 
 class TaskLinkRef(_Strict):
@@ -1473,12 +1473,18 @@ class TaskLinkRef(_Strict):
 
 
 class ProgressStep(_Strict):
-    """One turn's advance on one Task Group, keyed by its turn's opening timestamp."""
+    """One turn's advance on one Task Group, keyed by its turn's opening timestamp.
+
+    On a step that left its group ``needs_you``, ``summary`` opens with what the user is asked and
+    ``questions`` lists each question about the matter; ``questions`` is empty on every other step.
+    """
 
     id: str
     turn_at: str
     turn_id: str | None = None
-    text: str
+    title: str
+    summary: str
+    questions: list[str]
     tasks: list[TaskLinkRef]
 
 
@@ -1487,6 +1493,7 @@ class TaskGroup(_Strict):
 
     id: str
     title: str
+    summary: str
     status: TaskGroupStatus
     created_at: int
     updated_at: int
@@ -1514,6 +1521,36 @@ class TasksBoardParams(_Strict):
     session_key: str
 
 
+TaskBoardCategory = Literal["needs_you", "running", "idle", "completed"]
+
+
+class TaskBoardCard(_Strict):
+    """One Task Group on the Task Board page: where it came from, what it is, and what it needs."""
+
+    session_key: str
+    session_title: str
+    group_id: str
+    title: str
+    summary: str
+    status: TaskGroupStatus
+    created_at: int
+    updated_at: int
+    category: TaskBoardCategory
+    running_since_ms: int | None = None
+    events: int
+    sub_agents: int
+
+
+class TasksBoardsParams(_Strict):
+    include_completed: bool = False
+
+
+class TasksBoardsResult(_Strict):
+    cards: list[TaskBoardCard]
+    completed_count: int
+    needs_you_count: int
+
+
 class TasksBoardResult(_Strict):
     board: TaskBoard
     lineage: dict[str, str]
@@ -1522,12 +1559,33 @@ class TasksBoardResult(_Strict):
 class TasksSetGroupStatusParams(_Strict):
     session_key: str
     group_id: str
-    status: Literal["completed", "active"]
+    status: Literal["completed", "idle"]
 
 
 class TasksSetGroupStatusResult(_Strict):
     board: TaskBoard
     lineage: dict[str, str]
+
+
+class TasksIgnoreQuestionParams(_Strict):
+    session_key: str
+    group_id: str
+    step_id: str
+    question: str
+
+
+class TasksIgnoreQuestionResult(_Strict):
+    board: TaskBoard
+    lineage: dict[str, str]
+
+
+class TasksMoveOnParams(_Strict):
+    session_key: str
+    group_id: str
+
+
+class TasksMoveOnResult(_Strict):
+    noted: bool
 
 
 class TasksBoardUpdatedPayload(_Strict):
@@ -7266,7 +7324,10 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "dag.node": (DagNodeParams, DagNodeResult),
     "tasks.list": (TasksListParams, TasksListResult),
     "tasks.board": (TasksBoardParams, TasksBoardResult),
+    "tasks.boards": (TasksBoardsParams, TasksBoardsResult),
     "tasks.set_group_status": (TasksSetGroupStatusParams, TasksSetGroupStatusResult),
+    "tasks.ignore_question": (TasksIgnoreQuestionParams, TasksIgnoreQuestionResult),
+    "tasks.move_on": (TasksMoveOnParams, TasksMoveOnResult),
 }
 
 __all__ = [

@@ -483,10 +483,11 @@ const deliveredStatus = (v: unknown): DeliveredData['status'] =>
    then there is nothing to fold open. Absent is a server that never sent it. */
 export function delivered(lane: Lane, p: {
   label: string; isDag: boolean; status?: string; open: () => void; body?: string; output?: string; outputTruncated?: boolean | null
+  at?: number
 }): void {
   const said = typeof p.output === 'string'
   push(lane, {
-    v: 0, id: nextId(), kind: 'sdlv',
+    v: 0, id: nextId(), kind: 'sdlv', at: p.at ?? Date.now(),
     label: p.label, isDag: p.isDag, status: deliveredStatus(p.status), open: p.open,
     body: said ? (p.output as string).trim() : defence(p.body || ''), said, shown: false,
     outputTruncated: said && p.outputTruncated === true,
@@ -1793,6 +1794,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
         delivered(lane, {
           label: String(d.label || ''),
           isDag,
+          at: turnAt,
           status: d.status,
           body: m.text || '',
           output: d.output,

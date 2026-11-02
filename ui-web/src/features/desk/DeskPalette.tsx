@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } fr
 
 import { t } from '../../i18n/t'
 import * as tasksStore from '../tasks/store'
-import { TasksApp } from '../tasks/TasksPage'
+import { TasksPanel } from '../tasks/TasksPage'
 import * as deliveries from '../workspace/deliveries'
 import { fileKind } from '../workspace/store'
 import * as workspace from '../workspace/store'
@@ -218,11 +218,11 @@ function TasksNav(): JSX.Element {
   const state = useSyncExternalStore(tasksStore.subscribe, tasksStore.get)
   useEffect(() => { void tasksStore.refresh() }, [])
   /* Answered here rather than inside the view: in the desk, one nothing has to
-     look like the other two, and TasksApp's own note belongs to the panel. */
+     look like the other two, and TasksPanel's own note belongs to the panel. */
   if (!state.rows.length) {
     return <DeskEmpty kind="tasks" title={t('gui.ws.tasks_none')} />
   }
-  return <TasksApp />
+  return <TasksPanel />
 }
 
 /* Long enough to read as a movement, short enough that a reader who wanted the

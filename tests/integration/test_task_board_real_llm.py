@@ -18,6 +18,7 @@ import pytest
 
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
+from raven.agent.task_board.board import GROUP_SUMMARY_WORDS, TITLE_WORDS, word_count
 from raven.agent.task_board.store import load_board
 from raven.config.schema import TaskBoardConfig
 from raven.contracts.tool import Tool
@@ -119,7 +120,11 @@ async def test_a_live_model_keeps_two_matters_apart_and_places_its_dispatch(tmp_
     assert board.unassigned == [], board
     assert len(board.groups) == 2, [g.title for g in board.groups]
     party = next(g for g in board.groups if any(t.id == "cake_research" for s in g.steps for t in s.tasks))
-    assert len(party.steps) >= 2, [s.text for s in party.steps]
+    assert len(party.steps) >= 2, [s.title for s in party.steps]
     # The other matter's step count is the model's call: a later reply that
     # reminds the reader of the pending draft may record a step of its own.
     assert next(g for g in board.groups if g is not party).steps
+    for group in board.groups:
+        assert group.summary and word_count(group.summary) <= GROUP_SUMMARY_WORDS, group
+        for step in group.steps:
+            assert step.title and word_count(step.title) <= TITLE_WORDS and step.summary, step

@@ -1,7 +1,8 @@
 """The post-turn call: once a host turn has answered, its model keeps the Task Board.
 
 One extra call, after the reply has gone out: the turn's own window and tools
-array plus one instruction, with the tool choice forced to ``task_board``. The
+array plus one instruction asking for a ``task_board`` call. Nothing forces the
+tool -- the choice stays the turn's own -- so an answer in text is asked again. The
 arguments are checked whole by :func:`apply_update`; a refusal goes back to the
 model with its reason, up to :data:`MAX_ATTEMPTS` times. When no update can be
 had, the turn's dispatches are parked in ``unassigned`` and the next update has
@@ -50,8 +51,8 @@ def _snapshot(board: Board) -> str:
         return "(the board is empty)"
     lines: list[str] = []
     for group in sorted((g for g in board.groups if g.status != "completed"), key=lambda g: g.created_at):
-        lines.append(f"- {group.id} [{group.status}] {group.title}")
-        lines.extend(f"    - {step.text}" for step in group.steps[-OPEN_STEPS_SHOWN:])
+        lines.append(f"- {group.id} [{group.status}] {group.title}" + (f" -- {group.summary}" if group.summary else ""))
+        lines.extend(f"    - {step.title}" for step in group.steps[-OPEN_STEPS_SHOWN:])
     done = sorted((g for g in board.groups if g.status == "completed"), key=lambda g: g.created_at)
     if done:
         lines.append("Completed: " + "; ".join(f"{g.id}: {g.title}" for g in done))

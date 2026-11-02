@@ -51,6 +51,12 @@ div.app[data-rail=on]
             path
             path
         span
+      button#boardsBtn.navi
+        svg
+          path
+          path
+        span
+        span.chrome-nav-badge
       button#importedBtn.navi
         svg
           path
@@ -327,6 +333,11 @@ section#knowledgePage.page[data-open=false]
     h2
   div.work
     div#knowledgeBody.wrap
+section#tasksBoardPage.page[data-open=false]
+  header
+    h2
+  div.work
+    div#tasksBoardBody.wrap
 aside#detail.detail[data-open=false]
   div.dpanel
     header

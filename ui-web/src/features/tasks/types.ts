@@ -29,14 +29,19 @@ import type {
   TaskLinkRef,
   ProgressStep,
   TasksBoardResult,
+  TasksBoardsResult,
+  TaskBoardCard,
   TasksBoardUpdatedEvent,
   TasksSetGroupStatusResult,
+  TasksIgnoreQuestionResult,
+  TasksMoveOnResult,
 } from '../../rpc/generated'
 
 export type {
   SubagentRow, TaskCounts, TaskFile, TaskKind, TaskNode, TaskReplan, TaskRow, TaskStatus,
   TasksListParams, TasksListResult,
   TaskBoard, TaskGroup, TaskGroupStatus, TaskLinkRef, ProgressStep, TasksBoardResult, TasksSetGroupStatusResult,
+  TaskBoardCard, TasksBoardsResult, TasksIgnoreQuestionResult, TasksMoveOnResult,
 }
 
 /* The live event's payload: a conversation's board after a write. */
@@ -105,6 +110,12 @@ export interface TasksSource {
      actions on a group. Optional so a stand-in source with no board reads as
      a conversation with no board. */
   board?: (sessionKey: string) => Promise<TasksBoardResult>
-  setGroupStatus?: (sessionKey: string, groupId: string, status: 'completed' | 'active') => Promise<TasksSetGroupStatusResult>
+  /* Every host conversation's cards, for the Task Board page. */
+  boards?: (includeCompleted: boolean) => Promise<TasksBoardsResult>
+  setGroupStatus?: (sessionKey: string, groupId: string, status: 'completed' | 'idle') => Promise<TasksSetGroupStatusResult>
+  /* One question the reader sets aside; a group asking nothing more goes idle. */
+  ignoreQuestion?: (sessionKey: string, groupId: string, stepId: string, question: string) => Promise<TasksIgnoreQuestionResult>
+  /* The group the reader's next message moves on, told before the message goes. */
+  moveOn?: (sessionKey: string, groupId: string) => Promise<TasksMoveOnResult>
   onBoardUpdated?: (p: TasksBoardUpdatedPayload) => void
 }

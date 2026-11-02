@@ -21,10 +21,10 @@ import { openDeskTab, openDeskTask } from '../desk/store'
 import { draw as sessionDraw } from '../rail/store'
 import { history as drawHistory, shownLane } from './mount'
 import { actLabel as storeActLabel } from './store'
-import { goTo as goToTurn, turnsOf } from './TurnNav'
+import { bringUp, goTo as goToTurn } from './TurnNav'
 
 import type { SessRow } from '../rail/types'
-import type { HistoryMessage } from './types'
+import type { AnswerData, AskData, DeliveredData, HistoryMessage, Seg } from './types'
 
 /* Every delegation verb here is addressed to the conversation on screen, and
    the card that offers it only exists inside one. */
@@ -165,18 +165,41 @@ export function branch(): void {
    browser's clock, which is seconds off the server's. */
 const TURN_NEAR_MS = 5 * 60 * 1000
 
-/** Scroll the transcript to the turn a task board step names by its opening
- *  message's timestamp; whether a turn near enough was on the stage. */
+/* Where a turn begins: a question someone asked, or a delegated result
+   re-entering, which opens one with no question typed. A message merged into
+   the running turn opens nothing. */
+type Opening = AskData | DeliveredData
+const opens = (seg: Seg): seg is Opening => (seg.kind === 'ask' && !seg.midTurn) || seg.kind === 'sdlv'
+
+/* The answer a turn ended on: the last one between its opening and the next. */
+function replyOf(segs: readonly Seg[], opening: Opening): AnswerData | null {
+  let reply: AnswerData | null = null
+  for (const seg of segs.slice(segs.indexOf(opening) + 1)) {
+    if (opens(seg)) break
+    if (seg.kind === 'answer') reply = seg
+  }
+  return reply
+}
+
+const rowOf = (attr: string, id: number): HTMLElement | null =>
+  document.querySelector<HTMLElement>(`#stage [data-${attr}="${id}"]`)
+
+/** Scroll the transcript to what Raven said in the turn a task board step names
+ *  by its opening message's timestamp -- the reply the turn ended on, or where
+ *  the turn begins while it has none; whether a turn near enough was on the stage. */
 export function revealTurnAt(turnAt: string): boolean {
   const target = new Date(turnAt).getTime()
   const lane = shownLane()
   if (!lane || Number.isNaN(target)) return false
-  let best = null as ReturnType<typeof turnsOf>[number] | null
-  for (const seg of turnsOf(lane.segs)) {
-    if (!seg.at) continue
+  let best = null as Opening | null
+  for (const seg of lane.segs) {
+    if (!opens(seg) || !seg.at) continue
     if (!best || Math.abs(seg.at - target) < Math.abs(best.at - target)) best = seg
   }
   if (!best || Math.abs(best.at - target) > TURN_NEAR_MS) return false
-  goToTurn(best)
+  const reply = replyOf(lane.segs, best)
+  const row = reply ? rowOf('answer', reply.id) : best.kind === 'sdlv' ? rowOf('delivered', best.id) : null
+  if (row) bringUp(row)
+  else if (best.kind === 'ask') goToTurn(best)
   return true
 }

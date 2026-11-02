@@ -1006,6 +1006,7 @@ class TurnPathMixin:
         tools_used: list[str] = []
         last_tool_defs: list[dict] | None = None
         last_model: str | None = None
+        last_effort: str | None = None
         effective_model = model or self.model
 
         # Track whether the turn was a normal exit or a max-iter interruption.
@@ -1469,7 +1470,7 @@ class TurnPathMixin:
             call_overrides = pending_gen_overrides
             pending_gen_overrides = None
             call_reasoning_effort = gen_overrides.get("reasoning_effort")
-            last_tool_defs, last_model = tool_defs, active_model
+            last_tool_defs, last_model, last_effort = tool_defs, active_model, call_reasoning_effort
             call_messages, call_tools, call_model = await first_call.stage(
                 "the before_llm_call strategies",
                 self.strategies.before_llm_call(
@@ -1881,7 +1882,10 @@ class TurnPathMixin:
                         called = self.tools.get(tool_call.name)
                         reached = called.metadata_owner(tool_call.arguments or {}) if called is not None else None
                         if reached is not None and reached.name in render.DISPATCH_TOOLS:
-                            watch_note += render.reply_rules_note()
+                            channel = (session_key or "").partition(":")[0]
+                            watch_note += render.reply_rules_note(
+                                board_shown=render.board_on_page(self._task_board_config.enabled, channel, None)
+                            )
                     # The registry already unwrapped any ToolResult: `result` is
                     # the model-facing text, with the optional display string
                     # riding along on it (ToolOutput). The model always gets the
@@ -2747,6 +2751,7 @@ class TurnPathMixin:
             silent=silent,
             last_tools=last_tool_defs,
             last_model=last_model,
+            last_effort=last_effort,
         )
         checkpoint = self._turn_checkpoint()
         if checkpoint is not None:
@@ -3546,8 +3551,9 @@ class TurnPathMixin:
         # Scheduled, never awaited: the reply is already the caller's, and the
         # board settles a few seconds after it.
         if self.task_board is not None:
+            await self.task_board.ack_turn_notes(key)
             self._schedule_task_board(
-                key, turn_window, outcome, live["log"].messages(), turn_received_at, req.turn_id, fallback_models
+                key, turn_window, outcome, live["log"].added(), turn_received_at, req.turn_id, fallback_models
             )
 
         if origin is Origin.USER:
@@ -3584,33 +3590,38 @@ class TurnPathMixin:
         key: str,
         window: list[dict],
         outcome: LoopOutcome | None,
-        turn_messages: list[dict],
+        turn_added: list[dict],
         turn_at: str,
         turn_id: str | None,
         fallback_models: list[str] | None,
     ) -> None:
         """Start the host's post-turn task board call for the turn that just ended.
 
-        It sends the tools array and model the turn's last call carried, through
-        the same strategies, so the request shares that call's cached prefix up
-        to the reply; only the instruction after it is new.
+        It sends the tools array, model, effort and tool choice the turn's last call
+        carried, through the same strategies, so it runs at the main model's settings
+        and shares that call's cached prefix up to the reply; only the instruction
+        after it is new. Nothing forces the tool: a forced choice voids Anthropic's
+        cached messages and several providers refuse one outright. The dispatches
+        come from what the turn added -- a spawn still in the history belongs to the
+        turn that made it.
         """
         from raven.agent.task_board.dispatches import turn_dispatches
         from raven.agent.task_board.runner import run_post_turn, should_run
 
         board = self.task_board
-        dispatches = turn_dispatches(turn_messages)
+        dispatches = turn_dispatches(turn_added)
         if board is None or outcome is None or outcome.last_tools is None or not window:
             return
         if not should_run(outcome.status, dispatches):
             return
         tools, model = outcome.last_tools, outcome.last_model or self.model
-        # Forced by name, so a turn whose array lacked the tool -- withheld by a
-        # deploy's disabledTools -- would only buy a refused request.
+        # The turn's own effort, or none at all: an explicit None would switch the
+        # provider's default off rather than leave it standing.
+        effort = {} if outcome.last_effort is None else {"reasoning_effort": outcome.last_effort}
+        # A turn whose array lacked the tool -- withheld by a deploy's disabledTools --
+        # leaves the model nothing to answer the instruction with.
         if not any((t.get("function") or {}).get("name") == "task_board" for t in tools):
             return
-        effort = self._task_board_config.reasoning_effort
-        choice = {"type": "function", "function": {"name": "task_board"}}
 
         async def call(rows: list[dict]) -> LLMResponse:
             with _llm_purpose("task_board"), usage_context.bind(key):
@@ -3620,8 +3631,7 @@ class TurnPathMixin:
                     tools=call_tools,
                     model=call_model,
                     fallback_models=fallback_models,
-                    tool_choice=choice,
-                    reasoning_effort=effort,
+                    **effort,
                 )
 
         task = asyncio.create_task(

@@ -297,6 +297,21 @@ export const mediaOf = (text: unknown): { media?: string[] } => {
   return paths.length ? { media: paths } : {}
 }
 
+/* What a message waits on before it goes, lent at boot (src/app/install.ts)
+   rather than imported from a domain: the Task Board's Move on, which tells
+   the server which group the message is about. A message with one waits for a
+   turn of its own rather than joining the one running, which was told about
+   something else. Unlent, nothing waits. */
+export interface BeforeSend {
+  pending: (sessionKey: string | null) => boolean
+  spend: (sessionKey: string | null) => Promise<void>
+}
+let beforeSend: BeforeSend | null = null
+
+export function lendBeforeSend(hook: BeforeSend | null): void {
+  beforeSend = hook
+}
+
 /* Into the turn that is already running: the server merges it at that turn's
    next gap, so the reader can correct it while it works instead of waiting for
    the answer to a question they have already changed their mind about.
@@ -336,7 +351,11 @@ export function send(text: string): void {
      message typed a moment later would call the gateway with no session key at
      all, which is a refusal the reader sees as a red row over a message the
      queue then delivers anyway. It waits in the queue, as it always has. */
-  if (turn.busy() && !registryIsDraft() && !promoting) { sendMidTurn(text); return }
+  if (turn.busy() && !registryIsDraft() && !promoting) {
+    if (beforeSend?.pending(sessionCurrent())) queuePush(text)
+    else sendMidTurn(text)
+    return
+  }
   if (turn.busy()) { queuePush(text); return }
   const rt = viewRuntime()
   /* What a retry re-sends. Recorded after the attachment note is folded in, so
@@ -405,12 +424,18 @@ export function dispatchSend(text: string, failed: (e: unknown) => void): void {
      at all, and reading that as "declined" would tear down a placeholder
      while a title really is on its way. Which servers carry it is
      rpc/capabilities.ts's question; what the verdict means stays here. */
-  gateway().call('turn.send', { session_key: current as string, content: text, ...mediaOf(text) })
-    .then((r) => {
-      if (ran && r.accepted !== false) rememberUsed(ran)
-      if (hasNamingFlag(r) && r.naming === false) namingDeclined(current as string)
-    })
-    .catch(failed)
+  const go = (): void => {
+    gateway().call('turn.send', { session_key: current as string, content: text, ...mediaOf(text) })
+      .then((r) => {
+        if (ran && r.accepted !== false) rememberUsed(ran)
+        if (hasNamingFlag(r) && r.naming === false) namingDeclined(current as string)
+      })
+      .catch(failed)
+  }
+  /* A message moving a task on goes once the board is told; any other goes at
+     once, in the same tick as before. */
+  if (beforeSend?.pending(current)) void beforeSend.spend(current).then(go)
+  else go()
 }
 
 /* Conversations whose staged model the server refused while they were being

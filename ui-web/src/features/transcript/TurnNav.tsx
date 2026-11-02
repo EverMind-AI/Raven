@@ -69,17 +69,21 @@ const questionOf = (seg: AskData): HTMLElement | null =>
 /* The reader chose a place, so the transcript stops following its tail before
    it moves; the scroller's own listener turns tail-follow back on if the move
    ends at the tail. */
-export function goTo(seg: AskData): void {
+export function bringUp(row: HTMLElement): void {
   const scroll = document.getElementById('scroll')
-  const question = questionOf(seg)
-  if (!scroll || !question) return
+  if (!scroll) return
   tail.setStuck(false)
-  /* The header floats over the scroller, so the question is put under the
-     title bar's lower edge rather than at the scroller's own top (lib/dom.ts,
+  /* The header floats over the scroller, so the row is put under the title
+     bar's lower edge rather than at the scroller's own top (lib/dom.ts,
      headerBand), with the same lead the up pill leaves. */
-  const top = scroll.scrollTop + question.getBoundingClientRect().top - scroll.getBoundingClientRect().top
+  const top = scroll.scrollTop + row.getBoundingClientRect().top - scroll.getBoundingClientRect().top
     - headerBand(scroll) - HEADER_LEAD
   scroll.scrollTo({ top: Math.max(0, top) })
+}
+
+export function goTo(seg: AskData): void {
+  const question = questionOf(seg)
+  if (question) bringUp(question)
 }
 
 export function TurnNav(): JSX.Element | null {

@@ -50,6 +50,11 @@ div.app
             path
             path
         span
+      button#boardsBtn.navi
+        svg
+          path
+          path
+        span
       button#importedBtn.navi
         svg
           path

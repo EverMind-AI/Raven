@@ -52,7 +52,7 @@ from raven.agent.subagent_memory import (
 from raven.config.agent_names import canonical_agent_name
 from raven.config.paths import get_sandbox_dir
 from raven.config.schema import TIER_LADDER, ExecToolConfig
-from raven.context_engine.segments.render import dispatch_language_line, reply_rules_note
+from raven.context_engine.segments.render import board_on_page, dispatch_language_line, reply_rules_note
 from raven.contracts.llm_provider import LLMProvider
 from raven.contracts.subagent_backend import SubagentNoAnswerError
 from raven.observability import semconv
@@ -261,12 +261,16 @@ class SubagentManager:
         retry_delays: "Sequence[float] | None" = None,
         retry_after_output: bool = False,
         provider_pool: ProviderPool | None = None,
+        task_board: bool = False,
     ):
         from raven.config.schema import LLM_ERROR_RETRY_DELAYS_DEFAULT, ExecToolConfig
 
         # Agent home. Also the working-directory fallback for a spawn that
         # captured none, which is the pre-split behaviour.
         self.workspace = workspace
+        # Whether the host keeps a Task Board: a graph's notice into a conversation
+        # the page draws then leaves the questions still open to that board.
+        self._task_board = task_board
         # What a streamed spawn waits out on a dropped stream, as two plain values:
         # this layer may not import the loop's RecoveryLimits, and the loop that
         # holds them passes them apart. A rig that passes none keeps the defaults.
@@ -2352,7 +2356,9 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
         if self._submit is None:
             logger.warning("DAG run {} finished with no submit wired; result not announced", run_id)
             return
-        injected = wrap_untrusted(summary, source="subagent") + reply_rules_note()
+        injected = wrap_untrusted(summary, source="subagent") + reply_rules_note(
+            board_shown=board_on_page(self._task_board, origin.get("channel"), None)
+        )
         mark = {"kind": "dag", "label": run_id, "status": "ok", "run_id": run_id}
         if not self._inject(injected, origin, mark, dispatch_link=trace.dispatch_link_of(origin)):
             return

@@ -294,10 +294,11 @@ children -- and every table that names a page derives from them:
 `chrome/Rail.tsx`'s nav strip, `features/rail/store.ts`'s marks and
 `src/test/regions.test.ts`'s goldens. Adding a page is adding a row.
 
-Two rows today, because a place and a setting are different things: what a
-reader goes TO is the **connections hub** -- the agents Raven hands work to and
-the channels it can be reached from -- while schedules and memory are set up
-once and then left alone, so those two are **settings sections** instead.
+Four rows today -- the **connections hub**'s two (the agents Raven hands work
+to and the channels it can be reached from), the knowledge base and the **Task
+Board page** -- because a place and a setting are different things: those are
+where a reader goes TO, while schedules and memory are set up once and then left
+alone, so those two are **settings sections** instead.
 _Avoid_: "page" for the whole document, or for a dialog -- the settings dialog
 and the model picker are overlays, not module pages.
 
@@ -439,13 +440,32 @@ is picked, never a copy of the record.
 _Avoid_: "task" for a turn or for the composer's draft.
 
 **Task Board** (`features/tasks/BoardList.tsx`, `tasks.board`):
-the tasks tab once the host's board holds a Task Group: one row per group, newest first, a
-row opening its thread of Progress Steps in place, each step's Tasks as chips that open the
-pane a list row opens; finished groups fold away at the bottom, and Tasks no step places sit
-in an Unassigned fold at the top. A conversation whose board holds no group draws the flat
-list of Tasks it always had. The terms are the Runtime's (`CONTEXT.md`: Task Board, Task
-Group, Progress Step).
+the tasks tab once the host's board holds a Task Group: one card per group, newest first, its
+head naming the group's type on a pill -- the Runtime's Board category, the four the Task
+Board page shows -- and opening its thread of Progress Steps inside the card. Each step's
+Tasks are chips that open the pane a list row opens; the latest step of a group that needs
+the user shows its summary, which opens with what the user is asked, and such a card frames
+the questions that step asked at its bottom, after that step, each in a box of its own with an
+Ignore that sets that question aside (the last one leaves the group idle), and one Answer (a
+draft in the
+composer, a slot under each question, from `composer/startTaskWith.ts` `answerInChat`, lent
+at boot); clicking a step scrolls
+the transcript to that turn's reply (`transcript/source.ts` `revealTurnAt`). Finished groups
+fold away at the bottom, and Tasks no step places sit in an Unassigned fold at the top. A conversation whose
+board holds no group draws the flat list of Tasks it always had. The terms are the Runtime's
+(`CONTEXT.md`: Task Board, Task Group, Progress Step, Board category).
 _Avoid_: "task list" for this -- that is the flat list it falls back to.
+
+**Task Board page** (`features/tasks/BoardsPage.tsx`, `tasks.boards`):
+the module page that gathers every host conversation's Task Groups as cards sorted by Board
+category -- columns in the board view, sections in the list view -- with Completed hidden
+until its switch is on. A card unfolds in place into the group's thread, the tasks tab's own;
+an event opens its conversation with the group expanded in the tasks tab and the transcript at
+that event's reply, and Move on opens it with the group held over the composer
+(`features/tasks/MoveOnBar.tsx`) for the next message. The rail button's badge counts the Needs
+you cards.
+_Avoid_: "Task Board" alone for the page -- that is one conversation's board, in the tasks
+tab.
 
 **Pane**:
 A resizable column: the workspace pane beside the chat (`src/state/ws.ts` holds

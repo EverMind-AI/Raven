@@ -13,7 +13,7 @@ import { installWsPane } from '../../test/wsPaneHarness'
 import * as desk from '../desk/store'
 import * as workspace from '../workspace/store'
 import * as store from './store'
-import { TaskPane, TaskRuns, TasksApp } from './TasksPage'
+import { TaskPane, TaskRuns, TasksPanel } from './TasksPage'
 
 import type { WsChange } from '../workspace/types'
 import type { NodeRecord, SubagentRow, TaskNode, TaskRow, TasksSource } from './types'
@@ -76,7 +76,7 @@ afterEach(() => {
 
 describe('the tasks list', () => {
   const draw = async (): Promise<void> => {
-    render(<TasksApp />)
+    render(<TasksPanel />)
     await act(async () => { await store.refresh() })
   }
 
