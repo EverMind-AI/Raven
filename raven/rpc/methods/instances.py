@@ -26,8 +26,6 @@ background task with no turn to cancel reaches it over the wire through
 
 from __future__ import annotations
 
-import json
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -39,6 +37,7 @@ from raven.agent.subagent.history import dag_root, nodes_root
 from raven.agent.subagent.instance_log import instance_title, message_rows
 from raven.agent.subagent.instance_records import stitched_turns
 from raven.agent.subagent.instances import get_registry, reconcile_instance_rows
+from raven.agent.subagent.task_rows import _graph_of
 from raven.agent.subagent.tool_vocabulary import normalize_row
 from raven.config.agent_names import canonical_agent_name
 from raven.rpc.errors import ConfigValidationError
@@ -48,11 +47,6 @@ if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
     from raven.rpc.methods.session import AgentLoopFactory
 
-
-# The shape `DagRunStore` mints, matched rather than trusted: a run id off a
-# registry row is joined into a path here, and a row is a file anything with
-# write access to the home directory can put a segment into.
-_RUN_ID_RE = re.compile(r"^[0-9]{8}T[0-9]{6}(?:[0-9]{6})?Z-[0-9a-f]{8}$")
 
 # What a branch decided about a node, spelled as its ``dag-node`` row spells it.
 _BRANCH_OUTCOME_KEYS = ("reason", "selectedRoutes", "routeEvidence")
@@ -262,47 +256,6 @@ def _reported(*, row: dict[str, Any], node: dict[str, Any]) -> dict[str, Any]:
         **{key: node[key] for key in _BRANCH_OUTCOME_KEYS if node.get(key) is not None},
         **({"attemptAgents": list(node["attemptAgents"])} if isinstance(node.get("attemptAgents"), list) else {}),
     }
-
-
-_GRAPH_CACHE: dict[Path, tuple[tuple[int, int], dict[str, Any]]] = {}
-
-
-def _graph_of(session_dir: Path, run_id: str) -> dict[str, Any]:
-    """One run's ``graph.json``, memoized on ``(mtime_ns, size)``.
-
-    Read rather than copied onto the registry row: the graph is where the two
-    lines were written, so a row cannot disagree with the run it belongs to, and
-    the three writers that rebuild a registry record wholesale cannot drop them.
-    A run's graph is written once and then changes at most once more, when a
-    replan notes its successor on it, so the stamp check is what makes a
-    two-second poll cost one ``stat`` per run. Only the two title fields are read
-    here and both are written at init, so today the second write changes nothing
-    this function returns -- the stamp matters for the reader that eventually
-    wants the note, not for this one.
-
-    ``{}`` for a run whose dir is gone or whose id is not one -- a title is not
-    worth failing a list over, and the caller falls back to the handle.
-    """
-    if not _RUN_ID_RE.match(run_id):
-        return {}
-    path = dag_root(session_dir) / run_id / "graph.json"
-    try:
-        st = path.stat()
-    except OSError:
-        _GRAPH_CACHE.pop(path, None)
-        return {}
-    stamp = (st.st_mtime_ns, st.st_size)
-    hit = _GRAPH_CACHE.get(path)
-    if hit is not None and hit[0] == stamp:
-        return hit[1]
-    try:
-        graph = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    if not isinstance(graph, dict):
-        graph = {}
-    _GRAPH_CACHE[path] = (stamp, graph)
-    return graph
 
 
 def _mark_titles(rows: list[dict[str, Any]], session_dir: Path | None) -> list[dict[str, Any]]:

@@ -260,7 +260,7 @@ def test_a_pre_fold_record_folds_the_same_way_through_the_tasks_reader() -> None
     entry per call must come out of that reader exactly as the recorder would
     have folded it -- including the created-then-removed path that leaves
     nothing behind."""
-    from raven.rpc.methods.tasks import _files_of
+    from raven.agent.subagent.task_rows import _files_of
 
     stored = {
         "files": [

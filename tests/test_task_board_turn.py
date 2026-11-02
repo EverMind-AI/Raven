@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 from typing import Any
 
 import pytest
@@ -528,3 +529,35 @@ async def test_an_update_still_on_its_way_at_delete_writes_nothing(tmp_path):
         await agent.stop_plugin_services()
 
     assert not (agent.sessions.session_dir(KEY) / BOARD_FILENAME).exists()
+
+
+async def test_the_hosts_recall_asks_its_own_loop_what_still_runs(tmp_path, monkeypatch):
+    """A graph run the loop still executes reads as running in recall, as on the page --
+    not as one a restart cut off."""
+    from raven.agent.subagent.dag_store import DagRunStore, index_guard
+    from raven.agent.subagent.history import dag_root, nodes_root, session_history_root
+    from raven.agent.subagent.prompt_backend import LocalFileBackend
+
+    run = "20261029T100213Z-3eb3b470"
+    agent = _agent(tmp_path, Recording([LLMResponse(content=ANSWER)]))
+    session_dir = agent.sessions.session_dir(KEY)
+    nodes_root(session_dir).mkdir(parents=True, exist_ok=True)
+    store = DagRunStore(
+        LocalFileBackend(),
+        str(dag_root(session_dir)),
+        run,
+        nodes_root=str(nodes_root(session_dir)),
+        registry_root=str(session_history_root(session_dir)),
+    )
+    graph = {"task_summary": "review", "nodes": [{"id": "n1", "subagent": "Raven", "prompt_template": "do"}]}
+    async with index_guard(store.registry_root):
+        await store.init(json.dumps(graph), node_ids=["n1"])
+    started = ProgressStep("s_a", "T0", None, "Started a review", "Started.", [TaskLink("dag", run, "Review fixes")])
+    save_board(session_dir, Board([TaskGroup("g_a", "Review the fix", "", "running", 1, 1, [started])], []))
+    monkeypatch.setattr(type(agent), "active_dag_run_ids", lambda _self: {run})
+    tool = agent.tools.get("task_board")
+    tool.set_context("test", "c1", KEY)
+
+    out = await tool.execute(action="recall", group_id="g_a")
+
+    assert f"dag:{run} (Review fixes): running" in out

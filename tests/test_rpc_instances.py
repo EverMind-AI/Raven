@@ -2245,7 +2245,7 @@ class TestWhatEachRowIsCalled:
         """Three nodes of one graph is one file. The list polls every two
         seconds with the panel open, so a read per row is a read per row for as
         long as the session is open."""
-        import raven.rpc.methods.instances as mod
+        import raven.agent.subagent.task_rows as mod
 
         session_dir = tmp_path / "sessions" / "s1"
         self._graph(

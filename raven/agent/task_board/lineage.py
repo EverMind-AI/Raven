@@ -3,9 +3,9 @@
 Two kinds of run start with no tool call of their own: a replan's successor and
 every round after the first of a stint. Neither is in any turn's dispatch list,
 so neither is placed by the model; each belongs wherever the run it continues
-was placed. Both answers are read off disk -- the run directories, the stint
-records and the session's node registry -- so they survive a restart and need no
-live tool.
+was placed. That is read off disk -- the run directories and the stint records
+-- so it survives a restart and needs no live tool. A linked Task's status is
+the one its ``tasks.list`` row carries, built by the same reader.
 """
 
 from __future__ import annotations
@@ -15,13 +15,10 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from raven.agent.subagent.dag_store import REGISTRY_FILENAME, RUNNING
-from raven.agent.subagent.history import dag_root, session_history_root
+from raven.agent.subagent.history import dag_root
+from raven.agent.subagent.task_rows import dag_rows, spawn_rows
 from raven.agent.task_board.board import Board, TaskLink
 from raven.stint.record import STINTS_DIRNAME, StintStore
-
-_FAILED = frozenset({"failed", "exception", "cancelled", "interrupted"})
-_SETTLED = frozenset({"completed", "skipped", "not_executed"})
 
 
 def _read_json(path: Path) -> Any:
@@ -70,22 +67,16 @@ def board_lineage(session_dir: Path, board: Board) -> dict[str, str]:
     return descendants(session_dir, placed) if placed else {}
 
 
-def task_status(session_dir: Path, link: TaskLink) -> str:
-    """A linked Task's status as the session's node registry has it; ``unknown`` when it has none."""
-    data = _read_json(session_history_root(Path(session_dir)) / REGISTRY_FILENAME)
-    nodes = data.get("nodes") if isinstance(data, dict) else None
-    if not isinstance(nodes, dict):
-        return "unknown"
+def task_status(
+    session_dir: Path, session_key: str, link: TaskLink, *, live: set[tuple[str, str]], live_runs: set[str]
+) -> str:
+    """A linked Task's status as its ``tasks.list`` row has it, so recall, the sidebar and
+    the Task Board page never disagree; ``live`` and ``live_runs`` are what the loop is
+    still running, as ``tasks.list`` asks it. ``unknown`` for a Task no row answers for."""
     if link.kind == "spawn":
-        row = nodes.get(link.id)
-        return str(row["status"]) if isinstance(row, dict) and row.get("status") else "unknown"
-    statuses = [str(r.get("status")) for r in nodes.values() if isinstance(r, dict) and r.get("run_id") == link.id]
-    if not statuses:
-        return "unknown"
-    if any(s in (RUNNING, "pending") for s in statuses):
-        return "running"
-    if any(s in _FAILED for s in statuses):
-        return "failed"
-    if all(s in _SETTLED for s in statuses):
-        return "completed"
-    return statuses[0]
+        rows = spawn_rows(Path(session_dir), link.id, live=live)
+    elif link.kind == "dag":
+        rows = dag_rows(Path(session_dir), session_key, link.id, live_runs=live_runs)
+    else:
+        rows = []
+    return str(rows[0]["status"]) if rows else "unknown"

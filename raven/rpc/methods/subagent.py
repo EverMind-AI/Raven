@@ -37,7 +37,6 @@ empty panel for a run that is on disk.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -47,9 +46,15 @@ from loguru import logger
 from raven.agent.subagent import activity as run_activity
 from raven.agent.subagent.dag_live import live_run_ids
 from raven.agent.subagent.dag_reader import current_assignment
-from raven.agent.subagent.dag_store import REGISTRY_FILENAME
-from raven.agent.subagent.history import dag_root, nodes_root, session_history_root, spawn_live_key
+from raven.agent.subagent.history import dag_root, nodes_root, spawn_live_key
 from raven.agent.subagent.instances import get_registry
+from raven.agent.subagent.task_rows import (
+    _label_from_prompt,
+    _NodeFiles,
+    _read_json,
+    _read_meta,
+    _spawn_node_ids,
+)
 from raven.agent.subagent.tool_vocabulary import normalize_row
 from raven.config.agent_names import canonical_agent_name
 from raven.config.loader import load_config
@@ -83,59 +88,6 @@ def _iso(ms: Any) -> str | None:
         return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
     except (OverflowError, OSError, ValueError):
         return None
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    """One JSON object off disk, or an empty one. Absent, unreadable and
-    malformed are the same answer here: every caller renders a row either way."""
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-@dataclass(frozen=True)
-class _NodeFiles:
-    """One node's artifacts, wherever the flat namespace put them.
-
-    A node used to own a directory and now owns a filename prefix, so what a
-    reader is handed is no longer a path it can join onto. Every read goes
-    through :meth:`path` for the reason the writer has one namer: the prefix
-    convention lives in one place.
-    """
-
-    root: Path
-    node_id: str
-
-    def path(self, name: str) -> Path:
-        return self.root / f"{self.node_id}.{name}"
-
-
-def _spawn_node_ids(session_dir: Path) -> list[str]:
-    """Node ids this session's spawns claimed, oldest first.
-
-    Ordered by the registry's own clock rather than by the id: an id the model
-    chose carries no time, where the minted call id it replaced sorted
-    chronologically for free. Sorting the names would shuffle the panel.
-    """
-    registry = _read_json(session_history_root(session_dir) / REGISTRY_FILENAME)
-    nodes = registry.get("nodes")
-    if not isinstance(nodes, dict):
-        return []
-    spawned = [
-        (int(entry.get("started_at_ms") or 0), node_id)
-        for node_id, entry in nodes.items()
-        if isinstance(entry, dict) and entry.get("kind") == "spawn" and isinstance(node_id, str)
-    ]
-    return [node_id for _at, node_id in sorted(spawned)]
-
-
-def _read_meta(files: _NodeFiles) -> dict[str, Any]:
-    meta = _read_json(files.path("meta.json"))
-    if isinstance(meta.get("agent"), str):
-        meta["agent"] = canonical_agent_name(meta["agent"])
-    return meta
 
 
 def _outcome(files: _NodeFiles) -> tuple[str | None, bool]:
@@ -197,19 +149,6 @@ def _row(files: _NodeFiles) -> dict[str, Any]:
         # number beside each would be the panel's whole payload.
         "tool_call_count": len(tools) if isinstance(tools, list) else None,
     }
-
-
-def _label_from_prompt(files: _NodeFiles) -> str:
-    """First line of the prompt, for a call whose meta carries no summary.
-
-    Read only in that case: one extra file per row would otherwise be paid on
-    every poll of a panel that is polling every few seconds.
-    """
-    try:
-        with files.path("prompt.md").open(encoding="utf-8", errors="replace") as fh:
-            return fh.readline().strip()[:80]
-    except OSError:
-        return ""
 
 
 def _call_dir(root: Path, call_id: str) -> _NodeFiles | None:

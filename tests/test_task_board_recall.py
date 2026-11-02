@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 
-from raven.agent.subagent.history import dag_root, session_history_root
+from raven.agent.subagent.history import dag_root
 from raven.agent.task_board.board import Board, ProgressStep, TaskGroup, TaskLink
-from raven.agent.task_board.lineage import descendants, task_status
+from raven.agent.task_board.lineage import descendants
 from raven.agent.task_board.recall import (
     COMPLETED_RECALL_WEIGHT,
     CUT,
@@ -70,35 +70,22 @@ def test_an_empty_board_says_so():
     assert "empty" in list_groups(Board([], []), now_ms=0)
 
 
-def test_a_thread_names_each_task_with_its_live_status(tmp_path):
-    root = session_history_root(tmp_path)
-    root.mkdir(parents=True)
-    (root / "nodes.json").write_text(
-        json.dumps(
-            {
-                "nodes": {
-                    "locate_login_bug": {"kind": "spawn", "status": "completed"},
-                    "a1": {"kind": "dag", "run_id": "RUN_A", "status": "completed"},
-                    "a2": {"kind": "dag", "run_id": "RUN_A", "status": "running"},
-                },
-                "runs": [],
-            }
-        ),
-        encoding="utf-8",
-    )
+def test_a_thread_names_each_task_with_its_status():
+    """The status is the one the caller reads for each link -- the ``tasks.list`` row's,
+    which ``test_rpc_tasks_board.py`` holds recall to."""
     spawn = TaskLink("spawn", "locate_login_bug", "Locate the blank-page bug")
     run = TaskLink("dag", "RUN_A", "Review fixes")
     group = _group("g_1", "Fix bug A", "idle", 1, ["Found it", "Fixing"], tasks=[spawn, run], summary="Fix under way")
     board = Board([group], [])
+    statuses = {"locate_login_bug": "interrupted", "RUN_A": "failed"}
 
-    out = thread_text(board, "g_1", status_of=lambda link: task_status(tmp_path, link), lineage={})
+    out = thread_text(board, "g_1", status_of=lambda link: statuses[link.id], lineage={})
 
     assert out.splitlines()[0] == "g_1 [idle] Fix bug A -- Fix under way"
     assert "- 2026-10-29T10:00:00: Found it -- In detail: Found it." in out
     assert "2026-10-29T10:01:00" in out
-    assert "spawn:locate_login_bug (Locate the blank-page bug): completed" in out
-    assert "dag:RUN_A (Review fixes): running" in out
-    assert task_status(tmp_path, TaskLink("spawn", "nobody", "")) == "unknown"
+    assert "spawn:locate_login_bug (Locate the blank-page bug): interrupted" in out
+    assert "dag:RUN_A (Review fixes): failed" in out
 
 
 def test_a_thread_names_the_runs_that_continued_a_placed_one():

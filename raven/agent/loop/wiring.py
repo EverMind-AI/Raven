@@ -1631,7 +1631,7 @@ class WiringMixin:
             from raven.agent.task_board.tool import TaskBoardTool
 
             self.task_board = TaskBoardService(self.sessions)
-            self.tools.register(TaskBoardTool(self.task_board))
+            self.tools.register(TaskBoardTool(self.task_board, loop=self))
         # The two close the array, in this order, so the roster spawn's
         # description ends with is the last thing the array says and the graph
         # tool's pointer to it lands on the tool read right after.

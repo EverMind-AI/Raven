@@ -12,6 +12,8 @@ from __future__ import annotations
 from contextvars import ContextVar
 from typing import Any
 
+from raven.agent.subagent.dag_live import live_run_ids
+from raven.agent.subagent.task_rows import live_spawn_handles
 from raven.agent.task_board.board import TaskLink
 from raven.agent.task_board.lineage import task_status
 from raven.agent.task_board.recall import list_groups, rank, search, thread_text, turn_texts
@@ -39,10 +41,15 @@ PARAMETERS: dict[str, Any] = {
 
 
 class TaskBoardTool(Tool):
-    """Reads this conversation's Task Board: a listing, one group's thread, or a search."""
+    """Reads this conversation's Task Board: a listing, one group's thread, or a search.
 
-    def __init__(self, service: TaskBoardService) -> None:
+    ``loop`` is asked what it is still running, the way ``tasks.list`` asks it, so a
+    linked Task reads the same in recall as on the page; without one, nothing is.
+    """
+
+    def __init__(self, service: TaskBoardService, *, loop: Any = None) -> None:
         self._service = service
+        self._loop = loop
         self._session_key: ContextVar[str | None] = ContextVar("task_board_session_key", default=None)
 
     def set_context(self, channel: str, chat_id: str, session_key: str | None = None) -> None:
@@ -87,9 +94,10 @@ class TaskBoardTool(Tool):
             return list_groups(board, now_ms=now)
         lineage = service.lineage(key, board)
         session_dir = service.session_dir(key)
+        live, live_runs = live_spawn_handles(self._loop, key), live_run_ids(self._loop)
 
         def status_of(link: TaskLink) -> str:
-            return task_status(session_dir, link)
+            return task_status(session_dir, key, link, live=live, live_runs=live_runs)
 
         if group_id:
             try:

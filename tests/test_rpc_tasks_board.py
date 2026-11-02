@@ -14,6 +14,7 @@ from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.task_board.board import Board, Dispatch, apply_update, set_group_status
 from raven.agent.task_board.service import TaskBoardService
 from raven.agent.task_board.store import load_board, save_board
+from raven.agent.task_board.tool import TaskBoardTool
 from raven.rpc.errors import InvalidParamsError
 from raven.rpc.methods.session import session_branch, session_clear, session_undo
 from raven.rpc.methods.tasks import (
@@ -576,3 +577,61 @@ async def test_boards_reads_what_runs_on_the_loop_thread_and_files_off_it(worksp
     assert len(cards) == 2
     assert {what for what, _ in readers} == {"instances", "spawns", "runs"}
     assert all(on_loop for _, on_loop in readers), readers
+
+
+async def _recalled(workspace: Path, loop: object) -> str:
+    """The thread recall reads back for the conversation's one group, asking ``loop``
+    what is still running the way ``tasks.list`` asks it."""
+    service = TaskBoardService(SessionManager(workspace))
+    tool = TaskBoardTool(service, loop=loop)
+    tool.set_context("web", "alpha", KEY)
+    return await tool.execute(action="recall", group_id=service.load(KEY).groups[0].id)
+
+
+async def test_recall_reads_a_spawn_a_restart_cut_off_as_tasks_list_does(workspace):
+    _host_session(workspace, KEY, _spawn_board())
+    await _open_spawn(_dir(workspace))
+    loop = _live()()
+
+    (row,) = (await tasks_list({"session_key": KEY}, agent_loop_factory=lambda: loop))["tasks"]
+    out = await _recalled(workspace, loop)
+
+    assert row["status"] == "interrupted"
+    assert f"spawn:helper_task (Look into it): {row['status']}" in out
+
+
+async def test_recall_reads_a_live_graph_with_a_failed_node_as_tasks_list_does(workspace):
+    from raven.agent.subagent.instances import get_registry
+
+    _host_session(workspace, KEY, _board())
+    await _claimed_run(_dir(workspace))
+    await get_registry().upsert_dag_node(KEY, RUN, "n1", "Raven", "failed")
+    await get_registry().upsert_dag_node(KEY, RUN, "n2", "Raven", "running")
+    loop = _live(runs=frozenset({RUN}))()
+
+    (row,) = (await tasks_list({"session_key": KEY}, agent_loop_factory=lambda: loop))["tasks"]
+    out = await _recalled(workspace, loop)
+
+    assert row["status"] == "failed"
+    assert f"dag:{RUN} (Review fixes): {row['status']}" in out
+
+
+async def test_recall_reads_a_live_graph_as_running_as_tasks_list_does(workspace):
+    from raven.agent.subagent.instances import get_registry
+
+    _host_session(workspace, KEY, _board())
+    await _claimed_run(_dir(workspace))
+    await get_registry().upsert_dag_node(KEY, RUN, "n1", "Raven", "running")
+    loop = _live(runs=frozenset({RUN}))()
+
+    (row,) = (await tasks_list({"session_key": KEY}, agent_loop_factory=lambda: loop))["tasks"]
+    out = await _recalled(workspace, loop)
+
+    assert row["status"] == "running"
+    assert f"dag:{RUN} (Review fixes): running" in out
+
+
+async def test_recall_names_a_task_no_row_answers_for_as_unknown(workspace):
+    _host_session(workspace, KEY, _spawn_board("never_ran"))
+
+    assert "spawn:never_ran (Look into it): unknown" in await _recalled(workspace, None)

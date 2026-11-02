@@ -777,12 +777,13 @@ parsing so a playbook can leave it for the model to fill, and `validate_and_orde
 it before any node runs. It replaces the first-line-of-the-template guess a row used to
 make.
 
-**Task** (`tasks.list`, `raven/rpc/methods/tasks.py`):
+**Task** (`tasks.list`, `raven/rpc/methods/tasks.py`; rows built by `raven/agent/subagent/task_rows.py`):
 one unit of delegated work a conversation started, as the wire lists it: a `spawn` call, or
 a `run_subagent_dag` run (a playbook run is one), each as a run-level row carrying its nodes.
 Built from the run dir, the session node registry (`subagents/nodes.json`) and the Instance
 Registry, without the live graph tool; the row's status is derived from its nodes'
-(`docs/specs/2026-09-18-desk-tasks-list-design.md`).
+(`docs/specs/2026-09-18-desk-tasks-list-design.md`). The Task Board's recall reads a linked
+Task's status off the same row.
 _Avoid_: "task" for a spine `TurnRequest`, an asyncio task, or the `task` text handed to a
 sub-agent -- those are a Turn, a coroutine, and a prompt.
 

@@ -147,7 +147,7 @@ nothing wrong with it, and stays where it is.
   it may be absent.
 - A step's `tasks` entries carry `{kind, id}` in exactly the address `tasks.list` uses -- a
   spawn's `node_id`, a DAG run's `run_id` (`_spawn_row` and `_dag_row` in
-  `raven/rpc/methods/tasks.py`) -- and
+  `raven/agent/subagent/task_rows.py`) -- and
   the `summary` the dispatching call gave, so recall and an inert chip (5.2) still have a
   name. The page joins them to its `TaskRow`s by the existing `taskKey`.
 - A step's `summary` is what recall reads back. On the step that leaves its group
@@ -238,7 +238,9 @@ the same three attempts (6.1); nothing is cut silently.
   age -- completed groups after open ones;
 - `group_id`: that group's whole thread, its summary, and each step with its time, title and
   summary and, for each linked Task, the Task's current status and summary as the
-  `tasks.list` readers report them;
+  `tasks.list` readers report them: the status is the one the Task's row carries, built by
+  the same reader (`raven/agent/subagent/task_rows.py`) with the loop's own word on what it
+  still runs, so recall, the sidebar and the page cannot disagree;
 - in both, a group that waits on the user (`needs_you`) closes with its unanswered questions:
   its latest step's, numbered as the page numbers them. One the user set aside has left the
   step already; an earlier step's were answered by the turns after it, and a group no longer
