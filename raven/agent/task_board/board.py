@@ -166,6 +166,7 @@ def _objects(value: Any, field: str, item_error: str) -> list[Mapping[str, Any]]
 
 
 def _check_steps(steps: Sequence[Mapping[str, Any]], groups: Set[str]) -> None:
+    seen: set[str] = set()
     for raw in steps:
         group = raw.get("group")
         new_title = raw.get("new_title")
@@ -176,8 +177,12 @@ def _check_steps(steps: Sequence[Mapping[str, Any]], groups: Set[str]) -> None:
             _within(_filled(raw, "new_summary", "new_summary"), GROUP_SUMMARY_WORDS, "new_summary")
         elif group not in groups:
             raise UpdateRejectedError(f"unknown group: {group}")
+        elif group in seen:
+            raise UpdateRejectedError(f"{group} appears twice in steps; give each group one step per turn")
         elif raw.get("new_summary") is not None:
             raise UpdateRejectedError("new_summary goes with new_title; change an existing group's summary in groups")
+        if group:
+            seen.add(group)
         status = _check_status(raw.get("status"))
         _within(_filled(raw, "title", "title"), TITLE_WORDS, "title")
         _filled(raw, "summary", "summary")
