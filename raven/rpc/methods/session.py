@@ -1677,6 +1677,10 @@ async def session_set_effort(
     install, and ``options``, the levels this model declares, so it need not
     spell the words itself. A draft names its model, since it has no session
     record to read one from.
+
+    A report reads the account catalogue's cache; only an explicit set or
+    clear refreshes it, and that refresh runs off the event loop, so a UI read
+    never blocks on the network.
     """
     session_key = str(params.get("session_key") or "")
     raw = params.get("effort")
@@ -1690,7 +1694,12 @@ async def session_set_effort(
         if not session_key and isinstance(requested_model, str) and requested_model
         else _session_model(loop, config, session_key)
     )
-    model_levels = _effort_levels(model_id, config, refresh=True)
+    refresh_catalogue = wanted is not None
+    model_levels = (
+        await asyncio.to_thread(_effort_levels, model_id, config, refresh=True)
+        if refresh_catalogue
+        else _effort_levels(model_id, config)
+    )
 
     def _reply(stored: str | None) -> dict:
         return {

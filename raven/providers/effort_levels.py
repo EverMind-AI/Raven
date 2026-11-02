@@ -9,12 +9,15 @@ static table carries. It is network data, so the turn reads only the cache
 ``codex_catalog`` keeps; ``refresh`` lets the RPC warm that cache. A level the
 account states outside this build's ladder (``ultra``) is not offered.
 
-The answer is tri-state: a tuple of levels when the model or the user declares
-them, ``()`` when the model declares none, and ``None`` when the source cannot
-answer (an internal failure or a cold account cache, not a model answer). Level
-semantics mirror LiteLLM's own validator: medium/high are the baseline,
-minimal/low are opt-out, xhigh/max are opt-in. ``none`` is ignored: Raven's
-None means "provider default", not "reasoning off".
+The answer is tri-state for the static table: a tuple of levels when the model
+or the user declares them, ``()`` when the model declares none, and ``None``
+when the table itself cannot be read (an internal failure, not a model answer).
+The Codex account source never answers ``None``: an expired answer is kept as
+last-good, and a cold cache has no levels to offer (``()``), so a stored pick is
+never sent against an unreadable account. Level semantics mirror LiteLLM's own
+validator: medium/high are the baseline, minimal/low are opt-out, xhigh/max are
+opt-in. ``none`` is ignored: Raven's None means "provider default", not
+"reasoning off".
 """
 
 from __future__ import annotations
@@ -38,9 +41,9 @@ LEVEL_ORDER = ("minimal", "low", "medium", "high", "xhigh", "max")
 def levels_for(model: str, declared: Sequence[str] = (), *, refresh: bool = False) -> tuple[str, ...] | None:
     """The levels this model declares, or ``()``/``None`` per the module docstring.
 
-    ``refresh`` lets a caller that is already spending a round trip (the RPC)
-    ask the Codex account catalogue when its cache is cold; the turn leaves it
-    false and reads the cache only.
+    ``refresh`` lets an explicit effort set ask the Codex account catalogue,
+    off the event loop; the turn and reports leave it false and read the cache
+    only, where an expired answer is still its last-good one.
     """
     if declared:
         known = set(declared)

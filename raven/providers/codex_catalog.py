@@ -109,30 +109,35 @@ def account_models(*, timeout: float = 5.0, strict: bool = False) -> tuple[str, 
     return tuple(models)
 
 
-def account_efforts(slug: str, *, refresh: bool = False, timeout: float = 5.0) -> tuple[str, ...] | None:
+def account_efforts(slug: str, *, refresh: bool = False, timeout: float = 5.0) -> tuple[str, ...]:
     """The reasoning levels this account's catalogue states for ``slug``, least first.
 
-    ``None`` when the catalogue could not answer -- a cold cache without
-    ``refresh``, or a failed fetch. ``()`` when it answers that it does not
-    offer this model, or offers it with no levels stated. The turn reads this
-    cache-only; the RPC path may pass ``refresh=True`` to fetch it.
+    Never ``None``: an answer that exists is kept as last-good past its refresh
+    time, because a turn may not wait on the network and dropping a stored pick
+    to the provider default is safer than sending an unvalidated word. ``()``
+    means the catalogue has no answer to offer -- it never was read, the fetch
+    failed with nothing cached, or it does not offer this model (or states no
+    levels for it). The turn and reports read cache-only; an explicit effort
+    set passes ``refresh=True`` to fetch, and a failed refresh falls back to
+    the last-good answer.
     """
     global _cache, _failure
 
     now = time.monotonic()
     fingerprint = _credential_fingerprint()
-    if _cache is not None and _cache[0] == fingerprint and now - _cache[1] < _CACHE_TTL_SECONDS:
-        return _cache[2].get(slug, ())
+    cached = _cache if _cache is not None and _cache[0] == fingerprint else None
+    if cached is not None and now - cached[1] < _CACHE_TTL_SECONDS:
+        return cached[2].get(slug, ())
     if not refresh:
-        return None
+        return cached[2].get(slug, ()) if cached is not None else ()
     if _failure is not None and _failure[0] == fingerprint and now - _failure[1] < _FAILURE_TTL_SECONDS:
-        return None
+        return cached[2].get(slug, ()) if cached is not None else ()
 
     try:
         models = _fetch(timeout=timeout)
     except Exception:
         _failure = (fingerprint, now)
-        return None
+        return cached[2].get(slug, ()) if cached is not None else ()
 
     _cache = (fingerprint, now, models)
     _failure = None

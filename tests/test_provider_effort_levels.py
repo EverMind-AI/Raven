@@ -178,9 +178,9 @@ def test_the_account_catalogue_is_refreshed_only_when_asked(monkeypatch):
     assert calls == [True]
 
 
-def test_a_cold_account_catalogue_is_unknown(monkeypatch):
-    monkeypatch.setattr(codex_catalog, "account_efforts", lambda slug, *, refresh=False: None)
-    assert effort_levels.levels_for("openai-codex/gpt-5.6-sol") is None
+def test_a_cold_account_catalogue_has_no_levels(monkeypatch):
+    monkeypatch.setattr(codex_catalog, "account_efforts", lambda slug, *, refresh=False: ())
+    assert effort_levels.levels_for("openai-codex/gpt-5.6-sol") == ()
 
 
 def test_an_unlisted_account_model_has_no_levels(monkeypatch):

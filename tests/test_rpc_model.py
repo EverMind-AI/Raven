@@ -2350,7 +2350,7 @@ async def test_a_codex_model_gets_its_options_from_the_account_catalogue(fake_ho
         agent_loop_factory=lambda: _Loop(fake_home),
     )
     assert result["options"] == ["low", "medium", "high", "xhigh", "max"]
-    assert calls == [("gpt-5.6-sol", True)]
+    assert calls == [("gpt-5.6-sol", False)]
 
 
 async def test_the_bundle_reads_the_codex_catalogue_without_refreshing(tmp_path, monkeypatch) -> None:
@@ -2379,3 +2379,36 @@ async def test_the_bundle_reads_the_codex_catalogue_without_refreshing(tmp_path,
     info = await session_module._default_session_info(loop, session_module.load_config(), "tui:1")
     assert info["reasoning_effort"] == "high"
     assert calls == [("gpt-5.6-sol", False)]
+
+
+async def test_an_effort_set_refreshes_the_codex_catalogue(tmp_path, monkeypatch) -> None:
+    from raven.providers import codex_catalog
+    from raven.rpc.methods.session import session_set_effort
+    from raven.session.manager import SessionManager
+
+    calls = []
+
+    def efforts(slug, *, refresh=False):
+        calls.append((slug, refresh))
+        return ("low", "medium", "high", "xhigh", "max")
+
+    monkeypatch.setattr(codex_catalog, "account_efforts", efforts)
+
+    class _Loop:
+        def __init__(self, path: Path) -> None:
+            self.sessions = SessionManager(path)
+
+        def session_model(self, key):
+            return "openai-codex/gpt-5.6-sol"
+
+        def session_policy(self, key):
+            from raven.agent.loop._shared import SessionPolicy
+
+            return SessionPolicy()
+
+    result = await session_set_effort(
+        {"session_key": "tui:1", "effort": "high"},
+        agent_loop_factory=lambda: _Loop(tmp_path),
+    )
+    assert result["effort"] == "high"
+    assert calls == [("gpt-5.6-sol", True)]
