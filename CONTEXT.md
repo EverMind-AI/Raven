@@ -319,10 +319,16 @@ ranking is `session_effort.in_force`, one rule with one home: the turn runs at i
 it, and the turn sends the word in force on every call, None included, so a default cleared
 on a running gateway lands on its next turn -- the provider's own copy of the key, frozen at
 boot, is never consulted. The
-words are `REASONING_EFFORTS` (`config/schema.py`), shared with the console's checker for
-`agents.defaults.reasoningEffort` and with the agent's own `raven_config` door -- a key that
-is clearable on both (null is the provider's own default) and that the settings page draws,
-when unset, as a rung of its own rather than as `low`. Lands on the next turn, like a tier;
+pick's words are the levels the conversation's model declares
+(`providers/effort_levels.py`: LiteLLM's static table first, a provider's
+`model_overlay.reasoningEfforts` over it); `session.set_effort` offers and validates exactly
+those, a model that declares none has no row, and a stored pick the current model does not
+declare is dropped to None at the turn and in `session.info` (`session_effort.clamp`). The
+install-wide `agents.defaults.reasoningEffort` keeps `REASONING_EFFORTS`
+(`config/schema.py`), shared with the console's checker and the agent's own `raven_config`
+door -- a key that is clearable on both (null is the provider's own default) and that the
+settings page draws, when unset, as a rung of its own rather than as `low`. Lands on the
+next turn, like a tier;
 reaches no sub-agent, unlike one -- a sub-agent is still told the configured default
 (`RAVEN_PARENT_REASONING_EFFORT`), and the TUI's `/effort` is refused inside a direct chat
 with an instance, since the pick is the main conversation's and an instance has none.

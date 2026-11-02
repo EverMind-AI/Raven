@@ -528,10 +528,12 @@ class WiringMixin:
 
         ``session_effort.in_force`` over this loop's inputs: the pick the caller
         read off the session's record, the session's mode's word, and the
-        configured default as the file has it now. Beside ``session_tier`` for
-        the reason it gives -- the turn and the RPC need the one rule, and the
-        policy it reads lives here -- and reached on ``self`` by the turn, so
-        nothing imports anything new.
+        configured default as the file has it now. The session's model then
+        bounds the answer (``session_effort.clamp``): a level it does not
+        declare, by LiteLLM's table or its provider overlay, is dropped to None
+        rather than sent. Beside ``session_tier`` for the reason it gives -- the
+        turn and the RPC need the one rule, and the policy it reads lives here
+        -- and reached on ``self`` by the turn, so nothing imports anything new.
         """
         from raven.agent import session_effort
         from raven.providers.overlay import declared_efforts, overlay_for

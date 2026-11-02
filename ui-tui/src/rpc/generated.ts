@@ -4894,7 +4894,7 @@ export interface SessionSetEffortResult {
    */
   default?: string | null;
   /**
-   * The words effort accepts, least first.
+   * The words this model accepts, least first.
    */
   options?: string[];
 }

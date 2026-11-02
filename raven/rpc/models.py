@@ -3593,7 +3593,7 @@ class SessionSetEffortResult(_Strict):
         description="What the session runs at with no pick of its own: its mode's effort where the catalogue sets "
         "one, else agents.defaults.reasoningEffort, else null for the provider's own default.",
     )
-    options: list[str] = Field(default_factory=list, description="The words effort accepts, least first.")
+    options: list[str] = Field(default_factory=list, description="The words this model accepts, least first.")
 
 
 # ---------------------------------------------------------------------------

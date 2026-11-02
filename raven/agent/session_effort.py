@@ -12,8 +12,11 @@ reads the model.
 Where it ranks (``in_force``, the one rule the turn runs at and the RPC
 reports): the configured default underneath, a Session Mode's own
 ``reasoningEffort`` over that, this pick over both, and a hook's rollback
-override over the lot (``_run_agent_loop``'s ``gen_overrides``). Raven's own
-calls only: a sub-agent is told the configured default, as before.
+override over the lot (``_run_agent_loop``'s ``gen_overrides``). The model then
+bounds the result (``clamp``): a level the current model does not declare is
+dropped to None, the provider's own default, and the stored pick is left on the
+record so it applies again if a later model declares it. Raven's own calls
+only: a sub-agent is told the configured default, as before.
 
 The words are ``REASONING_EFFORT_LADDER`` (``contracts/llm_provider.py``); the
 provider maps each to its own wire, and a model with no thinking to move

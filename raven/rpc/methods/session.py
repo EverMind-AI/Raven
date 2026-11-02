@@ -595,7 +595,7 @@ def _effort_in_force(
     session_key: str | None,
     model_id: str | None = None,
 ) -> str | None:
-    """The effort this session's own calls run at: its pick over the default, by the one rule."""
+    """The effort this session's own calls run at: its pick over the default, clamped to its model."""
     model_id = model_id or _session_model(agent_loop, config, session_key)
     picked = session_effort.read(manager_for(agent_loop, config), session_key) if session_key else None
     value = session_effort.in_force(picked, _mode_effort(agent_loop, session_key), _configured_effort(config))
@@ -1671,7 +1671,9 @@ async def session_set_effort(
 
     Every answer carries ``default`` -- what the session runs at without a
     pick of its own -- so a control can say what "default" means on this
-    install, and ``options``, so it need not spell the words itself.
+    install, and ``options``, the levels this model declares, so it need not
+    spell the words itself. A draft names its model, since it has no session
+    record to read one from.
     """
     session_key = str(params.get("session_key") or "")
     raw = params.get("effort")
