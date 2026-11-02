@@ -303,10 +303,11 @@ Filling rules:
 **Preview-verification (required):**
 1. After drafting, **scan for any non-ASCII char first** (CI lints the whole message as ASCII-only -- `scripts/check_pr_body.py` is the canonical checker, and the squash commit body is this PR description, so it must be ASCII too):
    ```bash
-   uv run python -c "import sys,pathlib; bad=[(n,l) for n,l in enumerate(pathlib.Path('/tmp/pr_description.md').read_text(encoding='utf-8').splitlines(),1) if any(ord(c)>0x7F for c in l)]; [print(f'{n}: {l}') for n,l in bad]; sys.exit(1 if bad else 0)"
-   # must exit 0 with no output. Same per-character test as scripts/check_pr_body.py.
-   # Catches em-dash/curly-quotes/ellipsis, not just CJK -- and stock macOS grep
-   # has no -P, so a grep -P check silently matches nothing there.
+   uv run python -m scripts.check_pr_body /tmp/pr_description.md
+   # must exit 0. The file argument is what gets linted; with no argument the
+   # script falls back to PR_BODY and exits 2 when neither supplies a body.
+   # The test is per-character, so it catches em-dash / curly quotes / ellipsis,
+   # not just CJK -- and stock macOS grep has no -P.
    ```
 2. show the full text for preview;
 3. only after the user edits/confirms, run `gh pr create --title "..." --body "$(cat /tmp/pr_description.md)"`;
