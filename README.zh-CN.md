@@ -205,7 +205,11 @@ Raven 可以通过 ACP、CLI 或兼容 OpenAI 的 API 接入并编排 Agent，�
 
 ## ❯❯ 新闻
 
-- 📣 **2026-09-30** — Raven 技术报告获评 Hugging Face [**#1 Paper of the day**](https://huggingface.co/papers/2609.33439)。
+- 📣 **2026-09-30** — Raven 技术报告在 [**Hugging Face Daily Papers**](https://huggingface.co/papers/2609.33439) 上拿下日榜（2026-09-30）、周榜（2026-10-04）、月榜（2026-10-10）第一。
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/03296c4b-6dd7-49ec-a1f2-3d26b37c6d29"><img src="https://github.com/user-attachments/assets/03296c4b-6dd7-49ec-a1f2-3d26b37c6d29" alt="Three Crowns on Hugging Face, Chinese edition: Raven's technical report ranked #1 on the daily, weekly and monthly Hugging Face Daily Papers boards" width="100%"></a>
+</p>
 
 ## ❯❯ 快速开始
 
