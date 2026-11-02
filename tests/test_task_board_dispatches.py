@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from raven.agent.task_board.board import Dispatch
-from raven.agent.task_board.dispatches import dag_run_id_of, spawn_task_id_of, turn_dispatches
+from raven.agent.task_board.dispatches import dag_run_id_of, delegated_handle, spawn_task_id_of, turn_dispatches
 
 RUN = "20261029T100213Z-3eb3b470"
 PLAYBOOK_RUN = "20261029T100500Z-0badf00d"
@@ -118,3 +118,21 @@ def test_a_dispatch_forwarded_through_tool_call_counts():
     ]
 
     assert turn_dispatches(turn) == [Dispatch(f"dag:{RUN}", "Review fixes"), Dispatch("spawn:write_notes", "Notes")]
+
+
+def test_a_delegated_result_names_the_run_it_brings_back():
+    """The handle the turn that dispatched the run placed: a graph is placed whole, so a
+    node's report names its run."""
+    spawn = {"kind": "spawn", "label": "Locate it", "status": "ok", "node_id": "locate_login_bug"}
+    node = {"kind": "dag", "label": RUN, "status": "error", "run_id": RUN, "node_id": "review"}
+
+    assert delegated_handle(spawn) == "spawn:locate_login_bug"
+    assert delegated_handle({"kind": "dag", "label": RUN, "status": "ok", "run_id": RUN}) == f"dag:{RUN}"
+    assert delegated_handle(node) == f"dag:{RUN}"
+
+
+def test_a_result_with_no_run_to_name_names_none():
+    assert delegated_handle(None) is None
+    assert delegated_handle({"kind": "spawn", "label": "Nightly check", "status": "ok"}) is None
+    assert delegated_handle({"kind": "dag", "label": RUN, "status": "ok"}) is None
+    assert delegated_handle({"kind": "unprompted", "label": "coder/x1", "status": "report", "node_id": "x"}) is None

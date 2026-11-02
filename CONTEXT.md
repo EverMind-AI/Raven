@@ -787,9 +787,12 @@ _Avoid_: "task" for a spine `TurnRequest`, an asyncio task, or the `task` text h
 sub-agent -- those are a Turn, a coroutine, and a prompt.
 
 **Task Board** (`raven/agent/task_board/`, `<session_dir>/task_board.json`):
-one host session's set of Task Groups, kept by the host model in one extra call after every
-turn and read back through the `task_board` tool. Only the Raven host keeps one; a sub-agent
-or product agent never does (`docs/specs/2026-10-29-task-board-design.md`).
+one host session's set of Task Groups, kept by the host model in one extra call after each
+turn that answered or dispatched work, and read back through the `task_board` tool. A turn
+known to be about a group -- one a delegated result opened, one whose message a Move on or an
+Answer named the group for -- writes only to that group and to wherever it places the work it
+started. Only the Raven host keeps one; a sub-agent or product agent never does
+(`docs/specs/2026-10-29-task-board-design.md`).
 _Avoid_: "task list" (that is `tasks.list`), "todo" (Raven-Code's Checklist).
 
 **Task Group**:
@@ -826,8 +829,8 @@ summary with what the user is asked and lists each question about the matter; wh
 waits, the page shows that summary under the step and frames each question in a box of its own
 on the card, with an Ignore that sets that one question aside (`tasks.ignore_question`; the
 last one set aside leaves the group idle; the host is told at its next turn, as declined, so it
-does not ask again), one Answer, and Move on, which names the group the next message is about in
-that message's turn (a reply drafted in the composer); recall reads the
+does not ask again), one Answer (a reply drafted in the composer), and Move on; each names the
+group the next message is about, in that message's turn; recall reads the
 ones still open back to the host. Because the page lists them, the host's reply rules stop asking open questions again on every reply for a reader of
 the page with the board on (`render.board_on_page`); other channels and the terminal still do. Chinese surfaces call it 事件. The page marks it running while a Task it started runs, failed when one failed, and
 done otherwise; clicking it scrolls the transcript to that turn's reply.

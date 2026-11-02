@@ -158,12 +158,25 @@ describe('answering a group that needs the user', () => {
   it('hands the draft to the verb the composer lends, and does nothing unlent', () => {
     const seen: [string, number][] = []
     const g = asking([['Which fix?']])
-    store.answer(g)
+    store.answer('s1', g)
+    expect(store.moveOnFor('s1')).toBeNull()
     store.lendAnswer((text, caret) => { seen.push([text, caret]) })
-    store.answer(g)
+    store.answer('s1', g)
 
     const draft = store.answerDraft(g)
     expect(seen).toEqual([[draft.text, draft.caret]])
+  })
+
+  /* The answer is a message about this group, as a Move on's is: its turn is kept
+     to the group by the same note. */
+  it('holds the group as the move-on of the conversation it answers in', () => {
+    store.lendAnswer(() => {})
+    store.answer('s1', asking([['Which fix?']]))
+
+    expect(store.moveOnFor('s1')).toEqual({ sessionKey: 's1', groupId: 'a', title: 'Matter a', summary: 'where a stands' })
+    store.clearMoveOn()
+    store.answer(null, asking([['Which fix?']]))
+    expect(store.get().moveOn).toBeNull()
   })
 })
 

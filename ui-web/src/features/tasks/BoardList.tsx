@@ -144,7 +144,7 @@ const HERE: ThreadVerbs = {
   reveal: (step) => { revealTurnAt(step.turn_at, step.turn_id) },
   setStatus: (group, status) => { void setStatus(group, status) },
   ignore: (group, step, question) => { void setAside(group, step, question) },
-  answer: (group) => store.answer(group),
+  answer: (group) => store.answer(sessionCurrent(), group),
   moveOn: (group) => {
     const key = sessionCurrent()
     if (key) store.moveOn(key, group)
@@ -165,8 +165,9 @@ export function MoveOnButton({ onClick }: { onClick: () => void }): JSX.Element 
 /* While a group needs the reader: the questions its latest event asked, at the
    bottom of the card -- under the head while it is folded, after that event
    while it is open -- each in a box of its own with an Ignore that sets that
-   one aside, and Answer, which drafts a reply to the rest in the composer. A
-   group that asks nothing it named keeps one Ignore, which puts it down as idle. */
+   one aside, and Answer, which drafts a reply to the rest in the composer and,
+   as Move on does, names the group that reply is about. A group that asks
+   nothing it named keeps one Ignore, which puts it down as idle. */
 function Questions({ group, verbs }: { group: TaskGroup; verbs: ThreadVerbs }): JSX.Element | null {
   const step = group.steps[group.steps.length - 1]
   const questions = step?.questions ?? []

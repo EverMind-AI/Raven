@@ -64,7 +64,9 @@ The feature fails, however well it otherwise works, if:
 - a dispatched Task can end a turn without a place on the board, with nothing saying so;
 - the board update leaves anything in the conversation the model reads on later turns;
 - steps paraphrase the reply ("answered the user's question") instead of saying what moved,
-  or a new group appears for every turn.
+  or a new group appears for every turn;
+- a turn about one matter adds steps to others it only mentioned, so a group's thread fills
+  with turns that did not move it.
 
 ## Vocabulary
 
@@ -73,7 +75,7 @@ Three terms join `CONTEXT.md` (Raven Runtime) and are cross-referenced from
 and is what hangs under a step.
 
 - **Task Board** (`raven/agent/task_board/`): one session's set of Task Groups, kept by the
-  host model after every turn. _Avoid_: "task list" (that is `tasks.list`), "todo"
+  host model after each turn that answered or dispatched work. _Avoid_: "task list" (that is `tasks.list`), "todo"
   (Raven-Code's Checklist).
 - **Task Group** (任务 on Chinese surfaces): one matter the conversation is pushing,
   spanning any number of turns -- a bug fix, a release note. Carries a title, a summary of
@@ -274,6 +276,9 @@ one instruction"). The instruction carries:
   its last two steps; every completed group's id and title;
 - this turn's dispatches, each as a handle (`spawn:<node_id>`, `dag:<run_id>`) with its task
   summary, followed by any `unassigned` left by an earlier failed update (6.1);
+- for a turn that belongs to some groups (What a turn may write, below), one paragraph
+  naming them by id -- never by title, which is text an earlier call wrote -- and asking for
+  steps only there and wherever a listed handle goes (`task_board_scope.md`);
 - the rules: one step per group this turn advanced, in the conversation's language, its title
   saying what moved and its summary what moved and what is next or awaited -- not restating
   the reply; the lengths above; rewrite a group's summary whenever the turn changed where the
@@ -341,8 +346,28 @@ neither appended to the turn nor persisted. It is traced as its own span and its
 added to the session's usage, so its cost is visible where every other call's is.
 
 **Which turns.** Every completed host turn, whatever opened it -- a user message, a
-returning sub-agent result, a cron firing. A turn that errored or was stopped runs the call
-only if it dispatched something. A turn that dispatched nothing may return an empty update.
+returning sub-agent result, a cron firing -- except one that answered with the silence
+marker and dispatched nothing: the host saying the turn has nothing to show leaves no
+progress to record. A turn that errored or was stopped runs the call only if it dispatched
+something. A turn that dispatched nothing may return an empty update.
+
+**What a turn may write.** Most turns are about whatever their reply moved, and their update
+may step any group. Two kinds are known to be about a group before the model is asked. A
+turn a delegated result opened (`TurnRequest.delegated`) belongs to the group whose step
+placed that run -- `spawn:<node_id>`, or `dag:<run_id>` for a graph even when one node
+reports, since a graph is placed whole. A turn whose message a Move on or an Answer named a
+group for (5.1.1) belongs to that group. The owning groups are resolved on the board the
+update queue hands over, where the update before this one may just have placed the run. The
+update is then confined before it is checked: steps on the owning groups stay, and so does
+every step that places a dispatch, wherever it puts it, a new group included -- the work has
+to land somewhere -- with the `groups` changes on the groups those steps keep. A step or
+change on any other matter, and a new group with no dispatch in it, is dropped rather than
+refused, so it never costs an attempt. The instruction names the owning groups so the model
+writes to them; the confinement, not the instruction, is what keeps the update to them. A
+run no step has placed yet -- still in `unassigned` -- names no group, and a turn with no
+owning group is not confined. The cost: a delegated result that also moved another matter
+does not record it there, and a matter that first comes up in such a turn gets its group at
+a later turn.
 
 **Ordering.** Two locks per session in the board service. The update queue holds a
 post-turn update across its model call, so the next turn's update is built on this one's
@@ -411,7 +436,8 @@ each in a box of its own with an Ignore that sets that one question aside
 (`tasks.ignore_question`: it leaves its step, so it leaves the card and the answer draft, and
 the last one set aside leaves the group `idle`). One Answer button puts a draft in the open
 conversation's composer -- the group named, each question still listed numbered with an
-answer slot under it, the cursor in the first slot, anything already typed kept above it.
+answer slot under it, the cursor in the first slot, anything already typed kept above it --
+and holds the group as Move on does (5.1.1): the answer is a message about it.
 Open, the card's last row holds Mark completed at the left, and Move on and Answer at the
 right. A group that waits on the user without naming a question keeps a single Ignore, which
 sets it `idle`.
@@ -423,9 +449,10 @@ reader in the composer. The bar is the page's alone until the message goes: the 
 tells the server (`tasks.move_on`, below) and then sends the message, and the bar goes with
 it. The server keeps a note beside the board, as it keeps a set-aside, and the turn the message
 opens reads, in its runtime context, which group it moves on, by id, title and where it
-stands; the turn's own board update reads the same line. A message sent while a turn runs
-waits for a turn of its own rather than joining that one, whose context was read before it. A
-later move-on replaces one not yet shown. The Task Board page offers it on every card and row,
+stands; the turn's own board update reads the same line, and is kept to that group (3,
+What a turn may write). A message sent while a turn runs waits for a turn of its own rather
+than joining that one, whose context was read before it. A later move-on replaces one not yet
+acknowledged; a turn already shown the earlier one stays about that group. The Task Board page offers it on every card and row,
 opening the conversation first, as an event does.
 
 5.2 **Thread.** Clicking a card's head expands its thread inside the card, under the head;

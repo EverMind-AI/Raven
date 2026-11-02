@@ -300,8 +300,9 @@ function moveOnFrom(card: TaskBoardCard): void {
 
 /* An unfolded card's thread, wired to the card's own conversation: an event
    goes to it and on to the reply its turn ended on (the switch answers once
-   the history is drawn), Answer drafts the reply there once it is open, and
-   the group's writes go to it whichever conversation is on screen. */
+   the history is drawn), Answer drafts the reply there once it is open and
+   holds the group for it as Move on does, and the group's writes go to it
+   whichever conversation is on screen. */
 function verbsFor(card: TaskBoardCard): ThreadVerbs {
   return {
     reveal: (step: ProgressStep) => {
@@ -310,7 +311,7 @@ function verbsFor(card: TaskBoardCard): ThreadVerbs {
     setStatus: (group, status) => { void boards.setGroupStatus(card.session_key, group.id, status) },
     ignore: (group, step, question) => { void boards.ignoreQuestion(card.session_key, group.id, step.id, question) },
     answer: (group: TaskGroup) => {
-      void openCard(card).then((there) => { if (there) tasks.answer(group) })
+      void openCard(card).then((there) => { if (there) tasks.answer(card.session_key, group) })
     },
   }
 }

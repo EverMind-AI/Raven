@@ -11,7 +11,7 @@ from __future__ import annotations
 import copy
 import secrets
 import unicodedata
-from collections.abc import Callable, Mapping, Sequence, Set
+from collections.abc import Callable, Collection, Mapping, Sequence, Set
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -326,6 +326,43 @@ def apply_update(
 
 def _revised(group: TaskGroup) -> dict[str, Any]:
     return {name: getattr(group, name) for name in REVISED_FIELDS}
+
+
+def owning_groups(board: Board, handles: Collection[str], groups: Collection[str]) -> list[str]:
+    """The groups a turn is known to be about before its update is asked, in the board's order.
+
+    ``handles`` are the delegated runs whose result opened the turn; each belongs to the
+    group whose step placed it. ``groups`` are the ones the reader's Move on named. A run
+    no step has placed yet, and a group the board no longer holds, name nothing.
+    """
+    runs = {(kind, ident) for kind, _, ident in (handle.partition(":") for handle in handles)}
+    return [
+        group.id
+        for group in board.groups
+        if group.id in groups or any((link.kind, link.id) in runs for step in group.steps for link in step.tasks)
+    ]
+
+
+def confine_update(args: Mapping[str, Any], owners: Collection[str]) -> dict[str, Any]:
+    """The update with only what a turn that belongs to ``owners`` may write.
+
+    It keeps the steps on those groups and every step that places work, wherever that
+    goes -- a dispatch has to land somewhere, a new group included -- and the ``groups``
+    changes on the groups those steps keep. What it says about any other matter is
+    dropped rather than refused: the turn was not about it. Arguments of the wrong shape
+    pass through whole, for the rules to refuse with their own reason. No owners, no
+    change.
+    """
+    out = dict(args)
+    steps, changes = args.get("steps"), args.get("groups")
+    if not owners or not isinstance(steps, list) or not all(isinstance(raw, Mapping) for raw in steps):
+        return out
+    owned = list(owners)
+    out["steps"] = [raw for raw in steps if raw.get("group") in owned or raw.get("tasks")]
+    if isinstance(changes, list) and all(isinstance(raw, Mapping) for raw in changes):
+        moved = owned + [raw.get("group") for raw in out["steps"]]
+        out["groups"] = [raw for raw in changes if raw.get("group") in moved]
+    return out
 
 
 def set_group_status(board: Board, group_id: str, status: str, *, now_ms: int) -> Board:

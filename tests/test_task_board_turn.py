@@ -11,7 +11,8 @@ import pytest
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.agent.task_board import service as board_service
-from raven.agent.task_board.store import BOARD_FILENAME, load_board
+from raven.agent.task_board.board import Board, ProgressStep, TaskGroup, TaskLink
+from raven.agent.task_board.store import BOARD_FILENAME, load_board, save_board
 from raven.config.schema import TaskBoardConfig
 from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
 from raven.contracts.tool import Tool
@@ -389,3 +390,81 @@ async def test_a_note_ack_the_disk_refuses_leaves_the_reply_and_shows_the_note_a
     turns = [r for r in provider.requests if r["purpose"] != "task_board"]
     note = 'the user set aside "Which fix should I apply?" (Fix bug A)'
     assert note in _text(turns[2]["messages"][-1]), "a note never acknowledged is shown again"
+
+
+async def test_a_silent_turn_makes_no_board_call(tmp_path):
+    """The host answered with its silence marker and started nothing: no step can
+    say what moved, so the post-turn call is not made at all."""
+    provider = Recording([LLMResponse(content="[SILENT]"), BOARD_REPLY])
+    agent = _agent(tmp_path, provider)
+
+    await agent._process_message(_turn("Anything new on the login bug?"), session_key=KEY)
+    await _drain(agent)
+
+    assert [r["purpose"] for r in provider.requests] == ["main"]
+    assert not (agent.sessions.session_dir(KEY) / BOARD_FILENAME).exists()
+
+
+def _placed_and_another(agent: AgentLoop) -> None:
+    """g_a placed the sub-agent run an earlier turn started; g_b is another matter."""
+    run = TaskLink("spawn", "locate_bug", "Locate the bug")
+    placed = ProgressStep("s_a", "T0", None, "Sent a sub-agent", "Dispatched it.", [run])
+    drafted = ProgressStep("s_b", "T0", None, "Drafted", "Drafted the notes.", [])
+    groups = [
+        TaskGroup("g_a", "Fix the blank page", "A sub-agent is locating it", "running", 1, 1, [placed]),
+        TaskGroup("g_b", "Release notes", "Drafting the notes", "idle", 1, 1, [drafted]),
+    ]
+    save_board(agent.sessions.session_dir(KEY), Board(groups, []))
+
+
+def _both_moved() -> LLMResponse:
+    return _update(
+        steps=[{"group": g, "title": f"Moved {g}", "summary": "Moved.", "status": "idle"} for g in ("g_a", "g_b")]
+    )
+
+
+def _scope(instruction: str) -> str:
+    return instruction[instruction.index("[END DISPATCHES]") : instruction.index("How to write the update:")]
+
+
+async def test_a_delegated_result_keeps_its_turns_board_to_the_group_that_placed_the_run(tmp_path):
+    provider = Recording([LLMResponse(content="The sub-agent found the empty token."), _both_moved()])
+    agent = _agent(tmp_path, provider)
+    _placed_and_another(agent)
+    result = TurnRequest(
+        origin=Origin.SUBAGENT,
+        source=Source(channel="test", chat_id="c1", sender_id="subagent", chat_type=ChatType.DM),
+        text="[Subagent 'Locate the bug' completed successfully]\n\nResult: the restored token is empty.",
+        delegated={"kind": "spawn", "label": "Locate the bug", "status": "ok", "node_id": "locate_bug"},
+    )
+
+    await agent._process_message(result, session_key=KEY, origin=Origin.SUBAGENT)
+    await _drain(agent)
+
+    assert "g_a" in _scope(_text(provider.requests[1]["messages"][-1]))
+    assert [len(g.steps) for g in load_board(agent.sessions.session_dir(KEY)).groups] == [2, 1]
+
+
+async def test_a_move_on_keeps_its_turns_board_to_the_group_it_named(tmp_path):
+    provider = Recording([LLMResponse(content=ANSWER), _both_moved()])
+    agent = _agent(tmp_path, provider)
+    _placed_and_another(agent)
+    await agent.task_board.move_on(KEY, "g_b")
+
+    await agent._process_message(_turn("Draft them for Friday."), session_key=KEY)
+    await _drain(agent)
+
+    assert "g_b" in _scope(_text(provider.requests[1]["messages"][-1]))
+    assert [len(g.steps) for g in load_board(agent.sessions.session_dir(KEY)).groups] == [1, 2]
+
+
+async def test_a_turn_the_user_started_with_nothing_picked_keeps_every_group_it_moved(tmp_path):
+    provider = Recording([LLMResponse(content=ANSWER), _both_moved()])
+    agent = _agent(tmp_path, provider)
+    _placed_and_another(agent)
+
+    await agent._process_message(_turn("Where do the fix and the notes stand?"), session_key=KEY)
+    await _drain(agent)
+
+    assert _scope(_text(provider.requests[1]["messages"][-1])) == "[END DISPATCHES]\n\n"
+    assert [len(g.steps) for g in load_board(agent.sessions.session_dir(KEY)).groups] == [2, 2]

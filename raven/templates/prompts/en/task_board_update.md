@@ -11,7 +11,7 @@ Handles this update must place, each on exactly one step:
 [BEGIN DISPATCHES]
 {dispatches}
 [END DISPATCHES]
-
+{scope}
 How to write the update:
 - A group is a matter the user is pursuing -- a party, a bug fix, a release -- not one action inside it. Title it by the matter ("Saturday birthday party", not "Find cake shops"), and put every later turn about the same matter in that group, whichever part of it the turn moved.
 - Lengths are counted in words, and each Chinese, Japanese or Korean character counts as one word. A title is at most 20 words, and a group's summary and each question at most 50; a step's summary has no limit. Write them in the language of the conversation.

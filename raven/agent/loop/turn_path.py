@@ -3685,9 +3685,17 @@ class TurnPathMixin:
         # Scheduled, never awaited: the reply is already the caller's, and the
         # board settles a few seconds after it.
         if self.task_board is not None:
-            await self.task_board.ack_turn_notes(key)
+            shown = await self.task_board.ack_turn_notes(key)
             self._schedule_task_board(
-                key, turn_window, outcome, live["log"].added(), turn_received_at, req.turn_id, fallback_models
+                key,
+                turn_window,
+                outcome,
+                live["log"].added(),
+                turn_received_at,
+                req.turn_id,
+                fallback_models,
+                delegated=req.delegated,
+                moved_on=[n.group for n in shown if n.kind == "move_on" and n.group],
             )
 
         if origin is Origin.USER:
@@ -3743,6 +3751,9 @@ class TurnPathMixin:
         turn_at: str,
         turn_id: str | None,
         fallback_models: list[str] | None,
+        *,
+        delegated: dict[str, Any] | None,
+        moved_on: list[str],
     ) -> None:
         """Start the host's post-turn task board call for the turn that just ended.
 
@@ -3752,16 +3763,18 @@ class TurnPathMixin:
         after it is new. Nothing forces the tool: a forced choice voids Anthropic's
         cached messages and several providers refuse one outright. The dispatches
         come from what the turn added -- a spawn still in the history belongs to the
-        turn that made it.
+        turn that made it. ``delegated`` (the request's mark of the result that
+        opened the turn) and ``moved_on`` (the groups the notes it was shown named)
+        say what the turn is about, when anything does.
         """
-        from raven.agent.task_board.dispatches import turn_dispatches
+        from raven.agent.task_board.dispatches import delegated_handle, turn_dispatches
         from raven.agent.task_board.runner import run_post_turn, should_run
 
         board = self.task_board
         dispatches = turn_dispatches(turn_added)
         if board is None or outcome is None or outcome.last_tools is None or not window:
             return
-        if not should_run(outcome.status, dispatches):
+        if not should_run(outcome.status, dispatches, silent=outcome.silent):
             return
         tools, model = outcome.last_tools, outcome.last_model or self.model
         # The turn's own effort, or none at all: an explicit None would switch the
@@ -3794,6 +3807,8 @@ class TurnPathMixin:
                 turn_id=turn_id,
                 now_ms=board.now_ms,
                 generation=board.generation(key),
+                delegated=[handle] if (handle := delegated_handle(delegated)) else [],
+                moved_on=moved_on,
             )
         )
         self._consolidation_tasks.add(task)

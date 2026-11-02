@@ -490,7 +490,7 @@ category -- columns in the board view, sections in the list view -- with Complet
 until its switch is on. A card unfolds in place into the group's thread, the tasks tab's own;
 an event opens its conversation with the group expanded in the tasks tab and the transcript at
 that event's reply, and Move on opens it with the group held over the composer
-(`features/tasks/MoveOnBar.tsx`) for the next message. The rail button's badge counts the Needs
+(`features/tasks/MoveOnBar.tsx`) for the next message, as Answer does with its draft. The rail button's badge counts the Needs
 you cards.
 _Avoid_: "Task Board" alone for the page -- that is one conversation's board, in the tasks
 tab.

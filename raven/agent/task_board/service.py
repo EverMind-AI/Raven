@@ -30,7 +30,7 @@ from raven.agent.task_board.board import (
     set_group_status,
 )
 from raven.agent.task_board.lineage import board_lineage
-from raven.agent.task_board.notes import add_move_on, add_note, load_notes, note_line, save_notes
+from raven.agent.task_board.notes import Note, add_move_on, add_note, load_notes, note_line, save_notes
 from raven.agent.task_board.store import load_board, save_board
 
 if TYPE_CHECKING:
@@ -52,7 +52,7 @@ class TaskBoardService:
         self._queues: dict[str, asyncio.Lock] = {}
         self._generation: dict[str, int] = {}
         self._dropped: dict[str, set[str]] = {}
-        self._shown: dict[str, int] = {}
+        self._shown: dict[str, list[Note]] = {}
         self._sink: Sink | None = None
         self.now_ms = now_ms
 
@@ -164,19 +164,23 @@ class TaskBoardService:
         told of, remembered as shown until that turn acknowledges them; read again
         within it, they stay."""
         notes = load_notes(self.session_dir(session_key))
-        self._shown[session_key] = max((n.seq for n in notes), default=0)
+        self._shown[session_key] = notes
         return [note_line(n) for n in notes]
 
-    async def ack_turn_notes(self, session_key: str) -> None:
-        """A turn that showed the notes has run: drop those, keep any made since. The
-        turn awaits this after its reply, so a write the disk refuses is logged, not
-        raised: the notes stay, and the next turn is shown them again."""
-        shown = self._shown.pop(session_key, 0)
+    async def ack_turn_notes(self, session_key: str) -> list[Note]:
+        """A turn that showed the notes has run: drop those, keep any made since, and
+        return them as the turn was shown them -- a Move on made meanwhile replaces its
+        note, but the turn that ran was about the group it was told of. The turn awaits
+        this after its reply, so a write the disk refuses is logged, not raised: the
+        notes stay, and the next turn is shown them again."""
+        shown = self._shown.pop(session_key, [])
         if not shown:
-            return
+            return []
+        last = max(n.seq for n in shown)
         async with self.lock(session_key):
             directory = self.session_dir(session_key)
             try:
-                save_notes(directory, [n for n in load_notes(directory) if n.seq > shown])
+                save_notes(directory, [n for n in load_notes(directory) if n.seq > last])
             except OSError as exc:
                 logger.warning("Task board notes for {} were not acknowledged: {}", session_key, exc)
+        return shown

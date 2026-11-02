@@ -362,6 +362,16 @@ describe('the task board', () => {
     store.lendAnswer(null)
   })
 
+  it('Answer holds the group as the move-on of the conversation on screen', async () => {
+    store.lendAnswer(() => {})
+    board.groups = [asking(group('a', NOW - 3e6, 'needs_you'), ['Which fix?'])]
+    await draw()
+
+    fireEvent.click(document.querySelector('.tkaskbtn[data-kind="answer"]') as HTMLElement)
+    expect(store.moveOnFor('s1')).toEqual({ sessionKey: 's1', groupId: 'a', title: 'Matter a', summary: 'where a stands' })
+    store.lendAnswer(null)
+  })
+
   it('a group that asks no question keeps the one Ignore, which sets it idle', async () => {
     board.groups = [group('a', NOW - 3e6, 'needs_you')]
     await draw()

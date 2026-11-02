@@ -596,6 +596,20 @@ describe('the page', () => {
     expect(drafts[0]).toContain('2. Ship today?')
   })
 
+  it('Answer from the page holds the group in the card s conversation, as Move on does', async () => {
+    vi.spyOn(registry, 'switchTo').mockImplementation(async (s) => { setCurrent(s.id) })
+    vi.spyOn(ws, 'pick').mockImplementation(() => {})
+    tasks.lendAnswer(() => {})
+    railRows = [{ id: 'web:a', title: 'Chat a' }]
+    const root = await mount()
+    const thread = await unfold(root, 'g1')
+
+    fireEvent.click(thread.querySelector<HTMLButtonElement>('.tkaskbtn[data-kind="answer"]')!)
+    await settle()
+
+    expect(tasks.moveOnFor('web:a')?.groupId).toBe('g1')
+  })
+
   it('an unfolded card s board is read again with every refresh, a folded one s never', async () => {
     page.show('tasksBoardPage')
     const root = await mount()

@@ -151,8 +151,11 @@ export function lendAnswer(fn: Answer | null): void {
   answerVerb = fn
 }
 
-export function answer(group: TaskGroup): void {
+/* The answer is a message about this group, so it is held as the move-on too:
+   the server is told as it goes, and its turn is kept to the group. */
+export function answer(sessionKey: string | null, group: TaskGroup): void {
   if (!answerVerb) return
+  if (sessionKey) hold(sessionKey, group)
   const draft = answerDraft(group)
   answerVerb(draft.text, draft.caret)
 }
@@ -169,8 +172,12 @@ export function lendFocus(fn: (() => void) | null): void {
    the message goes (`spendMoveOn`), not before, so a bar put away tells it
    nothing. */
 export function moveOn(sessionKey: string, group: Pick<TaskGroup, 'id' | 'title' | 'summary'>): void {
-  patch({ moveOn: { sessionKey, groupId: group.id, title: group.title, summary: group.summary } })
+  hold(sessionKey, group)
   focusVerb?.()
+}
+
+function hold(sessionKey: string, group: Pick<TaskGroup, 'id' | 'title' | 'summary'>): void {
+  patch({ moveOn: { sessionKey, groupId: group.id, title: group.title, summary: group.summary } })
 }
 
 export function moveOnFor(sessionKey: string | null): MoveOn | null {

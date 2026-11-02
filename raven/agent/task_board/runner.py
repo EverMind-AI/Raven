@@ -6,7 +6,9 @@ tool -- the choice stays the turn's own -- so an answer in text is asked again. 
 arguments are checked whole by :func:`apply_update`; a refusal goes back to the
 model with its reason, up to :data:`MAX_ATTEMPTS` times. When no update can be
 had, the turn's dispatches are parked in ``unassigned`` and the next update has
-to place them first -- a dispatch is never silently dropped.
+to place them first -- a dispatch is never silently dropped. A turn known to be
+about some groups -- a delegated result's, a Move on's -- has its update
+confined to them, and to wherever it places its dispatches, before it is checked.
 
 Updates of one session run one at a time, so the next turn's update is built
 on this one's result. Nothing here touches the session's messages.
@@ -27,6 +29,8 @@ from raven.agent.task_board.board import (
     UpdateRejectedError,
     apply_update,
     board_to_dict,
+    confine_update,
+    owning_groups,
 )
 from raven.agent.task_board.service import TaskBoardService
 from raven.agent.task_board.tool import TOOL_NAME
@@ -36,14 +40,17 @@ from raven.i18n import prompt
 MAX_ATTEMPTS = 3
 OPEN_STEPS_SHOWN = 2
 TEMPLATE = "task_board_update"
+SCOPE_TEMPLATE = "task_board_scope"
 
 _PROSE = "Answer with a task_board call (action=update), not with text."
 _NOT_UPDATE = "Only action=update is accepted here; the board is already in the instruction above."
 
 
-def should_run(status: str, dispatches: Sequence[Dispatch]) -> bool:
-    """A turn that answered keeps the board; one that failed does only if it dispatched work."""
-    return status == "completed" or bool(dispatches)
+def should_run(status: str, dispatches: Sequence[Dispatch], *, silent: bool = False) -> bool:
+    """A turn that answered keeps the board, unless its answer was the silence marker: the
+    host saying the turn has nothing to show leaves no progress to record. A turn that
+    dispatched work always does, failed or silent, since the work still needs placing."""
+    return bool(dispatches) or (status == "completed" and not silent)
 
 
 def _snapshot(board: Board) -> str:
@@ -66,8 +73,13 @@ def _handles(board: Board, dispatches: Sequence[Dispatch]) -> str:
     return "\n".join(lines) or "(none)"
 
 
-def build_instruction(board: Board, dispatches: Sequence[Dispatch]) -> str:
-    return prompt(TEMPLATE).format(board=_snapshot(board), dispatches=_handles(board, dispatches))
+def _scope(owners: Sequence[str]) -> str:
+    # Ids alone: a title is text an earlier call wrote, and only the record is fenced.
+    return f"\n{prompt(SCOPE_TEMPLATE).strip().format(groups=', '.join(owners))}\n" if owners else ""
+
+
+def build_instruction(board: Board, dispatches: Sequence[Dispatch], owners: Sequence[str] = ()) -> str:
+    return prompt(TEMPLATE).format(board=_snapshot(board), dispatches=_handles(board, dispatches), scope=_scope(owners))
 
 
 def _assistant_row(response: LLMResponse, call: ToolCallRequest) -> dict[str, Any]:
@@ -105,9 +117,14 @@ async def _ask(
     turn_at: str,
     turn_id: str | None,
     now_ms: Callable[[], int],
+    owners: list[str],
 ) -> dict[str, Any] | None:
-    """Up to MAX_ATTEMPTS asks; the arguments of an update the board accepted, or ``None``."""
-    rows = list(window) + [{"role": "user", "content": build_instruction(board, dispatches)}]
+    """Up to MAX_ATTEMPTS asks; the arguments of an update the board accepted, or ``None``.
+
+    A turn that belongs to ``owners`` has its update confined to them before it is
+    checked, so what would be dropped anyway never costs a refusal.
+    """
+    rows = list(window) + [{"role": "user", "content": build_instruction(board, dispatches, owners)}]
     for _ in range(MAX_ATTEMPTS):
         try:
             response = await call(rows)
@@ -125,12 +142,17 @@ async def _ask(
         if args.get("action") != "update":
             result = _NOT_UPDATE
         else:
+            confined = confine_update(args, owners)
             try:
-                apply_update(board, args, dispatches, turn_at=turn_at, turn_id=turn_id, now_ms=now_ms())
+                apply_update(board, confined, dispatches, turn_at=turn_at, turn_id=turn_id, now_ms=now_ms())
             except UpdateRejectedError as exc:
                 result = f"Rejected: {exc}. Call task_board again with action=update."
             else:
-                return args
+                if confined != args:
+                    logger.info(
+                        "Task board update for {} kept to {}; the rest was about other matters", session_key, owners
+                    )
+                return confined
         rows += [
             _assistant_row(response, tool_call),
             {"role": "tool", "tool_call_id": tool_call.id, "name": TOOL_NAME, "content": result},
@@ -149,6 +171,8 @@ async def run_post_turn(
     turn_id: str | None,
     now_ms: Callable[[], int],
     generation: int,
+    delegated: Sequence[str] = (),
+    moved_on: Sequence[str] = (),
 ) -> Board | None:
     """Keep the board for the turn that just ended; the board written, or ``None`` when no update was had.
 
@@ -162,11 +186,18 @@ async def run_post_turn(
     ``generation`` is the service's count of clears as the turn ended, read by
     the caller when it schedules this update: an update still waiting for the
     queue when a clear lands belongs to the cleared conversation too.
+
+    ``delegated`` names the run whose result opened the turn, and ``moved_on``
+    the groups the reader's Move on named: the groups they resolve to are the
+    ones the turn belongs to, and its update is confined to them and to wherever
+    it places the work it started. They are resolved on the board the queue
+    hands over, where the update before this one has placed its runs.
     """
     async with service.queue(session_key):
         try:
+            board = service.load(session_key)
             args = await _ask(
-                service.load(session_key),
+                board,
                 session_key=session_key,
                 call=call,
                 window=window,
@@ -174,6 +205,7 @@ async def run_post_turn(
                 turn_at=turn_at,
                 turn_id=turn_id,
                 now_ms=now_ms,
+                owners=owning_groups(board, delegated, moved_on),
             )
         except Exception:
             logger.opt(exception=True).warning("Task board update for {} failed", session_key)

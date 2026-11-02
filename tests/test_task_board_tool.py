@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from raven.agent.task_board import service as board_service
 from raven.agent.task_board.board import Board, Dispatch, ProgressStep, TaskGroup, UpdateRejectedError, apply_update
 from raven.agent.task_board.notes import NOTES_FILENAME
 from raven.agent.task_board.service import TaskBoardService
@@ -284,3 +285,34 @@ async def test_moving_on_a_group_the_board_lacks_is_refused(sessions):
     with pytest.raises(KeyError):
         await service.move_on(KEY, "g_nope")
     assert service.turn_notes(KEY) == []
+
+
+async def test_a_turn_hears_which_notes_it_acknowledged_as_it_was_shown_them(sessions):
+    """A Move on made while the turn ran replaces the note the turn was shown, and waits
+    for the next turn; the turn that ran was still about the group it was told of."""
+    service = TaskBoardService(sessions)
+    groups = [_waiting("g_a", "Fix bug A", []), _waiting("g_b", "Release notes", [])]
+    save_board(sessions.session_dir(KEY), Board(groups, []))
+    await service.move_on(KEY, "g_b")
+    service.turn_notes(KEY)
+    await service.move_on(KEY, "g_a")
+
+    shown = await service.ack_turn_notes(KEY)
+
+    assert [(n.kind, n.group) for n in shown] == [("move_on", "g_b")]
+    assert service.turn_notes(KEY) == ['Task board: the user\'s message moves on "Fix bug A" (g_a).']
+    assert await service.ack_turn_notes(OTHER) == [], "a turn shown nothing acknowledges nothing"
+
+
+async def test_an_ack_the_disk_refuses_still_says_what_the_turn_was_shown(sessions, monkeypatch):
+    service = TaskBoardService(sessions)
+    save_board(sessions.session_dir(KEY), Board([_waiting("g_a", "Fix bug A", [])], []))
+    await service.move_on(KEY, "g_a")
+    service.turn_notes(KEY)
+
+    def refuse(*_args):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(board_service, "save_notes", refuse)
+
+    assert [n.group for n in await service.ack_turn_notes(KEY)] == ["g_a"]

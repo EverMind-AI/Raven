@@ -1,4 +1,5 @@
-"""Which spawn calls and DAG runs a turn dispatched, read off its own tool rows.
+"""Which spawn calls and DAG runs a turn dispatched, read off its own tool rows, and
+which one a delegated result brings back when it opens a turn.
 
 A dispatch is known by the receipt its tool returned the moment the work was
 accepted. The managers write those sentences, so they are parsed here, in one
@@ -58,6 +59,20 @@ def _arguments(call: Mapping[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def delegated_handle(mark: Mapping[str, Any] | None) -> str | None:
+    """The handle of the run whose result opened a turn, read off its request's mark
+    (``TurnRequest.delegated``): the one the turn that dispatched it placed. A graph is
+    placed whole, so a node's report names its run. A result with no run to name -- a
+    spawn whose origin carried no node id, an instance's unprompted turn -- names none."""
+    if not mark:
+        return None
+    if mark.get("kind") == "spawn" and mark.get("node_id"):
+        return f"spawn:{mark['node_id']}"
+    if mark.get("kind") == "dag" and mark.get("run_id"):
+        return f"dag:{mark['run_id']}"
+    return None
 
 
 def turn_dispatches(messages: Sequence[Mapping[str, Any]]) -> list[Dispatch]:

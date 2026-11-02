@@ -115,3 +115,16 @@ def test_the_zh_instruction_keeps_each_question_with_its_own_matter(zh):
     questions_rule = text[text.index("- `questions`：") : text.index("- `tasks`：")]
     assert "列出回复里就这件事问用户的每个问题" in questions_rule
     assert "问别的事的问题归那件事：新问的写在那个任务的事件里，只是重复之前问过的就不必写。" in questions_rule
+
+
+def test_the_zh_instruction_names_the_tasks_a_scoped_turn_belongs_to(zh):
+    board = Board([_group("g_x", "整理发布说明", "写好初稿")], [])
+
+    text = build_instruction(board, [], owners=["g_x"])
+
+    scope = text[text.index("[END DISPATCHES]") : text.index("怎么写这次更新：")]
+    assert "这一轮属于下面这些任务" in scope and "g_x" in scope
+    assert "只给它们写事件，再加上每个待放置句柄所在的任务" in scope
+    assert text.count("整理发布说明") == 1, "a title stays inside the record"
+    plain = build_instruction(board, [])
+    assert plain[plain.index("[END DISPATCHES]") : plain.index("怎么写这次更新：")] == "[END DISPATCHES]\n\n"

@@ -1,0 +1,1 @@
+This turn belongs to these groups -- the one that placed the run whose result opened it, or the one the user picked on the board: {groups}. Give a step only to them, and to the group each listed handle goes on, a new one included; leave every other group, and any other new matter, out of this update.
