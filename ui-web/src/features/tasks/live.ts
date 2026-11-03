@@ -19,6 +19,8 @@
  * frame: what `tasks.list` answers over what the frames already said.
  */
 
+import { attemptOrder, attemptsOf, instanceOf } from '../../lib/attempts'
+
 import type {
   DagNodeUpdatedEvent, DagRunCompletedEvent, DagRunReplannedEvent, DagRunStartedEvent, SubagentStatusEvent,
 } from '../../rpc/generated'
@@ -172,15 +174,30 @@ export function applyNodeUpdated(rows: readonly TaskRow[], p: NodeUpdatedPayload
   if (at < 0) return { rows: [...rows] }
   const next = rows.map((row) => {
     if (row.kind !== 'dag' || row.id !== p.run_id) return row
-    const nodes = row.nodes.map((n) => (n.node_id === p.node
-      ? {
+    const nodes = row.nodes.map((n) => {
+      if (n.node_id !== p.node) return n
+      const held = n.attempt_agents
+      const history = attemptsOf(p.attempt_agents)
+      /* A frame that cannot claim a newer attempt than the node holds is from
+         the attempt it has moved past -- the frames of the agent that gave up
+         can still be in flight when the next one starts -- so it moves nothing. */
+      const order = attemptOrder(held, history)
+      if (order === 'stale') return n
+      /* A longer history is a later attempt, and it supersedes what the node says
+         however that attempt ended: identity, status and timing move together. */
+      const newer = order === 'newer'
+      return {
         ...n,
         status: p.status,
-        started_at: p.started_at ?? n.started_at,
-        ended_at: p.ended_at ?? n.ended_at,
+        started_at: newer ? (p.started_at ?? null) : (p.started_at ?? n.started_at),
+        ended_at: newer ? (p.ended_at ?? null) : (p.ended_at ?? n.ended_at),
+        ...(p.subagent !== undefined ? { agent: p.subagent } : {}),
+        ...instanceOf(p),
+        ...(p.instance_auto !== undefined ? { instance_auto: p.instance_auto } : {}),
+        ...(history !== undefined ? { attempt_agents: history } : {}),
         ...outcomeOf(p),
       }
-      : n))
+    })
     return { ...row, nodes, counts: countsOf(nodes), status: deriveStatus(nodes) }
   })
   return { rows: next, refetch: NODE_SETTLED.has(p.status) ? { kind: 'dag', id: p.run_id } : undefined }
@@ -200,7 +217,27 @@ export function applyRunCompleted(rows: readonly TaskRow[], p: RunCompletedPaylo
   const nodes = files.length
     ? row.nodes.map((n) => {
       const f = files.find((x) => x.node === n.node_id)
-      return f ? { ...n, status: f.status, error: f.error ?? n.error, ...outcomeOf(f) } : n
+      if (!f) return n
+      const held = n.attempt_agents
+      const history = attemptsOf(f.attempt_agents)
+      /* The manifest of an attempt the node has moved past says what that
+         attempt ended as, not what the node is doing now. */
+      const order = attemptOrder(held, history)
+      if (order === 'stale') return n
+      const newer = order === 'newer'
+      return {
+        ...n,
+        status: f.status,
+        /* The frame carries no node timings, so a newer attempt it names keeps
+           none rather than the previous attempt's. */
+        ...(newer ? { started_at: null, ended_at: null } : {}),
+        ...(f.subagent !== undefined ? { agent: f.subagent } : {}),
+        ...instanceOf(f),
+        ...(f.instance_auto !== undefined ? { instance_auto: f.instance_auto } : {}),
+        ...(history !== undefined ? { attempt_agents: history } : {}),
+        error: f.error ?? n.error,
+        ...outcomeOf(f),
+      }
     })
     : row.nodes
   const next: TaskRow = {

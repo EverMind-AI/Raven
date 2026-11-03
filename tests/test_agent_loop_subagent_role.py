@@ -447,3 +447,30 @@ def test_a2a_send_is_registered_only_with_a_peer_configured(workspace) -> None:
 
     with_peer = A2aConfig(peers=[A2aPeerConfig(origin="https://peer.example.com")])
     assert _loop(workspace, a2a_config=with_peer).tools.has("a2a_send")
+
+
+def test_every_wired_graph_tool_can_take_a_reassign(workspace) -> None:
+    """Both graph tool instances carry the move surface, with separate run bookkeeping.
+
+    A playbook's private tool dispatches its own runs; a move decided for one of
+    them has to be admitted against that instance's desk, outbox and frozen
+    admission data. Wiring the two from one class is what makes that possible,
+    and the separate dicts are what keep one run's move out of the other's state.
+    """
+    loop = _loop(workspace, playbook_config=PlaybookConfig(enabled=True))
+    registered = loop.tools.get("run_subagent_dag")
+    private = loop._playbooks.dag_tool
+
+    assert registered is not None, "baseline: the model's graph tool must be registered"
+    assert private is not None, "baseline: a playbook-enabled loop must build its own graph tool"
+    assert registered is not private
+
+    for tool in (registered, private):
+        assert callable(tool.prepare_reassign)
+        assert callable(tool.commit_reassign)
+        assert tool._run_contexts == {}
+        assert tool._desks == {}
+
+    assert registered._run_contexts is not private._run_contexts
+    assert registered._desks is not private._desks
+    assert registered._outboxes is not private._outboxes

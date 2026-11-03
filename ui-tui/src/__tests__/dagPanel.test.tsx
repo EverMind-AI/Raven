@@ -938,3 +938,90 @@ describe('a run no branch touched', () => {
     )
   })
 })
+
+// A node handed to another agent. Its row keeps naming the agent running it now,
+// where it always did; the history is detail, so it lives in the block the row
+// opens and costs the collapsed row nothing.
+describe('DagPanel on a reassigned node', () => {
+  beforeEach(() => {
+    $dagOpenNodes.set(new Set())
+  })
+
+  const MOVED: DagRunState = {
+    runId: 'dag-6',
+    done: false,
+    nodes: [
+      {
+        ...node('fix', 'running', [], 'beta'),
+        attemptAgents: ['alpha', 'alpha', 'beta'],
+        instance: 'fix-minted'
+      }
+    ]
+  }
+
+  it('keeps the row on the agent running it now, off the history', () => {
+    const f = frame(<DagPanel run={MOVED} t={DEFAULT_THEME} width={80} />)
+
+    expect(f).toMatch(/fix\s+beta/)
+    expect(f).not.toContain('attempts')
+  })
+
+  it('names every attempt in the expanded block', () => {
+    $dagOpenNodes.set(new Set([dagNodeKey('dag-6', 'fix')]))
+
+    expect(frame(<DagPanel run={MOVED} t={DEFAULT_THEME} width={80} />)).toContain('attempts: alpha x2 -> beta')
+  })
+
+  it('keeps its reserved height: the history rides the block it already opens', () => {
+    const withoutHistory: DagRunState = {
+      ...MOVED,
+      nodes: [{ ...MOVED.nodes[0]!, attemptAgents: undefined }]
+    }
+
+    for (const open of [new Set<string>(), new Set([dagNodeKey('dag-6', 'fix')])]) {
+      $dagOpenNodes.set(open)
+      const msgWith = (run: DagRunState): Msg => ({
+        episodes: [{ index: 0, tools: [{ dag: run, id: 't0', name: 'run_subagent_dag', ok: true, summary: 'dag' }] }],
+        kind: 'episodes',
+        role: 'assistant',
+        text: ''
+      })
+      const drawn = (run: DagRunState) =>
+        frame(<EpisodeView cols={92} episodes={msgWith(run).episodes!} t={DEFAULT_THEME} />)
+      const height = (run: DagRunState) =>
+        estimatedMsgHeight(msgWith(run), 92, { compact: false, dagOpen: open, details: false })
+
+      expect(
+        drawn(MOVED)
+          .split('\n')
+          .filter(line => line.trim()).length
+      ).toBe(height(MOVED))
+      expect(height(MOVED)).toBe(height(withoutHistory))
+    }
+  })
+
+  it('draws every line inside a narrow frame, a long history included', () => {
+    $dagOpenNodes.set(new Set([dagNodeKey('dag-6', 'fix')]))
+    const long = `agent-${'x'.repeat(120)}`
+    const run: DagRunState = {
+      ...MOVED,
+      nodes: [{ ...MOVED.nodes[0]!, attemptAgents: [long, long, long, 'beta'] }]
+    }
+
+    for (const cols of [36, 44, 60]) {
+      for (const line of frame(<DagPanel run={run} t={DEFAULT_THEME} width={cols} />).split('\n')) {
+        expect(stringWidth(line), line).toBeLessThanOrEqual(cols)
+      }
+    }
+  })
+
+  it('draws a node that never moved exactly as it did', () => {
+    const plain: DagRunState = { ...MOVED, nodes: [{ ...MOVED.nodes[0]!, attemptAgents: undefined }] }
+    $dagOpenNodes.set(new Set([dagNodeKey('dag-6', 'fix')]))
+
+    const drawn = frame(<DagPanel run={plain} t={DEFAULT_THEME} width={80} />)
+
+    expect(drawn).not.toContain('attempts')
+    expect(drawn).toContain('beta@fix-minted')
+  })
+})
