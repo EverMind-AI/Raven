@@ -1157,7 +1157,12 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
         # Read again after the last await, whichever ran: the gate's prompt and a
         # move's handshake each give other `subagents.*` writes time to land.
         entries, target = _merged_over_the_awaits(
-            target, row_before, name_before, materialized=materialized_discovered, shipped=shipped
+            target,
+            row_before,
+            name_before,
+            materialized=materialized_discovered,
+            shipped=shipped,
+            switch_row=switch is not None,
         )
         if move is not None:
             _drop_an_effort_the_move_lacks(target, move)
@@ -1180,7 +1185,13 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
 
 
 def _merged_over_the_awaits(
-    target: dict, before: dict, stored_name: str | None, *, materialized: bool, shipped: dict | None = None
+    target: dict,
+    before: dict,
+    stored_name: str | None,
+    *,
+    materialized: bool,
+    shipped: dict | None = None,
+    switch_row: bool = False,
 ) -> tuple[list[dict], dict]:
     """Re-read the agent list across the call's awaits, keeping both authors.
 
@@ -1213,11 +1224,20 @@ def _merged_over_the_awaits(
     a folder's name disk may hold the switch's stub instead, which carries the
     flag and nothing to merge onto: the folder's entry this call built replaces
     it whole, as the write would have without the await.
+
+    The flag is the one field that is never carried from the pre-await copy,
+    because it is the one a concurrent `subagents.toggle` writes. A stub still on
+    disk when this returns is the switch as it now stands, so its flag wins; a
+    stub that is gone was switched ON, which is spelled by removing the row at
+    all (the folder governs), and a row put back with the old flag would switch
+    the agent off again after that toggle had answered success.
     """
     entries = _read_agents()
     current = next((e for e in entries if e.get("name") == stored_name), None)
     if current is None:
         if materialized:
+            if switch_row:
+                target["enabled"] = True
             entries.append(target)
             return entries, target
         raise SubagentNotFoundError(
@@ -1225,6 +1245,7 @@ def _merged_over_the_awaits(
             data={"name": stored_name, "field": "name"},
         )
     if materialized and shipped is not None and _is_switch_row(current, shipped):
+        target["enabled"] = bool(current.get("enabled", False))
         return [target if e is current else e for e in entries], target
     current.update({key: value for key, value in target.items() if before.get(key) != value})
     return entries, current
@@ -1800,19 +1821,25 @@ The source is part of the key because a config row and a preset may share a
 name; one is not the other's stored menu, and a task started for one must not
 answer the other."""
 
-_MENU_READ_AT: dict[tuple[str, str], float] = {}
-"""``time.monotonic()`` when each (source, agent) menu was last read successfully.
+_MENU_READ_AT: dict[tuple[str, str], tuple[float, bool, str]] = {}
+"""``time.monotonic()``, ``ok`` and ``detail`` of each (source, agent) menu's last read.
 
-Only a successful read is recorded: a failed one leaves the next automatic ask
-free to retry, where a cooldown stamped on failure would keep answering the old
-menu as though it had just been read."""
+Recorded however the read ended, because the failure is what an automatic ask
+next has to be told: a failed read keeps the previous menu in the store, and a
+picker opening again inside the cooldown is answered from here. Stamped on
+failure as well as on success, since launching an agent that has just failed to
+start, once per open, is what the cooldown is there to stop -- so the entry has
+to carry the outcome too, or suppressing the launch would report the recorded
+menu as a fresh read."""
 
 _MENU_REFRESH_COOLDOWN_S = 5.0
-"""How long an automatic ask trusts the menu it just read.
+"""How long an automatic ask trusts the last read, answered or failed.
 
 A picker opened, closed and opened again is one reader looking at one menu; it
-should not launch the agent a second time. A manual refresh (`force`) always
-reads, because that press means the menu itself moved."""
+should not launch the agent a second time -- and an agent that just failed to
+start should not be launched again inside the same window either. Its answer is
+the outcome recorded with the stamp. A manual refresh (`force`) always reads,
+because that press means the menu itself moved."""
 
 _MENU_REFRESH_TIMEOUT_S = 60.0
 """How long a menu read may take before the caller is told it did not answer.
@@ -1892,14 +1919,22 @@ async def _read_menu_and_sync(
     at all while the store keeps the previous ones, and read off the answer every
     failure looked like news.
 
-    Stamped for the cooldown however the read ended. A failed read leaves the
-    recorded menu standing, and that is what a picker opening moments later
-    takes; launching an agent that just failed to start on every open is what
-    the cooldown is there to stop. A press of the refresh control still reads.
+    Stamped for the cooldown however the read ended, with how it ended. A failed
+    read leaves the recorded menu standing, and that is what a picker opening
+    moments later takes; launching an agent that just failed to start on every
+    open is what the cooldown is there to stop, and the outcome recorded with
+    the stamp is what the suppressed ask answers with. A press of the refresh
+    control still reads.
     """
     previous = acp_snapshot_for(cfg)
     snapshot = await record_capabilities(cfg)
-    _MENU_READ_AT[key] = time.monotonic()
+    measured = bool(getattr(snapshot, "usable", False) and getattr(snapshot, "model_menu_measured", False))
+    # Stamped for the cooldown however the read ended, with the outcome: a
+    # failed read leaves the recorded menu standing, and that is what a picker
+    # opening moments later takes -- told how this read went, so it repeats the
+    # reason instead of presenting the old menu as a fresh one. A press of the
+    # refresh control still reads.
+    _MENU_READ_AT[key] = (time.monotonic(), measured, str(getattr(snapshot, "detail", "") or ""))
     if source != "preset" and not _read_left_the_capabilities_alone(previous, acp_snapshot_for(cfg)):
         # The roster reads `stateful` and the menu from the table built the last
         # time `apply` ran, so a snapshot written now has to reach the table or
@@ -1927,8 +1962,9 @@ async def subagents_refresh_models(params: dict, *, agent_loop_factory: "AgentLo
 
     ``force`` separates the two callers. A reader pressing refresh means the menu
     moved since the last read, so it always launches. A picker opening on its own
-    does not: a menu read moments ago is taken as current rather than launching the
-    agent again. Concurrent asks for one agent share one handshake either way, and
+    does not: a read moments ago is taken as current rather than launching the
+    agent again -- and answered as it ended, so a failed one still says why.
+    Concurrent asks for one agent share one handshake either way, and
     the sync to the composed table is part of that shared read -- a read that
     outlives its last asker still leaves the store and the table agreeing. A read
     that reports the capabilities the row already held does not recompose at all:
@@ -1960,8 +1996,11 @@ async def subagents_refresh_models(params: dict, *, agent_loop_factory: "AgentLo
     task = _MENU_TASKS.get(key)
     if task is None or task.done():
         last = _MENU_READ_AT.get(key)
-        if not force and last is not None and time.monotonic() - last < _MENU_REFRESH_COOLDOWN_S:
-            return {"ok": True, "detail": "", **_recorded_menu(cfg)}
+        if not force and last is not None and time.monotonic() - last[0] < _MENU_REFRESH_COOLDOWN_S:
+            # The read this stands in for, told as it ended: a failed one leaves
+            # the recorded menu in the store, and answering `ok` would draw that
+            # menu as current and drop the reason the picker was showing.
+            return {"ok": last[1], "detail": last[2], **_recorded_menu(cfg)}
         task = asyncio.ensure_future(_read_menu_and_sync(key, cfg, source, agent_loop_factory))
         _MENU_TASKS[key] = task
         task.add_done_callback(lambda done, key=key: _forget_menu_task(key, done))

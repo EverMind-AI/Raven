@@ -1154,6 +1154,54 @@ async def test_an_edit_of_a_switched_off_folder_writes_its_whole_entry(
     assert (entry["command"], entry["description"], entry["enabled"]) == ("raven-probe {prompt_file}", "edited", False)
 
 
+async def test_a_toggle_that_lands_while_a_folder_edit_measures_is_not_undone(
+    config_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An edit that has to handshake gives a concurrent write time to land, and the
+    re-read exists so that write survives. Turning a discovered folder ON removes
+    its stored stub -- the folder governs then -- so this call finds no row under
+    the name. Putting the folder's entry back with the pre-await flag would switch
+    the agent off again, after the toggle had already answered success."""
+    from raven.acp_client.capabilities import AcpEffortChoice, CapabilitySnapshot, snapshot_fingerprint
+    from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+    vendored = ThirdPartyAcpSubagentConfig(
+        name="Raven-Probe",
+        command="raven-probe --acp",
+        description="shipped",
+    )
+    monkeypatch.setattr(
+        "raven.agent.subagent.vendored_agents.discover_product_rows",
+        lambda root=None: [vendored],
+    )
+    await subagents_toggle({"name": "Raven-Probe", "enabled": False})
+    assert any(e["name"] == "Raven-Probe" and e.get("switchOnly") for e in _stored(config_path))
+
+    async def measure(cfg, **_kw):
+        # What the toggle writes while this call awaits: the stub is removed.
+        stored = json.loads(config_path.read_text())
+        stored["subagents"]["agents"] = [a for a in stored["subagents"]["agents"] if a["name"] != "Raven-Probe"]
+        config_path.write_text(json.dumps(stored))
+        return CapabilitySnapshot(
+            agent="Raven-Probe",
+            fingerprint=snapshot_fingerprint(cfg),
+            status="ready",
+            detail="connected",
+            measured_at_ms=11,
+            effort_choices=(AcpEffortChoice(value="high", name="High"),),
+            effort_option="effort",
+        )
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", measure)
+
+    await subagents_update({"name": "Raven-Probe", "effort": "high"})
+
+    entry = next(e for e in _stored(config_path) if e["name"] == "Raven-Probe")
+    assert entry["effort"] == "high", "the edit the reader asked for is stored"
+    assert entry["enabled"] is True, "and the toggle that turned the folder on is not undone by it"
+
+
 async def test_a_vendored_override_cannot_be_renamed(
     config_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3278,9 +3326,13 @@ async def test_a_menu_read_that_fails_leaves_the_agent_table_alone_and_takes_the
     kept = SnapshotStore().load([cfg], allow_stale=True)["Helped"]
     assert (kept.status, [c.value for c in kept.model_choices]) == ("attention", ["m1"])
 
-    await subagents_refresh_models({"name": "Helped", "source": "config"}, agent_loop_factory=lambda: _Loop())
+    cooled = await subagents_refresh_models({"name": "Helped", "source": "config"}, agent_loop_factory=lambda: _Loop())
     assert launched == ["Helped"], "a picker opening right after the failed read does not launch the agent again"
     assert applied == []
+    assert cooled["ok"] is False, "a read inside the cooldown answers for the read it stands in for"
+    assert "did not start" in cooled["detail"], (
+        "and repeats why it failed, so a picker opening again does not empty the note the first read drew"
+    )
 
 
 async def test_the_menu_refresh_wrapper_carries_the_live_loop(
