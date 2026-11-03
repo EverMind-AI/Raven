@@ -1302,14 +1302,19 @@ async def session_undo(
             for m in before[len(session.messages) :]
             if m.get("role") == "user" and m.get("timestamp")
         }
-        if (board := _task_board(agent_loop)) is not None:
-            await board.drop_turns(session_key, undone)
-        else:
-            directory = mgr.session_dir(session_key)
-            current = load_board(directory)
-            kept = drop_turns(current, undone)
-            if board_to_dict(kept, revisions=True) != board_to_dict(current, revisions=True):
-                save_board(directory, kept)
+        try:
+            if (board := _task_board(agent_loop)) is not None:
+                await board.drop_turns(session_key, undone)
+            else:
+                directory = mgr.session_dir(session_key)
+                current = load_board(directory)
+                kept = drop_turns(current, undone)
+                if board_to_dict(kept, revisions=True) != board_to_dict(current, revisions=True):
+                    save_board(directory, kept)
+        except OSError as exc:
+            # The turn is gone from the transcript either way; reporting an error
+            # would invite a retry that removes another.
+            logger.warning("session.undo: failed to update the task board for {}: {}", session_key, exc)
     return {"removed": removed}
 
 
@@ -1557,7 +1562,10 @@ async def session_branch(
     mgr = manager_for(agent_loop, config)
     child = mgr.fork(session_key, title=(name or None))
     if child is not None:
-        copy_board(mgr.session_dir(session_key), mgr.session_dir(child.key))
+        try:
+            copy_board(mgr.session_dir(session_key), mgr.session_dir(child.key))
+        except OSError as exc:
+            logger.warning("session.branch: failed to copy the task board of {} to {}: {}", session_key, child.key, exc)
     if child is not None and agent_loop is not None:
         # A fork continues its parent's conversation, so it continues on the
         # parent's model; without this it would silently drop to the default.

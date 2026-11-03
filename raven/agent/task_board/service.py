@@ -205,8 +205,14 @@ class TaskBoardService:
 async def reset_for(service: TaskBoardService | None, session_key: str, session_dir: Path) -> None:
     """Empty a conversation's board and notes, as every clear of it does -- `/new` and
     ``session.clear`` alike. Through the host's service when one runs here, since the clear
-    it records turns away an update still on its way; on disk when none does."""
-    if service is not None:
-        await service.reset(session_key)
-    else:
-        reset_board(session_dir)
+    it records turns away an update still on its way; on disk when none does.
+
+    The messages are gone by the time this runs, so a board that cannot be emptied is
+    logged rather than raised: an error would report a clear that happened as failed."""
+    try:
+        if service is not None:
+            await service.reset(session_key)
+        else:
+            reset_board(session_dir)
+    except OSError as exc:
+        logger.warning("Task board for {} could not be emptied with its conversation: {}", session_key, exc)

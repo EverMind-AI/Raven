@@ -8,6 +8,7 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
+from raven.agent.task_board import files as board_files
 from raven.agent.task_board.board import Board, TaskGroup
 from raven.agent.task_board.store import BOARD_FILENAME, save_board
 from raven.cli import session_commands
@@ -381,6 +382,25 @@ def test_fork_copies_the_conversations_task_board(
     assert (manager.session_dir(f"cli:{child}") / BOARD_FILENAME).read_bytes() == (
         manager.session_dir(f"cli:{cid}") / BOARD_FILENAME
     ).read_bytes()
+
+
+def test_fork_that_cannot_copy_the_board_still_gives_the_child(
+    two_sessions: list[str], patched_workspace: Path, manager: SessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cid = two_sessions[0]
+    save_board(manager.session_dir(f"cli:{cid}"), Board([TaskGroup("g_a", "Fix bug A", "", "idle", 1, 1, [])], []))
+
+    def refuse(*_args, **_kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(board_files, "write_bytes", refuse)
+
+    r = runner.invoke(session_app, ["fork", cid])
+
+    assert r.exit_code == 0, r.stdout
+    child = r.stdout.strip().splitlines()[0].strip()
+    assert manager.exists(f"cli:{child}")
+    assert "task board" in r.stdout
 
 
 def test_fork_prefix_match(two_sessions: list[str], patched_workspace: Path) -> None:

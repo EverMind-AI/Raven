@@ -11,6 +11,7 @@ import pytest
 
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
+from raven.agent.task_board import files as board_files
 from raven.agent.task_board import service as board_service
 from raven.agent.task_board.board import Board, ProgressStep, TaskGroup, TaskLink
 from raven.agent.task_board.store import BOARD_FILENAME, load_board, save_board
@@ -492,6 +493,25 @@ async def test_new_starts_the_next_conversation_with_an_empty_board(tmp_path, mo
     assert reply == ("New session started.", [])
     assert load_board(agent.sessions.session_dir(KEY)).groups == []
     assert agent.task_board.turn_notes(KEY) == []
+
+
+async def test_new_starts_the_next_conversation_when_the_board_cannot_be_emptied(tmp_path, monkeypatch):
+    """The messages are already gone; a board that cannot be emptied must not turn the
+    clear into a failure."""
+    agent = _agent(tmp_path, Recording([LLMResponse(content=ANSWER)]))
+    monkeypatch.setattr(agent.memory_consolidator, "consolidate_unconsolidated", _consolidated)
+    _placed_and_another(agent)
+
+    def refuse(*_args, **_kwargs):
+        raise OSError(28, "No space left on device")
+
+    for name in ("write_text", "remove"):
+        monkeypatch.setattr(board_files, name, refuse)
+
+    reply = await agent._process_message(_turn("/new"), session_key=KEY)
+
+    assert reply == ("New session started.", [])
+    assert agent.sessions.get_or_create(KEY).messages == []
 
 
 async def test_an_update_still_on_its_way_at_new_writes_nothing(tmp_path, monkeypatch):

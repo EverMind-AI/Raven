@@ -563,6 +563,10 @@ host with the plugins' observers), and `raven session delete`, which runs where 
 attached, removes them itself. The store calls the observer with the outcome of every delete it is
 asked for: one the disk refused leaves the transcript, and the board stays with it; one with no
 transcript to remove still takes an orphaned board along. `session.branch` and `raven session fork` copy the board with the transcript. Compaction leaves the board alone -- surviving compaction is part of its purpose.
+Each of these edits the transcript first. A board that cannot then be written is logged as a
+warning, and the edit still answers as done: an error for an edit that happened would invite a
+retry, and a second undo removes a second turn. What that write was to change stays on the
+board -- a branch without one starts with none.
 
 6.4 **Sessions from before the board.** No file: `tasks.board` answers an empty board and
 the page draws the session's Tasks as the old flat list (5.5). No backfill.

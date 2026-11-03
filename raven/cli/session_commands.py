@@ -256,11 +256,14 @@ def session_fork(
     if child is None:
         console.print(f"[red]Cannot fork {id_or_prefix!r}: session is empty or missing[/red]")
         raise typer.Exit(code=1)
-    copy_board(manager.session_dir(key), manager.session_dir(child.key))
 
     child_bare = _bare_id(child.key)
     console.print(child_bare)
     console.print(f"[dim]  (forked from {_bare_id(key)}; use: raven agent --session {child.key})[/dim]")
+    try:
+        copy_board(manager.session_dir(key), manager.session_dir(child.key))
+    except OSError as exc:
+        console.print(f"[yellow]Its task board was not copied: {exc}[/yellow]")
 
 
 # ── export ────────────────────────────────────────────────────────────

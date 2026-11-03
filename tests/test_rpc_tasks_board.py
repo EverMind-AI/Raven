@@ -6,11 +6,13 @@ import json
 from pathlib import Path
 
 import pytest
+from loguru import logger
 
 import raven.home as raven_home_module
 from raven.agent.subagent.dag_store import DagRunStore, ensure_node_claimed, index_guard
 from raven.agent.subagent.history import SpawnRecord, dag_root, nodes_root, session_history_root
 from raven.agent.subagent.prompt_backend import LocalFileBackend
+from raven.agent.task_board import files as board_files
 from raven.agent.task_board.board import Board, Dispatch, apply_update, set_group_status
 from raven.agent.task_board.service import TaskBoardService
 from raven.agent.task_board.store import BOARD_FILENAME, load_board, save_board
@@ -423,6 +425,63 @@ async def test_undo_where_no_board_is_kept_writes_none_for_a_conversation_withou
     await session_undo({"session_id": KEY}, agent_loop_factory=lambda: loop)
 
     assert not (_dir(workspace) / BOARD_FILENAME).exists()
+
+
+@pytest.fixture
+def warned():
+    lines: list[str] = []
+    sink = logger.add(lambda m: lines.append(m.record["message"]), level="WARNING")
+    yield lines
+    logger.remove(sink)
+
+
+def _refuse_board_writes(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(*_args, **_kwargs):
+        raise OSError(28, "No space left on device")
+
+    for name in ("write_text", "write_bytes", "remove"):
+        monkeypatch.setattr(board_files, name, refuse)
+
+
+@pytest.mark.parametrize("host", [True, False], ids=["host", "no-host"])
+async def test_undo_reports_what_it_removed_when_the_board_cannot_be_written(workspace, monkeypatch, warned, host):
+    """The transcript lost the turn either way; an error would invite a retry that
+    removes another."""
+    loop = _two_turns(workspace)
+    if not host:
+        loop.task_board = None
+    save_board(_dir(workspace), Board(_board(turn_at="T1").groups + _board(turn_at="T2").groups, []))
+    _refuse_board_writes(monkeypatch)
+
+    answer = await session_undo({"session_id": KEY}, agent_loop_factory=lambda: loop)
+
+    assert answer == {"removed": 2}
+    assert any("task board" in line.lower() for line in warned)
+
+
+@pytest.mark.parametrize("host", [True, False], ids=["host", "no-host"])
+async def test_clear_reports_the_clear_when_the_board_cannot_be_emptied(workspace, monkeypatch, warned, host):
+    loop = _two_turns(workspace)
+    if not host:
+        loop.task_board = None
+    save_board(_dir(workspace), _board())
+    _refuse_board_writes(monkeypatch)
+
+    answer = await session_clear({"session_id": KEY}, agent_loop_factory=lambda: loop)
+
+    assert answer == {"session_id": KEY, "cleared": True}
+    assert any("task board" in line.lower() for line in warned)
+
+
+async def test_branch_returns_the_child_when_the_board_cannot_be_copied(workspace, monkeypatch, warned):
+    loop = _two_turns(workspace)
+    save_board(_dir(workspace), _board())
+    _refuse_board_writes(monkeypatch)
+
+    answer = await session_branch({"session_id": KEY}, agent_loop_factory=lambda: loop)
+
+    assert answer["session_id"] not in (None, KEY)
+    assert any("task board" in line.lower() for line in warned)
 
 
 def _host_session(workspace: Path, key: str, board: Board) -> None:
