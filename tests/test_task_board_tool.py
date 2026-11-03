@@ -364,6 +364,28 @@ async def test_a_delete_with_no_transcript_to_remove_still_takes_the_orphan_boar
     assert not (sessions.session_dir(KEY) / BOARD_FILENAME).exists()
 
 
+async def test_a_conversation_a_project_run_filed_takes_its_board_along_when_the_gateway_deletes_it(tmp_path):
+    """A terminal run files its sessions under its project's slug; the gateway's store has
+    none and finds such a transcript by searching every group. The board and notes beside
+    it have to be found the same way, while the transcript is still there to find."""
+    project = SessionManager(tmp_path, project_slug="proj")
+    session = project.get_or_create(KEY)
+    session.add_message("user", "hi", timestamp="2026-11-02T08:00:00")
+    project.save(session)
+    save_board(project.session_dir(KEY), Board([_waiting("g_a", "Fix bug A", ["Which fix?"])], []))
+    await TaskBoardService(project).ignore_question(KEY, "g_a", "s_g_a", "Which fix?")
+    board, notes = project.session_dir(KEY) / BOARD_FILENAME, project.session_dir(KEY) / NOTES_FILENAME
+    assert board.exists() and notes.exists()
+    gateway = SessionManager(tmp_path)
+    gateway.set_delete_observers((TaskBoardService(gateway),))
+
+    assert gateway.delete(KEY) is True
+
+    assert not board.exists()
+    assert not notes.exists()
+    assert load_board(SessionManager(tmp_path, project_slug="proj").session_dir(KEY)).groups == []
+
+
 async def test_the_stores_word_that_it_removed_the_conversation_is_final(sessions):
     """``removed`` is the outcome; the transcript is looked at only to tell a delete the disk
     refused from one that had nothing to remove."""

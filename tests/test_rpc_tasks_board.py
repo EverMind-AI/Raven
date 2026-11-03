@@ -18,7 +18,7 @@ from raven.agent.task_board.service import TaskBoardService
 from raven.agent.task_board.store import BOARD_FILENAME, load_board, save_board
 from raven.agent.task_board.tool import TaskBoardTool
 from raven.rpc.errors import InvalidParamsError
-from raven.rpc.methods.session import session_branch, session_clear, session_undo
+from raven.rpc.methods.session import session_branch, session_clear, session_delete, session_undo
 from raven.rpc.methods.tasks import (
     tasks_board,
     tasks_boards,
@@ -276,6 +276,55 @@ async def test_clear_where_no_board_is_kept_still_removes_the_one_on_disk(worksp
     await session_clear({"session_id": KEY}, agent_loop_factory=lambda: loop)
 
     assert load_board(_dir(workspace)).groups == []
+
+
+@pytest.mark.parametrize("host", ["no host", "board off"])
+async def test_delete_where_no_board_is_kept_still_removes_the_one_on_disk(workspace, host):
+    """A channel's key comes back -- the next message from that chat takes it -- so a
+    deleted conversation's board has to go even with no board service to hear the delete."""
+    _host_session(workspace, KEY, _board())
+    loop = _Loop(workspace)
+    loop.task_board = None
+
+    answer = await session_delete(
+        {"session_id": KEY}, agent_loop_factory=(lambda: loop) if host == "board off" else None
+    )
+
+    assert answer["deleted"] == KEY
+    assert not (_dir(workspace) / BOARD_FILENAME).exists()
+
+
+async def test_delete_the_disk_refused_keeps_the_board_where_no_board_is_kept(workspace, monkeypatch):
+    """A transcript the disk would not unlink is a conversation still there to list, and its
+    board stays with it."""
+    import pathlib
+
+    _host_session(workspace, KEY, _board())
+    transcript = SessionManager(workspace).session_path(KEY)
+    real_unlink = pathlib.Path.unlink
+
+    def refuse(self, *args, **kwargs):
+        if self == transcript:
+            raise PermissionError(13, "Access is denied")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", refuse)
+    answer = await session_delete({"session_id": KEY})
+    monkeypatch.undo()
+
+    assert answer == {"deleted": None, "still_on_disk": True}
+    assert [g.title for g in load_board(_dir(workspace)).groups] == ["Fix bug A"]
+
+
+async def test_delete_that_cannot_remove_the_board_still_reports_the_delete(workspace, monkeypatch, warned):
+    """The transcript is gone by then; a board the disk keeps is no reason to report a failure."""
+    _host_session(workspace, KEY, _board())
+    _refuse_board_writes(monkeypatch)
+
+    answer = await session_delete({"session_id": KEY})
+
+    assert answer["deleted"] == KEY
+    assert any("task board" in line and KEY in line for line in warned)
 
 
 async def test_undo_drops_the_undone_turns_steps(workspace):

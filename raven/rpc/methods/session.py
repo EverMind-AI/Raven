@@ -38,7 +38,7 @@ from loguru import logger
 from raven.agent import session_effort
 from raven.agent.task_board.board import board_to_dict, drop_turns
 from raven.agent.task_board.dispatches import dag_run_id_of, spawn_task_id_of
-from raven.agent.task_board.service import reset_for
+from raven.agent.task_board.service import remove_unheard, reset_for
 from raven.agent.task_board.store import copy_board, load_board, save_board
 from raven.config.loader import drain_migration_notices, load_config, raven_home
 from raven.config.raven import load_raven_config
@@ -1063,6 +1063,9 @@ async def session_delete(
         agent_loop = _safe_invoke_factory(agent_loop_factory)
         config = load_config()
         mgr = manager_for(agent_loop, config)
+        # Found while the transcript is there to find it by, as the store finds it for
+        # its observers.
+        board_dir = mgr.session_dir(session_key)
         removed = mgr.delete(session_key)
         # ``delete`` answers False both for a session that had no file -- an
         # unknown key, or one created and never saved -- and for a removal the
@@ -1070,6 +1073,9 @@ async def session_delete(
         # first is the caller's own goal, the second leaves a session that is
         # still there to list. Asking the store again is what separates them.
         still_on_disk = not removed and mgr.exists(session_key)
+        # A channel's key comes back with the chat's next message, so where no board service
+        # heard the delete the board goes here, on the terms its observer keeps.
+        remove_unheard(_task_board(agent_loop), session_key, board_dir, transcript_kept=still_on_disk)
         if agent_loop is not None:
             # Not gated on ``removed``: a session that switched model before its
             # first save has a binding in memory and no file on disk, and

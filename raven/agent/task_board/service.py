@@ -111,7 +111,7 @@ class TaskBoardService:
             save_notes(self.session_dir(session_key), [])
             await self.write(session_key, Board([], []))
 
-    def on_session_deleted(self, session_key: str, removed: bool) -> None:
+    def on_session_deleted(self, session_key: str, removed: bool, *, session_dir: Path | None = None) -> None:
         """The session store's delete observer: the board and its notes go with the
         conversation, so one that later takes the same key starts with none. Called
         synchronously by the store, so it takes no lock: the clear it records is what
@@ -120,12 +120,14 @@ class TaskBoardService:
         The store calls it with the outcome of every delete it is asked for. One the disk
         refused leaves the transcript, and the conversation with it, so its board stays;
         one with no transcript to remove -- never saved, or gone already -- still takes
-        an orphaned board along."""
+        an orphaned board along. ``session_dir`` is where the store found the session
+        before the transcript went: asked now, it would name this process's own group
+        for one another process filed under its project's slug."""
         if not removed and self._sessions.exists(session_key):
             return
         self._generation[session_key] = self.generation(session_key) + 1
         self._shown.pop(session_key, None)
-        reset_board(self.session_dir(session_key))
+        reset_board(session_dir if session_dir is not None else self.session_dir(session_key))
 
     async def drop_turns(self, session_key: str, removed: set[str]) -> Board:
         """Drop what the board recorded for the turns an undo removed.
@@ -200,6 +202,23 @@ class TaskBoardService:
             except OSError as exc:
                 logger.warning("Task board notes for {} were not acknowledged: {}", session_key, exc)
         return shown
+
+
+def remove_unheard(
+    service: TaskBoardService | None, session_key: str, session_dir: Path, *, transcript_kept: bool
+) -> None:
+    """Take a deleted conversation's board and notes along where no board service heard the
+    delete -- no host in this process, or the board off -- the way the service's observer
+    takes them where one did. ``session_dir`` is the directory resolved before the transcript
+    went; a transcript the disk kept is a conversation still there, and its board stays.
+
+    The transcript is gone by then, so a board that cannot be removed is logged, not raised."""
+    if service is not None or transcript_kept:
+        return
+    try:
+        reset_board(session_dir)
+    except OSError as exc:
+        logger.warning("session delete: the task board of {} stays in {}: {}", session_key, session_dir, exc)
 
 
 async def reset_for(service: TaskBoardService | None, session_key: str, session_dir: Path) -> None:

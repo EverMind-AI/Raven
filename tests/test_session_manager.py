@@ -808,6 +808,30 @@ def test_a_raising_observer_is_skipped_and_the_rest_still_hear(tmp_path: Path):
     assert probe.log == [("probe", "tui:obs05", True)]
 
 
+def test_an_observer_that_asks_where_the_session_lived_hears_it_from_before_the_unlink(tmp_path: Path):
+    """Once the transcript is gone the store cannot find a session another process filed
+    under its project's slug, so the directory is resolved before the unlink and handed to
+    an observer that declares ``session_dir``; one that does not is called as before."""
+    project = SessionManager(tmp_path, project_slug="proj")
+    _saved(project, "tui:obs10")
+    lived = project.session_dir("tui:obs10")
+    gateway = SessionManager(tmp_path)
+    heard: list[tuple[str, bool, Path]] = []
+
+    class _Asks:
+        def on_session_deleted(self, session_key: str, removed: bool, *, session_dir: Path) -> None:
+            heard.append((session_key, removed, session_dir))
+
+    old_style = _DeleteProbe()
+    gateway.set_delete_observers((_Asks(), old_style))
+
+    assert gateway.delete("tui:obs10") is True
+
+    assert heard == [("tui:obs10", True, lived)]
+    assert gateway.session_dir("tui:obs10") != lived, "asked now, the store has lost it"
+    assert old_style.log == [("probe", "tui:obs10", True)]
+
+
 def test_set_delete_observers_replaces_the_whole_tuple(tmp_path: Path):
     """The setter is whole-tuple replacement, idempotent: re-attaching the same
     tuple never doubles a notification, and attaching () detaches."""

@@ -223,13 +223,16 @@ def session_delete(
         console.print(f"[red]Session not found: {id_or_key!r}[/red]")
         raise typer.Exit(code=1)
 
+    # Found while the transcript is still there: a session another process filed under
+    # its project's slug is found only by its transcript, and the board sits beside it.
+    board_dir = manager.session_dir(key)
     if manager.delete(key):
         console.print(f"[green]✓[/green] Deleted session {_bare_id(key)}")
         # This process attaches no host's delete observer, so the board goes here.
         try:
-            reset_board(manager.session_dir(key))
+            reset_board(board_dir)
         except OSError as exc:
-            console.print(f"[yellow]Its task board stays in {manager.session_dir(key)}: {exc}[/yellow]")
+            console.print(f"[yellow]Its task board stays in {board_dir}: {exc}[/yellow]")
     else:
         console.print(f"[red]Failed to delete session {id_or_key!r}[/red]")
         raise typer.Exit(code=1)

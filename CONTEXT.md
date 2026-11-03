@@ -2098,8 +2098,10 @@ verdict wins.
 A plugin's session-retirement contribution (the `session_observers` kind): the session
 store calls `on_session_deleted` synchronously after it has acted on a delete, from
 whichever host surface asked. The store notifies and never waits -- an observer that
-raises is logged and skipped; no veto, no repair. For a plugin keeping per-session state
-outside the session store (an allocation ledger, a provisioned directory).
+raises is logged and skipped; no veto, no repair. One that declares `session_dir` is also
+handed the session's metadata directory as the store found it before the transcript went.
+For a plugin keeping per-session state outside the session store (an allocation ledger, a
+provisioned directory).
 
 **Visual Domain Selector** (`plugins-dist/design-engine/raven_design/selector.py`, hook seat `raven_design/plugin/hook.py`):
 The design engine's per-turn domain router, seated on the `hooks` kind

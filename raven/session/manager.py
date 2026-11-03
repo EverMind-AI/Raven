@@ -1,6 +1,7 @@
 """Session management for conversation history."""
 
 import copy
+import inspect
 import json
 import os
 import uuid
@@ -185,6 +186,18 @@ class SessionResolution:
     status: str
     key: str | None = None
     candidates: tuple[str, ...] = ()
+
+
+def _declares(method: Any, name: str) -> bool:
+    """Whether ``method`` can be handed the keyword ``name``: it declares it or takes
+    ``**kwargs``. An observer written against the paper as it stood is called the way it
+    was written, and so is one whose signature cannot be read -- a keyword it never
+    declared would fail the call, and the store would skip it."""
+    try:
+        params = inspect.signature(method).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
 def _stamp(path: Path) -> tuple[int, int] | None:
@@ -1248,10 +1261,15 @@ class SessionManager:
         Returns True only if a file was actually removed; False if no file
         existed or the removal failed. Deleting an unknown key is a safe no-op.
         Attached observers hear every delete request after the store has acted,
-        with the removal outcome; an observer that raises is logged and skipped
-        (paper: contracts/session_events.py), so none can change this verdict.
+        with the removal outcome, and the directory the session lived in when the
+        observer declares ``session_dir``; an observer that raises is logged and
+        skipped (paper: contracts/session_events.py), so none can change this verdict.
         """
         path = self.session_path(key)
+        # Resolved while the transcript is still there to find: a session another process
+        # filed under its project's slug is found only through it, and an observer that
+        # asked once it was gone would be told this process's own group instead.
+        directory = self.session_dir(key)
         self.invalidate(key)
         removed = False
         if path.exists():
@@ -1262,7 +1280,10 @@ class SessionManager:
                 logger.warning("session.delete: failed to remove file for {}", key)
         for observer in self._delete_observers:
             try:
-                observer.on_session_deleted(key, removed)
+                if _declares(observer.on_session_deleted, "session_dir"):
+                    observer.on_session_deleted(key, removed, session_dir=directory)
+                else:
+                    observer.on_session_deleted(key, removed)
             except Exception:
                 logger.exception("session.delete: observer failed for {}; the deletion stands", key)
         return removed

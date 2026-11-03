@@ -320,6 +320,25 @@ def test_delete_takes_the_conversations_task_board_along(
     assert not (manager.session_dir(key) / BOARD_FILENAME).exists()
 
 
+def test_delete_takes_the_board_of_a_session_a_project_run_filed(workspace: Path, patched_workspace: Path) -> None:
+    """`raven agent`, `tui` and `serve` file their sessions under the launch directory's
+    project slug; this command's store has none and finds the transcript by searching every
+    group, so the board beside it has to be found while the transcript is still there."""
+    project = SessionManager(workspace, project_slug="proj")
+    key = "cli:work"
+    session = project.get_or_create(key)
+    session.add_message("user", "hello")
+    project.save(session)
+    save_board(project.session_dir(key), Board([TaskGroup("g_a", "Fix bug A", "", "idle", 1, 1, [])], []))
+    board = project.session_dir(key) / BOARD_FILENAME
+
+    r = runner.invoke(session_app, ["delete", key])
+
+    assert r.exit_code == 0
+    assert not project.exists(key)
+    assert not board.exists()
+
+
 def test_delete_that_cannot_remove_the_board_still_deletes_and_says_where_it_stays(
     two_sessions: list[str], patched_workspace: Path, manager: SessionManager, monkeypatch
 ) -> None:

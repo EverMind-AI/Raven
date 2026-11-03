@@ -559,10 +559,15 @@ cleared under its own key, empty the board and its notes through one helper (`re
 update still on its way finds the clear and writes nothing. A deleted conversation takes its
 board and notes along, so a chat that later takes the same key starts with none: the host's
 service is the session store's delete observer (`on_session_deleted`, attached by a resident
-host with the plugins' observers), and `raven session delete`, which runs where no observer is
-attached, removes them itself. The store calls the observer with the outcome of every delete it is
-asked for: one the disk refused leaves the transcript, and the board stays with it; one with no
-transcript to remove still takes an orphaned board along. `session.branch` and `raven session fork` copy the board with the transcript. Compaction leaves the board alone -- surviving compaction is part of its purpose.
+host with the plugins' observers), and where no service hears the delete -- `raven session
+delete`, an RPC `session.delete` with no host or with the board off, ACP's `session/delete` on an
+engine that keeps none -- the caller removes them itself (`remove_unheard`). Each finds the board
+where the store found the transcript, before it went: a session another process filed under its
+project's slug is found only through its transcript, so the store hands the observer the
+directory it resolved before the unlink (`session_dir`), and the callers resolve theirs before
+they delete. The store calls the observer with the outcome of
+every delete it is asked for: one the disk refused leaves the transcript, and the board stays with
+it; one with no transcript to remove still takes an orphaned board along. `session.branch` and `raven session fork` copy the board with the transcript. Compaction leaves the board alone -- surviving compaction is part of its purpose.
 Each of these edits the transcript first. A board that cannot then be written is logged as a
 warning, and the edit still answers as done: an error for an edit that happened would invite a
 retry, and a second undo removes a second turn. What that write was to change stays on the

@@ -546,7 +546,15 @@ class AcpMethods:
             self._translator.release_session(session_id)
         await self._release_per_session_mcp(session_id)
         if manager is not None:
-            manager.delete(session_id)
+            from raven.agent.task_board.service import remove_unheard
+
+            # Found before the transcript goes, as the store finds it for its observers.
+            board_dir = manager.session_dir(session_id)
+            removed = manager.delete(session_id)
+            transcript_kept = not removed and manager.exists(session_id)
+            remove_unheard(
+                getattr(self._agent_loop, "task_board", None), session_id, board_dir, transcript_kept=transcript_kept
+            )
         self._titles.pop(session_id, None)
         logger.info("acp: deleted session {}", session_id)
         return {}
