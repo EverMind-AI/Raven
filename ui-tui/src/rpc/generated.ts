@@ -3931,6 +3931,7 @@ export interface TurnSendParams {
   media?: string[];
   target?: DirectTarget;
   busy?: 'inject';
+  move_on?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -8424,21 +8425,6 @@ export interface TasksIgnoreQuestionResult {
   lineage: {
     [k: string]: string;
   };
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "TasksMoveOnParams".
- */
-export interface TasksMoveOnParams {
-  session_key: string;
-  group_id: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "TasksMoveOnResult".
- */
-export interface TasksMoveOnResult {
-  noted: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

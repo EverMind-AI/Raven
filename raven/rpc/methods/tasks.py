@@ -244,25 +244,6 @@ async def tasks_ignore_question(
     return _board_answer(service.session_dir(session_key), board)
 
 
-async def tasks_move_on(
-    params: dict[str, Any],
-    *,
-    agent_loop_factory: "AgentLoopFactory | None" = None,
-) -> dict[str, Any]:
-    """The reader's next message moves a Task Group on: the next turn is told which, by id and summary."""
-    session_key = str(params.get("session_key") or "")
-    group_id = str(params.get("group_id") or "")
-    loop = _safe_invoke_factory(agent_loop_factory)
-    service = getattr(loop, "task_board", None) if loop is not None else None
-    if service is None:
-        raise InvalidParamsError("this runtime keeps no task board")
-    try:
-        await service.move_on(session_key, group_id)
-    except KeyError:
-        raise InvalidParamsError(f"no group {group_id!r} on this conversation's board") from None
-    return {"noted": True}
-
-
 def register_tasks_methods(
     dispatcher: "Dispatcher",
     *,
@@ -283,15 +264,11 @@ def register_tasks_methods(
     async def _ignore_question(params: dict) -> dict:
         return await tasks_ignore_question(params, agent_loop_factory=agent_loop_factory)
 
-    async def _move_on(params: dict) -> dict:
-        return await tasks_move_on(params, agent_loop_factory=agent_loop_factory)
-
     dispatcher.register("tasks.list", _list)
     dispatcher.register("tasks.board", _board)
     dispatcher.register("tasks.boards", _boards)
     dispatcher.register("tasks.set_group_status", _set_group_status)
     dispatcher.register("tasks.ignore_question", _ignore_question)
-    dispatcher.register("tasks.move_on", _move_on)
 
 
 __all__ = [
@@ -300,6 +277,5 @@ __all__ = [
     "tasks_boards",
     "tasks_ignore_question",
     "tasks_list",
-    "tasks_move_on",
     "tasks_set_group_status",
 ]

@@ -34,14 +34,13 @@ import type {
   TasksBoardUpdatedEvent,
   TasksSetGroupStatusResult,
   TasksIgnoreQuestionResult,
-  TasksMoveOnResult,
 } from '../../rpc/generated'
 
 export type {
   SubagentRow, TaskCounts, TaskFile, TaskKind, TaskNode, TaskReplan, TaskRow, TaskStatus,
   TasksListParams, TasksListResult,
   TaskBoard, TaskGroup, TaskGroupStatus, TaskLinkRef, ProgressStep, TasksBoardResult, TasksSetGroupStatusResult,
-  TaskBoardCard, TasksBoardsResult, TasksIgnoreQuestionResult, TasksMoveOnResult,
+  TaskBoardCard, TasksBoardsResult, TasksIgnoreQuestionResult,
 }
 
 /* The live event's payload: a conversation's board after a write. */
@@ -115,7 +114,5 @@ export interface TasksSource {
   setGroupStatus?: (sessionKey: string, groupId: string, status: 'completed' | 'idle') => Promise<TasksSetGroupStatusResult>
   /* One question the reader sets aside; a group asking nothing more goes idle. */
   ignoreQuestion?: (sessionKey: string, groupId: string, stepId: string, question: string) => Promise<TasksIgnoreQuestionResult>
-  /* The group the reader's next message moves on, told before the message goes. */
-  moveOn?: (sessionKey: string, groupId: string) => Promise<TasksMoveOnResult>
   onBoardUpdated?: (p: TasksBoardUpdatedPayload) => void
 }

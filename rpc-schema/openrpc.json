@@ -684,6 +684,14 @@
             "type": "string",
             "const": "inject"
           }
+        },
+        {
+          "name": "move_on",
+          "description": "A Task Group the message moves on, by its tasks.board id. The board notes it before the turn this message opens is submitted, so that turn is told which group it is about and neither the note nor the message can go without the other. Honoured only when the message opens a turn of its own on the main agent; a group the board does not hold costs the note, never the message.",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -10916,43 +10924,6 @@
                 "type": "string"
               },
               "description": "Each run that continued a placed run without a tool call of its own (a replan's successor, a later stint round), mapped to the placed run it descends from."
-            }
-          }
-        }
-      },
-      "errors": []
-    },
-    {
-      "name": "tasks.move_on",
-      "summary": "The reader's next message moves a Task Group on.",
-      "description": "Notes, beside the conversation's board, that the reader's next message is about this group; the next turn's runtime context names it by id, title and summary, and the note is dropped once a turn that showed it has run. A later move-on replaces one not yet shown. invalid_params for an unknown group, and on a runtime that keeps no board.",
-      "params": [
-        {
-          "name": "session_key",
-          "required": true,
-          "schema": {
-            "type": "string"
-          }
-        },
-        {
-          "name": "group_id",
-          "required": true,
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "result": {
-        "name": "TasksMoveOnResult",
-        "schema": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "noted"
-          ],
-          "properties": {
-            "noted": {
-              "type": "boolean"
             }
           }
         }

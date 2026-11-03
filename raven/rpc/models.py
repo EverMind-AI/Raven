@@ -1695,15 +1695,6 @@ class TasksIgnoreQuestionResult(_Strict):
     lineage: dict[str, str]
 
 
-class TasksMoveOnParams(_Strict):
-    session_key: str
-    group_id: str
-
-
-class TasksMoveOnResult(_Strict):
-    noted: bool
-
-
 class TasksBoardUpdatedPayload(_Strict):
     session_key: str
     board: TaskBoard
@@ -2193,6 +2184,10 @@ class TurnSendParams(_Strict):
     # at its next tool-loop gap, the way a channel's mid-turn message is
     # merged. On an idle lane it is an ordinary send.
     busy: Literal["inject"] | None = None
+    # A Task Group the message moves on. Noted on the board before the turn is
+    # submitted, so the note and the message arrive together; ignored for a
+    # message merged into a running turn or sent to an instance.
+    move_on: str | None = None
 
 
 class TurnSendResult(_Strict):
@@ -7618,7 +7613,6 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "tasks.boards": (TasksBoardsParams, TasksBoardsResult),
     "tasks.set_group_status": (TasksSetGroupStatusParams, TasksSetGroupStatusResult),
     "tasks.ignore_question": (TasksIgnoreQuestionParams, TasksIgnoreQuestionResult),
-    "tasks.move_on": (TasksMoveOnParams, TasksMoveOnResult),
 }
 
 __all__ = [

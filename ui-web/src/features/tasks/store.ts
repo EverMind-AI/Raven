@@ -198,9 +198,9 @@ export function lendFocus(fn: (() => void) | null): void {
 }
 
 /* Move on: the next message in that conversation is about this group. The
-   reader is put in the composer to write it; the server hears which group as
-   the message goes (`spendMoveOn`), not before, so a bar put away tells it
-   nothing. */
+   reader is put in the composer to write it; the server hears which group
+   with the message itself (`takeMoveOn`), not before, so a bar put away tells
+   it nothing. */
 export function moveOn(sessionKey: string, group: Pick<TaskGroup, 'id' | 'title' | 'summary'>): void {
   hold(sessionKey, group)
   focusVerb?.()
@@ -221,18 +221,14 @@ export function clearMoveOn(): void {
   if (store.get().moveOn) patch({ moveOn: null })
 }
 
-/* Lent to the send (src/app/install.ts): the message about the group is going,
-   so the server is told first and the bar is put away. A server that cannot be
-   told costs the note, never the message. */
-export async function spendMoveOn(sessionKey: string | null): Promise<void> {
+/* Lent to the send (src/app/install.ts): the message about the group is going
+   and carries it, so the bar is put away. The server notes it as the turn the
+   message opens is submitted; one that cannot costs the note, never the message. */
+export function takeMoveOn(sessionKey: string | null): string | null {
   const held = moveOnFor(sessionKey)
-  if (!held) return
+  if (!held) return null
   clearMoveOn()
-  try {
-    await source()?.moveOn?.(held.sessionKey, held.groupId)
-  } catch {
-    /* The message still goes; its turn just is not told which group. */
-  }
+  return held.groupId
 }
 
 const newestFirst = (a: TaskGroup, b: TaskGroup): number => b.created_at - a.created_at

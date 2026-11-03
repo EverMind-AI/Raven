@@ -516,7 +516,6 @@ export function createTasks(env: FixtureEnv): TasksFixture {
         }
         return { board, lineage: {} }
       },
-      'tasks.move_on': () => ({ noted: true }),
       'tasks.list': (p) => {
         const all = bySession.get(p.session_key) || []
         const filtered = p.kind && p.id ? all.filter((r) => r.kind === p.kind && r.id === p.id) : all

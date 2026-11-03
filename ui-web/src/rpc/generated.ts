@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 256 methods, 147 component schemas.
+// 255 methods, 147 component schemas.
 
 /* eslint-disable */
 /**
@@ -3237,6 +3237,7 @@ export interface TurnSendParams {
   media?: string[];
   target?: DirectTarget;
   busy?: 'inject';
+  move_on?: string;
 }
 export interface TurnSendResult {
   turn_id: string;
@@ -6404,13 +6405,6 @@ export interface TasksIgnoreQuestionResult {
     [k: string]: string;
   };
 }
-export interface TasksMoveOnParams {
-  session_key: string;
-  group_id: string;
-}
-export interface TasksMoveOnResult {
-  noted: boolean;
-}
 export interface ImportScanParams {}
 export interface ImportScanResult {
   ready: boolean;
@@ -7061,7 +7055,6 @@ export interface RpcMethods {
   'tasks.boards': { params: TasksBoardsParams; result: TasksBoardsResult };
   'tasks.set_group_status': { params: TasksSetGroupStatusParams; result: TasksSetGroupStatusResult };
   'tasks.ignore_question': { params: TasksIgnoreQuestionParams; result: TasksIgnoreQuestionResult };
-  'tasks.move_on': { params: TasksMoveOnParams; result: TasksMoveOnResult };
   'import.scan': { params: ImportScanParams; result: ImportScanResult };
   'import.run': { params: ImportRunParams; result: ImportRunResult };
   'import.status': { params: ImportStatusParams; result: ImportStatusResult };
@@ -7338,7 +7331,6 @@ export const RPC_METHODS = [
   "tasks.boards",
   "tasks.ignore_question",
   "tasks.list",
-  "tasks.move_on",
   "tasks.set_group_status",
   "terminal.resize",
   "tools.configure",

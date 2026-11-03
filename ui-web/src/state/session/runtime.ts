@@ -44,7 +44,7 @@ import { ds, sources } from '../sources'
 import { load as loadTier } from '../tier'
 import { show as toast } from '../toast'
 import { clearStaged as clearStagedWorkdir, staged as stagedWorkdir } from '../workdir'
-import { ask, noteRow, noteSay, pitch, splitAtts, unask } from './conversation'
+import { ask, noteRow, noteSay, pitch, splitAtts } from './conversation'
 import { applyUsage } from './ctxReport'
 import { generation } from './generation'
 import { beginNaming, namingDeclined } from './naming'
@@ -303,26 +303,22 @@ export const mediaOf = (text: unknown): { media?: string[] } => {
   return paths.length ? { media: paths } : {}
 }
 
-/* What a message waits on before it goes, lent at boot (src/app/install.ts)
+/* What a message carries when it goes, lent at boot (src/app/install.ts)
    rather than imported from a domain: the Task Board's Move on, which tells
-   the server which group the message is about. A message with one waits for a
-   turn of its own rather than joining the one running, which was told about
-   something else. Unlent, nothing waits. */
+   the server which group the message is about. It rides the send itself, so
+   nothing waits between the two and a Stop finds no moment where one has gone
+   without the other. A message with one waits for a turn of its own rather
+   than joining the one running, which was told about something else. Unlent,
+   nothing is carried. */
 export interface BeforeSend {
   pending: (sessionKey: string | null) => boolean
-  spend: (sessionKey: string | null) => Promise<void>
+  take: (sessionKey: string | null) => string | null
 }
 let beforeSend: BeforeSend | null = null
 
 export function lendBeforeSend(hook: BeforeSend | null): void {
   beforeSend = hook
 }
-
-/* A message waiting on `beforeSend`, per conversation, with the bubble it drew.
-   No turn exists until it goes, so a Stop in that window has nothing for the
-   server to cancel: it takes the message back instead (`stop`). */
-interface HeldSend { bubble: number | null; stopped: boolean }
-const heldSends = new Map<string, HeldSend>()
 
 /* Into the turn that is already running: the server merges it at that turn's
    next gap, so the reader can correct it while it works instead of waiting for
@@ -436,24 +432,16 @@ export function dispatchSend(text: string, failed: (e: unknown) => void): void {
      at all, and reading that as "declined" would tear down a placeholder
      while a title really is on its way. Which servers carry it is
      rpc/capabilities.ts's question; what the verdict means stays here. */
-  const go = (): void => {
-    gateway().call('turn.send', { session_key: current as string, content: text, ...mediaOf(text) })
-      .then((r) => {
-        if (ran && r.accepted !== false) rememberUsed(ran)
-        if (hasNamingFlag(r) && r.naming === false) namingDeclined(current as string)
-      })
-      .catch(failed)
-  }
-  /* A message moving a task on goes once the board is told; any other goes at
-     once, in the same tick as before. */
-  if (current && beforeSend?.pending(current)) {
-    const held: HeldSend = { bubble: viewRuntime().asked, stopped: false }
-    heldSends.set(current, held)
-    void beforeSend.spend(current).then(() => {
-      if (heldSends.get(current) === held) heldSends.delete(current)
-      if (!held.stopped) go()
+  const moveOn = current ? (beforeSend?.take(current) ?? null) : null
+  gateway()
+    .call('turn.send', {
+      session_key: current as string, content: text, ...mediaOf(text), ...(moveOn ? { move_on: moveOn } : {}),
     })
-  } else go()
+    .then((r) => {
+      if (ran && r.accepted !== false) rememberUsed(ran)
+      if (hasNamingFlag(r) && r.naming === false) namingDeclined(current as string)
+    })
+    .catch(failed)
 }
 
 /* Conversations whose staged model the server refused while they were being
@@ -492,17 +480,6 @@ export function stop(): void {
      its own, as it does when a sent turn is stopped. */
   if (!turn.cancellable()) return
   const owner = sessionCurrent()
-  const held = owner ? heldSends.get(owner) : undefined
-  if (owner && held) {
-    heldSends.delete(owner)
-    held.stopped = true
-    const rt = viewRuntime()
-    if (held.bubble !== null) unask(held.bubble)
-    if (rt.asked === held.bubble) rt.asked = null
-    turn.dispatch({ type: 'idle' })
-    drawMeter(); goState(); sessionDraw(); drain()
-    return
-  }
   const opened = viewRuntime().openedTurn
   /* The turn this stop is about: the one running here. Its id came from the
      frame that opened it -- `message.start` for a turn a send opened,

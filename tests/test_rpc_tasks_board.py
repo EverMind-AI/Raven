@@ -24,10 +24,9 @@ from raven.rpc.methods.tasks import (
     tasks_boards,
     tasks_ignore_question,
     tasks_list,
-    tasks_move_on,
     tasks_set_group_status,
 )
-from raven.rpc.models import TasksBoardResult, TasksBoardsResult, TasksIgnoreQuestionResult, TasksMoveOnResult
+from raven.rpc.models import TasksBoardResult, TasksBoardsResult, TasksIgnoreQuestionResult
 from raven.session.manager import SessionManager
 
 KEY = "web:alpha"
@@ -194,29 +193,6 @@ async def test_ignore_question_refuses_an_unknown_step_and_a_runtime_without_a_b
         )
     with pytest.raises(InvalidParamsError):
         await tasks_ignore_question({"session_key": KEY, "group_id": gid, "step_id": "s_x", "question": "Q?"})
-
-
-async def test_move_on_notes_the_group_for_the_next_turn(workspace):
-    loop = _Loop(workspace)
-    save_board(_dir(workspace), _board())
-    gid = load_board(_dir(workspace)).groups[0].id
-
-    answer = await tasks_move_on({"session_key": KEY, "group_id": gid}, agent_loop_factory=lambda: loop)
-
-    assert TasksMoveOnResult.model_validate(answer).noted is True
-    assert loop.task_board.turn_notes(KEY) == [
-        f'Task board: the user\'s message moves on "Fix bug A" ({gid}); where it stands: Review of the login fix'
-    ]
-
-
-async def test_move_on_refuses_an_unknown_group_and_a_runtime_without_a_board(workspace):
-    loop = _Loop(workspace)
-    save_board(_dir(workspace), _board())
-
-    with pytest.raises(InvalidParamsError):
-        await tasks_move_on({"session_key": KEY, "group_id": "g_nope"}, agent_loop_factory=lambda: loop)
-    with pytest.raises(InvalidParamsError):
-        await tasks_move_on({"session_key": KEY, "group_id": "g_x"})
 
 
 async def test_set_group_status_writes_and_emits_the_event(workspace):

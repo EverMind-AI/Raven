@@ -32,8 +32,6 @@ export const tasksSource: TasksSource = {
     gateway().call('tasks.set_group_status', { session_key: sessionKey, group_id: groupId, status }),
   ignoreQuestion: (sessionKey: string, groupId: string, stepId: string, question: string) =>
     gateway().call('tasks.ignore_question', { session_key: sessionKey, group_id: groupId, step_id: stepId, question }),
-  moveOn: (sessionKey: string, groupId: string) =>
-    gateway().call('tasks.move_on', { session_key: sessionKey, group_id: groupId }),
   one: (kind: TaskKind, id: string) =>
     gateway().call('tasks.list', { session_key: openKey(), kind, id })
       .then((r) => (r.tasks && r.tasks[0]) || null),

@@ -259,17 +259,10 @@ describe('answering a group that needs the user', () => {
 })
 
 /* Move on: the matter the reader's next message is about, picked on a card and
-   drawn above the composer until the message goes -- when the server is told,
-   before the message itself. */
+   drawn above the composer until the message about it goes, which carries it to
+   the server. */
 describe('moving a group on', () => {
-  const told: [string, string][] = []
   const fix = { id: 'g_1', title: 'Fix bug A', summary: 'Cause found' }
-
-  beforeEach(() => {
-    told.length = 0
-    source.moveOn = async (key, gid) => { told.push([key, gid]); return { noted: true } }
-  })
-  afterEach(() => { delete source.moveOn })
 
   it('is held for the conversation it was picked in, and survives the switch that opens it', () => {
     store.moveOn('s1', fix)
@@ -282,25 +275,15 @@ describe('moving a group on', () => {
     expect(store.moveOnFor('s1')).toBeNull()
   })
 
-  it('tells the server once, as the message about it goes, and is spent', async () => {
+  it('is taken once, by the message about it, and is spent', () => {
     store.moveOn('s1', fix)
 
     expect(store.moveOnPending('s2')).toBe(false)
-    await store.spendMoveOn('s2')
-    expect(told).toEqual([])
+    expect(store.takeMoveOn('s2')).toBeNull()
     expect(store.moveOnPending('s1')).toBe(true)
-    await store.spendMoveOn('s1')
-    await store.spendMoveOn('s1')
+    expect(store.takeMoveOn('s1')).toBe('g_1')
+    expect(store.takeMoveOn('s1')).toBeNull()
 
-    expect(told).toEqual([['s1', 'g_1']])
-    expect(store.moveOnFor('s1')).toBeNull()
-  })
-
-  it('lets the message go even when the server cannot be told', async () => {
-    source.moveOn = async () => { throw new Error('down') }
-    store.moveOn('s1', fix)
-
-    await expect(store.spendMoveOn('s1')).resolves.toBeUndefined()
     expect(store.moveOnFor('s1')).toBeNull()
   })
 })

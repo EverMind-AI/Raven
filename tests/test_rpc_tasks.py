@@ -1535,7 +1535,6 @@ async def test_register_binds_the_method_name_to_the_reader(monkeypatch: pytest.
         "tasks.boards",
         "tasks.set_group_status",
         "tasks.ignore_question",
-        "tasks.move_on",
     }
     assert await handlers["tasks.list"]({"session_key": ""}) == {"tasks": []}
     assert (await handlers["tasks.board"]({"session_key": ""}))["board"]["groups"] == []

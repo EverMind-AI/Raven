@@ -426,9 +426,10 @@ generated into `ui-web/src/rpc/generated` (`npm run gen`); `tests/test_rpc_schem
    on every turn until one that showed it has run. A note made while a turn runs waits for
    the next one. Marking completed and reopening are not set-asides. Clearing the
    conversation drops the notes, and a branch takes them along with the board.
-4. `tasks.move_on(session_key, group_id)` -> `{noted}`: the reader's next message moves this
-   group on (5.1.1). Takes the write lock only; `invalid_params` for an unknown group and on a
-   runtime that keeps no board.
+4. `turn.send`'s `move_on` (a group id): the message moves this group on (5.1.1). The board
+   notes it before the turn the message opens is submitted, taking the write lock only. It is
+   ignored for a message merged into a running turn or sent to an instance, and a group the
+   board does not hold, or a runtime that keeps none, costs the note, never the message.
 5. Event `tasks.board_updated` `{session_key, board}`: after every accepted write, from
    either writer. Sent through the emitter the delivery sink already uses
    (`build_rpc_stack` in `raven/rpc/bootstrap.py`); the TUI binding (`raven/cli/tui_commands.py`)
@@ -464,15 +465,13 @@ sets it `idle`.
 5.1.1 **Move on.** Every group, folded or open, offers Move on: the reader's next message is
 about this matter. It puts a bar at the top of the composer card (`MoveOnBar`) -- the group's
 title with its id, then its summary, one line each, and a cross that puts it away -- and the
-reader in the composer. The bar is the page's alone until the message goes: the send first
-tells the server (`tasks.move_on`, below) and then sends the message, and the bar goes with
-it. The server keeps a note beside the board, as it keeps a set-aside, and the turn the message
+reader in the composer. The bar is the page's alone until the message goes: the message
+carries it (`turn.send`'s `move_on`, below), and the bar goes with it, so neither reaches the
+server without the other. The server keeps a note beside the board, as it keeps a set-aside, and the turn the message
 opens reads, in its runtime context, which group it moves on, by id, title and where it
 stands; the turn's own board update reads the same line, and is kept to that group (3,
 What a turn may write). A message sent while a turn runs waits for a turn of its own rather
-than joining that one, whose context was read before it. Until the server is told, no turn
-exists for the message: a Stop in that window takes it back, bubble and all, rather than
-asking the server to cancel a turn it never started. A later move-on replaces one not yet
+than joining that one, whose context was read before it. A later move-on replaces one not yet
 acknowledged; a turn already shown the earlier one stays about that group. The Task Board page offers it on every card and row,
 opening the conversation first, as an event does.
 
