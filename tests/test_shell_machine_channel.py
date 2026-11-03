@@ -458,6 +458,42 @@ def test_an_alias_to_an_unregistered_machine_and_a_literal_address_are_read_as_b
     assert asked == []
 
 
+def test_a_written_port_22_wins_over_the_alias_port(monkeypatch):
+    on_22 = dict(ROW, port=22)
+    monkeypatch.setattr("raven.ops.connections.load", lambda: [dict(on_22)])
+    _resolving(monkeypatch, {"gpu-box": ("203.0.113.7", "58717")})
+
+    assert machine_exec.raw_ssh_target("ssh -p 22 gpu-box ls")["id"] == "conn_gpu"
+    assert machine_exec.raw_ssh_target("ssh gpu-box ls") is None
+
+
+@pytest.mark.asyncio
+async def test_resolving_an_alias_leaves_the_event_loop_free(registry, monkeypatch, tmp_path):
+    import asyncio
+
+    from raven.ops import transport
+
+    def slow(argv):
+        time.sleep(0.4)
+        return transport.SshResolution({}, "ssh -G exited 255")
+
+    monkeypatch.setattr(transport, "resolve_with_ssh", slow)
+    ticks = 0
+
+    async def ticker():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.02)
+            ticks += 1
+
+    beat = asyncio.create_task(ticker())
+    try:
+        await ExecTool(working_dir=str(tmp_path)).execute(command="echo ssh somewhere-else would be typed here")
+    finally:
+        beat.cancel()
+    assert ticks >= 5
+
+
 def test_an_alias_ssh_cannot_resolve_or_with_no_numeric_port_is_left_alone(registry, monkeypatch):
     _resolving(monkeypatch, {"odd-port": ("203.0.113.7", "not-a-port")})
 

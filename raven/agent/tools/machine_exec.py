@@ -203,6 +203,17 @@ def _program(word: str) -> str:
 def _ssh_destinations(command: str) -> list[tuple[str, int]]:
     """Every host and port an ``ssh`` word in a shell command would connect to.
 
+    The pairs of :func:`_ssh_targets`, for callers that do not ask whether the
+    port was written.
+    """
+    return [(host, port) for host, port, _ in _ssh_targets(command)]
+
+
+def _ssh_targets(command: str) -> list[tuple[str, int, bool]]:
+    """Every host and port an ``ssh`` word in a shell command would connect to,
+    and whether the line gave that port: an ssh config's ``Port`` applies only
+    when it did not, and ``-p 22`` written out is not the default it equals.
+
     Empty when no token runs the ssh client, or when the line cannot be
     tokenised at all. Every ssh in the line is collected, not the first: a
     compound line reaches each of its commands, so stopping at one destination
@@ -232,7 +243,7 @@ def _ssh_destinations(command: str) -> list[tuple[str, int]]:
     if not tokens:
         return []
 
-    found: list[tuple[str, int]] = []
+    found: list[tuple[str, int, bool]] = []
     index = 0
     while index < len(tokens):
         if _program(tokens[index]) != "ssh":
@@ -308,7 +319,7 @@ def _ssh_destinations(command: str) -> list[tuple[str, int]]:
             # true -p 58717` prints 22.
             options_open = False
         if destination:
-            found.append((destination, port))
+            found.append((destination, port, port_set))
     return found
 
 
@@ -331,7 +342,7 @@ def raw_ssh_target(command: str) -> dict[str, Any] | None:
     and the ledger never saw the runs. Only ssh is matched -- ``scp`` and
     ``rsync`` move files and start nothing on the far side.
     """
-    destinations = _ssh_destinations(command)
+    destinations = _ssh_targets(command)
     if not destinations:
         return None
     try:
@@ -340,7 +351,7 @@ def raw_ssh_target(command: str) -> dict[str, Any] | None:
         rows = load()
     except Exception:  # noqa: BLE001 -- a malformed registry must leave the plain shell working
         return None
-    for host, port in destinations:
+    for host, port, _ in destinations:
         if (row := _row_at(rows, host, port)) is not None:
             return row
     # An alias in the owner's ssh config reaches a registered machine under a
@@ -348,16 +359,17 @@ def raw_ssh_target(command: str) -> dict[str, Any] | None:
     # the ``Host <id>`` block registration writes. Measured 2026-11-03: a model
     # that read ~/.ssh/config typed ``ssh <alias> ...`` in 3 of 18 runs and was
     # never stopped. ssh -G says where a destination goes without connecting;
-    # an explicit -p still wins over the config's Port, as it does for ssh.
+    # a port the line gives, 22 included, wins over the config's Port, as it
+    # does for ssh. It is a subprocess, so async callers run this off the loop.
     from raven.ops.transport import resolve_with_ssh
 
-    for host, port in destinations:
+    for host, port, port_set in destinations:
         resolved = resolve_with_ssh(["ssh", host])
         named = resolved.first("hostname").lower()
         if resolved.failure or not named:
             continue
         try:
-            via = port if port != 22 else int(resolved.first("port") or 22)
+            via = port if port_set else int(resolved.first("port") or 22)
         except ValueError:
             via = port
         if (named, via) != (host, port) and (row := _row_at(rows, named, via)) is not None:
@@ -505,7 +517,10 @@ async def run_on_machine(command: str, *, connection: str, cwd: str | None = Non
     runner, row = await asyncio.to_thread(_runner_for_connection, connection, cap_seconds=_TIMEOUT_S + 15)
     if runner is None:
         return row  # the message explaining why not
-    if str(row.get("transport") or "") == "local" and (other := raw_ssh_target(command)) is not None:
+    if (
+        str(row.get("transport") or "") == "local"
+        and (other := await asyncio.to_thread(raw_ssh_target, command)) is not None
+    ):
         # The local connection is this computer, so an ssh typed there is the
         # same registry bypass the plain shell refuses: measured 2026-11-03, 2
         # of 18 runs reached a registered machine this way.

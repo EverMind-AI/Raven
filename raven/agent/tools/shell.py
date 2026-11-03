@@ -302,7 +302,9 @@ class ExecTool(Tool):
         # recognises nothing.
         from raven.agent.tools.machine_exec import raw_ssh_target
 
-        if (row := raw_ssh_target(command)) is not None:
+        # Off the loop: a destination the registry does not hold literally is
+        # resolved through a local ``ssh -G``, a subprocess.
+        if (row := await asyncio.to_thread(raw_ssh_target, command)) is not None:
             # Typed ssh to a registered machine is the registry bypassed: the
             # cap, the process-group sweep and the ledger all live on the
             # other two paths. Refused by name so the model learns the path,
