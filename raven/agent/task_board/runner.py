@@ -9,7 +9,9 @@ attempt is refused, the last update the model sent is still written as far as
 the board can take it -- see :func:`salvage` -- and only a fault in a step or in
 where its work goes leaves no update to be had. Then the turn's dispatches are
 parked in ``unassigned`` and the next update has to place them first -- a
-dispatch is never silently dropped. A turn known to be about some groups -- a
+dispatch is never silently dropped. A turn that failed or was stopped makes no
+call, and what it dispatched is parked the same way, in its place in the update
+queue (:func:`park_dispatches`). A turn known to be about some groups -- a
 delegated result's, a Move on's -- has its update confined to them, and to
 wherever it places its dispatches, before it is checked. Each refusal is logged,
 and each update that never landed.
@@ -194,6 +196,42 @@ async def _ask(
     except UpdateRejectedError:
         return None
     return kept, True
+
+
+async def park_dispatches(
+    service: TaskBoardService,
+    *,
+    session_key: str,
+    dispatches: Sequence[Dispatch],
+    turn_at: str,
+    turn_id: str | None,
+    generation: int,
+) -> Board | None:
+    """Park what a turn that failed or was stopped dispatched, for the next update to place.
+
+    No call follows a provider that just failed, nor a stop the reader asked for. The park
+    waits in the update queue as an update would: an update still in its call is checked,
+    at its last step, against every handle the board holds unplaced, and one parked beside
+    it would be a handle it was never told of. A clear or an undo since the turn ended
+    leaves nothing to park.
+    """
+    async with service.queue(session_key), service.lock(session_key):
+        if service.generation(session_key) != generation or service.was_dropped(session_key, turn_at):
+            return None
+        try:
+            board = service.load(session_key)
+            parked = _park(board, dispatches, turn_at, turn_id)
+            if parked is not board:
+                logger.warning(
+                    "Task board for {}: the turn failed or was stopped; {} dispatch(es) parked for the next turn",
+                    session_key,
+                    len(parked.unassigned) - len(board.unassigned),
+                )
+                await service.write(session_key, parked)
+            return parked
+        except Exception:
+            logger.opt(exception=True).warning("Task board for {} could not be written", session_key)
+            return None
 
 
 async def run_post_turn(

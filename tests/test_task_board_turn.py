@@ -20,7 +20,7 @@ from raven.contracts.tool import Tool
 from raven.observability import purpose
 from raven.providers.base import LLMProvider
 from raven.spine.message import ChatType, Source
-from raven.spine.turn import Origin, TurnRequest
+from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
 from raven.token_wise import usage_context
 
 KEY = "test:c1"
@@ -106,6 +106,9 @@ def _turn(text: str = "Why is the page blank after login?") -> TurnRequest:
 async def _drain(agent: AgentLoop) -> None:
     while agent._consolidation_tasks:
         await asyncio.gather(*list(agent._consolidation_tasks), return_exceptions=True)
+        # A gather of tasks that already finished completes without yielding, and the
+        # done callbacks that take them out of the set wait for the loop's next turn.
+        await asyncio.sleep(0)
 
 
 def _text(message: dict) -> str:
@@ -591,3 +594,145 @@ async def test_a_delete_the_disk_refuses_keeps_the_board_and_the_update_on_its_w
 
     assert transcript.exists()
     assert load_board(agent.sessions.session_dir(KEY)).groups[0].title == "Fix bug A"
+
+
+SPAWN_CALL = LLMResponse(
+    content="",
+    tool_calls=[
+        ToolCallRequest(id="s1", name="spawn", arguments={"node_id": "locate_bug", "task_summary": "Locate the bug"})
+    ],
+)
+PROVIDER_DOWN = LLMResponse(content=None, finish_reason="error")
+
+
+class ByPurpose(Recording):
+    """Answers the board's call with ``board_reply`` and the turns' own calls in order,
+    so a board call held at the gate never takes a reply a later turn's call was due."""
+
+    def __init__(self, turn_replies: list[LLMResponse], board_reply: LLMResponse, gate: asyncio.Event | None = None):
+        super().__init__(turn_replies, gate)
+        self.board_reply = board_reply
+        self.turn_calls = 0
+
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
+        self.requests.append({"purpose": purpose.current(), "usage_session": usage_context.session_key()})
+        if purpose.current() == "task_board":
+            if self.gate is not None:
+                await self.gate.wait()
+            return self.board_reply
+        self.turn_calls += 1
+        return self.replies[min(self.turn_calls - 1, len(self.replies) - 1)]
+
+
+def _spawning_agent(tmp_path, provider) -> AgentLoop:
+    agent = _agent(tmp_path, provider)
+    agent.tools.register(_ReceiptSpawn())
+    return agent
+
+
+async def test_a_turn_that_fails_after_a_spawn_parks_what_it_dispatched(tmp_path):
+    """No call follows a provider that just failed: the run waits in unassigned, keyed by
+    the turn, for the next update to place."""
+    provider = Recording([SPAWN_CALL, PROVIDER_DOWN])
+    agent = _spawning_agent(tmp_path, provider)
+
+    with pytest.raises(AnswerlessTurnError):
+        await agent._process_message(_turn(), session_key=KEY)
+    await _drain(agent)
+
+    opening = next(m for m in agent.sessions.peek(KEY).messages if m["role"] == "user")
+    board = load_board(agent.sessions.session_dir(KEY))
+    assert [(p.handle, p.turn_at) for p in board.unassigned] == [("spawn:locate_bug", opening["timestamp"])]
+    assert "task_board" not in [r["purpose"] for r in provider.requests]
+
+
+async def test_a_turn_stopped_after_a_spawn_parks_what_it_dispatched(tmp_path):
+    held = asyncio.Event()
+
+    class HoldsTheSecondCall(Recording):
+        async def chat(self, messages, **kw):
+            if self.requests:
+                self.requests.append({"purpose": purpose.current()})
+                await held.wait()
+            return await super().chat(messages, **kw)
+
+    provider = HoldsTheSecondCall([SPAWN_CALL, LLMResponse(content=ANSWER)])
+    agent = _spawning_agent(tmp_path, provider)
+
+    task = asyncio.create_task(agent._process_message(_turn(), session_key=KEY))
+    while len(provider.requests) < 2:
+        await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await _drain(agent)
+
+    assert [p.handle for p in load_board(agent.sessions.session_dir(KEY)).unassigned] == ["spawn:locate_bug"]
+
+
+async def test_a_failed_turns_park_waits_for_the_update_still_in_its_call(tmp_path):
+    """Parked beside an update still in its call, the run would be a handle that update
+    was never told of and has to place, and the update would be refused for it."""
+    gate = asyncio.Event()
+    provider = ByPurpose([LLMResponse(content=ANSWER), SPAWN_CALL, PROVIDER_DOWN], BOARD_REPLY, gate=gate)
+    agent = _spawning_agent(tmp_path, provider)
+
+    await agent._process_message(_turn(), session_key=KEY)
+    with pytest.raises(AnswerlessTurnError):
+        await agent._process_message(_turn("Find out why"), session_key=KEY)
+    gate.set()
+    await _drain(agent)
+
+    board = load_board(agent.sessions.session_dir(KEY))
+    assert [g.title for g in board.groups] == ["Fix bug A"]
+    assert [p.handle for p in board.unassigned] == ["spawn:locate_bug"]
+
+
+async def test_a_turn_that_raises_after_a_spawn_parks_what_it_dispatched(tmp_path, monkeypatch):
+    """The third way a turn ends with no answer: an error nothing below the turn caught."""
+    agent = _spawning_agent(tmp_path, Recording([SPAWN_CALL, LLMResponse(content=ANSWER)]))
+    loop = agent._run_agent_loop
+
+    async def breaks_after(*args: Any, **kwargs: Any) -> Any:
+        await loop(*args, **kwargs)
+        raise RuntimeError("the turn broke after its loop")
+
+    monkeypatch.setattr(agent, "_run_agent_loop", breaks_after)
+
+    with pytest.raises(RuntimeError):
+        await agent._process_message(_turn(), session_key=KEY)
+    await _drain(agent)
+
+    assert [p.handle for p in load_board(agent.sessions.session_dir(KEY)).unassigned] == ["spawn:locate_bug"]
+
+
+@pytest.mark.parametrize("edit", ["clear", "undo"])
+async def test_a_failed_turns_park_writes_nothing_after_a_history_edit(tmp_path, monkeypatch, edit):
+    """Held in the queue behind an update, the park meets the clear or the undo that
+    landed meanwhile: the turn it is about is gone, and so is what it dispatched."""
+    gate = asyncio.Event()
+    provider = ByPurpose([LLMResponse(content=ANSWER), SPAWN_CALL, PROVIDER_DOWN], BOARD_REPLY, gate=gate)
+    agent = _spawning_agent(tmp_path, provider)
+    monkeypatch.setattr(agent.memory_consolidator, "consolidate_unconsolidated", _consolidated)
+
+    await agent._process_message(_turn(), session_key=KEY)
+    with pytest.raises(AnswerlessTurnError):
+        await agent._process_message(_turn("Find out why"), session_key=KEY)
+    if edit == "clear":
+        await agent._process_message(_turn("/new"), session_key=KEY)
+    else:
+        failed = [m for m in agent.sessions.peek(KEY).messages if m["role"] == "user"][-1]
+        await agent.task_board.drop_turns(KEY, {failed["timestamp"]})
+    gate.set()
+    await _drain(agent)
+
+    assert load_board(agent.sessions.session_dir(KEY)).unassigned == []

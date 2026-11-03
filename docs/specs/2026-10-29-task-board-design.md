@@ -360,8 +360,12 @@ added to the session's usage, so its cost is visible where every other call's is
 **Which turns.** Every completed host turn, whatever opened it -- a user message, a
 returning subagent result, a cron firing -- except one that answered with the silence
 marker and dispatched nothing: the host saying the turn has nothing to show leaves no
-progress to record. A turn that errored or was stopped runs the call only if it dispatched
-something. A turn that dispatched nothing may return an empty update.
+progress to record. A turn that errored or was stopped makes no call: none follows a
+provider that just failed, nor a stop the reader asked for. What it dispatched is parked as
+6.1 parks a turn's handles, and the park waits in the update queue as an update would -- an
+update still in its call is checked against every handle the board holds unplaced, and one
+parked beside it would be a handle it was never told of. A turn that dispatched nothing may
+return an empty update.
 
 **What a turn may write.** Most turns are about whatever their reply moved, and their update
 may step any group. Two kinds are known to be about a group before the model is asked. A
@@ -525,7 +529,8 @@ that pass on their own -- a status the step on its group already sets goes, the 
 written beside it stays -- and a text past its limit stands as written. Its steps and its
 placement are kept whole, so the turn's steps are still written and its work placed; only a
 fault there -- an unknown group, a handle left out -- leaves no update to be had. Then, as
-when the post-turn call fails after the provider's retries, the turn's handles are appended
+when the post-turn call fails after the provider's retries, or the turn itself errored or was
+stopped ("Which turns"), the turn's handles are appended
 to `unassigned` with the turn's id, a warning is logged, and the next turn's update must place
 them before its own. Until then the page shows them under Unassigned (5.5). Every refused
 attempt is logged with its faults, a salvage with a warning, and an update that never landed

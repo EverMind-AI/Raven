@@ -3548,6 +3548,7 @@ class TurnPathMixin:
                 status="cancelled",
                 context_used=reading.get("context_used"),
             )
+            self._park_task_board(key, live["log"].added(), turn_received_at, req.turn_id)
             raise
         except AnswerlessTurnError as exc:
             # The attempt's record, which follows every list a window pass rebound
@@ -3564,6 +3565,7 @@ class TurnPathMixin:
                 full_detail=attach_full_detail(exc),
                 context_used=reading.get("context_used"),
             )
+            self._park_task_board(key, live["log"].added(), turn_received_at, req.turn_id)
             raise
         except Exception as exc:
             self._save_broken_turn(
@@ -3580,6 +3582,7 @@ class TurnPathMixin:
                 full_detail=attach_full_detail(exc),
                 context_used=reading.get("context_used"),
             )
+            self._park_task_board(key, live["log"].added(), turn_received_at, req.turn_id)
             raise
         self._stash_recovery(key, outcome)
         # The model's last reply is a marker: nothing is sent for it, though the turn is filed
@@ -3744,6 +3747,29 @@ class TurnPathMixin:
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info("Response to {}:{}: {}", channel, sender_id, preview)
         return (final_content, [])
+
+    def _park_task_board(self, key: str, turn_added: list[dict], turn_at: str, turn_id: str | None) -> None:
+        """Park what a turn that failed or was stopped dispatched (``park_dispatches``): the
+        board makes no call after it, and the next update places the work."""
+        from raven.agent.task_board.dispatches import turn_dispatches
+        from raven.agent.task_board.runner import park_dispatches
+
+        board = self.task_board
+        dispatches = turn_dispatches(turn_added)
+        if board is None or not dispatches:
+            return
+        task = asyncio.create_task(
+            park_dispatches(
+                board,
+                session_key=key,
+                dispatches=dispatches,
+                turn_at=turn_at,
+                turn_id=turn_id,
+                generation=board.generation(key),
+            )
+        )
+        self._consolidation_tasks.add(task)
+        task.add_done_callback(self._consolidation_tasks.discard)
 
     def _schedule_task_board(
         self,
