@@ -179,7 +179,7 @@ class PerModelProvider(LLMProvider):
         unable to read a cache marker set for the primary model's vendor, as
         the single-instance case those guards were written for.
         """
-        from raven.providers import prompt_cache
+        from raven.providers import effort_levels, prompt_cache
 
         model_chain = [model, *(fallback_models or [])]
         response: LLMResponse | None = None
@@ -193,7 +193,22 @@ class PerModelProvider(LLMProvider):
                 continue
             if idx and not prompt_cache.accepts_cache_control(current_model or ""):
                 messages, tools = prompt_cache.strip(messages, tools)
-            response = await sub.chat_with_retry(messages, tools, model=current_model, fallback_models=[], **kwargs)
+            hop_kwargs = kwargs
+            effort = kwargs.get("reasoning_effort")
+            if idx and isinstance(effort, str) and effort:
+                # The sub-provider below gets ``fallback_models=[]``, so the
+                # base loop's hop clamp never sees that this is a fallback.
+                # Re-clamp here, where the hop is still visible.
+                hop = effort_levels.downgrade(effort, effort_levels.levels_for(current_model or ""))
+                if hop != effort:
+                    hop_kwargs = {**kwargs, "reasoning_effort": hop}
+                    logger.debug(
+                        "routed fallback model={} does not declare reasoning_effort={}; sending {}",
+                        current_model,
+                        effort,
+                        hop or "none",
+                    )
+            response = await sub.chat_with_retry(messages, tools, model=current_model, fallback_models=[], **hop_kwargs)
             if response.finish_reason != "error":
                 return response
 
