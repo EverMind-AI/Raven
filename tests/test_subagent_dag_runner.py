@@ -16997,6 +16997,80 @@ async def test_end_to_end_two_simultaneous_reassigns_of_one_node_land_exactly_on
     _valid_wire_frames(events)
 
 
+async def test_end_to_end_two_independent_nodes_reassigned_in_one_batch(tmp_path: Path) -> None:
+    """Two independent nodes accepted for reassignment in one adjudication wakeup.
+
+    Both answers land on the desk before the runner waits, which is the batch
+    the tool-level reproduction instrumented. The sibling loop must leave the
+    second accepted move on the desk for the next scheduler pass; the node must
+    not be failed as if no question had ever been opened.
+    """
+    from raven.agent.subagent.dag_adjudication import REASSIGN, AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    alpha = _FakeExec()
+    beta = _FakeExec()
+    nodes = [
+        {"id": "a", "subagent": "alpha", "node_summary": "do a", "prompt_template": "do a"},
+        {"id": "b", "subagent": "alpha", "node_summary": "do b", "prompt_template": "do b"},
+    ]
+    spec = parse_dag_spec({"task_summary": "two moves", "nodes": nodes})
+    spec_nodes = {node.id: node for node in spec.nodes}
+    desk = AdjudicationDesk()
+    state = ReassignmentState()
+    verdicts = {"a": [False, True], "b": [False, True]}
+    resolved = {"done": False}
+
+    async def _judge(*, node, **_kwargs):
+        ok = verdicts[node.id].pop(0)
+        return Verdict(accomplished=ok, what_is_missing="" if ok else "a parser")
+
+    async def _announce(run_id, node_id, report, origin, *, awaiting_decision, informational=False, output=None):
+        if not awaiting_decision:
+            return
+        # Hold both attempts open until both questions are on the desk, then
+        # answer them in one synchronous pass: exactly the batch the tool-level
+        # reproduction observed.
+        await _wait_until(lambda: len(desk.open_nodes()) == 2, timeout=10)
+        if resolved["done"]:
+            return
+        resolved["done"] = True
+        for nid in sorted(desk.open_nodes()):
+            waiter = desk.waiter(nid)
+            plan = _move_plan(
+                node_id=nid,
+                source_agent="alpha",
+                source_instance=None,
+                target_agent="beta",
+                target_stateful=False,
+                target_instance=None,
+                nodes=[spec_nodes[nid]],
+                backends={nid: beta},
+                waiter=waiter,
+            )
+            desk.resolve(nid, REASSIGN, "use beta", agent="beta", expected_waiter=waiter, reassignment=plan)
+
+    result = await _run_graph(
+        tmp_path,
+        nodes,
+        {"alpha": alpha, "beta": beta},
+        state=state,
+        desk=desk,
+        judge=_judge,
+        announce=_announce,
+        builder=_backend_builder({"alpha": alpha, "beta": beta}),
+    )
+
+    files = {entry["node"]: entry for entry in result.files}
+    assert files["a"]["status"] == "completed", files["a"]
+    assert files["b"]["status"] == "completed", files["b"]
+    assert files["a"]["subagent"] == "beta"
+    assert files["b"]["subagent"] == "beta"
+    assert "No adjudication was ever opened" not in (files["a"]["error"] or "")
+    assert "No adjudication was ever opened" not in (files["b"]["error"] or "")
+    assert {call["task_id"] for call in beta.calls} == {"a", "b"}
+
+
 async def test_end_to_end_a_destination_that_becomes_occupied_fails_the_moved_nodes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
