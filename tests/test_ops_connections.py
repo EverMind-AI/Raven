@@ -541,3 +541,177 @@ def test_a_password_can_only_be_kept_under_an_id_the_registry_accepts(tmp_path, 
     for bad in ("../escape", "/abs", "My Box", "Box", "", "box/../x"):
         with pytest.raises(ValueError, match="not an id a password can be kept under"):
             password_path(bad)
+
+
+# Turning a person's words for a machine into the registered machine. People
+# name one by whatever they have in front of them -- the address, its last
+# part, the port, a nickname -- while the model is only ever shown names. Four
+# machines sharing one address and told apart only by port is the layout used
+# here because it is the one measured: holding "203.0.113.27" from the task
+# and a list with no addresses, the model picked the wrong machine or stopped.
+
+SHARED = [
+    {
+        "id": "conn_cpu_32c",
+        "display_name": "my CPU dev box",
+        "kind": "cpu",
+        "cores": 32,
+        "host": "203.0.113.27",
+        "port": 64106,
+        "user": "root",
+        "key": "~/.ssh/id_rsa",
+    },
+    {
+        "id": "conn_cpu_kaggri",
+        "display_name": "match runner",
+        "kind": "cpu",
+        "cores": 128,
+        "host": "203.0.113.27",
+        "port": 58717,
+        "user": "root",
+        "key": "~/.ssh/id_rsa",
+    },
+    {
+        "id": "conn_gpu_a800",
+        "display_name": "GPU A800x2",
+        "kind": "gpu",
+        "host": "203.0.113.27",
+        "port": 7104,
+        "user": "root",
+        "key": "~/.ssh/id_rsa",
+    },
+    {
+        "id": "conn_lab",
+        "display_name": "lab box",
+        "kind": "cpu",
+        "aliases": ["the old one"],
+        "host": "10.0.0.127",
+        "port": 22,
+        "user": "root",
+        "key": "~/.ssh/id_rsa",
+    },
+]
+
+
+@pytest.fixture
+def shared_store(tmp_path, monkeypatch):
+    path = tmp_path / "connections.json"
+    monkeypatch.setattr(connections, "store_path", lambda: path)
+    path.write_text(json.dumps({"connections": SHARED}), encoding="utf-8")
+
+
+def ids(hint):
+    return [m.row["id"] for m in connections.match(hint, SHARED)]
+
+
+def test_a_port_names_exactly_one_machine():
+    assert ids("64106") == ["conn_cpu_32c"]
+
+
+def test_an_address_with_its_port_names_exactly_one_machine():
+    assert ids("203.0.113.27:58717") == ["conn_cpu_kaggri"]
+
+
+def test_a_shared_address_names_every_machine_on_it():
+    assert set(ids("203.0.113.27")) == {"conn_cpu_32c", "conn_cpu_kaggri", "conn_gpu_a800"}
+
+
+def test_the_last_part_of_an_address_matches_whole_segments_only():
+    assert set(ids("113.27")) == {"conn_cpu_32c", "conn_cpu_kaggri", "conn_gpu_a800"}
+    # "27" is the last segment of 203.0.113.27, not of 10.0.0.127.
+    assert "conn_lab" not in ids("27")
+    assert set(ids("27")) == {"conn_cpu_32c", "conn_cpu_kaggri", "conn_gpu_a800"}
+
+
+def test_a_name_or_nickname_matches_regardless_of_case():
+    assert ids("My CPU Dev Box") == ["conn_cpu_32c"]
+    assert ids("the old one") == ["conn_lab"]
+    assert ids("conn_gpu_a800") == ["conn_gpu_a800"]
+
+
+def test_part_of_a_name_matches():
+    assert ids("dev box") == ["conn_cpu_32c"]
+
+
+def test_words_that_mean_nothing_here_match_nothing():
+    assert ids("the cluster in Beijing") == []
+    assert ids("") == []
+
+
+def test_the_reason_never_carries_more_of_the_address_than_was_said():
+    for m in connections.match("64106", SHARED) + connections.match("27", SHARED):
+        assert "203.0.113" not in m.reason
+        assert "root" not in m.reason and "id_rsa" not in m.reason
+
+
+def test_nicknames_travel_with_what_a_machine_is_but_the_address_does_not():
+    out = connections.shown(SHARED[3])
+    assert out["aliases"] == ["the old one"]
+    assert "host" not in out and "port" not in out and "key" not in out
+
+
+def test_naming_a_machine_by_its_port_in_exec_points_at_the_right_id(shared_store):
+    from raven.agent.tools.machine_exec import _runner_for_connection
+
+    runner, message = _runner_for_connection("64106")
+    assert runner is None
+    assert "machine='conn_cpu_32c'" in message
+    assert "203.0.113.27" not in message
+
+
+def test_a_local_command_that_misses_a_path_names_the_registered_machines(shared_store, tmp_path):
+    from raven.agent.tools.machine_exec import missing_here_note
+
+    note = missing_here_note(["/home/cfd/work/", str(tmp_path)])
+    assert "/home/cfd/work" in note and str(tmp_path) not in note
+    assert "conn_cpu_32c" in note and "machine=<id>" in note
+    assert "203.0.113.27" not in note and "64106" not in note
+
+
+def test_no_note_when_the_path_is_here_or_nothing_is_registered(shared_store, tmp_path, monkeypatch):
+    from raven.agent.tools.machine_exec import missing_here_note
+
+    assert missing_here_note([str(tmp_path), f"{tmp_path}/*.log", "$HOME/x"]) == ""
+    assert "/home/cfd/work" in missing_here_note(["/home/cfd/work/*/"])
+    monkeypatch.setattr(connections, "store_path", lambda: tmp_path / "none.json")
+    assert missing_here_note(["/home/cfd/work"]) == ""
+
+
+def test_exec_run_here_on_a_remote_path_says_where_it_ran(shared_store, tmp_path):
+    import asyncio
+
+    from raven.agent.tools.shell import ExecTool
+
+    out = asyncio.run(ExecTool(working_dir=str(tmp_path)).execute("ls /home/cfd/work"))
+    assert "Note: this looked on THIS computer" in str(out)
+    assert "conn_cpu_32c" in str(out)
+    swallowed = asyncio.run(ExecTool(working_dir=str(tmp_path)).execute("ls /home/cfd/work 2>&1 || echo none"))
+    assert "conn_cpu_32c" in str(swallowed)
+    fine = asyncio.run(ExecTool(working_dir=str(tmp_path)).execute(f"ls {tmp_path}"))
+    assert "Note:" not in str(fine)
+
+
+def test_no_note_when_the_miss_was_on_the_far_side_of_ssh(shared_store):
+    from raven.agent.tools.machine_exec import missing_here_note
+
+    assert missing_here_note(["/home/cfd/work"], command="ssh box ls /home/cfd/work") == ""
+
+
+def test_a_working_dir_that_is_not_here_names_the_registered_machines(shared_store, tmp_path):
+    import asyncio
+
+    from raven.agent.tools.shell import ExecTool
+
+    out = asyncio.run(ExecTool(working_dir=str(tmp_path)).execute("ls", working_dir="/home/cfd/work"))
+    assert "conn_cpu_32c" in str(out)
+
+
+def test_list_dir_and_read_file_on_a_path_not_here_show_the_remote_spelling(shared_store, tmp_path):
+    import asyncio
+
+    from raven.agent.tools.filesystem import ListDirTool, ReadFileTool
+
+    listed = asyncio.run(ListDirTool(workspace=tmp_path).execute("/home/cfd/work"))
+    assert "Directory not found" in str(listed) and "exec(machine=<id>)" in str(listed)
+    read = asyncio.run(ReadFileTool(workspace=tmp_path).execute("/home/cfd/work/a.txt"))
+    assert "conn_cpu_32c" in str(read) and "203.0.113.27" not in str(read)

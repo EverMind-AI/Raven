@@ -55,10 +55,12 @@ from raven.ops.connections import (  # noqa: F401 -- re-exports
     SSH,
     STORE,
     UNREADABLE,
+    Match,
     Problem,
     Read,
     capacity,
     load,
+    match,
     problems,
     read,
     resource_unit,
@@ -134,8 +136,12 @@ _REQUEST = (
 )
 
 
-def describe() -> str:
-    """The list as the agent sees it: names and what each machine is, no secrets."""
+def describe(hint: str = "") -> str:
+    """The list as the agent sees it: names and what each machine is, no secrets.
+
+    With ``hint`` -- whatever the owner called the machine -- the list is
+    preceded by the machines that phrase could mean.
+    """
     found = read()
     if found.state == UNREADABLE:
         # Deliberately not folded into "there are none". There may well be
@@ -172,7 +178,7 @@ def describe() -> str:
         else ""
     )
     return (
-        f"{len(rows)} connection(s) this instance can run on:\n" + "\n".join(lines) + trouble +
+        _matched(hint, rows) + f"{len(rows)} connection(s) this instance can run on:\n" + "\n".join(lines) + trouble +
         # The id has to be told where to go. Measured 2026-08-19: a loop reached
         # this listing, picked the right machine, wrote "that one is this laptop, I
         # will just run it here", and hand-ran five trials. It held an id with no
@@ -204,4 +210,30 @@ def describe() -> str:
         "cannot reconstruct. Its budget can be counted in looks rather than in "
         "machine time, and coming back is ops_check_later. A cron job and a file "
         "of your own do the same arithmetic with none of the record."
+    )
+
+
+def _matched(hint: str, rows: list[dict[str, Any]]) -> str:
+    """What the owner's phrase for a machine resolves to, as the head of the listing."""
+    text = str(hint or "").strip()
+    if not text:
+        return ""
+    found = match(text, rows)
+    if not found:
+        return (
+            f"'{text}' matches none of these by name, nickname, address or port. "
+            "Pick from what the task needs; if nothing settles it, ask the owner which "
+            "machine they meant, listing the candidates.\n\n"
+        )
+    lines = "\n".join(
+        f"  {m.row.get('display_name') or m.row['id']}   (id {m.row['id']})   matched by {m.reason}" for m in found
+    )
+    if len(found) == 1:
+        return f"'{text}' is {found[0].row.get('display_name') or found[0].row['id']} (id {found[0].row['id']}), matched by {found[0].reason}.\n\n"
+    return (
+        f"'{text}' could be any of {len(found)} machines:\n{lines}\n"
+        "Settle it yourself before asking anyone: look on each candidate, read-only, for "
+        "what the task names -- the case path, the script, the data -- and pick the one "
+        "that has it. Say which you picked and what settled it. Ask the owner only if "
+        "that still leaves more than one, and name the candidates when you do.\n\n"
     )

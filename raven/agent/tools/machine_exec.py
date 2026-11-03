@@ -360,7 +360,7 @@ def _runner_for_connection(conn_id: str, *, cap_seconds: float | None = None):
     Returns ``(None, message)`` when the id is unknown or unreachable, so the
     caller can hand the reason back rather than a traceback.
     """
-    from raven.ops.connections import load, shown
+    from raven.ops.connections import load, match, shown
 
     # Looked up here rather than through a registry-side ``get``: main keeps
     # the registry's readers to what the CLI and this lane need (0fd38ef8),
@@ -374,8 +374,26 @@ def _runner_for_connection(conn_id: str, *, cap_seconds: float | None = None):
             + "".join(f"   {k} {v}" for k, v in shown(r).items() if k not in ("id", "display_name"))
             for r in rows
         )
+        found = match(wanted, rows)
+        if len(found) == 1:
+            hit = found[0]
+            guess = (
+                f"{conn_id!r} is {hit.row.get('display_name') or hit.row['id']} (matched by {hit.reason}); "
+                f"run it again with machine={hit.row['id']!r}.\n"
+            )
+        elif found:
+            guess = (
+                f"{conn_id!r} could be any of: "
+                + ", ".join(f"{m.row['id']!r} ({m.reason})" for m in found)
+                + ". Do not ask the owner yet: run a read-only look on each of these for what "
+                "the task names (the path, the file, the case) and use the one that has it. Ask "
+                "only if that still leaves more than one, and name the candidates when you do.\n"
+            )
+        else:
+            guess = ""
         return None, (
             f"No connection with id {conn_id!r}.\n"
+            + guess
             + (f"Connections this instance can run on:\n{listing}" if rows else "No connection is registered.")
         )
     from raven.ops.transport import TransportError, runner_from
@@ -491,6 +509,49 @@ async def run_on_machine(command: str, *, connection: str, cwd: str | None = Non
             f"belongs to the on-call agent's ops_submit.\n{text}"
         )
     return f"{head}\n{text}" if text.strip() else f"{head}, no output"
+
+
+def missing_here_note(paths: list[str], *, command: str = "") -> str:
+    """What to add to a local call that missed paths this computer lacks.
+
+    Run with no 'machine', a command meant for a registered machine fails here
+    with "No such file or directory" and nothing in that says why. Measured
+    2026-11-03: asked to look at /home/cfd/work "on my dev box", 2 of 18 runs
+    ran ``ls`` on this computer, read the error and reported the directory
+    absent; another model did the same with list_dir. The note names the
+    registered machines so the next call can pick one; it says nothing when
+    every named path is here, none is registered, or the command ran ssh (the
+    miss was on the far side, not here).
+    """
+    if command and _ssh_destinations(command):
+        return ""
+    gone = []
+    for raw in paths:
+        if "$" in raw or not raw.startswith(("/", "~")):
+            continue
+        # A pattern is checked up to its first wild segment: /home/cfd/work/*/
+        # names /home/cfd/work.
+        parts = raw.split("/")
+        wild = next((i for i, seg in enumerate(parts) if any(c in seg for c in "*?[")), len(parts))
+        path = "/".join(parts[:wild]).rstrip("/)`") or "/"
+        if not os.path.exists(os.path.expanduser(path)) and path not in gone:
+            gone.append(path)
+    if not gone:
+        return ""
+    try:
+        from raven.ops.connections import load
+
+        rows = load()
+    except Exception:  # noqa: BLE001 -- a malformed registry must leave the plain shell working
+        return ""
+    if not rows:
+        return ""
+    names = ", ".join(f"{r.get('display_name') or r.get('id')} (id {r.get('id')})" for r in rows)
+    again = "look there with exec(machine=<id>) -- the owner's own words for the machine work there too"
+    return (
+        f"\nNote: this looked on THIS computer, which has no {', '.join(gone[:3])}. Registered machines: "
+        f"{names}. If the owner meant one of them, {again}."
+    )
 
 
 def _where(row: dict[str, Any]) -> str:
