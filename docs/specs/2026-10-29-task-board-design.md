@@ -333,7 +333,8 @@ providers refuse one outright: the newest Claude models answer a forced `tool`/`
 400, and some OpenRouter routes take only `auto`, `none` or `required`. The instruction asks
 for the call; an answer in text is asked again (6.2). It runs at the main model's settings, none of them configured for the board: the
 model, fallbacks and effort the turn's last call ran at (`LoopOutcome.last_model` /
-`last_effort`; no effort is passed when the turn passed none). Taken from the turn rather
+`last_effort`; passed as the turn passes it, None included, since a key left out is filled
+from the provider's copy frozen at construction). Taken from the turn rather
 than re-read from config, because a conversation can pin its own model and effort, the router
 can pick another model per message, a turn can have fallen back mid-way, and Anthropic voids a cached message prefix when the thinking
 settings change between two calls. The call is skipped when the turn's tools array did not

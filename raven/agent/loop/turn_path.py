@@ -3827,9 +3827,9 @@ class TurnPathMixin:
         if not should_run(outcome.status, dispatches, silent=silent):
             return
         tools, model = outcome.last_tools, outcome.last_model or self.model
-        # The turn's own effort, or none at all: an explicit None would switch the
-        # provider's default off rather than leave it standing.
-        effort = {} if outcome.last_effort is None else {"reasoning_effort": outcome.last_effort}
+        # The turn's own effort, None included, as the turn sends it: a key left out
+        # lets the provider fill it from the copy frozen at its construction.
+        effort = outcome.last_effort
         # A turn whose array lacked the tool -- withheld by a deploy's disabledTools --
         # leaves the model nothing to answer the instruction with.
         if not any((t.get("function") or {}).get("name") == "task_board" for t in tools):
@@ -3843,7 +3843,7 @@ class TurnPathMixin:
                     tools=call_tools,
                     model=call_model,
                     fallback_models=fallback_models,
-                    **effort,
+                    reasoning_effort=effort,
                 )
 
         task = asyncio.create_task(

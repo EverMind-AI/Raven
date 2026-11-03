@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import dataclasses
 import json
 from typing import Any
 
@@ -158,6 +159,20 @@ async def test_the_board_call_runs_at_the_turns_own_effort(tmp_path, monkeypatch
 
     turn, extra = provider.requests
     assert turn["effort"] == extra["effort"] == "high"
+
+
+async def test_the_board_call_runs_at_no_effort_when_the_turn_ran_at_none(tmp_path, monkeypatch):
+    provider = Recording([LLMResponse(content=ANSWER), BOARD_REPLY])
+    provider.generation = dataclasses.replace(provider.generation, reasoning_effort="high")
+    agent = _agent(tmp_path, provider)
+    monkeypatch.setattr(type(agent), "default_reasoning_effort", property(lambda _self: None))
+
+    await agent._process_message(_turn(), session_key=KEY)
+    await _drain(agent)
+
+    turn, extra = provider.requests
+    assert turn["effort"] is None
+    assert extra["effort"] is None
 
 
 async def test_the_reply_goes_out_before_the_board_call_returns(tmp_path):
