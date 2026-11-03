@@ -801,6 +801,21 @@ async def run_dag(
         state=state,
     )
 
+    async def announce_scheduler_failures(failed: set[str]) -> None:
+        """Give the nodes this pass failed their terminal frame, and cascade.
+
+        `_install_move` and the adjudication wait fail nodes after the pass's
+        own `_cascade_failures` has run. Without this, a dependent is left
+        `pending` in the finalized manifest and the node's failed status never
+        leaves the runner.
+        """
+        if not failed:
+            return
+        _cascade_failures(deps, status)
+        await publish_terminal(("failed",), only=failed)
+        await publish_terminal(("skipped", NOT_EXECUTED))
+        failed.clear()
+
     # `store.init` above made this run's claim on its node ids durable, so every
     # await from here on has to be covered: a stop delivered on any of them would
     # otherwise leave those ids recorded as still being written, for a run that is
@@ -910,6 +925,7 @@ async def run_dag(
             # the reassign branch of the wait is taken here: a decided continue
             # has nothing to apply, so it keeps waiting for the empty ready set
             # it has always been handled from.
+            failed_here: set[str] = set()
             if reassignments is not None and _reassign_waiting(desk):
                 await _await_adjudications(
                     desk,
@@ -920,6 +936,8 @@ async def run_dag(
                     cancel=cancel,
                     released=released,
                     reassignments=reassignments,
+                    settled=settled,
+                    failed=failed_here,
                 )
             if reassignment_state is not None:
                 await _apply_reassignments(
@@ -933,7 +951,9 @@ async def run_dag(
                     subagents_root=subagents_root,
                     cancel=cancel,
                     build_reassigned=build_reassigned,
+                    failed=failed_here,
                 )
+            await announce_scheduler_failures(failed_here)
             ready = [
                 nid
                 for nid, st in status.items()
@@ -948,6 +968,7 @@ async def run_dag(
                     # Every suspended node has already given its slot back, and
                     # anything still running was handed on rather than awaited,
                     # so waiting here costs the graph nothing it could be doing.
+                    failed_here = set()
                     await _await_adjudications(
                         desk,
                         status,
@@ -957,7 +978,10 @@ async def run_dag(
                         cancel=cancel,
                         released=released,
                         reassignments=reassignments,
+                        settled=settled,
+                        failed=failed_here,
                     )
+                    await announce_scheduler_failures(failed_here)
                     continue
                 if carried:
                     # A `resume` ended an earlier round while these were still
@@ -1220,6 +1244,7 @@ async def _publish_terminal(
     run_id: str,
     progress_publisher: ProgressPublisher | None,
     state: ReassignmentState | None = None,
+    only: set[str] | None = None,
 ) -> None:
     """Announce, once each, every node the scheduler itself put in one of ``states``.
 
@@ -1229,9 +1254,15 @@ async def _publish_terminal(
     before it breaks. Two cases are announced by neither: the nodes stopped by
     cancelling the run's task, and a decision node completed but not yet
     adjudicated when a replan cancels its group.
+
+    ``only`` narrows the sweep to the nodes one caller failed itself. `_run_node`
+    announces its own failures without recording them here, so a sweep of every
+    `failed` node would publish each of them a second time.
     """
     for nid, st in status.items():
         if st not in states or nid in published_terminal:
+            continue
+        if only is not None and nid not in only:
             continue
         published_terminal.add(nid)
         now = _now_ms()
@@ -1858,6 +1889,8 @@ async def _await_adjudications(
     cancel: asyncio.Event | None,
     released: asyncio.Event | None = None,
     reassignments: dict[str, ReassignPlan] | None = None,
+    settled: asyncio.Event | None = None,
+    failed: set[str] | None = None,
 ) -> None:
     """Block until every suspended node has an answer, the wait runs out, or one
     answer replans the graph.
@@ -1911,11 +1944,24 @@ async def _await_adjudications(
     `resolve_dag_node` for it -- so it is failed outright before the wait
     below, instead of returning with nothing changed and inviting the caller
     to loop back here with no `await` in between.
+
+    ``settled`` is raced alongside the waiters: a move staged on a running
+    source attempt has to install as soon as that attempt lands, even when an
+    unrelated node is still suspended. The call then returns without touching
+    the open waiters, exactly as the reassign arm does.
+
+    ``failed`` collects the nodes this call fails on the scheduler's behalf --
+    the unopened-desk preamble, a reassign with no prepared move, a timeout --
+    so the caller can publish their terminal frames and cascade to their
+    dependents in the same pass. Nodes failed by an attempt are not in it:
+    `_run_node` has already announced those.
     """
     for nid, st in status.items():
         if st == "exception" and not desk.is_open(nid):
             status[nid] = "failed"
             errors[nid] = "No adjudication was ever opened for this node, so it could not be resolved."
+            if failed is not None:
+                failed.add(nid)
     open_nodes = sorted(desk.open_nodes())
     if not open_nodes:
         return
@@ -1930,16 +1976,29 @@ async def _await_adjudications(
     # would answer the sibling is the same one blocked in `resolve_dag_node`
     # awaiting this run's task, so the two wait on each other forever.
     replan = asyncio.create_task(desk.replanned.wait())
+    # A move staged behind a running source attempt is parked here: the move
+    # installs when that attempt settles, and without this the wait below would
+    # hold it until an unrelated suspended node was answered or timed out. The
+    # task is made even for an already-set event: that flag means the source
+    # landed during this pass, and the wait must still hand control back.
+    moved = asyncio.create_task(settled.wait()) if settled is not None else None
     loop = asyncio.get_running_loop()
     deadline: float | None = None if unbind is not None else loop.time() + timeout_s
     cancelled = False
     replanned = False
+    moved_on = False
+    # Set when the call returns with work the scheduler must pick up: a move
+    # parked above leaves sibling answers open by design, and a settled source
+    # leaves every waiter open. The finally must not close those.
+    handing_back = False
     reassigned_nid: str | None = None
     try:
         node_pending = set(node_tasks.values())
         while node_pending:
             budget = None if deadline is None else max(0.0, deadline - loop.time())
             waiting_on: set[asyncio.Future] = {*node_pending, replan}
+            if moved is not None:
+                waiting_on.add(moved)
             if stop is not None:
                 waiting_on.add(stop)
             if unbind is not None and not unbind.done():
@@ -1970,18 +2029,29 @@ async def _await_adjudications(
                     # before returning: the reassign hands control back at once,
                     # and a sibling's already-decided continue or abandon must
                     # not wait for the moved node's whole next attempt.
-                    for nid in sorted(answers):
-                        if nid == reassigned_nid:
-                            continue
-                        if (taken := desk.take(nid)) is not None:
-                            _apply_answer(nid, taken, status=status, errors=errors, continuations=continuations)
+                    _apply_sibling_answers(
+                        desk,
+                        answers,
+                        reassigned_nid,
+                        status=status,
+                        errors=errors,
+                        continuations=continuations,
+                    )
                     break
+            if moved is not None and moved in done:
+                # A staged move's source attempt landed. Hand control back so
+                # the scheduler can install it; every open waiter stays exactly
+                # as it is, so nothing is charged a timeout it did not have.
+                moved_on = True
+                break
             still_bound = unbind is not None and not unbind.done()
             if decided:
                 deadline = None if still_bound else loop.time() + timeout_s
             elif deadline is not None and loop.time() >= deadline:
                 break
         if cancelled:
+            return
+        if moved_on:
             return
         if reassigned_nid is not None:
             answer = desk.take(reassigned_nid)
@@ -1992,6 +2062,8 @@ async def _await_adjudications(
                         "The main agent chose to reassign but no prepared move reached the runner, "
                         "so the node failed instead of moving."
                     )
+                    if failed is not None:
+                        failed.add(reassigned_nid)
                 else:
                     continuations[reassigned_nid] = answer.message or ""
                     reassignments[reassigned_nid] = answer.reassignment
@@ -1999,6 +2071,17 @@ async def _await_adjudications(
             return
         for nid in open_nodes:
             event = waiters[nid]
+            answer = desk.peek(nid) if event.is_set() else None
+            if answer is not None and answer.decision == REASSIGN and not replanned:
+                # An accepted move this call did not park (only one is parked,
+                # in the early-return branch above). Leave the waiter and its
+                # answer for the scheduler's next pass; consuming it here would
+                # drop the move through `_apply_answer`'s REASSIGN no-op. A
+                # replan is the exception: the graph is being replaced, so the
+                # move is moot and `_apply_replan` names the successor as the
+                # node's cause.
+                handing_back = True
+                continue
             answer = desk.take(nid) if event.is_set() else None
             if answer is None:
                 desk.close(nid)
@@ -2011,6 +2094,8 @@ async def _await_adjudications(
                     continue
                 status[nid] = "failed"
                 errors[nid] = f"Nothing was decided for {timeout_s:g}s, so the node timed out."
+                if failed is not None:
+                    failed.add(nid)
                 continue
             # A replan is left at "exception" for `_apply_replan`, at the top of
             # the next loop pass, which is the single writer of a replanned
@@ -2023,6 +2108,8 @@ async def _await_adjudications(
             unbind.cancel()
         if not replan.done():
             replan.cancel()
+        if moved is not None and not moved.done():
+            moved.cancel()
         # Reached on every exit, including a hard Task.cancel() on the run
         # itself (as opposed to setting the soft `cancel` Event) raising
         # CancelledError right out of asyncio.wait above: that route skips
@@ -2037,13 +2124,15 @@ async def _await_adjudications(
             *node_tasks.values(),
             *([stop] if stop is not None else []),
             *([unbind] if unbind is not None else []),
+            *([moved] if moved is not None else []),
             replan,
             return_exceptions=True,
         )
         # A reassign returns while siblings are still questions: their waiters
         # must survive so the next call can answer them. The reassigned node's
-        # own waiter was consumed by `take` above.
-        if reassigned_nid is None:
+        # own waiter was consumed by `take` above. The same holds for a settled
+        # source attempt and for an accepted move left for the next pass.
+        if reassigned_nid is None and not moved_on and not handing_back:
             for nid in open_nodes:
                 desk.close(nid)
 
@@ -2075,6 +2164,31 @@ def _apply_answer(
     else:
         status[node_id] = "failed"
         errors[node_id] = "The main agent abandoned this node."
+
+
+def _apply_sibling_answers(
+    desk: AdjudicationDesk,
+    answers: dict[str, Any],
+    reassigned_nid: str,
+    *,
+    status: dict[str, str],
+    errors: dict[str, str],
+    continuations: dict[str, str],
+) -> None:
+    """Apply the answers that landed beside the one parked as a move.
+
+    A second accepted move is left on the desk for the scheduler's next pass:
+    only one move can be parked per call, and taking it here would hand it to
+    `_apply_answer`, whose REASSIGN arm is a no-op, silently dropping it.
+    """
+    for nid in sorted(answers):
+        if nid == reassigned_nid:
+            continue
+        answer = answers[nid]
+        if answer is None or answer.decision == REASSIGN:
+            continue
+        if (taken := desk.take(nid)) is not None:
+            _apply_answer(nid, taken, status=status, errors=errors, continuations=continuations)
 
 
 def _reassign_waiting(desk: "AdjudicationDesk | None") -> bool:
@@ -2152,6 +2266,7 @@ async def _apply_reassignments(
     subagents_root: str | None,
     cancel: asyncio.Event | None,
     build_reassigned: "Callable[[DagNodeSpec], Awaitable[tuple[DagNodeSpec, Any]]] | None",
+    failed: set[str] | None = None,
 ) -> None:
     """Move accepted nodes onto their target once every source attempt has settled.
 
@@ -2163,6 +2278,10 @@ async def _apply_reassignments(
     joins if its attempt landed unfinished -- the target backends are built for
     every mover, and the whole set is installed at once. Nothing here runs under
     the concurrency gate.
+
+    ``failed`` collects the nodes this pass fails on the scheduler's behalf, so
+    the caller can announce them and cascade to their dependents in the same
+    pass instead of leaving the dependents `pending` at finalization.
     """
     if cancel is not None and cancel.is_set():
         state.release_moves()
@@ -2170,7 +2289,7 @@ async def _apply_reassignments(
         return
     for node_id, plan in list(prepared.items()):
         prepared.pop(node_id, None)
-        _stage_move(state, plan, status=status, errors=errors, continuations=continuations)
+        _stage_move(state, plan, status=status, errors=errors, continuations=continuations, failed=failed)
     for key, move in list(state.pending_moves.items()):
         if _move_in_flight(state, move):
             continue
@@ -2185,6 +2304,7 @@ async def _apply_reassignments(
             subagents_root=subagents_root,
             cancel=cancel,
             build_reassigned=build_reassigned,
+            failed=failed,
         )
 
 
@@ -2195,6 +2315,7 @@ def _stage_move(
     status: dict[str, str],
     errors: dict[str, str],
     continuations: dict[str, str],
+    failed: set[str] | None = None,
 ) -> None:
     """Park one accepted move until its source attempts settle.
 
@@ -2211,6 +2332,8 @@ def _stage_move(
             plan.node_id,
             f"The group of node '{plan.node_id}' already has a move in progress, so this one was not applied.",
         )
+        if failed is not None:
+            failed.add(plan.node_id)
         return
     if plan.source_instance is not None:
         members = state.original_groups.get((plan.source_agent, plan.source_instance), frozenset({plan.node_id}))
@@ -2302,11 +2425,14 @@ async def _install_move(
     subagents_root: str | None,
     cancel: asyncio.Event | None,
     build_reassigned: "Callable[[DagNodeSpec], Awaitable[tuple[DagNodeSpec, Any]]] | None",
+    failed: set[str] | None = None,
 ) -> None:
     """Build every target, then install the whole move in one step.
 
     A group is never left half-built: any refusal here fails the node the move
-    was decided for and leaves every sibling on the agent it already has.
+    was decided for and leaves every sibling on the agent it already has. The
+    failed node is recorded in ``failed`` for the caller's same-pass announce
+    and cascade.
     """
     movers = _move_movers(state, move, status)
     if not movers:
@@ -2326,6 +2452,8 @@ async def _install_move(
             f"{len(original) - 1} other node(s) in this run, so it can only move to a stateful sub-agent; "
             f"'{move.target_agent}' is not one and the move was not applied.",
         )
+        if failed is not None:
+            failed.add(move.node_id)
         return
     built: dict[str, tuple[DagNodeSpec, Any]] = {}
     try:
@@ -2358,6 +2486,8 @@ async def _install_move(
             move.node_id,
             f"Node '{move.node_id}' could not move to '{move.target_agent}': {exc}",
         )
+        if failed is not None:
+            failed.add(move.node_id)
         return
     if cancel is not None and cancel.is_set():
         state.pending_moves.pop(key, None)
@@ -2399,11 +2529,18 @@ async def _destination_occupied(subagents_root: str | None, session_key: str | N
         except Exception:  # noqa: BLE001 - an unreadable log is not proof of an empty one
             logger.opt(exception=True).warning("DAG destination log could not be read for {}", agent)
     try:
-        bound = await get_registry().lookup(session_key or "default", agent, handle)
+        registry = get_registry()
+        # A binding is transport-specific, and the same key space holds ACP
+        # sessions as well as CLI ones. Asking only the default (`cli`) makes a
+        # live ACP conversation look like an empty handle, and the handover is
+        # then loaded into another lane's session.
+        for kind in ("cli", "acp"):
+            if await registry.lookup(session_key or "default", agent, handle, kind=kind) is not None:
+                return True
     except Exception:  # noqa: BLE001 - an unreadable registry is not proof of an empty binding
         logger.opt(exception=True).warning("DAG destination binding could not be read for {}", agent)
         return False
-    return bound is not None
+    return False
 
 
 async def _plant_handover(
@@ -3401,11 +3538,15 @@ async def _attempt_node(
         # real failure of this attempt is recorded after it, not lost.
         errors.pop(node.id, None)
     except Exception as exc:  # noqa: BLE001 - record and continue
-        if claimed_seed is not None and not dispatched:
-            # Nothing reached the session behind the seed, so the next mover may
-            # still plant it, and this attempt's failure stays out of that log.
-            state.release_handover(claimed_seed)
-            claimed_seed = None
+        if seed_dispatch and not dispatched:
+            # Nothing reached the session behind the seed, so the next attempt
+            # may still plant it, and this attempt's failure stays out of that
+            # log. A `[failed]` row here would also make `_destination_occupied`
+            # read the move's own failed attempt as another lane's conversation
+            # and refuse the retry that is about to plant the same seed.
+            if claimed_seed is not None:
+                state.release_handover(claimed_seed)
+                claimed_seed = None
             keep_turn_out = True
         logger.opt(exception=True).warning("DAG node {} failed: {}", node.id, exc)
         status[node.id] = "failed"

@@ -5940,6 +5940,128 @@ async def test_await_adjudications_applies_siblings_decided_in_the_same_batch(
         assert expected_error in errors["b"].lower()
 
 
+async def test_two_reassigns_in_one_batch_park_both_moves():
+    """Both accepted moves survive the wake-up.
+
+    A background resolver returns as soon as the desk takes the answer, so two
+    reassigns can land before the runner's wait looks. Only one move can be
+    parked per call; the other answer has to stay on the desk for the next
+    scheduler pass instead of being consumed by the sibling-apply loop, whose
+    REASSIGN arm is a no-op.
+    """
+    from raven.agent.subagent.dag_adjudication import REASSIGN, AdjudicationDesk
+    from raven.agent.subagent.dag_runner import _await_adjudications, _reassign_waiting
+
+    desk = AdjudicationDesk()
+    first = desk.open("a")
+    second = desk.open("b")
+    move_a = _reassign_plan(first, node_id="a")
+    move_b = _reassign_plan(second, node_id="b")
+    status = {"a": "exception", "b": "exception"}
+    errors: dict[str, str] = {}
+    continuations: dict[str, str] = {}
+    reassignments: dict = {}
+    desk.resolve("a", REASSIGN, "move a", agent="beta", expected_waiter=first, reassignment=move_a)
+    desk.resolve("b", REASSIGN, "move b", agent="gamma", expected_waiter=second, reassignment=move_b)
+
+    await asyncio.wait_for(
+        _await_adjudications(
+            desk,
+            status,
+            errors,
+            continuations,
+            timeout_s=5,
+            cancel=None,
+            reassignments=reassignments,
+        ),
+        timeout=5,
+    )
+
+    assert status == {"a": "pending", "b": "exception"}
+    assert continuations == {"a": "move a"}
+    assert reassignments == {"a": move_a}
+    assert desk.is_open("b"), "the second accepted move is still on the desk"
+    assert _reassign_waiting(desk), "the scheduler can still see it and consume it"
+
+    await asyncio.wait_for(
+        _await_adjudications(
+            desk,
+            status,
+            errors,
+            continuations,
+            timeout_s=5,
+            cancel=None,
+            reassignments=reassignments,
+        ),
+        timeout=5,
+    )
+
+    assert status == {"a": "pending", "b": "pending"}
+    assert continuations == {"a": "move a", "b": "move b"}
+    assert reassignments == {"a": move_a, "b": move_b}
+    assert errors == {}
+
+
+async def test_await_adjudications_leaves_the_desk_open_when_a_move_source_settles():
+    """A staged move waits for its source attempt, not for an unrelated answer.
+
+    The call is entered because some other node is suspended; the source
+    attempt settling must hand control back so the scheduler can install the
+    move, without timing out the question that is still open.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_runner import _await_adjudications
+
+    desk = AdjudicationDesk()
+    desk.open("waiting")
+    settled = asyncio.Event()
+    status = {"waiting": "exception"}
+    errors: dict[str, str] = {}
+    continuations: dict[str, str] = {}
+
+    async def _settle() -> None:
+        await asyncio.sleep(0)
+        settled.set()
+
+    await asyncio.wait_for(
+        asyncio.gather(
+            _await_adjudications(
+                desk,
+                status,
+                errors,
+                continuations,
+                timeout_s=30,
+                cancel=None,
+                settled=settled,
+            ),
+            _settle(),
+        ),
+        timeout=5,
+    )
+
+    assert status == {"waiting": "exception"}, "the question is not timed out"
+    assert errors == {}
+    assert desk.is_open("waiting"), "its waiter stays open for a later answer"
+
+    # The event may already be set when the wait begins (the source settled
+    # while this pass was doing other work): the call must still return rather
+    # than block on the suspended node.
+    assert settled.is_set()
+    await asyncio.wait_for(
+        _await_adjudications(
+            desk,
+            status,
+            errors,
+            continuations,
+            timeout_s=30,
+            cancel=None,
+            settled=settled,
+        ),
+        timeout=5,
+    )
+    assert desk.is_open("waiting")
+
+
 async def test_await_adjudications_leaves_no_task_waiting_after_a_reassign():
     from raven.agent.subagent.dag_adjudication import REASSIGN, AdjudicationDesk
     from raven.agent.subagent.dag_runner import _await_adjudications
@@ -14771,6 +14893,84 @@ async def test_a_new_move_does_not_bypass_a_destination_collision(tmp_path: Path
     assert "beta" in error and "shared" in error
 
 
+async def test_a_move_refused_at_install_fails_its_dependents_on_the_same_pass(tmp_path: Path) -> None:
+    """A target that cannot be built must not leave the graph's dependents pending.
+
+    `_install_move` fails the node after this pass's cascade has already run,
+    and the ready set is empty afterwards. Without a cascade and a terminal
+    publish here, the dependent is finalized as `pending` and the failed
+    node's status frame never leaves the runner.
+    """
+    from raven.agent.subagent.dag_adjudication import REASSIGN, AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    alpha = _FakeExec(reply="alpha answer")
+    beta = _FakeExec(reply="beta answer")
+    nodes = [
+        {"id": "a", "subagent": "alpha", "node_summary": "moves", "prompt_template": "do a"},
+        {
+            "id": "b",
+            "subagent": "alpha",
+            "node_summary": "needs a",
+            "prompt_template": "do b",
+            "depends_on": ["a"],
+        },
+    ]
+    spec = parse_dag_spec({"task_summary": "install refusal", "nodes": nodes})
+    spec_node = spec.nodes[0]
+    desk = AdjudicationDesk()
+    state = ReassignmentState()
+    frames: list[tuple[str, str]] = []
+
+    async def _capture(name: str, value: dict) -> None:
+        if name == "dag_node_updated":
+            frames.append((value["node"], value["status"]))
+
+    async def _judge(*, node, **_kwargs):
+        if node.id == "a":
+            return Verdict(accomplished=False, what_is_missing="a parser")
+        return Verdict(accomplished=True)
+
+    async def _announce(run_id, node_id, report, origin, *, awaiting_decision, informational=False, output=None):
+        if not awaiting_decision:
+            return
+        waiter = desk.waiter(node_id)
+        plan = _move_plan(
+            node_id=node_id,
+            source_agent="alpha",
+            source_instance=None,
+            target_agent="beta",
+            target_stateful=False,
+            target_instance=None,
+            nodes=[spec_node],
+            backends={"a": beta},
+            waiter=waiter,
+        )
+        desk.resolve(node_id, REASSIGN, "use the parser", agent="beta", expected_waiter=waiter, reassignment=plan)
+
+    async def _cannot_build(node: DagNodeSpec) -> tuple[DagNodeSpec, Any]:
+        raise DagValidationError("the target cannot be built")
+
+    result = await _run_graph(
+        tmp_path,
+        nodes,
+        {"alpha": alpha, "beta": beta},
+        state=state,
+        desk=desk,
+        judge=_judge,
+        announce=_announce,
+        builder=_cannot_build,
+        publisher=_capture,
+    )
+
+    files = {entry["node"]: entry for entry in result.files}
+    assert files["a"]["status"] == "failed"
+    assert "the target cannot be built" in (files["a"]["error"] or "")
+    assert files["b"]["status"] == "skipped", "a dependent of an install-refused node is not left pending"
+    assert ("a", "failed") in frames, "the scheduler's failure is announced in-run"
+    assert ("b", "skipped") in frames, "and so is the dependent it skipped"
+
+
 async def test_an_incomplete_instance_log_is_announced_without_changing_the_seed(tmp_path: Path) -> None:
     """The source log is best effort; the main agent hears when it was not carried."""
     from raven.agent.subagent.dag_adjudication import REASSIGN, AdjudicationDesk
@@ -14950,6 +15150,91 @@ async def test_a_seed_claimed_by_a_failed_attempt_is_released_for_the_next_mover
     assert "state load failed" in (files["r"]["error"] or "")
     assert files["s"]["status"] == "completed"
     assert state.pending_handovers == {}, "the seed was consumed by the mover that dispatched"
+
+
+async def test_a_destination_attempt_that_fails_before_the_seed_does_not_poison_the_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pre-dispatch failure must not leave a `[failed]` row that the first-use
+    check then reads as somebody else's conversation.
+
+    The retry plants the same seed on the same handle; the occupancy check is
+    for another lane's session, not for this move's own failed attempt.
+    """
+    from raven.agent.subagent import dag_runner as runner_mod
+    from raven.agent.subagent.dag_adjudication import CONTINUE, REASSIGN, AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+    from raven.agent.subagent.instance_log import transcript_path
+
+    alpha = _FakeExec(reply="partial answer")
+    beta = _FakeExec(reply="fixed answer")
+    nodes = [dict(_FIX_NODE, instance="shared")]
+    spec = parse_dag_spec({"task_summary": "pre-dispatch failure", "nodes": nodes})
+    spec_node = spec.nodes[0]
+    desk = AdjudicationDesk()
+    state = ReassignmentState()
+    verdicts = [
+        Verdict(accomplished=False, what_is_missing="a parser"),
+        Verdict(accomplished=False, what_is_missing="try again"),
+        Verdict(accomplished=True),
+    ]
+
+    real_render = runner_mod.render_prompt
+    failed_once = {"done": False}
+
+    async def _render(node, **kwargs):
+        if node.subagent == "beta" and not failed_once["done"]:
+            failed_once["done"] = True
+            raise RuntimeError("render failed before the handover seed was claimed")
+        return await real_render(node, **kwargs)
+
+    monkeypatch.setattr(runner_mod, "render_prompt", _render)
+
+    async def _judge(**_kwargs):
+        return verdicts.pop(0) if verdicts else Verdict(accomplished=True)
+
+    async def _announce(run_id, node_id, report, origin, *, awaiting_decision, informational=False, output=None):
+        if not awaiting_decision:
+            return
+        waiter = desk.waiter(node_id)
+        if node_id in state.reassigned:
+            desk.resolve(node_id, CONTINUE, "try again", expected_waiter=waiter)
+            return
+        plan = _move_plan(
+            node_id=node_id,
+            source_agent="alpha",
+            source_instance="shared",
+            target_agent="beta",
+            target_stateful=True,
+            target_instance="shared",
+            nodes=[spec_node],
+            backends={node_id: beta},
+            waiter=waiter,
+        )
+        desk.resolve(node_id, REASSIGN, "use the parser", agent="beta", expected_waiter=waiter, reassignment=plan)
+
+    result = await _run_graph(
+        tmp_path,
+        nodes,
+        {"alpha": alpha, "beta": beta},
+        state=state,
+        desk=desk,
+        judge=_judge,
+        announce=_announce,
+        builder=_backend_builder({"alpha": alpha, "beta": beta}),
+    )
+
+    assert [call["task_id"] for call in beta.calls] == ["fix"], "the retry plants the seed instead of being refused"
+    rows = [
+        json.loads(line)
+        for line in transcript_path(tmp_path, "beta", "shared").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert not [row for row in rows if row.get("role") and "[failed]" in (row.get("content") or "")], (
+        "a destination attempt that never reached the session leaves no turn"
+    )
+    files = {entry["node"]: entry for entry in result.files}
+    assert files["fix"]["status"] == "completed"
 
 
 async def test_repeated_moves_report_only_the_original_group_pair(tmp_path: Path) -> None:
@@ -15395,6 +15680,22 @@ async def test_a_destination_binding_created_after_install_is_refused_before_dis
         if row.get("agent") == "beta" and row.get("handle") == "shared"
     ]
     assert linked == [], "a refused destination is never marked as this run's node"
+
+
+async def test_a_destination_occupied_by_an_acp_binding_is_refused() -> None:
+    """The registry knows two transport kinds; the occupancy check must ask both.
+
+    An ACP session is committed under kind='acp', and the default lookup only
+    matches 'cli', so a live ACP conversation read as an empty handle and the
+    handover was planted into another lane's session.
+    """
+    from raven.agent.subagent.dag_runner import _destination_occupied
+
+    registry = instances_mod.get_registry()
+    await registry.commit("sess", "beta", "shared", "acp-session-1", kind="acp")
+
+    assert await _destination_occupied(None, "sess", "beta", "shared"), "an ACP binding occupies the handle"
+    assert not await _destination_occupied(None, "sess", "beta", "other"), "another handle stays free"
 
 
 async def test_a_reused_assignment_state_is_refused(tmp_path: Path) -> None:
