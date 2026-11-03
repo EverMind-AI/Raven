@@ -353,6 +353,12 @@ class ModelOverlay(Base):
     request may actually carry is still decided by `capabilities.supports_vision`
     and `ProviderSpec`, which is why a wrong tag here costs a wrong picture of a
     model and never a wrong call.
+
+    ``reasoning_efforts`` is the exception to the display-only rule: it states
+    the words this model accepts for a per-conversation pick, and
+    ``providers/effort_levels.py`` prefers it over the LiteLLM table. A word
+    outside the effort ladder is refused at the RPC door; an empty list means
+    nothing was stated and falls back to the table.
     """
 
     label: str = ""
@@ -360,6 +366,7 @@ class ModelOverlay(Base):
     capabilities: list[str] = Field(default_factory=list)
     input_modalities: list[str] = Field(default_factory=list)
     output_modalities: list[str] = Field(default_factory=list)
+    reasoning_efforts: list[str] = Field(default_factory=list)
 
 
 class ProviderEndpoint(Base):
@@ -796,6 +803,16 @@ class GatewayPageConfig(Base):
 TIER_LADDER: tuple[str, ...] = ("medium", "high", "max")
 """The built-in tiers, cheapest first. The order is what makes a clamp possible,
 so it is a constant here rather than something read back off the catalogue."""
+
+REASONING_EFFORTS: tuple[str, ...] = ("minimal", "low", "medium", "high")
+"""The words ``agents.defaults.reasoningEffort`` accepts, least first: the
+install-wide default. A session's own pick is checked against the levels its
+model declares (``providers/effort_levels.py``), which may also carry
+``xhigh``/``max``; this list is that picker's fallback only when the LiteLLM
+table cannot be read. Each provider maps a word to its own wire -- the adaptive
+efforts and thinking budgets in
+``providers/anthropic_messages_provider.py``, ``reasoning_effort`` on the
+OpenAI-shaped ones -- and a model with no thinking to move ignores it."""
 
 ROUTE_REQUIREMENTS: tuple[str, ...] = ("image_generation", "image_search")
 """What a route may declare its target's own pipeline spends.

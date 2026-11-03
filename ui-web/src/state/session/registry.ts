@@ -31,6 +31,7 @@ import { isImportedKey } from '../../lib/imported'
 import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
 import { draw as drawBanner } from '../banner'
+import { load as loadEffort } from '../effort'
 import { adopt as adoptBases, clearStaged as clearStagedBases } from '../mentions'
 import { load as loadTier } from '../tier'
 import { show as toast } from '../toast'
@@ -273,6 +274,7 @@ export function switchToDraft(): void {
   // default's own answer. The tier and the permission mode are the same.
   void loadProviders(null, gen)
   void loadTier()
+  void loadEffort(null, gen)
   void loadPermMode(null, gen)
   $('#title')!.textContent = t('gui.new_task')
   pitch(); sessionDraw(); $('#ta')!.focus()
@@ -300,7 +302,7 @@ export async function switchTo(s: SessRow, turnOver = false): Promise<void> {
   // until below (and not at all on the parked-turn path). The gen lets the
   // refresh drop itself if a later open overtakes it, since model.options
   // answers off-thread and can land out of order.
-  rt.staged.model = null; rt.staged.tier = null; rt.staged.perm = null
+  rt.staged.model = null; rt.staged.tier = null; rt.staged.perm = null; rt.staged.effort = null
   void loadProviders(s.id, gen)
   /* Read here rather than from `session.onChange`, which is what the tier used
      and what left it stale: `setCurrent` returns early when the id is unchanged,
@@ -309,6 +311,12 @@ export async function switchTo(s: SessRow, turnOver = false): Promise<void> {
      every session back on the catalogue default -- and the chip went on naming
      the tier from before the gap. */
   void loadTier()
+  /* The effort is kept on the session's record, so a reopen reads what it
+     was left at -- including after a gateway restart, unlike the tier. Keyed
+     to s.id and the switch, as the permission mode is: the current session
+     is not switched over until below, so a read of "the current one" here
+     would be a read of the conversation being left. */
+  void loadEffort(s.id, gen)
   void loadPermMode(s.id, gen)
   // Opening it IS reading it. ``s`` can be a bare {id, title} from the
   // reconnect path, so clear the flag on the row in sessionRows(), not on the arg.

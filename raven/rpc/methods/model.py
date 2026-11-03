@@ -264,7 +264,7 @@ def _model_labels(slug: str, models: "list[str]", *, section: Any = _UNLOADED) -
     for model in models:
         row = describe(slug, model, overlay=_overlay_for(overlays, slug, model))
         window = resolve_context_window(model, allow_fetch=False)
-        if not (row.described or row.tagged or window):
+        if not (row.described or row.tagged or window or row.reasoning_efforts):
             # A model only the vendor's own list names still has the kind that
             # list proved, which is what keeps an embedding model out of the
             # chat slot's column.
@@ -276,6 +276,8 @@ def _model_labels(slug: str, models: "list[str]", *, section: Any = _UNLOADED) -
             entry["description"] = row.description
         if row.capabilities:
             entry["capabilities"] = list(row.capabilities)
+        if row.reasoning_efforts:
+            entry["reasoning_efforts"] = list(row.reasoning_efforts)
         if row.input_modalities:
             entry["input_modalities"] = list(row.input_modalities)
         if row.output_modalities:
@@ -739,6 +741,18 @@ def _stated_overlay(parsed: "ModelAddModelParams") -> dict[str, object]:
             raise ConfigValidationError(f"unknown {field}: {', '.join(unknown)}", data={"field": field})
         if cleaned:
             stated[field] = list(cleaned)
+    if parsed.reasoning_efforts is not None:
+        from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
+
+        allowed = tuple(reversed(REASONING_EFFORT_LADDER))
+        cleaned = clean_tags(parsed.reasoning_efforts, allowed)
+        if len(cleaned) != len(set(parsed.reasoning_efforts)):
+            unknown = sorted(set(parsed.reasoning_efforts) - set(cleaned))
+            raise ConfigValidationError(
+                f"unknown reasoning effort: {', '.join(unknown)}",
+                data={"field": "reasoning_efforts"},
+            )
+        stated["reasoningEfforts"] = list(cleaned)
     return stated
 
 

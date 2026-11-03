@@ -306,10 +306,10 @@ function KvForm({ fields, onSave, onCancel, saveLabel }: {
 /* What the person stated about a model, from the config section itself:
    `labels` folds these into the registry's own names, so it cannot tell a
    name somebody chose from one the catalogue ships. */
-function statedOverlays(raw: Record<string, unknown>, slug: string): Array<[string, { label?: string; description?: string }]> {
-  const providers = raw.providers as Record<string, { modelOverlay?: Record<string, { label?: string; description?: string }> }> | undefined
+function statedOverlays(raw: Record<string, unknown>, slug: string): Array<[string, { label?: string; description?: string; reasoningEfforts?: string[] }]> {
+  const providers = raw.providers as Record<string, { modelOverlay?: Record<string, { label?: string; description?: string; reasoningEfforts?: string[] }> }> | undefined
   const overlay = (providers && providers[slug] && providers[slug].modelOverlay) || {}
-  return Object.entries(overlay).filter(([, v]) => v && (v.label || v.description))
+  return Object.entries(overlay).filter(([, v]) => v && (v.label || v.description || v.reasoningEfforts?.length))
 }
 
 function Advanced({ p }: { p: ProviderRow }): JSX.Element {
@@ -334,10 +334,11 @@ function Advanced({ p }: { p: ProviderRow }): JSX.Element {
     if (!v.model) { store.refuse(t('gui.settings.providers.model_first')); return }
     if (!v.label) { store.refuse(t('gui.settings.providers.label_first')); return }
     store.set({ ovlAdd: null })
-    void store.run(busy(p.id), () => store.source().provider('add_model', { slug: p.id, model: v.model, label: v.label, description: v.description || '' }))
+    const reasoning_efforts = (v.effort || '').split(',').map((word) => word.trim()).filter(Boolean)
+    void store.run(busy(p.id), () => store.source().provider('add_model', { slug: p.id, model: v.model, label: v.label, description: v.description || '', reasoning_efforts }))
   }
   const clearOverlay = (model: string): void => {
-    void store.run(busy(p.id), () => store.source().provider('add_model', { slug: p.id, model, label: '', description: '' }))
+    void store.run(busy(p.id), () => store.source().provider('add_model', { slug: p.id, model, label: '', description: '', reasoning_efforts: [] }))
   }
   return (
     <Fold open={s.adv === p.id} label={t('gui.settings.providers.advanced')}
@@ -377,7 +378,7 @@ function Advanced({ p }: { p: ProviderRow }): JSX.Element {
               {overlays.map(([model, v]) => (
                 <div key={model} className="settings-kvrow">
                   <span className="settings-kvn">{model}</span>
-                  <span className="settings-kvv" style={{ color: 'var(--text)' }}>{v.label || model}{v.description ? ` · ${v.description}` : ''}</span>
+                  <span className="settings-kvv" style={{ color: 'var(--text)' }}>{v.label || model}{v.description ? ` · ${v.description}` : ''}{v.reasoningEfforts?.length ? ` · ${v.reasoningEfforts.join(', ')}` : ''}</span>
                   <IconBtn glyph="x" label={t('gui.settings.providers.remove_label', { model })} onClick={() => clearOverlay(model)} />
                 </div>
               ))}
@@ -389,6 +390,7 @@ function Advanced({ p }: { p: ProviderRow }): JSX.Element {
                 listed.length ? { id: 'model', placeholder: t('gui.settings.providers.model_id'), options: listed } : { id: 'model', placeholder: t('gui.settings.providers.model_id') },
                 { id: 'label', placeholder: t('gui.settings.providers.label_ph') },
                 { id: 'description', placeholder: t('gui.settings.providers.description_ph') },
+                { id: 'effort', placeholder: t('gui.settings.providers.effort_ph') },
               ]}
               onSave={saveOverlay} onCancel={() => store.set({ ovlAdd: null })} saveLabel={t('gui.add')}
             />

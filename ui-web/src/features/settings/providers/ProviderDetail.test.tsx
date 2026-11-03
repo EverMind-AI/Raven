@@ -401,16 +401,31 @@ describe('provider detail', () => {
     await openAdv()
     expect(screen.getByText('Opus · the big one')).toBeTruthy()
     await act(async () => { fireEvent.click(screen.getByLabelText('gui.settings.providers.remove_label {"model":"claude-opus-4-5"}')) })
-    expect(calls).toEqual([['provider', { op: 'add_model', slug: 'anthropic', model: 'claude-opus-4-5', label: '', description: '' }]])
+    expect(calls).toEqual([['provider', { op: 'add_model', slug: 'anthropic', model: 'claude-opus-4-5', label: '', description: '', reasoning_efforts: [] }]])
     calls.length = 0
     await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.add_another')) })
     await act(async () => {
       fireEvent.change(screen.getByLabelText('gui.settings.providers.model_id'), { target: { value: 'claude-sonnet-4-5' } })
       fireEvent.change(screen.getByPlaceholderText('gui.settings.providers.label_ph'), { target: { value: 'Sonnet 4.5' } })
       fireEvent.change(screen.getByPlaceholderText('gui.settings.providers.description_ph'), { target: { value: 'fast' } })
+      fireEvent.change(screen.getByPlaceholderText('gui.settings.providers.effort_ph'), { target: { value: 'low, high' } })
     })
     await act(async () => { fireEvent.click(formSave()) })
-    expect(calls).toEqual([['provider', { op: 'add_model', slug: 'anthropic', model: 'claude-sonnet-4-5', label: 'Sonnet 4.5', description: 'fast' }]])
+    expect(calls).toEqual([['provider', { op: 'add_model', slug: 'anthropic', model: 'claude-sonnet-4-5', label: 'Sonnet 4.5', description: 'fast', reasoning_efforts: ['low', 'high'] }]])
+  })
+
+  it('a blank effort field clears the declaration', async () => {
+    const { calls } = install()
+    await open('anthropic')
+    await openAdv()
+    calls.length = 0
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.add_another')) })
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('gui.settings.providers.model_id'), { target: { value: 'claude-sonnet-4-5' } })
+      fireEvent.change(screen.getByPlaceholderText('gui.settings.providers.label_ph'), { target: { value: 'Haiku' } })
+    })
+    await act(async () => { fireEvent.click(formSave()) })
+    expect(calls).toEqual([['provider', { op: 'add_model', slug: 'anthropic', model: 'claude-sonnet-4-5', label: 'Haiku', description: '', reasoning_efforts: [] }]])
   })
 
   /* The popover that replaced the tick-then-confirm sheet: a click on a row is

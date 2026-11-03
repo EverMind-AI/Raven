@@ -312,6 +312,9 @@ async def test_default_session_info_key_set_matches_expected_v030(fake_agent_loo
         "usage",
         "endpoint",
         "running",
+        # What the session's own calls think at, for the status bar beside the
+        # model: its pick (session.set_effort), else the default in force.
+        "reasoning_effort",
     }
     assert set(info) == expected_keys, (
         f"init bundle key set drift: unexpected={set(info) - expected_keys}, missing={expected_keys - set(info)}"

@@ -769,3 +769,23 @@ def test_the_qwen_vendor_is_shelved_under_the_cloud_that_runs_it() -> None:
     from raven.providers.registry import find_by_model
 
     assert find_by_model("dashscope/qwen-plus") is spec
+
+
+def test_describe_carries_the_overlay_effort_levels() -> None:
+    from raven.config.schema import ModelOverlay
+    from raven.providers.catalog import describe
+
+    row = describe("hosted_vllm", "mine", overlay=ModelOverlay(reasoning_efforts=["low", "high"]))
+    assert row.reasoning_efforts == ("low", "high")
+
+
+def test_describe_drops_an_overlay_word_outside_the_ladder() -> None:
+    """The config file accepts any string; the label must state only words the
+    build can send, or the picker and the model table disagree."""
+    from raven.config.schema import ModelOverlay
+    from raven.providers.catalog import describe
+
+    mixed = describe("hosted_vllm", "mine", overlay=ModelOverlay(reasoning_efforts=["high", "Turbo"]))
+    assert mixed.reasoning_efforts == ("high",)
+    invalid = describe("hosted_vllm", "mine", overlay=ModelOverlay(reasoning_efforts=["High"]))
+    assert invalid.reasoning_efforts == ()

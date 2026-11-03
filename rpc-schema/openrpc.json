@@ -1472,6 +1472,17 @@
           }
         },
         {
+          "name": "reasoning_efforts",
+          "required": false,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The reasoning-effort words this model accepts, least first. Omit to leave a stored declaration alone; [] clears it."
+          }
+        },
+        {
           "name": "session_id",
           "required": false,
           "schema": {
@@ -3730,6 +3741,80 @@
                   }
                 }
               }
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "session.set_effort",
+      "summary": "Report, set or clear the reasoning effort this session's own model calls run at. Neither field reports; clear=true drops the pick so the session follows the default again; effort=<word> runs from the next turn on. Kept on the session's record, so it outlives the gateway. Raven's own calls only: sub-agents keep the configured default.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "effort",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "One of the words in options. Omit it to report without changing."
+          }
+        },
+        {
+          "name": "clear",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "description": "Drop the session's own pick and follow the default again. Wins over effort when both are given."
+          }
+        },
+        {
+          "name": "model",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "The model to answer for when the caller has no session yet (a draft). Omit for a session's own model."
+          }
+        }
+      ],
+      "result": {
+        "name": "SessionSetEffortResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "session_key"
+          ],
+          "properties": {
+            "session_key": {
+              "type": "string"
+            },
+            "effort": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The session's own pick where the model declares it, else null: a stored pick the model does not offer reads as null, and the turn runs at default."
+            },
+            "default": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "What the session runs at with no pick of its own: its mode's effort where the catalogue sets one, else agents.defaults.reasoningEffort, else null for the provider's own default. Not narrowed by the model."
+            },
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The words this model accepts, least first."
             }
           }
         }
@@ -12537,6 +12622,13 @@
             "type": "boolean",
             "description": "A turn is in flight on this session right now."
           },
+          "reasoning_effort": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The reasoning effort this session's own model calls run at: its own pick (session.set_effort), else its mode's, else agents.defaults.reasoningEffort; null when the provider's own default stands."
+          },
           "read_only": {
             "type": "boolean",
             "description": "True for an Imported Conversation, which nothing can change; absent on every other session."
@@ -14596,6 +14688,13 @@
           "output_modalities": {
             "type": "array",
             "description": "What the model writes: text, image, video, audio, vector.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reasoning_efforts": {
+            "type": "array",
+            "description": "The reasoning-effort words a provider's model overlay declares for this model; empty where none was stated.",
             "items": {
               "type": "string"
             }

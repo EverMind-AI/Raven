@@ -20,11 +20,11 @@ import { claimDraft as claimComposerDraft } from '../../features/composer/mount'
 import { drawMeter, goPaint as goState, queuePush, queueShift, turn } from '../../features/composer/mount'
 import { reduce } from '../../features/composer/turn'
 import { claimDraft as claimDeskDraft } from '../../features/desk/store'
-import { adoptSelection, chipModel, loadProviders, rememberUsed, stagedTier } from '../../features/model/source'
+import { adoptSelection, chipModel, loadProviders, rememberUsed } from '../../features/model/source'
 import { rowPreview, touchSession } from '../../features/rail/source'
 import { draw as sessionDraw } from '../../features/rail/store'
 import { plainTitle } from '../../features/rail/title'
-import { loadPermMode, stagedPerm } from '../../features/settings/source'
+import { loadPermMode } from '../../features/settings/source'
 import * as transcript from '../../features/transcript/mount'
 import { down as scrollTranscriptDown } from '../../features/transcript/tail'
 import { wsSetRoot as wsSetRootImpl } from '../../features/workspace/source'
@@ -38,6 +38,7 @@ import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/s
 import { hasNamingFlag, hasTurnDuration } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
 import { ask as confirmAsk } from '../confirm'
+import { load as loadEffort } from '../effort'
 import { adopt as adoptBases, staged as stagedBases } from '../mentions'
 import { ds, sources } from '../sources'
 import { load as loadTier } from '../tier'
@@ -139,7 +140,7 @@ export class SessionRuntime {
 
   /* A model, tier and permission mode picked while this was still a draft.
      Applied to the conversation the first message mints, then forgotten. */
-  staged: Staging = { model: null, tier: null, perm: null }
+  staged: Staging = { model: null, tier: null, perm: null, effort: null }
 
   wsRoot: string | null = null
 
@@ -627,6 +628,7 @@ export async function promote(preview?: string, atPointer?: (id: string) => void
   claimDeskDraft(sessionCurrent())
   await applyStagedModel(draftRt, s.id, gen)
   await applyStagedTier(draftRt, s.id)
+  await applyStagedEffort(draftRt, s.id, gen)
   await applyStagedPerm(draftRt, s.id)
   sessionDraw()
   await subscribe(s.id)
@@ -680,8 +682,9 @@ export async function applyStagedModel(rt: SessionRuntime, sessionId: string, ge
    A failure is said rather than reversed silently, and then re-read: the chip is
    showing the staged tier as though it were in force, so leaving it there after
    a refusal is the one outcome worse than the refusal. */
-export async function applyStagedTier(_rt: SessionRuntime, sessionId: string): Promise<void> {
-  const mode = stagedTier()
+export async function applyStagedTier(rt: SessionRuntime, sessionId: string): Promise<void> {
+  const mode = rt.staged.tier
+  rt.staged.tier = null
   if (!mode) return
   try {
     await gateway().call('session.set_mode', { session_key: sessionId, mode })
@@ -691,11 +694,39 @@ export async function applyStagedTier(_rt: SessionRuntime, sessionId: string): P
   void loadTier()
 }
 
+/* The reasoning effort picked while this was still a draft, written now that
+   there is a session_key to write it under. Awaited before the turn is sent,
+   for the reason the tier is: the turn's first call reads it, and a pick that
+   lands after the call went out is one that turn did not run at. Said rather
+   than reversed silently on a failure, and then re-read, as the tier is.
+
+   The re-read is about the session the promotion minted and carries the
+   ticket the promotion began under, as `applyStagedModel`'s does: a ticket
+   taken after the awaited write is whichever view the reader has opened
+   since, and under that one the source would paint this session's rung over
+   that view's own read. The source drops the late answer instead.
+
+   The pick is read off the draft's own runtime, not the view on screen now:
+   the model and tier writes above can await long enough for the reader to
+   open another conversation, and its staging is not this draft's. */
+export async function applyStagedEffort(rt: SessionRuntime, sessionId: string, gen: number): Promise<void> {
+  const effort = rt.staged.effort
+  rt.staged.effort = null
+  if (!effort) return
+  try {
+    await gateway().call('session.set_effort', { session_key: sessionId, effort })
+  } catch (e) {
+    toast(`${t('gui.effort.title')}: ${detailOf(e)}`)
+  }
+  void loadEffort(sessionId, gen)
+}
+
 /* The permission mode picked while this was still a draft, written now that
    there is a session_id to write it under. Awaited before the turn is sent so
    its first tool call already reads the chosen mode. */
-export async function applyStagedPerm(_rt: SessionRuntime, sessionId: string): Promise<void> {
-  const mode = stagedPerm()
+export async function applyStagedPerm(rt: SessionRuntime, sessionId: string): Promise<void> {
+  const mode = rt.staged.perm
+  rt.staged.perm = null
   if (!mode) return
   try {
     await gateway().call('config.set', { key: 'permissions.mode', value: mode, scope: 'session', session_id: sessionId })

@@ -214,6 +214,10 @@ export interface SessionInitInfo {
    */
   running?: boolean;
   /**
+   * The reasoning effort this session's own model calls run at: its own pick (session.set_effort), else its mode's, else agents.defaults.reasoningEffort; null when the provider's own default stands.
+   */
+  reasoning_effort?: string | null;
+  /**
    * True for an Imported Conversation, which nothing can change; absent on every other session.
    */
   read_only?: boolean;
@@ -1307,6 +1311,10 @@ export interface ModelLabel {
    * What the model writes: text, image, video, audio, vector.
    */
   output_modalities?: string[];
+  /**
+   * The reasoning-effort words a provider's model overlay declares for this model; empty where none was stated.
+   */
+  reasoning_efforts?: string[];
   /**
    * The bucket a model list files this model under, from what it writes (registry_data.kind_of): a model that reads images is still text. A model with no label entry is text.
    */
@@ -4116,6 +4124,10 @@ export interface ModelAddModelParams {
   capabilities?: string[];
   input_modalities?: string[];
   output_modalities?: string[];
+  /**
+   * The reasoning-effort words this model accepts, least first. Omit to leave a stored declaration alone; [] clears it.
+   */
+  reasoning_efforts?: string[];
   session_id?: string;
 }
 /**
@@ -4962,6 +4974,44 @@ export interface SessionSetModeResult {
     name?: string;
     description?: string;
   }[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionSetEffortParams".
+ */
+export interface SessionSetEffortParams {
+  session_key: string;
+  /**
+   * One of the words in options. Omit it to report without changing.
+   */
+  effort?: string;
+  /**
+   * Drop the session's own pick and follow the default again. Wins over effort when both are given.
+   */
+  clear?: boolean;
+  /**
+   * The model to answer for when the caller has no session yet (a draft). Omit for a session's own model.
+   */
+  model?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionSetEffortResult".
+ */
+export interface SessionSetEffortResult {
+  session_key: string;
+  /**
+   * The session's own pick where the model declares it, else null: a stored pick the model does not offer reads as null, and the turn runs at default.
+   */
+  effort?: string | null;
+  /**
+   * What the session runs at with no pick of its own: its mode's effort where the catalogue sets one, else agents.defaults.reasoningEffort, else null for the provider's own default. Not narrowed by the model.
+   */
+  default?: string | null;
+  /**
+   * The words this model accepts, least first.
+   */
+  options?: string[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
