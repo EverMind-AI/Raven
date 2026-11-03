@@ -189,3 +189,26 @@ def test_steering_and_images_are_offered_where_they_were_measured() -> None:
     assert STEER_AGENTS == {"claude", "codex", "dsh", "pi", "zcode"}
     assert IMAGE_AGENTS <= STEER_AGENTS | {"kimi", "antigravity", "qwen", "grok"}
     assert {agent for agent, _, _ in MIRASIM_AGENTS.values()} >= STEER_AGENTS | IMAGE_AGENTS
+
+
+def test_a_route_prefixed_id_that_collides_with_a_catalog_entry_is_reported() -> None:
+    """The literal entry wins; the copy the route would mint is dropped and said so."""
+    from loguru import logger
+
+    lines: list[str] = []
+    sink = logger.add(lambda message: lines.append(message), level="WARNING")
+    try:
+        doc = catalog_doc(
+            models=[{"id": "sonnet", "label": "Sonnet"}, {"id": "own:sonnet", "label": "Literal"}],
+            routeByModel={},
+        )
+        catalog = read_catalog("claude", agent_entry(ROWS, "claude"), doc)
+    finally:
+        logger.remove(sink)
+
+    assert any("own:sonnet" in line and "not offered" in line for line in lines)
+    option = catalog.model_option(None)
+    values = [entry["value"] for group in option["options"] for entry in group["options"]]
+    # The collision is reported rather than resolved: neither entry is offered
+    # under the contested spelling.
+    assert "own:sonnet" not in values

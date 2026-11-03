@@ -353,6 +353,10 @@ export async function run(
   landed = gen
   const next: Partial<ExtAgentsState> = { rows, epoch: get().epoch + 1 }
   if (renamed && get().sheet === row?.name) next.sheet = renamed
+  /* The row now holds the model, so the waiting pick has done its job. Left
+     behind, it came back when the member was disconnected and folded into the
+     card again, long after the row had moved off that model. */
+  if (!failedWith && op === 'connect' && row && get().picked[row.name]) next.picked = without(get().picked, row.name)
   set(next)
   if (get().sheet && !rows.some((x) => x.name === get().sheet)) closeSheet()
   watchBuilds(rows)
@@ -413,7 +417,11 @@ export function connectRow(row: ExtAgentRow): Promise<void> {
   const stage = stageOf(row)
   if (stage === 'add') {
     const description = get().drafts[row.name]
-    const model = get().picked[row.name]
+    const held = get().picked[row.name]
+    /* A pick outlives a menu that has since dropped it -- the handshake is
+       re-measured behind the page -- and the add refuses a model the agent no
+       longer offers. The agent's own default is the better answer. */
+    const model = held && (row.model_choices || []).some(choice => choice.value === held) ? held : ''
     return act(row, 'connect', { ...(description ? { description } : {}), ...(model ? { model } : {}), ...whereArgs(row.name) })
   }
   if (stage === 'stale') return act(row, 'migrate')

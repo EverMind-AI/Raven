@@ -548,3 +548,15 @@ def test_the_socket_of_a_server_run_over_ssh_is_a_host_only_while_it_answers(
     (remote_root / "current" / "start.sh").unlink()
     (remote_root / "servers" / "0.0.587").rmdir()
     assert mp.presence(nowhere["env"], path=nowhere["path"]) == ("installed", str(remote_root))
+
+
+def test_which_rows_get_ravens_interpreter_is_declared_not_inferred_from_the_command() -> None:
+    """A command that happens to spell a placeholder does not make its row a bundled shim."""
+    from raven.agent.subagent.presets import BUNDLED_SHIM_PRESETS, _launchable
+
+    shaped = {"preset": "codex", "command": "{PYTHON} -P -m example"}
+    assert _launchable(shaped) == shaped
+
+    bundled = {"preset": next(iter(BUNDLED_SHIM_PRESETS)), "command": "{PYTHON} -P -m example"}
+    expanded = _launchable(bundled)["command"]
+    assert "{PYTHON}" not in expanded and expanded.endswith(" -P -m example")

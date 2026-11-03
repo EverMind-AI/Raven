@@ -149,6 +149,36 @@ describe('connectRow', () => {
     expect(acts[0]).toEqual(['connect', 'claude_code', { description: 'Writes the release notes' }])
   })
 
+  it('carries the picked model into the add and drops the pick once it lands', async () => {
+    const r = row({
+      name: 'OpenCode',
+      preset: 'opencode',
+      model_source: 'agent',
+      model_choices: [{ value: 'v/sonnet', name: 'Sonnet', group: 'Anthropic' }],
+    })
+    const { acts } = install([r])
+    store.pickModel(r, 'v/sonnet')
+    store.connectRow(r)
+    await vi.waitFor(() => expect(acts.length).toBe(1))
+    expect(acts[0]).toEqual(['connect', 'OpenCode', { model: 'v/sonnet' }])
+    expect(store.get().picked.OpenCode).toBeUndefined()
+  })
+
+  it('does not send a pick the row menu has since dropped', async () => {
+    const r = row({
+      name: 'OpenCode',
+      preset: 'opencode',
+      model_source: 'agent',
+      model_choices: [{ value: 'v/sonnet', name: 'Sonnet', group: 'Anthropic' }],
+    })
+    const { acts } = install([r])
+    store.pickModel(r, 'v/gone')
+    store.connectRow(r)
+    await vi.waitFor(() => expect(acts.length).toBe(1))
+    expect(acts[0]).toEqual(['connect', 'OpenCode', {}])
+    expect(store.get().picked.OpenCode).toBeUndefined()
+  })
+
   it('switches a configured row back on and a stale one over to its new transport', async () => {
     const off = row({ name: 'off_one', configured: true, enabled: false, probe_status: 'ready' })
     const stale = row({ name: 'stale_one', configured: true, enabled: false, probe_status: 'ready', upgrade_to: 'acp' })

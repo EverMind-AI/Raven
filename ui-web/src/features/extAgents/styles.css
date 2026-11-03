@@ -463,7 +463,8 @@
    head already shows the family's mark at 46px, and nine of them at that size
    would be a wall of plates rather than a list. */
 .extAgents-pickrow .extAgents-tile .agent-mark { width: 30px; height: 30px; border-radius: 9px; }
-.extAgents-pickrow .extAgents-tile .agent-mark > img { width: 19px; height: 19px; }
+.extAgents-pickrow .extAgents-tile .agent-mark > img,
+.extAgents-pickrow .extAgents-tile .agent-mark > svg { width: 19px; height: 19px; }
 /* Name over its line, the roster row's own stack: the line is the one part of
    the row that gives way, and beside the name it had only what the pill and the
    button left, which was a word. */
