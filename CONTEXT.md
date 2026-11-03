@@ -167,7 +167,11 @@ names a roster agent rather than a label: the move takes the node out of this ta
 the node keeps the Charter of the role it was submitted under (see **Charter**). A stored
 Playbook's private DAG
 tool never consults this turn-scoped table: its graph already names roster agents and carries
-its own authored prompts, so a coincidentally equal worker label cannot rewrite it.
+its own authored prompts, so a coincidentally equal worker label cannot rewrite it. When a
+completed run is saved as a Playbook, a worker-labelled node that finished on another agent
+keeps its role by gaining a derived delegate row named `<label>--reassign-<n>`, one per
+(role, finishing agent) pair; that row exists only in the saved Harness, and the turn-scoped
+table it came from is untouched.
 _Avoid_: reading the table itself as a permission. It decides who the dispatching model may
 hand work to; what a dispatched worker may then do is its Charter's business, applied in the
 worker's own process. And reading it as configuring the main agent: it does not. The main
@@ -3991,7 +3995,10 @@ early; that escape is a framing guard, not a sanitizer for instructions inside t
 Each carried answer is also wrapped with `wrap_untrusted` (`source="subagent"`), and a
 handover carried inside an earlier user row is fenced the same way, because both are
 sub-agent output by construction (the fence rule below); the task, the person's and the
-main agent's words, and the raven-minted trailer stay unfenced.
+main agent's words, and the raven-minted trailer stay unfenced. A steer row is fenced
+too: the collector records one for any user chunk that differs from the prompt, including
+a chunk the agent process or a remote host emitted, so its provenance is not the person's
+word by construction.
 _Avoid_: "handoff" -- the **Handoff Block** (`raven/agent/subagent/direct_chat.py`) is the
 raven-minted pointer block in the main agent's next turn after Direct Chat activity, and it
 carries no transcript text.

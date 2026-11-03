@@ -1407,6 +1407,157 @@ async def test_a_moved_node_is_listed_once_under_the_agent_that_ran_it_last(_iso
     assert row["attemptAgents"] == ["alpha", "beta"]
 
 
+async def test_a_node_that_returned_to_alpha_wears_the_handle_it_ended_on(_isolated_registry: Any) -> None:
+    """A->B->A on minted handles: recency alone can pick the first session.
+
+    The row's current handle is what the node last ran on; the older link with
+    the same agent is not the card.
+    """
+    await _isolated_registry.upsert_dag_node("s1", "r1", "fix", "alpha", "exception")
+    await _isolated_registry.link_dag_node("s1", "alpha", "fix-a", "r1", "fix")
+    await _isolated_registry.move_dag_node(
+        "s1",
+        run_id="r1",
+        node_id="fix",
+        old_agent="alpha",
+        new_agent="beta",
+        status="running",
+        instance="fix-b",
+        instance_auto=True,
+        attempt_agents=["alpha", "beta"],
+    )
+    await _isolated_registry.link_dag_node("s1", "beta", "fix-b", "r1", "fix")
+    await _isolated_registry.move_dag_node(
+        "s1",
+        run_id="r1",
+        node_id="fix",
+        old_agent="beta",
+        new_agent="alpha",
+        status="completed",
+        instance="fix-c",
+        instance_auto=True,
+        attempt_agents=["alpha", "beta", "alpha"],
+    )
+    await _isolated_registry.link_dag_node("s1", "alpha", "fix-c", "r1", "fix")
+    # A write on the stale link makes it the most recently updated row, which is
+    # exactly the order a recency-only choice reads.
+    await _isolated_registry.commit("s1", "alpha", "fix-a", "alpha-session")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    assert [(r["agent"], r["handle"]) for r in out["instances"]] == [("alpha", "fix-c")]
+
+
+async def test_a_named_source_instance_keeps_its_own_row_after_the_node_moves(
+    _isolated_registry: Any, tmp_path: Path
+) -> None:
+    """The handle the graph named predates the node's visit.
+
+    Moving the node away does not make that conversation the destination's, and
+    it does not take the source session off the list.
+    """
+    from raven.agent.subagent.history import dag_root
+
+    RUN = "20261103T090000000000Z-abcdef12"
+
+    session_dir = tmp_path / "sessions" / "s1"
+    run_dir = dag_root(session_dir) / RUN
+    run_dir.mkdir(parents=True)
+    (run_dir / "graph.json").write_text(
+        json.dumps(
+            {
+                "task_summary": "moved",
+                "nodes": [{"id": "fix", "subagent": "alpha", "instance": "shared"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = _FakeManager()
+    manager.session_dirs["s1"] = session_dir
+    await _isolated_registry.upsert_dag_node("s1", RUN, "fix", "alpha", "exception")
+    await _isolated_registry.link_dag_node("s1", "alpha", "shared", RUN, "fix")
+    await _isolated_registry.move_dag_node(
+        "s1",
+        run_id=RUN,
+        node_id="fix",
+        old_agent="alpha",
+        new_agent="beta",
+        status="completed",
+        instance="fix-b",
+        instance_auto=True,
+        attempt_agents=["alpha", "beta"],
+    )
+    await _isolated_registry.link_dag_node("s1", "beta", "fix-b", RUN, "fix")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(manager)))
+
+    assert {(r["agent"], r["handle"]) for r in out["instances"]} == {("beta", "fix-b"), ("alpha", "shared")}
+
+
+async def test_forgetting_a_named_source_card_keeps_the_nodes_own_status(
+    _isolated_registry: Any, tmp_path: Path
+) -> None:
+    """The source card is a different row from the node's paired card.
+
+    Forgetting the source conversation must not remove the dag-node record the
+    current card wears, even when both agents happen to be the same after a hop.
+    """
+    from raven.agent.subagent.history import dag_root
+
+    RUN = "20261103T090000000000Z-abcdef13"
+    session_dir = tmp_path / "sessions" / "s1"
+    run_dir = dag_root(session_dir) / RUN
+    run_dir.mkdir(parents=True)
+    (run_dir / "graph.json").write_text(
+        json.dumps(
+            {
+                "task_summary": "moved",
+                "nodes": [{"id": "fix", "subagent": "alpha", "instance": "shared"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = _FakeManager()
+    manager.session_dirs["s1"] = session_dir
+    await _isolated_registry.upsert_dag_node("s1", RUN, "fix", "alpha", "exception")
+    await _isolated_registry.link_dag_node("s1", "alpha", "shared", RUN, "fix")
+    await _isolated_registry.move_dag_node(
+        "s1",
+        run_id=RUN,
+        node_id="fix",
+        old_agent="alpha",
+        new_agent="beta",
+        status="running",
+        instance="fix-b",
+        instance_auto=True,
+        attempt_agents=["alpha", "beta"],
+    )
+    await _isolated_registry.link_dag_node("s1", "beta", "fix-b", RUN, "fix")
+    await _isolated_registry.move_dag_node(
+        "s1",
+        run_id=RUN,
+        node_id="fix",
+        old_agent="beta",
+        new_agent="alpha",
+        status="completed",
+        instance="fix-c",
+        instance_auto=True,
+        attempt_agents=["alpha", "beta", "alpha"],
+    )
+    await _isolated_registry.link_dag_node("s1", "alpha", "fix-c", RUN, "fix")
+
+    forgotten = await instances_forget(
+        {"session_key": "s1", "agent": "alpha", "handle": "shared"},
+        agent_loop_factory=_factory(_FakeLoop(manager)),
+    )
+    assert forgotten["removed"] is True
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(manager)))
+    current = next(r for r in out["instances"] if (r["agent"], r["handle"]) == ("alpha", "fix-c"))
+    assert current["status"] == "completed"
+    assert current["attemptAgents"] == ["alpha", "beta", "alpha"]
+
+
 async def test_a_moved_stateless_node_reads_back_as_one_row_of_its_new_agent(_isolated_registry: Any) -> None:
     """With no linked row to wear, a moved node is listed as its own row -- under
     the agent that last ran it, not the one the graph named."""

@@ -21,6 +21,14 @@ class HandoverTurn:
     agent: str
     user: str
     assistant: str
+    steered: bool = False
+    """Whether the user row is a steer.
+
+    A steer's provenance is not recorded: the ACP collector writes one for any
+    user chunk that differs from the prompt, including a chunk the agent
+    process or a remote host emitted. Such a row is carried as data, not as the
+    person's words.
+    """
 
 
 @dataclass(frozen=True)
@@ -112,6 +120,18 @@ def _carried_user(text: str) -> str:
     return escape_handover_text(_fence_nested(text))
 
 
+def _carried_user_row(turn: HandoverTurn) -> str:
+    """One user line as it reaches the destination.
+
+    A steer row is fenced whole. Its provenance is not recorded, and the
+    collector writes one for any user chunk that differs from the prompt,
+    including a chunk the agent process or a remote host emitted; carrying it
+    as the person's words would let that text become an instruction.
+    """
+    text = _carried_user(turn.user)
+    return wrap_untrusted(text, source="subagent") if turn.steered else text
+
+
 def _text_content(content: Any) -> str | None:
     if isinstance(content, str):
         return content
@@ -130,6 +150,7 @@ def turns_from_rows(rows: Sequence[Mapping[str, Any]], *, agent: str) -> tuple[H
     """Take each user row and its last eligible assistant text from an instance log."""
     turns: list[HandoverTurn] = []
     user: str | None = None
+    steered = False
     answer: str | None = None
     for row in rows:
         if "_type" in row:
@@ -137,15 +158,16 @@ def turns_from_rows(rows: Sequence[Mapping[str, Any]], *, agent: str) -> tuple[H
         role = row.get("role")
         if role == "user":
             if user is not None:
-                turns.append(HandoverTurn(agent, user, answer if answer is not None else _NO_ANSWER))
+                turns.append(HandoverTurn(agent, user, answer if answer is not None else _NO_ANSWER, steered=steered))
             user = _text_content(row.get("content")) or ""
+            steered = bool(row.get("steer"))
             answer = None
         elif role == "assistant" and user is not None and not row.get("tool_calls"):
             content = _text_content(row.get("content"))
             if content is not None and not content.startswith("[failed]"):
                 answer = content
     if user is not None:
-        turns.append(HandoverTurn(agent, user, answer if answer is not None else _NO_ANSWER))
+        turns.append(HandoverTurn(agent, user, answer if answer is not None else _NO_ANSWER, steered=steered))
     return tuple(turns)
 
 
@@ -292,7 +314,7 @@ def _inner_block(turns: Sequence[HandoverTurn], retained: set[int], answers: Map
         if omitted_count:
             lines.append(f"[{omitted_count} earlier turns omitted]")
             omitted_count = 0
-        lines.append(f"User: {_carried_user(turn.user)}")
+        lines.append(f"User: {_carried_user_row(turn)}")
         lines.append(f"Assistant: {_fence_body(answers[index])}")
     if omitted_count:
         lines.append(f"[{omitted_count} earlier turns omitted]")

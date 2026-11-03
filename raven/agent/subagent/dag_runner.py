@@ -2018,8 +2018,11 @@ async def _await_adjudications(
                 # A reassign hands the node back to the scheduler immediately.
                 # Waiting for the round's other nodes would hold the move behind
                 # questions it does not depend on, and on a bound run those may
-                # never be answered at all.
-                answers = {nid: desk.peek(nid) for nid, task in node_tasks.items() if task in decided}
+                # never be answered at all. Every waiter already carrying an
+                # answer is considered, not just the ones that woke this
+                # iteration: a sibling answered in an earlier wakeup must not be
+                # stranded until the moved node's next attempt ends.
+                answers = {nid: desk.peek(nid) for nid, task in node_tasks.items() if task.done()}
                 reassigned_nid = next(
                     (nid for nid in sorted(answers) if answers[nid] is not None and answers[nid].decision == REASSIGN),
                     None,
@@ -2069,38 +2072,17 @@ async def _await_adjudications(
                     reassignments[reassigned_nid] = answer.reassignment
                     status[reassigned_nid] = "pending"
             return
-        for nid in open_nodes:
-            event = waiters[nid]
-            answer = desk.peek(nid) if event.is_set() else None
-            if answer is not None and answer.decision == REASSIGN and not replanned:
-                # An accepted move this call did not park (only one is parked,
-                # in the early-return branch above). Leave the waiter and its
-                # answer for the scheduler's next pass; consuming it here would
-                # drop the move through `_apply_answer`'s REASSIGN no-op. A
-                # replan is the exception: the graph is being replaced, so the
-                # move is moot and `_apply_replan` names the successor as the
-                # node's cause.
-                handing_back = True
-                continue
-            answer = desk.take(nid) if event.is_set() else None
-            if answer is None:
-                desk.close(nid)
-                if replanned:
-                    # Never asked, rather than asked and ignored: left at
-                    # "exception" for `_apply_replan` to name the successor as
-                    # its cause, for the same reason the REPLAN answer below is.
-                    # Calling it a timeout would blame the agent for a silence
-                    # its own replan is what ended.
-                    continue
-                status[nid] = "failed"
-                errors[nid] = f"Nothing was decided for {timeout_s:g}s, so the node timed out."
-                if failed is not None:
-                    failed.add(nid)
-                continue
-            # A replan is left at "exception" for `_apply_replan`, at the top of
-            # the next loop pass, which is the single writer of a replanned
-            # node's terminal status and reason (naming the successor run).
-            _apply_answer(nid, answer, status=status, errors=errors, continuations=continuations)
+        handing_back = _settle_open_waiters(
+            desk,
+            open_nodes,
+            waiters,
+            status,
+            errors,
+            continuations,
+            replanned=replanned,
+            timeout_s=timeout_s,
+            failed=failed,
+        )
     finally:
         if stop is not None and not stop.done():
             stop.cancel()
@@ -2189,6 +2171,56 @@ def _apply_sibling_answers(
             continue
         if (taken := desk.take(nid)) is not None:
             _apply_answer(nid, taken, status=status, errors=errors, continuations=continuations)
+
+
+def _settle_open_waiters(
+    desk: AdjudicationDesk,
+    open_nodes: list[str],
+    waiters: dict[str, asyncio.Event],
+    status: dict[str, str],
+    errors: dict[str, str],
+    continuations: dict[str, str],
+    *,
+    replanned: bool,
+    timeout_s: float,
+    failed: set[str] | None,
+) -> bool:
+    """Apply or close every waiter still open when the wait ends.
+
+    Returns whether an accepted move was left on the desk for the scheduler's
+    next pass. Only one move can be parked per call; taking another here would
+    hand it to `_apply_answer`'s REASSIGN no-op and drop it.
+    """
+    handing_back = False
+    for nid in open_nodes:
+        event = waiters[nid]
+        answer = desk.peek(nid) if event.is_set() else None
+        if answer is not None and answer.decision == REASSIGN and not replanned:
+            # An accepted move this call did not park (only one is parked, in
+            # the early-return branch above). Leave the waiter and its answer
+            # for the scheduler's next pass. A replan is the exception: the
+            # graph is being replaced, so the move is moot and `_apply_replan`
+            # names the successor as the node's cause.
+            handing_back = True
+            continue
+        answer = desk.take(nid) if event.is_set() else None
+        if answer is None:
+            desk.close(nid)
+            if replanned:
+                # Never asked, rather than asked and ignored: left at
+                # "exception" for `_apply_replan` to name the successor as its
+                # cause, for the same reason a REPLAN answer is.
+                continue
+            status[nid] = "failed"
+            errors[nid] = f"Nothing was decided for {timeout_s:g}s, so the node timed out."
+            if failed is not None:
+                failed.add(nid)
+            continue
+        # A replan is left at "exception" for `_apply_replan`, at the top of the
+        # next loop pass, which is the single writer of a replanned node's
+        # terminal status and reason (naming the successor run).
+        _apply_answer(nid, answer, status=status, errors=errors, continuations=continuations)
+    return handing_back
 
 
 def _reassign_waiting(desk: "AdjudicationDesk | None") -> bool:

@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { DagNodeUpdatedEvent, DagRunCompletedEvent, DagRunSnapshot, DagRunStartedEvent } from '../rpc/index.js'
 
-import { foldDagEvent, foldDagSnapshot } from '../domain/dagRun.js'
+import { attemptOrder, foldDagEvent, foldDagSnapshot } from '../domain/dagRun.js'
 
 const started = (
   nodes: DagRunStartedEvent['payload']['nodes'],
@@ -1057,5 +1057,15 @@ describe('foldDagEvent completion of a reassigned node', () => {
       status: 'completed',
       startedAt: 10
     })
+  })
+})
+
+describe('attemptOrder', () => {
+  it('places a report against the attempt the node holds', () => {
+    expect(attemptOrder(['alpha', 'beta'], undefined)).toBe('stale')
+    expect(attemptOrder(['alpha', 'beta'], ['alpha'])).toBe('stale')
+    expect(attemptOrder(undefined, ['alpha'])).toBe('newer')
+    expect(attemptOrder(['alpha'], ['alpha', 'beta'])).toBe('newer')
+    expect(attemptOrder(['alpha'], ['alpha'])).toBe('same')
   })
 })

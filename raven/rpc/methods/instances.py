@@ -94,7 +94,53 @@ def _session_dir(agent_loop_factory: "AgentLoopFactory | None", session_key: str
         return None
 
 
-def _collapse_dag_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _current_row(node: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    """The linked row that is the node's current conversation.
+
+    A moved node's ``dag-node`` row names the handle its last attempt ran on, so
+    that pair wins even when an older link with the same agent is more recently
+    updated. A node that never moved has no handle on its status row, and its
+    single link is found by agent. A moved stateless node has no handle at all:
+    its ``dag-node`` row is the card, never an older agent's link.
+    """
+    agent = node.get("agent")
+    handle = node.get("nodeInstance")
+    if not isinstance(agent, str):
+        return node
+    canonical = canonical_agent_name(agent)
+    same_agent = [
+        row
+        for row in candidates
+        if isinstance(row.get("agent"), str) and canonical_agent_name(row["agent"]) == canonical
+    ]
+    if "attemptAgents" in node:
+        if isinstance(handle, str):
+            for row in same_agent:
+                if row.get("handle") == handle:
+                    return row
+        return node
+    return same_agent[0] if same_agent else node
+
+
+def _named_instance(node: dict[str, Any], session_dir: Path | None) -> set[str]:
+    """The handle the graph named for this node, when it named one.
+
+    Read from ``graph.json`` rather than the registry: the node's current row
+    carries the handle its last attempt ran on, not the one the graph submitted,
+    and only the graph can say whether an older link predates the node's visit.
+    """
+    run_id, node_id = node.get("runId"), node.get("nodeId")
+    if session_dir is None or not isinstance(run_id, str) or not isinstance(node_id, str):
+        return set()
+    graph = _graph_of(session_dir, run_id)
+    for entry in graph.get("nodes") or []:
+        if isinstance(entry, dict) and entry.get("id") == node_id:
+            instance = entry.get("instance")
+            return {instance} if isinstance(instance, str) and instance else set()
+    return set()
+
+
+def _collapse_dag_rows(rows: list[dict[str, Any]], session_dir: Path | None = None) -> list[dict[str, Any]]:
     """One row per invocation: a stateful DAG node's two rows become one.
 
     Such a node owns both a ``dag-node`` row, which carries its status, and an
@@ -109,11 +155,13 @@ def _collapse_dag_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     A reassigned node leaves a link behind on every agent that ran it -- the
     session that gave up did work on the node too -- so more than one ordinary
     row can answer to one ``dag-node`` row. There is still one node, and the
-    card is the current agent's row: an old link may keep its own historical
-    detail through ``subagents.instance.history``, but it cannot stand in for
-    the identity the node has now, nor add a second card. When the current
-    attempt is stateless no link of its own exists, and the ``dag-node`` row is
-    the card.
+    card is the row of the handle the node ended on, not merely the first link
+    whose agent matches: a move back to an earlier agent can leave two rows for
+    that agent. A minted old handle is folded -- it exists only because this
+    node ran on it. A handle the graph named predates the node's visit, so its
+    row stays a card of its own (never a second card for the node). When the
+    current attempt is stateless no link of its own exists, and the
+    ``dag-node`` row is the card.
 
     A stateless node runs on no handle and keeps its ``dag-node`` row -- with
     no ordinary row to fall back to, dropping it would take that node off the
@@ -154,23 +202,32 @@ def _collapse_dag_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         linked.setdefault((str(node.get("runId")), str(node.get("nodeId"))), []).append(row)
 
     claimed: set[tuple[str, str]] = set()
+    current_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    emitted: set[tuple[Any, Any]] = set()
     for key, candidates in linked.items():
         node = by_node[key]
         claimed.add(key)
-        # Canonicalized on both sides: the rows are written under one name and a
-        # stored reference may still spell a legacy alias, which is the same agent
-        # and must not cost the card its addressable row.
-        current = next(
-            (
-                row
-                for row in candidates
-                if isinstance(row.get("agent"), str)
-                and isinstance(node.get("agent"), str)
-                and canonical_agent_name(row["agent"]) == canonical_agent_name(node["agent"])
-            ),
-            node,
-        )
+        current = _current_row(node, candidates)
+        current_by_key[key] = current
         out.append(_reported(row=current, node=node))
+        emitted.add((current.get("agent"), current.get("handle")))
+    # A named source handle is a conversation of its own: the graph named it
+    # before this node ran there, so moving the node away neither folds it into
+    # the destination's card nor takes it off the list. A minted old handle
+    # stays folded -- it exists only because this node ran on it.
+    for key, candidates in linked.items():
+        named = _named_instance(by_node[key], session_dir)
+        if not named:
+            continue
+        current = current_by_key[key]
+        for row in candidates:
+            if row is current or row.get("handle") not in named:
+                continue
+            identity = (row.get("agent"), row.get("handle"))
+            if identity in emitted:
+                continue
+            emitted.add(identity)
+            out.append(row)
     out.extend(node for key, node in by_node.items() if key not in claimed)
     return sorted(out, key=lambda r: r.get("updatedAtMs") or 0, reverse=True)
 
@@ -354,11 +411,12 @@ async def instances_list(
     table = getattr(manager, "registry", None)
     hidden = {row.name for row in table.rows() if getattr(row, "hidden", False)} if table is not None else set()
     reconciled = [row for row in reconciled if row.get("agent") not in hidden]
+    session_dir = _session_dir(agent_loop_factory, session_key)
     return {
         "instances": _mark_turn_start(
             _mark_titles(
-                _mark_resumable(_collapse_dag_rows(_drop_nodes_that_never_ran(reconciled)), manager),
-                _session_dir(agent_loop_factory, session_key),
+                _mark_resumable(_collapse_dag_rows(_drop_nodes_that_never_ran(reconciled), session_dir), manager),
+                session_dir,
             ),
             session_key,
         ),
@@ -648,7 +706,7 @@ def _ms_of(timestamp: Any) -> int:
         return 0
 
 
-def _paired_handle(rows: list[dict[str, Any]], agent: str, handle: str) -> str | None:
+def _paired_handle(rows: list[dict[str, Any]], agent: str, handle: str, session_dir: Path | None = None) -> str | None:
     """The ``dag-node`` record the named row was reported *with*, if any.
 
     Read back through ``_collapse_dag_rows`` rather than off the row's own
@@ -661,11 +719,26 @@ def _paired_handle(rows: list[dict[str, Any]], agent: str, handle: str) -> str |
     ``None`` for the unpaired ``dag-node`` row of a stateless node, whose own
     handle is already the one being forgotten.
     """
-    for row in _collapse_dag_rows(rows):
+    for row in _collapse_dag_rows(rows, session_dir):
         if row.get("agent") != agent or row.get("handle") != handle:
             continue
         run_id, node_id = row.get("runId"), row.get("nodeId")
         if not isinstance(run_id, str) or not isinstance(node_id, str):
+            return None
+        node = next(
+            (
+                candidate
+                for candidate in rows
+                if candidate.get("kind") == "dag-node"
+                and candidate.get("runId") == run_id
+                and candidate.get("nodeId") == node_id
+            ),
+            None,
+        )
+        # A source row the collapse kept as its own card is not the node's
+        # paired row: forgetting that conversation must not take the node's
+        # status record with it. Only the handle the node ended on is paired.
+        if node is not None and "attemptAgents" in node and node.get("nodeInstance") != handle:
             return None
         paired = f"{run_id}/{node_id}"
         return None if paired == handle else paired
@@ -711,7 +784,7 @@ async def instances_forget(
 
     rows = registry.list_instances(session_key)
     row = next((r for r in rows if r.get("agent") == agent and r.get("handle") == handle), None)
-    paired = _paired_handle(rows, agent, handle)
+    paired = _paired_handle(rows, agent, handle, _session_dir(agent_loop_factory, session_key))
     removed = await registry.forget(session_key, agent, handle)
     if paired is not None:
         removed = await registry.forget(session_key, agent, paired) or removed

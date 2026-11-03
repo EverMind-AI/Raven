@@ -5940,6 +5940,93 @@ async def test_await_adjudications_applies_siblings_decided_in_the_same_batch(
         assert expected_error in errors["b"].lower()
 
 
+async def test_await_adjudications_applies_a_sibling_decided_in_an_earlier_iteration():
+    """A continue that landed in an earlier wakeup is not stranded.
+
+    The reassign arm returns as soon as it parks the move; a sibling answered
+    one iteration before it must be applied in that same return, not left on the
+    desk until the moved node's next attempt ends.
+    """
+    from raven.agent.subagent.dag_adjudication import CONTINUE, REASSIGN, AdjudicationDesk
+    from raven.agent.subagent.dag_runner import _await_adjudications
+
+    desk = AdjudicationDesk()
+    first = desk.open("a")
+    sibling = desk.open("b")
+    move = _reassign_plan(first)
+    status = {"a": "exception", "b": "exception"}
+    errors: dict[str, str] = {}
+    continuations: dict[str, str] = {}
+    reassignments: dict = {}
+
+    async def _answer() -> None:
+        await asyncio.sleep(0)
+        desk.resolve("b", CONTINUE, "keep going", expected_waiter=sibling)
+        for _ in range(3):
+            await asyncio.sleep(0)
+        desk.resolve("a", REASSIGN, "move a", agent="beta", expected_waiter=first, reassignment=move)
+
+    await asyncio.wait_for(
+        asyncio.gather(
+            _await_adjudications(
+                desk,
+                status,
+                errors,
+                continuations,
+                timeout_s=5,
+                cancel=None,
+                reassignments=reassignments,
+            ),
+            _answer(),
+        ),
+        timeout=5,
+    )
+
+    assert status == {"a": "pending", "b": "pending"}
+    assert continuations == {"a": "move a", "b": "keep going"}
+    assert reassignments == {"a": move}
+    assert errors == {}
+    assert not desk.is_open("b")
+
+
+def test_a_reassign_answer_left_at_the_timeout_stays_on_the_desk():
+    """The sweep's keep branch: an answer this call could not park survives.
+
+    Only one move is parked per call. One still sitting on the desk when the
+    wait times out must not be consumed by the sweep, or the next scheduler
+    pass never sees it and the node fails as if it had never been answered.
+    """
+    from raven.agent.subagent.dag_adjudication import REASSIGN, AdjudicationDesk
+    from raven.agent.subagent.dag_runner import _settle_open_waiters
+
+    desk = AdjudicationDesk()
+    waiter = desk.open("a")
+    move = _reassign_plan(waiter)
+    desk.resolve("a", REASSIGN, "move a", agent="beta", expected_waiter=waiter, reassignment=move)
+    status = {"a": "exception"}
+    errors: dict[str, str] = {}
+    continuations: dict[str, str] = {}
+
+    handing_back = _settle_open_waiters(
+        desk,
+        ["a"],
+        {"a": waiter},
+        status,
+        errors,
+        continuations,
+        replanned=False,
+        timeout_s=1,
+        failed=None,
+    )
+
+    assert handing_back, "the sweep must leave the move for the next pass"
+    assert status == {"a": "exception"}
+    assert errors == {}
+    assert desk.is_open("a")
+    answer = desk.peek("a")
+    assert answer is not None and answer.decision == REASSIGN
+
+
 async def test_two_reassigns_in_one_batch_park_both_moves():
     """Both accepted moves survive the wake-up.
 

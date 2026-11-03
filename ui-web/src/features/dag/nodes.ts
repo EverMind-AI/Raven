@@ -23,6 +23,8 @@
  * request follows, or the other way round, and neither may erase the other.
  */
 
+import { attemptOrder, attemptsOf, instanceOf } from '../../lib/attempts'
+
 import type { DagNode, NodeInput } from './types'
 
 /* A dag call's `nodes` argument. Deliberately loose: this is a tool call the
@@ -39,12 +41,6 @@ interface ArgNode {
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
-
-/* A node's attempt history, as a frame or a snapshot row carries it. Absent and
-   malformed are the same answer: a half-valid list would silently drop or
-   misplace an attempt, so the node keeps whatever history it already had. */
-const attemptsOf = (v: unknown): string[] | undefined =>
-  Array.isArray(v) && v.every((a) => typeof a === 'string' && a) ? [...v] : undefined
 
 const inputsOf = (v: unknown): Record<string, NodeInput> | null => {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null
@@ -198,12 +194,8 @@ export function merge(have: DagNode[], incoming: DagNode[]): DagNode[] {
        it was: no history, or a shorter one than the live frames have already
        moved. It still knows the request and the branch, so those are taken --
        the attempt (identity, status, timing) is not. */
-    const stale = held !== undefined && (history === undefined || history.length < held.length)
-    /* A longer history is a later attempt, and it supersedes what the node says
-       however it ended: the old attempt's terminal status, agent and clock all
-       belong to the attempt the node has moved past. */
-    const newer = history !== undefined && (held === undefined || history.length > held.length)
-    if (stale) {
+    const order = attemptOrder(held, history)
+    if (order === 'stale') {
       return {
         ...n,
         depends_on: next.depends_on.length ? next.depends_on : n.depends_on,
@@ -212,6 +204,10 @@ export function merge(have: DagNode[], incoming: DagNode[]): DagNode[] {
         inputs: next.inputs ?? n.inputs,
       }
     }
+    /* A longer history is a later attempt, and it supersedes what the node says
+       however it ended: the old attempt's terminal status, agent and clock all
+       belong to the attempt the node has moved past. */
+    const newer = order === 'newer'
     return {
       ...n,
       subagent: next.subagent || n.subagent,
@@ -264,18 +260,16 @@ export function applyUpdate(
   /* A frame that cannot claim a newer attempt than the node holds is from the
      attempt it has moved past -- the frames of the agent that gave up can still
      be in flight when the next one starts -- so it changes nothing. */
-  if (held !== undefined && (history === undefined || history.length < held.length)) return nodes
-  const newer = history !== undefined && (held === undefined || history.length > held.length)
+  const order = attemptOrder(held, history)
+  if (order === 'stale') return nodes
+  const newer = order === 'newer'
 
   return nodes.map((n) =>
     n.id === id
       ? {
           ...n,
           ...(typeof update.subagent === 'string' && update.subagent ? { subagent: update.subagent } : {}),
-          /* Presence, not value: a present null clears the handle a stateless
-             retry left behind, while an absent key says this frame does not
-             speak for it. */
-          ...(Object.hasOwn(update, 'instance') ? { instance: str(update.instance) || null } : {}),
+          ...instanceOf(update),
           ...(history !== undefined ? { attempt_agents: history } : {}),
           status: str(update.status) || n.status,
           started_at: newer ? num(update.started_at) : (num(update.started_at) ?? n.started_at),

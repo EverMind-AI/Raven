@@ -162,6 +162,26 @@ const attemptReportOf = (source: {
   subagent: source.subagent ?? undefined
 })
 
+type AttemptOrder = 'stale' | 'same' | 'newer'
+
+/** Where a report sits against the attempt the node holds.
+ *
+ * A report that cannot claim a longer history than the node holds is from the
+ * attempt it has moved past: the frames of the agent that gave up can still be
+ * in flight when the next one starts. A longer history is a later attempt, and
+ * it supersedes what the node says however that attempt ended. One rule for
+ * both folds that place a report (this file and the snapshot reader below).
+ */
+export const attemptOrder = (held: string[] | undefined, history: string[] | undefined): AttemptOrder => {
+  if (held !== undefined && (history === undefined || history.length < held.length)) {
+    return 'stale'
+  }
+  if (history !== undefined && (held === undefined || history.length > held.length)) {
+    return 'newer'
+  }
+  return 'same'
+}
+
 /**
  * Fold one report of a reassigned node's attempt onto the node it is about.
  *
@@ -184,11 +204,13 @@ const foldAttemptReport = (
 ): DagRunNode | null => {
   const held = node.attemptAgents
 
-  if (held !== undefined && (report.history === undefined || report.history.length < held.length)) {
+  const order = attemptOrder(held, report.history)
+
+  if (order === 'stale') {
     return null
   }
 
-  const newer = report.history !== undefined && (held === undefined || report.history.length > held.length)
+  const newer = order === 'newer'
   const next: DagRunNode = { ...node, status }
 
   if (newer) {
@@ -401,11 +423,7 @@ export const foldDagSnapshot = (prev: DagRunState | null, snapshot: DagRunSnapsh
     // was: no history, or a shorter one than the live frames have already
     // moved. Everything in that row belongs to the attempt the node has moved
     // past, so the node keeps its own word entire -- not just its identity.
-    if (
-      before !== undefined &&
-      before.attemptAgents !== undefined &&
-      (report.history === undefined || report.history.length < before.attemptAgents.length)
-    ) {
+    if (before !== undefined && attemptOrder(before.attemptAgents, report.history) === 'stale') {
       return before
     }
 
