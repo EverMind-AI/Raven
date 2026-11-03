@@ -205,10 +205,10 @@ def _with_overlay(row: ModelRow, overlay: "ModelOverlay | None") -> ModelRow:
     if overlay is None:
         return row
 
-    from raven.providers.effort_levels import LEVEL_ORDER
+    from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
     from raven.providers.registry_data import CAPABILITIES, MODALITIES, clean_tags
 
-    stated_efforts = tuple(word for word in overlay.reasoning_efforts if word in LEVEL_ORDER)
+    stated_efforts = tuple(word for word in overlay.reasoning_efforts if word in REASONING_EFFORT_LADDER)
     changed = {
         "label": overlay.label or row.label,
         "description": overlay.description or row.description,
