@@ -2107,6 +2107,10 @@ class ModelLabel(_Strict):
     capabilities: list[str] = Field(default_factory=list)
     input_modalities: list[str] = Field(default_factory=list)
     output_modalities: list[str] = Field(default_factory=list)
+    #: The words a provider's ``model_overlay.reasoningEfforts`` declares for
+    #: this model; the picker's effort row reads the live answer instead, and
+    #: this carries what the label itself can state.
+    reasoning_efforts: list[str] = Field(default_factory=list)
     #: The bucket a model list files this model under, from what it writes
     #: (``registry_data.kind_of``): a model that reads images is still text.
     kind: Literal["text", "image", "audio", "video", "embedding", "reranker"]
@@ -3592,11 +3596,16 @@ class SessionSetEffortParams(_Strict):
 
 class SessionSetEffortResult(_Strict):
     session_key: str
-    effort: str | None = Field(None, description="The session's own pick, or null while it follows the default.")
+    effort: str | None = Field(
+        None,
+        description="The session's own pick where the model declares it, else null: a stored pick the model "
+        "does not offer reads as null, and the turn runs at default.",
+    )
     default: str | None = Field(
         None,
         description="What the session runs at with no pick of its own: its mode's effort where the catalogue sets "
-        "one, else agents.defaults.reasoningEffort, else null for the provider's own default.",
+        "one, else agents.defaults.reasoningEffort, else null for the provider's own default. Not narrowed by the "
+        "model.",
     )
     options: list[str] = Field(default_factory=list, description="The words this model accepts, least first.")
 

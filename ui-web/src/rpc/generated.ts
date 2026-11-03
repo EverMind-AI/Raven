@@ -1106,6 +1106,10 @@ export interface ModelLabel {
    */
   output_modalities?: string[];
   /**
+   * The reasoning-effort words a provider's model overlay declares for this model; empty where none was stated.
+   */
+  reasoning_efforts?: string[];
+  /**
    * The bucket a model list files this model under, from what it writes (registry_data.kind_of): a model that reads images is still text. A model with no label entry is text.
    */
   kind: 'text' | 'image' | 'audio' | 'video' | 'embedding' | 'reranker';
@@ -3776,11 +3780,11 @@ export interface SessionSetEffortParams {
 export interface SessionSetEffortResult {
   session_key: string;
   /**
-   * The session's own pick, or null while it follows the default.
+   * The session's own pick where the model declares it, else null: a stored pick the model does not offer reads as null, and the turn runs at default.
    */
   effort?: string | null;
   /**
-   * What the session runs at with no pick of its own: its mode's effort where the catalogue sets one, else agents.defaults.reasoningEffort, else null for the provider's own default.
+   * What the session runs at with no pick of its own: its mode's effort where the catalogue sets one, else agents.defaults.reasoningEffort, else null for the provider's own default. Not narrowed by the model.
    */
   default?: string | null;
   /**

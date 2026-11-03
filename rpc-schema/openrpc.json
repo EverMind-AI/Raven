@@ -3721,14 +3721,14 @@
                 "string",
                 "null"
               ],
-              "description": "The session's own pick, or null while it follows the default."
+              "description": "The session's own pick where the model declares it, else null: a stored pick the model does not offer reads as null, and the turn runs at default."
             },
             "default": {
               "type": [
                 "string",
                 "null"
               ],
-              "description": "What the session runs at with no pick of its own: its mode's effort where the catalogue sets one, else agents.defaults.reasoningEffort, else null for the provider's own default."
+              "description": "What the session runs at with no pick of its own: its mode's effort where the catalogue sets one, else agents.defaults.reasoningEffort, else null for the provider's own default. Not narrowed by the model."
             },
             "options": {
               "type": "array",
@@ -14595,6 +14595,13 @@
           "output_modalities": {
             "type": "array",
             "description": "What the model writes: text, image, video, audio, vector.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reasoning_efforts": {
+            "type": "array",
+            "description": "The reasoning-effort words a provider's model overlay declares for this model; empty where none was stated.",
             "items": {
               "type": "string"
             }
