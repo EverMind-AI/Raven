@@ -66,6 +66,7 @@ from raven.context_engine.segments.render import dispatch_language_line
 from raven.contracts.subagent_backend import SubagentNoAnswerError
 from raven.observability import semconv
 from raven.providers.base import bound_llm_detail
+from raven.security.trust import wrap_untrusted
 from raven.tracing import trace
 
 # In-context cap for terminal outputs returned to the main agent; the on-disk
@@ -1042,6 +1043,13 @@ def _route_available(control_reachable: "Callable[[], bool] | None") -> bool:
         return False
 
 
+# The judge is asked for the shortest quote that shows the problem, so a cap loses
+# nothing it was asked for. The quote is sub-agent text reaching the main agent's
+# context, so it is fenced like the judge request fences it, and bounded here where
+# it enters the report -- the same cap the route quote is bounded at where it enters.
+_EVIDENCE_REPORT_MAX = 500
+
+
 def _exception_report(
     *,
     run_id: str,
@@ -1066,7 +1074,10 @@ def _exception_report(
         f"what is missing: {verdict.what_is_missing or '(the judge did not say)'}",
     ]
     if verdict.evidence:
-        lines.append(f"evidence: {verdict.evidence}")
+        quote = verdict.evidence
+        if len(quote) > _EVIDENCE_REPORT_MAX:
+            quote = quote[: _EVIDENCE_REPORT_MAX - 3].rstrip() + "..."
+        lines.append("evidence:\n" + wrap_untrusted(quote, source="subagent"))
     if not verdict.evidence_complete:
         lines.append("evidence is incomplete: this sub-agent's transport publishes no per-step transcript.")
     lines.append(f"blocked while this waits: {', '.join(blocked) if blocked else '(no dependents)'}")
