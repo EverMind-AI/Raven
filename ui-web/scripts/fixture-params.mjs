@@ -86,6 +86,8 @@ export const PARAMS = {
   'model.save_key': { slug: 'openai', api_key: 'sk-x' },
   'model.disconnect': { slug: 'openai' },
   'model.reveal_key': { slug: 'anthropic' },
+  /* A key the library refuses, so the refusal's fields are drawn once. */
+  'model.check_key': { slug: 'openrouter', api_key: 'bad' },
   'model.add_model': { slug: 'openai', model: 'gpt-5.2' },
   'model.remove_model': { slug: 'openai', model: 'gpt-5.1' },
   'model.fetch_models': { slug: 'openai' },

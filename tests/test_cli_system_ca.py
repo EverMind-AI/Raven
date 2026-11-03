@@ -79,7 +79,10 @@ def test_a_root_only_the_system_store_holds_is_trusted(corporate, launch, tmp_pa
     done = _provider_test(launch, corporate, tmp_path)
 
     assert done.returncode == 0, done.stdout + done.stderr
-    assert "custom OK" in done.stdout
+    # What this asserts is that the handshake got through. The stand-in's list
+    # answers anyone, so the probe's truthful word for it is "reached, key not
+    # confirmed"; a stand-in that checked its bearer would read "OK" instead.
+    assert "custom OK" in done.stdout or "custom reached, key not confirmed" in done.stdout, done.stdout
 
 
 @pytest.mark.slow

@@ -502,7 +502,7 @@ def test_test_command_success_renders_models_count(
 ) -> None:
     from raven.config import update_providers
 
-    def fake_probe(name: str, *, timeout_s: int = 10) -> dict:
+    def fake_probe(name: str, *, timeout_s: int = 10, **_: object) -> dict:
         assert name == "openrouter"
         return {
             "ok": True,
@@ -527,7 +527,7 @@ def test_test_command_failure_renders_hint(
 ) -> None:
     from raven.config import update_providers
 
-    def fake_probe(name: str, *, timeout_s: int = 10) -> dict:
+    def fake_probe(name: str, *, timeout_s: int = 10, **_: object) -> dict:
         return {
             "ok": False,
             "status": "invalid_key",
@@ -552,7 +552,7 @@ def test_test_command_points_an_untrusted_certificate_at_the_certificate_store(
     """The handshake refused the certificate, so the network advice would mislead."""
     from raven.config import update_providers
 
-    def fake_probe(name: str, *, timeout_s: int = 10) -> dict:
+    def fake_probe(name: str, *, timeout_s: int = 10, **_: object) -> dict:
         return {
             "ok": False,
             "status": "certificate_untrusted",
@@ -583,7 +583,7 @@ def test_test_command_names_the_refusals_a_ca_does_not_fix(
     """
     from raven.config import update_providers
 
-    def fake_probe(name: str, *, timeout_s: int = 10) -> dict:
+    def fake_probe(name: str, *, timeout_s: int = 10, **_: object) -> dict:
         return {
             "ok": False,
             "status": "certificate_untrusted",
@@ -1109,3 +1109,45 @@ def test_endpoint_list_unknown_provider_exits_1(tmp_config: Path) -> None:
     r = runner.invoke(app, ["provider", "endpoint", "list", "no-such-provider"])
     assert r.exit_code == 1
     assert "Unknown provider" in r.output
+
+
+def test_test_command_confirms_the_key_itself(tmp_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 200 from a list that answers anyone is never read as a valid key on its own."""
+    from raven.config import update_providers
+
+    seen: dict = {}
+
+    def fake_probe(name: str, *, timeout_s: int = 10, **kwargs: object) -> dict:
+        seen.update(kwargs)
+        return {"ok": True, "status": "valid", "elapsed_ms": 9, "http_status": 200, "models_count": 3, "error": None}
+
+    monkeypatch.setattr(update_providers, "test_provider", fake_probe)
+
+    r = runner.invoke(app, ["provider", "test", "openrouter"])
+    assert r.exit_code == 0, r.output
+    assert seen["check_credential"] is True
+
+
+def test_test_command_says_an_unconfirmed_key_is_not_confirmed(
+    tmp_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reached, list real, key unconfirmed: said as that, and not as a failure."""
+    from raven.config import update_providers
+
+    def fake_probe(name: str, *, timeout_s: int = 10, **kwargs: object) -> dict:
+        return {
+            "ok": False,
+            "status": "key_unchecked",
+            "elapsed_ms": 9,
+            "http_status": 200,
+            "models_count": 3,
+            "error": "this vendor's models endpoint answers without checking the key",
+        }
+
+    monkeypatch.setattr(update_providers, "test_provider", fake_probe)
+
+    r = runner.invoke(app, ["provider", "test", "custom"])
+    out = " ".join(r.output.split())
+    assert r.exit_code == 0, r.output
+    assert "key not confirmed" in out
+    assert "custom OK" not in out

@@ -75,6 +75,14 @@ describe('settings source', () => {
     ])
   })
 
+  it('asks check_key about a key before it is stored, with the fields the form sent', async () => {
+    const mod = await load({ 'model.check_key': { ok: false, status: 'invalid_key', http_status: 401, refused: true } })
+    const verdict = await mod.settingsSource.checkKey('openrouter', { api_key: 'sk-or-never-issued' })
+    expect(verdict.refused).toBe(true)
+    expect(seen).toEqual([['model.check_key', { slug: 'openrouter', api_key: 'sk-or-never-issued' }]])
+    expect(toasts).toEqual([])
+  })
+
   it('reads one provider\'s saved key back on request, and null when it keeps none', async () => {
     const mod = await load({ 'model.reveal_key': { api_key: 'sk-or-saved' } })
     expect(await mod.settingsSource.revealKey('openrouter')).toBe('sk-or-saved')
