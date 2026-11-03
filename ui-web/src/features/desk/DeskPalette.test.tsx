@@ -324,6 +324,21 @@ describe('the tasks tab of a conversation with a board', () => {
     expect(document.querySelector('.tkgroup[data-group="g_a"]')?.getAttribute('aria-expanded')).toBe('true')
   })
 
+  /* A reconnect to the same conversation resets the store without a switch, so
+     nothing but the tab itself can read the board back: an unread board is not an
+     empty one. */
+  it('reads the board back after a reconnect resets it, the conversation unchanged', async () => {
+    holding([waiting])
+    await tasksTab()
+    expect([...document.querySelectorAll<HTMLElement>('.tkgroup')].map((b) => b.dataset.group)).toEqual(['g_a'])
+
+    await act(async () => { tasksStore.reset() })
+    await act(async () => {})
+
+    expect(emptyOf()).toBeNull()
+    expect([...document.querySelectorAll<HTMLElement>('.tkgroup')].map((b) => b.dataset.group)).toEqual(['g_a'])
+  })
+
   it('says nothing is here with no Task and no group', async () => {
     holding([])
     await tasksTab()

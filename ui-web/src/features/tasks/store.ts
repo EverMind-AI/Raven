@@ -84,21 +84,23 @@ export const source = (): TasksSource | null => sources.tasks ?? null
 /* A different conversation is a different set of tasks. Carrying them across
    would attribute one conversation's background work to another. */
 export function reset(): void {
-  /* The focus request and the move-on survive: opening a card switches
-     conversation, and the switch is what resets this store, before the board it
-     asked for exists. Each names its own conversation. */
-  store.set({ ...initial, focus: store.get().focus, moveOn: store.get().moveOn })
   rechecked.clear()
   checking.clear()
   boardFailed = false
   /* A board read still out was asked for the conversation being left, and the
      switch resets this store before it moves the pointer: by the session guard
-     alone, that answer would still be taken for this one's. */
+     alone, that answer would still be taken for this one's. Raised before the
+     store says it was reset: a subscriber that reads the board back on hearing
+     it asks above the floor, not under it. */
   boardShown = ++boardAsked
   /* The stamps go with the rows they were about. Left behind they would only
      waste room -- the tick is monotonic, so an entry from the conversation
      just left can never out-rank a read taken in the one arrived at. */
   liveAt.clear()
+  /* The focus request and the move-on survive: opening a card switches
+     conversation, and the switch is what resets this store, before the board it
+     asked for exists. Each names its own conversation. */
+  store.set({ ...initial, focus: store.get().focus, moveOn: store.get().moveOn })
 }
 
 export const rows = (): TaskRow[] => store.get().rows

@@ -221,8 +221,9 @@ function TasksNav(): JSX.Element {
      look like the other two, and TasksPanel's own note belongs to the panel.
      Nothing is no Task and no group: a conversation that delegated nothing
      still has the matters its board keeps, and the Task Board page opens them
-     here. */
-  if (!state.rows.length && !state.board?.groups.length) {
+     here. An unread board is not an empty one -- a reconnect resets it with
+     this tab mounted, and the panel reads it back. */
+  if (!state.rows.length && state.boardLoaded && !state.board?.groups.length) {
     return <DeskEmpty kind="tasks" title={t('gui.ws.tasks_none')} />
   }
   return <TasksPanel />
