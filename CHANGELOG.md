@@ -442,6 +442,12 @@ All notable changes to Raven are documented here.
   its task fails on the judge's reason. A host with no model to judge with
   refuses a graph that declares routes.
 
+- The research agent's `high` mode closes a dry search streak as soon as
+  `medium` and `max` do: its overlay sets `search.saturation.k` to 5 instead
+  of 10, so each rung of the saturation ladder (widen the result list, open
+  the next page, close search) fires after five consecutive searches that
+  surface nothing new rather than ten.
+
 ### Removed
 
 - The built-in `deep_research` tool is gone, along with the stand-in that
