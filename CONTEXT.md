@@ -799,10 +799,10 @@ _Avoid_: "task list" (that is `tasks.list`), "todo" (Raven-Code's Checklist).
 **Task Group**:
 one matter a conversation is pushing, spanning any number of turns -- a bug fix, a release
 note. Carries a title (at most 20 words, a CJK character counting as one), a summary of
-where the matter stands (at most 50; any turn may rewrite it), a status and its Progress
-Steps. The status is one of four the model sets after each turn: `needs_you` (the reply asks
-the user to answer, confirm or decide about it -- an error only the user can resolve included
--- even while a run it started still works),
+where the matter stands (asked for at most 50, refused only past 100; any turn may rewrite
+it), a status and its Progress Steps. The status is one of four the model sets after each
+turn: `needs_you` (the reply asks the user to answer, confirm or decide about it -- an error
+only the user can resolve included -- even while a run it started still works),
 `running` (a run it started is still working), `idle` (nothing in flight, nothing asked) and
 `completed` (finished or dropped; nothing further moves it). Chinese surfaces -- the zh
 prompt pack, the conversation -- call it 任务.
