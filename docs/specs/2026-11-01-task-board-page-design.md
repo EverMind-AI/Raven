@@ -106,7 +106,7 @@ tasks.boards(include_completed?: boolean = false) -> {
     group_id, title, summary, status,    // the Task Group's own fields
     created_at, updated_at,              // ms, the Task Group's own
     category: "needs_you" | "running" | "idle" | "completed",
-    running_since_ms,                    // ms; set only on a Running card (5.2)
+    running_since_ms,                    // ms; while one of its runs runs, any category (5.2)
     events, sub_agents
   }],
   completed_count,                       // always, so the switch can show it

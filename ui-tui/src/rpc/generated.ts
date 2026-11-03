@@ -3572,7 +3572,7 @@ export interface MachineRow {
   agents_off_here: string[];
 }
 /**
- * One Task Group on the Task Board page: where it came from, what it is, and what it needs. running_since_ms is set only on a running card: the earliest start among its running runs.
+ * One Task Group on the Task Board page: where it came from, what it is, and what it needs. running_since_ms is the earliest start among its runs still running, on a card of any category; null when none runs or none that runs reports a start.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "TaskBoardCard".

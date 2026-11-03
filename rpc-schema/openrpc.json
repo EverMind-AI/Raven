@@ -19510,7 +19510,7 @@
         }
       },
       "TaskBoardCard": {
-        "description": "One Task Group on the Task Board page: where it came from, what it is, and what it needs. running_since_ms is set only on a running card: the earliest start among its running runs.",
+        "description": "One Task Group on the Task Board page: where it came from, what it is, and what it needs. running_since_ms is the earliest start among its runs still running, on a card of any category; null when none runs or none that runs reports a start.",
         "type": "object",
         "additionalProperties": false,
         "required": [

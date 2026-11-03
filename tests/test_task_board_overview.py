@@ -73,6 +73,14 @@ def test_a_running_spawn_makes_its_card_running_since_its_start(tmp_path):
     assert (card["category"], card["running_since_ms"]) == ("running", 1000)
 
 
+def test_a_card_that_waits_on_the_user_still_dates_a_run_that_runs(tmp_path):
+    _session(tmp_path, "a", _group("g1", "needs_you", ["spawn:n1"]))
+
+    (card,) = _cards(tmp_path, {"web:a": {("spawn", "n1"): _row("running", started=1000)}})
+
+    assert (card["category"], card["running_since_ms"]) == ("needs_you", 1000)
+
+
 def test_a_run_the_sidebar_reads_interrupted_is_not_running(tmp_path):
     _session(tmp_path, "a", _group("g1", "idle", ["spawn:n1"]))
 
