@@ -548,6 +548,8 @@ answer with the call.
 
 6.3 **History edits.** A step never points at a turn the log no longer holds. `session.undo`
 drops the steps whose `turn_at` belongs to a turn it removed, and groups left with no steps.
+Those turns are named by the questions the undo cut off the log, not by the stamps the log no
+longer holds: a coarse clock can give a kept answer the stamp of the question undone.
 A group that stays gets back each field a removed turn changed, newest turn first, from its
 `revisions` -- but only a field still holding what that turn wrote: a later writer's value,
 the reader's own Mark completed, stays. `session.clear` and `/new`, the two ways a conversation is

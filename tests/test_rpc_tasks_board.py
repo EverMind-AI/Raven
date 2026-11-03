@@ -383,6 +383,39 @@ async def test_undo_keeps_the_steps_of_turns_consolidation_archived(workspace):
     assert [g.title for g in load_board(_dir(workspace)).groups] == ["Archived", "Kept"]
 
 
+def _stamped(workspace: Path, *entries: tuple[str, str]) -> _Loop:
+    loop = _Loop(workspace)
+    session = loop.sessions.get_or_create(KEY)
+    for role, stamp in entries:
+        session.add_message(role, f"{role} at {stamp}", timestamp=stamp)
+    loop.sessions.save(session)
+    return loop
+
+
+async def test_undo_drops_a_turn_whose_question_shares_a_stamp_with_the_last_answer_kept(workspace):
+    """A coarse clock can stamp the last answer kept and the undone turn's question alike;
+    what the board recorded for the undone turn still goes."""
+    loop = _stamped(workspace, ("user", "T1"), ("assistant", "T2"), ("user", "T2"), ("assistant", "T2a"))
+    kept, undone = _board(turn_at="T1", title="Kept"), _board(turn_at="T2", title="Undone")
+    save_board(_dir(workspace), Board(kept.groups + undone.groups, []))
+
+    await session_undo({"session_id": KEY}, agent_loop_factory=lambda: loop)
+
+    assert [g.title for g in load_board(_dir(workspace)).groups] == ["Kept"]
+
+
+async def test_undo_keeps_a_turn_whose_question_shares_a_stamp_with_an_undone_answer(workspace):
+    """A step is keyed by its turn's question; an undone answer stamped like a kept
+    question names no turn of its own."""
+    loop = _stamped(workspace, ("user", "T1"), ("assistant", "T1a"), ("user", "T2"), ("assistant", "T1"))
+    kept, undone = _board(turn_at="T1", title="Kept"), _board(turn_at="T2", title="Undone")
+    save_board(_dir(workspace), Board(kept.groups + undone.groups, []))
+
+    await session_undo({"session_id": KEY}, agent_loop_factory=lambda: loop)
+
+    assert [g.title for g in load_board(_dir(workspace)).groups] == ["Kept"]
+
+
 def _host_session(workspace: Path, key: str, board: Board) -> None:
     sessions = SessionManager(workspace)
     session = sessions.get_or_create(key)

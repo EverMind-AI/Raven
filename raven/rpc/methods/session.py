@@ -1285,7 +1285,7 @@ async def session_undo(
     config = load_config()
     mgr = manager_for(agent_loop, config)
     session = mgr.get_or_create(session_key)
-    stamps_before = {str(m.get("timestamp")) for m in session.messages if m.get("timestamp")}
+    before = list(session.messages)
     removed = session.undo_last_turn(n)
     if removed and mgr.exists(session_key):
         try:
@@ -1293,10 +1293,15 @@ async def session_undo(
         except Exception:
             logger.warning("session.undo: failed to persist undo for {}", session_key)
     if removed:
-        # A step is keyed by its turn's opening timestamp. Only the turns this
-        # undo removed go: consolidation has moved older messages out of the
-        # session, and their steps are not undone with this one.
-        undone = stamps_before - {str(m.get("timestamp")) for m in session.messages if m.get("timestamp")}
+        # A step is keyed by its turn's question, stamped when the turn arrived.
+        # Named from the messages this undo cut off the tail, not from what the
+        # log no longer holds: consolidation has moved older turns out, and a
+        # coarse clock can give a kept answer the undone question's stamp.
+        undone = {
+            str(m["timestamp"])
+            for m in before[len(session.messages) :]
+            if m.get("role") == "user" and m.get("timestamp")
+        }
         if (board := _task_board(agent_loop)) is not None:
             await board.drop_turns(session_key, undone)
         else:
