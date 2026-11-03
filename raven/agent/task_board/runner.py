@@ -58,10 +58,12 @@ _REFUSED = (
 
 
 def should_run(status: str, dispatches: Sequence[Dispatch], *, silent: bool = False) -> bool:
-    """A turn that answered keeps the board, unless its answer was the silence marker: the
-    host saying the turn has nothing to show leaves no progress to record. A turn that
-    dispatched work always does, failed or silent, since the work still needs placing."""
-    return bool(dispatches) or (status == "completed" and not silent)
+    """Only a completed turn makes the call: none follows a provider that just failed, nor a
+    turn that was stopped or cut short, and what such a turn dispatched is parked instead
+    (``park_dispatches``). A completed turn keeps the board unless it was a Silent Turn
+    that dispatched nothing: the host saying the turn has nothing to show leaves no
+    progress to record, while work it started still needs placing."""
+    return status == "completed" and (bool(dispatches) or not silent)
 
 
 def _snapshot(board: Board) -> str:

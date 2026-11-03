@@ -3813,8 +3813,16 @@ class TurnPathMixin:
         from raven.agent.task_board.runner import run_post_turn, should_run
 
         board = self.task_board
+        if board is None or outcome is None:
+            return
+        if outcome.status != "completed":
+            # A turn whose provider failed after a tool had answered returns rather than
+            # raises, and so does one cut short; neither makes the call, and what it
+            # dispatched waits in unassigned as the exits that raise park it.
+            self._park_task_board(key, turn_added, turn_at, turn_id)
+            return
         dispatches = turn_dispatches(turn_added)
-        if board is None or outcome is None or outcome.last_tools is None or not window:
+        if outcome.last_tools is None or not window:
             return
         if not should_run(outcome.status, dispatches, silent=silent):
             return

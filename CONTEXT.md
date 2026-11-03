@@ -789,7 +789,7 @@ sub-agent -- those are a Turn, a coroutine, and a prompt.
 
 **Task Board** (`raven/agent/task_board/`, `<session_dir>/task_board.json`):
 one host session's set of Task Groups, kept by the host model in one extra call after each
-turn that answered or dispatched work, and read back through the `task_board` tool. A turn
+completed turn that answered or dispatched work, and read back through the `task_board` tool. A turn
 known to be about a group -- one a delegated result opened, one whose message a Move on or an
 Answer named the group for -- writes only to that group and to wherever it places the work it
 started. Only the Raven host keeps one; a subagent or product agent never does

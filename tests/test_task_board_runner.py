@@ -106,9 +106,16 @@ def test_the_constants_are_the_specs():
 
 def test_should_run_after_an_answer_or_any_dispatch():
     assert should_run("completed", [])
-    assert should_run("error", [SPAWN])
+    assert should_run("completed", [SPAWN])
     assert not should_run("error", [])
     assert not should_run("interrupted", [])
+
+
+def test_a_turn_that_failed_or_was_stopped_makes_no_call_whatever_it_dispatched():
+    """No call follows a provider that just failed, nor a stop the reader asked for; what
+    such a turn dispatched is parked instead (``park_dispatches``)."""
+    assert not should_run("error", [SPAWN])
+    assert not should_run("interrupted", [SPAWN])
 
 
 def test_a_silent_turn_keeps_the_board_only_when_it_dispatched():

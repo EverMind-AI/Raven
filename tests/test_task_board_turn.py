@@ -741,6 +741,31 @@ async def test_a_turn_that_fails_after_a_spawn_parks_what_it_dispatched(tmp_path
     assert "task_board" not in [r["purpose"] for r in provider.requests]
 
 
+SPAWN_AND_ASK = LLMResponse(
+    content="",
+    tool_calls=[
+        ToolCallRequest(id="s1", name="spawn", arguments={"node_id": "locate_bug", "task_summary": "Locate the bug"}),
+        ToolCallRequest(id="m1", name="message", arguments={"content": "Searching; which fix do you want?"}),
+    ],
+)
+
+
+async def test_a_turn_whose_provider_failed_after_the_message_tool_answered_parks_what_it_dispatched(tmp_path):
+    """The reader has the tool's answer, so the turn does not raise; it still failed, and no
+    call follows a provider that just failed: the run waits in unassigned, as it would
+    after a failure that raises."""
+    provider = Recording([SPAWN_AND_ASK, PROVIDER_DOWN])
+    agent = _spawning_agent(tmp_path, provider)
+    sent = _delivering(agent)
+
+    await agent._process_message(_turn(), session_key=KEY)
+    await _drain(agent)
+
+    assert sent == ["Searching; which fix do you want?"]
+    assert "task_board" not in [r["purpose"] for r in provider.requests]
+    assert [p.handle for p in load_board(agent.sessions.session_dir(KEY)).unassigned] == ["spawn:locate_bug"]
+
+
 async def test_a_turn_stopped_after_a_spawn_parks_what_it_dispatched(tmp_path):
     held = asyncio.Event()
 
