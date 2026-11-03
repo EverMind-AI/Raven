@@ -1920,6 +1920,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.effort.scope':
       'How much the model thinks before each answer, for this conversation only. Sub-agents are not affected.',
     'gui.effort.now': 'Default follows the global setting, which is {name} right now.',
+    'gui.effort.kept':
+      "A pick the current model does not offer is kept, and the provider's own default runs until a model offers it.",
     'gui.effort.provider': "the provider's own default",
     'gui.effort.failed': 'Could not set the reasoning effort to {name}',
     'gui.imodel.title': 'Model',
@@ -5402,6 +5404,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.effort.max': '最高',
     'gui.effort.scope': '模型每次回答前思考多少，只作用于本会话，不影响子智能体。',
     'gui.effort.now': '「默认」跟随设置页里的全局值，当前是「{name}」。',
+    'gui.effort.kept': '当前模型不提供已保存的档位时会保留该档位，在模型提供之前使用厂商默认。',
     'gui.effort.provider': '厂商默认',
     'gui.effort.failed': '思考深度切到「{name}」没有成功',
     'gui.imodel.title': '模型',

@@ -122,7 +122,7 @@ export const heading = (): string => t('gui.effort.title')
    rather than leaving "default" to mean anything. */
 export const scopeNote = (): string => {
   const now = get().fallback ? label(get().fallback) : t('gui.effort.provider')
-  return `${t('gui.effort.scope')} ${t('gui.effort.now', { name: now })}`
+  return `${t('gui.effort.scope')} ${t('gui.effort.now', { name: now })} ${t('gui.effort.kept')}`
 }
 
 function absorb(reply: EffortReply | null | undefined): void {
@@ -152,10 +152,12 @@ export async function load(sid?: string | null, gen?: number, model?: string): P
   }
 }
 
-/* A rung's click. The one already in force asks for nothing. '' is the default
-   rung, which clears the pick. */
+/* A rung's click. The one already in force asks for nothing -- except the
+   default rung, which always sends the clear: a stored pick the current model
+   does not offer reads as "default" here but is still on the record, and this
+   click is the only way the row can drop it. '' is the default rung. */
 export function pick(id: string): void {
-  if (!get().loaded || id === get().effort) return
+  if (!get().loaded || (id && id === get().effort)) return
   void choose(id)
 }
 

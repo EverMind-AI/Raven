@@ -68,11 +68,11 @@ describe('the reasoning effort', () => {
 
   it('says what the default rung stands for on this install', async () => {
     await effort.load()
-    expect(effort.scopeNote()).toBe('gui.effort.scope gui.effort.now {"name":"gui.effort.low"}')
+    expect(effort.scopeNote()).toBe('gui.effort.scope gui.effort.now {"name":"gui.effort.low"} gui.effort.kept')
     answer = async () => ({ effort: null, default: null, options: WORDS })
     await effort.load()
     /* No configured effort: the provider's own, which has no rung. */
-    expect(effort.scopeNote()).toBe('gui.effort.scope gui.effort.now {"name":"gui.effort.provider"}')
+    expect(effort.scopeNote()).toBe('gui.effort.scope gui.effort.now {"name":"gui.effort.provider"} gui.effort.kept')
   })
 
   it('reads the conversation it was given under the switch it was given, not the one on screen', async () => {
@@ -151,10 +151,13 @@ describe('the reasoning effort', () => {
     expect(asked).toEqual([])
   })
 
-  it('asks for nothing when the rung already in force is picked', async () => {
+  it('sends the clear for the default rung even when it already looks ticked', async () => {
     await effort.load()
     effort.pick('')
-    expect(asked).toEqual([undefined])
+    await Promise.resolve()
+    /* A stored pick the model no longer offers reads as "" here; the clear is
+       what drops it from the record. */
+    expect(asked).toEqual([undefined, null])
   })
 })
 

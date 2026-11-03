@@ -1169,7 +1169,7 @@ describe('the effort row', () => {
     expect(seg().map((b) => b.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false', 'false', 'false'])
     /* One explanation behind the question mark, naming what default means. */
     const help = document.querySelector('.mpick .model-effort .model-tier-help')!
-    expect(help.getAttribute('data-tip')).toBe('gui.effort.scope gui.effort.now {"name":"gui.effort.low"}')
+    expect(help.getAttribute('data-tip')).toBe('gui.effort.scope gui.effort.now {"name":"gui.effort.low"} gui.effort.kept')
     expect(help.hasAttribute('data-tip-wrap')).toBe(true)
     await act(async () => { fireEvent.click(seg()[4]!) })
     expect(asked).toEqual([undefined, 'high'])

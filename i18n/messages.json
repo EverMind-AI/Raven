@@ -6251,6 +6251,10 @@
       "en": "Default follows the global setting, which is {name} right now.",
       "zh": "「默认」跟随设置页里的全局值，当前是「{name}」。"
     },
+    "gui.effort.kept": {
+      "en": "A pick the current model does not offer is kept, and the provider's own default runs until a model offers it.",
+      "zh": "当前模型不提供已保存的档位时会保留该档位，在模型提供之前使用厂商默认。"
+    },
     "gui.effort.provider": {
       "en": "the provider's own default",
       "zh": "厂商默认"
