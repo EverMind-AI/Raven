@@ -30,11 +30,13 @@ from __future__ import annotations
 
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from benchmarks.appworld.evolve import adapter as aw_adapter
 from evolver.launch.contract import BenchBundle, LaunchContext, validate_whitelist
 from evolver.orchestrator.scoring import eval_with_infra_rerun
+from evolver.tree import git_ops
 
 _KNOWN_KEYS = {
     "config_path",
@@ -114,6 +116,29 @@ def _task_ids(bc: dict, prefix: str, base_dir: Path) -> list[str]:
             "(see evolver/README.md, Bootstrap)"
         )
     return ids
+
+
+def _make_cold_start_eval(cfg: aw_adapter.AppWorldConfig, *, repo_root: Path, base_sha: str):
+    """The base arm's eval: the inherited harness at the pinned root commit.
+
+    Running it in a worktree gives the marker a real harness digest and keeps
+    the control arm comparable to the candidate arms, which also run from
+    worktrees.
+    """
+
+    def base_eval(_node, task_ids, k, job_name, *, split="train"):
+        eval_cfg = cfg if split == cfg.split else replace(cfg, split=split)
+        with git_ops.worktree_at(Path(repo_root), base_sha) as wt:
+            return aw_adapter.run_eval(
+                eval_cfg,
+                K=k,
+                experiment=job_name,
+                task_ids=task_ids,
+                cwd=wt,
+                reuse_complete=True,
+            )
+
+    return base_eval
 
 
 def build(ctx: LaunchContext) -> BenchBundle:
@@ -252,10 +277,13 @@ def build(ctx: LaunchContext) -> BenchBundle:
             # rounds have their own per-round Gate0.
             make_precheck()()
 
-        def base_eval(_node, task_ids, k, job_name, *, split="train"):
-            return aw_adapter.run_eval(cfg, K=k, experiment=job_name, task_ids=task_ids)
-
-        eval_with_infra_rerun(base_eval, None, train_ids, k_confirm, van_exp)
+        eval_with_infra_rerun(
+            _make_cold_start_eval(cfg, repo_root=spec.repo_root, base_sha=spec.base_sha),
+            None,
+            train_ids,
+            k_confirm,
+            van_exp,
+        )
 
     def build_orchestrator():
         from benchmarks.appworld.evolve.run import build_appworld_orchestrator

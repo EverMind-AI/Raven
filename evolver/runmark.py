@@ -206,7 +206,8 @@ def is_complete(
     cannot prove it produced the marker, so the check fails closed instead of
     comparing against the shared ``"absent"`` digest.
     ``expected`` checks supplemental metadata the caller recorded in
-    ``extra`` (for example ``split``, ``n``, and ``tasks``).
+    ``extra`` (for example ``split``, ``n``, ``tasks``, and the subject
+    config's content digest).
     """
     data = read_mark(where)
     if data is None:
