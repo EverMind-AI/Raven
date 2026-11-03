@@ -27,7 +27,7 @@ let answer: (effort: string | null | undefined) => Promise<EffortReply | null>
 function source(): void {
   const src: EffortSource = {
     read: (sid, gen, model) => { asked.push(undefined); reads.push([sid, gen, model]); return answer(undefined) },
-    set: (id) => { asked.push(id); return answer(id) as Promise<EffortReply> },
+    set: (id) => { asked.push(id); return answer(id) },
   }
   setSources({ effort: src })
 }
@@ -124,6 +124,17 @@ describe('the reasoning effort', () => {
     await Promise.resolve()
     expect(asked).toEqual([undefined, 'high'])
     expect(ticked()).toEqual(['medium'])
+  })
+
+  it('drops a set reply the source discarded because the view was left', async () => {
+    await effort.load()
+    let release!: (r: EffortReply | null) => void
+    answer = () => new Promise((res) => { release = res })
+    effort.pick('high')
+    release(null)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(ticked()).toEqual([''])
   })
 
   it('clears the pick through the default rung', async () => {

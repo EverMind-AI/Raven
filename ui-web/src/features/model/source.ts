@@ -337,11 +337,18 @@ export async function persistModel(
     if (r && r.applied === false) throw { data: { detail: t('gui.model.refused') } }
     // The default moved, so the settings row's pair is this one now.
     setDefaultPair(m, provider)
-    if (sid) return
+    /* The row describes this model's words; both halves of a 'both' write move
+       the conversation's model, so it is read again under the same ticket. The
+       composer chip is the opener that draws the row, and it writes 'both'. */
+    if (sid) {
+      void loadEffort(sid, gen)
+      return
+    }
     /* No session yet: the default is what the conversation minted from this
        draft reads, and the staged pair re-states it against that session, so a
        default moved elsewhere before the first message cannot take the pick. */
     held.model = { model: m, provider }
+    void loadEffort(null, gen, m)
     return r && r.needs_restart ? 'needs_restart' : 'staged'
   }
   if (sid) {
@@ -433,6 +440,7 @@ export const effortSource: EffortSource = {
     return ticket === generation() ? r : null
   },
   set: async (effort: string | null) => {
+    const ticket = generation()
     const sid = sessionCurrent()
     if (!sid) {
       /* Staged, and echoed back as though written: there is no server state
@@ -452,15 +460,16 @@ export const effortSource: EffortSource = {
       try {
         const was = await gateway().call('session.set_effort', params)
         stood.set(held, effort)
-        return { ...was, effort }
+        return ticket === generation() ? { ...was, effort } : null
       } catch (e) {
         if (held.effort === effort) held.effort = stood.get(held) ?? null
         throw e
       }
     }
-    return gateway().call('session.set_effort', effort
+    const reply = await gateway().call('session.set_effort', effort
       ? { session_key: sid, effort }
       : { session_key: sid, clear: true })
+    return ticket === generation() ? reply : null
   },
 }
 

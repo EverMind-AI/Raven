@@ -322,6 +322,20 @@ describe('the live model persist', () => {
     expect(h.effortReads().at(-1)).toEqual({ sid: 'sess-1', gen: h.gen() })
   })
 
+  it('re-reads the effort row of the session a both-scope write moved', async () => {
+    /* The composer chip is the opener that draws the effort row, and it opens
+       with scope 'both'; this branch returned before reading it. */
+    const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: true } } })
+    await h.settings.persistModel('m2', 'minimax', 'both')
+    expect(h.effortReads().at(-1)).toEqual({ sid: 'sess-1', gen: h.gen() })
+  })
+
+  it('re-reads the effort row with the staged model of a both-scope draft write', async () => {
+    const h = await live({ answers: { 'config.set': { applied: true } } })
+    await h.settings.persistModel('m2', 'minimax', 'both')
+    expect(h.effortReads().at(-1)).toEqual({ sid: null, gen: h.gen(), model: 'm2' })
+  })
+
   it('rejects a refused session write, because only the caller\'s catch puts the chip back', async () => {
     /* `choose` moves the chip before the round trip and rolls it back only in
        its catch, so a refusal that RESOLVES left the chip on a model the
@@ -731,6 +745,21 @@ describe('the staged effort write', () => {
     expect(h.effortReads()).toEqual([{ sid: 'a', gen: began }])
     expect(began).toBe(h.gen())
   })
+
+  it('writes the draft\'s own pick after the reader has switched views', async () => {
+    const h = await live({ session: 'a' })
+    const registry = await import('../../state/session/registry')
+    const runtime = await import('../../state/session/runtime')
+    const draftRt = registry.viewRuntime()
+    draftRt.staged.effort = 'high'
+    h.bump()
+    const applied = runtime.applyStagedEffort(draftRt, 'a', h.gen())
+    const setAt = h.inFlight().lastIndexOf('session.set_effort')
+    expect(setAt).toBeGreaterThan(-1)
+    expect(h.param(setAt)).toEqual({ session_key: 'a', effort: 'high' })
+    await h.settle(setAt, reply)
+    await applied
+  })
 })
 
 describe('a draft\'s effort pick', () => {
@@ -758,6 +787,14 @@ describe('a draft\'s effort pick', () => {
     await h.settle(0, draft)
     expect(await set).toEqual({ ...draft, effort: 'high' })
     expect(h.overrides.staged.effort).toBe('high')
+  })
+
+  it('discards an answer for a draft the reader left while the set was in flight', async () => {
+    const h = await live()
+    const set = h.effortSet('high')
+    h.bump()
+    await h.settle(0, draft)
+    expect(await set).toBeNull()
   })
 
   it('puts back the last pick whose read landed, not the one a failing read overtook', async () => {

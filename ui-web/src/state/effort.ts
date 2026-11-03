@@ -49,7 +49,10 @@ export interface EffortReply {
    whose switch has been overtaken, and null paints nothing. */
 export interface EffortSource {
   read(sid?: string | null, gen?: number, model?: string): Promise<EffortReply | null>
-  set(effort: string | null): Promise<EffortReply>
+  /* ``null`` when the view was left while the set was in flight: a draft's
+     write can wait on the Codex catalogue, and the answer belongs to the
+     conversation the reader was on. */
+  set(effort: string | null): Promise<EffortReply | null>
 }
 
 /** One rung of the row. The default rung's id is '' -- no pick. */
@@ -163,7 +166,8 @@ export function pick(id: string): void {
 
 async function choose(id: string): Promise<void> {
   try {
-    absorb(await ds('effort').set(id || null))
+    const reply = await ds('effort').set(id || null)
+    if (reply) absorb(reply)
   } catch (err) {
     toast(t('gui.effort.failed', { name: label(id) }))
     /* Nothing moved: the state still holds what the server last said. */

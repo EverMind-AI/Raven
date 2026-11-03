@@ -157,6 +157,25 @@ export const sessionCommands: SlashCommand[] = [
                 ...state,
                 info: state.info ? { ...state.info, model: r.value! } : { model: r.value!, skills: {}, tools: {} }
               }))
+              /* The effort in force is a property of the model, and no
+                 session.info event follows a switch: read it back the way
+                 /effort does. A failure here must not turn a switch that
+                 landed into an error. */
+              if (ctx.sid) {
+                ctx.gateway
+                  .rpc<SessionSetEffortResult>('session.set_effort', { session_key: ctx.sid }, { quiet: true })
+                  .then(
+                    ctx.guarded<SessionSetEffortResult>(effort => {
+                      patchUiState(state => ({
+                        ...state,
+                        info: state.info
+                          ? { ...state.info, reasoning_effort: effort.effort ?? effort.default ?? '' }
+                          : state.info
+                      }))
+                    })
+                  )
+                  .catch(() => {})
+              }
             }
           })
         )
