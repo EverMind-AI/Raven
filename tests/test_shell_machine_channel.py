@@ -458,6 +458,14 @@ def test_an_alias_to_an_unregistered_machine_and_a_literal_address_are_read_as_b
     assert asked == []
 
 
+def test_an_alias_ssh_cannot_resolve_or_with_no_numeric_port_is_left_alone(registry, monkeypatch):
+    _resolving(monkeypatch, {"odd-port": ("203.0.113.7", "not-a-port")})
+
+    assert machine_exec.raw_ssh_target("ssh unknown-alias ls") is None
+    assert machine_exec.raw_ssh_target("ssh odd-port ls") is None
+    assert machine_exec.raw_ssh_target("ssh -p 58717 odd-port ls")["id"] == "conn_gpu"
+
+
 @pytest.mark.asyncio
 async def test_ssh_typed_through_the_local_connection_is_refused(monkeypatch):
     here = {"id": "this-mac", "display_name": "This Mac", "transport": "local", "kind": "cpu"}
