@@ -240,3 +240,50 @@ def test_a_non_codex_model_does_not_read_the_catalogue(monkeypatch, table):
 
     monkeypatch.setattr(codex_catalog, "account_efforts", boom)
     assert effort_levels.levels_for("openai/gpt-5") == ("minimal", "low", "medium", "high")
+
+
+def test_a_declared_word_outside_the_ladder_falls_back_to_the_table(table):
+    """A hand-edited overlay is not validated at the file; only a word the
+    build knows is a declaration, and a list of none states nothing."""
+    table({"gpt-5": _row()})
+    assert effort_levels.levels_for("gpt-5", ("High",)) == ("minimal", "low", "medium", "high")
+    assert effort_levels.levels_for("gpt-5", ("high", "Turbo")) == ("high",)
+
+
+def test_a_fallback_downgrades_to_the_highest_level_the_hop_declares():
+    assert effort_levels.downgrade("max", ("low", "high")) == "high"
+    assert effort_levels.downgrade("high", ("minimal", "low")) == "low"
+    assert effort_levels.downgrade("minimal", ("medium", "high")) is None
+    assert effort_levels.downgrade("high", None) == "high"
+
+
+def test_an_overlays_last_alias_wins():
+    """The model-label reader and the overlay writer already use the last row;
+    the effort reader must not pick the first and disagree with them."""
+    from raven.providers.overlay import overlay_for
+
+    section = {
+        "modelOverlay": {
+            "gpt-5": {"reasoningEfforts": ["low"]},
+            "openai/gpt-5": {"reasoningEfforts": ["high"]},
+        }
+    }
+    assert overlay_for(section, "openai", "openai/gpt-5") == {"reasoningEfforts": ["high"]}
+
+
+def test_declared_for_reads_raw_and_parsed_providers_alike(tmp_path):
+    """The turn reads the live file's raw subtree and the RPC the parsed
+    config; one lookup keeps their answers, including a legacy spelling."""
+    import json
+
+    from raven.config.live import LiveConfig
+    from raven.config.loader import load_config
+    from raven.providers.overlay import declared_for
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps({"providers": {"zhipu": {"modelOverlay": {"zai/glm-5": {"reasoningEfforts": ["high"]}}}}}),
+        encoding="utf-8",
+    )
+    assert declared_for(LiveConfig(path).get("providers") or {}, "zai", "zai/glm-5") == ("high",)
+    assert declared_for(load_config(path).providers, "zai", "zai/glm-5") == ("high",)

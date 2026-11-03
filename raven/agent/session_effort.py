@@ -80,9 +80,9 @@ def clamp(value: str | None, levels: tuple[str, ...] | None) -> str | None:
     answer: the caller's value is left alone (fail open). An empty tuple means
     the model declares no reasoning at all, so even a valid word is dropped.
     """
-    if levels is None:
-        return value
-    return value if value in levels else None
+    from raven.providers.effort_levels import clamp as _clamp
+
+    return _clamp(value, levels)
 
 
 def read(sessions: Any, session_key: str | None) -> str | None:

@@ -54,7 +54,11 @@ def levels_for(model: str, declared: Sequence[str] = (), *, refresh: bool = Fals
     """
     if declared:
         known = set(declared)
-        return tuple(name for name in LEVEL_ORDER if name in known)
+        levels = tuple(name for name in LEVEL_ORDER if name in known)
+        if levels:
+            return levels
+        # A hand-edited overlay with only words outside the ladder states no
+        # level: fall through to the table, as an empty declaration does.
     from raven.providers.registry import canonical_provider_name, split_model_id
 
     provider, rest = split_model_id(model)
@@ -81,6 +85,35 @@ def levels_for(model: str, declared: Sequence[str] = (), *, refresh: bool = Fals
 def reset() -> None:
     """Drop the cached table/index; tests and a LiteLLM reload use it."""
     _index.cache_clear()
+
+
+def clamp(value: str | None, levels: tuple[str, ...] | None) -> str | None:
+    """The value if this model declares it; None otherwise.
+
+    ``None`` levels mean the table could not be read, which is not a model
+    answer: the caller's value is left alone (fail open). An empty tuple means
+    the model declares no reasoning at all, so even a valid word is dropped.
+    """
+    if levels is None:
+        return value
+    return value if value in levels else None
+
+
+def downgrade(value: str | None, levels: tuple[str, ...] | None) -> str | None:
+    """The value where the model declares it, else the highest level below it.
+
+    For a fallback hop: the primary's word is not evidence about this model,
+    and dropping straight to None would make the recovery call a different
+    request from the one just attempted. A model declaring nothing at or below
+    the word gets None; an unreadable table keeps the value (fail open).
+    """
+    if levels is None or value in levels:
+        return value
+    if value not in LEVEL_ORDER:
+        return None
+    rank = LEVEL_ORDER.index(value)
+    below = [name for name in levels if name in LEVEL_ORDER and LEVEL_ORDER.index(name) < rank]
+    return max(below, key=LEVEL_ORDER.index) if below else None
 
 
 def _table() -> dict[str, dict[str, Any]] | None:
