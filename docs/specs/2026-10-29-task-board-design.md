@@ -470,7 +470,9 @@ it. The server keeps a note beside the board, as it keeps a set-aside, and the t
 opens reads, in its runtime context, which group it moves on, by id, title and where it
 stands; the turn's own board update reads the same line, and is kept to that group (3,
 What a turn may write). A message sent while a turn runs waits for a turn of its own rather
-than joining that one, whose context was read before it. A later move-on replaces one not yet
+than joining that one, whose context was read before it. Until the server is told, no turn
+exists for the message: a Stop in that window takes it back, bubble and all, rather than
+asking the server to cancel a turn it never started. A later move-on replaces one not yet
 acknowledged; a turn already shown the earlier one stays about that group. The Task Board page offers it on every card and row,
 opening the conversation first, as an event does.
 

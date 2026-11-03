@@ -37,6 +37,7 @@ async function harness({
       'src/state/ws': { setOpen: () => {}, reset: () => {} },
       'src/state/session/conversation': {
         ask: (text: string) => log.push(['ask', text]),
+        unask: (id: number) => log.push(['unask', id]),
         noteRow: (labelText: string, detail: string, opts?: Record<string, unknown>) =>
           log.push(['noteRow', labelText, detail, opts ? Object.keys(opts).sort() : null]),
         pitch: () => {},
@@ -349,6 +350,28 @@ describe('a message that moves a task on', () => {
 
     expect(h.sends()).toEqual([])
     expect(h.queue).toEqual(['the next step'])
+    h.runtime.lendBeforeSend(null)
+  })
+
+  /* Until the board is told no turn exists, so there is nothing for the server to
+     cancel; the message is taken back instead, and the board's answer sends nothing. */
+  it('is taken back, never sent, when Stop is pressed before the board is told', async () => {
+    const h = await harness()
+    let told: () => void = () => {}
+    h.runtime.lendBeforeSend({ pending: (key) => key === 's1', spend: () => new Promise<void>((resolve) => { told = resolve }) })
+
+    h.runtime.send('the next step')
+    await h.tick()
+    h.runtime.stop()
+    told()
+    await h.tick()
+    await h.tick()
+
+    const drawn = h.log.findIndex((c) => c[0] === 'ask') + 1
+    expect(h.sends()).toEqual([])
+    expect(h.asked.map(([m]) => m)).not.toContain('turn.cancel')
+    expect(h.did('unask')).toEqual([['unask', drawn]])
+    expect(turn.busy()).toBe(false)
     h.runtime.lendBeforeSend(null)
   })
 })
