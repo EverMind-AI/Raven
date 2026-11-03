@@ -219,13 +219,22 @@ const slugOf = (name: string): string => name.toLowerCase().replace(/-/g, '_')
    reading "Testing" beside the model it is leaving reads as though the old one
    is the one under test.
 
+   The effort select beside it reads the row the same way, for the reason its
+   own write can outlast the click: disabled on the value the reader just
+   picked, it would look like a refused pick for the whole round trip.
+
    No rollback is needed and none is written: the pending entry goes when the
    write does, so a refusal puts the row's own value back on screen by itself.
    Handing the patched row to `shownModel` rather than reimplementing it keeps
    the choice lookup and the provider split in one place. */
 function asAsked(row: ExtAgentRow, s: ExtAgentsState): ExtAgentRow {
   const write = s.joining[row.name]
-  if (!write || write.op !== 'model') return row
+  if (!write) return row
+  if (write.op === 'effort') {
+    if (write.args.clear_effort) return { ...row, effort: null }
+    return write.args.effort ? { ...row, effort: write.args.effort } : row
+  }
+  if (write.op !== 'model') return row
   if (write.args.clear_model) return { ...row, model: null }
   return write.args.model ? { ...row, model: write.args.model } : row
 }
@@ -387,6 +396,13 @@ function ModelPill({
                 {c.name || c.value}
               </option>
             ))}
+            {/* The rung the row still sends, when the menu no longer offers it --
+                an agent whose menus moved under a stored pick. Without it the
+                controlled select has no matching option and draws blank, which
+                reads as "the agent's own" for a row that is not on it. */}
+            {row.effort && !row.effort_choices.some((c) => c.value === row.effort) ? (
+              <option value={row.effort}>{row.effort}</option>
+            ) : null}
           </select>
         </label>
       ) : null}

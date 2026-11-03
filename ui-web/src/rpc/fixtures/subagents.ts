@@ -60,6 +60,16 @@ const ROSTER: Row[] = [
       { value: 'claude-sonnet-5', name: 'Sonnet 5', group: 'Anthropic' },
       { value: 'claude-haiku-4-5', name: 'Haiku 4.5', group: 'Anthropic' },
     ],
+    /* The reasoning effort this row sends and the rungs the agent advertises, in
+       the shape a handshake answers with: the offline page draws its own field
+       from these, so a control the page adds has one row to appear on. */
+    effort: 'high',
+    effort_choices: [
+      { value: 'low', name: 'Low' },
+      { value: 'medium', name: 'Medium' },
+      { value: 'high', name: 'High' },
+      { value: 'default', name: 'Default' },
+    ],
     description: 'Claude Code CLI - strong general coding / agent tasks.' },
   { name: 'claude_code@ravenx2', preset: 'claude_code', kind: 'acp', configured: true, enabled: true, machine: 'ravenx2',
     group: 'installed', probe_status: 'ready', probe_detail: "runs on machine 'RavenX 2' (ravenx2); it ran and replied", has_api_key: false, needs_auth: false,
@@ -189,6 +199,12 @@ export function createSubagents(env: FixtureEnv): SubagentsFixture {
            unless the id already carries it). */
         if (row && p.clear_model) row.model = null
         else if (row && p.model) row.model = p.provider && !p.model.startsWith(`${p.provider}/`) ? `${p.provider}/${p.model}` : p.model
+        /* And its effort, on the same terms: the clear wins over a pick sent
+           beside it, and a value the agent's menu does not offer is what the
+           server refuses -- this library has no refusal frame of its own, so it
+           keeps only what the row's own menu carries. */
+        if (row && p.clear_effort) row.effort = null
+        else if (row && p.effort && (row.effort_choices || []).some((c) => c.value === p.effort)) row.effort = p.effort
         return { updated: true, name: p.name }
       },
       /* One switch for every kind of row, including the discovered ones: the

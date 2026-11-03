@@ -570,9 +570,8 @@ describe('the Mirasim family card', () => {
     expect(sent.at(-1)).toEqual(['connect', 'codex-Mirasim', { model: 'gpt-6' }])
   })
 
-  /* The same for a model picker the reader has open: a reload -- any write's
-     refetch, or the poll while some agent builds -- does not shut it under the
-     cursor. */
+  /* A menu read is a reader looking, so opening the picker asks again -- and
+     the card-corner button asks forcibly. */
   it('re-reads a preset member menu when its picker opens, and on its button', async () => {
     const calls: Array<[string, boolean]> = []
     const all = withChoices(members(), 'codex-Mirasim', CODEX_CHOICES)
@@ -603,6 +602,9 @@ describe('the Mirasim family card', () => {
     expect(calls).toEqual([['codex-Mirasim', false], ['codex-Mirasim', true]])
   })
 
+  /* The same for a model picker the reader has open: a reload -- any write's
+     refetch, or the poll while some agent builds -- does not shut it under the
+     cursor. */
   it('keeps a model picker open across a reload', async () => {
     install(withChoices(members(), 'codex-Mirasim', CODEX_CHOICES))
     await mount()
@@ -2231,6 +2233,27 @@ describe('the model pill', () => {
     await mount()
     await openSheet('claude_code')
     expect(sheet()!.querySelector('.extAgents-effort')).toBeNull()
+  })
+
+  /* A menu can move under a stored pick: the row still sends the rung, and the
+     select is controlled by it. With no option carrying that value the browser
+     draws blank, which reads as "the agent's own" -- the one thing the row is
+     not on. */
+  it('draws a stored effort the menu no longer offers, rather than a blank select', async () => {
+    install([
+      row({
+        model_source: 'agent',
+        model_choices: choices,
+        effort: 'max',
+        effort_choices: [{ value: 'low', name: 'Low' }],
+      }),
+    ])
+    await mount()
+    await openSheet('claude_code')
+
+    const select = sheet()!.querySelector<HTMLSelectElement>('.extAgents-effort')!
+    expect(select.value).toBe('max')
+    expect([...select.options].map((o) => o.textContent)).toEqual(['gui.agent.effort_default', 'Low', 'max'])
   })
 
   it('draws no effort field for an agent that advertises none', async () => {
