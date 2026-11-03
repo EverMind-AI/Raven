@@ -570,6 +570,42 @@ describe('the model menu re-read', () => {
   })
 })
 
+describe('a write that supersedes a roster read', () => {
+  /* The write takes the read's sequence, so the read returns through the stale
+     guard without clearing `loading` -- and it is the read that owns that flag.
+     With rows already on screen the page is interactive while the opening probe
+     is still out, so a write pressed there would leave it saying "Checking". */
+  it('clears the checking state the read it replaced left behind', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let listed = 0
+    const rows = [row(), row({ name: 'codex' })]
+    setSources({
+      extAgents: {
+        ...offMachine,
+        load: async () => {
+          listed += 1
+          if (listed === 1) await gate
+          return rows
+        },
+        act: async () => rows,
+      },
+    })
+    store.set({ rows })
+
+    const opening = store.load(true)
+    expect(store.get().loading).toBe(true)
+
+    await store.runTest(rows[0]!)
+
+    expect(store.get().loading).toBe(false)
+
+    release()
+    await opening
+    expect(store.get().loading).toBe(false)
+  })
+})
+
 describe('a menu read that failed', () => {
   it('drops its note once the row is measured again', async () => {
     const rows = [row(), row({ name: 'codex' })]

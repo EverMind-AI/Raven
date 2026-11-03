@@ -432,6 +432,12 @@ export async function run(
      re-measured, so it goes with it. Only on success -- a refused write says
      nothing about the menu. */
   if (failedWith === null && row) next.menusFailed = without(get().menusFailed, row.name)
+  /* This write took the sequence above, so a roster read already in flight
+     returns through `read`'s stale guard without clearing `loading` -- it is
+     the read that owns that flag. Nothing else would: the write's own rows are
+     here, so the page is not waiting for anything any more. A read that started
+     after this one is the newer owner and keeps the flag it set. */
+  if (seq === reads) next.loading = false
   set(next)
   if (get().sheet && !rows.some((x) => x.name === get().sheet)) closeSheet()
   watchBuilds(rows)
