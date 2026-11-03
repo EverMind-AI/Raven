@@ -14,7 +14,9 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from loguru import logger
 
+from raven.channels.adapters.whatsapp import channel as wa_channel
 from raven.channels.adapters.whatsapp.bridge import load_or_create_bridge_token
 from raven.channels.adapters.whatsapp.channel import WhatsAppChannel
 from tests.conftest import make_channel_config
@@ -960,6 +962,111 @@ async def test_login_fails_when_the_pairing_codes_expire(tmp_path, monkeypatch):
         await fake.stop()
 
     assert proc.terminated is True
+
+
+@pytest.mark.production_timing  # the login deadline is the property under test
+async def test_login_times_out_when_the_qr_is_never_scanned(tmp_path, monkeypatch):
+    """An unscanned QR must not hold the terminal and the bridge forever: the
+    wizard's retry/skip menu only appears once login returns."""
+    port = _free_port()
+    fake, proc = _FakeBridge(), _FakeProcess()
+
+    async def _spawn(bridge_dir, token, auth_dir, spawn_port):  # noqa: ARG001
+        await fake.start(spawn_port)
+        return proc
+
+    async def _closed(host, port, timeout=1.0):  # noqa: ARG001
+        return False
+
+    async def _ready(host, port, timeout):  # noqa: ARG001
+        return True
+
+    ch = _make_channel(monkeypatch, tmp_path, bridge_url=f"ws://127.0.0.1:{port}")
+    monkeypatch.setattr(wb, "port_is_open", _closed)
+    monkeypatch.setattr(wb, "wait_for_port", _ready)
+    monkeypatch.setattr(wb, "ensure_bridge_dir", lambda: tmp_path / "bridge")
+    monkeypatch.setattr(wb, "spawn_bridge", _spawn)
+    monkeypatch.setattr(wa_channel, "_LOGIN_TIMEOUT_SECONDS", 1.0)
+    monkeypatch.setattr(wa_channel, "_LOGIN_HINT_SECONDS", 0.3)
+    monkeypatch.setattr(wa_channel, "_LOGIN_POLL_SECONDS", 0.01)
+
+    messages: list[str] = []
+    sink = logger.add(lambda message: messages.append(str(message)), level="INFO")
+    login = asyncio.create_task(ch.login())
+    try:
+        await _wait_for(lambda: ch._bridge_proc is not None)
+        await _wait_for(lambda: fake.clients)
+        assert await asyncio.wait_for(login, timeout=5) is False
+    finally:
+        logger.remove(sink)
+        login.cancel()
+        with suppress(asyncio.CancelledError):
+            await login
+        await fake.stop()
+
+    assert any("did not finish" in message for message in messages)
+    assert any("Ctrl-C" in message for message in messages)
+    assert proc.terminated is True
+    assert ch.is_running is False
+    assert ch.connected is False
+
+
+@pytest.mark.production_timing
+async def test_login_counts_the_deadline_from_the_bridge_coming_up(tmp_path, monkeypatch):
+    """The build is a precondition, not the QR wait: a build slower than the
+    deadline must not end the login before a code can even appear."""
+    port = _free_port()
+    fake, proc = _FakeBridge(), _FakeProcess()
+    building, release = threading.Event(), threading.Event()
+
+    async def _spawn(bridge_dir, token, auth_dir, spawn_port):  # noqa: ARG001
+        await fake.start(spawn_port)
+        return proc
+
+    def _build():
+        building.set()
+        release.wait(30)
+        return tmp_path / "bridge"
+
+    async def _closed(host, port, timeout=1.0):  # noqa: ARG001
+        return False
+
+    async def _ready(host, port, timeout):  # noqa: ARG001
+        return True
+
+    ch = _make_channel(monkeypatch, tmp_path, bridge_url=f"ws://127.0.0.1:{port}")
+    monkeypatch.setattr(wb, "port_is_open", _closed)
+    monkeypatch.setattr(wb, "wait_for_port", _ready)
+    monkeypatch.setattr(wb, "ensure_bridge_dir", _build)
+    monkeypatch.setattr(wb, "spawn_bridge", _spawn)
+    monkeypatch.setattr(wa_channel, "_LOGIN_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(wa_channel, "_LOGIN_HINT_SECONDS", 0.1)
+    monkeypatch.setattr(wa_channel, "_LOGIN_POLL_SECONDS", 0.01)
+
+    login = asyncio.create_task(ch.login())
+    try:
+        await _wait_for(building.is_set)
+        await asyncio.sleep(0.4)  # twice the deadline, still building
+        assert login.done() is False, "the build is not the QR wait"
+        release.set()
+        await _wait_for(lambda: fake.clients)
+        assert await asyncio.wait_for(login, timeout=5) is False
+    finally:
+        release.set()
+        login.cancel()
+        with suppress(asyncio.CancelledError):
+            await login
+        await fake.stop()
+
+    assert proc.terminated is True
+    assert ch.is_running is False
+
+
+@pytest.mark.production_timing
+def test_login_deadline_keeps_the_approved_defaults():
+    """The timeout and hint cadence are the values approved for this behavior."""
+    assert wa_channel._LOGIN_TIMEOUT_SECONDS == 300.0
+    assert wa_channel._LOGIN_HINT_SECONDS == 30.0
 
 
 async def test_cancelling_the_channel_task_does_not_orphan_its_bridge(tmp_path, monkeypatch):
