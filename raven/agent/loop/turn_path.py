@@ -3649,7 +3649,8 @@ class TurnPathMixin:
             # message tool answered sends no reply of its own, so its marker row stays.
             _file_composed_reply(turn_msgs, final_content)
         delivered_files = _delivered_files(turn_msgs[turn_start_idx:])
-        if self._answered_by_tool(turn_msgs[turn_start_idx:]):
+        answered_by_tool = self._answered_by_tool(turn_msgs[turn_start_idx:])
+        if answered_by_tool:
             _stamp_replied_via_tool(turn_msgs, turn_start_idx)
         if delivered_files and silence is not None:
             silence["delivered_files"] = True
@@ -3710,6 +3711,9 @@ class TurnPathMixin:
                 fallback_models,
                 delegated=req.delegated,
                 moved_on=[n.group for n in shown if n.kind == "move_on" and n.group],
+                # The turn's own verdict rather than the marker: a turn a tool answered is not a
+                # Silent Turn whatever it ended on, and a hook's reply has cleared ``silent``.
+                silent=silent and not answered_by_tool,
             )
 
         if origin is Origin.USER:
@@ -3791,6 +3795,7 @@ class TurnPathMixin:
         *,
         delegated: dict[str, Any] | None,
         moved_on: list[str],
+        silent: bool,
     ) -> None:
         """Start the host's post-turn task board call for the turn that just ended.
 
@@ -3811,7 +3816,7 @@ class TurnPathMixin:
         dispatches = turn_dispatches(turn_added)
         if board is None or outcome is None or outcome.last_tools is None or not window:
             return
-        if not should_run(outcome.status, dispatches, silent=outcome.silent):
+        if not should_run(outcome.status, dispatches, silent=silent):
             return
         tools, model = outcome.last_tools, outcome.last_model or self.model
         # The turn's own effort, or none at all: an explicit None would switch the

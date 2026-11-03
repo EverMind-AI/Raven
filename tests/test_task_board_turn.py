@@ -397,6 +397,37 @@ async def test_a_note_ack_the_disk_refuses_leaves_the_reply_and_shows_the_note_a
     assert note in _text(turns[2]["messages"][-1]), "a note never acknowledged is shown again"
 
 
+def _delivering(agent: AgentLoop) -> list[str]:
+    """Give the message tool a channel to send on; what it sent, in order."""
+    sent: list[str] = []
+
+    async def deliver(content: str, _media: list[str]) -> None:
+        sent.append(content)
+
+    agent.tools.get("message").set_send_callback(deliver)
+    return sent
+
+
+ASKS_THROUGH_THE_MESSAGE_TOOL = LLMResponse(
+    content="",
+    tool_calls=[ToolCallRequest(id="m1", name="message", arguments={"content": "Which fix should I apply?"})],
+)
+
+
+async def test_a_turn_the_message_tool_answered_keeps_the_board_though_it_ends_on_the_marker(tmp_path):
+    """Not a Silent Turn: the reader has the answer the message tool sent, and the question
+    it asked belongs on the board."""
+    provider = Recording([ASKS_THROUGH_THE_MESSAGE_TOOL, LLMResponse(content="[SILENT]"), BOARD_REPLY])
+    agent = _agent(tmp_path, provider)
+    sent = _delivering(agent)
+
+    await agent._process_message(_turn(), session_key=KEY)
+    await _drain(agent)
+
+    assert sent == ["Which fix should I apply?"]
+    assert [r["purpose"] for r in provider.requests] == ["main", "main", "task_board"]
+
+
 async def test_a_silent_turn_makes_no_board_call(tmp_path):
     """The host answered with its silence marker and started nothing: no step can
     say what moved, so the post-turn call is not made at all."""
