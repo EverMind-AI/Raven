@@ -628,6 +628,11 @@ class AcpConnectionPool:
             )
             held = self._connections.setdefault(name, {})
             bkey = _binding_key(None)
+            # The slot this connection fills, as a launched one records it: the
+            # next dispatch of a machine's agent acquires with no binding, so it
+            # lands on this same key, and the session records written here are
+            # what that dispatch -- after an idle close -- has to read back.
+            client.session_identity = (name, bkey)
             existing = held.get(bkey)
             if existing is not None and existing.alive:
                 return connection, False

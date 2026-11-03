@@ -8650,6 +8650,42 @@ async def test_a_cleared_pin_is_sent_back_after_the_pool_closes_the_idle_agent(
     assert frames and frames[-1].endswith(restore), f"the restore on the new process, got {frames!r}"
 
 
+async def test_an_adopted_connections_session_record_outlives_the_idle_close(tmp_path: Path) -> None:
+    """A run picked up from a registered machine adopts the agent still running
+    there, and that connection serves the name's later dispatches. The pool
+    closes an idle agent that can reload its sessions, so the record of what
+    this host pushed has to outlive the process exactly as it does for a
+    connection the pool launched -- they fill the same slot.
+
+    Adopted clients were given no slot, so their records stayed per client and
+    the idle close took them: a clear on the next turn found nothing pushed and
+    sent nothing back.
+    """
+    from tests.test_acp_client_resume import _Pipe
+
+    cfg = stub_config("adopted")
+    pipe = _Pipe()
+    adopted, _held = await get_pool().adopt(
+        name="adopted",
+        endpoint=pipe,
+        initialize={"agentCapabilities": {"loadSession": True}},
+        launch="k",
+        config="c",
+        next_id=1,
+    )
+    state = _session_state(adopted.client, "s1")
+    state.model_baseline, state.model_pushed = "stub:model-a", "stub:model-b"
+    assert await get_pool().close_idle(0.0) == ["adopted"]
+
+    connection = await get_pool().acquire(
+        name="adopted", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+
+    assert _session_state(connection.client, "s1").model_pushed == "stub:model-b", (
+        "the next turn reads the record the adopted connection wrote; without it a clear sends nothing"
+    )
+
+
 async def test_a_fresh_session_starts_on_an_empty_record_whatever_its_id() -> None:
     """Session ids are numbered per process, so a process started after another
     can hand out an id the earlier one used. A new session has pushed nothing:
