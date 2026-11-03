@@ -203,7 +203,11 @@ Raven can connect to and orchestrate agents via ACP, CLI, or OpenAI-compatible A
 
 ## ❯❯ News
 
-- 📣 **2026-09-30** — Raven's technical report is [**#1 Paper of the day**](https://huggingface.co/papers/2609.33439) on Hugging Face.
+- 📣 **2026-09-30** — Raven's technical report reached [**#1 on Hugging Face Daily Papers**](https://huggingface.co/papers/2609.33439) — daily (2026-09-30), weekly (2026-10-04) and monthly (2026-10-10).
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/c8e7c7f6-e435-4dda-a54c-ce3340ca547b"><img src="https://github.com/user-attachments/assets/c8e7c7f6-e435-4dda-a54c-ce3340ca547b" alt="Three Crowns on Hugging Face: Raven's technical report ranked #1 on the daily, weekly and monthly Hugging Face Daily Papers boards" width="100%"></a>
+</p>
 
 ## ❯❯ Quick Start
 
