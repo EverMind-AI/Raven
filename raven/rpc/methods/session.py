@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from loguru import logger
 
 from raven.agent import session_effort
-from raven.agent.task_board.board import drop_turns
+from raven.agent.task_board.board import board_to_dict, drop_turns
 from raven.agent.task_board.dispatches import dag_run_id_of, spawn_task_id_of
 from raven.agent.task_board.service import reset_for
 from raven.agent.task_board.store import copy_board, load_board, save_board
@@ -1306,7 +1306,10 @@ async def session_undo(
             await board.drop_turns(session_key, undone)
         else:
             directory = mgr.session_dir(session_key)
-            save_board(directory, drop_turns(load_board(directory), undone))
+            current = load_board(directory)
+            kept = drop_turns(current, undone)
+            if board_to_dict(kept, revisions=True) != board_to_dict(current, revisions=True):
+                save_board(directory, kept)
     return {"removed": removed}
 
 

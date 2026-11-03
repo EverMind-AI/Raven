@@ -13,7 +13,7 @@ from raven.agent.subagent.history import SpawnRecord, dag_root, nodes_root, sess
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.task_board.board import Board, Dispatch, apply_update, set_group_status
 from raven.agent.task_board.service import TaskBoardService
-from raven.agent.task_board.store import load_board, save_board
+from raven.agent.task_board.store import BOARD_FILENAME, load_board, save_board
 from raven.agent.task_board.tool import TaskBoardTool
 from raven.rpc.errors import InvalidParamsError
 from raven.rpc.methods.session import session_branch, session_clear, session_undo
@@ -414,6 +414,15 @@ async def test_undo_keeps_a_turn_whose_question_shares_a_stamp_with_an_undone_an
     await session_undo({"session_id": KEY}, agent_loop_factory=lambda: loop)
 
     assert [g.title for g in load_board(_dir(workspace)).groups] == ["Kept"]
+
+
+async def test_undo_where_no_board_is_kept_writes_none_for_a_conversation_without_one(workspace):
+    loop = _two_turns(workspace)
+    loop.task_board = None
+
+    await session_undo({"session_id": KEY}, agent_loop_factory=lambda: loop)
+
+    assert not (_dir(workspace) / BOARD_FILENAME).exists()
 
 
 def _host_session(workspace: Path, key: str, board: Board) -> None:
