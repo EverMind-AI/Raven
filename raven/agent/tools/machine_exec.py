@@ -341,16 +341,41 @@ def raw_ssh_target(command: str) -> dict[str, Any] | None:
     except Exception:  # noqa: BLE001 -- a malformed registry must leave the plain shell working
         return None
     for host, port in destinations:
-        for row in rows:
-            row_host = str(row.get("host") or "").strip().lower()
-            if not row_host or row_host != host:
-                continue
-            try:
-                row_port = int(row.get("port") or 22)
-            except (TypeError, ValueError):
-                row_port = 22
-            if row_port == port:
-                return row
+        if (row := _row_at(rows, host, port)) is not None:
+            return row
+    # An alias in the owner's ssh config reaches a registered machine under a
+    # name the registry does not hold -- the owner's own ``Host gpu-a800``, or
+    # the ``Host <id>`` block registration writes. Measured 2026-11-03: a model
+    # that read ~/.ssh/config typed ``ssh <alias> ...`` in 3 of 18 runs and was
+    # never stopped. ssh -G says where a destination goes without connecting;
+    # an explicit -p still wins over the config's Port, as it does for ssh.
+    from raven.ops.transport import resolve_with_ssh
+
+    for host, port in destinations:
+        resolved = resolve_with_ssh(["ssh", host])
+        named = resolved.first("hostname").lower()
+        if resolved.failure or not named:
+            continue
+        try:
+            via = port if port != 22 else int(resolved.first("port") or 22)
+        except ValueError:
+            via = port
+        if (named, via) != (host, port) and (row := _row_at(rows, named, via)) is not None:
+            return row
+    return None
+
+
+def _row_at(rows: list[dict[str, Any]], host: str, port: int) -> dict[str, Any] | None:
+    for row in rows:
+        row_host = str(row.get("host") or "").strip().lower()
+        if not row_host or row_host != host:
+            continue
+        try:
+            row_port = int(row.get("port") or 22)
+        except (TypeError, ValueError):
+            row_port = 22
+        if row_port == port:
+            return row
     return None
 
 
@@ -480,6 +505,15 @@ async def run_on_machine(command: str, *, connection: str, cwd: str | None = Non
     runner, row = await asyncio.to_thread(_runner_for_connection, connection, cap_seconds=_TIMEOUT_S + 15)
     if runner is None:
         return row  # the message explaining why not
+    if str(row.get("transport") or "") == "local" and (other := raw_ssh_target(command)) is not None:
+        # The local connection is this computer, so an ssh typed there is the
+        # same registry bypass the plain shell refuses: measured 2026-11-03, 2
+        # of 18 runs reached a registered machine this way.
+        other_id = str(other.get("id") or "")
+        return (
+            f"Error: this command reaches {_where(other)} over raw ssh, and that machine is registered "
+            f"as {other_id!r}. Run the command itself with machine={other_id!r} instead. Nothing was run."
+        )
 
     where = (cwd or ".").rstrip("/") or "/"
     # bash, not sh: /bin/sh is dash on these hosts, and shell gets written the
