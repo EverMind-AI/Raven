@@ -20,11 +20,9 @@
 
 ### ❯ Multi-Agent Trajectory Observability
 
-**Every agent, every turn, every step — on one timeline.** Raven's new trajectory view turns a running multi-agent session from a black box into a live waterfall: the host agent and every subagent hold their own row, and each turn expands into the LLM calls, tool calls, and errors that ran inside it. Duration, agents, turns, LLM calls, tool calls, and errors update as the session runs; busy spans are colored by type, idle gaps fold away, and the axis zooms from the whole run down to a single step. Hover a turn to split its time across LLM calls, tools, and waiting, or click a step to open its output.
+**Every agent, every turn, every step — on one timeline.** Raven's new trajectory view renders a running multi-agent session as a live waterfall, from the whole run down to a single step.
 
 https://github.com/user-attachments/assets/abb0a5e9-1c37-48bd-9be0-1c9267293337
-
-<p align="center"><em>A 20-hour, 23-agent session: from the whole run down to a single tool call.</em></p>
 
 # What is Raven
 
