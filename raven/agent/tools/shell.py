@@ -196,7 +196,10 @@ class ExecTool(Tool):
         return (
             f"{base} "
             "Runs on THIS computer unless you name a machine: pass 'machine' with a "
-            "connection id from the owner's registry to run it there instead. A machine "
+            "connection id from the owner's registry to run it there instead. When the "
+            "owner said where -- a machine's name, a nickname, an address or part of one, "
+            "a port -- pass their words as 'machine' even if they are not an id: the reply "
+            "says which registered machine they mean. A machine "
             "of the owner's is where their code and their cases live, and work that "
             "outlives the call belongs to a job runner, so this refuses to detach there."
         )
@@ -393,8 +396,16 @@ class ExecTool(Tool):
         try:
             result = await self._executor.exec(command, cwd=cwd, timeout=effective_timeout, env=env)
         except Exception as e:
-            return f"Error executing command: {str(e)}"
+            from raven.agent.tools.machine_exec import missing_here_note
+
+            # A working_dir that is not on this disk fails here, before the command runs.
+            return f"Error executing command: {str(e)}" + missing_here_note([cwd], command=command)
         text = result.as_text(self._MAX_OUTPUT)
+        # `ls x || echo none` exits 0 with the miss only in its text.
+        if (result.exit_code != 0 or "No such file or directory" in text) and not self._executor.is_sandboxed:
+            from raven.agent.tools.machine_exec import missing_here_note
+
+            text += missing_here_note(self._extract_absolute_paths(command), command=command)
         removed = tuple(
             FileRemoval(path=path, before=before) for path, before in watched.items() if not os.path.exists(path)
         )
