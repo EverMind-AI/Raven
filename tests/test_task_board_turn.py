@@ -639,6 +639,41 @@ def _spawning_agent(tmp_path, provider) -> AgentLoop:
     return agent
 
 
+def _terminal_turn(text: str = "Why is the page blank after login?") -> TurnRequest:
+    source = Source(channel="tui", chat_id="c1", sender_id="user", chat_type=ChatType.DM, surface="tui")
+    return TurnRequest(origin=Origin.USER, source=source, text=text)
+
+
+class _AddressedSpawn(_ReceiptSpawn):
+    """A spawn that keeps the surface each turn addressed it with."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.surfaces: list[str | None] = []
+
+    def set_context(self, channel: str, chat_id: str, session_key: str, surface: str | None = None) -> None:
+        self.surfaces.append(surface)
+
+
+async def test_a_dispatch_on_the_terminal_is_addressed_and_noted_as_the_terminal(tmp_path):
+    """The terminal shares the page's channel and draws no board: the run it starts is
+    addressed back to the terminal, and the note after its receipt keeps the rule that
+    open decisions close the reply."""
+    from raven.context_engine.segments.render import reply_rules_note
+
+    provider = Recording([SPAWN_CALL, LLMResponse(content=ANSWER)])
+    agent = _agent(tmp_path, provider)
+    spawn = _AddressedSpawn()
+    agent.tools.register(spawn)
+
+    await agent._process_message(_terminal_turn(), session_key="tui:c1")
+    await _drain(agent)
+
+    receipt = next(m for m in provider.requests[1]["messages"] if m.get("role") == "tool")
+    assert spawn.surfaces == ["tui"]
+    assert _text(receipt).endswith(reply_rules_note(board_shown=False))
+
+
 async def test_a_turn_that_fails_after_a_spawn_parks_what_it_dispatched(tmp_path):
     """No call follows a provider that just failed: the run waits in unassigned, keyed by
     the turn, for the next update to place."""

@@ -999,6 +999,7 @@ class TurnPathMixin:
         silence_taught: bool = False,
         turn_start_idx: int = 0,
         session_effort: str | None = None,
+        surface: str | None = None,
     ) -> tuple[str | None, list[str], list[dict], LoopOutcome]:
         """Run the agent iteration loop.
 
@@ -1023,6 +1024,10 @@ class TurnPathMixin:
         ``session_history`` is the filed record of the session this turn
         persists into -- still ending with the previous turn -- stamped once
         onto the iteration hook context. The caller owns which record that is.
+
+        ``surface`` is the front end the turn's request declared; the note after
+        a dispatch receipt reads it, since the terminal and the page share a
+        channel and only the page draws the board.
 
         ``turn_started_at`` is when the caller's turn began, on the clock
         :func:`monotonic` reads. A caller that may run this loop more than once
@@ -1995,7 +2000,7 @@ class TurnPathMixin:
                         if reached is not None and reached.name in render.DISPATCH_TOOLS:
                             channel = (session_key or "").partition(":")[0]
                             watch_note += render.reply_rules_note(
-                                board_shown=render.board_on_page(self._task_board_config.enabled, channel, None)
+                                board_shown=render.board_on_page(self._task_board_config.enabled, channel, surface)
                             )
                     # The registry already unwrapped any ToolResult: `result` is
                     # the model-facing text, with the optional display string
@@ -3165,7 +3170,9 @@ class TurnPathMixin:
                     # generate_question failed: skip silently and proceed
         # ── End personalization flow ─────────────────────────────────────────
 
-        self._set_tool_context(channel, chat_id, metadata.get("message_id"), session_key=key)
+        self._set_tool_context(
+            channel, chat_id, metadata.get("message_id"), session_key=key, surface=req.source.surface
+        )
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
                 message_tool.start_turn()
@@ -3181,7 +3188,7 @@ class TurnPathMixin:
         # least context made the most expensive call. All that remains per turn is
         # telling the tool what the turn is about, so its listing can be ranked.
         if self._playbooks is not None:
-            self._playbooks.set_context(channel=channel, chat_id=chat_id, session_key=key)
+            self._playbooks.set_context(channel=channel, chat_id=chat_id, session_key=key, surface=req.source.surface)
             if (pb_tool := self.tools.get("load_playbook")) is not None and hasattr(pb_tool, "set_turn_message"):
                 pb_tool.set_turn_message(content)
 
@@ -3385,6 +3392,7 @@ class TurnPathMixin:
                 # Read here, beside the model, because this is where the
                 # session is: the loop below is handed a key, not a record.
                 session_effort=session_effort_of(session.metadata),
+                surface=req.source.surface,
             )
 
         # Taken BEFORE the first attempt, because the loop appends to the list it is

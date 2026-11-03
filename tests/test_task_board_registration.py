@@ -106,3 +106,15 @@ def test_the_turn_binds_the_board_to_its_session(tmp_path, monkeypatch):
     agent._set_tool_context("web", "alpha", None, session_key="web:alpha")
 
     assert agent.tools.get("task_board")._session_key.get() == "web:alpha"
+
+
+def test_the_turn_hands_its_surface_to_the_tools_that_dispatch(tmp_path, monkeypatch):
+    """A run's result comes back as a turn of its own; the surface it was dispatched
+    from is what tells that turn whether its reader has the board."""
+    monkeypatch.delenv("RAVEN_SUBAGENT", raising=False)
+    agent = _loop(tmp_path)
+
+    agent._set_tool_context("tui", "c1", None, session_key="tui:c1", surface="tui")
+
+    assert agent.tools.get("spawn")._cur().surface == "tui"
+    assert agent.tools.get("run_subagent_dag").turn_origin()["surface"] == "tui"

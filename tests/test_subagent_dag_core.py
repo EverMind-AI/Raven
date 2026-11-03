@@ -5447,3 +5447,17 @@ async def test_registry_dag_nodes_reject_playbook_resource_fields(tmp_path, monk
     assert f"nodes[0].{field} is not allowed" in result
     assert captured == []
     assert getattr(parse_dag_spec({"task_summary": "work", "nodes": [node]}).nodes[0], field) == value
+
+
+def test_a_dag_run_keeps_the_surface_its_turn_was_on(tmp_path):
+    """A stint's later rounds read the run's address back from disk, so the surface
+    travels in the dict the announcers take, and back out of it."""
+    from raven.agent.subagent.dag_tool import SubAgentDagTool, _DagOrigin
+
+    tool = SubAgentDagTool(workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="x", command="true")])
+    tool.set_context("tui", "default", "tui:term", surface="tui")
+
+    origin = tool.turn_origin()
+
+    assert origin["surface"] == "tui"
+    assert _DagOrigin.from_dict(origin).as_dict() == origin

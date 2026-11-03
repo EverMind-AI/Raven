@@ -833,7 +833,7 @@ last one set aside leaves the group idle; the host is told at its next turn, as 
 does not ask again), one Answer (a reply drafted in the composer), and Move on; each names the
 group the next message is about, in that message's turn; recall reads the
 ones still open back to the host. Because the page lists them, the host's reply rules stop asking open questions again on every reply for a reader of
-the page with the board on (`render.board_on_page`); other channels and the terminal still do. Chinese surfaces call it 事件. The page marks it running while a Task it started runs, failed when one failed, and
+the page with the board on (`render.board_on_page`); other channels and the terminal still do, and a turn a run's result opens is read on the surface the turn that dispatched it declared. Chinese surfaces call it 事件. The page marks it running while a Task it started runs, failed when one failed, and
 done otherwise; clicking it scrolls the transcript to that turn's reply.
 _Avoid_: "subtask" (it records progress, it is not a unit of work), "step" alone (the node
 record's steps are another thing).

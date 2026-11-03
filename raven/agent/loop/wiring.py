@@ -2180,9 +2180,18 @@ class WiringMixin:
         )
 
     def _set_tool_context(
-        self, channel: str, chat_id: str, message_id: str | None = None, session_key: str | None = None
+        self,
+        channel: str,
+        chat_id: str,
+        message_id: str | None = None,
+        session_key: str | None = None,
+        surface: str | None = None,
     ) -> None:
-        """Update context for all tools that need routing info."""
+        """Update context for all tools that need routing info.
+
+        ``surface`` goes to the tools that start runs, whose results come back as
+        turns of their own: the front end the turn declared is where those are read.
+        """
         # Before the per-tool contexts because the schema is assembled from this
         # same turn: a channel-bound tool is withheld by the registry, not by
         # its own refusal (see ToolRegistry.set_channel).
@@ -2204,9 +2213,9 @@ class WiringMixin:
                     continue
                 if name == "message":
                     tool.set_context(channel, chat_id, message_id)
+                elif name in ("spawn", "run_subagent_dag"):
+                    tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}", surface=surface)
                 elif name in (
-                    "spawn",
-                    "run_subagent_dag",
                     "deliver_files",
                     "dag_status",
                     "cancel_dag",
@@ -2224,7 +2233,7 @@ class WiringMixin:
         # to that turn's own address rather than the last human conversation's.
         if self._playbooks is not None:
             self._playbooks.set_context(
-                channel=channel, chat_id=chat_id, session_key=session_key or f"{channel}:{chat_id}"
+                channel=channel, chat_id=chat_id, session_key=session_key or f"{channel}:{chat_id}", surface=surface
             )
 
     def dag_tools(self) -> list[Any]:

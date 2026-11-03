@@ -439,12 +439,14 @@ class PlaybookExecutor:
         """
         return self._dag_tool
 
-    def set_context(self, *, channel: str | None, chat_id: str | None, session_key: str | None) -> None:
+    def set_context(
+        self, *, channel: str | None, chat_id: str | None, session_key: str | None, surface: str | None = None
+    ) -> None:
         """Address this turn's dispatch (progress + announce) like the loop
         does for registered tools; the executor's tool instance is private,
         so nobody else calls set_context on it."""
         if self._dag_tool is not None and hasattr(self._dag_tool, "set_context") and channel and chat_id:
-            self._dag_tool.set_context(channel, chat_id, session_key)
+            self._dag_tool.set_context(channel, chat_id, session_key, surface=surface)
 
     async def execute(
         self,

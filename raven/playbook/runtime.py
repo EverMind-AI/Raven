@@ -335,10 +335,12 @@ class PlaybookRuntime:
         self._refresh()
         return not (set(self._specs) - self.disabled())
 
-    def set_context(self, *, channel: str | None, chat_id: str | None, session_key: str | None) -> None:
+    def set_context(
+        self, *, channel: str | None, chat_id: str | None, session_key: str | None, surface: str | None = None
+    ) -> None:
         """Record this turn's reply address and pass it to the executor."""
         self._context = {"channel": channel, "chat_id": chat_id, "session_key": session_key}
-        self._executor.set_context(channel=channel, chat_id=chat_id, session_key=session_key)
+        self._executor.set_context(channel=channel, chat_id=chat_id, session_key=session_key, surface=surface)
 
     def names(self) -> list[str]:
         """Every offered playbook name, id order -- the tool's ``enum``.
