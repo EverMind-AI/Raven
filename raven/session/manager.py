@@ -36,6 +36,14 @@ SUBAGENT_CHANNEL = "sub"
 # conversation a writable twin that pickers, sweeps and delivery targets see.
 IMPORTED_CHANNEL = "imported"
 
+# Metadata keys the loop stamps on a session with the message index a cut turn
+# starts at: one stopped at the model's output ceiling, one its own budget ended
+# (the tool cap, the wall clock or a stalled tool). ACP reads them to refine a
+# prompt's ``end_turn``; clearing the session's history forgets them.
+OUTPUT_LIMIT_TURN_AT = "output_limit_turn_at"
+BUDGET_STOP_TURN_AT = "budget_stop_turn_at"
+TURN_MARKERS = (OUTPUT_LIMIT_TURN_AT, BUDGET_STOP_TURN_AT)
+
 
 def _refuse_imported(key: str) -> None:
     if key.partition(":")[0] == IMPORTED_CHANNEL:
@@ -357,14 +365,14 @@ class Session:
         """Clear the turn markers whose turn starts at ``from_index`` or later.
 
         The loop stamps a cut turn with the index its rows start at
-        (``output_limit_turn_at``, ``budget_stop_turn_at``) and ACP reports a
+        (:data:`TURN_MARKERS`) and ACP reports a
         prompt as cut when one sits at or past where that prompt began. Once the
         messages from ``from_index`` are gone, the next prompt begins there, and
         a command that writes no marker of its own would be reported cut by a
         turn that no longer exists. Cleared as None rather than dropped, per the
         removal rule in ``SessionManager._metadata_to_write``.
         """
-        for key in ("output_limit_turn_at", "budget_stop_turn_at"):
+        for key in TURN_MARKERS:
             at = self.metadata.get(key)
             if isinstance(at, int) and at >= from_index:
                 self.metadata[key] = None

@@ -143,6 +143,30 @@ async def test_usage_sink_carries_context_gauge_and_cost(workspace):
 
 
 @pytest.mark.asyncio
+async def test_a_turn_run_without_a_stream_fills_the_usage_sink_too(workspace):
+    """A cron or wake turn runs without a stream; its ``message.complete``
+    reports what it spent from the same sink a streamed turn fills."""
+    provider = UsageProvider("stub", prompt_tokens=6000, completion_tokens=2000)
+    agent = _make_agent(workspace, provider, model="stub", window=40000)
+    sink: dict = {}
+    source = Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM)
+
+    async def emit(_event) -> None:
+        return None
+
+    await agent.run_turn(
+        TurnRequest(origin=Origin.CRON, source=source, text="wake", conversation="test:c1"),
+        emit,
+        lambda: [],
+        stream=False,
+        usage_sink=sink,
+        text_sink={},
+    )
+
+    assert (sink["prompt_tokens"], sink["completion_tokens"], sink["context_used"]) == (6000, 2000, 8000)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("extra", "used", "percent"),
     [

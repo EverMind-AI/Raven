@@ -242,7 +242,7 @@ async def _closed_pool():
     await close_pool()
 
 
-def _dispatched(preset: str, reply: str):
+def _dispatched(preset: str, reply: str, **env: str):
     import sys
 
     from raven.agent.subagent.backends import build_third_party_backend
@@ -254,7 +254,7 @@ def _dispatched(preset: str, reply: str):
             name="GitHub Copilot",
             preset=preset,
             command=f"{command_quote(sys.executable)} {command_quote(str(_STUB))}",
-            env={"ACP_STUB_REPLY": reply},
+            env={"ACP_STUB_REPLY": reply, **env},
             ready_timeout_ms=15000,
         )
     )
@@ -277,6 +277,20 @@ async def test_a_dispatch_whose_reply_is_the_refusal_fails(tmp_path: Path, _clos
 
     assert "for want of credit" in str(caught.value)
     assert _CREDIT in str(caught.value), "the agent's own words travel with the reading"
+
+
+async def test_a_refusal_after_an_earlier_message_still_fails(tmp_path: Path, _closed_pool) -> None:
+    """Copilot narrates before a call and can be refused on the next one. The
+    refusal is read off the reply the caller gets, the last message: the turn's
+    text joined opens with the narration and never reads as one."""
+    from raven.acp_client.acp_agent import AcpProviderRefusalError
+
+    backend = _dispatched("github_copilot", _CREDIT, ACP_STUB_MODE="two_messages")
+
+    with pytest.raises(AcpProviderRefusalError) as caught:
+        await backend.run("summarize the README", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert caught.value.said == _CREDIT
 
 
 async def test_an_answer_that_quotes_such_an_error_is_still_an_answer(tmp_path: Path, _closed_pool) -> None:
