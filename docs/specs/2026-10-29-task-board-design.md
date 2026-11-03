@@ -371,7 +371,8 @@ return an empty update.
 may step any group. Two kinds are known to be about a group before the model is asked. A
 turn a delegated result opened (`TurnRequest.delegated`) belongs to the group whose step
 placed that run -- `spawn:<node_id>`, or `dag:<run_id>` for a graph even when one node
-reports, since a graph is placed whole. A turn whose message a Move on or an Answer named a
+reports, since a graph is placed whole -- and a descendant run's result belongs to the group
+that placed the run it descends from ("Descendant runs"). A turn whose message a Move on or an Answer named a
 group for (5.1.1) belongs to that group. The owning groups are resolved on the board the
 update queue hands over, where the update before this one may just have placed the run. The
 update is then confined before it is checked: steps on the owning groups stay, and so does

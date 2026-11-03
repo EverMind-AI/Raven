@@ -790,3 +790,24 @@ async def test_a_salvaged_update_keeps_to_the_groups_its_turn_belongs_to(tmp_pat
     await _run(service, Scripted(stray), dispatches=(), delegated=[SPAWN.handle])
 
     assert [len(g.steps) for g in load_board(service.session_dir(KEY)).groups] == [2, 1]
+
+
+async def test_a_turn_a_successor_run_opened_belongs_to_the_group_that_placed_its_ancestor(tmp_path):
+    """A replan's successor, like a later stint round, was never placed itself: its
+    result belongs to the group whose step placed the run it descends from."""
+    from raven.agent.subagent.history import dag_root
+
+    service = _service(tmp_path)
+    run = TaskLink("dag", "R1", "Review the fix")
+    review = TaskGroup(
+        "g_a", "Review the fix", "", "running", 1, 1, [ProgressStep("s_a", "T0", None, "Ran it", ".", [run])]
+    )
+    notes = TaskGroup("g_b", "Release notes", "", "idle", 1, 1, [ProgressStep("s_b", "T0", None, "Drafted", ".", [])])
+    save_board(service.session_dir(KEY), Board([review, notes], []))
+    graph = dag_root(service.session_dir(KEY)) / "R1" / "graph.json"
+    graph.parent.mkdir(parents=True)
+    graph.write_text(json.dumps({"replan": {"run_id": "R2"}}), encoding="utf-8")
+
+    await _run(service, Scripted(_update_with([*_steps_on("g_a", "g_b"), STRAY])), dispatches=(), delegated=["dag:R2"])
+
+    assert [len(g.steps) for g in load_board(service.session_dir(KEY)).groups] == [2, 1]

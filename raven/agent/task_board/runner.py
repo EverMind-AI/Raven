@@ -124,6 +124,19 @@ def _refused(session_key: str, attempt: int, why: str) -> None:
     logger.info("Task board update for {}, attempt {} of {}, refused: {}", session_key, attempt, MAX_ATTEMPTS, why)
 
 
+def _as_placed(service: TaskBoardService, session_key: str, board: Board, handles: Sequence[str]) -> list[str]:
+    """Delegated runs as the board placed them: a replan's successor and a later stint
+    round were never placed themselves, and belong to the run they descend from."""
+    if not any(handle.startswith("dag:") for handle in handles):
+        return list(handles)
+    lineage = service.lineage(session_key, board)
+    placed = []
+    for handle in handles:
+        kind, _, ident = handle.partition(":")
+        placed.append(f"dag:{lineage.get(ident, ident)}" if kind == "dag" else handle)
+    return placed
+
+
 def _park(board: Board, dispatches: Sequence[Dispatch], turn_at: str, turn_id: str | None) -> Board:
     pending = {p.handle for p in board.unassigned}
     fresh = [Pending(d.handle, d.summary, turn_at, turn_id) for d in dispatches if d.handle not in pending]
@@ -261,8 +274,9 @@ async def run_post_turn(
     the caller when it schedules this update: an update still waiting for the
     queue when a clear lands belongs to the cleared conversation too.
 
-    ``delegated`` names the run whose result opened the turn, and ``moved_on``
-    the groups the reader's Move on named: the groups they resolve to are the
+    ``delegated`` names the run whose result opened the turn -- read as the run the
+    board placed when it descends from one -- and ``moved_on`` the groups the
+    reader's Move on named: the groups they resolve to are the
     ones the turn belongs to, and its update is confined to them and to wherever
     it places the work it started. They are resolved on the board the queue
     hands over, where the update before this one has placed its runs.
@@ -279,7 +293,7 @@ async def run_post_turn(
                 turn_at=turn_at,
                 turn_id=turn_id,
                 now_ms=now_ms,
-                owners=owning_groups(board, delegated, moved_on),
+                owners=owning_groups(board, _as_placed(service, session_key, board, delegated), moved_on),
             )
         except Exception:
             logger.opt(exception=True).warning("Task board update for {} failed", session_key)
