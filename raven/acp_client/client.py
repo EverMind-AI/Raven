@@ -453,6 +453,13 @@ class AcpClient:
         journal: FrameJournal | None = None,
     ) -> None:
         self.name = name
+        self.session_identity: tuple[str, str] | None = None
+        """The pool slot this connection fills, as ``(agent name, binding)``, or ``None`` unpooled.
+
+        Set by the pool. It names the process line a session lives on rather than
+        this one process: an agent the pool closes while idle is relaunched into
+        the same slot and reloads the sessions it held, so what this host
+        recorded about those sessions is kept under the slot, not the client."""
         if endpoint is None:
             if proc is None:
                 raise ValueError(f"acp agent {name!r}: a connection needs an endpoint or a process")

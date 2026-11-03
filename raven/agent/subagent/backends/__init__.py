@@ -107,6 +107,53 @@ class AgentMeta(NamedTuple):
     runs there, the tag is the same. Appended last, for the reason
     ``model_choices`` gives."""
 
+    effort_choices: tuple[Any, ...] = ()
+    """The reasoning efforts this agent offers, or ``()`` when it offers none.
+
+    ``raven.acp_client.capabilities.AcpEffortChoice`` records, measured from
+    the ``thought_level`` config option in the same session response that gives
+    the model menu. Appended after ``machine`` for the reason ``model_choices``
+    gives: this is a NamedTuple several callers build positionally."""
+
+    effort_via_modes: bool = False
+    """Whether ``effort_choices`` is the mode menu read as effort, sent through ``session/set_mode``.
+
+    Then the row's effort and an instance's mode override share one channel,
+    and the dispatch resolver has to rank them rather than send both (see
+    ``SubagentManager.session_effort_for``). Last, for the reason
+    ``effort_choices`` gives."""
+
+
+class AcpMenus(NamedTuple):
+    """The menus one acp capability snapshot offers, as every reader derives them."""
+
+    models: tuple[Any, ...]
+    efforts: tuple[Any, ...]
+    effort_via_modes: bool
+
+
+def acp_menus(snapshot: Any) -> AcpMenus:
+    """The model and reasoning-effort menus ``snapshot`` offers, and the channel the effort takes.
+
+    The one derivation behind ``agent_meta`` -- so the roster, the update
+    validator and a failed menu read -- and behind a successful
+    ``subagents.refresh_models``, which reads the snapshot it just measured
+    without the policy ``agent_meta`` also evaluates. Two spellings of it would
+    let a refreshed picker and the list that follows it disagree.
+
+    The effort is the agent's ``thought_level`` option when it has one
+    (OpenCode 1.19.4). An agent with no such option may still advertise effort
+    as its modes -- Pi, Grok, Kimi, DSH -- and ``mode_efforts`` takes those only
+    when every mode id is a level name, never a permission or editor mode.
+    """
+    models = tuple(getattr(snapshot, "model_choices", ()) or ())
+    efforts = tuple(getattr(snapshot, "effort_choices", ()) or ())
+    if efforts:
+        return AcpMenus(models, efforts, False)
+    mode_efforts = getattr(snapshot, "mode_efforts", None)
+    efforts = tuple(mode_efforts()) if callable(mode_efforts) else ()
+    return AcpMenus(models, efforts, bool(efforts))
+
 
 def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
     """The advertised capabilities of one agent config, any kind.
@@ -172,7 +219,7 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
             bool(getattr(cfg, "owns_watched_work", False)),
         )
     modes: tuple[Any, ...] = ()
-    model_choices: tuple[Any, ...] = ()
+    menus = AcpMenus((), (), False)
     if kind == "acp":
         if snapshot is None:
             snapshot = acp_snapshot_for(cfg)
@@ -183,9 +230,10 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
         # Measured, never declared: the menu offered has to be the one the agent
         # serves, or the model is handed a mode the agent then refuses.
         modes = tuple(getattr(snapshot, "available_modes", ()) or ())
-        # Same rule, same reason: the menu offered has to be the one the agent
-        # serves, or a reader is handed a model the agent then refuses.
-        model_choices = tuple(getattr(snapshot, "model_choices", ()) or ())
+        # Same rule, same reason, for the model and effort menus: the menu
+        # offered has to be the one the agent serves, or a reader is handed a
+        # value the agent then refuses.
+        menus = acp_menus(snapshot)
     elif kind == "openai":
         stateful = bool(getattr(cfg, "stateful", True))
     else:
@@ -205,8 +253,10 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
         getattr(cfg, "owns", None) or "",
         modes,
         bool(getattr(cfg, "owns_watched_work", False)),
-        model_choices,
+        menus.models,
         machine,
+        menus.efforts,
+        menus.effort_via_modes,
     )
 
 
@@ -463,9 +513,11 @@ def build_third_party_backend(
 __all__ = [
     "ABORTED_ACTION_RESULT",
     "IN_SUBAGENT_RUN",
+    "AcpMenus",
     "AgentMeta",
     "SubagentActionAbortedError",
     "SubagentBackend",
+    "acp_menus",
     "acp_snapshot_for",
     "agent_meta",
     "enabled_agents",

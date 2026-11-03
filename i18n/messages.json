@@ -5953,6 +5953,22 @@
       "en": "Back to the default model",
       "zh": "清除，回到默认模型"
     },
+    "gui.agent.model_refresh": {
+      "en": "Refresh the model list",
+      "zh": "刷新模型列表"
+    },
+    "gui.agent.model_refresh_failed": {
+      "en": "Couldn't refresh the model list: {detail}",
+      "zh": "刷新模型列表失败：{detail}"
+    },
+    "gui.agent.effort_label": {
+      "en": "Effort",
+      "zh": "思考强度"
+    },
+    "gui.agent.effort_default": {
+      "en": "The agent's default",
+      "zh": "用它自己的默认"
+    },
     "gui.agent.model_no_provider": {
       "en": "Connect a provider first",
       "zh": "先接入一个模型供应商"

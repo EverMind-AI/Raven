@@ -110,9 +110,11 @@ def test_every_dispatch_lane_hands_the_backend_the_authored_task(lane):
 
 
 def test_the_override_is_read_in_exactly_one_place():
-    """`resolve_mode` is that place. A lane reading `instance_mode` for itself is
-    how the spawn/chat split happened, and would re-introduce it -- the reader
-    that forgets `requested` looks correct until a caller names a mode."""
+    """`_instance_mode_override` is that place: `resolve_mode` adds the session
+    tier on top of its answer, and `session_effort_for` asks it for the override
+    alone. A lane reading `instance_mode` for itself is how the spawn/chat split
+    happened, and would re-introduce it -- each lane deciding again, correctly
+    until the one that forgets."""
     tree = ast.parse((RAVEN / "agent/subagent/manager.py").read_text(encoding="utf-8"))
     readers = set()
     for fn in ast.walk(tree):
@@ -122,7 +124,7 @@ def test_the_override_is_read_in_exactly_one_place():
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 if node.func.attr == "instance_mode":
                     readers.add(fn.name)
-    assert readers == {"resolve_mode"}
+    assert readers == {"_instance_mode_override"}
 
 
 def test_the_dag_lane_takes_its_resolver_from_the_manager():

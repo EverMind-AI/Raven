@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import time
+from collections.abc import Awaitable
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,14 @@ PNG = base64.b64decode(
 class Harness:
     """One adapter over a stand-in host, and what it has said so far."""
 
+    limit = 10.0
+    """Seconds one request, or the adapter's shutdown, may take before the test fails naming it.
+
+    The bound ``asked`` and ``FakeHost.wait_for`` already keep. Without it a turn
+    that never ended hung the whole run rather than failing its own test
+    (measured on Windows, ``test_a_turn_stopped_from_the_app_ends_cancelled``);
+    the slowest test here takes about 1.4 s on Linux."""
+
     def __init__(self, tmp_path: Path, host: FakeHost) -> None:
         self.tmp_path = tmp_path
         self.host = host
@@ -47,14 +56,27 @@ class Harness:
 
     async def close(self) -> None:
         for agent in self.agents:
-            await agent.shutdown()
-            await agent.close()
+            await self._within(agent.shutdown(), f"the {agent.agent!r} adapter's shutdown did not finish")
+            await self._within(agent.close(), f"the {agent.agent!r} adapter did not close")
 
     async def call(self, method: str, **params: Any) -> dict[str, Any]:
         self.ids += 1
-        response = await self.agent.handle({"jsonrpc": "2.0", "id": self.ids, "method": method, "params": params})
+        frame = {"jsonrpc": "2.0", "id": self.ids, "method": method, "params": params}
+        on = f" on {params['sessionId']}" if "sessionId" in params else ""
+        response = await self._within(self.agent.handle(frame), f"{method}{on} got no answer from the adapter")
         assert response is not None
         return response
+
+    async def _within(self, step: Awaitable[Any], what: str) -> Any:
+        """``step``'s result, or a failure saying ``what`` once ``limit`` has passed."""
+        bound = asyncio.timeout(self.limit)
+        try:
+            async with bound:
+                return await step
+        except TimeoutError:
+            if not bound.expired():
+                raise
+            pytest.fail(f"{what} within {self.limit:g}s")
 
     async def ok(self, method: str, **params: Any) -> Any:
         response = await self.call(method, **params)
@@ -187,8 +209,12 @@ async def test_a_new_session_offers_the_menus_and_the_agents_commands_and_starts
 ) -> None:
     result = await harness.ok("session/new", cwd=str(harness.tmp_path), mcpServers=[])
     validate_def("NewSessionResponse", result)
-    assert result["configOptions"][0]["currentValue"] == "sonnet"
-    assert result["modes"]["currentModeId"] == "high"
+    model = next(o for o in result["configOptions"] if o["category"] == "model")
+    effort = next(o for o in result["configOptions"] if o["category"] == "thought_level")
+    assert model["currentValue"] == "sonnet"
+    assert effort["currentValue"] == "high"
+    assert [choice["value"] for choice in effort["options"]] == ["low", "high", "max"]
+    assert "modes" not in result
     assert harness.prompts() == []
     await harness.host.wait_for(lambda: "available_commands_update" in harness.kinds())
     commands = harness.session_updates()[-1]
@@ -340,10 +366,19 @@ async def test_text_arrives_before_the_turn_ends(harness: Harness) -> None:
 async def test_a_model_without_rungs_is_sent_no_effort_and_a_rung_it_lacks_is_dropped(harness: Harness) -> None:
     sid = await harness.new()
     await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="glm-5.3-flash")
-    await harness.ok("session/set_mode", sessionId=sid, modeId="max")
+    await harness.ok("session/set_config_option", sessionId=sid, configId="effort", value="max")
     await harness.ok("session/prompt", sessionId=sid, prompt=text("hi"))
     sent = harness.prompts()[0]
     assert sent["model"] == "glm-5.3-flash" and "effort" not in sent
+
+
+async def test_a_model_switch_answers_with_the_effort_menu_that_model_takes(harness: Harness) -> None:
+    sid = await harness.new()
+    flash = await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="glm-5.3-flash")
+    assert [option["category"] for option in flash["configOptions"]] == ["model"]
+    sonnet = await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="own:sonnet")
+    effort = next(option for option in sonnet["configOptions"] if option["category"] == "thought_level")
+    assert [choice["value"] for choice in effort["options"]] == ["low", "high", "max"]
 
 
 async def test_each_route_choice_puts_the_conversation_on_its_route(harness: Harness) -> None:
@@ -371,10 +406,10 @@ async def test_an_unoffered_model_or_effort_is_refused_with_what_is_offered(harn
     sid = await harness.new()
     error = await harness.refused("session/set_config_option", sessionId=sid, configId="model", value="gpt-9")
     assert error["code"] == INVALID_PARAMS and "'own:sonnet'" in error["message"]
-    error = await harness.refused("session/set_mode", sessionId=sid, modeId="ultra")
+    error = await harness.refused("session/set_config_option", sessionId=sid, configId="effort", value="ultra")
     assert error["code"] == INVALID_PARAMS and "'low'" in error["message"]
     error = await harness.refused("session/set_config_option", sessionId=sid, configId="theme", value="dark")
-    assert "only 'model'" in error["message"]
+    assert "'model'" in error["message"] and "'effort'" in error["message"]
     error = await harness.refused("session/set_config_option", sessionId=sid, configId="model", value="")
     assert error["code"] == INVALID_PARAMS
 
@@ -384,7 +419,7 @@ async def test_a_model_mirasim_added_since_the_menus_were_read_is_accepted(harne
     harness.host.catalogs["claude"]["models"].append({"id": "sonnet-next", "label": "Next"})
     harness.host.catalogs["claude"]["effort"].append({"id": "ultra", "label": "Ultra"})
     await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="sonnet-next")
-    await harness.ok("session/set_mode", sessionId=sid, modeId="ultra")
+    await harness.ok("session/set_config_option", sessionId=sid, configId="effort", value="ultra")
     assert any(frame.get("refresh") for frame in harness.host.frames("getCatalog"))
 
 
@@ -804,6 +839,34 @@ async def test_a_turn_stopped_from_the_app_ends_cancelled(harness: Harness) -> N
     session.stopped = True
     session.wake.set()
     assert await turn == {"stopReason": "cancelled"}
+
+
+async def test_a_request_the_adapter_never_answers_fails_the_test_by_name(harness: Harness) -> None:
+    """The harness bounds every request, so a turn that never ends fails the test
+    that awaited it, naming the request, instead of hanging the whole run -- the
+    way the test above hung on Windows."""
+    harness.limit = 0.2
+    harness.host.respond = script(("hold",))
+    sid = await harness.new()
+    async with asyncio.timeout(5):
+        with pytest.raises(pytest.fail.Exception, match=rf"session/prompt on {sid} got no answer .* within 0.2s"):
+            await harness.ok("session/prompt", sessionId=sid, prompt=text("go"))
+
+
+async def test_a_shutdown_that_never_ends_fails_the_test_by_name(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness.limit = 0.2
+    real = harness.agent.shutdown
+
+    async def wedged() -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(harness.agent, "shutdown", wedged)
+    async with asyncio.timeout(5):
+        with pytest.raises(pytest.fail.Exception, match=r"the 'claude' adapter's shutdown did not finish within 0.2s"):
+            await harness.close()
+    monkeypatch.setattr(harness.agent, "shutdown", real)
 
 
 async def test_a_cancel_the_host_never_confirms_is_answered_within_its_budget(
@@ -1728,6 +1791,15 @@ async def test_a_conversation_the_host_refuses_to_delete_is_said_so(harness: Har
 
 
 async def test_each_turn_names_the_effort_the_session_was_put_on(harness: Harness) -> None:
+    sid = await harness.new()
+    await harness.ok("session/set_config_option", sessionId=sid, configId="effort", value="max")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("hi"))
+    assert harness.prompts()[0]["effort"] == "max"
+
+
+async def test_an_effort_sent_as_a_session_mode_is_taken_as_the_old_alias(harness: Harness) -> None:
+    """A client that read the pre-migration menu still sends set_mode; the
+    adapter accepts the rung and applies it, while advertising no modes."""
     sid = await harness.new()
     await harness.ok("session/set_mode", sessionId=sid, modeId="max")
     await harness.ok("session/prompt", sessionId=sid, prompt=text("hi"))

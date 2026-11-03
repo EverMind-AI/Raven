@@ -227,6 +227,22 @@ class SubagentRow(_Strict):
             "host-qualified id under either rule, since it runs on raven's providers whatever it advertised."
         ),
     )
+    effort: str | None = Field(
+        default=None,
+        description=(
+            "The reasoning effort this row sends, or null to use the agent's own. A value from "
+            "`effort_choices`; set through the agent's thought_level config option, separately from `model`, "
+            "or as a session mode on an agent whose modes are its effort menu."
+        ),
+    )
+    effort_choices: list["SubagentEffortChoice"] = Field(
+        default_factory=list,
+        description=(
+            "The reasoning efforts this row's agent offers on the row's own model: its thought_level option, "
+            "or its mode menu when every mode is a reasoning level. Empty when it offers neither. An agent that "
+            "packs effort into model ids instead has no such menu."
+        ),
+    )
 
 
 class DirectTarget(_Strict):
@@ -3010,7 +3026,13 @@ class SubagentsUpdateParams(_Strict):
         default=None,
         description="The Raven providers whose key an acp agent is started with; [] lends none.",
     )
-    model: str | None = None
+    model: str | None = Field(
+        default=None,
+        description=(
+            "A model from the row's `model_choices`. On an acp row the move re-measures the effort menu on the "
+            "new model, and a stored `effort` that menu does not offer is dropped; it is kept when the read fails."
+        ),
+    )
     provider: str | None = Field(
         default=None,
         description=(
@@ -3022,6 +3044,19 @@ class SubagentsUpdateParams(_Strict):
     clear_model: bool = Field(
         default=False,
         description="Drop the row's own model, reverting to the agent's default. Wins over `model` when both are sent.",
+    )
+    effort: str | None = Field(
+        default=None,
+        description=(
+            "A reasoning effort from the row's `effort_choices`, sent on every turn through the agent's "
+            "thought_level option, or as a session mode on an agent whose modes are its effort menu, where an "
+            "instance's own mode override takes its place. Refused when the row's menu does not offer it. Sent "
+            "with a model move, it is judged on the new model's menu, and refused when that menu could not be read."
+        ),
+    )
+    clear_effort: bool = Field(
+        default=False,
+        description="Drop the row's own effort, reverting to the agent's default. Wins over `effort` when both are sent.",
     )
 
 
@@ -3089,6 +3124,42 @@ class SubagentsTestCancelParams(_Strict):
 
 class SubagentsTestCancelResult(_Strict):
     cancelled: bool
+
+
+class SubagentsRefreshModelsParams(_Strict):
+    name: str
+    source: Literal["config", "preset", "vendored"] = "config"
+    force: bool = Field(
+        False,
+        description=(
+            "Read the agent's handshake even when its menu was just read. A reader that pressed refresh "
+            "after changing the menu in the agent itself means it; an automatic read on opening a picker "
+            "does not, and skips a handshake for a menu already read moments ago."
+        ),
+    )
+
+
+class SubagentsRefreshModelsResult(_Strict):
+    ok: bool = Field(
+        ...,
+        description="Whether the handshake answered and reported the menu. False leaves the recorded menu in place.",
+    )
+    detail: str = Field("", description="Why the menu could not be read, when it could not.")
+    models: list["SubagentModelChoice"] = Field(
+        ...,
+        description=(
+            "The menu now recorded for the agent, which is the previous one when this read failed. Each "
+            "choice is the agent's own id, name and group, exactly as ``subagents.list`` sends them."
+        ),
+    )
+    effort_choices: list["SubagentEffortChoice"] = Field(
+        default_factory=list,
+        description=(
+            "The effort menu recorded by the same read, in ``subagents.list``'s shape. A model-specific "
+            "menu (OpenCode 1.19.4) moves with the model, so it is sent beside the models rather than left "
+            "for a later listing."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -3404,6 +3475,13 @@ class SubagentModelChoice(_Strict):
     value: str = Field(..., description="The id the agent takes back.")
     name: str = Field("", description="What the agent asked to be shown, usually far shorter than the value.")
     group: str = Field("", description="The agent's own bucketing, a provider typically. Empty when it offered none.")
+
+
+class SubagentEffortChoice(_Strict):
+    """One reasoning effort an agent offers, from its thought_level config option."""
+
+    value: str = Field(..., description="The value the agent takes back, e.g. low, high or max.")
+    name: str = Field("", description="What the agent asked to be shown, usually the same word.")
 
 
 class SubagentsInstanceSetModelParams(_Strict):
@@ -7123,6 +7201,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "subagents.probe": (SubagentsProbeParams, SubagentsProbeResult),
     "subagents.test": (SubagentsTestParams, SubagentsTestResult),
     "subagents.test_cancel": (SubagentsTestCancelParams, SubagentsTestCancelResult),
+    "subagents.refresh_models": (SubagentsRefreshModelsParams, SubagentsRefreshModelsResult),
     "machines.list": (MachinesListParams, MachinesListResult),
     "machines.add": (MachinesAddParams, MachinesAddResult),
     "machines.install_node": (MachinesInstallNodeParams, MachinesInstallNodeResult),

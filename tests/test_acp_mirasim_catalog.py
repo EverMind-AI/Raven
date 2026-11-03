@@ -124,19 +124,46 @@ def test_the_platform_heading_reads_as_the_family_does() -> None:
     }
 
 
-def test_the_effort_rungs_are_session_modes_with_the_default_current() -> None:
+def test_the_effort_rungs_are_a_thought_level_option_with_the_default_current() -> None:
     catalog = read_catalog("claude", agent_entry(ROWS, "claude"), catalog_doc())
-    modes = catalog.modes(None)
-    validate_def("SessionModeState", modes)
-    assert modes["currentModeId"] == "high"
-    assert [mode["id"] for mode in modes["availableModes"]] == ["low", "high", "max"]
-    assert catalog.modes("max")["currentModeId"] == "max"
+    option = catalog.effort_option(None)
+    assert option["id"] == "effort"
+    assert option["category"] == "thought_level"
+    assert option["currentValue"] == "high"
+    assert [(choice["value"], choice["name"]) for choice in option["options"]] == [
+        ("low", "Low"),
+        ("high", "High"),
+        ("max", "Max"),
+    ]
+    assert catalog.effort_option("max")["currentValue"] == "max"
 
 
-def test_no_mode_is_current_where_mirasim_names_no_default_effort() -> None:
+def test_no_effort_option_where_mirasim_names_no_default_effort() -> None:
     """ZCode CLI lists rungs and no default: offering one as current would be a guess."""
-    assert read_catalog("claude", agent_entry(ROWS, "claude"), catalog_doc(defaultEffort=None)).modes(None) is None
-    assert read_catalog("claude", agent_entry(ROWS, "claude"), catalog_doc(effort=[])).modes(None) is None
+    assert (
+        read_catalog("claude", agent_entry(ROWS, "claude"), catalog_doc(defaultEffort=None)).effort_option(None) is None
+    )
+    assert read_catalog("claude", agent_entry(ROWS, "claude"), catalog_doc(effort=[])).effort_option(None) is None
+
+
+def test_the_effort_menu_offers_only_the_rungs_its_model_takes() -> None:
+    """A turn drops a rung its model lacks, so a menu offering one offers a
+    choice that does nothing; the menu is read per model, as the turn is."""
+    catalog = read_catalog("claude", agent_entry(ROWS, "claude"), catalog_doc())
+    assert catalog.effort_option(None, "glm-5.3-flash") is None
+    assert catalog.config_options("glm-5.3-flash", "max") == [catalog.model_option("glm-5.3-flash")]
+
+    narrow = catalog.effort_option("max", "profile:abc")
+    validate_def("SessionConfigOption", narrow)
+    assert [(choice["value"], choice["name"]) for choice in narrow["options"]] == [("low", "Low"), ("high", "High")]
+    assert narrow["currentValue"] == "high", "a rung the model lacks is not reported as current"
+
+    unlisted = catalog.effort_option(None, "a-model-mirasim-added-later")
+    assert [choice["value"] for choice in unlisted["options"]] == ["low", "high", "max"]
+    no_default = read_catalog(
+        "claude", agent_entry(ROWS, "claude"), catalog_doc(effortByModel={"profile:abc": RUNGS[:1]})
+    )
+    assert no_default.effort_option(None, "profile:abc") is None, "no rung of its own to mark as current"
 
 
 def test_a_model_takes_its_own_rungs_and_an_unlisted_one_the_agents() -> None:
@@ -158,7 +185,7 @@ def test_a_missing_catalog_leaves_the_agent_with_no_menu() -> None:
     catalog = read_catalog("claude", agent_entry(ROWS, "claude"), None)
     assert catalog.installed and catalog.label == "Claude Code"
     assert catalog.config_options(None) == []
-    assert catalog.modes(None) is None
+    assert catalog.effort_option(None) is None
     unknown = read_catalog("ghost", agent_entry(ROWS, "ghost"), None)
     assert not unknown.installed and unknown.label == "ghost"
 
