@@ -30,7 +30,9 @@ from raven.acp.updates import (
     MAX_RAW_INPUT_CHARS,
     MAX_RESULT_PREVIEW,
     SIDE_CHANNEL_METHODS,
+    UNSERVED_EVENT_TYPES,
     AcpSession,
+    Translated,
     TurnAlreadyRunningError,
     UpdateTranslator,
     translate,
@@ -65,20 +67,26 @@ class TestWireVocabulary:
         import inspect
         import re
 
+        from raven.agent.task_board import service as task_board_service
         from raven.rpc import spine
         from raven.rpc.methods import turn
 
         emitted = set()
-        for module in (spine, turn):
+        for module in (spine, turn, task_board_service):
             source = inspect.getsource(module)
             emitted |= set(re.findall(r'"type": "([a-z_.]+)"', source))
         emitted |= set(re.findall(r'"(dag\.[a-z_]+)"', inspect.getsource(spine)))
         emitted |= {"cron.delivered", "cron.missed"}
 
-        missing = emitted - KNOWN_EVENT_TYPES
+        missing = emitted - KNOWN_EVENT_TYPES - UNSERVED_EVENT_TYPES
         assert missing == set(), (
             f"these wire events reach the ACP sink with no branch in the translator: {sorted(missing)}"
         )
+
+    def test_an_unserved_event_is_dropped_and_never_also_served(self):
+        assert UNSERVED_EVENT_TYPES.isdisjoint(KNOWN_EVENT_TYPES)
+        for kind in UNSERVED_EVENT_TYPES:
+            assert translate({"type": kind, "payload": {"session_key": "acp:s1"}}) == Translated()
 
     def test_the_pinned_set_does_not_claim_events_that_do_not_exist(self):
         # The other direction: a name left behind after an event was renamed

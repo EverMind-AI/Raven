@@ -69,6 +69,17 @@ KNOWN_EVENT_TYPES = frozenset(
     }
 )
 
+# Subscription events an ACP client has no surface for. ``translate`` has no branch
+# for them and drops them on purpose; they are named here so the coverage test can
+# tell that decision from an event nobody wired.
+UNSERVED_EVENT_TYPES = frozenset(
+    {
+        # The page's task board. An ACP client draws none; the surfaces that do
+        # read the board whole through ``tasks.board``.
+        "tasks.board_updated",
+    }
+)
+
 # Outbound frames on ``send_frame`` that are not subscription events. Each one is
 # a surface this translator does not serve; listed so that "we drop it" is a
 # decision with a name on it, and so a newly-added notification shows up as an
@@ -1076,6 +1087,7 @@ __all__ = [
     "MAX_MEDIA_ITEMS",
     "MAX_RESULT_PREVIEW",
     "SIDE_CHANNEL_METHODS",
+    "UNSERVED_EVENT_TYPES",
     "AcpSession",
     "Translated",
     "TurnAlreadyRunningError",
