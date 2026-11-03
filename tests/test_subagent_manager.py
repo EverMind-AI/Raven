@@ -105,11 +105,12 @@ async def _settle(predicate, *, tries: int = 2000) -> None:
     raise AssertionError("condition never reached")
 
 
-def _make_manager(max_concurrent: int) -> SubagentManager:
+def _make_manager(max_concurrent: int, **over) -> SubagentManager:
     return SubagentManager(
         provider=_StubProvider(),
         workspace=Path("/tmp"),
         max_concurrent=max_concurrent,
+        **over,
     )
 
 
@@ -1307,6 +1308,81 @@ async def test_announce_result_routes_to_tui_session_key(monkeypatch):
     assert submitted[0].conversation == "tui:sess123"
 
 
+_PAGE = {"channel": "tui", "chat_id": "default", "session_key": "tui:page"}
+_TERMINAL = {**_PAGE, "session_key": "tui:term", "surface": "tui"}
+
+
+async def test_a_result_turn_is_read_on_the_surface_that_dispatched_its_run():
+    """The terminal and the page share the ``tui`` channel; only the surface the
+    dispatching turn declared tells the result turn which of them reads it."""
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[Any] = []
+    mgr.set_submit(submitted.append)
+
+    for origin in (_TERMINAL, _PAGE):
+        await mgr._announce_result(
+            task_id="t1", task_summary="label", task="task", result="result", origin=dict(origin), status="ok"
+        )
+
+    assert [(r.conversation, r.source.surface) for r in submitted] == [("tui:term", "tui"), ("tui:page", None)]
+
+
+async def test_a_spawn_keeps_the_surface_it_was_dispatched_from(monkeypatch):
+    mgr = _make_manager(max_concurrent=1)
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+    seen: list[dict[str, Any]] = []
+
+    async def _inner(task_id, task, label, origin, executor, provider, model) -> None:
+        seen.append(origin)
+
+    monkeypatch.setattr(mgr, "_run_subagent_inner", _inner)
+
+    await mgr.spawn(
+        task="scan", session_key="tui:term", origin_channel="tui", origin_chat_id="default", origin_surface="tui"
+    )
+    await asyncio.gather(*mgr._running_tasks.values(), return_exceptions=True)
+
+    assert [o.get("surface") for o in seen] == ["tui"]
+
+
+async def test_a_dag_notice_keeps_the_open_decision_rule_on_the_terminal():
+    """The page lists open decisions on the board, so its notice leaves that rule out;
+    the terminal draws no board and keeps it."""
+    from raven.context_engine.segments.render import reply_rules_note
+
+    mgr = _make_manager(max_concurrent=1, task_board=True)
+    submitted: list[Any] = []
+    mgr.set_submit(submitted.append)
+
+    await mgr.announce_dag_result("r1", "DAG run r1 finished", dict(_TERMINAL))
+    await mgr.announce_dag_result("r2", "DAG run r2 finished", dict(_PAGE))
+
+    terminal, page = submitted
+    assert (terminal.source.surface, page.source.surface) == ("tui", None)
+    assert terminal.text.endswith(reply_rules_note(board_shown=False))
+    assert page.text.endswith(reply_rules_note(board_shown=True))
+
+
+async def test_an_unprompted_report_is_read_on_the_surface_last_dispatched_from():
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[Any] = []
+    mgr.set_submit(submitted.append)
+    mgr.remember_origin(dict(_TERMINAL))
+
+    await mgr.announce_unprompted_turn("tui:term", "watcher", "w1", "the job finished")
+
+    assert [r.source.surface for r in submitted] == ["tui"]
+
+
+async def test_the_spawn_tool_hands_the_turns_surface_to_the_manager(tmp_path: Path) -> None:
+    tool, mgr = _spawn_tool(tmp_path)
+    tool.set_context("tui", "default", "tui:term", surface="tui")
+
+    await tool.execute(node_id="n0", task_summary="Scan", prompt_template="scan the market")
+
+    assert mgr.surfaces == ["tui"]
+
+
 async def test_a_relayed_result_does_not_teach_the_silence_marker():
     """The person asked for the work, so its result is relayed to them, never withheld: the turn is
     not told the marker, and a reply that only looks like one is delivered."""
@@ -2082,6 +2158,7 @@ class _RecordingSpawnManager:
         self.workspace = root
         self.tasks: list[str] = []
         self.authored: list[str | None] = []
+        self.surfaces: list[str | None] = []
 
     def session_dir_for(self, session_key: str) -> Path:
         return self._root
@@ -2089,6 +2166,7 @@ class _RecordingSpawnManager:
     async def spawn(self, *, task: str, **kwargs: Any) -> str:
         self.tasks.append(task)
         self.authored.append(kwargs.get("authored_task"))
+        self.surfaces.append(kwargs.get("origin_surface"))
         return "Subagent [deck] started (id: t1)."
 
 
@@ -6770,3 +6848,19 @@ async def test_an_unprompted_report_carries_no_link_whatever_span_it_is_sent_fro
 
     (report,) = submitted
     assert report.dispatch_link is None
+
+
+async def test_a_dag_notice_on_the_page_leaves_open_decisions_to_the_board() -> None:
+    """With the Task Board on, a graph's notice into a conversation the served page draws
+    carries only the section rule; into any other channel it still carries both."""
+    from raven.context_engine.segments.render import reply_rules_note
+
+    mgr = _make_manager(max_concurrent=1, task_board=True)
+    submitted: list[object] = []
+    mgr.set_submit(submitted.append)
+
+    await mgr.announce_dag_result("r1", "done", {"channel": "tui", "chat_id": "d", "session_key": "tui:s1"})
+    await mgr.announce_dag_result("r2", "done", {"channel": "weixin", "chat_id": "d", "session_key": "weixin:s2"})
+
+    assert submitted[0].text.endswith(reply_rules_note(board_shown=True))
+    assert submitted[1].text.endswith(reply_rules_note())

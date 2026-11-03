@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } fr
 
 import { t } from '../../i18n/t'
 import * as tasksStore from '../tasks/store'
-import { TasksApp } from '../tasks/TasksPage'
+import { TasksPanel } from '../tasks/TasksPage'
 import * as deliveries from '../workspace/deliveries'
 import { fileKind } from '../workspace/store'
 import * as workspace from '../workspace/store'
@@ -216,13 +216,17 @@ function DeliverablesNav(): JSX.Element {
    direct chat still live there. */
 function TasksNav(): JSX.Element {
   const state = useSyncExternalStore(tasksStore.subscribe, tasksStore.get)
-  useEffect(() => { void tasksStore.refresh() }, [])
+  useEffect(() => { void tasksStore.refresh(); void tasksStore.refreshBoard() }, [])
   /* Answered here rather than inside the view: in the desk, one nothing has to
-     look like the other two, and TasksApp's own note belongs to the panel. */
-  if (!state.rows.length) {
+     look like the other two, and TasksPanel's own note belongs to the panel.
+     Nothing is no Task and no group: a conversation that delegated nothing
+     still has the matters its board keeps, and the Task Board page opens them
+     here. An unread board is not an empty one -- a reconnect resets it with
+     this tab mounted, and the panel reads it back. */
+  if (!state.rows.length && state.boardLoaded && !state.board?.groups.length) {
     return <DeskEmpty kind="tasks" title={t('gui.ws.tasks_none')} />
   }
-  return <TasksApp />
+  return <TasksPanel />
 }
 
 /* Long enough to read as a movement, short enough that a reader who wanted the

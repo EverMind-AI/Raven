@@ -543,6 +543,29 @@ async def test_a_dispatch_receipt_carries_the_reply_rules_note_after_its_fence(t
     assert notes["f1"] == ""
 
 
+async def test_a_dispatch_receipt_on_the_page_leaves_open_decisions_to_the_board(tmp_path):
+    # With the Task Board on and the turn on the channel the page draws, the receipt's
+    # note keeps the section rule only: the board lists the questions still open.
+    from raven.agent.loop.bundles import EngineWiring
+    from raven.config.schema import TaskBoardConfig
+
+    provider = _FakeStreamToolProvider([[_call_by_route("s1", "spawn", "direct")], [ChatDelta(content="done")]])
+    loop = AgentLoop(provider=provider, workspace=tmp_path, engine=EngineWiring(task_board_config=TaskBoardConfig()))
+    _stub_edges(loop)
+    loop.tools.register(_SpawnReceiptTool())
+    notes, _contents = _record_tool_results(loop)
+    page = TurnRequest(
+        origin=Origin.USER,
+        source=Source(channel="tui", chat_id="c", sender_id="u", chat_type=ChatType.DM),
+        text="hi",
+    )
+
+    await loop.run_turn(page, _EmitCollector(), _drain)
+
+    assert "gives each task its own `### <task>` section" in notes["s1"]
+    assert "still open" not in notes["s1"]
+
+
 @pytest.mark.parametrize("route", ["direct", "tool_call"])
 async def test_a_dispatch_tool_the_turn_does_not_hold_earns_no_note(tmp_path, route):
     # A Sub-agent role process registers no dispatch tool, so a call naming one is
@@ -1323,9 +1346,9 @@ async def test_run_turn_reconstructs_metadata_from_source_extras(tmp_path):
     seen: dict = {}
     real = loop._set_tool_context
 
-    def _spy(channel, chat_id, message_id=None, session_key=None):
+    def _spy(channel, chat_id, message_id=None, session_key=None, surface=None):
         seen["message_id"] = message_id
-        return real(channel, chat_id, message_id, session_key=session_key)
+        return real(channel, chat_id, message_id, session_key=session_key, surface=surface)
 
     loop._set_tool_context = _spy
 
@@ -1428,7 +1451,7 @@ async def test_run_turn_empty_extras_reconstructs_empty_metadata(tmp_path):
     _stub_edges(loop)
     seen: dict = {"message_id": "sentinel"}
 
-    def _spy(channel, chat_id, message_id=None, session_key=None):
+    def _spy(channel, chat_id, message_id=None, session_key=None, surface=None):
         seen["message_id"] = message_id
 
     loop._set_tool_context = _spy

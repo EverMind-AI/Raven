@@ -816,6 +816,24 @@ class TestSessionDelete:
         assert response["result"] == {}
         assert rig.engine.sessions.exists("acp:gone") is False
 
+    async def test_it_takes_the_board_along_where_no_board_service_heard(self, rig):
+        """No board service hears this delete -- this engine keeps none -- and a key a client
+        deleted may come back: the board a host wrote for it goes with the conversation."""
+        from raven.agent.task_board.board import Board, TaskGroup
+        from raven.agent.task_board.store import BOARD_FILENAME, save_board
+
+        session = rig.engine.sessions.get_or_create("acp:gone")
+        session.add_message("user", "hi")
+        rig.engine.sessions.save(session)
+        board_dir = rig.engine.sessions.session_dir("acp:gone")
+        save_board(board_dir, Board([TaskGroup("g_a", "Fix bug A", "", "idle", 1, 1, [])], []))
+        await rig.handshake()
+
+        response = await rig.call("session/delete", {"sessionId": "acp:gone"})
+
+        assert response["result"] == {}
+        assert not (board_dir / BOARD_FILENAME).exists()
+
     async def test_it_drops_a_held_session_from_the_connection(self, rig):
         await rig.handshake()
         session_id = await rig.new_session()

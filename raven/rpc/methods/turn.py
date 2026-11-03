@@ -572,6 +572,7 @@ async def turn_send(
         # key survives end to end.
         turn_id=turn_id,
     )
+    await _note_move_on(parsed, agent_loop_factory)
     try:
         handle = scheduler.submit(req)
     except SchedulerDrainingError:
@@ -630,6 +631,27 @@ async def turn_send(
         )
 
     return {"turn_id": turn_id, "accepted": True, "naming": naming}
+
+
+async def _note_move_on(parsed: TurnSendParams, agent_loop_factory: "AgentLoopFactory | None") -> None:
+    """Tell the board which group the message moves on, before the turn it opens is submitted.
+
+    The note and the message arrive together, so a Stop has no window in which one has gone
+    and the other has not; the turn reads its notes when it starts. Only a message that opens
+    a turn of its own on the main agent gets here -- one merged into a running turn left
+    before. A board that cannot take the note costs the note, never the message."""
+    if not parsed.move_on or parsed.target is not None:
+        return
+    from raven.rpc.methods.session import _safe_invoke_factory
+
+    agent_loop = _safe_invoke_factory(agent_loop_factory)
+    board = getattr(agent_loop, "task_board", None) if agent_loop is not None else None
+    if board is None:
+        return
+    try:
+        await board.move_on(parsed.session_key, parsed.move_on)
+    except (KeyError, OSError) as exc:
+        logger.warning("turn.send: {} goes without its Move on of {!r}: {}", parsed.session_key, parsed.move_on, exc)
 
 
 def _lane_in_flight(scheduler: Scheduler, lane: str) -> bool:

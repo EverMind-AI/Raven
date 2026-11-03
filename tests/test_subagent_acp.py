@@ -2591,7 +2591,7 @@ async def test_a_running_acp_node_shows_its_files_through_the_live_account(tmp_p
     recorded mid-turn has to be readable there before the record lands."""
     from raven.acp_client.acp_agent import _TurnCollector
     from raven.agent.subagent import activity
-    from raven.rpc.methods.tasks import _overlay_live
+    from raven.agent.subagent.task_rows import _overlay_live
 
     with activity.collecting(live_key="acp-live") as did:
         col = _TurnCollector(workspace=tmp_path)

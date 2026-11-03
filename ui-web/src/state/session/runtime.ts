@@ -134,6 +134,11 @@ export class SessionRuntime {
      conversation. */
   lastAsk = ''
 
+  /* The bubble a send drew for a turn whose `message.start` has not arrived:
+     that frame files the turn's id on it, and a task board step finds the
+     turn by that id. Null once filed. */
+  asked: number | null = null
+
   /* The wait for a generated title: the opening line to fall back to, and the
      backstop timer. */
   naming: { fallback: string; timer: ReturnType<typeof setTimeout> } | null = null
@@ -298,6 +303,23 @@ export const mediaOf = (text: unknown): { media?: string[] } => {
   return paths.length ? { media: paths } : {}
 }
 
+/* What a message carries when it goes, lent at boot (src/app/install.ts)
+   rather than imported from a domain: the Task Board's Move on, which tells
+   the server which group the message is about. It rides the send itself, so
+   nothing waits between the two and a Stop finds no moment where one has gone
+   without the other. A message with one waits for a turn of its own rather
+   than joining the one running, which was told about something else. Unlent,
+   nothing is carried. */
+export interface BeforeSend {
+  pending: (sessionKey: string | null) => boolean
+  take: (sessionKey: string | null) => string | null
+}
+let beforeSend: BeforeSend | null = null
+
+export function lendBeforeSend(hook: BeforeSend | null): void {
+  beforeSend = hook
+}
+
 /* Into the turn that is already running: the server merges it at that turn's
    next gap, so the reader can correct it while it works instead of waiting for
    the answer to a question they have already changed their mind about.
@@ -337,13 +359,17 @@ export function send(text: string): void {
      message typed a moment later would call the gateway with no session key at
      all, which is a refusal the reader sees as a red row over a message the
      queue then delivers anyway. It waits in the queue, as it always has. */
-  if (turn.busy() && !registryIsDraft() && !promoting) { sendMidTurn(text); return }
+  if (turn.busy() && !registryIsDraft() && !promoting) {
+    if (beforeSend?.pending(sessionCurrent())) queuePush(text)
+    else sendMidTurn(text)
+    return
+  }
   if (turn.busy()) { queuePush(text); return }
   const rt = viewRuntime()
   /* What a retry re-sends. Recorded after the attachment note is folded in, so
      the second attempt carries the same message as the first. */
   rt.lastAsk = text
-  ask(text)
+  rt.asked = ask(text)
   turn.dispatch({ type: 'send' })
   dropStaleSteps(rt)
   reset(rt)
@@ -406,7 +432,11 @@ export function dispatchSend(text: string, failed: (e: unknown) => void): void {
      at all, and reading that as "declined" would tear down a placeholder
      while a title really is on its way. Which servers carry it is
      rpc/capabilities.ts's question; what the verdict means stays here. */
-  gateway().call('turn.send', { session_key: current as string, content: text, ...mediaOf(text) })
+  const moveOn = current ? (beforeSend?.take(current) ?? null) : null
+  gateway()
+    .call('turn.send', {
+      session_key: current as string, content: text, ...mediaOf(text), ...(moveOn ? { move_on: moveOn } : {}),
+    })
     .then((r) => {
       if (ran && r.accepted !== false) rememberUsed(ran)
       if (hasNamingFlag(r) && r.naming === false) namingDeclined(current as string)

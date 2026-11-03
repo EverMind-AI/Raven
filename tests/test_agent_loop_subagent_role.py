@@ -342,6 +342,22 @@ def test_the_reply_rules_close_every_reply_with_the_decisions_still_open(workspa
     assert "One the user dropped or put off for later is no longer open." in section
 
 
+def test_on_the_page_the_reply_rules_leave_open_decisions_to_the_board(workspace) -> None:
+    """Where the Task Board is drawn beside the conversation it lists every question still
+    open, so the reply rules stop closing each reply with them and ask only what the turn
+    newly needs; the per-task sections stay."""
+    section = (
+        render.identity_text(workspace, board_shown=True)
+        .split("## How you reply", 1)[1]
+        .split("\n\nReply directly", 1)[0]
+    )
+
+    assert "close every reply" not in section
+    assert "The open decisions that close the reply" not in section
+    assert "on the user's task board" in section
+    assert "When a reply covers more than one task" in section
+
+
 def test_a_turn_without_the_role_still_reads_a_passed_over_offer_as_declined(
     workspace, monkeypatch: pytest.MonkeyPatch
 ) -> None:

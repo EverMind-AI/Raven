@@ -91,6 +91,11 @@ class TurnLog:
         kept = [_unstamped(m) for m in self._entries if not any(m.get(k) for k in keys)]
         return [*self._head, *kept]
 
+    def added(self) -> list[dict[str, Any]]:
+        """Only what the turn added -- :meth:`messages` without the history it opened with."""
+        self._sync(self._live)
+        return [_unstamped(m) for m in self._entries]
+
     def drop(self, removed: Iterable[dict[str, Any]]) -> None:
         """Forget messages the loop took back (a hook rollback), and anything
         recorded after them, so the record matches a turn in which they never

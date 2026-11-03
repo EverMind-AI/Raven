@@ -52,7 +52,7 @@ from raven.agent.subagent_memory import (
 from raven.config.agent_names import canonical_agent_name
 from raven.config.paths import get_sandbox_dir
 from raven.config.schema import TIER_LADDER, ExecToolConfig
-from raven.context_engine.segments.render import dispatch_language_line, reply_rules_note
+from raven.context_engine.segments.render import board_on_page, dispatch_language_line, reply_rules_note
 from raven.contracts.llm_provider import LLMProvider
 from raven.contracts.subagent_backend import SubagentNoAnswerError
 from raven.observability import semconv
@@ -261,12 +261,16 @@ class SubagentManager:
         retry_delays: "Sequence[float] | None" = None,
         retry_after_output: bool = False,
         provider_pool: ProviderPool | None = None,
+        task_board: bool = False,
     ):
         from raven.config.schema import LLM_ERROR_RETRY_DELAYS_DEFAULT, ExecToolConfig
 
         # Agent home. Also the working-directory fallback for a spawn that
         # captured none, which is the pre-split behaviour.
         self.workspace = workspace
+        # Whether the host keeps a Task Board: a graph's notice into a conversation
+        # the page draws then leaves the questions still open to that board.
+        self._task_board = task_board
         # What a streamed spawn waits out on a dropped stream, as two plain values:
         # this layer may not import the loop's RecoveryLimits, and the loop that
         # holds them passes them apart. A rig that passes none keeps the defaults.
@@ -911,12 +915,18 @@ class SubagentManager:
         workspace: Path | None = None,
         authored_task: str | None = None,
         tool_call_id: str | None = None,
+        origin_surface: str | None = None,
     ) -> str:
         """Spawn a subagent to execute a task in the background.
 
         ``tool_call_id`` is the call that dispatched this run, when the host
         correlates the two; it rides ``origin`` so every ``subagent.status``
         frame can name the tool row the run belongs to.
+
+        ``origin_surface`` is the front end the dispatching turn declared
+        (``Source.surface``). It rides ``origin`` too, and the result turn
+        carries it back: the terminal and the page share a channel, and the
+        two reply under different rules.
 
         ``authored_task`` is the task as the dispatching model wrote it, given
         when ``task`` is a rendering of it that a caller resolved file inputs
@@ -988,6 +998,7 @@ class SubagentManager:
         origin = {
             "channel": origin_channel,
             "chat_id": origin_chat_id,
+            "surface": origin_surface,
             "session_key": quota_key,
             "agent": agent,
             "instance": instance,
@@ -2411,7 +2422,9 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
         if self._submit is None:
             logger.warning("DAG run {} finished with no submit wired; result not announced", run_id)
             return
-        injected = wrap_untrusted(summary, source="subagent") + reply_rules_note()
+        injected = wrap_untrusted(summary, source="subagent") + reply_rules_note(
+            board_shown=board_on_page(self._task_board, origin.get("channel"), origin.get("surface"))
+        )
         mark = {"kind": "dag", "label": run_id, "status": "ok", "run_id": run_id}
         if not self._inject(injected, origin, mark, dispatch_link=trace.dispatch_link_of(origin)):
             return
@@ -2518,11 +2531,10 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
         session_key = str(origin.get("session_key") or "")
         channel, chat_id = origin.get("channel"), origin.get("chat_id")
         if session_key and channel and chat_id:
-            self._session_origins[session_key] = {
-                "channel": str(channel),
-                "chat_id": str(chat_id),
-                "session_key": session_key,
-            }
+            route = {"channel": str(channel), "chat_id": str(chat_id), "session_key": session_key}
+            if surface := origin.get("surface"):
+                route["surface"] = str(surface)
+            self._session_origins[session_key] = route
 
     def remember_session(self, session_key: str) -> None:
         """Keep the route back to a conversation known only by its session key.
@@ -2664,6 +2676,7 @@ Read it against the plan this instance serves. If it reports finished work, resu
                 chat_id=origin["chat_id"],
                 sender_id="subagent",
                 chat_type=ChatType.DM,
+                surface=origin.get("surface"),
             ),
             text=content,
             conversation=origin["session_key"],

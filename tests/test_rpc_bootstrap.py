@@ -66,6 +66,16 @@ class _FakeAskUser:
         self.broker = broker
 
 
+class _FakeBoard:
+    """The host's task board service: only its event sink is wired by the stack."""
+
+    def __init__(self) -> None:
+        self.sink = None
+
+    def set_sink(self, fn) -> None:
+        self.sink = fn
+
+
 class _FakeLoop:
     """The AgentLoop surface build_rpc_stack touches, each hook recorded."""
 
@@ -73,6 +83,7 @@ class _FakeLoop:
         self.tools: dict = {"ask_user": _FakeAskUser()}
         self.order: list[str] = []
         self.subagents = _FakeSubagents(self.order)
+        self.task_board = _FakeBoard()
         self.mcp_closed = 0
         self.cron_service = cron
         self.backend = None
@@ -240,6 +251,7 @@ async def test_a_shared_loop_is_used_not_rebuilt(monkeypatch) -> None:
         assert loop.dag_sink is not None
         assert loop.mcp_sink is not None
         assert loop.subagents.delivery_sink is not None
+        assert loop.task_board.sink is not None
         # The engine is the host's and the host's ``run()`` already connected
         # it; a second prewarm here would re-walk every server it attached.
         assert loop.prewarms == 0

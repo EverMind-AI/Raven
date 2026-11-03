@@ -43,6 +43,8 @@ class _SpawnOrigin:
     channel: str
     chat_id: str
     session_key: str
+    # The front end the turn declared (``Source.surface``); the result turn is read there.
+    surface: str | None = None
 
 
 class SpawnTool(Tool):
@@ -75,9 +77,11 @@ class SpawnTool(Tool):
     def _cur(self) -> _SpawnOrigin:
         return self._origin.get(None) or self._default
 
-    def set_context(self, channel: str, chat_id: str, session_key: str) -> None:
+    def set_context(self, channel: str, chat_id: str, session_key: str, surface: str | None = None) -> None:
         """Set the origin context for subagent announcements (turn-local)."""
-        self._origin.set(replace(self._cur(), channel=channel, chat_id=chat_id, session_key=session_key))
+        self._origin.set(
+            replace(self._cur(), channel=channel, chat_id=chat_id, session_key=session_key, surface=surface)
+        )
 
     def set_tool_call_id(self, tool_call_id: str | None) -> None:
         """Turn-local: record which tool call this spawn's run belongs to.
@@ -554,6 +558,7 @@ class SpawnTool(Tool):
                 task_summary=task_summary,
                 origin_channel=org.channel,
                 origin_chat_id=org.chat_id,
+                origin_surface=org.surface,
                 session_key=org.session_key,
                 agent=subagent,
                 instance=instance,

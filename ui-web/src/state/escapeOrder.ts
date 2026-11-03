@@ -73,6 +73,7 @@ const CLOSERS: Record<PageId, () => void> = {
      file that scripts/gates/import-direction.test.mjs refuses -- rightly: a
      page with nothing to tear down has no verb of its own to call. */
   knowledgePage: () => page.show(null),
+  tasksBoardPage: () => page.show(null),
 }
 
 /* The four layers Escape reaches before any page. Two of them are raised from

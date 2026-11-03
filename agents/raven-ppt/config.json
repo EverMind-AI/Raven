@@ -48,6 +48,9 @@
       "compaction": {
         "enabled": true,
         "triggerRatio": 0.85
+      },
+      "taskBoard": {
+        "enabled": false
       }
     }
   },

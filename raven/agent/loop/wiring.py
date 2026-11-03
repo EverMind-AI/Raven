@@ -1623,6 +1623,15 @@ class WiringMixin:
                 verdict_config=self.subagent_dag_config,
             )
         )
+        # The host's own record of the conversation's matters. Host-only for the
+        # same reason as everything above: a subagent's turns are its caller's
+        # business, and a board kept there would record the caller's matters twice.
+        if self._task_board_config.enabled:
+            from raven.agent.task_board.service import TaskBoardService
+            from raven.agent.task_board.tool import TaskBoardTool
+
+            self.task_board = TaskBoardService(self.sessions)
+            self.tools.register(TaskBoardTool(self.task_board, loop=self))
         # The two close the array, in this order, so the roster spawn's
         # description ends with is the last thing the array says and the graph
         # tool's pointer to it lands on the tool read right after.
@@ -1786,7 +1795,8 @@ class WiringMixin:
 
         The contributed session observers ride this same lifecycle: attached
         to the session store here, detached in :meth:`stop_plugin_services`
-        (paper: contracts/session_events.py).
+        (paper: contracts/session_events.py). The host's own task board joins
+        them, so a deleted conversation's board goes with it.
         """
         if self._plugin_services_started:
             return
@@ -1805,7 +1815,8 @@ class WiringMixin:
                 continue
             started.append(service)
         self._started_services = tuple(started)
-        self.sessions.set_delete_observers(self.session_observers)
+        board = (self.task_board,) if self.task_board is not None else ()
+        self.sessions.set_delete_observers((*self.session_observers, *board))
 
     async def stop_plugin_services(self) -> None:
         """Stop started services, newest first; idempotent, loud on error.
@@ -2169,9 +2180,18 @@ class WiringMixin:
         )
 
     def _set_tool_context(
-        self, channel: str, chat_id: str, message_id: str | None = None, session_key: str | None = None
+        self,
+        channel: str,
+        chat_id: str,
+        message_id: str | None = None,
+        session_key: str | None = None,
+        surface: str | None = None,
     ) -> None:
-        """Update context for all tools that need routing info."""
+        """Update context for all tools that need routing info.
+
+        ``surface`` goes to the tools that start runs, whose results come back as
+        turns of their own: the front end the turn declared is where those are read.
+        """
         # Before the per-tool contexts because the schema is assembled from this
         # same turn: a channel-bound tool is withheld by the registry, not by
         # its own refusal (see ToolRegistry.set_channel).
@@ -2186,20 +2206,22 @@ class WiringMixin:
             "cancel_dag",
             "resolve_dag_node",
             "context_retrieve",
+            "task_board",
         ):
             if tool := self.tools.get(name):
                 if not hasattr(tool, "set_context"):
                     continue
                 if name == "message":
                     tool.set_context(channel, chat_id, message_id)
+                elif name in ("spawn", "run_subagent_dag"):
+                    tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}", surface=surface)
                 elif name in (
-                    "spawn",
-                    "run_subagent_dag",
                     "deliver_files",
                     "dag_status",
                     "cancel_dag",
                     "resolve_dag_node",
                     "context_retrieve",
+                    "task_board",
                 ):
                     tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
                 else:
@@ -2211,7 +2233,7 @@ class WiringMixin:
         # to that turn's own address rather than the last human conversation's.
         if self._playbooks is not None:
             self._playbooks.set_context(
-                channel=channel, chat_id=chat_id, session_key=session_key or f"{channel}:{chat_id}"
+                channel=channel, chat_id=chat_id, session_key=session_key or f"{channel}:{chat_id}", surface=surface
             )
 
     def dag_tools(self) -> list[Any]:

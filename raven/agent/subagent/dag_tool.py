@@ -217,10 +217,15 @@ class _DagOrigin:
     # The span that dispatched the run, set where the graph is dispatched; part
     # of one run's origin, never of the address a stint writes down.
     dispatch_link: tuple[str, str] | None = None
+    # The front end the turn declared (``Source.surface``); the announce is read there.
+    surface: str | None = None
 
     def as_dict(self) -> dict[str, str]:
-        """The shape the announcers take: channel, chat, session key, and the dispatch link when there is one."""
+        """The shape the announcers take: channel, chat, session key, the surface and
+        the dispatch link when there are."""
         out = {"channel": self.channel, "chat_id": self.chat_id, "session_key": self.conversation}
+        if self.surface:
+            out["surface"] = self.surface
         out.update(trace.dispatch_attrs(self.dispatch_link))
         return out
 
@@ -237,6 +242,7 @@ class _DagOrigin:
             channel=str(data.get("channel") or ""),
             chat_id=str(data.get("chat_id") or ""),
             conversation=str(data.get("session_key") or ""),
+            surface=str(data["surface"]) if data.get("surface") else None,
         )
 
 
@@ -859,10 +865,17 @@ class SubAgentDagTool(Tool):
             for row in self._registry.enabled()
         }
 
-    def set_context(self, channel: str, chat_id: str, session_key: str | None = None) -> None:
+    def set_context(
+        self, channel: str, chat_id: str, session_key: str | None = None, surface: str | None = None
+    ) -> None:
         """Turn-local: record where this turn's progress and announces are addressed."""
         self._origin.set(
-            _DagOrigin(channel=channel, chat_id=chat_id, conversation=session_key or f"{channel}:{chat_id}")
+            _DagOrigin(
+                channel=channel,
+                chat_id=chat_id,
+                conversation=session_key or f"{channel}:{chat_id}",
+                surface=surface,
+            )
         )
 
     def _turn_conversation(self) -> str | None:

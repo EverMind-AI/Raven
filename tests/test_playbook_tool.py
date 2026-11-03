@@ -26,9 +26,11 @@ class FakeDagTool:
     def __init__(self):
         self.calls = []
         self.context = None
+        self.surface = None
 
-    def set_context(self, channel, chat_id, session_key=None):
+    def set_context(self, channel, chat_id, session_key=None, surface=None):
         self.context = (channel, chat_id, session_key)
+        self.surface = surface
 
     async def execute(self, nodes, background=True, confirm=False, **_):
         self.calls.append({"nodes": nodes, "background": background, "confirm": confirm})

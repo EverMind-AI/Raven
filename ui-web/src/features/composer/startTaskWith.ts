@@ -8,6 +8,10 @@
  * and renders nothing, and the `use` it used to carry had every caller
  * breaking `react-hooks/rules-of-hooks` on a call that is not a hook call.
  *
+ * `answerInChat` is the Task Board's: a group that needs the reader puts its
+ * questions in the open conversation's composer, a slot under each, the
+ * cursor in the first, so all that is left is the answers.
+ *
  * `askInChat` is the other door, for the settings dialog. A skill or an MCP
  * server is added by asking Raven in the chat (use_skill fetches the Skill Hub
  * bundle, the plugin tool connects the PlugHub entry), which no row of those
@@ -27,11 +31,11 @@ const field = (): HTMLTextAreaElement => document.getElementById('ta') as HTMLTe
    event is what the dock listens for (mount.tsx, then store.fieldInput): the
    field is sized to its text, Send wakes, and the text is parked as the
    conversation's own draft. */
-function fill(ta: HTMLTextAreaElement, text: string): void {
+function fill(ta: HTMLTextAreaElement, text: string, at = text.length): void {
   ta.value = text
   ta.dispatchEvent(new Event('input', { bubbles: true }))
   ta.focus()
-  ta.setSelectionRange(ta.value.length, ta.value.length)
+  ta.setSelectionRange(at, at)
 }
 
 export function startTaskWith(promptKey: string, name: string, vars: Record<string, string> = {}): void {
@@ -54,4 +58,22 @@ export function askInChat(text: string): void {
   const typed = ta.value
   const lead = `${text}\n`
   fill(ta, typed.trim() ? `${typed.replace(/\s+$/, '')}\n\n${lead}` : lead)
+}
+
+/* The reader is put in the open conversation's composer with what they had
+   typed left as it was: the Task Board's Move on, whose message is theirs to
+   write. */
+export function focusChat(): void {
+  field().focus()
+}
+
+/* The same door with the cursor placed by the caller -- `caret` counts into
+   `draft` -- and the same care for a draft already typed, which stays above. */
+export function answerInChat(draft: string, caret: number): void {
+  settings.close()
+  if (page.get() !== null) page.show(null)
+  const ta = field()
+  const typed = ta.value
+  const before = typed.trim() ? `${typed.replace(/\s+$/, '')}\n\n` : ''
+  fill(ta, before + draft, before.length + caret)
 }

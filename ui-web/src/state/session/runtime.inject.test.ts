@@ -37,6 +37,7 @@ async function harness({
       'src/state/ws': { setOpen: () => {}, reset: () => {} },
       'src/state/session/conversation': {
         ask: (text: string) => log.push(['ask', text]),
+        unask: (id: number) => log.push(['unask', id]),
         noteRow: (labelText: string, detail: string, opts?: Record<string, unknown>) =>
           log.push(['noteRow', labelText, detail, opts ? Object.keys(opts).sort() : null]),
         pitch: () => {},
@@ -313,5 +314,34 @@ describe('an imported conversation', () => {
     h.runtime.send('can I add to it?')
     await h.tick()
     expect(h.sends()).toEqual([])
+  })
+})
+
+/* A message sent with a Move on above the composer carries the group with it, so
+   the turn it opens is told which matter it moves on and nothing waits between
+   the two. It waits for a turn of its own rather than joining one already
+   running, which was told about something else. */
+describe('a message that moves a task on', () => {
+  it('goes at once, carrying the group it moves on', async () => {
+    const h = await harness()
+    h.runtime.lendBeforeSend({ pending: (key) => key === 's1', take: (key) => (key === 's1' ? 'g_1' : null) })
+
+    h.runtime.send('the next step')
+
+    expect(h.sends()).toEqual([{ session_key: 's1', content: 'the next step', move_on: 'g_1' }])
+    h.runtime.lendBeforeSend(null)
+  })
+
+  it('waits for a turn of its own instead of joining the one running', async () => {
+    const h = await harness()
+    h.runtime.lendBeforeSend({ pending: () => true, take: () => 'g_1' })
+    turn.dispatch({ type: 'stream', cancellable: true })
+
+    h.runtime.send('the next step')
+    await h.tick()
+
+    expect(h.sends()).toEqual([])
+    expect(h.queue).toEqual(['the next step'])
+    h.runtime.lendBeforeSend(null)
   })
 })
