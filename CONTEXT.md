@@ -318,13 +318,13 @@ ranking is `session_effort.in_force`, one rule with one home: the turn runs at i
 (`session_reasoning_effort` on the loop) and `session.info` / `session.set_effort` report
 it, and the turn sends the word in force on every call, None included, so a default cleared
 on a running gateway lands on its next turn -- the provider's own copy of the key, frozen at
-boot, is never consulted. The
-pick's words are the levels the conversation's model declares
+boot, is never consulted. The pick's words are the levels the conversation's model declares
 (`providers/effort_levels.py`: LiteLLM's static table first, a provider's
 `model_overlay.reasoningEfforts` over it); `session.set_effort` offers and validates exactly
 those, a model that declares none has no row, and a stored pick the current model does not
-declare is dropped to None at the turn and in `session.info` (`session_effort.clamp`). The
-install-wide `agents.defaults.reasoningEffort` keeps `REASONING_EFFORTS`
+declare is dropped at the turn and in `session.info` (`session_effort.clamp`); the mode's
+word or the configured default then runs, since those two are not narrowed by the model.
+The install-wide `agents.defaults.reasoningEffort` keeps `REASONING_EFFORTS`
 (`config/schema.py`), shared with the console's checker and the agent's own `raven_config`
 door -- a key that is clearable on both (null is the provider's own default) and that the
 settings page draws, when unset, as a rung of its own rather than as `low`. Lands on the

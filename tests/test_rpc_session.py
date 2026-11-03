@@ -4543,6 +4543,8 @@ async def test_a_model_that_declares_no_reasoning_offers_no_words(tmp_path, monk
 
 
 async def test_the_reported_pick_is_clamped_to_the_model(tmp_path, monkeypatch, levels):
+    """A pick the model stopped declaring reads as no pick, and the default
+    the turn actually falls back to is reported as it stands."""
     _configured_effort(monkeypatch, "low")
     levels(["medium", "high", "xhigh"])
     loop = _EffortLoop(tmp_path)
@@ -4550,10 +4552,21 @@ async def test_the_reported_pick_is_clamped_to_the_model(tmp_path, monkeypatch, 
     await session_module.session_set_effort({"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop)
     levels(["medium"])
     result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
-    assert result["effort"] is None and result["default"] is None
+    assert result["effort"] is None and result["default"] == "low"
 
 
-async def test_the_bundle_reports_the_clamped_effort(tmp_path, monkeypatch, levels):
+async def test_the_default_is_not_narrowed_by_the_model(tmp_path, monkeypatch, levels):
+    """The mode's word and the configured default are sent as they stand; only
+    a pick is bounded by what the model declares."""
+    _configured_effort(monkeypatch, "xhigh")
+    levels(["low", "medium"])
+    loop = _EffortLoop(tmp_path)
+    result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert result["default"] == "xhigh"
+    assert result["options"] == ["low", "medium"]
+
+
+async def test_the_bundle_reports_the_default_when_the_pick_is_clamped(tmp_path, monkeypatch, levels):
     from unittest.mock import MagicMock
 
     _configured_effort(monkeypatch, "low")
@@ -4567,7 +4580,7 @@ async def test_the_bundle_reports_the_clamped_effort(tmp_path, monkeypatch, leve
     await session_module.session_set_effort({"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop)
     levels(["low", "medium"])
     info = await session_module._default_session_info(loop, config, "tui:1")
-    assert info["reasoning_effort"] is None
+    assert info["reasoning_effort"] == "low"
 
 
 async def test_a_pick_comes_back_when_a_later_model_declares_it(tmp_path, monkeypatch, levels):

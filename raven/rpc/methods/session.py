@@ -41,7 +41,7 @@ from raven.config.loader import drain_migration_notices, load_config, raven_home
 from raven.config.raven import load_raven_config
 from raven.config.schema import REASONING_EFFORTS
 from raven.providers import effort_levels
-from raven.providers.overlay import declared_efforts, overlay_for
+from raven.providers.overlay import declared_for
 from raven.providers.rates import resolve_context_window
 from raven.providers.usage import reported_cost, token_count
 from raven.rpc.errors import (
@@ -574,22 +574,23 @@ def _default_effort(agent_loop: object, config: Any, session_key: str | None) ->
 
     ``session_effort.in_force`` ranks it, the same rule the turn runs at, so
     what this reports and what the next turn sends cannot drift apart: None is
-    the provider's own default on both sides.
+    the provider's own default on both sides. The model does not narrow this
+    answer -- the mode's word and the configured default are sent as they
+    stand, unlike a pick.
     """
     return session_effort.in_force(None, _mode_effort(agent_loop, session_key), _configured_effort(config))
 
 
 def _effort_levels(model_id: str, config: Any, *, refresh: bool = False) -> tuple[str, ...] | None:
     """What this model declares, with the provider's overlay as the authority."""
-    from raven.providers.registry import canonical_provider_name, find_by_model, split_model_id
+    from raven.providers.registry import find_by_model, split_model_id
 
     provider, _rest = split_model_id(model_id)
     if not provider:
         spec = find_by_model(model_id)
         provider = getattr(spec, "name", "") if spec else ""
-    section = getattr(config, "providers", {}).get(canonical_provider_name(provider)) if provider else None
-    overlay = overlay_for(section, provider, model_id) if section is not None else None
-    return effort_levels.levels_for(model_id, declared_efforts(overlay), refresh=refresh)
+    declared = declared_for(getattr(config, "providers", None), provider, model_id)
+    return effort_levels.levels_for(model_id, declared, refresh=refresh)
 
 
 def _effort_in_force(
@@ -598,11 +599,11 @@ def _effort_in_force(
     session_key: str | None,
     model_id: str | None = None,
 ) -> str | None:
-    """The effort this session's own calls run at: its pick over the default, clamped to its model."""
+    """The effort this session's own calls run at: its pick, bounded by its model, over the default."""
     model_id = model_id or _session_model(agent_loop, config, session_key)
     picked = session_effort.read(manager_for(agent_loop, config), session_key) if session_key else None
-    value = session_effort.in_force(picked, _mode_effort(agent_loop, session_key), _configured_effort(config))
-    return session_effort.clamp(value, _effort_levels(model_id, config))
+    picked = session_effort.clamp(picked, _effort_levels(model_id, config))
+    return session_effort.in_force(picked, _mode_effort(agent_loop, session_key), _configured_effort(config))
 
 
 def _read_knowledge(agent_loop: object, config: object, session_key: str | None) -> tuple[str, ...]:
@@ -1673,10 +1674,12 @@ async def session_set_effort(
     conversation runs at what it was left at. A set lands on the next turn.
 
     Every answer carries ``default`` -- what the session runs at without a
-    pick of its own -- so a control can say what "default" means on this
-    install, and ``options``, the levels this model declares, so it need not
-    spell the words itself. A draft names its model, since it has no session
-    record to read one from.
+    pick of its own, the mode's word or the configured default, not narrowed
+    by the model -- so a control can say what "default" means on this install.
+    ``effort`` is the pick only where the model declares it; when it does not,
+    ``effort`` is null and the turn runs at ``default``. ``options`` are the
+    words this model declares, so a control need not spell them itself. A
+    draft names its model, since it has no session record to read one from.
 
     A report reads the account catalogue's cache; only an explicit set
     refreshes it -- a clear needs no word to validate -- and that refresh runs
@@ -1705,7 +1708,7 @@ async def session_set_effort(
         return {
             "session_key": session_key,
             "effort": session_effort.clamp(stored, model_levels),
-            "default": session_effort.clamp(_default_effort(loop, config, session_key or None), model_levels),
+            "default": _default_effort(loop, config, session_key or None),
             "options": list(model_levels) if model_levels is not None else list(REASONING_EFFORTS),
         }
 

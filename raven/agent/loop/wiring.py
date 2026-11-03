@@ -535,51 +535,43 @@ class WiringMixin:
         read off the session's record, the session's mode's word, and the
         configured default as the file has it now. ``model`` is the id the loop
         was handed for this turn -- the router's pick when it made one, else the
-        session's own -- and bounds the answer (``session_effort.clamp``) for the
-        calls that will actually carry it; without one, the session's binding,
-        else the default. A level the called model does not declare, by LiteLLM's
-        table or its provider overlay, is dropped to None rather than sent.
-        Beside ``session_tier`` for the reason it gives -- the turn and the RPC
-        need the one rule, and the policy it reads lives here -- and reached on
-        ``self`` by the turn, so nothing imports anything new.
+        session's own -- and bounds the **pick** (``session_effort.clamp``): a
+        level it does not declare, by LiteLLM's table or its provider overlay,
+        is dropped rather than sent. The mode's word and the configured default
+        are not narrowed here; they are not this conversation's pick and were
+        sent as they stand before the pick existed. Beside ``session_tier`` for
+        the reason it gives -- the turn and the RPC need the one rule, and the
+        policy it reads lives here -- and reached on ``self`` by the turn, so
+        nothing imports anything new.
         """
         from raven.agent import session_effort
-        from raven.providers.overlay import declared_efforts, overlay_for
-        from raven.providers.registry import canonical_provider_name, find_by_model, split_model_id
+        from raven.providers.overlay import declared_for
+        from raven.providers.registry import find_by_model, split_model_id
 
         model_id = model or (
             self.session_model(session_key) if session_key and self.has_session_binding(session_key) else self.model
-        )
-        value = session_effort.in_force(
-            pick, self.session_policy(session_key or "").reasoning_effort, self.default_reasoning_effort
         )
         provider, _rest = split_model_id(model_id)
         if not provider:
             spec = find_by_model(model_id)
             provider = getattr(spec, "name", "") if spec else ""
-        try:
-            from raven.config.schema import _provider_section
-
-            section = (
-                _provider_section(
-                    self._live_config.get("providers") or {},
-                    canonical_provider_name(provider),
-                )
-                if provider
-                else None
-            )
-        except Exception:  # noqa: BLE001 - a bad edit must not fail the turn over an overlay
-            section = None
-        overlay = overlay_for(section, provider, model_id) if section is not None else None
-        clamped = session_effort.clamp(value, effort_levels.levels_for(model_id, declared_efforts(overlay)))
-        if value is not None and clamped is None:
+        levels = effort_levels.levels_for(
+            model_id,
+            declared_for(self._live_config.get("providers") or {}, provider, model_id),
+        )
+        valid_pick = session_effort.clamp(pick, levels)
+        if pick is not None and valid_pick is None:
             logger.debug(
-                "session {}: reasoning effort {} is not declared by {}; using the provider default",
+                "session {}: reasoning effort {} is not declared by {}; using the session default",
                 session_key,
-                value,
+                pick,
                 model_id,
             )
-        return clamped
+        return session_effort.in_force(
+            valid_pick,
+            self.session_policy(session_key or "").reasoning_effort,
+            self.default_reasoning_effort,
+        )
 
     @property
     def personalization_enabled(self) -> bool:

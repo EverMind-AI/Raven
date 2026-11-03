@@ -313,7 +313,9 @@ All notable changes to Raven are documented here.
   at all for a model that declares none. The turn and the status bar clamp a
   stored pick to the current model, so switching models cannot send a level the
   new model does not accept; the pick itself is kept and applies again if a
-  later model declares it. The global `agents.defaults.reasoningEffort` is
+  later model declares it, and the conversation's mode word or the global
+  setting runs meanwhile. A fallback hop re-clamps the word for the model it
+  actually calls. The global `agents.defaults.reasoningEffort` is
   unchanged.
 
 - Empty and abnormal model replies are handled the way Hermes Agent handles

@@ -435,6 +435,40 @@ async def test_a_pick_the_model_does_not_declare_is_dropped(tmp_path, monkeypatc
     assert loop.session_reasoning_effort("cli:c", "high") == "high"
 
 
+def _live_with_effort(tmp_path, effort: str) -> LiveConfig:
+    import json
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"agents": {"defaults": {"reasoningEffort": effort}}}), encoding="utf-8")
+    return LiveConfig(path)
+
+
+async def test_a_model_with_no_row_still_gets_the_configured_effort(tmp_path, monkeypatch):
+    """Only a pick is bounded by what the model declares; the configured
+    default was sent on main and keeps being sent for models the table lacks."""
+    from raven.agent.loop import wiring
+
+    monkeypatch.setattr(wiring.effort_levels, "levels_for", lambda model, declared=(), refresh=False: ())
+    loop = _loop(tmp_path, _ScriptedProvider([_text("ok")]))
+    loop._live_config = _live_with_effort(tmp_path, "high")
+    assert loop.session_reasoning_effort("cli:c") == "high"
+
+
+async def test_an_undeclared_pick_falls_back_to_the_mode_or_configured_word(tmp_path, monkeypatch):
+    from raven.agent.loop import wiring
+
+    monkeypatch.setattr(
+        wiring.effort_levels,
+        "levels_for",
+        lambda model, declared=(), refresh=False: ("medium", "high"),
+    )
+    loop = _loop(tmp_path, _ScriptedProvider([_text("ok")]))
+    loop._live_config = _live_with_effort(tmp_path, "medium")
+    assert loop.session_reasoning_effort("cli:c", "minimal") == "medium"
+    loop.set_session_policy("cli:c", reasoning_effort="high")
+    assert loop.session_reasoning_effort("cli:c", "minimal") == "high"
+
+
 async def test_a_routed_model_bounds_the_effort_the_turn_sends(tmp_path, monkeypatch):
     """A router can hand the turn a model other than the session's binding; the
     clamp must follow the model the calls actually name."""
