@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from raven.providers.wire import wire_model
+from raven.providers.wire import metadata_candidates, wire_model
 
 
 @pytest.mark.parametrize(
@@ -21,6 +21,7 @@ from raven.providers.wire import wire_model
         ("github_copilot/gpt-5.6-sol", "github_copilot/responses/gpt-5.6-sol"),
         ("github_copilot/gpt-5.6-luna", "github_copilot/responses/gpt-5.6-luna"),
         ("github_copilot/gpt-5.5", "github_copilot/responses/gpt-5.5"),
+        ("github_copilot/gpt-5.10", "github_copilot/responses/gpt-5.10"),
         ("github_copilot/gpt-6-luna", "github_copilot/responses/gpt-6-luna"),
         ("github_copilot/gpt-6.1-terra", "github_copilot/responses/gpt-6.1-terra"),
         ("github_copilot/gpt-6.1-sol", "github_copilot/responses/gpt-6.1-sol"),
@@ -65,7 +66,22 @@ def test_the_responses_segment_is_not_added_twice() -> None:
     assert wire_model(once) == once
 
 
-@pytest.mark.parametrize("model", ["github_copilot/gpt-6-luna", "github_copilot/gpt-6.1-terra", "github_copilot/gpt-6.1-sol"])
+def test_responses_bridge_metadata_falls_back_to_the_unprefixed_id() -> None:
+    assert metadata_candidates("github_copilot/responses/gpt-5.3-codex") == [
+        "github_copilot/responses/gpt-5.3-codex",
+        "github_copilot/gpt-5.3-codex",
+        "openrouter/github_copilot/responses/gpt-5.3-codex",
+    ]
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "github_copilot/responses/gpt-6-luna",
+        "github_copilot/responses/gpt-6.1-terra",
+        "github_copilot/responses/gpt-6.1-sol",
+    ],
+)
 def test_copilot_gpt6_is_sent_without_temperature(model: str) -> None:
     """Copilot answers 400 "Unsupported parameter: 'temperature'" for gpt-6.x."""
     from raven.providers.litellm_provider import LiteLLMProvider

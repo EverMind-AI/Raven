@@ -117,7 +117,7 @@ def _through_gateway(model: str, gateway: ProviderSpec) -> str:
 #: ``/chat/completions`` with HTTP 400 ("model ... is not accessible via the
 #: /chat/completions endpoint"). Same family OmniRoute routes to /responses:
 #: gpt-5.5 and later, gpt-6.x, and any codex id.
-_COPILOT_RESPONSES_ONLY = re.compile(r"^(?:gpt-(?:[6-9]|5\.[5-9])|.*codex)", re.IGNORECASE)
+_COPILOT_RESPONSES_ONLY = re.compile(r"^(?:gpt-(?:[6-9]|5\.(?:[5-9]|\d{2,}))|.*codex(?:[-.]|$))", re.IGNORECASE)
 
 
 def _copilot_responses_only(spec: ProviderSpec | None, model: str) -> bool:
@@ -294,7 +294,10 @@ def metadata_candidates(model: str) -> list[str]:
     if filed_as:
         return [filed_as]
 
+    candidates = [model]
+    provider, bare = split_model_id(model)
+    if provider == "github_copilot" and bare.startswith("responses/"):
+        candidates.append(f"{provider}/{bare.removeprefix('responses/')}")
     if model.startswith("openrouter/"):
-        return [model]
-
-    return [model, f"openrouter/{model}"]
+        return candidates
+    return [*candidates, f"openrouter/{model}"]
