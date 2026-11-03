@@ -415,9 +415,13 @@ const dispatch = (
         return
       }
       // The model ended the turn on its silence marker: the line below is all
-      // the turn has to say, and any preview already streamed is taken back.
+      // the turn has to say, and what the detail says the reply had already
+      // streamed is taken back. The detail is that text, so the line omits it.
       if (event.payload.kind === 'silent_turn') {
-        turnController.recordSilentTurn()
+        turnController.recordSilentTurn(event.payload.detail ?? '')
+        turnController.recordNotice(noticeLine({ kind: 'silent_turn' }))
+
+        return
       }
       // Runtime prose, not the model's: never merged into the streamed answer.
       // Handed to the turn rather than appended here, because it arrives mid-turn

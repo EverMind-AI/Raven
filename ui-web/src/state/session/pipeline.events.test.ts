@@ -20,7 +20,7 @@ type Pipeline = typeof import('./pipeline')
 interface Row { id: string; title?: string; status?: string | null; last?: string; naming?: boolean }
 interface Step {
   seal(): void
-  dropReply(): void
+  dropReply(shown: string): void
   thinkAppend(text: string): void
   sayDelta(text: string): void
   tool(name: string, args: unknown, display: unknown, callId: string): { done(...a: unknown[]): void }
@@ -40,7 +40,7 @@ async function harness({
   const step = (): Step => {
     const st: Step = {
       seal: () => log.push(['seal']),
-      dropReply: () => log.push(['dropReply']),
+      dropReply: (shown: string) => log.push(['dropReply', shown]),
       thinkAppend: (text: string) => log.push(['thinkAppend', text]),
       sayDelta: (text: string) => log.push(['sayDelta', text]),
       tool: (name: string, args: unknown, display: unknown, callId: string) => {
@@ -445,6 +445,16 @@ describe('notice', () => {
       expect(h.live.silent).toBe(true)
     })
 
+    it('takes back what the notice says the reply showed, and draws none of it in the row', async () => {
+      const h = await harness()
+      h.dispatch({ type: 'token.delta', payload: { text: 'Let me check.<think>nothing new</think>' } })
+
+      h.dispatch({ type: 'notice', payload: { kind: 'silent_turn', detail: '<think>nothing new</think>' } })
+
+      expect(h.did('dropReply')).toEqual([['dropReply', '<think>nothing new</think>']])
+      expect(h.did('noteRow')).toEqual([['noteRow', 'gui.notice.silent_turn', '', ['quiet']]])
+    })
+
     it('marks the turn when no step was open, with nothing to take back', async () => {
       const h = await harness()
 
@@ -649,6 +659,7 @@ describe('a turn that ends silent, drawn by the real transcript island', () => {
   afterEach(() => { vi.unstubAllGlobals() })
 
   const SILENT = { type: 'notice', payload: { kind: 'silent_turn', detail: '', transient: false } }
+  const silentShowing = (shown: string) => ({ type: 'notice', payload: { kind: 'silent_turn', detail: shown, transient: false } })
 
   it('keeps the narration of the step an exhausted turn\'s wrap-up streamed into, as a reload does', async () => {
     /* The wire of a person's turn that ran out of iterations: one episode per
@@ -704,10 +715,10 @@ describe('a turn that ends silent, drawn by the real transcript island', () => {
   })
 
   it('takes back only what the wrap-up streamed when it did stream its marker', async () => {
-    /* A model that inlines its thinking in the reply: the server's hold lets
-       the reply through at its first character, and only once the call ended
-       and the thinking was stripped does the loop read a marker. That stream is
-       the one the notice takes back, and the narration before it stays. */
+    /* Whatever the closing reply streamed -- here a thought and the marker
+       after it, as a server that did not hold the marker back would send them --
+       is what the notice names. Only that is taken back, and the narration the
+       step said before it stays. */
     const h = await islandHarness()
     h.dispatch({ type: 'message.start', payload: { turn_id: 't1', content: 'tidy the logs' } })
     h.dispatch({ type: 'episode.start', payload: { index: 0 } })
@@ -716,7 +727,7 @@ describe('a turn that ends silent, drawn by the real transcript island', () => {
     h.dispatch({ type: 'tool.complete', payload: { tool_call_id: 'c1', result_preview: 'quiet', ok: true } })
     h.dispatch({ type: 'token.delta', payload: { text: '<think>nothing new</think>' } })
     h.dispatch({ type: 'token.delta', payload: { text: '[SILENT]' } })
-    h.dispatch(SILENT)
+    h.dispatch(silentShowing('<think>nothing new</think>[SILENT]'))
     h.dispatch({ type: 'message.complete', payload: { turn_id: 't1', usage: {}, duration_ms: 4000 } })
 
     const live = h.seen()
@@ -733,7 +744,7 @@ describe('a turn that ends silent, drawn by the real transcript island', () => {
     h.dispatch({ type: 'message.start', payload: { turn_id: 't1', content: 'anything new?' } })
     h.dispatch({ type: 'episode.start', payload: { index: 0 } })
     h.dispatch({ type: 'token.delta', payload: { text: '<think>nothing new</think>[SILENT]' } })
-    h.dispatch(SILENT)
+    h.dispatch(silentShowing('<think>nothing new</think>[SILENT]'))
     h.dispatch({ type: 'message.complete', payload: { turn_id: 't1', usage: {}, duration_ms: 2000 } })
 
     const live = h.seen()

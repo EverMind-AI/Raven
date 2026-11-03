@@ -21,7 +21,7 @@ import pytest
 from raven.agent.hook import AgentHook, HookDecision
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
-from raven.agent.loop.recovery import EMPTY_REPLY_FAILURE, RecoveryLimits
+from raven.agent.loop.recovery import EMPTY_REPLY_FAILURE, PARTIAL_STREAM_NOTE, RecoveryLimits
 from raven.contracts.llm_provider import CallRecord
 from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
@@ -256,25 +256,38 @@ class _Refused(Exception):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("death", "status"), [(_Refused("invalid request"), "failed"), (asyncio.CancelledError(), "cancelled")]
-)
-async def test_the_words_of_a_cut_answer_are_filed_when_its_continuation_dies_unheard(workspace, death, status):
+async def test_the_words_of_a_cut_answer_are_filed_when_its_continuation_is_cancelled_unheard(workspace):
     """The cut answer's words sit in the loop's list as a recovery row that is never
-    persisted, and a continuation that dies before saying anything leaves the reader's
+    persisted, and a continuation cancelled before saying anything leaves the reader's
     words as exactly that row's text. The rescue must not take them for committed, or
     the answer the reader watched is gone on the next reload."""
-    agent = _agent(workspace, _CutThenDies(death))
+    agent = _agent(workspace, _CutThenDies(asyncio.CancelledError()))
 
     async def _sink(_text: str) -> None:
         return None
 
-    with pytest.raises(type(death)):
+    with pytest.raises(asyncio.CancelledError):
         await agent._process_message(_make_msg("hello"), on_token_delta=_sink)
 
     msgs = _persisted(workspace)
     assert [(m["role"], m["content"]) for m in msgs[:-1]] == [("user", "hello"), ("assistant", "half an ")]
-    assert msgs[-1]["turn_ended"]["status"] == status
+    assert msgs[-1]["turn_ended"]["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_a_cut_answer_whose_continuation_is_refused_ends_on_its_words(workspace):
+    """A continuation refused outright leaves the reader holding the answer so far, so the turn ends on
+    it, said to be partial, and files it as the turn's reply rather than failing."""
+    agent = _agent(workspace, _CutThenDies(_Refused("invalid request")))
+
+    async def _sink(_text: str) -> None:
+        return None
+
+    out = await agent._process_message(_make_msg("hello"), on_token_delta=_sink)
+
+    msgs = _persisted(workspace)
+    assert out is not None and out[0] == "half an\n\n" + PARTIAL_STREAM_NOTE
+    assert [(m["role"], m["content"]) for m in msgs] == [("user", "hello"), ("assistant", out[0])]
 
 
 # --- the other way a turn dies: an error response the ladder could not wait out ---

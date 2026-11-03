@@ -256,9 +256,10 @@ def make_on_cron_job(
             req = TurnRequest(
                 origin=Origin.CRON,
                 source=source,
-                # The wake message verbatim. The instance is the addressee, and
-                # a wake turn's message is the whole of what it gets.
-                text=job.payload.message,
+                # The wake message and the silence lesson. The instance is the
+                # addressee, and a wake turn's message is the whole of what it
+                # gets; the lesson says how to report that it has nothing.
+                text=f"{job.payload.message}\n\n{SILENCE_INSTRUCTION}",
                 conversation=conversation,
                 direct_target=target,
                 parent_session=parent_session,
@@ -545,12 +546,15 @@ def make_on_session_wake(
     So the job runs ON the session that scheduled it. The session is not looked
     up: a job records the ``(channel, to)`` of the turn that created it, the ACP
     prompt gives every turn the pair that rebuilds its own session key, and
-    ``<channel>:<chat_id>`` IS that key. The wake's text goes in verbatim -- the
-    on-call agent is the addressee and a wake turn's message is the whole of what
-    it gets -- and the origin stays CRON so the loop's cron-context guard applies.
+    ``<channel>:<chat_id>`` IS that key. The wake's own words go in with the
+    silence lesson after them -- the on-call agent is the addressee and a wake
+    turn's message is the whole of what it gets, and the lesson is how it reports
+    having nothing -- and the origin stays CRON so the loop's cron-context guard
+    applies.
     A prompt in flight is unaffected: the translator defers a runtime turn's
     ending rather than letting it answer the prompt.
     """
+    from raven.agent.context.silence import SILENCE_INSTRUCTION
     from raven.spine import ChatType, Origin, Source, TurnFailed, TurnRequest
 
     async def on_session_wake(job: "CronJob") -> str | None:
@@ -560,7 +564,7 @@ def make_on_session_wake(
         req = TurnRequest(
             origin=Origin.CRON,
             source=Source(channel=job_channel, chat_id=chat_id, sender_id="cron", chat_type=ChatType.DM),
-            text=job.payload.message or "",
+            text=f"{job.payload.message or ''}\n\n{SILENCE_INSTRUCTION}",
             conversation=conversation,
         )
         logger.info("Cron: wake '{}' running on {}", job.name, conversation)
