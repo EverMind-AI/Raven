@@ -218,6 +218,8 @@ export function _resetForTests(waits: { ceilingMs?: number; graceMs?: number } =
   store._resetForTests()
   connectCeilingMs = waits.ceilingMs ?? CONNECT_CEILING_MS
   stopGraceMs = waits.graceMs ?? STOP_GRACE_MS
+  freshMenus.clear()
+  reads = 0
 }
 
 /** A patch, merged into the page's state. */
@@ -281,6 +283,30 @@ export function warm(): Promise<void> {
 
 let reads = 0
 
+/* Menus this page read itself, which a listing already in flight must not paint
+   over: one row's handshake can answer before the roster read that started
+   earlier, and that read carries the menu as it stood before. Kept with the
+   read mark it was taken under, applied to a listing that started no later than
+   the patch, and dropped once a listing that started after it lands -- that one
+   was fetched afterwards, so its menu is the server's record of the same read. */
+type FreshMenu = { atRead: number; models: ExtAgentRow['model_choices']; efforts: ExtAgentRow['effort_choices'] }
+
+const freshMenus = new Map<string, FreshMenu>()
+
+function keepingFreshMenus(rows: ExtAgentRow[], read: number): ExtAgentRow[] {
+  let patched = false
+  const kept = rows.map((row) => {
+    const fresh = freshMenus.get(row.name)
+    if (!fresh || fresh.atRead < read) return row
+    patched = true
+    return { ...row, model_choices: fresh.models, effort_choices: fresh.efforts }
+  })
+  for (const [name, fresh] of freshMenus) if (fresh.atRead < read) freshMenus.delete(name)
+  /* Untouched rows are the very objects the listing answered with: the page
+     compares them by identity to decide what to redraw. */
+  return patched ? kept : rows
+}
+
 async function read(probe: boolean, rescan: boolean, quiet: boolean): Promise<void> {
   const seq = ++reads
   set({ loading: true })
@@ -290,7 +316,14 @@ async function read(probe: boolean, rescan: boolean, quiet: boolean): Promise<vo
        rows are the roster as it stood before that newer answer. The newer read
        owns the table, and it is the one that clears `loading`. */
     if (seq !== reads) return
-    set({ rows, epoch: get().epoch + 1, loading: false })
+    /* A probe re-measures every row, so a menu note left by an earlier read is
+       news about a measurement this listing has just replaced. */
+    set({
+      rows: keepingFreshMenus(rows, seq),
+      epoch: get().epoch + 1,
+      loading: false,
+      ...(probe ? { menusFailed: {} } : {}),
+    })
   } catch (e) {
     if (seq !== reads) return
     set({ loading: false })
@@ -352,6 +385,12 @@ export async function run(
   opts: { quiet?: boolean } = {},
 ): Promise<Refused | null> {
   let rows = get().rows
+  /* This write's listing is newer than anything a read started before it can
+     answer with, and it is a probe, so those reads are stale the moment it
+     lands. The same mark orders the menus this page read itself (see
+     `freshMenus`): a handshake that answered before this started is not fresher
+     than the listing fetched after it. */
+  const seq = ++reads
   let failedWith: Refused | null = null
   /* A rename moves the open sheet, but only once the rows that carry the new
      name are here: the sheet is resolved by looking the name up in rows, so
@@ -382,12 +421,17 @@ export async function run(
     rows = await source().load(true).catch(() => get().rows)
   }
   landed = gen
-  const next: Partial<ExtAgentsState> = { rows, epoch: get().epoch + 1 }
+  const next: Partial<ExtAgentsState> = { rows: keepingFreshMenus(rows, seq), epoch: get().epoch + 1 }
   if (renamed && get().sheet === row?.name) next.sheet = renamed
   /* The row now holds the model, so the waiting pick has done its job. Left
      behind, it came back when the member was disconnected and folded into the
      card again, long after the row had moved off that model. */
   if (!failedWith && op === 'connect' && row && get().picked[row.name]) next.picked = without(get().picked, row.name)
+  /* Every write ends on a probe listing, and a Test is that measurement: the
+     menu note from an earlier failed read is about a row this has just
+     re-measured, so it goes with it. Only on success -- a refused write says
+     nothing about the menu. */
+  if (failedWith === null && row) next.menusFailed = without(get().menusFailed, row.name)
   set(next)
   if (get().sheet && !rows.some((x) => x.name === get().sheet)) closeSheet()
   watchBuilds(rows)
@@ -541,6 +585,9 @@ export async function refreshMenus(row: ExtAgentRow, opts: { force?: boolean } =
   set({ menusBusy: [...get().menusBusy, name], menusFailed: without(get().menusFailed, name) })
   try {
     const got = await source().refreshMenus(row, !!opts.force)
+    /* The patch below stands until a listing that started after it lands; one
+       already in flight carries the menu as it stood before this answered. */
+    freshMenus.set(name, { atRead: reads, models: got.models, efforts: got.effortChoices })
     set({
       rows: get().rows.map((r) =>
         r.name === name ? { ...r, model_choices: got.models, effort_choices: got.effortChoices } : r,

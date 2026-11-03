@@ -500,7 +500,7 @@ describe('the model menu re-read', () => {
     expect(toastWriter.items).toEqual([])
   })
 
-  it('drops a second press while the first read is in flight, and forwards force', async () => {
+  it('drops a second press while the first read is in flight', async () => {
     let release: () => void = () => {}
     const gate = new Promise<void>((resolve) => { release = resolve })
     const { calls, rows } = readeable(async () => {
@@ -517,6 +517,89 @@ describe('the model menu re-read', () => {
     await Promise.all([first, second])
 
     expect(calls).toEqual([['claude_code', false]])
+  })
+
+  /* The refresh control means the menu itself moved, so that press has to reach
+     the source even though a read of the same row finished moments ago. */
+  it('forwards a press of the refresh control', async () => {
+    const { calls, rows } = readeable(async () => ({ ok: true, detail: '', models: [], effortChoices: [] }))
+    const target = row()
+    rows[0] = target
+    store.set({ rows })
+
+    await store.refreshMenus(target)
+    await store.refreshMenus(target, { force: true })
+
+    expect(calls).toEqual([
+      ['claude_code', false],
+      ['claude_code', true],
+    ])
+  })
+
+  /* A listing that started before the handshake answered carries the menu as it
+     stood then. Painting it over the row drops the menu the reader's picker is
+     open on, with no note and nothing to re-apply it. */
+  it('keeps the menu it just read when a listing that started earlier lands', async () => {
+    const fresh = { value: 'profile:x', name: 'own key', group: 'Own key' }
+    const stale = { value: 'old', name: 'old', group: 'Mirasim' }
+    let releaseLoad: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { releaseLoad = resolve })
+    const rows = [row({ model_choices: [stale] }), row({ name: 'codex' })]
+    setSources({
+      extAgents: {
+        ...offMachine,
+        load: async () => {
+          await gate
+          return rows
+        },
+        act: async () => rows,
+        refreshMenus: async () => ({ ok: true, detail: '', models: [fresh], effortChoices: [] }),
+      },
+    })
+    store.set({ rows: [rows[0]!] })
+
+    const opening = store.load(true)
+    await store.refreshMenus(rows[0]!)
+    expect(store.get().rows[0]!.model_choices).toEqual([fresh])
+
+    releaseLoad()
+    await opening
+
+    expect(store.get().rows[0]!.model_choices).toEqual([fresh])
+    expect(store.get().rows.map((r) => r.name)).toEqual(['claude_code', 'codex'])
+  })
+})
+
+describe('a menu read that failed', () => {
+  it('drops its note once the row is measured again', async () => {
+    const rows = [row(), row({ name: 'codex' })]
+    let listed = 0
+    setSources({
+      extAgents: {
+        ...offMachine,
+        load: async () => {
+          listed += 1
+          return rows
+        },
+        act: async () => rows,
+        refreshMenus: async () => ({ ok: false, detail: 'the host is down', models: [], effortChoices: [] }),
+      },
+    })
+    store.set({ rows })
+
+    await store.refreshMenus(rows[0]!)
+    expect(store.get().menusFailed.claude_code).toBe('the host is down')
+
+    /* The sheet's re-check re-lists with a probe, which measures the row again. */
+    await store.load(true)
+    expect(store.get().menusFailed).toEqual({})
+    expect(listed).toBe(1)
+
+    /* And a Test does, through the write path. */
+    await store.refreshMenus(rows[0]!)
+    expect(store.get().menusFailed.claude_code).toBe('the host is down')
+    await store.runTest(rows[0]!)
+    expect(store.get().menusFailed).toEqual({})
   })
 })
 
