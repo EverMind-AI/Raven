@@ -1558,6 +1558,74 @@ async def test_forgetting_a_named_source_card_keeps_the_nodes_own_status(
     assert current["attemptAgents"] == ["alpha", "beta", "alpha"]
 
 
+async def test_same_handle_moves_keep_only_the_graph_named_source(_isolated_registry: Any, tmp_path: Path) -> None:
+    """alpha/shared -> beta/shared -> gamma/shared: one source card, not two.
+
+    The handle is the same at every hop, so identity has to include the agent;
+    otherwise the node-created beta/shared link masquerades as the graph-named
+    source, and forgetting either old card deletes the current status row.
+    """
+    from raven.agent.subagent.history import dag_root
+
+    RUN = "20261103T090000000000Z-abcdef14"
+    session_dir = tmp_path / "sessions" / "s1"
+    run_dir = dag_root(session_dir) / RUN
+    run_dir.mkdir(parents=True)
+    (run_dir / "graph.json").write_text(
+        json.dumps(
+            {
+                "task_summary": "same handle",
+                "nodes": [{"id": "fix", "subagent": "alpha", "instance": "shared"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = _FakeManager()
+    manager.session_dirs["s1"] = session_dir
+    await _isolated_registry.upsert_dag_node("s1", RUN, "fix", "alpha", "exception")
+    await _isolated_registry.link_dag_node("s1", "alpha", "shared", RUN, "fix")
+    await _isolated_registry.move_dag_node(
+        "s1",
+        run_id=RUN,
+        node_id="fix",
+        old_agent="alpha",
+        new_agent="beta",
+        status="running",
+        instance="shared",
+        instance_auto=False,
+        attempt_agents=["alpha", "beta"],
+    )
+    await _isolated_registry.link_dag_node("s1", "beta", "shared", RUN, "fix")
+    await _isolated_registry.move_dag_node(
+        "s1",
+        run_id=RUN,
+        node_id="fix",
+        old_agent="beta",
+        new_agent="gamma",
+        status="completed",
+        instance="shared",
+        instance_auto=False,
+        attempt_agents=["alpha", "beta", "gamma"],
+    )
+    await _isolated_registry.link_dag_node("s1", "gamma", "shared", RUN, "fix")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(manager)))
+    assert {(r["agent"], r["handle"]) for r in out["instances"]} == {
+        ("gamma", "shared"),
+        ("alpha", "shared"),
+    }
+
+    forgotten = await instances_forget(
+        {"session_key": "s1", "agent": "alpha", "handle": "shared"},
+        agent_loop_factory=_factory(_FakeLoop(manager)),
+    )
+    assert forgotten["removed"] is True
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(manager)))
+    current = next(r for r in out["instances"] if (r["agent"], r["handle"]) == ("gamma", "shared"))
+    assert current["status"] == "completed"
+    assert current["attemptAgents"] == ["alpha", "beta", "gamma"]
+
+
 async def test_a_moved_stateless_node_reads_back_as_one_row_of_its_new_agent(_isolated_registry: Any) -> None:
     """With no linked row to wear, a moved node is listed as its own row -- under
     the agent that last ran it, not the one the graph named."""

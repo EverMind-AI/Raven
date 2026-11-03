@@ -13440,6 +13440,7 @@ async def _run_graph(
     state_for: Any = None,
     session_key: str | None = None,
     cancel: asyncio.Event | None = None,
+    adjudication_timeout_s: float = 5,
 ) -> DagRunResult:
     """Run one graph through the real scheduler with a per-run assignment record."""
     spec = parse_dag_spec({"task_summary": "graph under test", "nodes": nodes})
@@ -13462,7 +13463,7 @@ async def _run_graph(
         announce_exception=announce,
         max_continuations=max_continuations,
         origin=_TEST_ORIGIN,
-        adjudication_timeout_s=5,
+        adjudication_timeout_s=adjudication_timeout_s,
         semaphore=semaphore,
         progress_publisher=publisher,
         cancel=cancel,
@@ -15056,6 +15057,112 @@ async def test_a_move_refused_at_install_fails_its_dependents_on_the_same_pass(t
     assert files["b"]["status"] == "skipped", "a dependent of an install-refused node is not left pending"
     assert ("a", "failed") in frames, "the scheduler's failure is announced in-run"
     assert ("b", "skipped") in frames, "and so is the dependent it skipped"
+
+
+async def test_a_timed_out_node_announces_its_failure_and_cascades_on_the_same_pass(tmp_path: Path) -> None:
+    """The idle wait's failure is published where it happens.
+
+    The loop's own sweep publishes skipped/cancelled/not_executed, not failed,
+    so without the helper a timed-out node's failed frame never leaves the
+    runner. Its dependent is cascaded here as well.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    frames: list[tuple[str, str]] = []
+
+    async def _capture(name: str, payload: dict) -> None:
+        if name == "dag_node_updated":
+            frames.append((payload["node"], payload["status"]))
+
+    async def _judge(*, node, **_kwargs):
+        return Verdict(accomplished=False, what_is_missing="a parser")
+
+    async def _announce(run_id, node_id, report, origin, *, awaiting_decision, informational=False, output=None):
+        return None  # nobody answers; the wait must time out
+
+    nodes = [
+        {"id": "a", "subagent": "alpha", "node_summary": "do a", "prompt_template": "do a"},
+        {
+            "id": "b",
+            "subagent": "alpha",
+            "node_summary": "needs a",
+            "prompt_template": "do b",
+            "depends_on": ["a"],
+        },
+    ]
+    result = await _run_graph(
+        tmp_path,
+        nodes,
+        {"alpha": _FakeExec()},
+        state=ReassignmentState(),
+        desk=AdjudicationDesk(),
+        judge=_judge,
+        announce=_announce,
+        publisher=_capture,
+        adjudication_timeout_s=0.05,
+    )
+
+    files = {entry["node"]: entry for entry in result.files}
+    assert files["a"]["status"] == "failed"
+    assert files["b"]["status"] == "skipped"
+    assert ("a", "failed") in frames, "the timed-out node's failure is announced in-run"
+    assert ("b", "skipped") in frames, "and so is the dependent it skipped"
+
+
+async def test_the_scheduler_publishes_only_the_failures_it_owns() -> None:
+    """`only` keeps a node `_run_node` already announced from a second frame.
+
+    The sweep's states include no `failed` normally; when a caller widens it to
+    the nodes it failed itself, the filter is what keeps `_run_node`'s own
+    announcements from being repeated.
+    """
+    from raven.agent.subagent.dag_graph import DagNodeSpec
+    from raven.agent.subagent.dag_runner import BranchState, _publish_terminal
+
+    frames: list[tuple[str, str]] = []
+
+    async def _capture(name: str, payload: dict) -> None:
+        if name == "dag_node_updated":
+            frames.append((payload["node"], payload["status"]))
+
+    by_id = {
+        nid: DagNodeSpec(id=nid, subagent="alpha", node_summary="n", prompt_template="p")
+        for nid in ("own", "scheduler")
+    }
+    await _publish_terminal(
+        ("failed",),
+        status={"own": "failed", "scheduler": "failed"},
+        branch=BranchState(guards={}, skippable=frozenset()),
+        published_terminal=set(),
+        node_started_at={},
+        node_ended_at={},
+        by_id=by_id,
+        session_key=None,
+        run_id="r",
+        progress_publisher=_capture,
+        state=None,
+        only={"scheduler"},
+    )
+
+    assert frames == [("scheduler", "failed")]
+
+
+async def test_an_unopened_desk_node_is_recorded_for_the_same_pass_announce() -> None:
+    """The preamble fails a node no desk will ever answer; the caller must see it."""
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_runner import _await_adjudications
+
+    desk = AdjudicationDesk()
+    status = {"a": "exception"}
+    errors: dict[str, str] = {}
+    failed: set[str] = set()
+
+    await _await_adjudications(desk, status, errors, {}, timeout_s=1, cancel=None, failed=failed)
+
+    assert status == {"a": "failed"}
+    assert "No adjudication was ever opened" in errors["a"]
+    assert failed == {"a"}
 
 
 async def test_an_incomplete_instance_log_is_announced_without_changing_the_seed(tmp_path: Path) -> None:

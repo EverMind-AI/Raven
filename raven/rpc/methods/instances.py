@@ -122,12 +122,21 @@ def _current_row(node: dict[str, Any], candidates: list[dict[str, Any]]) -> dict
     return same_agent[0] if same_agent else node
 
 
-def _named_instance(node: dict[str, Any], session_dir: Path | None) -> set[str]:
-    """The handle the graph named for this node, when it named one.
+def _row_identity(row: dict[str, Any]) -> tuple[Any, Any]:
+    """A row's addressable identity: agent and handle, canonicalized on the agent."""
+    agent = row.get("agent")
+    return (canonical_agent_name(agent) if isinstance(agent, str) else agent, row.get("handle"))
+
+
+def _named_instance(node: dict[str, Any], session_dir: Path | None) -> set[tuple[str, str]]:
+    """The ``(agent, handle)`` pair the graph named for this node, when it named one.
 
     Read from ``graph.json`` rather than the registry: the node's current row
     carries the handle its last attempt ran on, not the one the graph submitted,
     and only the graph can say whether an older link predates the node's visit.
+    Both components matter: a named handle carried across agents leaves one row
+    per agent, and only the submitted agent's row is the conversation the graph
+    named.
     """
     run_id, node_id = node.get("runId"), node.get("nodeId")
     if session_dir is None or not isinstance(run_id, str) or not isinstance(node_id, str):
@@ -136,7 +145,10 @@ def _named_instance(node: dict[str, Any], session_dir: Path | None) -> set[str]:
     for entry in graph.get("nodes") or []:
         if isinstance(entry, dict) and entry.get("id") == node_id:
             instance = entry.get("instance")
-            return {instance} if isinstance(instance, str) and instance else set()
+            agent = entry.get("subagent")
+            if isinstance(instance, str) and instance and isinstance(agent, str) and agent:
+                return {(canonical_agent_name(agent), instance)}
+            return set()
     return set()
 
 
@@ -210,20 +222,23 @@ def _collapse_dag_rows(rows: list[dict[str, Any]], session_dir: Path | None = No
         current = _current_row(node, candidates)
         current_by_key[key] = current
         out.append(_reported(row=current, node=node))
-        emitted.add((current.get("agent"), current.get("handle")))
+        emitted.add(_row_identity(current))
     # A named source handle is a conversation of its own: the graph named it
     # before this node ran there, so moving the node away neither folds it into
-    # the destination's card nor takes it off the list. A minted old handle
-    # stays folded -- it exists only because this node ran on it.
+    # the destination's card nor takes it off the list. Identity is the
+    # (agent, handle) pair, because a named handle carried across agents leaves
+    # one row per agent and only the submitted agent's row is the one the graph
+    # named. A minted old handle stays folded -- it exists only because this
+    # node ran on it.
     for key, candidates in linked.items():
         named = _named_instance(by_node[key], session_dir)
         if not named:
             continue
         current = current_by_key[key]
         for row in candidates:
-            if row is current or row.get("handle") not in named:
+            identity = _row_identity(row)
+            if row is current or identity not in named:
                 continue
-            identity = (row.get("agent"), row.get("handle"))
             if identity in emitted:
                 continue
             emitted.add(identity)
@@ -737,8 +752,16 @@ def _paired_handle(rows: list[dict[str, Any]], agent: str, handle: str, session_
         )
         # A source row the collapse kept as its own card is not the node's
         # paired row: forgetting that conversation must not take the node's
-        # status record with it. Only the handle the node ended on is paired.
-        if node is not None and "attemptAgents" in node and node.get("nodeInstance") != handle:
+        # status record with it. The current identity is the (agent, handle)
+        # pair, not the handle alone: a named handle carried across agents
+        # leaves an old link under every agent that ran the node.
+        node_agent = node.get("agent") if node is not None else None
+        if (
+            node is not None
+            and "attemptAgents" in node
+            and isinstance(node_agent, str)
+            and (canonical_agent_name(node_agent), node.get("nodeInstance")) != _row_identity(row)
+        ):
             return None
         paired = f"{run_id}/{node_id}"
         return None if paired == handle else paired
