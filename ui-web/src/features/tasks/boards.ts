@@ -104,11 +104,23 @@ let open = false
 let pageTimer: ReturnType<typeof setInterval> | null = null
 let badgeTimer: ReturnType<typeof setInterval> | null = null
 
+/* Every read is numbered as it is asked for, and a board the reader's own write
+   came back with is numbered as it lands. The cards and each conversation's thread
+   keep the number of what they drew, and an answer below it -- an older poll, the
+   read before a switch of the completed filter -- describes the state before it
+   and is dropped. */
+let asked = 0
+let cardsDrawn = 0
+const threadDrawn = new Map<string, number>()
+
 export async function refresh(): Promise<void> {
   const ask = sources.tasks?.boards
   if (!ask) return
+  const mine = ++asked
   try {
     const got = await ask(store.get().showCompleted)
+    if (mine < cardsDrawn) return
+    cardsDrawn = mine
     store.set((s) => ({
       ...s,
       cards: got.cards,
@@ -118,7 +130,7 @@ export async function refresh(): Promise<void> {
       loaded: true,
     }))
   } catch {
-    store.set((s) => ({ ...s, error: true }))
+    if (mine > cardsDrawn) store.set((s) => ({ ...s, error: true }))
     return
   }
   /* The badge's poll wants the count alone: unfolded cards are read again
@@ -134,15 +146,18 @@ function unfoldedSessions(): string[] {
 async function readThread(sessionKey: string): Promise<void> {
   const src = sources.tasks
   if (!src?.board) return
+  const mine = ++asked
   try {
     const [got, rows] = await Promise.all([src.board(sessionKey), src.list(sessionKey)])
-    keepThread(sessionKey, got, rows)
+    keepThread(sessionKey, got, mine, rows)
   } catch {
     /* The thread drawn stays; the open page's next refresh asks again. */
   }
 }
 
-function keepThread(sessionKey: string, got: TasksBoardResult, rows?: TaskRow[]): void {
+function keepThread(sessionKey: string, got: TasksBoardResult, mine: number, rows?: TaskRow[]): void {
+  if (mine < (threadDrawn.get(sessionKey) ?? 0)) return
+  threadDrawn.set(sessionKey, mine)
   store.set((s) => ({
     ...s,
     threads: {
@@ -166,7 +181,7 @@ export function toggleCard(card: TaskBoardCard): void {
    card's thread now, the sidebar's too when that conversation is the one open
    there, and the cards are read again for where the group stands. */
 async function adopt(sessionKey: string, got: TasksBoardResult): Promise<void> {
-  keepThread(sessionKey, got)
+  keepThread(sessionKey, got, ++asked)
   tasks.onBoardUpdated({ session_key: sessionKey, board: got.board, lineage: got.lineage })
   await refresh()
 }

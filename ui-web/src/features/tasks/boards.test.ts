@@ -225,4 +225,42 @@ describe('the task board page store', () => {
     expect(boards.get().threads['web:a']!.rows).toEqual(ROWS)
     expect(calls).toHaveLength(2)
   })
+
+  it('an older poll that lands after a newer answer does not put its cards back', async () => {
+    let releaseOld: (v: TasksBoardsResult) => void = () => {}
+    const src = source()
+    let first = true
+    src.boards = (includeCompleted) => {
+      calls.push(includeCompleted)
+      if (!first) return Promise.resolve(answer([card('g_new')]))
+      first = false
+      return new Promise((resolve) => { releaseOld = resolve })
+    }
+    setSources({ tasks: src })
+
+    const older = boards.refresh()
+    await boards.refresh()
+    releaseOld(answer([card('g_old')]))
+    await older
+
+    expect(boards.get().cards.map((c) => c.group_id)).toEqual(['g_new'])
+  })
+
+  it('a thread read asked for before the reader s write does not undo it', async () => {
+    let releaseOld: (b: TaskBoard) => void = () => {}
+    const src = source()
+    src.board = (key) => {
+      boardCalls.push(key)
+      return new Promise((resolve) => { releaseOld = (b) => resolve({ board: b, lineage: {} }) })
+    }
+    setSources({ tasks: src })
+    boards.toggleCard(card('g1'))
+    await vi.advanceTimersByTimeAsync(0)
+
+    await boards.ignoreQuestion('web:a', 'g1', 's1', 'Which fix?')
+    releaseOld(asked(['Which fix?']))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(boards.get().threads['web:a']!.board.groups[0]!.steps[0]!.questions).toEqual([])
+  })
 })

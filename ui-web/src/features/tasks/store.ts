@@ -17,7 +17,7 @@ import * as live from './live'
 import type { WsChange } from '../workspace/types'
 import type {
   ProgressStep, TaskBoard, TaskFile, TaskGroup, TaskKind, TaskLinkRef, TaskNode, TaskRow,
-  TasksBoardUpdatedPayload, TasksSource,
+  TasksBoardResult, TasksBoardUpdatedPayload, TasksSource,
 } from './types'
 
 export interface TasksState {
@@ -89,6 +89,12 @@ export function reset(): void {
      asked for exists. Each names its own conversation. */
   store.set({ ...initial, focus: store.get().focus, moveOn: store.get().moveOn })
   rechecked.clear()
+  checking.clear()
+  boardFailed = false
+  /* A board read still out was asked for the conversation being left, and the
+     switch resets this store before it moves the pointer: by the session guard
+     alone, that answer would still be taken for this one's. */
+  boardShown = ++boardAsked
   /* The stamps go with the rows they were about. Left behind they would only
      waste room -- the tick is monotonic, so an entry from the conversation
      just left can never out-rank a read taken in the one arrived at. */
@@ -113,20 +119,44 @@ export function clearFocus(): void {
 
 /* ── the task board ─────────────────────────────────────────────────────── */
 
+/* Every board read is numbered as it is asked for, and the board on screen keeps
+   the number it came with; the event every write sends is numbered as it lands.
+   A read that answers below the board on screen describes the board before it,
+   and is dropped: a board is replaced whole, so unlike the rows there is nothing
+   to merge. */
+let boardAsked = 0
+let boardShown = 0
+/* The last read failed: the next change to the Tasks asks again (`noticeUnplaced`),
+   since the panel's own effect runs once per load. */
+let boardFailed = false
+
+function showBoard(n: number, board: TaskBoard | null, lineage: Record<string, string> | undefined): void {
+  boardShown = n
+  boardFailed = false
+  patch({ board, lineage: lineage || {}, boardLoaded: true })
+}
+
 /* Asked for one conversation, answered into whichever is open now: the same
-   guard `refresh` keeps, for the same reason. */
-export async function refreshBoard(): Promise<void> {
+   guard `refresh` keeps, for the same reason. False when the read failed. */
+export async function refreshBoard(): Promise<boolean> {
   const src = source()
   const key = sessionCurrent()
-  if (!src?.board || !key) { patch({ board: null, lineage: {}, boardLoaded: true }); return }
-  const got = await src.board(key)
-  if (key !== sessionCurrent()) return
-  patch({ board: got.board, lineage: got.lineage || {}, boardLoaded: true })
+  const n = ++boardAsked
+  if (!src?.board || !key) { showBoard(n, null, {}); return true }
+  let got: TasksBoardResult
+  try {
+    got = await src.board(key)
+  } catch {
+    if (key === sessionCurrent() && n > boardShown) boardFailed = true
+    return false
+  }
+  if (key === sessionCurrent() && n > boardShown) showBoard(n, got.board, got.lineage)
+  return true
 }
 
 export function onBoardUpdated(p: TasksBoardUpdatedPayload): void {
   if (p.session_key !== sessionCurrent()) return
-  patch({ board: p.board, lineage: p.lineage || {}, boardLoaded: true })
+  showBoard(++boardAsked, p.board, p.lineage)
 }
 
 /* What Answer puts in the composer for a group that needs the reader: the
@@ -241,18 +271,31 @@ export function unplacedRows(list: TaskRow[], board: TaskBoard | null, lineage: 
 }
 
 /* A dag row nothing places may be a stint round or a replan's successor the
-   board's lineage was read without: the board is re-read once per such row. */
+   board's lineage was read without: the board is re-read once per such row, once
+   a read has answered for it -- one that failed leaves the row to ask about again.
+   A row whose read is still out is not asked about twice. */
 const rechecked = new Set<string>()
+const checking = new Set<string>()
 
 export async function noticeUnplaced(): Promise<void> {
   const s = store.get()
   const key = sessionCurrent()
-  if (!s.boardLoaded || !key) return
+  if (!key) return
+  if (!s.boardLoaded) {
+    if (boardFailed) { boardFailed = false; await refreshBoard() }
+    return
+  }
   const fresh = unplacedRows(s.rows, s.board, s.lineage)
-    .filter((r) => r.kind === 'dag' && !rechecked.has(`${key}|${rowKey(r)}`))
+    .filter((r) => r.kind === 'dag')
+    .map((r) => `${key}|${rowKey(r)}`)
+    .filter((k) => !rechecked.has(k) && !checking.has(k))
   if (!fresh.length) return
-  for (const r of fresh) rechecked.add(`${key}|${rowKey(r)}`)
-  await refreshBoard()
+  for (const k of fresh) checking.add(k)
+  const read = await refreshBoard()
+  for (const k of fresh) {
+    checking.delete(k)
+    if (read) rechecked.add(k)
+  }
 }
 
 export const rowKey = (row: TaskRow): string => `${row.kind}:${row.id}`

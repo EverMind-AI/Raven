@@ -133,7 +133,10 @@ conversations' `tasks.board_updated`. It asks `tasks.boards` when it opens, agai
 seconds while it is the visible page (no polling when it is hidden or another page is open),
 and at once on a `tasks.board_updated` it does receive. The rail badge reads
 `needs_you_count` from the same answer; while the page is not visible, the badge alone asks
-again every 60 seconds (my call).
+again every 60 seconds (my call). Each answer is numbered when it is asked for, and the board a
+reader's write comes back with when it lands; an answer numbered below the cards or the thread
+on screen describes the state before them and is dropped, so an older poll never puts back
+what a newer answer or the reader's own write showed.
 
 ### 5.4 Where it lives in the page
 

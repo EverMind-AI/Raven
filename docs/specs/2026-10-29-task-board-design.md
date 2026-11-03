@@ -516,7 +516,11 @@ switched off -- draws the old flat list itself, so nothing about it changes.
 
 5.6 **Live.** `state/session/stages.ts` arms `tasks.board_updated` the way it arms
 `subagent.status`, replacing the open session's board; switching session or reconnecting
-re-reads `tasks.board`.
+re-reads `tasks.board`. A read answers with the board as it stood when it was asked, so it is
+dropped once a board asked for or sent after it is on screen -- the event every write sends,
+a later read -- and a switch drops the reads still out, since it resets the store before the
+open session changes. A read that fails leaves the board unloaded, and the next change to the
+session's Tasks asks again.
 
 Strings go through both catalogs (`ui-web/src/i18n/`); styles stay under the domain's `tk`
 prefix and the page's existing colour variables (`--amber`, `--sky`, `--moss`, `--clay`,

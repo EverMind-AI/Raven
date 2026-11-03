@@ -78,6 +78,84 @@ describe('onBoardUpdated', () => {
   })
 })
 
+/* A read answers with the board as it stood when it was asked. One applied since
+   -- the event every write sends, or a read asked for later -- is newer, and stands. */
+describe('reads in flight', () => {
+  function held(): { release: (b: TaskBoard) => void } {
+    const gate = { release: (_b: TaskBoard): void => {} }
+    source.board = (key) => {
+      asked.push(key)
+      return new Promise((resolve) => { gate.release = (b) => resolve({ board: b, lineage: {} }) })
+    }
+    return gate
+  }
+
+  it('keeps the board an event applied while an older read was out', async () => {
+    const gate = held()
+    const pending = store.refreshBoard()
+    store.onBoardUpdated({ session_key: 's1', board: board([group('g_new', 2)]), lineage: {} })
+    gate.release(board([group('g_old', 1)]))
+    await pending
+    expect(store.get().board?.groups.map((g) => g.id)).toEqual(['g_new'])
+  })
+
+  it('keeps the read asked for last, whichever lands last', async () => {
+    const first = held()
+    const older = store.refreshBoard()
+    const second = held()
+    const newer = store.refreshBoard()
+    second.release(board([group('g_new', 2)]))
+    await newer
+    first.release(board([group('g_old', 1)]))
+    await older
+    expect(store.get().board?.groups.map((g) => g.id)).toEqual(['g_new'])
+  })
+
+  it('drops a read the conversation switch reset the store under', async () => {
+    /* The switch resets this store before it moves the pointer, so the read's own
+       session guard still passes when the answer lands. */
+    const gate = held()
+    const pending = store.refreshBoard()
+    store.reset()
+    gate.release(board([group('g_old', 1)]))
+    await pending
+    expect(store.get().board).toBeNull()
+    expect(store.get().boardLoaded).toBe(false)
+  })
+})
+
+describe('a read that fails', () => {
+  const down = async (): Promise<TasksBoardResult> => { throw new Error('gateway down') }
+
+  it('settles, and the board is read again on the next change to the Tasks', async () => {
+    store.reset()
+    source.board = down
+    await expect(store.refreshBoard()).resolves.toBe(false)
+    expect(store.get().boardLoaded).toBe(false)
+
+    answers.s1 = { board: board([group('g_1', 1)]), lineage: {} }
+    source.board = async (key) => { asked.push(key); return answers[key]! }
+    store.set({ ...store.get(), rows: [row('spawn', 'n1')] })
+    await store.noticeUnplaced()
+    expect(asked).toEqual(['s1'])
+    expect(store.get().board?.groups.map((g) => g.id)).toEqual(['g_1'])
+  })
+
+  it('does not count a row as rechecked when the read for it failed', async () => {
+    store.reset()
+    answers.s1 = { board: board([]), lineage: {} }
+    await store.refreshBoard()
+    store.set({ ...store.get(), rows: [row('dag', 'RUN_LATE')] })
+    source.board = down
+    await store.noticeUnplaced()
+
+    source.board = async (key) => { asked.push(key); return answers[key]! }
+    asked = []
+    await store.noticeUnplaced()
+    expect(asked).toEqual(['s1'])
+  })
+})
+
 describe('ordering', () => {
   it('orders open and completed groups by created_at, newest first', () => {
     const b = board([group('a', 1), group('b', 3, 'completed'), group('c', 2, 'needs_you'), group('d', 4, 'completed')])
