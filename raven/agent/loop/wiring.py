@@ -523,23 +523,31 @@ class WiringMixin:
 
         return held(_EFFORT_KEY, lambda: reasoning_effort(self._live_config))
 
-    def session_reasoning_effort(self, session_key: str | None, pick: str | None = None) -> str | None:
+    def session_reasoning_effort(
+        self,
+        session_key: str | None,
+        pick: str | None = None,
+        model: str | None = None,
+    ) -> str | None:
         """The reasoning effort this session's own calls run at, short of a hook's override.
 
         ``session_effort.in_force`` over this loop's inputs: the pick the caller
         read off the session's record, the session's mode's word, and the
-        configured default as the file has it now. The session's model then
-        bounds the answer (``session_effort.clamp``): a level it does not
-        declare, by LiteLLM's table or its provider overlay, is dropped to None
-        rather than sent. Beside ``session_tier`` for the reason it gives -- the
-        turn and the RPC need the one rule, and the policy it reads lives here
-        -- and reached on ``self`` by the turn, so nothing imports anything new.
+        configured default as the file has it now. ``model`` is the id the loop
+        was handed for this turn -- the router's pick when it made one, else the
+        session's own -- and bounds the answer (``session_effort.clamp``) for the
+        calls that will actually carry it; without one, the session's binding,
+        else the default. A level the called model does not declare, by LiteLLM's
+        table or its provider overlay, is dropped to None rather than sent.
+        Beside ``session_tier`` for the reason it gives -- the turn and the RPC
+        need the one rule, and the policy it reads lives here -- and reached on
+        ``self`` by the turn, so nothing imports anything new.
         """
         from raven.agent import session_effort
         from raven.providers.overlay import declared_efforts, overlay_for
         from raven.providers.registry import canonical_provider_name, find_by_model, split_model_id
 
-        model_id = (
+        model_id = model or (
             self.session_model(session_key) if session_key and self.has_session_binding(session_key) else self.model
         )
         value = session_effort.in_force(
