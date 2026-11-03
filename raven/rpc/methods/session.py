@@ -1678,9 +1678,9 @@ async def session_set_effort(
     spell the words itself. A draft names its model, since it has no session
     record to read one from.
 
-    A report reads the account catalogue's cache; only an explicit set or
-    clear refreshes it, and that refresh runs off the event loop, so a UI read
-    never blocks on the network.
+    A report reads the account catalogue's cache; only an explicit set
+    refreshes it -- a clear needs no word to validate -- and that refresh runs
+    off the event loop, so a UI read never blocks on the network.
     """
     session_key = str(params.get("session_key") or "")
     raw = params.get("effort")

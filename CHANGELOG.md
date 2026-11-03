@@ -20,8 +20,9 @@ All notable changes to Raven are documented here.
 
 - The reasoning effort can be set **per conversation**: the *Reasoning
   effort* row of the WebUI's model picker, beside the sub-agent tier, and
-  `/effort <minimal|low|medium|high|default>` in the TUI (`/effort` alone
-  reports, `default` returns to the global setting). The pick outranks
+  `/effort <word>` in the TUI (`/effort` alone reports, `default` returns to
+  the global setting; the words are the ones the current model declares). The
+  pick outranks
   `agents.defaults.reasoningEffort` and the conversation's mode, is kept on the
   conversation's own record so it survives a gateway restart and comes back on
   resume, lands on the next turn, and moves Raven's own model calls only.
