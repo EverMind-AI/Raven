@@ -3,7 +3,10 @@ or the Codex account catalogue.
 
 LiteLLM's table is read offline from ``import_litellm().model_cost``;
 ``get_model_info`` is deliberately not used because it may query a provider's
-endpoint. The Codex account catalogue is the one provider-owned source: its
+endpoint. LiteLLM's model-name resolver is asked about bare ids only: it
+resolves the provider through ``get_llm_provider``, which for LiteLLM's OAuth
+spellings (``github_copilot/``, ``chatgpt/``) starts an interactive login, and
+a prefixed id already names its provider. The Codex account catalogue is the one provider-owned source: its
 ``supported_reasoning_levels`` are the account's own declaration for models no
 static table carries. It is network data, so the turn reads only the cache
 ``codex_catalog`` keeps; ``refresh`` lets the RPC warm that cache. A level the
@@ -23,8 +26,11 @@ opt-in. ``none`` is ignored: Raven's None means "provider default", not
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterator
 from functools import lru_cache
 from typing import Any, Sequence
+
+from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
 
 #: The per-level flags, in the order the derivation asks about them.
 EFFORT_FLAGS = (
@@ -34,8 +40,9 @@ EFFORT_FLAGS = (
     "supports_max_reasoning_effort",
 )
 
-#: The public order, least first. A declared overlay is normalized to it.
-LEVEL_ORDER = ("minimal", "low", "medium", "high", "xhigh", "max")
+#: The public order, least first. A declared overlay is normalized to it, and
+#: the ladder is the only place the words are stated.
+LEVEL_ORDER: tuple[str, ...] = tuple(reversed(REASONING_EFFORT_LADDER))
 
 
 def levels_for(model: str, declared: Sequence[str] = (), *, refresh: bool = False) -> tuple[str, ...] | None:
@@ -99,8 +106,17 @@ def _index() -> tuple[dict[str, dict[str, Any]], dict[str, tuple[tuple[str, dict
     return table, {key: tuple(rows) for key, rows in by_name.items()}
 
 
-def _candidates(model: str) -> list[tuple[str, bool]]:
-    """Table keys to try, each with whether a bare key needs provider agreement."""
+def _candidates(model: str) -> Iterator[tuple[str, bool]]:
+    """Table keys to try, each with whether a bare key needs provider agreement.
+
+    A generator on purpose: ``_route_row`` stops at the first key that matches,
+    so LiteLLM's name resolver is never asked about a model Raven's own
+    spellings already found. That resolver calls ``get_llm_provider``, which
+    starts an interactive login for LiteLLM's OAuth spellings
+    (``github_copilot/``, ``chatgpt/``) -- and this runs on the turn's thread.
+    A prefixed id already names its provider, so the resolver is left to bare
+    ids, where the provider lookup is a table read.
+    """
     from raven.providers.registry import metadata_model_id, split_model_id
 
     provider, rest = split_model_id(model)
@@ -115,6 +131,17 @@ def _candidates(model: str) -> list[tuple[str, bool]]:
 
     for candidate in metadata_candidates(model):
         out.append((candidate, "/" not in candidate))
+
+    seen: set[str] = set()
+    for candidate, needs_agreement in out:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        yield candidate, needs_agreement
+
+    if provider:
+        return
+
     try:
         from litellm.utils import _get_potential_model_names
 
@@ -126,18 +153,11 @@ def _candidates(model: str) -> list[tuple[str, bool]]:
             "split_model",
         ):
             value = names.get(name)
-            if isinstance(value, str) and value:
-                out.append((value, "/" not in value))
+            if isinstance(value, str) and value and value not in seen:
+                seen.add(value)
+                yield value, "/" not in value
     except Exception:
         pass
-    seen: set[str] = set()
-    unique: list[tuple[str, bool]] = []
-    for candidate, needs_agreement in out:
-        if candidate in seen:
-            continue
-        seen.add(candidate)
-        unique.append((candidate, needs_agreement))
-    return unique
 
 
 def _provider_names(provider: str) -> set[str]:

@@ -120,6 +120,42 @@ def test_an_unknown_provider_spelling_still_finds_its_row(table):
     )
 
 
+def test_a_prefixed_model_never_reaches_litellms_provider_resolver(table, monkeypatch):
+    """``get_llm_provider`` starts a device-flow login for LiteLLM's OAuth
+    spellings (``github_copilot/``, ``chatgpt/``); a prefixed id names its
+    provider already, and the turn calls this on its own thread."""
+    table({"github_copilot/gpt-4o": _row()})
+    import litellm.utils as litellm_utils
+
+    calls: list[str] = []
+
+    def record(*, model, custom_llm_provider):
+        calls.append(model)
+        return {}
+
+    monkeypatch.setattr(litellm_utils, "_get_potential_model_names", record)
+    assert effort_levels.levels_for("github_copilot/gpt-4o") == ("minimal", "low", "medium", "high")
+    assert calls == []
+    assert effort_levels.levels_for("github_copilot/not-in-the-table") == ()
+    assert calls == []
+
+
+def test_a_bare_model_still_consults_litellms_resolver(table, monkeypatch):
+    """The resolver's aliases are what a bare id has; only prefixed ids skip it."""
+    table({"gpt-5": _row()})
+    import litellm.utils as litellm_utils
+
+    calls: list[str] = []
+
+    def record(*, model, custom_llm_provider):
+        calls.append(model)
+        return {}
+
+    monkeypatch.setattr(litellm_utils, "_get_potential_model_names", record)
+    assert effort_levels.levels_for("some-bare-model") == ()
+    assert calls == ["some-bare-model"]
+
+
 def test_a_model_with_no_registry_row_uses_its_route_vendor(table):
     table({"zai/glm-5": {**_row(), "litellm_provider": "zai"}})
     assert effort_levels.levels_for("bigmodel/glm-5") == ("minimal", "low", "medium", "high")
