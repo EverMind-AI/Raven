@@ -23,7 +23,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from raven.agent.task_board.store import reset_board
+from raven.agent.task_board.store import copy_board, reset_board
 from raven.cli._log_silence import mute_subsystem_logs_unless_debug
 from raven.config.paths import get_workspace_path
 from raven.session.export import default_export_path, write_transcript
@@ -245,9 +245,10 @@ def session_fork(
 ) -> None:
     """Fork a session into a new diverging copy (fork-at-head).
 
-    Resolves the id/prefix within the cli channel, copies its full history
-    into a fresh session, records the source as the child's parent, and prints
-    the new child id (first line) for use with ``raven agent --session``.
+    Resolves the id/prefix within the cli channel, copies its full history and
+    its task board into a fresh session, records the source as the child's
+    parent, and prints the new child id (first line) for use with
+    ``raven agent --session``.
     """
     manager = _open_manager()
     key = resolve_session(manager, id_or_prefix)
@@ -255,6 +256,7 @@ def session_fork(
     if child is None:
         console.print(f"[red]Cannot fork {id_or_prefix!r}: session is empty or missing[/red]")
         raise typer.Exit(code=1)
+    copy_board(manager.session_dir(key), manager.session_dir(child.key))
 
     child_bare = _bare_id(child.key)
     console.print(child_bare)

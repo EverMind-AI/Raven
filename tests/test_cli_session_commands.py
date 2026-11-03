@@ -366,6 +366,23 @@ def test_fork_prints_child_id(two_sessions: list[str], patched_workspace: Path, 
     assert child.metadata["parent_session_id"] == f"cli:{cid}"
 
 
+def test_fork_copies_the_conversations_task_board(
+    two_sessions: list[str], patched_workspace: Path, manager: SessionManager
+) -> None:
+    """A fork carries its parent's turns, so it carries the board their steps name, as
+    ``session.branch`` does."""
+    cid = two_sessions[0]
+    save_board(manager.session_dir(f"cli:{cid}"), Board([TaskGroup("g_a", "Fix bug A", "", "idle", 1, 1, [])], []))
+
+    r = runner.invoke(session_app, ["fork", cid])
+
+    assert r.exit_code == 0, r.stdout
+    child = r.stdout.strip().splitlines()[0].strip()
+    assert (manager.session_dir(f"cli:{child}") / BOARD_FILENAME).read_bytes() == (
+        manager.session_dir(f"cli:{cid}") / BOARD_FILENAME
+    ).read_bytes()
+
+
 def test_fork_prefix_match(two_sessions: list[str], patched_workspace: Path) -> None:
     cid = two_sessions[0]
     r = runner.invoke(session_app, ["fork", cid[:20]])
