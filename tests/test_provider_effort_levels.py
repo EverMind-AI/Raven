@@ -210,6 +210,41 @@ def test_the_vendors_ladder_follows_the_provider_that_serves_the_call(table):
     assert effort_levels.levels_for("deepseek/deepseek-r1", provider="") == ("low", "high", "max")
 
 
+def test_a_direct_vendor_rows_ladder_does_not_answer_for_a_gateway(table):
+    """A future table row for the direct vendor names its levels. A gateway
+    serving the same id has its own answer, not the vendor's ladder."""
+    table(
+        {
+            "deepseek/deepseek-r1": {
+                "supports_reasoning": True,
+                "litellm_provider": "deepseek",
+                "reasoning_effort_levels": ["low", "high", "max"],
+            }
+        }
+    )
+    assert effort_levels.levels_for("deepseek/deepseek-r1", provider="openrouter") == (
+        "minimal",
+        "low",
+        "medium",
+        "high",
+    )
+    assert effort_levels.levels_for("deepseek/deepseek-r1", provider="deepseek") == ("low", "high", "max")
+
+
+def test_an_explicit_gateway_row_answers_for_itself(table):
+    """The skip is for a row filed under another provider, not for the serving
+    provider's own row."""
+    table(
+        {
+            "openrouter/deepseek/deepseek-r1": {
+                **_row(litellm_provider="openrouter"),
+                "reasoning_effort_levels": ["high"],
+            }
+        }
+    )
+    assert effort_levels.levels_for("openrouter/deepseek/deepseek-r1", provider="openrouter") == ("high",)
+
+
 def test_a_route_rows_own_flag_beats_an_inherited_ladder(table):
     """An inherited list describes the vendor's row; the route's own flag is the
     more specific statement about the API that receives the call."""

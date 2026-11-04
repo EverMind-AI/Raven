@@ -73,8 +73,10 @@ def levels_for(
     instance about to send it. The vendor ladder follows that section rather
     than the model id: a gateway reselling another vendor's model takes the
     gateway's ladder, and a hand-written or older-config id can name a vendor
-    the request never reaches. Empty and ``"auto"`` mean no single section
-    serves the call, and the id answers instead.
+    the request never reaches. A row filed under another provider than the
+    serving section is skipped for the same reason -- its levels and flags
+    describe an API this call does not reach. Empty and ``"auto"`` mean no
+    single section serves the call, and the id answers instead.
 
     ``refresh`` lets an explicit effort set ask the Codex account catalogue,
     off the event loop; the turn and reports leave it false and read the cache
@@ -108,6 +110,16 @@ def levels_for(
         row = authority
     if row is None or row.get("supports_reasoning") is not True:
         return ()
+    serving = _serving_provider(provider)
+    if serving:
+        statements_from = route if route is not None else authority
+        if statements_from is not None and not _row_serves_provider(statements_from, serving):
+            # The only row this id resolves to describes another API. Its
+            # levels and flags are not evidence about the section that will
+            # receive the call: answer from that section's own ladder, or the
+            # flags' defaults when it states none.
+            vendor = _vendor_levels(model, serving)
+            return vendor if vendor else _derive({})
     if route is not None:
         # The route row's own statements describe the API that receives the
         # call. An inherited ladder from the vendor's row must not overrule
@@ -308,6 +320,25 @@ def _states_effort_flag(row: dict[str, Any]) -> bool:
     return any(row.get(flag) is not None for flag in EFFORT_FLAGS)
 
 
+def _serving_provider(provider: str | None) -> str:
+    """The section name when the caller has one, else ``""``."""
+    return provider if provider and provider != "auto" else ""
+
+
+def _row_serves_provider(row: dict[str, Any], provider: str) -> bool:
+    """Whether this row's own level statements describe ``provider``'s API.
+
+    A row that names no ``litellm_provider`` makes no claim to contradict;
+    only a named provider can disagree with the section carrying the request.
+    """
+    from raven.providers.registry import canonical_provider_name
+
+    name = row.get("litellm_provider")
+    if not isinstance(name, str) or not name:
+        return True
+    return canonical_provider_name(name) in _provider_names(provider)
+
+
 def _vendor_levels(model: str, provider: str | None = None) -> tuple[str, ...]:
     """The vendor's own ladder, or () when it states none.
 
@@ -341,12 +372,13 @@ def _vendor_spec(model: str, provider: str | None) -> "ProviderSpec | None":
     """
     from raven.providers.registry import find_by_model, find_by_name, split_model_id
 
-    if provider and provider != "auto":
+    serving = _serving_provider(provider)
+    if serving:
         # The section that carries the request answers, even when it states no
         # ladder: an empty tuple means the caller falls through to the flags,
         # not that the model id's vendor should be borrowed. An unknown section
         # has no spec, and the id is not evidence about an API Raven cannot see.
-        return find_by_name(provider)
+        return find_by_name(serving)
     prefix, _rest = split_model_id(model)
     return find_by_name(prefix) if prefix else find_by_model(model)
 

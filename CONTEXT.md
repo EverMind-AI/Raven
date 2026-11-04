@@ -334,8 +334,8 @@ boot, is never consulted. The pick's words are the levels the conversation's mod
 per-level flags, else the vendor row's `reasoning_effort_levels`, else the flags inherited
 from that row, else the serving provider's `ProviderSpec.reasoning_efforts`, else the flags'
 defaults, with a provider's `model_overlay.reasoningEfforts` over all of them; the serving
-provider is the config's route for the model, not the id's prefix); `session.set_effort`
-offers and validates
+provider is the config's route for the model, not the id's prefix, and a row filed under
+another provider than that section is skipped); `session.set_effort` offers and validates
 exactly those, a model that declares none has no row, and a stored pick the current model
 does not declare is dropped at the turn and in `session.info` (`session_effort.clamp`); the mode's
 word or the configured default then runs, since those two are not narrowed by the model.
