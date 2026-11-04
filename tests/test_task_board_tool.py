@@ -77,6 +77,10 @@ def test_the_description_says_recall_lists_the_questions_still_open(sessions):
     assert "questions" in _tool(sessions).description
 
 
+def test_the_description_names_carry_as_the_post_turn_pass(sessions):
+    assert "carry" in _tool(sessions).description
+
+
 async def test_update_during_a_turn_is_refused(sessions):
     tool = _tool(sessions)
 

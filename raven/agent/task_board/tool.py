@@ -65,7 +65,8 @@ class TaskBoardTool(Tool):
             "This conversation's task board -- one group per matter, one step per turn that moved it -- "
             "kept for you after every turn, so never call action=update. action=recall: alone lists the "
             "groups, with the questions they still wait on; group_id gives one group's thread; query "
-            "finds a matter by its words; include_turns adds each step's turn."
+            "finds a matter by its words; include_turns adds each step's turn. action=carry belongs to "
+            "the after-turn pass; never call it."
         )
 
     @property
