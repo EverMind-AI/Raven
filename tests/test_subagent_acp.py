@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import itertools
 import json
 import os
@@ -9592,3 +9593,139 @@ async def test_a_failed_call_still_records_what_it_left_on_disk(tmp_path: Path) 
         await _feed(col, {"sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "failed"})
 
     assert did.files == [{"path": "partial.txt", "op": "add", "add": 1, "del": 0, "size": 5}]
+
+
+# ---- the launch digest follows an in-place upgrade -------------------------
+
+
+def _legacy_launch_digest(cfg: Any) -> str:
+    """The digest an acp row produced before the launcher's own identity joined it."""
+    from raven.acp_client.capabilities import _LAUNCH_FIELDS, REMOTE_LAUNCH_FIELDS
+
+    payload: dict[str, Any] = {name: getattr(cfg, name, None) for name in _LAUNCH_FIELDS}
+    if getattr(cfg, "lend_keys", None):
+        payload["lend_keys"] = list(cfg.lend_keys)
+    for name in REMOTE_LAUNCH_FIELDS:
+        if getattr(cfg, name, None):
+            payload[name] = getattr(cfg, name)
+    raw = json.dumps(payload, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _installed(path: Path, body: str = "#!/bin/sh\n") -> Path:
+    path.write_text(body, encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def test_the_launch_digest_follows_an_in_place_upgrade(tmp_path: Path) -> None:
+    """An agent upgraded where it stands keeps its command line, so the command
+    alone cannot tell that what it offers may have moved with the build."""
+    exe = _installed(tmp_path / "agent-acp")
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command=str(exe))
+    before = snapshot_fingerprint(cfg)
+
+    stat = exe.stat()
+    os.utime(exe, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+
+    assert snapshot_fingerprint(cfg) != before
+
+
+def test_an_npx_digest_reads_the_pinned_version_not_a_cache_entry() -> None:
+    """An npx command names the version it runs, so an upgrade is a command
+    change and the cache underneath it is not this digest's business."""
+    one = ThirdPartyAcpSubagentConfig(name="a", command="npx -y @scope/agent@1.2.3")
+    same = ThirdPartyAcpSubagentConfig(name="a", command="npx -y @scope/agent@1.2.3")
+    bumped = ThirdPartyAcpSubagentConfig(name="a", command="npx -y @scope/agent@1.2.4")
+
+    assert snapshot_fingerprint(one) == snapshot_fingerprint(same)
+    assert snapshot_fingerprint(bumped) != snapshot_fingerprint(one)
+
+
+def test_a_row_on_another_machine_ignores_this_computers_binaries(tmp_path: Path) -> None:
+    """The agent there is another install: digesting a local file of the same
+    name would make this row's staleness depend on a machine it does not run on."""
+    from raven.config import login_path
+
+    login_path.remember(str(tmp_path))
+    remote = ThirdPartyAcpSubagentConfig(name="a", command="opencode acp", machine="ravenx2")
+    before = snapshot_fingerprint(remote)
+
+    _installed(tmp_path / "opencode")
+
+    assert snapshot_fingerprint(remote) == before
+    assert snapshot_fingerprint(remote) == _legacy_launch_digest(remote)
+
+
+def test_a_local_row_digests_a_binary_that_now_exists(tmp_path: Path) -> None:
+    """The sibling of the test above: for a row that runs here, the file is
+    exactly what has to move the digest -- an install is a new agent."""
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="opencode acp", env={"PATH": str(tmp_path)})
+    before = snapshot_fingerprint(cfg)
+    assert before == _legacy_launch_digest(cfg)
+
+    _installed(tmp_path / "opencode")
+
+    assert snapshot_fingerprint(cfg) != before
+
+
+def test_a_digest_resolves_on_the_login_path_the_launch_uses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row without its own PATH is launched with the login shell's, so the
+    file this digest reads has to be the one that launch would run -- not
+    whichever same-named file raven's own process PATH happens to find."""
+    from raven.acp_client.capabilities import _executable_identity
+    from raven.config import login_path
+
+    login_dir = tmp_path / "login"
+    process_dir = tmp_path / "process"
+    login_dir.mkdir()
+    process_dir.mkdir()
+    _installed(login_dir / "agent-acp", "#!/bin/sh\nexit 0\n")
+    _installed(process_dir / "agent-acp")
+    login_path.remember(str(login_dir))
+    monkeypatch.setenv("PATH", str(process_dir))
+
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="agent-acp acp")
+    on_login_path = ThirdPartyAcpSubagentConfig(name="a", command="agent-acp acp", env={"PATH": str(login_dir)})
+    on_process_path = ThirdPartyAcpSubagentConfig(name="a", command="agent-acp acp", env={"PATH": str(process_dir)})
+
+    assert _executable_identity(cfg) == _executable_identity(on_login_path)
+    assert _executable_identity(cfg) != _executable_identity(on_process_path)
+
+
+def test_a_windows_shim_is_read_where_it_stands(tmp_path: Path) -> None:
+    """A .cmd shim is the file PATH resolves, and this digest reads that file
+    rather than the package entry it names. Following the generated shim is not
+    portable, so the limitation is accepted and pinned here: rewriting the
+    entry behind an untouched shim does not move the digest, and reading the
+    shim never raises."""
+    shim = tmp_path / "agent-acp.cmd"
+    shim.write_text('@echo off\r\nnode "%~dp0\\agent.js" %*\r\n', encoding="utf-8")
+    shim.chmod(0o755)
+    entry = tmp_path / "agent.js"
+    entry.write_text("// v1\n", encoding="utf-8")
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="agent-acp.cmd acp", env={"PATH": str(tmp_path)})
+
+    first = snapshot_fingerprint(cfg)
+
+    assert first == snapshot_fingerprint(cfg)
+    assert first != _legacy_launch_digest(cfg)
+    entry.write_text("// v2, a bigger build\n", encoding="utf-8")
+    assert snapshot_fingerprint(cfg) == first
+
+
+def test_rows_the_launcher_identity_cannot_read_keep_their_old_digest(tmp_path: Path) -> None:
+    """The guarantee that lets this land without invalidating every stored
+    snapshot: an npx row, a row on another machine, and a command nothing
+    resolves all digest exactly as they did before."""
+    from raven.config import login_path
+
+    login_path.remember(str(tmp_path))
+    rows = [
+        ThirdPartyAcpSubagentConfig(name="a", command="npx -y @scope/agent@1.2.3"),
+        ThirdPartyAcpSubagentConfig(name="a", command="opencode acp", machine="ravenx2"),
+        ThirdPartyAcpSubagentConfig(name="a", command="not-installed-agent acp"),
+    ]
+
+    for row in rows:
+        assert snapshot_fingerprint(row) == _legacy_launch_digest(row)
