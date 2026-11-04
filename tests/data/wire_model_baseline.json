@@ -213,6 +213,14 @@
       "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
       "zz-probe-1": "openai/zz-probe-1"
     },
+    "llmtr": {
+      "llmtr-probe": "openai/llmtr-probe",
+      "llmtr/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "llmtr/zz-probe-1": "openai/zz-probe-1",
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
+    },
     "lm_studio": {
       "lm-studio/zz-probe-1": "lm_studio/zz-probe-1",
       "lm_studio/vendorx/zz-probe-1": "lm_studio/vendorx/zz-probe-1",
