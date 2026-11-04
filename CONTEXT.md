@@ -330,9 +330,12 @@ ranking is `session_effort.in_force`, one rule with one home: the turn runs at i
 it, and the turn sends the word in force on every call, None included, so a default cleared
 on a running gateway lands on its next turn -- the provider's own copy of the key, frozen at
 boot, is never consulted. The pick's words are the levels the conversation's model declares
-(`providers/effort_levels.py`: a row's own `reasoning_effort_levels`, else its per-level flags,
-else the vendor's `ProviderSpec.reasoning_efforts`, else the flags' defaults, with a provider's
-`model_overlay.reasoningEfforts` over all of them); `session.set_effort` offers and validates
+(`providers/effort_levels.py`: the route row's own `reasoning_effort_levels`, else its
+per-level flags, else the vendor row's `reasoning_effort_levels`, else the flags inherited
+from that row, else the serving provider's `ProviderSpec.reasoning_efforts`, else the flags'
+defaults, with a provider's `model_overlay.reasoningEfforts` over all of them; the serving
+provider is the config's route for the model, not the id's prefix); `session.set_effort`
+offers and validates
 exactly those, a model that declares none has no row, and a stored pick the current model
 does not declare is dropped at the turn and in `session.info` (`session_effort.clamp`); the mode's
 word or the configured default then runs, since those two are not narrowed by the model.

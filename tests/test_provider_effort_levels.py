@@ -193,6 +193,60 @@ def test_a_rows_own_level_flag_beats_the_vendors_ladder(table):
     assert effort_levels.levels_for("deepseek/deepseek-flash") == ("minimal", "low", "medium", "high")
 
 
+def test_the_vendors_ladder_follows_the_provider_that_serves_the_call(table):
+    """A hand-written or older-config id can name a vendor the request never
+    reaches; the ladder belongs to the API that receives the word."""
+    table({"deepseek/deepseek-r1": {"supports_reasoning": True, "litellm_provider": "deepseek"}})
+    assert effort_levels.levels_for("deepseek/deepseek-r1") == ("low", "high", "max")
+    assert effort_levels.levels_for("deepseek/deepseek-r1", provider="deepseek") == ("low", "high", "max")
+    assert effort_levels.levels_for("deepseek/deepseek-r1", provider="openrouter") == (
+        "minimal",
+        "low",
+        "medium",
+        "high",
+    )
+    # No single serving section: the id's own vendor answers, as before.
+    assert effort_levels.levels_for("deepseek/deepseek-r1", provider="auto") == ("low", "high", "max")
+    assert effort_levels.levels_for("deepseek/deepseek-r1", provider="") == ("low", "high", "max")
+
+
+def test_a_route_rows_own_flag_beats_an_inherited_ladder(table):
+    """An inherited list describes the vendor's row; the route's own flag is the
+    more specific statement about the API that receives the call."""
+    table(
+        {
+            "claude-opus-4-6": {
+                **_row(litellm_provider="anthropic"),
+                "reasoning_effort_levels": ["low", "high", "max"],
+            },
+            "openrouter/anthropic/claude-opus-4.6": {
+                "supports_reasoning": True,
+                "supports_max_reasoning_effort": False,
+            },
+        }
+    )
+    assert effort_levels.levels_for("openrouter/anthropic/claude-opus-4.6") == (
+        "minimal",
+        "low",
+        "medium",
+        "high",
+    )
+
+
+def test_the_vendors_ladder_is_read_in_the_public_order(table, monkeypatch):
+    """A spec written out of order still reaches the effort row least-first:
+    the effort row, not the spec, owns the public order."""
+    from dataclasses import replace
+
+    from raven.providers import registry
+
+    real = registry.find_by_name
+    out_of_order = replace(real("deepseek"), reasoning_efforts=("max", "low", "high"))
+    monkeypatch.setattr(registry, "find_by_name", lambda name: out_of_order if name == "deepseek" else real(name))
+    table({"deepseek/deepseek-flash": {"supports_reasoning": True, "litellm_provider": "deepseek"}})
+    assert effort_levels.levels_for("deepseek/deepseek-flash") == ("low", "high", "max")
+
+
 def test_every_vendors_ladder_uses_the_rungs_this_build_offers():
     from raven.providers.registry import PROVIDERS
 

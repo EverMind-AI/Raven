@@ -577,15 +577,25 @@ def _default_effort(agent_loop: object, config: Any, session_key: str | None) ->
 
 
 def _effort_levels(model_id: str, config: Any, *, refresh: bool = False) -> tuple[str, ...] | None:
-    """What this model declares, with the provider's overlay as the authority."""
+    """What this model declares, with the provider that serves it as the authority.
+
+    The provider is the section the config routes ``model_id`` through, not the
+    id's own prefix: a forced gateway serves a bare vendor id, and the ladder
+    and the overlay have to follow the API that receives the word. The id
+    answers only when the config cannot name one (no usable section, or a
+    caller with no routing of its own).
+    """
     from raven.providers.registry import find_by_model, split_model_id
 
-    provider, _rest = split_model_id(model_id)
+    get_provider_name = getattr(config, "get_provider_name", None)
+    provider = get_provider_name(model_id) if callable(get_provider_name) else None
     if not provider:
-        spec = find_by_model(model_id)
-        provider = getattr(spec, "name", "") if spec else ""
+        provider, _rest = split_model_id(model_id)
+        if not provider:
+            spec = find_by_model(model_id)
+            provider = getattr(spec, "name", "") if spec else ""
     declared = declared_for(getattr(config, "providers", None), provider, model_id)
-    return effort_levels.levels_for(model_id, declared, refresh=refresh)
+    return effort_levels.levels_for(model_id, declared, provider=provider, refresh=refresh)
 
 
 def _effort_in_force(

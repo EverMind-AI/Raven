@@ -434,7 +434,10 @@ async def test_a_routed_fallback_hop_reclamps_the_primarys_effort(monkeypatch):
     fallback; the routed layer must re-clamp where the hop is still visible."""
     from raven.providers import effort_levels
 
-    def levels(model, declared=(), *, refresh=False):
+    asked: list[str | None] = []
+
+    def levels(model, declared=(), *, provider=None, refresh=False):
+        asked.append(provider)
         return ("low", "high") if model == "large" else ("low", "high", "max")
 
     monkeypatch.setattr(effort_levels, "levels_for", levels)
@@ -459,3 +462,4 @@ async def test_a_routed_fallback_hop_reclamps_the_primarys_effort(monkeypatch):
     assert out.content == "ok"
     assert p._by_model["small"].chat_with_retry.call_args.kwargs["reasoning_effort"] == "max"
     assert seen == ["high"]
+    assert asked == ["custom"], "the hop's ladder must follow the endpoint that sends it"

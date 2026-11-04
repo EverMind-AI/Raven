@@ -36,9 +36,12 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterator
 from functools import lru_cache
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
 from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
+
+if TYPE_CHECKING:
+    from raven.providers.registry import ProviderSpec
 
 #: The per-level flags, in the order the derivation asks about them.
 EFFORT_FLAGS = (
@@ -56,8 +59,22 @@ DECLARED_EFFORTS_KEY = "reasoning_effort_levels"
 LEVEL_ORDER: tuple[str, ...] = tuple(reversed(REASONING_EFFORT_LADDER))
 
 
-def levels_for(model: str, declared: Sequence[str] = (), *, refresh: bool = False) -> tuple[str, ...] | None:
+def levels_for(
+    model: str,
+    declared: Sequence[str] = (),
+    *,
+    provider: str | None = None,
+    refresh: bool = False,
+) -> tuple[str, ...] | None:
     """The levels this model declares, or ``()``/``None`` per the module docstring.
+
+    ``provider`` names the section that will receive the request, when the
+    caller knows it -- the config that routed the model, or the provider
+    instance about to send it. The vendor ladder follows that section rather
+    than the model id: a gateway reselling another vendor's model takes the
+    gateway's ladder, and a hand-written or older-config id can name a vendor
+    the request never reaches. Empty and ``"auto"`` mean no single section
+    serves the call, and the id answers instead.
 
     ``refresh`` lets an explicit effort set ask the Codex account catalogue,
     off the event loop; the turn and reports leave it false and read the cache
@@ -72,8 +89,8 @@ def levels_for(model: str, declared: Sequence[str] = (), *, refresh: bool = Fals
         # level: fall through to the table, as an empty declaration does.
     from raven.providers.registry import canonical_provider_name, split_model_id
 
-    provider, rest = split_model_id(model)
-    if canonical_provider_name(provider) == "openai_codex":
+    prefix, rest = split_model_id(model)
+    if canonical_provider_name(prefix) == "openai_codex":
         from raven.providers import codex_catalog
 
         return codex_catalog.account_efforts(rest, refresh=refresh)
@@ -86,30 +103,28 @@ def levels_for(model: str, declared: Sequence[str] = (), *, refresh: bool = Fals
         return ()
     authority = _authority_row(model, by_name)
     if route is not None:
-        merged = _merged(route, authority)
-        if merged.get("supports_reasoning") is not True:
-            return ()
+        row = _merged(route, authority)
+    else:
+        row = authority
+    if row is None or row.get("supports_reasoning") is not True:
+        return ()
+    if route is not None:
+        # The route row's own statements describe the API that receives the
+        # call. An inherited ladder from the vendor's row must not overrule
+        # them: a route that says max is off is not overruled by the vendor
+        # listing max, and a route that names its levels wins whole.
         own = _stated_levels(route)
         if own is not None:
             return own
         if _states_effort_flag(route):
-            return _derive(merged)
-        stated = _stated_levels(merged)
-        if stated is not None:
-            return stated
-        if _states_effort_flag(merged):
-            return _derive(merged)
-        vendor = _vendor_levels(model)
-        return vendor if vendor else _derive(merged)
-    if authority is not None and authority.get("supports_reasoning") is True:
-        stated = _stated_levels(authority)
-        if stated is not None:
-            return stated
-        if _states_effort_flag(authority):
-            return _derive(authority)
-        vendor = _vendor_levels(model)
-        return vendor if vendor else _derive(authority)
-    return ()
+            return _derive(row)
+    stated = _stated_levels(row)
+    if stated is not None:
+        return stated
+    if _states_effort_flag(row):
+        return _derive(row)
+    vendor = _vendor_levels(model, provider)
+    return vendor if vendor else _derive(row)
 
 
 def reset() -> None:
@@ -293,22 +308,49 @@ def _states_effort_flag(row: dict[str, Any]) -> bool:
     return any(row.get(flag) is not None for flag in EFFORT_FLAGS)
 
 
-def _vendor_levels(model: str) -> tuple[str, ...]:
+def _vendor_levels(model: str, provider: str | None = None) -> tuple[str, ...]:
     """The vendor's own ladder, or () when it states none.
 
     LiteLLM's table carries some vendors' models without saying which words the
     API takes, and its flags cannot express a set that has no medium. A spec
     that states the ladder answers for every model of that vendor whose row the
     table already declares as reasoning.
-    """
-    from raven.providers.registry import find_by_model, find_by_name, split_model_id
 
-    provider, _rest = split_model_id(model)
-    spec = find_by_name(provider) if provider else find_by_model(model)
+    ``provider`` is the section that will receive the request when the caller
+    knows it; :func:`_vendor_spec` says how it and the model id share the
+    answer.
+    """
+    spec = _vendor_spec(model, provider)
     if spec is None:
         return ()
     known = set(spec.reasoning_efforts)
     return tuple(name for name in LEVEL_ORDER if name in known)
+
+
+def _vendor_spec(model: str, provider: str | None) -> "ProviderSpec | None":
+    """The spec whose declared ladder answers this call, or None when none does.
+
+    ``provider`` is the section the request will travel through, when the
+    caller knows it. Empty and ``"auto"`` mean no single section serves the
+    call; the model id answers instead -- its prefix when it has one, else
+    ``find_by_model``'s keyword match.
+
+    A spec with an empty ``reasoning_efforts`` is still a spec: returning it
+    lets the caller fall through to the per-level flags, which is the honest
+    answer when the serving API states no ladder.
+    """
+    from raven.providers.registry import find_by_model, find_by_name, split_model_id
+
+    if provider and provider != "auto":
+        # The section that carries the request answers, even when it states no
+        # ladder: an empty tuple means the caller falls through to the flags,
+        # not that the model id's vendor should be borrowed. An unknown section
+        # has no spec, and the id is not evidence about an API Raven cannot see.
+        return find_by_name(provider)
+    prefix, _rest = split_model_id(model)
+    return find_by_name(prefix) if prefix else find_by_model(model)
+
+
 def _canonical_vendor(model: str) -> str:
     from raven.providers.catalog import _vendor_id
     from raven.providers.registry import canonical_provider_name, find_by_model, split_model_id

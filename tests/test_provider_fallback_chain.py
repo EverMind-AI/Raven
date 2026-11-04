@@ -370,6 +370,8 @@ async def test_should_fallback_classification():
 class _EffortRecordingProvider(_ScriptedProvider):
     """``_ScriptedProvider`` that also records the effort each hop carried."""
 
+    provider_name = "testbed"
+
     def __init__(self, script):
         super().__init__(script)
         self.efforts: list[tuple[str | None, str | None]] = []
@@ -402,7 +404,10 @@ async def test_a_fallback_hop_re_clamps_the_primarys_effort(monkeypatch):
     must not be rejected for an effort the fallback does not declare."""
     from raven.providers import effort_levels
 
-    def levels(model, declared=(), *, refresh=False):
+    asked: list[str | None] = []
+
+    def levels(model, declared=(), *, provider=None, refresh=False):
+        asked.append(provider)
         return ("low", "high") if model == "backup" else ("low", "high", "max")
 
     monkeypatch.setattr(effort_levels, "levels_for", levels)
@@ -417,3 +422,4 @@ async def test_a_fallback_hop_re_clamps_the_primarys_effort(monkeypatch):
     )
     assert resp.content == "ok"
     assert provider.efforts == [("primary", "max"), ("backup", "high")]
+    assert asked == ["testbed"], "the hop's ladder must follow the provider instance that sends it"
