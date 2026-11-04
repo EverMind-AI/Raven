@@ -219,6 +219,31 @@ def test_the_render_merges_secrets_pins_workspace_and_boards_the_plugin(grounded
     assert rendered.parent == tmp_path / "state"
 
 
+def test_the_trunk_gate_renders_full_and_the_owners_mode_reaches_the_plugin(grounded, tmp_path):
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(json.dumps({"permissions": {"mode": "ask"}}))
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    assert data["permissions"]["mode"] == "full"
+    assert data["plugins"]["config"]["oncall-flow"]["approval"]["mode"] == "ask"
+
+
+def test_the_approval_mode_precedence(launcher):
+    def mode(slice_mode=None, own=None, host=None):
+        config = {"permissions": {"mode": own}} if own else {}
+        flow = {"approval": {"mode": slice_mode}} if slice_mode else {}
+        hostcfg = {"permissions": {"mode": host}} if host else {}
+        chosen = launcher.apply_approval_policy(config, flow, hostcfg)
+        assert config["permissions"]["mode"] == "full" and flow["approval"]["mode"] == chosen
+        return chosen
+
+    assert mode() == "smart"
+    assert mode(host="full") == "full"
+    assert mode(own="ask", host="full") == "ask"
+    assert mode(slice_mode="smart", own="ask", host="full") == "smart"
+    assert mode(host="bogus") == "smart"
+
+
 def test_the_fork_schema_key_never_reaches_trunks_loader(grounded):
     data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
     assert "oncall" not in data["tools"], "the gate arms via the plugin slice, not tools.oncall"
