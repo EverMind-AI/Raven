@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
-/* The composer's height seam: a drag from the card's top edge sets the tallest
- * the field may get, between its resting size and half the visual viewport,
- * while the content still decides the height it actually takes; the lift the
- * transcript reserves is published inside the move rather than after the paint
- * that follows it.
+/* The composer's height seam: a drag from the card's top edge sets the field's
+ * height, between its resting size and half the visual viewport, and the field
+ * keeps that height whatever it holds; the lift the transcript reserves is
+ * published inside the move rather than after the paint that follows it, while
+ * the resting lift the turn nav stands on stays where the drag found it.
  *
  * happy-dom does no layout and loads no stylesheet, so the field's min-height
  * is stated inline (the value page.css gives it) and its scroll height and
@@ -142,29 +142,33 @@ describe('the composer height seam', () => {
     const chat = document.querySelector('.chat') as HTMLElement
     expect(chat.style.getPropertyValue('--lift')).toBe('152px')
   })
+
+  it('leaves the resting lift where the drag found it, before and after the release', () => {
+    const ta = mount()
+    box(document.querySelector('.chat')!, 0, 600)
+    box(document.querySelector('.dock')!, 0, 600)
+    const height = (): number => parseFloat(ta.style.height) || FLOOR
+    const card = document.querySelector('.dock-in') as HTMLElement
+    card.getBoundingClientRect = () => rect(600 - height(), height())
+    ta.getBoundingClientRect = () => rect(600 - height(), height())
+    gripDrag(grip())
+    press(grip(), 500)
+    moveTo(grip(), 400)
+    const chat = document.querySelector('.chat') as HTMLElement
+    expect(chat.style.getPropertyValue('--lift')).toBe('152px')
+    expect(chat.style.getPropertyValue('--lift-rest')).toBe('52px')
+    release(grip())
+    expect(chat.style.getPropertyValue('--lift-rest')).toBe('52px')
+  })
 })
 
-describe('a dragged height against the content fit', () => {
-  it('caps the content fit without fixing the height', () => {
+describe('a dragged height against the content', () => {
+  it('holds the dragged height whatever the content', () => {
     const ta = mount()
     resizeField(200)
     content(ta, 60)
     fitField()
-    expect(ta.style.height).toBe('60px')
-    content(ta, 900)
-    fitField()
     expect(ta.style.height).toBe('200px')
-  })
-
-  it('keeps the cap while the content moves under it', () => {
-    const ta = mount()
-    resizeField(200)
-    content(ta, 900)
-    fitField()
-    expect(ta.style.height).toBe('200px')
-    content(ta, 60)
-    fitField()
-    expect(ta.style.height).toBe('60px')
     content(ta, 900)
     fitField()
     expect(ta.style.height).toBe('200px')
@@ -198,14 +202,37 @@ describe('a dragged height against the content fit', () => {
 })
 
 describe('a drag against the content', () => {
-  it('previews the drag while the pointer moves and settles back to the content on release', () => {
+  it('keeps the dragged height on release when the content is shorter', () => {
     const ta = mount()
     gripDrag(grip())
     press(grip(), 500)
     moveTo(grip(), 300)
     expect(ta.style.height).toBe('252px')
     release(grip())
-    expect(ta.style.height).toBe('52px')
+    expect(ta.style.height).toBe('252px')
+  })
+
+  it('leaves the field to its content after a click with a pixel of travel', () => {
+    const ta = mount()
+    gripDrag(grip())
+    press(grip(), 500)
+    moveTo(grip(), 499)
+    release(grip())
+    content(ta, 300)
+    fitField()
+    expect(ta.style.height).toBe('300px')
+  })
+
+  it('follows the whole travel once the press has become a drag', () => {
+    const ta = mount()
+    gripDrag(grip())
+    press(grip(), 500)
+    moveTo(grip(), 499)
+    expect(ta.style.height).toBe('')
+    moveTo(grip(), 480)
+    expect(ta.style.height).toBe('72px')
+    moveTo(grip(), 498)
+    expect(ta.style.height).toBe('54px')
   })
 
   it('keeps the dragged height on release when the content is taller', () => {
@@ -233,7 +260,7 @@ describe('the seam by keyboard', () => {
     expect(ta.style.height).toBe('92px')
   })
 
-  it('leaves the field free to shrink after a key sets a cap', () => {
+  it('holds the height a key set when the content shrinks', () => {
     const ta = mount()
     content(ta, 900)
     gripDrag(grip())
@@ -241,7 +268,7 @@ describe('the seam by keyboard', () => {
     expect(ta.style.height).toBe('62px')
     content(ta, 60)
     fitField()
-    expect(ta.style.height).toBe('60px')
+    expect(ta.style.height).toBe('62px')
   })
 
   it('leaves every other key alone', () => {

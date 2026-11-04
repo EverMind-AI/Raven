@@ -8,12 +8,20 @@
  * half its height, and at the dock's 5 against the nav's 4 it was drawn under
  * the glass. Paint order is not in the DOM, and happy-dom applies no
  * stylesheet, so the order is pinned here.
+ *
+ * Where the band ends is pinned for the same reason. The nav lives in the
+ * gutter beside the composer, never over it, so the composer growing -- the
+ * reader dragging its edge up, or a long draft -- has no reason to move it; a
+ * band ending at the live `--lift` slides every mark up by half of each drag
+ * and squeezes a long strip. The resting lift (`--lift-rest`, published by
+ * dockLift beside `--lift`) leaves the field's growth out. The `, 96px`
+ * fallback is what keeps the declaration valid before the first dockLift.
  */
 
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-import { rule } from './css.mjs'
+import { decls, rule } from './css.mjs'
 
 const sheet = (path) => readFileSync(new URL(`../../src/${path}`, import.meta.url), 'utf8')
 const zOf = (source, selector) => {
@@ -28,5 +36,11 @@ describe('the turn nav over the composer', () => {
     expect(nav).not.toBeNull()
     expect(dock).not.toBeNull()
     expect(nav).toBeGreaterThan(dock)
+  })
+
+  it('ends the band at the resting lift, so a taller field does not move it', () => {
+    const nav = decls('.transcript-nav', sheet('features/transcript/styles.css'))
+    expect(nav).not.toBeNull()
+    expect(nav.get('bottom')).toMatch(/^var\(--lift-rest,\s*96px\)$/)
   })
 })

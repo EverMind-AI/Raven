@@ -252,11 +252,9 @@ const fieldCeiling = (): number =>
    rather than repeated, so the two cannot drift. */
 const fieldFloor = (e: HTMLTextAreaElement): number => parseFloat(getComputedStyle(e).minHeight) || 52
 
-/* The tallest a drag (or an arrow key) has allowed the field to get, or null
-   while only the viewport ceiling applies. The content still decides the height
-   the field actually takes, so this is a cap rather than a height; nothing
-   renders from it directly, which is why it is module state rather than a
-   store key. */
+/* The height a drag (or an arrow key) gave the field, or null while the
+   content still decides it. Nothing renders from it directly, which is why it
+   is module state rather than a store key. */
 let manualHeight: number | null = null
 
 function fieldBounds(e: HTMLTextAreaElement): { max: number; min: number } {
@@ -267,33 +265,32 @@ function fieldBounds(e: HTMLTextAreaElement): { max: number; min: number } {
 /* A textarea cannot size itself to its content, so the height is set here.
    The box is reset to auto before `scrollHeight` is read, because a box taller
    than its content reports the box rather than the content. A dragged height is
-   the tallest the field may get, not a fixed height: the content still decides
-   what it takes, so removing text shrinks it back. The cap and the content are
-   both re-clamped on every pass, so a window that shrank pulls the field back
-   under the smaller ceiling instead of leaving it taller than half of one.
-   This reads `manualHeight` and never writes it, so a keyboard that clamps the
-   field for its duration gives the height back when it closes. */
+   the field's height, not a cap on the content: a short draft, an emptied field
+   and a sent message all leave it where the reader put it, and a longer draft
+   scrolls inside it. It is still re-clamped on every pass, so a window that
+   shrank pulls the field back under the smaller ceiling instead of leaving it
+   taller than half of one. This reads `manualHeight` and never writes it, so a
+   keyboard that clamps the field for its duration gives the height back when
+   it closes. */
 export function fitField(): void {
   const e = field()
   if (!e) return
-  e.style.height = 'auto'
   if (manualHeight === null) {
+    e.style.height = 'auto'
     e.style.height = Math.min(fieldCeiling(), e.scrollHeight) + 'px'
     dockLift()
     return
   }
   const { max, min } = fieldBounds(e)
-  const cap = Math.min(manualHeight, max)
-  e.style.height = Math.round(Math.max(min, Math.min(cap, e.scrollHeight))) + 'px'
+  e.style.height = Math.round(Math.max(min, Math.min(manualHeight, max))) + 'px'
   dockLift()
 }
 
-/* A drag step: the tallest the field may get, clamped and written at once so
-   the reader sees the drag under the pointer. `fitField` settles the resting
-   height once the gesture ends. The write and the lift below happen inside the
-   move handler rather than on the next paint, so the transcript's reserve and
-   the sheets stacked over the card travel with the pointer instead of a frame
-   behind it. */
+/* A drag step: the field's new height, clamped and written at once so the
+   reader sees the drag under the pointer. The write and the lift below happen
+   inside the move handler rather than on the next paint, so the transcript's
+   reserve and the sheets stacked over the card travel with the pointer instead
+   of a frame behind it. */
 export function resizeField(px: number): void {
   const e = field()
   if (!e) return
@@ -303,11 +300,15 @@ export function resizeField(px: number): void {
   dockLift()
 }
 
-/* The seam on the card's top edge: up raises the cap, down lowers it. While the
-   pointer moves the field renders at the drag value so the gesture is visible;
-   on release it settles to what the content needs under that cap. The pointer
-   is captured on the handle and the move writes the height directly, with no
-   state and no re-render, for the reason `resizeField` gives. */
+/* How far a press travels before it is a drag, the slop the page's other
+   drags allow. A dragged height outlives the gesture, so a click's own jitter
+   on the handle must not pin the field at its current height. */
+const GRIP_SLOP = 4
+
+/* The seam on the card's top edge: up raises the field, down lowers it, and
+   the release leaves it where the pointer let go. The pointer is captured on
+   the handle and the move writes the height directly, with no state and no
+   re-render, for the reason `resizeField` gives. */
 export function gripDrag(el: HTMLElement): void {
   el.tabIndex = 0
   el.addEventListener('pointerdown', (e) => {
@@ -321,8 +322,11 @@ export function gripDrag(el: HTMLElement): void {
     el.dataset.drag = 'true'
     el.setPointerCapture(pointerId)
     document.body.style.userSelect = 'none'
+    let dragging = false
     const move = (ev: PointerEvent): void => {
       if (ev.pointerId !== pointerId) return
+      if (!dragging && Math.abs(ev.clientY - startY) < GRIP_SLOP) return
+      dragging = true
       resizeField(startH + startY - ev.clientY)
     }
     const up = (): void => {
@@ -338,8 +342,8 @@ export function gripDrag(el: HTMLElement): void {
     el.addEventListener('pointercancel', up)
   })
   /* The handle is a separator, so arrows move it: ten pixels a press, forty
-     with Shift, the same step the pane grips take. A press only moves the cap;
-     the field still settles to its content, so no press can pin it. */
+     with Shift, the same step the pane grips take. A press sets the height
+     the way a drag does, and the field keeps it the same way. */
   el.addEventListener('keydown', (e) => {
     const ta = field()
     if (!ta) return
@@ -351,11 +355,24 @@ export function gripDrag(el: HTMLElement): void {
   })
 }
 
+/* Written only on a real change: dockLift also runs per scroll event, and a
+   style write there would invalidate layout on every frame of a flick. */
+function publish(chat: HTMLElement, name: string, px: number): void {
+  const v = px + 'px'
+  if (chat.style.getPropertyValue(name) !== v) chat.style.setProperty(name, v)
+}
+
 /* Everything docked at the bottom moves: the composer grows with its content,
    queued rows and a clarify sheet stack above it. The pill hangs off .chat, a
    different positioned ancestor, so keeping them apart takes one measured
    number -- the distance from the chat column's bottom edge up to the top of
-   the highest docked thing -- published for the CSS to offset against. */
+   the highest docked thing -- published for the CSS to offset against.
+
+   A second number rides with it, `--lift-rest`: the same distance with the
+   field at its resting height. The turn nav stands on that one, since it sits
+   in the gutter beside the card and has nothing to clear when the field grows
+   (features/transcript/styles.css): dragging the field taller moves the
+   transcript's edge and leaves the nav's marks where they were. */
 export function dockLift(): void {
   const chat = document.querySelector<HTMLElement>('.chat')
   const dock = document.querySelector<HTMLElement>('.dock')
@@ -364,7 +381,8 @@ export function dockLift(): void {
      lifts nothing. Measured as it is below, its zero box would read as a dock
      the height of the whole column, and the transcript would fade out under it. */
   if (!dock.getClientRects().length) {
-    if (chat.style.getPropertyValue('--lift') !== '0px') chat.style.setProperty('--lift', '0px')
+    publish(chat, '--lift', 0)
+    publish(chat, '--lift-rest', 0)
     return
   }
   /* Measured against what the reader SEES, not the dock's box: the dock carries
@@ -386,10 +404,16 @@ export function dockLift(): void {
     const r = n.getBoundingClientRect()
     if (r.height > 0) top = Math.min(top, r.top)
   })
-  /* Written only on a real change: this also runs per scroll event, and a style
-     write there would invalidate layout on every frame of a flick. */
-  const v = Math.round(chat.getBoundingClientRect().bottom - top) + 'px'
-  if (chat.style.getPropertyValue('--lift') !== v) chat.style.setProperty('--lift', v)
+  const lift = chat.getBoundingClientRect().bottom - top
+  publish(chat, '--lift', Math.round(lift))
+  /* Everything measured above rides on top of the field -- the sheets and the
+     chip in flow, the slash popover off the card's top edge -- so the field's
+     growth over its floor is exactly how far it pushed the highest of them up.
+     A field that is not drawn (the trajectory view hides the card) grew
+     nothing. */
+  const ta = field()
+  const grown = ta ? Math.max(0, ta.getBoundingClientRect().height - fieldFloor(ta)) : 0
+  publish(chat, '--lift-rest', Math.round(lift - grown))
 }
 
 /* ── the quick-jump pills ─────────────────────────────────────────────── */
