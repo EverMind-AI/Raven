@@ -16,6 +16,14 @@
 
 <br>
 
+## ❯❯ What's New
+
+### ❯ Multi-Agent Trajectory Observability
+
+**Every agent, every turn, every step — on one timeline.** Raven's new trajectory view renders a running multi-agent session as a live waterfall, from the whole run down to a single step.
+
+https://github.com/user-attachments/assets/abb0a5e9-1c37-48bd-9be0-1c9267293337
+
 # What is Raven
 
 <p align="center">

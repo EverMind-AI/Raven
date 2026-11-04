@@ -16,6 +16,14 @@
 
 <br>
 
+## ❯❯ What's New
+
+### ❯ 多智能体轨迹观测
+
+**每个智能体、每个 Turn、每个 Step，都落在同一条时间线上。** Raven 新增的多智能体轨迹观测页面，把运行中的会话变成一张实时瀑布图，从整段运行一直缩放到单个 Step。
+
+https://github.com/user-attachments/assets/abb0a5e9-1c37-48bd-9be0-1c9267293337
+
 # Raven 是什么
 
 <p align="center">
