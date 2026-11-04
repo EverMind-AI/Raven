@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
 from loguru import logger
 
 from raven.agent.task_board.board import (
@@ -16,6 +17,8 @@ from raven.agent.task_board.board import (
     ProgressStep,
     TaskGroup,
     TaskLink,
+    UpdateRejectedError,
+    apply_carry,
     apply_update,
     board_to_dict,
 )
@@ -818,3 +821,237 @@ async def test_a_turn_a_successor_run_opened_belongs_to_the_group_that_placed_it
     await _run(service, Scripted(_update_with([*_steps_on("g_a", "g_b"), STRAY])), dispatches=(), delegated=["dag:R2"])
 
     assert [len(g.steps) for g in load_board(service.session_dir(KEY)).groups] == [2, 1]
+
+
+WAITING = "Which fix should I apply?"
+CARRY_REFUSED = (
+    "Rejected, and nothing was written. Call task_board again with action=carry, sending the whole answer with"
+    " each of these fixed:"
+)
+
+
+def _waiting(service) -> None:
+    """One group whose latest step asked a question and still waits on the user."""
+    step = ProgressStep("s_0", "T0", None, "Asked which fix", "Asked which fix to apply.", [], [WAITING])
+    group = TaskGroup("g_c", "Fix bug A", "Waiting on the user's pick", "needs_you", 1, 1, [step])
+    save_board(service.session_dir(KEY), Board([group], []))
+
+
+def _step_on(group: str, *, status: str = "idle", questions: list[str] | None = None) -> dict:
+    step: dict = {"group": group, "title": "Explained the two matters", "summary": "Explained both.", "status": status}
+    if questions is not None:
+        step["questions"] = questions
+    return step
+
+
+def _carry(groups: list[dict], call_id: str = "c1") -> LLMResponse:
+    return LLMResponse(
+        content="",
+        tool_calls=[ToolCallRequest(id=call_id, name="task_board", arguments={"action": "carry", "groups": groups})],
+    )
+
+
+def _kept(*questions: str) -> LLMResponse:
+    return _carry([{"group": "g_c", "questions": list(questions)}])
+
+
+async def test_a_new_step_carries_the_previous_steps_open_questions(tmp_path):
+    service = _service(tmp_path)
+    _waiting(service)
+    call = Scripted(_update_with([_step_on("g_c")]), _kept(WAITING))
+
+    board = await _run(service, call, dispatches=())
+
+    assert board is not None
+    group = board.groups[0]
+    assert group.status == "needs_you"
+    assert group.steps[-1].questions == [WAITING]
+    stored = load_board(service.session_dir(KEY))
+    assert (stored.groups[0].status, stored.groups[0].steps[-1].questions) == ("needs_you", [WAITING])
+
+
+async def test_the_carry_call_continues_from_the_update_exchange(tmp_path):
+    service = _service(tmp_path)
+    _waiting(service)
+    call = Scripted(_update_with([_step_on("g_c")]), _kept(WAITING))
+
+    await _run(service, call, dispatches=())
+
+    assert len(call.seen) == 2
+    rows = call.seen[1]
+    assert rows[: len(WINDOW)] == WINDOW
+    instruction, update, result = rows[len(WINDOW) : -1]
+    assert instruction["role"] == "user" and "How to write the update" in instruction["content"]
+    assert update["role"] == "assistant" and update["tool_calls"][0]["id"] == "t1"
+    assert result["role"] == "tool" and result["tool_call_id"] == "t1"
+    assert rows[-1]["role"] == "user" and WAITING in rows[-1]["content"]
+
+
+async def test_the_carry_keeps_the_questions_the_new_step_asked_itself(tmp_path):
+    service = _service(tmp_path)
+    _waiting(service)
+    call = Scripted(
+        _update_with([_step_on("g_c", status="needs_you", questions=["And the test?"])]),
+        _kept(WAITING, "And the test?"),
+    )
+
+    board = await _run(service, call, dispatches=())
+
+    assert board is not None and board.groups[0].steps[-1].questions == [WAITING, "And the test?"]
+
+
+async def test_no_carry_call_when_the_previous_step_asked_nothing(tmp_path):
+    call = Scripted(GOOD)
+
+    await _run(_service(tmp_path), call)
+
+    assert len(call.seen) == 1
+
+
+async def test_a_carry_answer_that_omits_a_group_is_asked_again(tmp_path):
+    service = _service(tmp_path)
+    _waiting(service)
+    call = Scripted(_update_with([_step_on("g_c")]), _carry([], "c0"), _kept(WAITING))
+
+    board = await _run(service, call, dispatches=())
+
+    assert board is not None and board.groups[0].steps[-1].questions == [WAITING]
+    assert len(call.seen) == 3
+    assert call.seen[2][-1]["content"] == f"{CARRY_REFUSED}\n1. not answered: g_c"
+
+
+async def test_a_carry_never_drops_a_question_the_new_step_just_asked(tmp_path):
+    """The newest step's own questions went out with the turn's reply, so the user
+    cannot have answered them yet; an answer that leaves one out is refused."""
+    service = _service(tmp_path)
+    _waiting(service)
+    call = Scripted(
+        _update_with([_step_on("g_c", status="needs_you", questions=["And the test?"])]),
+        _kept(WAITING),
+    )
+
+    board = await _run(service, call, dispatches=())
+
+    assert len(call.seen) == 1 + MAX_ATTEMPTS
+    stored = load_board(service.session_dir(KEY))
+    assert stored.groups[0].status == "needs_you"
+    assert stored.groups[0].steps[-1].questions == ["And the test?"]
+    assert board is not None and board.groups[0].steps[-1].questions == ["And the test?"]
+
+
+async def test_a_completed_step_still_carries_an_open_question(tmp_path):
+    service = _service(tmp_path)
+    _waiting(service)
+    call = Scripted(_update_with([_step_on("g_c", status="completed")]), _kept(WAITING))
+
+    board = await _run(service, call, dispatches=())
+
+    assert board is not None
+    assert (board.groups[0].status, board.groups[0].steps[-1].questions) == ("needs_you", [WAITING])
+
+
+async def test_a_carry_that_never_answers_leaves_the_update_as_written(tmp_path):
+    service = _service(tmp_path)
+    _waiting(service)
+    call = Scripted(_update_with([_step_on("g_c", status="idle")]), LLMResponse(content="Nothing to add."))
+
+    board = await _run(service, call, dispatches=())
+
+    assert len(call.seen) == 1 + MAX_ATTEMPTS
+    stored = load_board(service.session_dir(KEY))
+    assert (stored.groups[0].status, stored.groups[0].steps[-1].questions) == ("idle", [])
+    assert board is not None and board.groups[0].status == "idle"
+
+
+async def test_an_update_without_a_step_still_asks_about_its_open_questions(tmp_path):
+    """The turn rewrote the group itself and wrote no step: the newest step still
+    asks something, so the question pass runs and the question stays open."""
+    service = _service(tmp_path)
+    _waiting(service)
+    call = Scripted(_update_with([], groups=[{"group": "g_c", "status": "idle"}]), _kept(WAITING))
+
+    board = await _run(service, call, dispatches=())
+
+    assert len(call.seen) == 2
+    assert board is not None and len(board.groups[0].steps) == 1
+    assert (board.groups[0].status, board.groups[0].steps[-1].questions) == ("needs_you", [WAITING])
+
+
+async def test_an_older_step_may_have_the_questions_it_asked_dropped(tmp_path):
+    """The newest step is the one that asked, and this turn settled the question: the
+    pass clears it, and the status the update wrote stands."""
+    service = _service(tmp_path)
+    _waiting(service)
+    call = Scripted(
+        _update_with([], groups=[{"group": "g_c", "status": "idle"}]),
+        _carry([{"group": "g_c", "questions": []}]),
+    )
+
+    board = await _run(service, call, dispatches=())
+
+    assert board is not None
+    assert (board.groups[0].status, board.groups[0].steps[-1].questions) == ("idle", [])
+
+
+async def test_a_group_this_turn_did_not_touch_is_not_asked_about(tmp_path):
+    service = _service(tmp_path)
+    _waiting(service)
+    other = TaskGroup("g_o", "Release notes", "", "idle", 1, 1, [ProgressStep("s_o", "T0", None, "Drafted", ".", [])])
+    stored = load_board(service.session_dir(KEY))
+    save_board(service.session_dir(KEY), Board([*stored.groups, other], []))
+    call = Scripted(_update_with([], groups=[{"group": "g_o", "status": "running"}]), _kept(WAITING))
+
+    await _run(service, call, dispatches=())
+
+    assert len(call.seen) == 1
+
+
+def _answered_board(status: str, questions: list[str]) -> Board:
+    asked = ProgressStep("s_0", "T0", None, "Asked which fix", "Asked which fix to apply.", [], [WAITING])
+    step = ProgressStep("s_1", "T1", None, "Explained", "Explained both.", [], questions)
+    return Board([TaskGroup("g_c", "Fix bug A", "Waiting", status, 1, 1, [asked, step])], [])
+
+
+def test_apply_carry_writes_the_complete_list_and_returns_the_group_to_needs_you():
+    board = _answered_board("completed", [])
+
+    out = apply_carry(board, {"groups": [{"group": "g_c", "questions": [WAITING]}]}, ["g_c"], turn_at="T1", now_ms=2)
+
+    assert (out.groups[0].status, out.groups[0].steps[-1].questions) == ("needs_you", [WAITING])
+    assert out.groups[0].revisions[-1].turn_at == "T1"
+    assert out.groups[0].revisions[-1].after["status"] == "needs_you"
+    assert board.groups[0].status == "completed", "the board handed in is not changed"
+
+
+def test_apply_carry_may_clear_an_older_steps_questions():
+    asked = ProgressStep("s_0", "T0", None, "Asked which fix", ".", [], [WAITING])
+    board = Board([TaskGroup("g_c", "Fix bug A", "Waiting", "idle", 1, 1, [asked])], [])
+
+    out = apply_carry(board, {"groups": [{"group": "g_c", "questions": []}]}, ["g_c"], turn_at="T1", now_ms=2)
+
+    assert (out.groups[0].status, out.groups[0].steps[-1].questions) == ("idle", [])
+
+
+def test_apply_carry_refuses_a_group_with_no_step():
+    board = Board([TaskGroup("g_c", "Fix bug A", "", "idle", 1, 1, [])], [])
+
+    with pytest.raises(UpdateRejectedError) as caught:
+        apply_carry(board, {"groups": [{"group": "g_c", "questions": []}]}, ["g_c"], turn_at="T1", now_ms=2)
+
+    assert [str(problem) for problem in caught.value.problems] == ["no step to carry on: g_c"]
+
+
+def test_apply_carry_refuses_a_group_the_call_was_not_asked_about():
+    with pytest.raises(UpdateRejectedError) as caught:
+        apply_carry(
+            _answered_board("idle", []),
+            {"groups": [{"group": "g_x", "questions": []}]},
+            ["g_c"],
+            turn_at="T1",
+            now_ms=2,
+        )
+
+    assert [str(problem) for problem in caught.value.problems] == [
+        "groups[0]: not asked about: g_x",
+        "not answered: g_c",
+    ]

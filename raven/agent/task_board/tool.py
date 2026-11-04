@@ -29,7 +29,7 @@ REFUSED_UPDATE = "The board is updated for you after this turn ends; use action=
 PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "action": {"type": "string", "enum": ["recall", "update"]},
+        "action": {"type": "string", "enum": ["recall", "update", "carry"]},
         "query": {"type": "string"},
         "group_id": {"type": "string"},
         "include_turns": {"type": "boolean"},
@@ -80,7 +80,7 @@ class TaskBoardTool(Tool):
         include_turns: bool = False,
         **_: Any,
     ) -> str:
-        if action == "update":
+        if action in ("update", "carry"):
             return REFUSED_UPDATE
         if action != "recall":
             return f"Error: unknown action {action!r}; use action=recall."

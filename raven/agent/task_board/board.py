@@ -385,6 +385,83 @@ def apply_update(
     return out
 
 
+def apply_carry(
+    board: Board,
+    args: Mapping[str, Any],
+    eligible: Sequence[str],
+    *,
+    turn_at: str,
+    now_ms: int,
+) -> Board:
+    """The board with the questions each group's newest step now carries.
+
+    ``eligible`` names the groups this turn updated while their latest step still
+    asked something. Each has to be answered with the complete list its newest step
+    carries. A question the newest step itself asked this turn may not be left out,
+    since it went out with the reply and the user cannot have answered it yet; the
+    questions of an older step are the ones this turn may have settled. A group left
+    with questions is ``needs_you``. :class:`UpdateRejectedError` names every rule
+    the answer breaks.
+    """
+    rules = _Rules()
+    entries = args.get("groups")
+    if not isinstance(entries, list) or not all(isinstance(raw, Mapping) for raw in entries):
+        raise UpdateRejectedError(Problem("groups must be a list of objects"))
+    known = set(eligible)
+    by_id = {group.id: group for group in board.groups}
+    carried: dict[str, list[str]] = {}
+    for index, raw in enumerate(entries):
+        where = f"groups[{index}]"
+        group_id = raw.get("group")
+        if not isinstance(group_id, str) or group_id not in known:
+            rules.refuse(f"not asked about: {group_id}", where)
+            continue
+        if group_id in carried:
+            rules.refuse(f"{group_id} appears twice", where)
+            continue
+        questions = raw.get("questions")
+        if not isinstance(questions, list) or not all(isinstance(question, str) for question in questions):
+            rules.refuse("questions must be a list of questions", where)
+            continue
+        for number, question in enumerate(questions):
+            rules.filled(question, f"questions[{number}]", where, QUESTION_WORDS)
+        carried[group_id] = [question.strip() for question in questions]
+    for group_id in eligible:
+        if group_id not in carried:
+            rules.refuse(f"not answered: {group_id}")
+            continue
+        group = by_id.get(group_id)
+        if group is None or not group.steps:
+            rules.refuse(f"no step to carry on: {group_id}")
+            continue
+        if group.steps[-1].turn_at != turn_at:
+            continue
+        missing = [question for question in group.steps[-1].questions if question not in carried[group_id]]
+        if missing:
+            rules.refuse(f"a question the newest step already asks is missing: {missing[0]}")
+    if rules.problems:
+        raise UpdateRejectedError(rules.problems)
+
+    out = copy.deepcopy(board)
+    by_id = {group.id: group for group in out.groups}
+    before = {group_id: _revised(by_id[group_id]) for group_id in carried}
+    for group_id, questions in carried.items():
+        group = by_id[group_id]
+        group.steps[-1].questions = questions
+        if questions:
+            group.status = "needs_you"
+        group.updated_at = now_ms
+    for group_id in carried:
+        group, was = by_id[group_id], before[group_id]
+        now = _revised(group)
+        changed = [name for name in REVISED_FIELDS if now[name] != was[name]]
+        if changed:
+            group.revisions.append(
+                GroupRevision(turn_at, {name: was[name] for name in changed}, {name: now[name] for name in changed})
+            )
+    return out
+
+
 def _revised(group: TaskGroup) -> dict[str, Any]:
     return {name: getattr(group, name) for name in REVISED_FIELDS}
 

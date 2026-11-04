@@ -19,7 +19,7 @@ from raven.agent.task_board.board import (
     word_count,
 )
 from raven.agent.task_board.recall import search
-from raven.agent.task_board.runner import build_instruction
+from raven.agent.task_board.runner import build_carry_instruction, build_instruction
 
 
 @pytest.fixture
@@ -86,6 +86,20 @@ def test_the_zh_update_instruction_renders_the_board_and_handles(zh):
     assert "{board}" not in text and "{dispatches}" not in text
     assert text.index("[BEGIN BOARD RECORD]") < text.index("修复登录白屏") < text.index("[END BOARD RECORD]")
     assert text.index("[BEGIN DISPATCHES]") < text.index("定位白屏原因") < text.index("[END DISPATCHES]")
+
+
+def test_the_zh_carry_instruction_fences_the_questions_it_carries(zh):
+    asked = ProgressStep("s_0", "T0", None, "问用户", "问用户选哪种修法", [], ["用哪种修法？"])
+    newest = ProgressStep("s_1", "T1", None, "解释两件事", "解释了两件事", [], [])
+    before = TaskGroup("g_1", "修复登录白屏", "", "needs_you", 1, 1, [asked])
+    after = TaskGroup("g_1", "修复登录白屏", "", "idle", 1, 1, [asked, newest])
+
+    text = build_carry_instruction([(before, after)])
+
+    assert "上面这一轮已经结束" in text
+    assert "{groups}" not in text
+    start, end = text.index("[BEGIN QUESTIONS RECORD]"), text.index("[END QUESTIONS RECORD]")
+    assert start < text.index("用哪种修法？") < end
 
 
 def test_the_zh_instruction_asks_for_half_of_what_the_board_takes(zh):
