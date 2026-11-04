@@ -1316,6 +1316,64 @@ async def test_add_model_stores_the_text_a_user_states(fake_home: Path, monkeypa
     assert entry["model_labels"][key]["kind"] == "text"
 
 
+@pytest.mark.parametrize(
+    ("capabilities", "outputs", "kind"),
+    [
+        (["rerank"], ["text"], "reranker"),
+        (["embedding"], ["vector"], "embedding"),
+        (["image-generation"], ["text", "image"], "image"),
+        (["audio-generation"], ["audio"], "audio"),
+        (["video-generation"], ["video"], "video"),
+    ],
+)
+async def test_a_stated_kind_survives_the_round_trip(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch, capabilities: list[str], outputs: list[str], kind: str
+) -> None:
+    """The chip's stated tags reach the label as the kind the person chose.
+
+    Reranker is the case that regressed: its output is text, and the text output
+    used to strip the rerank capability the same overlay stated.
+    """
+    _write_config(fake_home, {"providers": {"custom": {"apiKey": "k", "apiBase": "https://example.test/v1"}}})
+    monkeypatch.setattr(
+        "raven.config.update_providers.test_provider",
+        lambda *a, **k: {"ok": False, "status": "network_error"},
+    )
+
+    await model_add_model(
+        {"slug": "custom", "model": "our-model", "capabilities": capabilities, "output_modalities": outputs}
+    )
+
+    entry = _entry(await model_options({}), "custom")
+    key = next(m for m in entry["model_labels"] if m.endswith("our-model"))
+    assert entry["model_labels"][key]["kind"] == kind
+
+
+async def test_the_endpoint_proof_and_the_label_agree(fake_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The add-model row and the picker after adding read the same evidence.
+
+    A sibling endpoint proves the model an embedder while the main list declares
+    text outputs; the proof has to survive into the label, not only the fetch.
+    """
+    _write_config(fake_home, {"providers": {"openrouter": {"apiKey": "sk-or"}}})
+    payload = {
+        "ok": True,
+        "status": "valid",
+        "model_ids": ["voyageai/voyage-code-4"],
+        "model_facts": {"voyageai/voyage-code-4": {"output_modalities": ["text"], "capabilities": []}},
+        "implied_capabilities": {"voyageai/voyage-code-4": "embedding"},
+    }
+    monkeypatch.setattr("raven.config.update_providers.test_provider", lambda *a, **k: payload)
+
+    out = await model_fetch_models({"slug": "openrouter"})
+    row = next(row for row in out["models"] if row["source"] == "live")
+    assert row["kind"] == "embedding"
+
+    await model_module.model_add_models({"slug": "openrouter", "models": [row["id"]]})
+    after = _entry(await model_options({}), "openrouter")
+    assert after["model_labels"][row["id"]]["kind"] == "embedding"
+
+
 async def test_options_lists_lm_studio_models_from_the_local_server(
     fake_home: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -276,7 +276,7 @@ def _model_labels(slug: str, models: "list[str]", *, section: Any = _UNLOADED) -
             continue
         entry: dict[str, Any] = {
             "label": row.label,
-            "kind": kind_of(row.capabilities, row.output_modalities, outputs_stated=row.stated_outputs),
+            "kind": kind_of(row.capabilities, row.output_modalities),
         }
         if row.description:
             entry["description"] = row.description
@@ -851,7 +851,7 @@ def _served_rows(slug: str, probe: dict[str, Any]) -> tuple[dict[str, dict[str, 
     from raven.providers.catalog import describe
     from raven.providers.rates import resolve_context_window
     from raven.providers.registry import find_by_name
-    from raven.providers.registry_data import CAPABILITIES, catalogue_for, kind_of
+    from raven.providers.registry_data import catalogue_for, kind_of
     from raven.providers.wire import merge_key
 
     live = [m for m in (probe.get("model_ids") or []) if isinstance(m, str) and m]
@@ -887,13 +887,21 @@ def _served_rows(slug: str, probe: dict[str, Any]) -> tuple[dict[str, dict[str, 
         if key in rows:
             continue
         raw_facts = facts.get(raw)
-        row = describe(slug, stored, overlay=_overlay_for(overlays, slug, stored), vendor=_vendor_facts(raw_facts))
-        capabilities = row.capabilities
+        if not isinstance(raw_facts, dict):
+            raw_facts = {}
         proven = implied.get(raw)
-        if proven and proven not in capabilities:
-            merged = {*capabilities, proven}
-            capabilities = tuple(name for name in CAPABILITIES if name in merged)
-        kind = kind_of(capabilities, row.output_modalities, outputs_stated=row.stated_outputs)
+        vendor_caps = tuple(name for name in raw_facts.get("capabilities") or [] if isinstance(name, str))
+        if proven and proven not in vendor_caps:
+            vendor_caps = (*vendor_caps, proven)
+        raw_outputs = tuple(name for name in raw_facts.get("output_modalities") or [] if isinstance(name, str))
+        row = describe(
+            slug,
+            stored,
+            overlay=_overlay_for(overlays, slug, stored),
+            vendor=_vendor_facts({"capabilities": list(vendor_caps), "output_modalities": list(raw_outputs)}),
+        )
+        capabilities = row.capabilities
+        kind = kind_of(capabilities, row.output_modalities)
         entry: dict[str, Any] = {
             "id": stored,
             "label": row.label,
@@ -913,13 +921,10 @@ def _served_rows(slug: str, probe: dict[str, Any]) -> tuple[dict[str, dict[str, 
             entry["context_window"] = window
         rows[key] = entry
         if key in live_keys:
-            vendor_caps = {name for name in (raw_facts or {}).get("capabilities") or [] if isinstance(name, str)}
             served[stored] = {
                 "kind": kind,
-                "capabilities": sorted(vendor_caps | ({proven} if proven else set())),
-                "output_modalities": [
-                    name for name in (raw_facts or {}).get("output_modalities") or [] if isinstance(name, str)
-                ],
+                "capabilities": sorted(set(vendor_caps)),
+                "output_modalities": list(raw_outputs),
             }
 
     return rows, served

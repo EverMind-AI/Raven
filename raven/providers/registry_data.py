@@ -288,30 +288,22 @@ def _kind_from_outputs(outputs: "set[str]") -> str:
     return "text"
 
 
-def kind_of(
-    capabilities: "tuple[str, ...] | list[str]",
-    outputs: "tuple[str, ...] | list[str]",
-    *,
-    outputs_stated: bool = False,
-) -> str:
-    """Which bucket this model belongs in, from what it writes and what it can do.
+def kind_of(capabilities: "tuple[str, ...] | list[str]", outputs: "tuple[str, ...] | list[str]") -> str:
+    """Which bucket this model belongs in, from what it can do and what it writes.
 
     Vision does not make a model an image model: reading pictures is something a
     text model does, and filtering "Image" to everything that can see would put
     most of a modern catalogue behind it. What a model *writes* is the question,
-    so declared outputs outrank a capability. The generator derives a
-    ``*-generation`` capability from the same field, which is why bundled rows
-    agree either way; when a vendor or the user overrides the outputs, the stale
-    derivation must not outvote them.
+    so declared outputs outrank a derived ``*-generation`` capability.
 
-    The exception is an embedding or rerank tag. The catalogue writes
-    ``("text",)`` for all 24 of those rows, and the tag is the only thing that
-    says what they are -- unless the user stated the outputs themselves, since
-    the user is describing their own deployment.
+    Embedding and rerank tags decide before outputs. The catalogue writes
+    ``("text",)`` for all 24 of those rows, and a reranker's own output is text,
+    so neither output can contradict the tag. Callers strip the tags a stronger
+    source overrode before calling -- a declared output from a vendor or the
+    user removes the bundled ones -- so a tag surviving here is one nobody
+    contradicted.
     """
     caps, outs = set(capabilities), set(outputs)
-    if outputs_stated and outs:
-        return _kind_from_outputs(outs)
     if "embedding" in caps:
         return "embedding"
     if "rerank" in caps:

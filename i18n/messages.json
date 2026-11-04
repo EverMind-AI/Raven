@@ -3165,6 +3165,10 @@
       "en": "Text",
       "zh": "文本"
     },
+    "gui.model.type.auto": {
+      "en": "Auto",
+      "zh": "自动"
+    },
     "gui.model.cap.tool": {
       "en": "Tool",
       "zh": "工具"

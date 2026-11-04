@@ -678,8 +678,7 @@ def test_outputs_the_user_states_beat_both_vendor_and_catalogue() -> None:
         vendor=VendorFacts(output_modalities=("image",)),
         overlay=ModelOverlay(output_modalities=["text"]),
     )
-    assert row.stated_outputs
-    assert kind_of(row.capabilities, row.output_modalities, outputs_stated=row.stated_outputs) == "text"
+    assert kind_of(row.capabilities, row.output_modalities) == "text"
     assert "image-generation" not in row.capabilities
 
 
@@ -713,6 +712,49 @@ def test_a_vendor_s_vector_output_keeps_an_embedder_embedding() -> None:
     row = describe("custom", "text-embedding-3-small", vendor=VendorFacts(output_modalities=("vector",)))
     assert kind_of(row.capabilities, row.output_modalities) == "embedding"
     assert "embedding" in row.capabilities
+
+
+def test_a_stated_reranker_keeps_its_kind_when_the_overlay_states_text() -> None:
+    """A reranker's output is text; the capability is the kind statement.
+
+    Every UI path states a reranker as rerank plus text outputs, so stripping
+    the tag the same overlay stated filed the explicit choice as Text. A stated
+    outputs-only overlay on an inferred embedder must still strip that tag.
+    """
+    from raven.config.schema import ModelOverlay
+    from raven.providers.catalog import describe
+    from raven.providers.registry_data import kind_of
+
+    stated = describe(
+        "hosted_vllm",
+        "our-finetune",
+        overlay=ModelOverlay(capabilities=["rerank"], output_modalities=["text"]),
+    )
+    assert stated.capabilities == ("rerank",)
+    assert kind_of(stated.capabilities, stated.output_modalities) == "reranker"
+
+    text_only = describe("custom", "text-embedding-3-small", overlay=ModelOverlay(output_modalities=["text"]))
+    assert text_only.capabilities == ()
+    assert kind_of(text_only.capabilities, text_only.output_modalities) == "text"
+
+
+def test_an_endpoint_proved_embedding_survives_the_vendor_s_text_outputs() -> None:
+    """The vendor's own endpoint proof is not a stale bundled tag.
+
+    A model served from `/embeddings/models` is proved an embedder by the same
+    vendor whose main list writes text outputs; the proof survives, so the
+    add-model row and the label agree.
+    """
+    from raven.providers.catalog import VendorFacts, describe
+    from raven.providers.registry_data import kind_of
+
+    row = describe(
+        "openrouter",
+        "voyageai/voyage-code-4",
+        vendor=VendorFacts(capabilities=("embedding",), output_modalities=("text",)),
+    )
+    assert row.capabilities == ("embedding",)
+    assert kind_of(row.capabilities, row.output_modalities) == "embedding"
 
 
 def test_an_overlay_written_bare_matches_the_qualified_id() -> None:

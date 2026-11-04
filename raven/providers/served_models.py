@@ -35,9 +35,33 @@ def _read() -> dict[str, Any]:
         raw = json.loads(cache_path().read_text(encoding="utf-8"))
     except Exception:
         return {}
-    if not isinstance(raw, dict) or raw.get("version") != CACHE_VERSION or not isinstance(raw.get("providers"), dict):
+    if not isinstance(raw, dict) or not isinstance(raw.get("providers"), dict):
+        return {}
+    version = raw.get("version")
+    if version == 1:
+        return _migrate_v1(raw["providers"])
+    if version != CACHE_VERSION:
         return {}
     return raw["providers"]
+
+
+def _migrate_v1(providers: dict[str, Any]) -> dict[str, Any]:
+    """Version 1 stored ``{id: kind}``; the shape maps directly onto the facts.
+
+    Reading it instead of dropping it keeps every provider's labels across an
+    upgrade, and keeps the first write from rewriting the file with only the
+    provider that was just asked.
+    """
+    migrated: dict[str, Any] = {}
+    for slug, entry in providers.items():
+        models = entry.get("models") if isinstance(entry, dict) else None
+        if isinstance(models, dict):
+            entry = {
+                **entry,
+                "models": {str(model): {"kind": str(kind)} for model, kind in models.items() if isinstance(kind, str)},
+            }
+        migrated[slug] = entry
+    return migrated
 
 
 def _write(providers: dict[str, Any]) -> None:

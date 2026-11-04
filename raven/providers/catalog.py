@@ -83,9 +83,6 @@ class ModelRow:
     input_modalities: tuple[str, ...] = ()
     output_modalities: tuple[str, ...] = ()
     reasoning_efforts: tuple[str, ...] = ()
-    #: Whether the outputs above are the user's own statement. Those outrank
-    #: even an embedding or rerank tag, which is what ``kind_of`` needs to know.
-    stated_outputs: bool = False
 
     @property
     def described(self) -> bool:
@@ -151,19 +148,23 @@ def describe(
     outputs = entry.output_modalities if entry is not None else ()
     vendor_capabilities = clean_tags(vendor.capabilities, CAPABILITIES) if vendor is not None else ()
     vendor_outputs = clean_tags(vendor.output_modalities, MODALITIES) if vendor is not None else ()
-    if vendor_capabilities:
-        capabilities = _union_capabilities(capabilities, vendor_capabilities)
     if vendor_outputs:
         outputs = vendor_outputs
 
     capabilities = _with_inferred(ref, capabilities)
+    if vendor_capabilities:
+        capabilities = _union_capabilities(capabilities, vendor_capabilities)
     if not outputs and not _has_kind_tag(capabilities):
         capabilities = _union_capabilities(capabilities, family_tags(ref))
     if vendor_outputs:
-        # A declared output outranks the bundled tags it contradicts, embedding
-        # and rerank included. The catalogue's own outputs never take this
-        # path, which is the exception the bundled embedder rows depend on.
-        capabilities = _with_declared_outputs(capabilities, vendor_outputs)
+        # A declared output strips the kind tags inferred from the row, but not
+        # one the vendor proved at its own endpoint. Generation tags follow the
+        # outputs either way; the catalogue's own outputs never take this path,
+        # which is the exception the bundled embedder rows depend on.
+        proved = tuple(name for name in vendor_capabilities if name in _KIND_TAGS)
+        capabilities = _union_capabilities(
+            tuple(_strip_kind_tags(capabilities)), (*proved, *_generation_capabilities(vendor_outputs))
+        )
 
     row = ModelRow(
         ref=ref,
@@ -216,25 +217,18 @@ def _generation_capabilities(outputs: tuple[str, ...]) -> set[str]:
     return found
 
 
+#: Tags that state a kind directly rather than derive it from outputs. A
+#: reranker's output is text, so a declared output cannot contradict these.
+_KIND_TAGS = frozenset({"embedding", "rerank"})
+
+
 def _has_kind_tag(capabilities: tuple[str, ...]) -> bool:
-    return bool({"embedding", "rerank"} & set(capabilities)) or any(
-        name.endswith("-generation") for name in capabilities
-    )
+    return bool(_KIND_TAGS & set(capabilities)) or any(name.endswith("-generation") for name in capabilities)
 
 
-def _with_declared_outputs(capabilities: tuple[str, ...], outputs: tuple[str, ...]) -> tuple[str, ...]:
-    """Capabilities whose kind tags follow the outputs that were declared.
-
-    A user statement and a vendor declaration both outrank bundled tags, so the
-    tags that decided the kind before -- generative, embedding or rerank -- go
-    with outputs that contradict them. The catalogue's own outputs never reach
-    this helper, which is the exception its embedder and rerank rows depend on.
-    """
-    from raven.providers.registry_data import CAPABILITIES
-
-    kept = {name for name in capabilities if not name.endswith("-generation") and name not in {"embedding", "rerank"}}
-    merged = kept | _generation_capabilities(outputs)
-    return tuple(name for name in CAPABILITIES if name in merged)
+def _strip_kind_tags(capabilities: tuple[str, ...]) -> set[str]:
+    """Capabilities without the tags a declared output has overridden."""
+    return {name for name in capabilities if not name.endswith("-generation") and name not in _KIND_TAGS}
 
 
 def model_cost(model: str) -> dict | None:
@@ -289,10 +283,20 @@ def _with_overlay(row: ModelRow, overlay: "ModelOverlay | None") -> ModelRow:
     # Stated tags replace the catalogue's rather than joining them: a person
     # correcting a row that says "vision" is saying it does not, and a union
     # would make that correction unsayable.
+    stated_capabilities = clean_tags(overlay.capabilities, CAPABILITIES)
     stated_outputs = clean_tags(overlay.output_modalities, MODALITIES)
-    capabilities = clean_tags(overlay.capabilities, CAPABILITIES) or row.capabilities
     if stated_outputs:
-        capabilities = _with_declared_outputs(capabilities, stated_outputs)
+        # A kind tag the person stated is the answer: a reranker's own output is
+        # text, so that output cannot contradict it. A tag inferred from the row
+        # is exactly what a declared output overrides.
+        kept = (
+            tuple(name for name in stated_capabilities if not name.endswith("-generation"))
+            if stated_capabilities
+            else tuple(_strip_kind_tags(row.capabilities))
+        )
+        capabilities = _union_capabilities(kept, tuple(_generation_capabilities(stated_outputs)))
+    else:
+        capabilities = stated_capabilities or row.capabilities
     changed = {
         "label": overlay.label or row.label,
         "description": overlay.description or row.description,
@@ -302,12 +306,7 @@ def _with_overlay(row: ModelRow, overlay: "ModelOverlay | None") -> ModelRow:
         "reasoning_efforts": stated_efforts or row.reasoning_efforts,
     }
     described = row.described or bool(overlay.label or overlay.description)
-    return replace(
-        row,
-        **changed,
-        source=SOURCE_OVERLAY if described else row.source,
-        stated_outputs=bool(stated_outputs),
-    )
+    return replace(row, **changed, source=SOURCE_OVERLAY if described else row.source)
 
 
 def _vendor_id(provider: str, model: str) -> str:

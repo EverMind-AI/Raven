@@ -136,22 +136,27 @@ export function rowName(m: ModelCandidate, group: string, host: ModelHost): stri
   return group && text.startsWith(`${group}/`) ? text.slice(group.length + 1) : text
 }
 
-function KindChip({ value, onCycle }: { value: Kind; onCycle(next: Kind): void }): JSX.Element {
+function KindChip({ value, onCycle }: { value: Kind | null; onCycle(next: Kind): void }): JSX.Element {
+  /* Nothing stated yet: the name gave no better answer than the Text default,
+     so the chip says Auto rather than assert a kind the backend may file
+     differently. The first click states Text, the choice that used to take a
+     full cycle of six. */
+  const next = value === null ? 'text' : nextKind(value)
   return (
     <span
       className="settings-apkind"
       role="button"
       tabIndex={0}
       aria-label={t('gui.model.add_type')}
-      onClick={(e) => { e.stopPropagation(); onCycle(nextKind(value)) }}
+      onClick={(e) => { e.stopPropagation(); onCycle(next) }}
       onKeyDown={(e) => {
         if (e.key !== 'Enter' && e.key !== ' ') return
         e.stopPropagation(); e.preventDefault()
-        onCycle(nextKind(value))
+        onCycle(next)
       }}
     >
-      <TagGlyph name={KIND_GLYPH[value]} />
-      {t(KIND_LABEL[value])}
+      {value !== null && <TagGlyph name={KIND_GLYPH[value]} />}
+      {t(value === null ? 'gui.model.type.auto' : KIND_LABEL[value])}
     </span>
   )
 }
@@ -179,7 +184,11 @@ export function AddModelPop({ p }: { p: ProviderRow }): JSX.Element {
   const counts = kindCounts(sheet, configured, p.labels)
   const q = sheet.q.trim()
   const exact = allRows(sheet, configured, p.labels).some((m) => bare(p, m.id) === bare(p, q))
-  const typedKind = sheet.typed ?? guessKind(q)
+  /* The name's guess is a suggestion, not an answer: it only knows the rerank
+     and embedding families, and Text is its fallback. Text shows as Auto so the
+     chip never promises a bucket the backend's catalogue families overrule. */
+  const guessed = guessKind(q)
+  const typedKind: Kind | null = sheet.typed ?? (guessed === 'text' ? null : guessed)
 
   /* Below the button it hangs off, flipping above only when the room below is
      too short to be useful and there is more of it above. The height follows

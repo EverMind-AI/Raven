@@ -510,12 +510,20 @@ def test_embedding_and_rerank_tags_still_decide_before_outputs() -> None:
     assert kind_of(["rerank"], ["text"]) == "reranker"
 
 
-def test_outputs_the_user_states_outrank_every_tag() -> None:
+def test_a_kind_tag_decides_before_the_outputs_it_can_live_with() -> None:
+    """A reranker writes text, and that text cannot contradict it.
+
+    The stated-tags path used to answer from outputs alone, which filed every
+    explicitly chosen reranker as text. A kind tag is the statement; the output
+    vocabulary has no word for a ranking. Stale tags are stripped by the caller
+    before this function sees them, which is what keeps a Text choice on an
+    inferred embedder working.
+    """
     from raven.providers.registry_data import kind_of
 
-    assert kind_of(["embedding"], ["text"], outputs_stated=True) == "text"
-    assert kind_of(["image-generation"], ["text"], outputs_stated=True) == "text"
-    assert kind_of(["function-call"], ["image"], outputs_stated=True) == "image"
+    assert kind_of(["rerank"], ["text"]) == "reranker"
+    assert kind_of(["embedding"], ["text"]) == "embedding"
+    assert kind_of(["function-call"], ["image"]) == "image"
 
 
 def test_an_uncatalogued_version_inherits_its_family_s_kind() -> None:
