@@ -5697,15 +5697,3 @@ async def test_after_turn_memory_is_handed_the_markers_text_on_a_silent_turn(wor
 
     assert [record["final_content"] for record in seen] == ["[SILENT]"]
     assert seen[0]["messages"][-1]["content"] == "[SILENT]"
-
-
-@pytest.fixture(autouse=True)
-def _fake_model_declares_every_level(monkeypatch):
-    """The turn clamps to the model's levels; the scripted model declares them all."""
-    from raven.agent.loop import wiring
-
-    monkeypatch.setattr(
-        wiring.effort_levels,
-        "levels_for",
-        lambda model, declared=(), refresh=False: ("minimal", "low", "medium", "high", "xhigh", "max"),
-    )

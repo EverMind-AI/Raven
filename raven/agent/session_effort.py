@@ -9,14 +9,14 @@ outlive the gateway (a policy held only in memory goes back to the default on
 every restart, which is what the tier does), and the turn reads it where it
 reads the model.
 
-Where it ranks (``in_force``, the one rule the turn runs at and the RPC
+Where it ranks (``in_force``, the rule the turn runs at and the RPC's default
 reports): the configured default underneath, a Session Mode's own
-``reasoningEffort`` over that, this pick over both, and a hook's rollback
-override over the lot (``_run_agent_loop``'s ``gen_overrides``). The model then
-bounds the result (``clamp``): a level the current model does not declare is
-dropped to None, the provider's own default, and the stored pick is left on the
-record so it applies again if a later model declares it. Raven's own calls
-only: a sub-agent is told the configured default, as before.
+``reasoningEffort`` over that, and this pick over both; a hook's rollback
+override sits over the lot (``_run_agent_loop``'s ``gen_overrides``). The turn
+fits the pick to its model's wire first (``fit``): a level the current wire
+does not take runs at the highest rung it does take, and the stored pick is
+left on the record, so it applies as named again if a later model takes it.
+Raven's own calls only: a sub-agent is told the configured default, as before.
 
 The words a session may pick are its model's provider's
 (``LLMProvider.reasoning_efforts``: the four every wire takes, ``xhigh`` and
@@ -79,18 +79,6 @@ def in_force(pick: str | None, mode_effort: str | None, configured: str | None) 
     inputs and this is the one place they are ranked.
     """
     return pick or mode_effort or configured or None
-
-
-def clamp(value: str | None, levels: tuple[str, ...] | None) -> str | None:
-    """The value if this model declares it; None otherwise.
-
-    ``None`` levels mean the table could not be read, which is not a model
-    answer: the caller's value is left alone (fail open). An empty tuple means
-    the model declares no reasoning at all, so even a valid word is dropped.
-    """
-    from raven.providers.effort_levels import clamp as _clamp
-
-    return _clamp(value, levels)
 
 
 def fit(effort: str | None, words: Iterable[str] | None) -> str | None:

@@ -15,9 +15,6 @@ from __future__ import annotations
 import pytest
 
 from raven.agent import session_effort
-from raven.providers import effort_levels as effort_levels_module
-
-_REAL_LEVELS_FOR = effort_levels_module.levels_for
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.agent.window import compaction
@@ -175,8 +172,8 @@ async def test_a_default_cleared_on_a_running_gateway_reaches_the_next_turn(tmp_
     await loop._process_message(_req())
 
     assert provider.efforts == [sent]
-    # The one rule the RPC reports from answers the same.
-    assert loop.session_reasoning_effort("cli:c", None) == sent
+    # The configured default the turn's last rung reads answers the same.
+    assert loop.default_reasoning_effort == sent
 
 
 # The effort in force, under three readings the turn's side calls must agree
@@ -411,30 +408,6 @@ async def test_the_watch_work_judgement_is_handed_the_sessions_effort(tmp_path):
     assert handed == ["max"], handed
 
 
-@pytest.fixture(autouse=True)
-def _fake_model_declares_every_level(monkeypatch):
-    from raven.agent.loop import wiring
-
-    monkeypatch.setattr(
-        wiring.effort_levels,
-        "levels_for",
-        lambda model, declared=(), refresh=False: ("minimal", "low", "medium", "high", "xhigh", "max"),
-    )
-
-
-async def test_a_pick_the_model_does_not_declare_is_dropped(tmp_path, monkeypatch):
-    from raven.agent.loop import wiring
-
-    monkeypatch.setattr(
-        wiring.effort_levels,
-        "levels_for",
-        lambda model, declared=(), refresh=False: ("medium", "high"),
-    )
-    loop = _loop(tmp_path, _ScriptedProvider([_text("ok")]))
-    assert loop.session_reasoning_effort("cli:c", "minimal") is None
-    assert loop.session_reasoning_effort("cli:c", "high") == "high"
-
-
 def _live_with_effort(tmp_path, effort: str) -> LiveConfig:
     import json
 
@@ -443,30 +416,38 @@ def _live_with_effort(tmp_path, effort: str) -> LiveConfig:
     return LiveConfig(path)
 
 
-async def test_a_model_with_no_row_still_gets_the_configured_effort(tmp_path, monkeypatch):
-    """Only a pick is bounded by what the model declares; the configured
-    default was sent on main and keeps being sent for models the table lacks."""
-    from raven.agent.loop import wiring
+def _wire(provider, words):
+    """The provider answering ``words`` for this wire, as the turn asks it."""
+    provider.reasoning_efforts = lambda model=None: words
+    return provider
 
-    monkeypatch.setattr(wiring.effort_levels, "levels_for", lambda model, declared=(), refresh=False: ())
-    loop = _loop(tmp_path, _ScriptedProvider([_text("ok")]))
+
+async def test_a_narrow_wire_still_gets_the_configured_effort(tmp_path):
+    """Only a pick is fitted to the wire; the configured default goes out as
+    it stands, even where the wire's own words do not carry it."""
+    provider = _wire(_ScriptedProvider([_text("ok")]), ("low", "medium"))
+    loop = _loop(tmp_path, provider)
     loop._live_config = _live_with_effort(tmp_path, "high")
-    assert loop.session_reasoning_effort("cli:c") == "high"
+
+    await loop._process_message(_req())
+
+    assert provider.calls[0]["reasoning_effort"] == "high"
 
 
-async def test_an_undeclared_pick_falls_back_to_the_mode_or_configured_word(tmp_path, monkeypatch):
-    from raven.agent.loop import wiring
-
-    monkeypatch.setattr(
-        wiring.effort_levels,
-        "levels_for",
-        lambda model, declared=(), refresh=False: ("medium", "high"),
-    )
-    loop = _loop(tmp_path, _ScriptedProvider([_text("ok")]))
+async def test_a_pick_fitted_to_nothing_falls_back_to_the_mode_or_configured_word(tmp_path):
+    """A pick below every rung the wire takes runs at the mode's word, else
+    the configured default -- not at the pick and not at None."""
+    provider = _wire(_ScriptedProvider([_text("ok")]), ("medium", "high"))
+    loop = _loop(tmp_path, provider)
     loop._live_config = _live_with_effort(tmp_path, "medium")
-    assert loop.session_reasoning_effort("cli:c", "minimal") == "medium"
+    loop.sessions.get_or_create("cli:c").metadata["reasoning_effort"] = "minimal"
+
+    await loop._process_message(_req())
+    assert provider.calls[0]["reasoning_effort"] == "medium"
+
     loop.set_session_policy("cli:c", reasoning_effort="high")
-    assert loop.session_reasoning_effort("cli:c", "minimal") == "high"
+    await loop._process_message(_req())
+    assert provider.calls[1]["reasoning_effort"] == "high"
 
 
 async def test_a_routed_model_bounds_the_effort_the_turn_sends(tmp_path, monkeypatch):
@@ -489,84 +470,30 @@ async def test_a_routed_model_bounds_the_effort_the_turn_sends(tmp_path, monkeyp
     assert provider.calls[0]["reasoning_effort"] == "medium"
 
 
-async def test_a_model_that_declares_no_reasoning_drops_the_pick(tmp_path, monkeypatch):
-    from raven.agent.loop import wiring
+async def test_a_wire_with_no_words_runs_the_pick_at_the_default(tmp_path):
+    """A wire that takes no rung at all leaves the pick at the default, the
+    provider's own answer for None."""
+    provider = _wire(_ScriptedProvider([_text("ok")]), ())
+    loop = _loop(tmp_path, provider)
+    loop.sessions.get_or_create("cli:c").metadata["reasoning_effort"] = "high"
 
-    monkeypatch.setattr(wiring.effort_levels, "levels_for", lambda model, declared=(), refresh=False: ())
-    loop = _loop(tmp_path, _ScriptedProvider([_text("ok")]))
-    assert loop.session_reasoning_effort("cli:c", "high") is None
+    await loop._process_message(_req())
 
-
-async def test_an_unreadable_table_keeps_the_pick(tmp_path, monkeypatch):
-    from raven.agent.loop import wiring
-
-    monkeypatch.setattr(wiring.effort_levels, "levels_for", lambda model, declared=(), refresh=False: None)
-    loop = _loop(tmp_path, _ScriptedProvider([_text("ok")]))
-    assert loop.session_reasoning_effort("cli:c", "high") == "high"
+    assert provider.calls[0]["reasoning_effort"] is None
 
 
-def _live_with_legacy_overlay(tmp_path) -> LiveConfig:
-    import json
+async def test_a_provider_that_cannot_say_leaves_the_pick_as_named(tmp_path):
+    """A provider that cannot answer is not a model answer: the pick goes out
+    as named, and nothing on that path fails the turn."""
 
-    path = tmp_path / "config.json"
-    path.write_text(
-        json.dumps(
-            {
-                "providers": {
-                    "zhipu": {
-                        "modelOverlay": {
-                            "zai/glm-5": {"reasoningEfforts": ["high"]},
-                        }
-                    }
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    return LiveConfig(path)
+    def broken(model=None):
+        raise RuntimeError("no credentials for this vendor yet")
 
+    provider = _ScriptedProvider([_text("ok")])
+    provider.reasoning_efforts = broken
+    loop = _loop(tmp_path, provider)
+    loop.sessions.get_or_create("cli:c").metadata["reasoning_effort"] = "high"
 
-async def test_a_legacy_provider_spelling_reaches_the_overlay(tmp_path, monkeypatch):
-    """The file kept its former provider name; the turn must read the overlay
-    the same way the RPC's parsed config does, or the status bar and the turn
-    disagree."""
-    from raven.agent.loop import wiring
+    await loop._process_message(_req())
 
-    monkeypatch.setattr(
-        wiring.effort_levels,
-        "levels_for",
-        lambda model, declared=(), refresh=False: tuple(declared) if declared else ("minimal", "low"),
-    )
-    loop = AgentLoop(
-        provider=_ScriptedProvider([_text("ok")]),
-        workspace=tmp_path,
-        model="zai/glm-5",
-        policy=TurnPolicy(max_iterations=6),
-        tools=ToolWiring(restrict_to_workspace=True),
-    )
-    loop._live_config = _live_with_legacy_overlay(tmp_path)
-    assert loop.session_reasoning_effort("cli:c", "high") == "high"
-
-
-async def test_the_turn_reads_a_codex_accounts_levels_from_the_cache(tmp_path, monkeypatch):
-    """The turn must never fetch the account catalogue; the RPC warms it."""
-    from raven.agent.loop import wiring
-    from raven.providers import codex_catalog
-
-    monkeypatch.setattr(wiring.effort_levels, "levels_for", _REAL_LEVELS_FOR)
-    calls = []
-
-    def efforts(slug, *, refresh=False):
-        calls.append((slug, refresh))
-        return ("high",)
-
-    monkeypatch.setattr(codex_catalog, "account_efforts", efforts)
-    loop = AgentLoop(
-        provider=_ScriptedProvider([_text("ok")]),
-        workspace=tmp_path,
-        model="openai-codex/gpt-5.6-sol",
-        policy=TurnPolicy(max_iterations=6),
-        tools=ToolWiring(restrict_to_workspace=True),
-    )
-    assert loop.session_reasoning_effort("cli:c", "high") == "high"
-    assert calls == [("gpt-5.6-sol", False)]
+    assert provider.calls[0]["reasoning_effort"] == "high"

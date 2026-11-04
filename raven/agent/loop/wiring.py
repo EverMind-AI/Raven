@@ -44,7 +44,6 @@ from raven.agent.subagent import charter as charter_mod
 from raven.agent.subagent.role import is_subagent_process
 from raven.agent.tools.ask_user import DEFAULT_TIMEOUT_S
 from raven.contracts.token_strategy import UsageSnapshot
-from raven.providers import effort_levels
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -522,56 +521,6 @@ class WiringMixin:
         from raven.config.live import held, reasoning_effort
 
         return held(_EFFORT_KEY, lambda: reasoning_effort(self._live_config))
-
-    def session_reasoning_effort(
-        self,
-        session_key: str | None,
-        pick: str | None = None,
-        model: str | None = None,
-    ) -> str | None:
-        """The reasoning effort this session's own calls run at, short of a hook's override.
-
-        ``session_effort.in_force`` over this loop's inputs: the pick the caller
-        read off the session's record, the session's mode's word, and the
-        configured default as the file has it now. ``model`` is the id the loop
-        was handed for this turn -- the router's pick when it made one, else the
-        session's own -- and bounds the **pick** (``session_effort.clamp``): a
-        level it does not declare, by LiteLLM's table or its provider overlay,
-        is dropped rather than sent. The mode's word and the configured default
-        are not narrowed here; they are not this conversation's pick and were
-        sent as they stand before the pick existed. Beside ``session_tier`` for
-        the reason it gives -- the turn and the RPC need the one rule, and the
-        policy it reads lives here -- and reached on ``self`` by the turn, so
-        nothing imports anything new.
-        """
-        from raven.agent import session_effort
-        from raven.providers.overlay import declared_for
-        from raven.providers.registry import find_by_model, split_model_id
-
-        model_id = model or (
-            self.session_model(session_key) if session_key and self.has_session_binding(session_key) else self.model
-        )
-        provider, _rest = split_model_id(model_id)
-        if not provider:
-            spec = find_by_model(model_id)
-            provider = getattr(spec, "name", "") if spec else ""
-        levels = effort_levels.levels_for(
-            model_id,
-            declared_for(self._live_config.get("providers") or {}, provider, model_id),
-        )
-        valid_pick = session_effort.clamp(pick, levels)
-        if pick is not None and valid_pick is None:
-            logger.debug(
-                "session {}: reasoning effort {} is not declared by {}; using the session default",
-                session_key,
-                pick,
-                model_id,
-            )
-        return session_effort.in_force(
-            valid_pick,
-            self.session_policy(session_key or "").reasoning_effort,
-            self.default_reasoning_effort,
-        )
 
     @property
     def personalization_enabled(self) -> bool:

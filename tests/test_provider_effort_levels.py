@@ -269,21 +269,3 @@ def test_an_overlays_last_alias_wins():
         }
     }
     assert overlay_for(section, "openai", "openai/gpt-5") == {"reasoningEfforts": ["high"]}
-
-
-def test_declared_for_reads_raw_and_parsed_providers_alike(tmp_path):
-    """The turn reads the live file's raw subtree and the RPC the parsed
-    config; one lookup keeps their answers, including a legacy spelling."""
-    import json
-
-    from raven.config.live import LiveConfig
-    from raven.config.loader import load_config
-    from raven.providers.overlay import declared_for
-
-    path = tmp_path / "config.json"
-    path.write_text(
-        json.dumps({"providers": {"zhipu": {"modelOverlay": {"zai/glm-5": {"reasoningEfforts": ["high"]}}}}}),
-        encoding="utf-8",
-    )
-    assert declared_for(LiveConfig(path).get("providers") or {}, "zai", "zai/glm-5") == ("high",)
-    assert declared_for(load_config(path).providers, "zai", "zai/glm-5") == ("high",)

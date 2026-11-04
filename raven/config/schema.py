@@ -366,11 +366,11 @@ class ModelOverlay(Base):
     and `ProviderSpec`, which is why a wrong tag here costs a wrong picture of a
     model and never a wrong call.
 
-    ``reasoning_efforts`` is the exception to the display-only rule: it states
-    the words this model accepts for a per-conversation pick, and
-    ``providers/effort_levels.py`` prefers it over the LiteLLM table. A word
+    ``reasoning_efforts`` states the words this model accepts for the model
+    row's display. It is not where a per-conversation pick is checked: that is
+    the provider's own answer (``LLMProvider.reasoning_efforts``). A word
     outside the effort ladder is refused at the RPC door; an empty list means
-    nothing was stated and falls back to the table.
+    nothing was stated.
     """
 
     label: str = ""

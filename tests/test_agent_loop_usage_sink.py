@@ -1391,15 +1391,3 @@ async def test_a_turn_whose_calls_read_no_window_still_reports_a_whole_usage(wor
 
     assert TurnUsage.model_validate(sink).context_used == 0
     assert reported_usage(sink) is None
-
-
-@pytest.fixture(autouse=True)
-def _fake_model_declares_every_level(monkeypatch):
-    """The turn clamps to the model's levels; the scripted model declares them all."""
-    from raven.agent.loop import wiring
-
-    monkeypatch.setattr(
-        wiring.effort_levels,
-        "levels_for",
-        lambda model, declared=(), refresh=False: ("minimal", "low", "medium", "high", "xhigh", "max"),
-    )

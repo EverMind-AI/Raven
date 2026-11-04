@@ -8,9 +8,10 @@ resolves the provider through ``get_llm_provider``, which for LiteLLM's OAuth
 spellings (``github_copilot/``, ``chatgpt/``) starts an interactive login, and
 a prefixed id already names its provider. The Codex account catalogue is the one provider-owned source: its
 ``supported_reasoning_levels`` are the account's own declaration for models no
-static table carries. It is network data, so the turn reads only the cache
-``codex_catalog`` keeps; ``refresh`` lets the RPC warm that cache. A level the
-account states outside this build's ladder (``ultra``) is not offered.
+static table carries. It is network data, so the retry descent reads only the
+cache ``codex_catalog`` keeps; ``refresh`` lets a caller warm that cache. A
+level the account states outside this build's ladder (``ultra``) is not
+offered.
 
 The answer is tri-state for the static table: a tuple of levels when the model
 or the user declares them, ``()`` when the model declares none, and ``None``
@@ -48,9 +49,9 @@ LEVEL_ORDER: tuple[str, ...] = tuple(reversed(REASONING_EFFORT_LADDER))
 def levels_for(model: str, declared: Sequence[str] = (), *, refresh: bool = False) -> tuple[str, ...] | None:
     """The levels this model declares, or ``()``/``None`` per the module docstring.
 
-    ``refresh`` lets an explicit effort set ask the Codex account catalogue,
-    off the event loop; the turn and reports leave it false and read the cache
-    only, where an expired answer is still its last-good one.
+    ``refresh`` lets a caller ask the Codex account catalogue, off the event
+    loop; the retry descent leaves it false and reads the cache only, where an
+    expired answer is still its last-good one.
     """
     if declared:
         known = set(declared)
@@ -85,18 +86,6 @@ def levels_for(model: str, declared: Sequence[str] = (), *, refresh: bool = Fals
 def reset() -> None:
     """Drop the cached table/index; tests and a LiteLLM reload use it."""
     _index.cache_clear()
-
-
-def clamp(value: str | None, levels: tuple[str, ...] | None) -> str | None:
-    """The value if this model declares it; None otherwise.
-
-    ``None`` levels mean the table could not be read, which is not a model
-    answer: the caller's value is left alone (fail open). An empty tuple means
-    the model declares no reasoning at all, so even a valid word is dropped.
-    """
-    if levels is None:
-        return value
-    return value if value in levels else None
 
 
 def downgrade(value: str | None, levels: tuple[str, ...] | None) -> str | None:

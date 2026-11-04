@@ -112,19 +112,3 @@ def test_of_accepts_a_word_from_the_extended_ladder() -> None:
 
 def test_of_still_rejects_a_word_outside_the_ladder() -> None:
     assert session_effort.of({"reasoning_effort": "turbo"}) is None
-
-
-def test_clamp_keeps_a_declared_value() -> None:
-    assert session_effort.clamp("high", ("minimal", "low", "medium", "high")) == "high"
-
-
-def test_clamp_drops_an_undeclared_value() -> None:
-    assert session_effort.clamp("max", ("minimal", "low", "medium", "high")) is None
-
-
-def test_clamp_drops_everything_when_the_model_declares_none() -> None:
-    assert session_effort.clamp("high", ()) is None
-
-
-def test_clamp_is_a_no_op_when_the_table_could_not_be_read() -> None:
-    assert session_effort.clamp("high", None) == "high"
