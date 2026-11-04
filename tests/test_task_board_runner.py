@@ -963,6 +963,27 @@ async def test_a_carry_that_never_answers_leaves_the_update_as_written(tmp_path)
     assert board is not None and board.groups[0].status == "idle"
 
 
+async def test_a_question_the_reader_set_aside_during_the_carry_call_is_not_written_back(tmp_path):
+    """The pass is a model round trip; a set-aside that lands while it runs must not
+    be undone by the list the model was asked for before it."""
+    service = _service(tmp_path)
+    _waiting(service)
+    calls = []
+
+    async def call(rows):
+        calls.append(rows)
+        if len(calls) == 1:
+            return _update_with([_step_on("g_c", status="idle")])
+        await service.ignore_question(KEY, "g_c", "s_0", WAITING)
+        return _kept(WAITING)
+
+    board = await _run(service, call, dispatches=())
+
+    assert len(calls) == 2
+    assert board is not None
+    assert (board.groups[0].status, board.groups[0].steps[-1].questions) == ("idle", [])
+
+
 async def test_an_update_without_a_step_still_asks_about_its_open_questions(tmp_path):
     """The turn rewrote the group itself and wrote no step: the newest step still
     asks something, so the question pass runs and the question stays open."""

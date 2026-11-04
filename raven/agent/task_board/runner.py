@@ -149,6 +149,23 @@ def build_carry_instruction(groups: Sequence[tuple[TaskGroup, TaskGroup]]) -> st
     return prompt(CARRY_TEMPLATE).format(groups=_carry_record(groups))
 
 
+def _still_open(waiting: Sequence[tuple[TaskGroup, TaskGroup]], board: Board) -> list[str]:
+    """The groups whose asked step the reader has not touched since the preview.
+
+    The question pass is a model round trip, and the reader can set a question
+    aside while it runs; writing the model's list back would undo that.
+    """
+    groups = {group.id: group for group in board.groups}
+    kept = []
+    for before, group in waiting:
+        asked = before.steps[-1]
+        current = groups.get(group.id)
+        step = next((s for s in current.steps if s.id == asked.id), None) if current is not None else None
+        if step is not None and step.questions == asked.questions:
+            kept.append(group.id)
+    return kept
+
+
 def _assistant_row(response: LLMResponse, call: ToolCallRequest) -> dict[str, Any]:
     row: dict[str, Any] = {
         "role": "assistant",
@@ -472,20 +489,30 @@ async def run_post_turn(
                         updated = None
                     if updated is not None:
                         if carry is not None:
-                            try:
-                                updated = apply_carry(
-                                    updated,
-                                    carry,
-                                    [group.id for _before, group in waiting],
-                                    turn_at=turn_at,
-                                    now_ms=now_ms(),
-                                )
-                            except UpdateRejectedError as exc:
-                                logger.warning(
-                                    "Task board questions for {} no longer fit the board: {}",
+                            kept = _still_open(waiting, updated)
+                            entries = [entry for entry in carry.get("groups") or [] if entry.get("group") in kept]
+                            if len(kept) != len(waiting):
+                                logger.info(
+                                    "Task board questions for {}: {} group(s) changed while the pass ran; left as the"
+                                    " reader set them",
                                     session_key,
-                                    _faults(exc),
+                                    len(waiting) - len(kept),
                                 )
+                            if entries:
+                                try:
+                                    updated = apply_carry(
+                                        updated,
+                                        {**carry, "groups": entries},
+                                        kept,
+                                        turn_at=turn_at,
+                                        now_ms=now_ms(),
+                                    )
+                                except UpdateRejectedError as exc:
+                                    logger.warning(
+                                        "Task board questions for {} no longer fit the board: {}",
+                                        session_key,
+                                        _faults(exc),
+                                    )
                         if board_to_dict(updated) != board_to_dict(board):
                             await service.write(session_key, updated)
                         if salvaged:
