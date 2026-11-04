@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { dockLift } from './store'
 
@@ -58,6 +58,19 @@ describe('the dock lift', () => {
     box(document.querySelector('.sheets')!, 400, 60)
     dockLift()
     expect(lift()).toBe('200px')
+  })
+
+  it('writes nothing when nothing moved, since it also runs on every scroll event', () => {
+    box(document.querySelector('.tkruns')!, 0, 0)
+    box(document.querySelector('.sheets')!, 0, 0)
+    dockLift()
+    const chat = document.querySelector('.chat') as HTMLElement
+    const writes = vi.spyOn(chat.style, 'setProperty')
+    dockLift()
+    expect(writes).not.toHaveBeenCalled()
+    box(document.querySelector('.dock-in')!, 480, 120)
+    dockLift()
+    expect(writes).toHaveBeenCalledWith('--lift', '120px')
   })
 
   it('ignores a docked thing with no height, which is how an empty sheet rack reads', () => {
