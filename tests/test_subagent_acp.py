@@ -9729,3 +9729,41 @@ def test_rows_the_launcher_identity_cannot_read_keep_their_old_digest(tmp_path: 
 
     for row in rows:
         assert snapshot_fingerprint(row) == _legacy_launch_digest(row)
+
+
+def test_an_empty_command_keeps_the_old_digest() -> None:
+    """A switch-only row carries no launcher at all; it digests as it always did."""
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="")
+
+    assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
+
+
+def test_a_malformed_command_keeps_the_old_digest() -> None:
+    """A command this parser cannot split is not a reason to drop a snapshot."""
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command='"unclosed')
+
+    assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
+
+
+def test_a_bare_command_with_no_captured_launch_path_keeps_the_old_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Before any capture the launch PATH is unknown, and guessing raven's own
+    PATH could resolve a file the launch never runs."""
+    monkeypatch.setenv("PATH", str(_installed(tmp_path / "agent-acp").parent))
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="agent-acp acp")
+
+    assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
+
+
+def test_a_launcher_that_vanishes_before_it_is_read_keeps_the_old_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stat is a second filesystem answer after the lookup, and it can lose
+    the race with an uninstall; that is a missing measurement, not a new one."""
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="agent-acp acp", env={"PATH": str(tmp_path)})
+    before = snapshot_fingerprint(cfg)
+    monkeypatch.setattr("raven.acp_client.capabilities.shutil.which", lambda *a, **k: str(tmp_path / "gone"))
+
+    assert snapshot_fingerprint(cfg) == before
+    assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
