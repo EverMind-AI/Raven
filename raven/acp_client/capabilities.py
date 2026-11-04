@@ -428,11 +428,19 @@ def _executable_identity(cfg: Any) -> list[Any] | None:
     a launch does not use it, so resolving a different file of the same name
     here would tie this row's staleness to the wrong binary.
 
+    A launcher that names a path is read the way the launch reads it.
+    ``AcpClient.launch`` passes ``cwd=cfg.cwd`` to ``create_subprocess_exec``,
+    so a relative one (``./agent-acp``, ``bin/agent``) is that directory's
+    file -- or this process's directory when the row sets no cwd. An absolute
+    path is its own file, and a bare name is looked up on the PATH alone;
+    neither depends on the launch directory.
+
     ``None`` for an ``npx`` launcher, for a row on another machine (that install
-    is not this one's to read), for a command this process cannot resolve, and
-    for a bare command while no launch PATH has been captured yet: each leaves
-    the digest exactly as it was, which keeps every snapshot measured before
-    this function existed valid.
+    is not this one's to read), for a command this process cannot resolve, for
+    a relative launcher missing from the launch directory, and for a bare
+    command while no launch PATH has been captured yet: each leaves the digest
+    exactly as it was, which keeps every snapshot measured before this function
+    existed valid.
 
     A Windows ``.cmd``/``.bat``/``.ps1`` shim is read as the file PATH resolves,
     not as the package entry it points at. npm can rewrite a package without
@@ -461,13 +469,27 @@ def _executable_identity(cfg: Any) -> list[Any] | None:
         from raven.config.login_path import recall
 
         path = recall()
-    # An absolute command names its file without any PATH; a bare one cannot be
-    # resolved at all until a capture has recorded the launch's PATH.
-    if path is None and not os.path.dirname(argv[0]):
-        return None
-    resolved = shutil.which(argv[0], path=path)
-    if resolved is None:
-        return None
+    program = argv[0]
+    if os.path.isabs(program):
+        resolved: str | None = program
+    elif os.path.dirname(program):
+        # The subprocess starts in the row's cwd, so its relative launcher is
+        # that directory's file; an unset cwd means this process's directory.
+        base = getattr(cfg, "cwd", None)
+        if not base:
+            try:
+                base = os.getcwd()
+            except OSError:  # a service can outlive the directory it started in
+                return None
+        resolved = os.path.normpath(os.path.join(base, program))
+    else:
+        # A bare name cannot be resolved at all until a capture has recorded
+        # the launch's PATH.
+        if path is None:
+            return None
+        resolved = shutil.which(program, path=path)
+        if resolved is None:
+            return None
     try:
         stat = os.stat(resolved)
     except OSError:
