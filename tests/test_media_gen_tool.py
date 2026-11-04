@@ -507,6 +507,25 @@ async def test_an_ark_inline_picture_takes_its_type_from_output_format(
     assert path.suffix == suffix and path.read_bytes() == payload
 
 
+@pytest.mark.parametrize(
+    ("output_format", "mime"),
+    [
+        ("jpeg", "image/jpeg"),
+        ("jpg", "image/jpeg"),
+        ("png", "image/png"),
+        ("PNG", "image/png"),
+        (".jpg", "image/jpeg"),
+        ("webp", "image/webp"),
+        ("tiff", "image/gif"),
+    ],
+    ids=["jpeg", "jpg-alias", "png", "uppercase", "leading-dot", "webp", "unknown"],
+)
+def test_picture_mime_reads_every_spelling_of_output_format(output_format, mime) -> None:
+    """The jpg alias, case folding and a leading dot all resolve to a known
+    MIME; an unknown format falls to the caller's default."""
+    assert media_gen._picture_mime({"output_format": output_format}, "image/gif") == mime
+
+
 async def test_an_ark_url_picture_without_an_image_content_type_takes_output_format(monkeypatch, tmp_path) -> None:
     """Storage can answer without an image content type; the entry's
     ``output_format`` is then what says the JPEG is not a .png."""
