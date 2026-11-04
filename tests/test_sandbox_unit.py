@@ -2004,7 +2004,7 @@ class TestConnectOneMcpServer:
 
         @asynccontextmanager
         async def fake_streamable_http_client(url, http_client):
-            yield object(), object(), None
+            yield object(), object()
 
         class FakeSession:
             def __init__(self, read, write):

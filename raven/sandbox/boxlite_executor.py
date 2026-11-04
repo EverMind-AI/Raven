@@ -478,7 +478,7 @@ class BoxliteExecutor(SandboxExecutor):
                 logger.error("MCP stderr bridge error: %s", exc)
 
         async def _stdin_bridge() -> None:
-            # MCP SDK 1.x: write stream carries SessionMessage; serialize the inner
+            # MCP SDK 2.x: write stream carries SessionMessage; serialize the inner
             # JSONRPCMessage as newline-delimited JSON to the VM process stdin.
             try:
                 async for session_msg in write_recv:

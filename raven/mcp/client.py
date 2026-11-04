@@ -261,7 +261,7 @@ async def open_mcp_transport(
                     auth=http_auth,
                 )
             )
-            read, write, _ = await stack.enter_async_context(streamable_http_client(cfg.url, http_client=http_client))
+            read, write = await stack.enter_async_context(streamable_http_client(cfg.url, http_client=http_client))
         else:
             raise KeyError(transport_type)
         yield read, write

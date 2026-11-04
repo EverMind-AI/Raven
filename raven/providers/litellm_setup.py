@@ -99,7 +99,7 @@ RAVEN_MODEL_ROWS: dict[str, dict] = {
 
 
 def _drop_unread_tokenizer_copies() -> None:
-    """Free two tokenizer copies litellm's import leaves resident and nothing it runs reads.
+    """Free the tokenizer copies that stay resident although nothing reads them.
 
     ``litellm.utils`` loads Anthropic's tokenizer JSON into ``json_data`` and keeps
     it after dumping it to ``claude_json_str``, which is what its Claude tokenizer

@@ -259,9 +259,9 @@ async def test_a_failed_transport_does_not_cancel_the_following_server(monkeypat
                     raise RuntimeError("transport failed")
 
                 group.start_soon(fail_transport)
-                yield url, object(), None
+                yield url, object()
         else:
-            yield url, object(), None
+            yield url, object()
 
     class FakeSession:
         def __init__(self, read, write) -> None:
