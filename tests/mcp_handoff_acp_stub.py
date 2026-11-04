@@ -91,7 +91,18 @@ def main() -> None:
         elif method == "session/prompt":
             prompt = params.get("prompt") or []
             marker = "".join(str(item.get("text") or "") for item in prompt if isinstance(item, dict))
-            result = asyncio.run(_call_mcp(marker))
+            try:
+                result = asyncio.run(_call_mcp(marker))
+            except Exception as exc:
+                # One line, and no traceback: the host keeps only the last 400
+                # characters of an agent's stderr, and a traceback of ours here
+                # pushes out the bridge's own one-sentence reason above it.
+                print(
+                    f"mcp handoff stub: the lent server could not be reached: {type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                raise SystemExit(1) from None
             _send(
                 {
                     "jsonrpc": "2.0",
