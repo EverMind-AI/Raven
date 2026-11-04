@@ -400,11 +400,34 @@ def test_the_places_the_presence_check_looks_are_the_adapters(tmp_path: Path, mo
     mp.token_file(env).parent.mkdir(parents=True)
     for written in ("desk\n", "", "   \n"):
         mp.token_file(env).write_text(written, encoding="utf-8")
-        assert mp.desktop_token(env) == host_mod.port_token(host_mod.DESKTOP_PORT, env)
+        assert mp.port_token(mp.DESKTOP_PORT, env) == host_mod.port_token(host_mod.DESKTOP_PORT, env)
         found = host_mod.locate_host(env)
         state, _where = mp.presence(env, path=str(tmp_path / "bin"))
         assert (state == "running") == (found is not None), written
     assert host_mod.locate_host(env) is None and mp.presence(env, path=None)[0] == "installed"
+
+
+def test_the_ports_the_presence_check_tries_are_the_adapters_in_the_same_order(tmp_path: Path) -> None:
+    from raven.acp.mirasim import host as host_mod
+    from raven.agent.subagent import mirasim_presets as mp
+
+    assert mp.SERVE_PORT == host_mod.SERVE_PORT
+    env = {"MIRASIM_HOME": str(tmp_path)}
+    assert mp.token_ports(env) == host_mod.token_ports(env) == []
+    run = tmp_path / "run"
+    run.mkdir()
+    for port, token in (
+        (36925, "old"),
+        (4939, "serve"),
+        (4940, "moved"),
+        (mp.DESKTOP_PORT, "desk"),
+        (3000, "dev"),
+        (4100, " "),
+    ):
+        mp.token_file(env, port).write_text(f"{token}\n", encoding="utf-8")
+    for other in ("local-x.token", "local-0.token", "local-70000.token", "space-api.env"):
+        (run / other).write_text("x\n", encoding="utf-8")
+    assert mp.token_ports(env) == host_mod.token_ports(env) == [mp.DESKTOP_PORT, 4939, 3000, 4940, 36925]
 
 
 @pytest.fixture
@@ -470,6 +493,21 @@ def test_a_token_file_counts_as_a_host_only_while_something_listens_and_holds_a_
     # A blank file is no token to the adapter (`port_token`), so what listens behind it is not its host.
     mp.token_file(nowhere["env"]).write_text("  \n", encoding="utf-8")
     assert mp.presence(nowhere["env"], path=nowhere["path"]) == ("installed", nowhere["env"]["MIRASIM_HOME"])
+
+
+def test_a_host_on_any_port_a_token_file_names_is_running(
+    nowhere: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`mirasim serve` listens on 4939, or on the next port when that one is taken; neither is the desktop app's."""
+    from raven.agent.subagent import mirasim_presets as mp
+
+    mp.token_file(nowhere["env"], 36925).parent.mkdir(parents=True)
+    mp.token_file(nowhere["env"], 36925).write_text("old\n", encoding="utf-8")
+    mp.token_file(nowhere["env"], mp.SERVE_PORT).write_text("killed\n", encoding="utf-8")
+    mp.token_file(nowhere["env"], 4940).write_text("moved\n", encoding="utf-8")
+    assert mp.presence(nowhere["env"], path=nowhere["path"]) == ("installed", nowhere["env"]["MIRASIM_HOME"])
+    monkeypatch.setattr(mp, "_listening", lambda port: port == 4940)
+    assert mp.presence(nowhere["env"], path=nowhere["path"]) == ("running", "127.0.0.1:4940")
 
 
 def test_a_listener_on_the_desktop_port_with_no_token_file_is_not_a_host(

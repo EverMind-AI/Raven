@@ -28,6 +28,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
+import re
 import shutil
 import socket
 from collections.abc import Mapping
@@ -105,10 +107,17 @@ INSTALLED_TIMEOUT_S = 60.0
 presets' own ``readyTimeoutMs`` for the same work."""
 
 DESKTOP_PORT = 4970
-"""The loopback port the installed desktop app's host listens on, and the adapter's third place to look.
+"""The loopback port the installed desktop app's host listens on, the first port the adapter tries.
 
-Spelled here as well as in ``raven.acp.mirasim.host`` (pinned equal by a test): this package may not import
-the adapter, a served surface, and the probe that reads these presets has to find the host without it."""
+Spelled here as well as in ``raven.acp.mirasim.host`` (pinned equal by a test), like :data:`SERVE_PORT`,
+:data:`TOKEN_FILE` and the order of :func:`token_ports`: this package may not import the adapter, a served
+surface, and the probe that reads these presets has to find the host without it."""
+
+SERVE_PORT = 4939
+"""Where ``mirasim serve`` listens unless told another port, the second port the adapter tries."""
+
+TOKEN_FILE = re.compile(r"local-([1-9][0-9]{0,4})\.token")
+"""The name a host gives the file it writes its token in, under ``run/``, after the port it bound."""
 
 LAUNCHER = ("bin", "mirasim")
 """Where Mirasim writes its CLI under its state directory, at every start of its host.
@@ -176,18 +185,35 @@ def launcher(home: Path) -> Path | None:
     return None
 
 
-def token_file(env: Mapping[str, str]) -> Path:
-    """The access token the desktop app's host writes for its local clients, where the adapter reads it."""
-    return mirasim_home(env) / "run" / f"local-{DESKTOP_PORT}.token"
+def token_file(env: Mapping[str, str], port: int | None = None) -> Path:
+    """Where the host on ``port`` (the desktop app's by default) writes its access token for local clients."""
+    return mirasim_home(env) / "run" / f"local-{DESKTOP_PORT if port is None else port}.token"
 
 
-def desktop_token(env: Mapping[str, str]) -> str | None:
+def port_token(port: int, env: Mapping[str, str]) -> str | None:
     """The token in that file, read as the adapter reads it: stripped, and a blank file is no token."""
     try:
-        token = token_file(env).read_text(encoding="utf-8").strip()
+        token = token_file(env, port).read_text(encoding="utf-8").strip()
     except OSError:
         return None
     return token or None
+
+
+def _token_files(env: Mapping[str, str]) -> list[str]:
+    try:
+        return [name for name in os.listdir(mirasim_home(env) / "run") if TOKEN_FILE.fullmatch(name)]
+    except OSError:
+        return []
+
+
+def token_ports(env: Mapping[str, str]) -> list[int]:
+    """The ports a host wrote its token for, in the order the adapter tries them: the desktop app's,
+    ``mirasim serve``'s, then the rest in ascending order; a blank file's port is not one to try."""
+    ports = {int(found.group(1)) for name in _token_files(env) if (found := TOKEN_FILE.fullmatch(name))}
+    ordered = sorted(
+        (port for port in ports if port < 65536), key=lambda port: (port != DESKTOP_PORT, port != SERVE_PORT, port)
+    )
+    return [port for port in ordered if port_token(port, env) is not None]
 
 
 def _listening(port: int) -> bool:
@@ -230,9 +256,10 @@ def presence(env: Mapping[str, str], *, path: str | None) -> tuple[Presence, str
 
     ``running`` when there is a host to reach, in the order the adapter looks: one named in
     ``RAVEN_MIRASIM_HOST``, the socket of a server Mirasim runs here over ssh when it answers, or the
-    desktop app's port with its token written and something listening. ``installed`` when Mirasim is
-    here but no host is up: the launcher under its home, ``mirasim`` on ``path`` (the login shell's
-    PATH), a server installed over ssh, or a token file nothing answers behind. ``absent`` otherwise.
+    first port with its token written that something listens on (:func:`token_ports`). ``installed``
+    when Mirasim is here but no host is up: the launcher under its home, ``mirasim`` on ``path`` (the
+    login shell's PATH), a server installed over ssh, or token files nothing answers behind. ``absent``
+    otherwise.
     The adapter itself runs no executable, so none is asked after: what a row needs is the host, and what
     its reader needs to hear is which of the three this is. ``env`` is the environment the row's adapter
     would be launched in.
@@ -244,9 +271,10 @@ def presence(env: Mapping[str, str], *, path: str | None) -> tuple[Presence, str
         if sock.is_socket() and _answers(sock):
             return "running", str(sock)
     home = mirasim_home(env)
-    token_written = token_file(env).is_file()
-    if desktop_token(env) is not None and _listening(DESKTOP_PORT):
-        return "running", f"127.0.0.1:{DESKTOP_PORT}"
+    token_written = bool(_token_files(env))
+    for port in token_ports(env):
+        if _listening(port):
+            return "running", f"127.0.0.1:{port}"
     if (found := launcher(home)) is not None:
         return "installed", str(found)
     if on_path := shutil.which(MIRASIM_EXECUTABLE, path=path or None):
@@ -326,13 +354,16 @@ __all__ = [
     "MIRASIM_SHIM_PRESETS",
     "REMOTE_SERVERS",
     "REMOTE_START",
-    "desktop_token",
+    "SERVE_PORT",
+    "TOKEN_FILE",
     "installed_agents",
     "launcher",
     "mirasim_home",
+    "port_token",
     "presence",
     "remote_install",
     "remote_root",
     "remote_socket",
     "token_file",
+    "token_ports",
 ]
