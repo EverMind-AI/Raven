@@ -45,8 +45,9 @@ class TaskLink:
 class ProgressStep:
     """One turn's advance on a group: a title, and a summary recall reads back.
 
-    The step that left its group needing the user also carries the questions its reply
-    asked about the matter; the page shows them still unanswered, with the summary.
+    The step that left its group needing the user also carries the questions the matter
+    still waits on -- those its reply asked, plus any carried from the step before it;
+    the page shows them still unanswered, with the summary.
     """
 
     id: str
