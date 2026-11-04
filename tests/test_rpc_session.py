@@ -3684,6 +3684,10 @@ async def test_a_pick_is_reported_as_recorded_after_the_model_moved(tmp_path, mo
     assert result["effort"] == "max"
     assert result["options"] == ["minimal", "low", "medium", "high"]
 
+    loop.provider, loop._model = _anthropic(), "claude-opus-5"
+    back = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert back["effort"] == "max", "the record kept it while the model was away"
+
 
 async def test_a_draft_is_offered_the_default_models_words(tmp_path, monkeypatch) -> None:
     """No key: the loop's default binding answers, since that is what the
