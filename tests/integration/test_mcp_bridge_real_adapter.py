@@ -5,7 +5,7 @@ bridge with the MCP SDK's own ``ClientSession`` standing in for the sub-agent,
 and ``tests/test_subagent_acp_mcp_lifecycle.py`` drives the ACP side against a
 stub adapter that never speaks MCP. Here all three parties are the real ones:
 the adapter each preset pins, ``raven mcp bridge`` as the adapter spawns it, and
-a FastMCP server the host holds.
+an MCPServer the host holds.
 
 What is asserted is that the sub-agent *used* the server, not that ``session/new``
 was accepted -- an adapter that ignored the stanza outright would pass that. Three

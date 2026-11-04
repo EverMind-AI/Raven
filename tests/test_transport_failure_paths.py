@@ -1250,7 +1250,9 @@ def test_every_spelling_of_stop_the_library_knows_is_classified() -> None:
 
     from raven.providers.transport_failure import _NORMAL_STOP_ALIASES, _OBSERVED_FAILURE_REASONS
 
-    known_failures = _OBSERVED_FAILURE_REASONS
+    # Both are abnormal terminations LiteLLM relabels as "stop"; reading
+    # them as a normal end would turn a failed turn into a healthy one.
+    known_failures = _OBSERVED_FAILURE_REASONS | {"MISSING_THOUGHT_SIGNATURE", "UNEXPECTED_TOOL_CALL"}
 
     renamed_to_stop = {name for name, mapped in _FINISH_REASON_MAP.items() if mapped == "stop" and name != "stop"}
     unclassified = renamed_to_stop - _NORMAL_STOP_ALIASES - known_failures

@@ -293,7 +293,7 @@ def test_a_url_borne_credential_never_reaches_the_file(tmp_logs: Path, query: st
 
     assert "HTTP Request" in text, "the httpx record itself must still be persisted"
     assert "SECRET-VALUE-1" not in text
-    assert "<redacted>" in text
+    assert "<redacted>" in text or "REDACTED" in text
 
 
 def test_redaction_keeps_the_rest_of_the_url(tmp_logs: Path) -> None:

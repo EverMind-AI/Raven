@@ -645,7 +645,7 @@ class _Flow:
             return
         open_browser(self._server, auth_url)
 
-    async def callback(self) -> tuple[str, str | None]:
+    async def callback(self) -> Any:
         state = self._state
         if state is None or state not in _PENDING:
             raise OAuthUnavailableError("no pending authorization for this flow")
@@ -674,7 +674,9 @@ class _Flow:
             self._emit("oauth.done", {"server": self._server, "ok": False, "error": str(e)})
             raise
         self._emit("oauth.done", {"server": self._server, "ok": True})
-        return code, got_state
+        from mcp.shared.auth import AuthorizationCodeResult
+
+        return AuthorizationCodeResult(code=code, state=got_state)
 
 
 def cancel_pending(server: str, *, reason: str = "superseded by a newer authorization attempt") -> None:
@@ -1313,7 +1315,6 @@ async def provider_for(
         storage=storage,
         redirect_handler=flow.redirect,
         callback_handler=flow.callback,
-        timeout=OAUTH_FLOW_TIMEOUT,
         **kwargs,
     )
     # The SDK's _initialize() restores the tokens but not when they expire, and

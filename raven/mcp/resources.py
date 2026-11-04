@@ -143,7 +143,7 @@ class ListMcpResourcesTool(_ResourceTool):
                         "uri": str(res.uri),
                         "name": res.name,
                         "description": res.description,
-                        "mimeType": res.mimeType,
+                        "mimeType": res.mime_type,
                     }
                 )
         return _rendered(rows, errors, empty="No resources on the server(s) asked.")
@@ -196,10 +196,10 @@ class ListMcpResourceTemplatesTool(_ResourceTool):
                 rows.append(
                     {
                         "server": target,
-                        "uriTemplate": tpl.uriTemplate,
+                        "uriTemplate": tpl.uri_template,
                         "name": tpl.name,
                         "description": tpl.description,
-                        "mimeType": tpl.mimeType,
+                        "mimeType": tpl.mime_type,
                     }
                 )
         return _rendered(rows, errors, empty="No resource templates on the server(s) asked.")
@@ -324,7 +324,7 @@ def _render_blob(server: str, uri: str, item: Any, blocks: list[Any], *, workspa
             "Ask the server for a smaller representation if it offers one.]"
         )
 
-    mime = item.mimeType or "application/octet-stream"
+    mime = item.mime_type or "application/octet-stream"
     path = _write_blob(server, uri, raw, mime, workspace=workspace)
     note = f"[resource {uri} ({mime}, {len(raw)} bytes)"
     note += f" written to {path}]" if path else " could not be written to disk]"

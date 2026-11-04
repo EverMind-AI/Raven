@@ -306,15 +306,17 @@ class _FakeBox:
         import anyio
         from mcp.shared.message import SessionMessage
         from mcp.types import JSONRPCMessage
+        from pydantic import TypeAdapter
 
         self.spawned.append((command, tuple(args), cwd))
         read_send, read_recv = anyio.create_memory_object_stream(16)
         write_send, write_recv = anyio.create_memory_object_stream(16)
+        rpc_adapter = TypeAdapter(JSONRPCMessage)
 
         async def _serve() -> None:
             async for outgoing in write_recv:
-                request = outgoing.message.root
-                reply = JSONRPCMessage.model_validate(
+                request = outgoing.message
+                reply = rpc_adapter.validate_python(
                     {"jsonrpc": "2.0", "id": request.id, "result": {"in_the_box": request.method}}
                 )
                 await read_send.send(SessionMessage(reply))

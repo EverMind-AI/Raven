@@ -1,7 +1,7 @@
 """A sub-agent reaching a host-held server through the bridge.
 
 Runs a real MCP client over a real ``raven mcp bridge`` process against a real
-FastMCP server, so the properties under test are the ones a dispatch depends on:
+MCPServer, so the properties under test are the ones a dispatch depends on:
 the sub-agent handshakes with the true server identity, server-initiated
 requests reach it, progress notifications arrive, a large result survives the
 hop, and an upstream that dies mid-request closes the sub-agent's connection

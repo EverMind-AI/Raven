@@ -95,7 +95,9 @@ def test_a_plan_billed_provider_reports_no_per_token_cost():
         assert estimate_cost_usd(model, 1_000_000, 0) is None, model
 
     # The same vendor's metered API is unaffected: that one is per-token.
-    assert estimate_cost_usd("minimax/MiniMax-M3", 1_000_000, 0) == pytest.approx(0.3)
+    # 1.108 added a tier above 512k tokens: the first 512k at 0.30/M, the rest
+    # at 0.60/M, so a 1M-token prompt costs 0.60.
+    assert estimate_cost_usd("minimax/MiniMax-M3", 1_000_000, 0) == pytest.approx(0.6)
 
 
 def test_offline_context_neither_warns_nor_consumes_the_warning():

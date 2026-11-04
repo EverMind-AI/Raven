@@ -834,7 +834,9 @@ async def test_options_openrouter_seeds_common_models(fake_home: Path) -> None:
     entry = _entry(await model_options({}), "openrouter")
     curated = common_models_for("openrouter")
     assert entry["models"][: len(curated)] == curated
-    assert entry["total_models"] > len(curated), "the catalogue tier added nothing"
+    # LiteLLM 1.108 dropped its openrouter rows, so there is no static
+    # catalogue tier left; the live catalogue is the source for the extra ids.
+    assert entry["total_models"] == len(curated)
 
 
 async def test_options_config_models_rank_before_common_and_dedup(fake_home: Path) -> None:
@@ -1817,7 +1819,7 @@ async def test_the_context_window_a_picker_shows_is_the_one_a_request_is_sized_w
 
 
 async def test_options_read_cached_windows_without_asking_the_ollama_daemon(fake_home, monkeypatch):
-    from litellm.llms.ollama.completion.transformation import OllamaConfig
+    from litellm.llms.ollama.common_utils import OllamaModelInfo
 
     from raven.providers.litellm_setup import import_litellm
 
@@ -1834,11 +1836,11 @@ async def test_options_read_cached_windows_without_asking_the_ollama_daemon(fake
     monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, cached: {"max_input_tokens": 16384}})
     asked = []
 
-    def info(self, model, api_base=None):
+    def info(self, model, api_base=None, api_key=None):
         asked.append(model)
         return {}
 
-    monkeypatch.setattr(OllamaConfig, "get_model_info", info)
+    monkeypatch.setattr(OllamaModelInfo, "get_model_info", info)
 
     result = await model_options({})
 

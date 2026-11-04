@@ -7,7 +7,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-import httpx
+import httpx2
 from loguru import logger
 
 from raven.agent.tools import media
@@ -40,7 +40,7 @@ class MCPToolWrapper(Tool):
         self._original_name = tool_def.name
         self._name = tool_name(server_name, tool_def.name, taken=taken)
         self._description = tool_def.description or tool_def.name
-        self._parameters = tool_def.inputSchema or {"type": "object", "properties": {}}
+        self._parameters = tool_def.input_schema or {"type": "object", "properties": {}}
         self._tool_timeout = tool_timeout
 
     @property
@@ -148,7 +148,7 @@ class MCPConfigError(ValueError):
     """A server config that cannot be connected (missing/unknown transport)."""
 
 
-async def _report_redirect(response: httpx.Response) -> None:
+async def _report_redirect(response: httpx2.Response) -> None:
     """Say plainly why a redirecting MCP endpoint does not connect.
 
     The HTTP clients built below do not follow redirects, and that is the
@@ -191,7 +191,7 @@ async def open_mcp_transport(
     cfg,
     transport_type: str,
     executor: "SandboxExecutor | None" = None,
-    http_auth: httpx.Auth | None = None,
+    http_auth: httpx2.Auth | None = None,
 ):
     """One server's transport, without a session on top of it.
 
@@ -236,11 +236,11 @@ async def open_mcp_transport(
 
             def httpx_client_factory(
                 headers: dict[str, str] | None = None,
-                timeout: httpx.Timeout | None = None,
-                auth: httpx.Auth | None = None,
-            ) -> httpx.AsyncClient:
+                timeout: httpx2.Timeout | None = None,
+                auth: httpx2.Auth | None = None,
+            ) -> httpx2.AsyncClient:
                 merged_headers = {**(cfg.headers or {}), **(headers or {})}
-                return httpx.AsyncClient(
+                return httpx2.AsyncClient(
                     headers=merged_headers or None,
                     follow_redirects=False,
                     event_hooks={"response": [_report_redirect]},
@@ -253,7 +253,7 @@ async def open_mcp_transport(
             )
         elif transport_type == "streamableHttp":
             http_client = await stack.enter_async_context(
-                httpx.AsyncClient(
+                httpx2.AsyncClient(
                     headers=cfg.headers or None,
                     follow_redirects=False,
                     event_hooks={"response": [_report_redirect]},
@@ -272,7 +272,7 @@ async def _mcp_server_connection(
     cfg,
     transport_type: str,
     executor: "SandboxExecutor | None",
-    http_auth: httpx.Auth | None = None,
+    http_auth: httpx2.Auth | None = None,
 ):
     """One server's transport, session and handshake as a single lifecycle.
 
@@ -302,7 +302,7 @@ async def connect_mcp_server(
     registry: ToolRegistry,
     stack: AsyncExitStack,
     executor: "SandboxExecutor | None" = None,
-    http_auth: httpx.Auth | None = None,
+    http_auth: httpx2.Auth | None = None,
 ) -> Connected:
     """Connect one MCP server, register its tools, and hand back what it offers.
 

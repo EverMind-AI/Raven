@@ -161,8 +161,8 @@ async def test_flow_redirect_then_callback_resolution(monkeypatch):
     await asyncio.sleep(0)
     matched, html = resolve_callback({"state": "st-123", "code": "authcode-9"})
     assert matched and "connected" in html
-    code, state = await task
-    assert (code, state) == ("authcode-9", "st-123")
+    result = await task
+    assert (result.code, result.state) == ("authcode-9", "st-123")
     assert ("oauth.done", {"server": "srv", "ok": True}) in events
 
 
@@ -348,7 +348,8 @@ async def test_a_relayed_background_flow_keeps_its_exemption():
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(asyncio.shield(waiter), timeout=0.2)
     assert resolve_callback({"state": "relay-1", "code": "c"})[0]
-    assert await asyncio.wait_for(waiter, timeout=2) == ("c", "relay-1")
+    result = await asyncio.wait_for(waiter, timeout=2)
+    assert (result.code, result.state) == ("c", "relay-1")
 
 
 async def test_two_providers_do_not_race_a_rotating_refresh_token(monkeypatch, tmp_path):
@@ -986,7 +987,9 @@ async def test_a_token_endpoint_that_is_not_there_still_disarms_the_seed(_fixed_
 
 
 async def _completed(code: str, state: list[str]):
-    return code, state[0]
+    from mcp.shared.auth import AuthorizationCodeResult
+
+    return AuthorizationCodeResult(code=code, state=state[0])
 
 
 async def test_a_preregistered_client_skips_registration(_fixed_callback):

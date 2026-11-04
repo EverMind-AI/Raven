@@ -63,8 +63,12 @@ def test_a_route_that_declares_no_reasoning_has_no_levels(table):
 
 
 def test_the_pinned_table_declares_the_models_the_spec_names():
-    """The real 1.85.0 table, not a fixture: these are the values the design
-    measured. A LiteLLM upgrade that moves them must fail here and be re-read."""
+    """The real 1.108.0 table, not a fixture: these are the values the design
+    measured. A LiteLLM upgrade that moves them must fail here and be re-read.
+
+    1.108 added ``zai/glm-5.3-flash`` with ``supports_reasoning: True`` (it had
+    no row before), so the ``zhipu/`` route now derives effort levels.
+    """
     effort_levels.reset()
     assert effort_levels.levels_for("openai/gpt-5") == ("minimal", "low", "medium", "high")
     assert effort_levels.levels_for("openai/gpt-5.5-pro") == ("medium", "high", "xhigh")
@@ -78,7 +82,7 @@ def test_the_pinned_table_declares_the_models_the_spec_names():
         "max",
     )
     assert effort_levels.levels_for("zai/glm-5") == ("minimal", "low", "medium", "high")
-    assert effort_levels.levels_for("zhipu/glm-5.3-flash") == ()
+    assert effort_levels.levels_for("zhipu/glm-5.3-flash") == ("minimal", "low", "medium", "high")
 
 
 def test_a_route_row_inherits_the_vendors_missing_flags(table):

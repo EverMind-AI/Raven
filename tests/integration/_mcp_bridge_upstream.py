@@ -14,7 +14,7 @@ import sys
 import threading
 import time
 
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.mcpserver import Context, MCPServer
 
 # How long ``go_silent`` stays alive before killing itself. Long enough to
 # outlast the client SDK's stdio teardown (a 2s wait on the process plus a 2s
@@ -24,7 +24,7 @@ from mcp.server.fastmcp import Context, FastMCP
 # the run, and neither the SDK's escalation nor closing stdin reaches it.
 _LINGER_SECONDS = 10.0
 
-mcp = FastMCP("bridge-e2e-upstream")
+mcp = MCPServer("bridge-e2e-upstream")
 
 # argv[1], when given, is a path to drop this pid into. The caller of
 # ``go_silent`` needs it: that tool leaves a process no signal from the client

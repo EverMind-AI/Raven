@@ -280,7 +280,7 @@ async def test_a_failed_transport_does_not_cancel_the_following_server(monkeypat
 
         async def list_tools(self, *, params=None):
             return SimpleNamespace(
-                tools=[SimpleNamespace(name="ping", description="", inputSchema={})], nextCursor=None
+                tools=[SimpleNamespace(name="ping", description="", input_schema={})], next_cursor=None
             )
 
     monkeypatch.setattr(mcp, "ClientSession", FakeSession)

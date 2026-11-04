@@ -65,7 +65,7 @@ def _loop_source(
 
 def _host_wrapper(tools: ToolRegistry, server: str, tool: str = "query") -> MCPToolWrapper:
     """One live host wrapper, registered the way an MCP connect registers it."""
-    wrapper = MCPToolWrapper(SimpleNamespace(), server, SimpleNamespace(name=tool, description="", inputSchema={}))
+    wrapper = MCPToolWrapper(SimpleNamespace(), server, SimpleNamespace(name=tool, description="", input_schema={}))
     tools.register(wrapper, origin=wrapper.ref)
     return wrapper
 

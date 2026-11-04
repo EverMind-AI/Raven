@@ -101,13 +101,14 @@ def _drop_unread_tokenizer_copies() -> None:
 
     ``litellm.utils`` loads Anthropic's tokenizer JSON into ``json_data`` and keeps
     it after dumping it to ``claude_json_str``, which is what its Claude tokenizer
-    is built from. The cl100k encoding litellm loads at import, which raven's own
-    estimator shares through tiktoken's registry, keeps a Python copy of its ranks
-    beside the one its core encodes with; tiktoken itself reads that copy only to
-    pickle an encoding outside the registry, since a registered one pickles by
-    name. Code that reads the private copy off the registered encoding, as
-    tiktoken's README does to extend one, gets an AttributeError after this.
-    Together about 25 MiB.
+    is built from. The cl100k encoding, when a registered one is present, keeps a
+    Python copy of its ranks beside the one its core encodes with; tiktoken itself
+    reads that copy only to pickle an encoding outside the registry, since a
+    registered one pickles by name. Raven's estimator drops the same copy when it
+    loads the encoding (``utils.tokens``), so a process that imports LiteLLM and
+    one that never does are both covered. Code that reads the private copy off
+    the registered encoding, as tiktoken's README does to extend one, gets an
+    AttributeError after this. Together about 25 MiB.
     """
     utils = sys.modules.get("litellm.utils")
     if isinstance(getattr(utils, "json_data", None), dict) and isinstance(getattr(utils, "claude_json_str", None), str):

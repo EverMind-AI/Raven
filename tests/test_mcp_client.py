@@ -28,7 +28,7 @@ def _wrapper(session: _Session) -> MCPToolWrapper:
     tool_def = SimpleNamespace(
         name="read",
         description="read something",
-        inputSchema={"type": "object", "properties": {}},
+        input_schema={"type": "object", "properties": {}},
     )
     return MCPToolWrapper(session, "server-x", tool_def, tool_timeout=30, taken=frozenset())
 
@@ -114,7 +114,7 @@ def _paged_session(pages: dict):
 
 
 def _tool_def(name: str) -> SimpleNamespace:
-    return SimpleNamespace(name=name, description=name, inputSchema={"type": "object", "properties": {}})
+    return SimpleNamespace(name=name, description=name, input_schema={"type": "object", "properties": {}})
 
 
 @asynccontextmanager
@@ -140,8 +140,8 @@ async def _connect(monkeypatch, pages: dict) -> tuple:
 
 async def test_tools_list_pages_are_followed_until_the_cursor_ends(monkeypatch) -> None:
     pages = {
-        None: SimpleNamespace(tools=[_tool_def("a"), _tool_def("b")], nextCursor="page-2"),
-        "page-2": SimpleNamespace(tools=[_tool_def("c")], nextCursor=None),
+        None: SimpleNamespace(tools=[_tool_def("a"), _tool_def("b")], next_cursor="page-2"),
+        "page-2": SimpleNamespace(tools=[_tool_def("c")], next_cursor=None),
     }
 
     connected, asked, reg = await _connect(monkeypatch, pages)
@@ -153,8 +153,8 @@ async def test_tools_list_pages_are_followed_until_the_cursor_ends(monkeypatch) 
 
 async def test_a_repeated_cursor_stops_paging(monkeypatch) -> None:
     pages = {
-        None: SimpleNamespace(tools=[_tool_def("a")], nextCursor="same"),
-        "same": SimpleNamespace(tools=[_tool_def("b")], nextCursor="same"),
+        None: SimpleNamespace(tools=[_tool_def("a")], next_cursor="same"),
+        "same": SimpleNamespace(tools=[_tool_def("b")], next_cursor="same"),
     }
 
     connected, asked, _ = await _connect(monkeypatch, pages)
@@ -169,7 +169,7 @@ async def test_registry_respects_the_mcp_servers_declared_extra_property_policy(
         tool_def = SimpleNamespace(
             name="read",
             description="Read a path.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
                 "additionalProperties": not closed,
