@@ -25,6 +25,7 @@ import asyncio
 import hashlib
 import json
 import os
+import shutil
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
@@ -412,15 +413,84 @@ class CapabilitySnapshot:
         )
 
 
+def _executable_identity(cfg: Any) -> list[Any] | None:
+    """The launcher file an in-place upgrade replaces, when the command names one.
+
+    An ``npx`` command names the version it runs, so its digest already moves
+    with that version. A command that runs a binary off PATH keeps the same
+    command line across an upgrade while the menu it advertises can move with
+    the build -- the path names the same file either way, so the digest has to
+    read the file itself.
+
+    The PATH is the one the launch gets, from the same record the config loader
+    reads for the same question: the row's own ``env`` PATH, else the login
+    shell's last capture. Raven's process PATH is deliberately not a fallback:
+    a launch does not use it, so resolving a different file of the same name
+    here would tie this row's staleness to the wrong binary.
+
+    ``None`` for an ``npx`` launcher, for a row on another machine (that install
+    is not this one's to read), for a command this process cannot resolve, and
+    for a bare command while no launch PATH has been captured yet: each leaves
+    the digest exactly as it was, which keeps every snapshot measured before
+    this function existed valid.
+
+    A Windows ``.cmd``/``.bat``/``.ps1`` shim is read as the file PATH resolves,
+    not as the package entry it points at. npm can rewrite a package without
+    touching that shim, so an in-place upgrade behind one can leave this digest
+    unmoved -- an under-report that keeps a snapshot rather than discarding a
+    good one. Following the shim would mean parsing generated shell text, and
+    there is no portable way to do that.
+    """
+    if (getattr(cfg, "machine", None) or "").strip():
+        return None
+    command = getattr(cfg, "command", None)
+    if not isinstance(command, str) or not command.strip():
+        return None
+    if launches_with_npx(command):
+        return None
+    try:
+        argv = command_argv(command)
+    except ValueError:
+        return None
+    if not argv:
+        return None
+    own = (getattr(cfg, "env", None) or {}).get("PATH")
+    if isinstance(own, str) and own:
+        path: str | None = own
+    else:
+        from raven.config.login_path import recall
+
+        path = recall()
+    # An absolute command names its file without any PATH; a bare one cannot be
+    # resolved at all until a capture has recorded the launch's PATH.
+    if path is None and not os.path.dirname(argv[0]):
+        return None
+    resolved = shutil.which(argv[0], path=path)
+    if resolved is None:
+        return None
+    try:
+        stat = os.stat(resolved)
+    except OSError:
+        return None
+    return [resolved, stat.st_mtime_ns, stat.st_size]
+
+
 def snapshot_fingerprint(cfg: Any) -> str:
     """A digest of the fields that decide how this acp agent is launched.
 
     ``name``, ``description``, ``preset`` and ``enabled`` are deliberately absent
     for the reason ``probe_state.fingerprint`` gives: renaming an agent or
     switching it off and on does not change what it can do, so neither may
-    discard a measurement that still holds.
+    discard a measurement that still holds. The launcher's own identity is here
+    for the opposite reason: an in-place upgrade changes what the agent offers
+    without changing a single configured field.
     """
     payload = {name: getattr(cfg, name, None) for name in _LAUNCH_FIELDS}
+    # Only when the command names a file -- see `_executable_identity`. Absent
+    # for npx rows and rows this computer cannot read, so their digests stay as
+    # they were.
+    if (identity := _executable_identity(cfg)) is not None:
+        payload["executable"] = identity
     # Only when set, so every snapshot measured before the field existed holds.
     if getattr(cfg, "lend_keys", None):
         payload["lend_keys"] = list(cfg.lend_keys)
