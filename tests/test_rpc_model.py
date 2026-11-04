@@ -1238,6 +1238,34 @@ async def test_a_vendor_s_text_outputs_outrank_a_catalogued_image_row(
     assert after["model_labels"][row["id"]]["kind"] == "text"
 
 
+async def test_a_vendor_s_text_outputs_beat_a_name_inferred_embedding(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The name says embedder; the provider says the deployment writes text.
+
+    The tag is inferred, the output is declared, and the declared fact wins --
+    both in the fetched row and in the label after the model is added.
+    """
+    _write_config(fake_home, {"providers": {"custom": {"apiKey": "k", "apiBase": "https://example.test/v1"}}})
+    payload = {
+        "ok": True,
+        "status": "valid",
+        "model_ids": ["text-embedding-3-small"],
+        "model_facts": {"text-embedding-3-small": {"output_modalities": ["text"], "capabilities": []}},
+    }
+    monkeypatch.setattr("raven.config.update_providers.test_provider", lambda *a, **k: payload)
+
+    out = await model_fetch_models({"slug": "custom"})
+
+    row = next(row for row in out["models"] if row["source"] == "live")
+    assert row["kind"] == "text"
+    assert "embedding" not in row.get("capabilities", [])
+
+    await model_module.model_add_models({"slug": "custom", "models": [row["id"]]})
+    after = _entry(await model_options({}), "custom")
+    assert after["model_labels"][row["id"]]["kind"] == "text"
+
+
 @pytest.mark.parametrize("with_facts", [False, True])
 async def test_the_issue_s_thirteen_models_file_five_as_images(
     fake_home: Path, monkeypatch: pytest.MonkeyPatch, with_facts: bool

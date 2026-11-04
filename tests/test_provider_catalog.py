@@ -683,6 +683,38 @@ def test_outputs_the_user_states_beat_both_vendor_and_catalogue() -> None:
     assert "image-generation" not in row.capabilities
 
 
+def test_a_vendor_s_outputs_outrank_bundled_embedding_and_rerank_tags() -> None:
+    """A provider's own declaration is stronger evidence than a bundled tag.
+
+    The tags exist because the catalogue publishes no flag for these models; a
+    vendor that declares outputs is describing the deployment a request reaches,
+    and the stale tag may not outvote it. The catalogue-only exception below is
+    what keeps the bundled embedders in their bucket.
+    """
+    from raven.providers.catalog import VendorFacts, describe
+    from raven.providers.registry_data import kind_of
+
+    for model in ("text-embedding-3-small", "bge-reranker-v2-m3"):
+        row = describe("custom", model, vendor=VendorFacts(output_modalities=("text",)))
+        assert kind_of(row.capabilities, row.output_modalities) == "text"
+        assert "embedding" not in row.capabilities
+        assert "rerank" not in row.capabilities
+
+    # The catalogue's own legacy outputs are not a vendor declaration: the tag
+    # still decides for a row nothing else describes.
+    catalogue = describe("custom", "text-embedding-3-small")
+    assert kind_of(catalogue.capabilities, catalogue.output_modalities) == "embedding"
+
+
+def test_a_vendor_s_vector_output_keeps_an_embedder_embedding() -> None:
+    from raven.providers.catalog import VendorFacts, describe
+    from raven.providers.registry_data import kind_of
+
+    row = describe("custom", "text-embedding-3-small", vendor=VendorFacts(output_modalities=("vector",)))
+    assert kind_of(row.capabilities, row.output_modalities) == "embedding"
+    assert "embedding" in row.capabilities
+
+
 def test_an_overlay_written_bare_matches_the_qualified_id() -> None:
     """Overlays are matched by identity, so a pre-contract spelling still applies."""
     from raven.providers.wire import merge_key

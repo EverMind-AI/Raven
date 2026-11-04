@@ -149,16 +149,21 @@ def describe(
 
     capabilities = entry.capabilities if entry is not None else ()
     outputs = entry.output_modalities if entry is not None else ()
-    if vendor is not None:
-        capabilities = _union_capabilities(capabilities, clean_tags(vendor.capabilities, CAPABILITIES))
-        stated = clean_tags(vendor.output_modalities, MODALITIES)
-        if stated:
-            outputs = stated
-            capabilities = _with_generation_caps(capabilities, stated)
+    vendor_capabilities = clean_tags(vendor.capabilities, CAPABILITIES) if vendor is not None else ()
+    vendor_outputs = clean_tags(vendor.output_modalities, MODALITIES) if vendor is not None else ()
+    if vendor_capabilities:
+        capabilities = _union_capabilities(capabilities, vendor_capabilities)
+    if vendor_outputs:
+        outputs = vendor_outputs
 
     capabilities = _with_inferred(ref, capabilities)
     if not outputs and not _has_kind_tag(capabilities):
         capabilities = _union_capabilities(capabilities, family_tags(ref))
+    if vendor_outputs:
+        # A declared output outranks the bundled tags it contradicts, embedding
+        # and rerank included. The catalogue's own outputs never take this
+        # path, which is the exception the bundled embedder rows depend on.
+        capabilities = _with_declared_outputs(capabilities, vendor_outputs)
 
     row = ModelRow(
         ref=ref,
@@ -217,20 +222,13 @@ def _has_kind_tag(capabilities: tuple[str, ...]) -> bool:
     )
 
 
-def _with_generation_caps(capabilities: tuple[str, ...], outputs: tuple[str, ...]) -> tuple[str, ...]:
-    """Capabilities whose generative tags follow the outputs they came from."""
-    from raven.providers.registry_data import CAPABILITIES
+def _with_declared_outputs(capabilities: tuple[str, ...], outputs: tuple[str, ...]) -> tuple[str, ...]:
+    """Capabilities whose kind tags follow the outputs that were declared.
 
-    kept = {name for name in capabilities if not name.endswith("-generation")}
-    merged = kept | _generation_capabilities(outputs)
-    return tuple(name for name in CAPABILITIES if name in merged)
-
-
-def _with_stated_outputs(capabilities: tuple[str, ...], outputs: tuple[str, ...]) -> tuple[str, ...]:
-    """Capabilities whose kind tags follow outputs the user stated themselves.
-
-    A stated output outranks every kind tag, embedding and rerank included, so
-    the tags that decided the kind before go with it.
+    A user statement and a vendor declaration both outrank bundled tags, so the
+    tags that decided the kind before -- generative, embedding or rerank -- go
+    with outputs that contradict them. The catalogue's own outputs never reach
+    this helper, which is the exception its embedder and rerank rows depend on.
     """
     from raven.providers.registry_data import CAPABILITIES
 
@@ -294,7 +292,7 @@ def _with_overlay(row: ModelRow, overlay: "ModelOverlay | None") -> ModelRow:
     stated_outputs = clean_tags(overlay.output_modalities, MODALITIES)
     capabilities = clean_tags(overlay.capabilities, CAPABILITIES) or row.capabilities
     if stated_outputs:
-        capabilities = _with_stated_outputs(capabilities, stated_outputs)
+        capabilities = _with_declared_outputs(capabilities, stated_outputs)
     changed = {
         "label": overlay.label or row.label,
         "description": overlay.description or row.description,
