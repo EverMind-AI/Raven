@@ -260,6 +260,15 @@ class CapabilitySnapshot:
     time from the row's keys and never written as a field of its own: an
     unmeasured menu is written as the key's absence, so a verdict re-recorded
     over such a row does not turn "never measured" into "measured, none"."""
+    effort_measured: bool = True
+    """Whether the reasoning-effort menu was measured, or left for a probe.
+
+    A record minted from a live session reads the menus that session reported,
+    but the effort ladder belongs to the row's own model while the session
+    opened on the agent's default, so the mint leaves it unmeasured. False is
+    persisted, and ``capabilities_wanted`` asks the next boot's backfill to
+    complete the record. Absent from rows written before the field, which all
+    came from a probe: absence means measured."""
     stale: bool = False
     """Measured against a launch config this agent no longer has.
 
@@ -318,6 +327,7 @@ class CapabilitySnapshot:
     def to_row(self) -> dict[str, Any]:
         row = self.to_wire()
         row["fingerprint"] = self.fingerprint
+        row["effortMeasured"] = self.effort_measured
         if not self.model_menu_measured:
             del row["modelChoices"]
         return row
@@ -399,6 +409,7 @@ class CapabilitySnapshot:
             unfetched=bool(row.get("unfetched")),
             elapsed_ms=int(row.get("elapsedMs") or 0),
             model_menu_measured="modelChoices" in row,
+            effort_measured=bool(row.get("effortMeasured", True)),
         )
 
 
@@ -475,6 +486,41 @@ class SnapshotStore:
             atomic_update(self._path, merge)
         except OSError as exc:  # a snapshot is a cache, never a dependency
             logger.warning("acp capability snapshot write failed (not remembered): {}", exc)
+
+    def record_if_absent(self, snapshot: CapabilitySnapshot) -> tuple[CapabilitySnapshot, bool] | None:
+        """Store ``snapshot`` unless this agent already has a readable row.
+
+        For evidence gathered outside a probe: the first session an agent opens
+        is newer than nothing, which is all a boot probe that failed leaves
+        behind. An existing row is the measurement that got there first -- a
+        probe's, or another session's -- so it is returned instead of being
+        overwritten, and this call writes nothing. Returns the record now
+        stored and whether this call wrote it; ``None`` when the store could
+        not be written.
+        """
+
+        def merge(current: str | None) -> tuple[str | None, tuple[CapabilitySnapshot, bool] | None]:
+            rows = self._parse(current)
+            stored = next((r for r in rows if r.get("agent") == snapshot.agent), None)
+            if stored is not None:
+                existing = CapabilitySnapshot.from_row(stored)
+                if existing is not None:
+                    return None, (
+                        replace(
+                            existing,
+                            stale=snapshot.stale or existing.fingerprint != snapshot.fingerprint,
+                        ),
+                        False,
+                    )
+            rows = [r for r in rows if r.get("agent") != snapshot.agent]
+            rows.append(snapshot.to_row())
+            return self._dump(rows), (snapshot, True)
+
+        try:
+            return atomic_update(self._path, merge)
+        except OSError as exc:  # a snapshot is a cache, never a dependency
+            logger.warning("acp capability snapshot write failed (not remembered): {}", exc)
+            return None
 
     def revise(self, snapshot: CapabilitySnapshot, **changes: Any) -> tuple[CapabilitySnapshot, bool] | None:
         """Apply ``changes`` to the stored record ``snapshot`` was read from.
@@ -881,11 +927,71 @@ def _read_session_modes(result: Any) -> tuple[AcpMode, ...]:
     )
 
 
+def _mint_session_menus(
+    result: Any,
+    *,
+    agent: str,
+    fingerprint: str,
+    store: SnapshotStore | None,
+) -> CapabilitySnapshot | None:
+    """The first capability record for an agent, from the session it just opened.
+
+    A boot probe that failed writes no row, and ``relearn_session_menus`` could
+    only revise one that existed, so the menus stayed empty for the life of the
+    process. A session this agent opened is evidence the probe never got: the
+    handshake completed and the agent opened a session. Only the menus are
+    taken here -- the fields an ``initialize`` answer carries keep the probe's
+    defaults, so nothing outside the menus changes until a probe runs -- and
+    the next successful probe overwrites the row wholesale. ``effort_measured``
+    stays false so the boot backfill knows to finish the record rather than
+    skip one that looks ready.
+    """
+    if not agent or not fingerprint:
+        return None
+    session_id = _dict(result).get("sessionId")
+    if not isinstance(session_id, str) or not session_id:
+        return None
+    modes = _read_session_modes(result)
+    choices = () if _read_session_menu_unread(result) else _read_session_model_choices(result)
+    if not modes and not choices:
+        return None
+    minted = CapabilitySnapshot(
+        agent=agent,
+        fingerprint=fingerprint,
+        status="ready",
+        detail="menus learned from a live session; no handshake probe has run",
+        measured_at_ms=int(time.time() * 1000),
+        model_choices=choices,
+        model_menu_measured=bool(choices),
+        effort_measured=False,
+        available_modes=modes,
+    )
+    revised = (store or SnapshotStore()).record_if_absent(minted)
+    if revised is None:
+        return None
+    updated, written = revised
+    if not written:
+        logger.info(
+            "acp agent {!r}: a capability record appeared while its first session was opening; keeping that one",
+            agent,
+        )
+        return updated
+    logger.info(
+        "acp agent {!r}: recorded {} mode(s) and {} model(s) from the first session it opened",
+        agent,
+        len(updated.available_modes),
+        len(updated.model_choices),
+    )
+    return updated
+
+
 def relearn_session_menus(
     snapshot: CapabilitySnapshot | None,
     result: Any,
     *,
     store: SnapshotStore | None = None,
+    agent: str = "",
+    fingerprint: str = "",
 ) -> CapabilitySnapshot | None:
     """Re-record an agent's modes and model menu from a live session response, if they moved.
 
@@ -927,9 +1033,17 @@ def relearn_session_menus(
     is the probe's, measured on the row's own model. Taking a session's over it
     made the agent-wide record swing with every model switch, each swing a
     rebuild of the whole agent table.
+
+    With no record at all -- a boot probe that failed leaves none -- a response
+    carrying a menu mints the first one instead of being dropped, when the
+    caller names the agent and the launch fingerprint its row belongs to. The
+    early return this branch replaces made the menus stay empty for the life of
+    the process, so no successful dispatch could repair the failed probe.
+    ``agent`` and ``fingerprint`` are absent at call sites that only refresh an
+    existing record, and then nothing is minted.
     """
     if snapshot is None:
-        return None
+        return _mint_session_menus(result, agent=agent, fingerprint=fingerprint, store=store)
     changes: dict[str, Any] = {}
     modes = _read_session_modes(result)
     if modes and modes != snapshot.available_modes:
