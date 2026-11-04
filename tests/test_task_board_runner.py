@@ -984,6 +984,42 @@ async def test_a_question_the_reader_set_aside_during_the_carry_call_is_not_writ
     assert (board.groups[0].status, board.groups[0].steps[-1].questions) == ("idle", [])
 
 
+async def test_a_completed_group_is_not_asked_about_its_stale_questions(tmp_path):
+    """Recall and the page stop showing a question once the reader completes its
+    group, so the pass must not treat it as open and reopen the group."""
+    service = _service(tmp_path)
+    _waiting(service)
+    await service.set_status(KEY, "g_c", "completed")
+    call = Scripted(_update_with([_step_on("g_c", status="running")]), _kept(WAITING))
+
+    board = await _run(service, call, dispatches=())
+
+    assert len(call.seen) == 1
+    assert board is not None
+    assert (board.groups[0].status, board.groups[0].steps[-1].questions) == ("running", [])
+
+
+async def test_a_completion_that_lands_during_the_carry_call_is_not_undone(tmp_path):
+    """The reader can complete the group while the pass runs; the pass must not
+    write a question back onto it."""
+    service = _service(tmp_path)
+    _waiting(service)
+    calls = []
+
+    async def call(rows):
+        calls.append(rows)
+        if len(calls) == 1:
+            return _update_with([], groups=[{"group": "g_c", "summary": "Settled now."}])
+        await service.set_status(KEY, "g_c", "completed")
+        return _kept(WAITING)
+
+    board = await _run(service, call, dispatches=())
+
+    assert len(calls) == 2
+    assert board is not None
+    assert (board.groups[0].status, board.groups[0].steps[-1].questions) == ("completed", [WAITING])
+
+
 async def test_a_settled_question_puts_the_group_down_when_only_the_summary_changed(tmp_path):
     """The turn settled the question and rewrote only the group's summary, so its
     step still says needs_you; an empty answer has to move the group to idle."""

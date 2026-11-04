@@ -112,12 +112,17 @@ def build_instruction(board: Board, dispatches: Sequence[Dispatch], owners: Sequ
 def carry_candidates(before: Board, after: Board, turn_at: str) -> list[tuple[TaskGroup, TaskGroup]]:
     """The groups whose latest step already asked something and this turn updated.
 
-    A question is open only while it sits on the group's latest step, so ``before``
-    is read there. ``after`` says which of those groups the turn touched -- a step
-    written, or the group's own title, summary or status rewritten -- and each pair
-    is that group as it stood and as the update left it.
+    A question is open only while it sits on the group's latest step and the group is
+    ``needs_you`` -- the rule recall reads -- so ``before`` is read both ways.
+    ``after`` says which of those groups the turn touched -- a step written, or the
+    group's own title, summary or status rewritten -- and each pair is that group as
+    it stood and as the update left it.
     """
-    prior = {group.id: group for group in before.groups if group.steps and group.steps[-1].questions}
+    prior = {
+        group.id: group
+        for group in before.groups
+        if group.status == "needs_you" and group.steps and group.steps[-1].questions
+    }
     waiting = []
     for group in after.groups:
         old = prior.get(group.id)
@@ -150,10 +155,10 @@ def build_carry_instruction(groups: Sequence[tuple[TaskGroup, TaskGroup]]) -> st
 
 
 def _still_open(waiting: Sequence[tuple[TaskGroup, TaskGroup]], board: Board) -> list[str]:
-    """The groups whose asked step the reader has not touched since the preview.
+    """The groups whose asked step and status the reader has not touched since the preview.
 
-    The question pass is a model round trip, and the reader can set a question
-    aside while it runs; writing the model's list back would undo that.
+    The question pass is a model round trip, and the reader can set a question aside
+    or complete the group while it runs; writing the model's list back would undo that.
     """
     groups = {group.id: group for group in board.groups}
     kept = []
@@ -161,7 +166,7 @@ def _still_open(waiting: Sequence[tuple[TaskGroup, TaskGroup]], board: Board) ->
         asked = before.steps[-1]
         current = groups.get(group.id)
         step = next((s for s in current.steps if s.id == asked.id), None) if current is not None else None
-        if step is not None and step.questions == asked.questions:
+        if step is not None and step.questions == asked.questions and current.status == group.status:
             kept.append(group.id)
     return kept
 
