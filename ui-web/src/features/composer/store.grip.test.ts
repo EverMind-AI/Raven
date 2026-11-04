@@ -212,6 +212,29 @@ describe('a drag against the content', () => {
     expect(ta.style.height).toBe('252px')
   })
 
+  it('leaves the field to its content after a click with a pixel of travel', () => {
+    const ta = mount()
+    gripDrag(grip())
+    press(grip(), 500)
+    moveTo(grip(), 499)
+    release(grip())
+    content(ta, 300)
+    fitField()
+    expect(ta.style.height).toBe('300px')
+  })
+
+  it('follows the whole travel once the press has become a drag', () => {
+    const ta = mount()
+    gripDrag(grip())
+    press(grip(), 500)
+    moveTo(grip(), 499)
+    expect(ta.style.height).toBe('')
+    moveTo(grip(), 480)
+    expect(ta.style.height).toBe('72px')
+    moveTo(grip(), 498)
+    expect(ta.style.height).toBe('54px')
+  })
+
   it('keeps the dragged height on release when the content is taller', () => {
     const ta = mount()
     content(ta, 900)

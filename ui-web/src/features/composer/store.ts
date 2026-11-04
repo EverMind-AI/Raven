@@ -300,6 +300,11 @@ export function resizeField(px: number): void {
   dockLift()
 }
 
+/* How far a press travels before it is a drag, the slop the page's other
+   drags allow. A dragged height outlives the gesture, so a click's own jitter
+   on the handle must not pin the field at its current height. */
+const GRIP_SLOP = 4
+
 /* The seam on the card's top edge: up raises the field, down lowers it, and
    the release leaves it where the pointer let go. The pointer is captured on
    the handle and the move writes the height directly, with no state and no
@@ -317,8 +322,11 @@ export function gripDrag(el: HTMLElement): void {
     el.dataset.drag = 'true'
     el.setPointerCapture(pointerId)
     document.body.style.userSelect = 'none'
+    let dragging = false
     const move = (ev: PointerEvent): void => {
       if (ev.pointerId !== pointerId) return
+      if (!dragging && Math.abs(ev.clientY - startY) < GRIP_SLOP) return
+      dragging = true
       resizeField(startH + startY - ev.clientY)
     }
     const up = (): void => {
