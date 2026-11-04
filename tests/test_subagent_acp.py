@@ -9767,3 +9767,133 @@ def test_a_launcher_that_vanishes_before_it_is_read_keeps_the_old_digest(
 
     assert snapshot_fingerprint(cfg) == before
     assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
+
+
+def test_a_relative_launcher_resolves_against_the_configured_cwd(tmp_path: Path) -> None:
+    """The launch starts the agent in the row's cwd, so a relative launcher is
+    that directory's file; reading raven's own directory would fingerprint a
+    different binary, or none at all."""
+    from raven.acp_client.capabilities import _executable_identity
+
+    _installed(tmp_path / "agent-acp")
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="./agent-acp", cwd=str(tmp_path))
+
+    identity = _executable_identity(cfg)
+
+    assert identity is not None
+    assert identity[0] == str(tmp_path / "agent-acp")
+
+
+def test_a_relative_launcher_in_a_subdirectory_is_read_from_the_configured_cwd(tmp_path: Path) -> None:
+    """The same rule for a launcher that names a directory of its own: the
+    directory part is relative to where the subprocess starts, not to raven."""
+    from raven.acp_client.capabilities import _executable_identity
+
+    launch_dir = tmp_path / "agent"
+    (launch_dir / "bin").mkdir(parents=True)
+    _installed(launch_dir / "bin" / "agent-acp")
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="bin/agent-acp", cwd=str(launch_dir))
+
+    identity = _executable_identity(cfg)
+
+    assert identity is not None
+    assert identity[0] == str(launch_dir / "bin" / "agent-acp")
+
+
+def test_a_relative_launchers_in_place_upgrade_moves_the_digest(tmp_path: Path) -> None:
+    """The blocking case: an agent installed beside its configured cwd is
+    upgraded where it stands, exactly as for an absolute command."""
+    exe = _installed(tmp_path / "agent-acp")
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="./agent-acp", cwd=str(tmp_path))
+    before = snapshot_fingerprint(cfg)
+    assert before != _legacy_launch_digest(cfg)
+
+    stat = exe.stat()
+    os.utime(exe, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+
+    assert snapshot_fingerprint(cfg) != before
+
+
+def test_a_relative_launcher_without_a_configured_cwd_resolves_from_the_process_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row that sets no cwd is launched in raven's own directory, so the
+    fallback has to be that same directory."""
+    from raven.acp_client.capabilities import _executable_identity
+
+    _installed(tmp_path / "agent-acp")
+    monkeypatch.chdir(tmp_path)
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="./agent-acp")
+
+    identity = _executable_identity(cfg)
+
+    assert identity is not None
+    assert identity[0] == os.path.join(os.getcwd(), "agent-acp")
+
+
+def test_a_removed_process_directory_keeps_the_old_digest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A service can outlive the directory it started in; the launch directory
+    is then unknowable, which is a missing measurement, not an error."""
+    import raven.acp_client.capabilities as capabilities
+
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="./agent-acp")
+    before = snapshot_fingerprint(cfg)
+
+    def gone() -> str:
+        raise FileNotFoundError("the process directory is gone")
+
+    monkeypatch.setattr(capabilities.os, "getcwd", gone)
+
+    assert snapshot_fingerprint(cfg) == before
+    assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
+
+
+def test_a_relative_launcher_missing_from_the_configured_cwd_keeps_the_old_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A launcher not installed where the launch looks is a missing
+    measurement, not a new one -- and a same-named file in raven's own
+    directory is not the file that launch would run."""
+    from raven.acp_client.capabilities import _executable_identity
+
+    raven_dir = tmp_path / "raven-dir"
+    launch_dir = tmp_path / "launch-dir"
+    raven_dir.mkdir()
+    launch_dir.mkdir()
+    _installed(raven_dir / "agent-acp")
+    monkeypatch.chdir(raven_dir)
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="./agent-acp", cwd=str(launch_dir))
+
+    assert _executable_identity(cfg) is None
+    assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
+
+
+def test_the_configured_cwd_only_moves_a_relative_launcher(tmp_path: Path) -> None:
+    """A bare name is looked up on the launch PATH and an absolute one is its
+    own file, so neither may resolve differently under another launch
+    directory."""
+    from raven.acp_client.capabilities import _executable_identity
+
+    # Windows' PATH lookup never tries a bare name, so the fixture carries an
+    # extension there and the command names that same file.
+    name = "agent-acp.exe" if os.name == "nt" else "agent-acp"
+    exe = _installed(tmp_path / name)
+    here = tmp_path / "here"
+    there = tmp_path / "there"
+    here.mkdir()
+    there.mkdir()
+
+    bare_here = ThirdPartyAcpSubagentConfig(name="a", command=f"{name} acp", env={"PATH": str(tmp_path)}, cwd=str(here))
+    bare_there = ThirdPartyAcpSubagentConfig(
+        name="a", command=f"{name} acp", env={"PATH": str(tmp_path)}, cwd=str(there)
+    )
+    absolute_here = ThirdPartyAcpSubagentConfig(name="a", command=str(exe), cwd=str(here))
+    absolute_there = ThirdPartyAcpSubagentConfig(name="a", command=str(exe), cwd=str(there))
+
+    bare = _executable_identity(bare_here)
+    absolute = _executable_identity(absolute_here)
+
+    assert bare is not None
+    assert absolute is not None
+    assert bare == _executable_identity(bare_there)
+    assert absolute == _executable_identity(absolute_there)
