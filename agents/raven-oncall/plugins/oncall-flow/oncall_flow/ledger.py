@@ -173,6 +173,8 @@ class Ledger:
     def _load(self) -> None:
         try:
             payload = json.loads(self._path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise TypeError(f"expected an object, found {type(payload).__name__}")
             self._records = {k: _record_from_dict(v) for k, v in payload.get("records", {}).items()}
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             raise LedgerCorruptError(
