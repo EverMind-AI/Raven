@@ -98,13 +98,13 @@ class MCPToolWrapper(Tool):
         # to put its entire base64 payload into the prompt as prose -- the model
         # saw gibberish instead of a picture and nothing errored. Convert per
         # content type instead, and never stringify a payload-bearing block.
-        ok = not bool(getattr(result, "isError", False))
+        ok = not bool(getattr(result, "is_error", False))
         text, blocks = media.blocks_from_mcp_content(result.content)
         if blocks:
             return ToolResult(model_text=text or "(no output)", blocks=blocks, ok=ok)
         if ok:
             return text or "(no output)"
-        # The kind of failure this describes (isError) is not an exception: its
+        # The kind of failure this describes (is_error) is not an exception: its
         # text looks like any other output, so the verdict must ride on the
         # result rather than be derived from a prefix.
         return ToolResult(model_text=text or "(no output)", ok=False)

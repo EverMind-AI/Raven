@@ -1352,8 +1352,13 @@ async def provider_for(
 
 
 def is_auth_error(exc: BaseException) -> bool:
-    """Whether a connect failure means "user must (re)authorize"."""
+    """Whether a connect failure means "user must (re)authorize".
+
+    Both HTTP stacks are checked: mcp 2.x's transports raise httpx2 errors,
+    while raven's own OAuth responses still use httpx.
+    """
     import httpx
+    import httpx2
     from mcp.client.auth import OAuthFlowError, OAuthRegistrationError, OAuthTokenError
 
     def check(e: BaseException, depth: int = 0) -> bool:
@@ -1361,7 +1366,7 @@ def is_auth_error(exc: BaseException) -> bool:
             return False
         if isinstance(e, (OAuthFlowError, OAuthTokenError, OAuthRegistrationError, OAuthWaitTimeoutError)):
             return True
-        if isinstance(e, httpx.HTTPStatusError) and e.response.status_code in (401, 403):
+        if isinstance(e, (httpx.HTTPStatusError, httpx2.HTTPStatusError)) and e.response.status_code in (401, 403):
             return True
         if isinstance(e, BaseExceptionGroup):
             return any(check(sub, depth + 1) for sub in e.exceptions)

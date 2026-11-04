@@ -8,6 +8,7 @@ that goes unreachable while staying alive, and one that leaves evidence on disk
 that a caller reached this process.
 """
 
+import asyncio
 import os
 import signal
 import sys
@@ -76,7 +77,7 @@ def die() -> str:
 
 
 @mcp.tool()
-def go_silent() -> str:
+async def go_silent() -> str:
     """Become unreachable without exiting: EOF on stdout, but the process lives.
 
     This is the shape that makes the placement of the endpoint's downstream
@@ -85,15 +86,28 @@ def go_silent() -> str:
     close before or after transport teardown look the same from downstream.
     Refusing SIGTERM forces that teardown to burn its full timeout instead.
 
+    Async on purpose: mcp 2.x runs a sync tool in a worker thread, where
+    ``signal.signal`` raises ``ValueError``. The event loop runs on the main
+    thread, so the handlers install there.
+
+    mcp 2.x also diverts fd 1 and serves the wire from a private duplicate
+    (``mcp.server.stdio._claims``), so closing fd 1 alone leaves the transport
+    open. Closing the duplicate is what makes the endpoint see EOF while this
+    process stays alive.
+
     The linger is a non-daemon thread so the process stays alive by
     construction rather than by whatever the crashed writer task leaves behind,
     and it ends in ``os._exit`` so nothing here can outlive the test.
     """
+    import mcp.server.stdio as mcp_stdio
+
     threading.Thread(target=lambda: (time.sleep(_LINGER_SECONDS), os._exit(0)), daemon=False, name="linger").start()
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
-    os.close(1)
-    time.sleep(_LINGER_SECONDS)
+    claim = mcp_stdio._claims.get(1)
+    if claim is not None and claim.private_fd is not None:
+        os.close(claim.private_fd)
+    await asyncio.sleep(_LINGER_SECONDS)
     return "never reaches the client"
 
 

@@ -6,6 +6,8 @@ import asyncio
 from contextlib import AsyncExitStack, asynccontextmanager
 from types import SimpleNamespace
 
+from mcp.types import CallToolResult, TextContent
+
 from raven.agent.tools.registry import ToolRegistry
 from raven.config.schema import MCPServerConfig
 from raven.contracts.tool import ToolResult
@@ -33,10 +35,8 @@ def _wrapper(session: _Session) -> MCPToolWrapper:
     return MCPToolWrapper(session, "server-x", tool_def, tool_timeout=30, taken=frozenset())
 
 
-def _result(*, is_error: bool, text: str) -> SimpleNamespace:
-    from mcp.types import TextContent
-
-    return SimpleNamespace(isError=is_error, content=[TextContent(type="text", text=text)])
+def _result(*, is_error: bool, text: str) -> CallToolResult:
+    return CallToolResult(content=[TextContent(type="text", text=text)], is_error=is_error)
 
 
 async def test_an_is_error_result_carries_ok_false() -> None:

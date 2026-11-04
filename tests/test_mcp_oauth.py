@@ -9,6 +9,7 @@ import time
 from types import SimpleNamespace
 
 import httpx
+import httpx2
 import pytest
 from mcp.shared.auth import OAuthToken
 
@@ -656,19 +657,24 @@ async def test_is_auth_error_mapping():
     assert is_auth_error(OAuthTokenError("expired"))
     assert is_auth_error(OAuthWaitTimeoutError("slow user"))
 
-    req = httpx.Request("GET", "https://mcp.example/mcp")
-    resp = httpx.Response(401, request=req)
-    http_err = httpx.HTTPStatusError("401", request=req, response=resp)
-    assert is_auth_error(http_err)
-    assert is_auth_error(BaseExceptionGroup("g", [RuntimeError("x"), http_err]))
+    def status_error(module, code: int):
+        req = module.Request("GET", "https://mcp.example/mcp")
+        resp = module.Response(code, request=req)
+        return module.HTTPStatusError(str(code), request=req, response=resp)
+
+    # mcp 2.x's transports raise httpx2 errors; raven's own OAuth responses
+    # still use httpx. Both mean the same thing to a caller.
+    for module in (httpx, httpx2):
+        http_err = status_error(module, 401)
+        assert is_auth_error(http_err), module.__name__
+        assert is_auth_error(BaseExceptionGroup("g", [RuntimeError("x"), http_err])), module.__name__
+        assert not is_auth_error(status_error(module, 500)), module.__name__
 
     wrapped = RuntimeError("outer")
     wrapped.__cause__ = OAuthTokenError("inner")
     assert is_auth_error(wrapped)
 
     assert not is_auth_error(RuntimeError("plain"))
-    resp5 = httpx.Response(500, request=req)
-    assert not is_auth_error(httpx.HTTPStatusError("500", request=req, response=resp5))
 
 
 # ── Token expiry survives the process (the silent-refresh anchor) ──

@@ -67,9 +67,11 @@ def _use_local_model_cost_map() -> None:
 
 # Rows the installed LiteLLM catalogue lacks and raven vouches for itself.
 # ``deepseek/deepseek-flash`` is DeepSeek's own API name for V4.1-Flash (the
-# retired ``deepseek-v4-flash`` routes to it); LiteLLM files nothing under it,
-# so the window resolver fell back to 65,536 for a 1,048,576-token model and
-# the cost recorder wrote 0 (2026-09-11). Prices are DeepSeek's peak-hour
+# retired ``deepseek-v4-flash`` routes to it); before LiteLLM 1.108 the
+# catalogue filed nothing under it, so the window resolver fell back to 65,536
+# for a 1,048,576-token model and the cost recorder wrote 0 (2026-09-11).
+# 1.108 ships its own row, so registration is skipped there; the row stays for
+# the `litellm>=1.82.1` range. Prices are DeepSeek's peak-hour
 # rates per token -- off-peak is half, and a flat table cannot say so, so the
 # recorded cost is an upper bound. Keyed by the exact ids the wire uses; the
 # OpenRouter-routed ``openrouter/deepseek/...`` ids are deliberately absent,
