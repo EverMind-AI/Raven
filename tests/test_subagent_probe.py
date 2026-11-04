@@ -1835,8 +1835,8 @@ async def test_a_mirasim_row_is_read_by_whether_mirasim_is_here_not_by_an_execut
     res = await probe_one(cfg, source="preset", path=str(tmp_path / "bin"))
     assert res.status == "attention" and res.absent is None
     assert res.detail == (
-        f"Mirasim is installed ({launcher}) but no host of it is running: open the Mirasim app, or let the "
-        "Mirasim app on another computer reach this one again, then check again"
+        f"Mirasim is installed ({launcher}) but no host of it is running: open the Mirasim app or start "
+        "`mirasim serve`, or let the Mirasim app on another computer reach this one again, then check again"
     )
     assert res.target == str(launcher)
 

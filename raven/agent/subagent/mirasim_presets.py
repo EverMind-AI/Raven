@@ -71,10 +71,12 @@ def _row(key: str, agent: str, label: str, what: str) -> dict[str, Any]:
         # The first session waits on the host listing its agents, which it
         # answers progressively: measured at about two seconds, with the rows
         # probing every agent CLI on the machine. The budget covers the
-        # adapter's own limits instead -- reaching the host (15 s), then the
-        # agent list and the menus (60 s), twice when the first list says the
-        # agent is not installed -- so a slow host is refused by the adapter,
-        # saying why, rather than timed out as an agent that hung.
+        # adapter's own limits instead -- reaching the host (15 s at each place
+        # that takes the connection and never answers; a port nothing listens
+        # on refuses at once), then the agent list and the menus (60 s), twice
+        # when the first list says the agent is not installed -- so a slow host
+        # is refused by the adapter, saying why, rather than timed out as an
+        # agent that hung.
         "readyTimeoutMs": 150000,
         # The Mirasim host takes no MCP servers for one session, so nothing
         # handed over could reach the agent. False is the one declaration that

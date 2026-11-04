@@ -86,8 +86,8 @@ MAX_FRAME_BYTES = 64 * 1024 * 1024
 RECONNECT_PAUSES_S = (0.2, 0.5, 1.0, 2.0, 5.0)
 
 NO_HOST = (
-    "No Mirasim host is running on this machine: start the Mirasim app (or let it reach this machine), "
-    f"or name where the host listens in {HOST_ENV}."
+    "No Mirasim host is running on this machine: start the Mirasim app or `mirasim serve` (or let the app "
+    f"reach this machine), or name where the host listens in {HOST_ENV}."
 )
 
 
@@ -507,7 +507,8 @@ def _none_answered(refusals: Sequence[_UnreachableError]) -> str:
     places = "; ".join(f"{refusal.address.describe()} ({refusal.reason})" for refusal in refusals)
     return (
         f"cannot reach a Mirasim host at any of the {len(refusals)} places it may listen: {places}; start the "
-        f"Mirasim app (or let it reach this machine), or name where the host listens in {HOST_ENV}"
+        f"Mirasim app or `mirasim serve` (or let the app reach this machine), or name where the host listens in "
+        f"{HOST_ENV}"
     )
 
 

@@ -720,9 +720,10 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
         # The adapter runs no executable of Mirasim's; it reaches the host. So the
         # row is read by whether a host is there to reach, then by whether
         # Mirasim is installed at all -- told apart, because the reader's next
-        # move differs: open the app (or let the app on another computer reach
-        # this one again), or install it. Both sentences cover both ways a host
-        # comes to be here, as the adapter's own refusal does.
+        # move differs: start a host -- open the app, start `mirasim serve`, or
+        # let the app on another computer reach this one again -- or install it.
+        # The not-running sentence names each way a host comes to be here, as
+        # the adapter's own refusal does.
         state, where = mirasim_presets.presence(_mirasim_env(cfg), path=cfg_path or path)
         if state == "absent":
             return replace(
@@ -737,8 +738,8 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
         if state == "installed":
             return done(
                 "attention",
-                f"Mirasim is installed ({where}) but no host of it is running: open the Mirasim app, or let the "
-                "Mirasim app on another computer reach this one again, then check again",
+                f"Mirasim is installed ({where}) but no host of it is running: open the Mirasim app or start "
+                "`mirasim serve`, or let the Mirasim app on another computer reach this one again, then check again",
                 where,
             )
     requirement = shim_requirement_for(cfg)
