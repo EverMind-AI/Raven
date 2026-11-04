@@ -1263,6 +1263,13 @@ _NPM9_ENOTFOUND = (
         (_NPM9_ENOTFOUND, "ENOTFOUND"),
         ("npm error code E404\nnpm error 404 Not Found - GET https://registry.example/pkg\n", "E404"),
         ("npm error code ETARGET\nnpm error notarget No matching version found\n", "ETARGET"),
+        # The shape a registered machine's node relays: the code line follows
+        # Raven's own "stderr tail: " marker instead of starting the text.
+        (
+            "acp agent 'x': connection ended (exit 1); stderr tail: npm error code ETARGET\n"
+            "npm error notarget No matching version found\n",
+            "ETARGET",
+        ),
         ("npm error network request to https://registry.example failed\n", "network"),
         # A local failure: no network, registry or proxy setting fixes it.
         ("npm error code EACCES\nnpm error syscall mkdir\n", None),
@@ -1277,6 +1284,16 @@ def test_a_fetch_failure_is_read_off_npm_s_own_error_code(stderr: str, verdict: 
 
     died = AcpConnectionError("acp agent 'x': connection ended (exit 1)", stderr=stderr)
     assert npx_fetch_failure("npx -y some-adapter@1.0.0", died) == verdict
+
+
+def test_an_etarget_lead_names_the_metadata_cache_before_the_pin() -> None:
+    """npm states a missing version from a cache it may have fallen back to on its own."""
+    from raven.acp_client.capabilities import npx_fetch_lead
+
+    lead = npx_fetch_lead("ETARGET")
+    assert lead.startswith("npx could not download it (ETARGET"), lead
+    assert "cached metadata" in lead
+    assert npx_fetch_lead("ENOTFOUND").endswith("check the network, the npm registry or the proxy")
 
 
 def test_only_a_command_that_fetches_and_only_a_start_that_ran_out_are_download_verdicts() -> None:

@@ -977,7 +977,10 @@ def looks_like_auth(text: str) -> bool:
 # on a line of its own, then (for a network failure) lines headed "network".
 # `npm error` is npm 10, `npm ERR!` npm 9 and older; both measured 2026-09-23
 # against an unreachable and an unresolvable registry, npm 10.9.8 and 9.9.4.
-_NPM_CODE = re.compile(r"^npm (?:ERR!|error) code (\S+)", re.MULTILINE)
+# A line that follows Raven's own "stderr tail: " marker counts too: that is the
+# shape a registered machine's node relays the report in, where the code line is
+# no longer first on its line.
+_NPM_CODE = re.compile(r"(?:^|(?<=stderr tail: ))npm (?:ERR!|error) code (\S+)", re.MULTILINE)
 _NPM_NETWORK = re.compile(r"^npm (?:ERR!|error) network ", re.MULTILINE)
 # The codes that mean the registry could not be reached or would not serve the
 # package: the network, TLS in front of it, or the registry's own answer (the
@@ -1043,17 +1046,18 @@ def npx_fetch_failure(command: str, exc: BaseException, stderr: str | None = Non
     Evidence rather than inference, in the way `looks_like_auth` is not: the
     verdict needs npm's own error-code line, read from the whole stderr
     (``AcpConnectionError.stderr``, or ``stderr`` for a caller that holds the
-    client) because npm prints that line first. The timeout is the one reading
-    without such a line, and it is kept to an ``initialize`` that ran out on an
-    ``npx`` command whose package was not fetched ahead of the handshake
+    client) because npm prints that line first. A launch on a registered machine
+    relays the same report inside the node's own sentence (`stderr tail: npm
+    error code ...`), so that sentence is evidence too, read by
+    `probe.ping_agent`. The timeout is the one reading without such a line, and
+    it is kept to an ``initialize`` that ran out on an ``npx`` command whose
+    package was not fetched ahead of the handshake
     (`npx_fetch.fetchable_package`) -- an agent that has not finished starting,
     where a first download is the likeliest cause and the one the reader can act
     on. One that was fetched ahead had its download over before the handshake
-    began, so running out there is the agent's own start. Every caller reads a
-    launch on this computer, where that fetch runs: an agent on a registered
-    machine, whose Raven node starts it with no fetch ahead, has its failure
-    reported as the machine gave it before any of them is reached
-    (`verify_agent`, `probe.ping_agent`).
+    began, so running out there is the agent's own start. That half stays this
+    computer's: a row on a registered machine is started by its node with no
+    fetch ahead, so a start that ran out there is the machine's to report.
     """
     if not launches_with_npx(command):
         return None
@@ -1078,9 +1082,25 @@ def npx_fetch_failure(command: str, exc: BaseException, stderr: str | None = Non
 
 
 def npx_fetch_lead(verdict: str) -> str:
-    """The sentence `npx_fetch_failure`'s verdict is reported with, for the log, the CLI and the TUI."""
+    """The sentence `npx_fetch_failure`'s verdict is reported with, for the log, the CLI and the TUI.
+
+    ETARGET gets words of its own because it is the one verdict that reads like a
+    bad pin rather than a bad connection: npm states that the version does not
+    exist, and it can state that from a cached packument it fell back to when the
+    registry did not answer. Measured 2026-11-04 on npm 10.9.3: three
+    FETCH_ERRORs against registry.npmjs.org, then a stale body that predated the
+    pinned version, reported as `No matching version found`. The sentence names
+    the cache so a reader checks that before hunting for a typo.
+    """
     if verdict == "timeout":
         return "it did not finish starting in time, and npx may still have been downloading it"
+    if verdict == "ETARGET":
+        return (
+            "npx could not download it (ETARGET: the registry metadata it read has no such version); "
+            "check the network, the npm registry or the proxy -- npm can fall back to cached metadata "
+            "when the registry does not answer, so a version published since that cache was written is "
+            "missing from it"
+        )
     return f"npx could not download it ({verdict}); check the network, the npm registry or the proxy"
 
 

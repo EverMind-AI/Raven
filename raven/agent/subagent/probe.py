@@ -1245,7 +1245,16 @@ async def ping_agent(cfg: Any) -> PingResult:
         # on this computer, and this agent is on another one.
         if failure is None:
             return PingResult(False, "it started and then answered nothing")
-        text, _fix = _refusal(cfg, *_said(failure))
+        from raven.acp_client.capabilities import npx_fetch_failure, npx_fetch_lead
+
+        shown, answer = _said(failure)
+        # npm's report reaches this side inside the node's own sentence
+        # (`stderr tail: ...`) rather than in an `stderr` field, so that
+        # sentence is the evidence read.
+        unfetched = npx_fetch_failure((getattr(cfg, "command", None) or "").strip(), failure, shown)
+        if unfetched is not None:
+            return PingResult(False, _on_machine(f"{npx_fetch_lead(unfetched)}. It said: {shown}", machine))
+        text, _fix = _refusal(cfg, shown, answer)
         return PingResult(False, _on_machine(text, machine))
     # An agent whose ACP answer leaves the reason out is asked for it its own way,
     # once the pool is closed, so the process asked is not racing the one pinged.
