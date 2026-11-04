@@ -62,12 +62,14 @@ class ProgressStep:
 @dataclass
 class GroupRevision:
     """What one turn's update changed on a group that already stood: each field it
-    changed, as it was before and as the update left it. An undo of that turn puts
-    back what it changed, and only where nothing written since has changed it again."""
+    changed, as it was before and as the update left it, and the questions the carry
+    rewrote on a step of an earlier turn, by step id. An undo of that turn puts back
+    what it changed, and only where nothing written since has changed it again."""
 
     turn_at: str
     before: dict[str, Any]
     after: dict[str, Any]
+    questions: dict[str, tuple[list[str], list[str]]] = field(default_factory=dict)
 
 
 REVISED_FIELDS = ("title", "summary", "status", "updated_at")
@@ -447,9 +449,14 @@ def apply_carry(
     out = copy.deepcopy(board)
     by_id = {group.id: group for group in out.groups}
     before = {group_id: _revised(by_id[group_id]) for group_id in carried}
+    rewritten: dict[str, dict[str, tuple[list[str], list[str]]]] = {}
     for group_id, questions in carried.items():
         group = by_id[group_id]
-        group.steps[-1].questions = questions
+        step = group.steps[-1]
+        was = list(step.questions)
+        step.questions = questions
+        if step.turn_at != turn_at and was != questions:
+            rewritten[group_id] = {step.id: (was, list(questions))}
         if questions:
             group.status = "needs_you"
         elif group.status == "needs_you":
@@ -459,9 +466,15 @@ def apply_carry(
         group, was = by_id[group_id], before[group_id]
         now = _revised(group)
         changed = [name for name in REVISED_FIELDS if now[name] != was[name]]
-        if changed:
+        step_questions = rewritten.get(group_id, {})
+        if changed or step_questions:
             group.revisions.append(
-                GroupRevision(turn_at, {name: was[name] for name in changed}, {name: now[name] for name in changed})
+                GroupRevision(
+                    turn_at,
+                    {name: was[name] for name in changed},
+                    {name: now[name] for name in changed},
+                    step_questions,
+                )
             )
     return out
 
@@ -582,8 +595,9 @@ def drop_turns(board: Board, removed: Set[str]) -> Board:
 
     Named rather than inferred from what the log still holds: consolidation moves
     old messages out of the session, and their turns' steps stay. A group such a
-    turn changed gets back each field that turn changed, newest turn first, unless
-    a later writer -- the reader's own Mark completed -- changed it again.
+    turn changed gets back each field that turn changed, and the questions the carry
+    rewrote on a step that is still there, newest turn first, unless a later writer
+    -- the reader's own Mark completed or set-aside -- changed it again.
     """
     out = copy.deepcopy(board)
     for group in out.groups:
@@ -592,6 +606,10 @@ def drop_turns(board: Board, removed: Set[str]) -> Board:
             for name, value in revision.after.items():
                 if getattr(group, name) == value:
                     setattr(group, name, revision.before[name])
+            for step_id, (was, now) in revision.questions.items():
+                step = next((s for s in group.steps if s.id == step_id), None)
+                if step is not None and step.questions == now:
+                    step.questions = list(was)
         group.revisions = [r for r in group.revisions if r.turn_at not in removed]
     out.groups = [g for g in out.groups if g.steps]
     out.unassigned = [p for p in out.unassigned if p.turn_at not in removed]
@@ -625,7 +643,21 @@ def board_to_dict(board: Board, *, revisions: bool = False) -> dict[str, Any]:
                 **(
                     {
                         "revisions": [
-                            {"turn_at": r.turn_at, "before": dict(r.before), "after": dict(r.after)}
+                            {
+                                "turn_at": r.turn_at,
+                                "before": dict(r.before),
+                                "after": dict(r.after),
+                                **(
+                                    {
+                                        "questions": {
+                                            step_id: {"before": list(was), "after": list(now)}
+                                            for step_id, (was, now) in r.questions.items()
+                                        }
+                                    }
+                                    if r.questions
+                                    else {}
+                                ),
+                            }
                             for r in g.revisions
                         ]
                     }
@@ -668,7 +700,18 @@ def board_from_dict(data: Mapping[str, Any]) -> Board:
                     for s in g.get("steps") or []
                 ],
                 revisions=[
-                    GroupRevision(str(r["turn_at"]), dict(r.get("before") or {}), dict(r.get("after") or {}))
+                    GroupRevision(
+                        str(r["turn_at"]),
+                        dict(r.get("before") or {}),
+                        dict(r.get("after") or {}),
+                        {
+                            str(step_id): (
+                                [str(q) for q in (change.get("before") or [])],
+                                [str(q) for q in (change.get("after") or [])],
+                            )
+                            for step_id, change in (r.get("questions") or {}).items()
+                        },
+                    )
                     for r in g.get("revisions") or []
                 ],
             )
