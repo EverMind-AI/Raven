@@ -208,7 +208,10 @@ Kimi Code 和 ZCode CLI 的自有模型，因此这四个 Agent 的这些模型�
 （`~/.mirasim-remote/run/server.sock`，仅限 Linux 和 macOS），然后是 Mirasim 状态目录
 （`MIRASIM_HOME`，否则为 `~/.mirasim`）下每个以 `run/local-<port>.token` 写出了 token
 的本机回环端口：先试桌面端的 `4970`，再试 `mirasim serve` 默认监听的 `4939`，其余按端口号
-从小到大，第一个应答的就是 host。host 按实际绑定的端口写这个文件，所以因原端口被占而换了
+从小到大，第一个应答的就是 host；写出了 token 文件的端口只有在它的 `/api/health`
+自称 Mirasim host 时才算应答，该文件里的 token 只会发给自证了身份的 host，不会发给之后
+占用该端口的其他程序。health 答不出来的 host 仍可用 `RAVEN_MIRASIM_HOST` 指名接入。
+host 按实际绑定的端口写这个文件，所以因原端口被占而换了
 端口的 host 照样能找到，被强行结束的 host 留下的文件会被跳过，host 重启后换了端口，适配器
 重连时也会到新端口找它。若 host 监听在其他位置，用
 `RAVEN_MIRASIM_HOST` 指明：socket 写作 `unix:<path>`（Windows 不支持，那里经桌面端的

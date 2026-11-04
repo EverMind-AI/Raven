@@ -250,7 +250,11 @@ Linux and macOS only), then every loopback port a host wrote its token for, as
 `run/local-<port>.token` under Mirasim's state directory (`MIRASIM_HOME`, else
 `~/.mirasim`): the desktop app's `4970` first, then `4939`, where
 `mirasim serve` listens unless told otherwise, then the rest in ascending
-order. The first that answers is the host. A host writes its file for the port
+order. The first that answers is the host, and a port with a token file counts
+as answering only when its `/api/health` names a Mirasim host: the token that
+file holds goes only to a host that identified itself, not to whatever else may
+hold the port by then. A host whose health cannot say is still reachable by
+naming it in `RAVEN_MIRASIM_HOST`. A host writes its file for the port
 it actually bound, so one that moved on because its own port was taken is still
 found, a file a killed host left behind is passed over, and a host that comes
 back on another port is found there when the adapter reconnects. When the host

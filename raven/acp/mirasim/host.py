@@ -35,7 +35,11 @@ never logged and never quoted in an error: a refused upgrade is worded from
 its status, and the token is taken out of whatever else is said. ``/api/health``
 is the one path a host serves without a token, so it is asked without one: the
 port a killed host left its file for may be another program's by now, and a
-place whose health names another service is passed over before the upgrade.
+place whose health names another service is passed over before the upgrade. A
+place found from a token file has to name a Mirasim host there at all, because
+the upgrade is the request that carries that file's token; a place named in
+``RAVEN_MIRASIM_HOST``, or Mirasim's SSH socket (no token), is still tried when
+its health cannot say.
 
 One connection serves every session of the adapter. A frame comes back to its
 request by what the host echoes, which differs per frame: ``clientRef`` on
@@ -105,7 +109,8 @@ class _UnreachableError(HostUnavailableError):
 
 
 class _NotMirasimError(Exception):
-    """What answers at a place says, in ``/api/health``, that it is some other program."""
+    """What answers at a place is not a Mirasim host: its ``/api/health`` names another program, or, at a
+    place found by scanning, does not name one at all."""
 
 
 @dataclass(frozen=True)
@@ -117,6 +122,10 @@ class HostAddress:
     token: str | None = field(default=None, repr=False)
     host: str = "127.0.0.1"
     """The loopback name the port is reached on, as the address named it: ``localhost`` and ``[::1]`` stay so."""
+
+    discovered: bool = field(default=False, compare=False)
+    """Whether scanning ``run/local-<port>.token`` found this place, which must then name itself in
+    ``/api/health`` before the token is sent to it: the file only says where a host once was."""
 
     @property
     def base_url(self) -> str:
@@ -196,7 +205,7 @@ def locate_hosts(env: Mapping[str, str] | None = None) -> list[HostAddress]:
         with contextlib.suppress(OSError):
             if socket.is_socket():
                 return [HostAddress(socket=str(socket))]
-    return [HostAddress(port=port, token=port_token(port, env)) for port in token_ports(env)]
+    return [HostAddress(port=port, token=port_token(port, env), discovered=True) for port in token_ports(env)]
 
 
 def locate_host(env: Mapping[str, str] | None = None) -> HostAddress | None:
@@ -481,11 +490,14 @@ def _reason(exc: BaseException, address: HostAddress) -> str:
 
 
 async def _health(session: aiohttp.ClientSession, address: HostAddress) -> str | None:
-    """The host's version from ``/api/health``, or ``None``: a host that cannot say is still one to talk to.
+    """The host's version from ``/api/health``, or ``None`` when an explicitly selected host did not say.
 
-    Asked without the token, which the path does not take (see the module docstring), and
-    :exc:`_NotMirasimError` when the answer names another program.
+    Asked without the token, which the path does not take (see the module docstring). A place found by
+    scanning must name a Mirasim host here, because the upgrade is the request that carries its token:
+    another program on that port, and a host that cannot say, both raise :exc:`_NotMirasimError`. A place
+    named outright is trusted as before, and only a name for another program raises.
     """
+    body: Any = None
     try:
         async with session.get(
             f"{address.base_url}/api/health", timeout=aiohttp.ClientTimeout(total=HEALTH_TIMEOUT_S)
@@ -494,10 +506,13 @@ async def _health(session: aiohttp.ClientSession, address: HostAddress) -> str |
     except (aiohttp.ClientConnectionError, OSError, TimeoutError):
         raise
     except (aiohttp.ClientError, ValueError):
-        return None
+        pass
     name = body.get("name") if isinstance(body, dict) else None
-    if isinstance(name, str) and name != "mirasim":
-        raise _NotMirasimError(f"it is not a Mirasim host: its /api/health names {name[:80]!r}")
+    if isinstance(name, str):
+        if name != "mirasim":
+            raise _NotMirasimError(f"it is not a Mirasim host: its /api/health names {name[:80]!r}")
+    elif address.discovered:
+        raise _NotMirasimError("it did not identify itself as a Mirasim host")
     version = body.get("version") if isinstance(body, dict) else None
     return version.strip() if isinstance(version, str) and version.strip() else None
 

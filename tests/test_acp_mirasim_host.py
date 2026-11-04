@@ -160,6 +160,16 @@ def test_every_port_a_token_file_names_is_a_place_to_try_the_desktop_app_and_mir
     assert locate_host(env) == HostAddress(port=4939, token="serve")
 
 
+def test_a_place_a_token_file_names_is_marked_as_found_and_a_named_one_is_not(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(host_mod, "remote_socket", lambda: tmp_path / "absent.sock")
+    write_token(tmp_path, 4939, "serve")
+    env = {"MIRASIM_HOME": str(tmp_path)}
+    assert [(place.port, place.discovered) for place in host_mod.locate_hosts(env)] == [(4939, True)]
+    assert parse_address("4939", env).discovered is False
+
+
 @posix_only
 def test_a_named_host_or_the_remote_hosts_socket_is_the_only_place_to_try(
     tmp_path: Path, socket_dir: Path, monkeypatch: pytest.MonkeyPatch
@@ -462,6 +472,60 @@ async def test_a_host_that_comes_back_on_another_port_is_found_there(
         await after.stop()
 
 
+async def test_a_place_a_token_file_names_is_used_once_its_health_names_mirasim(fake: FakeHost) -> None:
+    assert fake.address is not None
+    found = HostAddress(port=fake.address.port, token=fake.address.token, discovered=True)
+    conn = HostConnection(on_frame=lambda f: None, locate=lambda: found)
+    try:
+        await conn.connect()
+        assert conn.connected
+    finally:
+        await conn.close()
+
+
+@pytest.mark.parametrize("answer", ["not-there", "not-json", "no-name", "unavailable"])
+async def test_a_place_a_token_file_names_is_left_alone_unless_its_health_names_mirasim(answer: str) -> None:
+    """A killed host's port may be any program's by now; only a host that says it is one gets the token."""
+    from aiohttp import web
+
+    seen: list[str] = []
+
+    async def health(request: web.Request) -> web.Response:
+        seen.append(request.path_qs)
+        if answer == "not-there":
+            return web.Response(status=404)
+        if answer == "unavailable":
+            return web.Response(status=503)
+        if answer == "not-json":
+            return web.Response(text="not json at all")
+        return web.json_response({"ok": True})
+
+    async def anything_else(request: web.Request) -> web.Response:
+        seen.append(request.path_qs)
+        return web.Response(status=404)
+
+    app = web.Application()
+    app.router.add_get("/api/health", health)
+    app.router.add_route("*", "/{rest:.*}", anything_else)
+    runner = web.AppRunner(app, shutdown_timeout=0.1)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+    found = HostAddress(port=port, token="s3cret-stale-token", discovered=True)
+    try:
+        conn = HostConnection(on_frame=lambda f: None, locate=lambda: found)
+        with pytest.raises(HostUnavailableError) as raised:
+            await conn.connect()
+        assert str(raised.value) == (
+            f"cannot reach the Mirasim host at 127.0.0.1:{port}: it did not identify itself as a Mirasim host"
+        )
+        assert seen == ["/api/health"]
+        assert not conn.connected
+    finally:
+        await runner.cleanup()
+
+
 async def test_a_place_whose_health_names_another_service_is_not_a_mirasim_host_and_never_sees_the_token(
     fake: FakeHost,
 ) -> None:
@@ -486,7 +550,7 @@ async def test_a_place_whose_health_names_another_service_is_not_a_mirasim_host_
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
     port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
-    other = HostAddress(port=port, token="s3cret-stale-token")
+    other = HostAddress(port=port, token="s3cret-stale-token", discovered=True)
     try:
         alone = HostConnection(on_frame=lambda f: None, locate=lambda: other)
         with pytest.raises(HostUnavailableError) as raised:
@@ -524,7 +588,10 @@ async def test_when_no_place_answers_each_is_named_with_why_and_never_with_its_t
 
 
 @pytest.mark.parametrize("health", [False, "not json"])
-async def test_a_host_that_cannot_say_its_version_is_still_one_to_talk_to(fake: FakeHost, health: bool | str) -> None:
+async def test_an_explicitly_selected_host_that_cannot_say_its_version_is_still_one_to_talk_to(
+    fake: FakeHost, health: bool | str
+) -> None:
+    """Compatibility: a host selected outright is tried as before, its health notwithstanding."""
     fake.health = health
     conn = HostConnection(on_frame=lambda f: None, locate=lambda: fake.address)
     try:
