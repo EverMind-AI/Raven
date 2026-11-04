@@ -15,6 +15,10 @@ account states outside this build's ladder (``ultra``) is not offered.
 A row's explicit ``reasoning_effort_levels`` answers before per-level flags,
 including an empty list. A route's own list or flags answer before an inherited
 vendor list, so an explicit route restriction is not undone by inheritance.
+When a row states neither a list nor flags, the vendor's own ladder
+(``ProviderSpec.reasoning_efforts``) answers before the flags' defaults: those
+defaults are OpenAI's, and reading them onto an API that takes low/high/max is
+what offered DeepSeek minimal and medium.
 
 The answer is tri-state for the static table: a tuple of levels when the model
 or the user declares them, ``()`` when the model declares none, and ``None``
@@ -44,6 +48,7 @@ EFFORT_FLAGS = (
     "supports_max_reasoning_effort",
 )
 
+#: The row key LiteLLM states a model's ladder in, when the flags cannot.
 DECLARED_EFFORTS_KEY = "reasoning_effort_levels"
 
 #: The public order, least first. A declared overlay is normalized to it, and
@@ -90,10 +95,20 @@ def levels_for(model: str, declared: Sequence[str] = (), *, refresh: bool = Fals
         if _states_effort_flag(route):
             return _derive(merged)
         stated = _stated_levels(merged)
-        return stated if stated is not None else _derive(merged)
+        if stated is not None:
+            return stated
+        if _states_effort_flag(merged):
+            return _derive(merged)
+        vendor = _vendor_levels(model)
+        return vendor if vendor else _derive(merged)
     if authority is not None and authority.get("supports_reasoning") is True:
         stated = _stated_levels(authority)
-        return stated if stated is not None else _derive(authority)
+        if stated is not None:
+            return stated
+        if _states_effort_flag(authority):
+            return _derive(authority)
+        vendor = _vendor_levels(model)
+        return vendor if vendor else _derive(authority)
     return ()
 
 
@@ -260,17 +275,40 @@ def _derive(row: dict[str, Any]) -> tuple[str, ...]:
 
 
 def _stated_levels(row: dict[str, Any]) -> tuple[str, ...] | None:
-    """Return a declared list, including an empty one, in the public order."""
+    """The row's own ladder, or None when it states none.
+
+    Present-and-a-list is the answer, an empty list included: a model that takes
+    no level at all is a statement, not a missing one. Words outside this
+    build's ladder are dropped, the way a hand-edited overlay's are.
+    """
     raw = row.get(DECLARED_EFFORTS_KEY)
     if not isinstance(raw, (list, tuple)):
         return None
-    return tuple(name for name in LEVEL_ORDER if name in raw)
+    known = set(raw)
+    return tuple(name for name in LEVEL_ORDER if name in known)
 
 
 def _states_effort_flag(row: dict[str, Any]) -> bool:
+    """Whether the row says which levels it takes through the per-level flags."""
     return any(row.get(flag) is not None for flag in EFFORT_FLAGS)
 
 
+def _vendor_levels(model: str) -> tuple[str, ...]:
+    """The vendor's own ladder, or () when it states none.
+
+    LiteLLM's table carries some vendors' models without saying which words the
+    API takes, and its flags cannot express a set that has no medium. A spec
+    that states the ladder answers for every model of that vendor whose row the
+    table already declares as reasoning.
+    """
+    from raven.providers.registry import find_by_model, find_by_name, split_model_id
+
+    provider, _rest = split_model_id(model)
+    spec = find_by_name(provider) if provider else find_by_model(model)
+    if spec is None:
+        return ()
+    known = set(spec.reasoning_efforts)
+    return tuple(name for name in LEVEL_ORDER if name in known)
 def _canonical_vendor(model: str) -> str:
     from raven.providers.catalog import _vendor_id
     from raven.providers.registry import canonical_provider_name, find_by_model, split_model_id

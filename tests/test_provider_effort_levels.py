@@ -140,6 +140,64 @@ def test_the_pinned_table_declares_the_models_the_spec_names():
     )
     assert effort_levels.levels_for("zai/glm-5") == ("minimal", "low", "medium", "high")
     assert effort_levels.levels_for("zhipu/glm-5.3-flash") == ("minimal", "low", "medium", "high")
+    assert effort_levels.levels_for("deepseek/deepseek-flash") == ("low", "high", "max")
+    assert effort_levels.levels_for("deepseek/deepseek-reasoner") == ("low", "high", "max")
+    assert effort_levels.levels_for("deepseek/deepseek-chat") == ()
+
+
+def test_a_row_that_states_its_ladder_wins_whole(table):
+    table(
+        {"moonshot/kimi-k3": {**_row(litellm_provider="moonshot"), "reasoning_effort_levels": ["max", "low", "high"]}}
+    )
+    assert effort_levels.levels_for("moonshot/kimi-k3") == ("low", "high", "max")
+
+
+def test_a_row_that_states_an_empty_ladder_takes_no_level(table):
+    table({"openai/gpt-chat-latest": {**_row(), "reasoning_effort_levels": []}})
+    assert effort_levels.levels_for("openai/gpt-chat-latest") == ()
+
+
+def test_a_route_row_inherits_the_vendors_stated_ladder(table):
+    table(
+        {
+            "claude-opus-4-6": {
+                **_row(litellm_provider="anthropic"),
+                "reasoning_effort_levels": ["low", "high", "max"],
+            },
+            "openrouter/anthropic/claude-opus-4.6": {"supports_reasoning": True},
+        }
+    )
+    assert effort_levels.levels_for("openrouter/anthropic/claude-opus-4.6") == ("low", "high", "max")
+
+
+def test_the_vendors_ladder_answers_a_row_that_states_no_levels(table):
+    table({"deepseek/deepseek-flash": {"supports_reasoning": True, "litellm_provider": "deepseek"}})
+    assert effort_levels.levels_for("deepseek/deepseek-flash") == ("low", "high", "max")
+
+
+def test_the_vendors_ladder_does_not_invent_reasoning_for_a_model_the_table_lacks(table):
+    table({"openai/gpt-5": _row()})
+    assert effort_levels.levels_for("deepseek/deepseek-v4-flash") == ()
+
+
+def test_a_rows_own_level_flag_beats_the_vendors_ladder(table):
+    table(
+        {
+            "deepseek/deepseek-flash": {
+                "supports_reasoning": True,
+                "litellm_provider": "deepseek",
+                "supports_max_reasoning_effort": False,
+            }
+        }
+    )
+    assert effort_levels.levels_for("deepseek/deepseek-flash") == ("minimal", "low", "medium", "high")
+
+
+def test_every_vendors_ladder_uses_the_rungs_this_build_offers():
+    from raven.providers.registry import PROVIDERS
+
+    for spec in PROVIDERS:
+        assert set(spec.reasoning_efforts) <= set(effort_levels.LEVEL_ORDER), spec.name
 
 
 def test_a_route_row_inherits_the_vendors_missing_flags(table):
