@@ -536,15 +536,18 @@ async def test_an_ark_url_picture_without_an_image_content_type_takes_output_for
     ("api_base", "model", "payload", "suffix"),
     [
         ("https://ark.cn-beijing.volces.com/api/v3", "doubao-seedream-5-0-pro", _JPG, ".jpg"),
+        ("https://ark.cn-beijing.volces.com/api/v3", "doubao-seedream-5-0-pro", _PNG, ".png"),
+        ("https://gw.test/v1", "gpt-image-2", _JPG, ".jpg"),
         ("https://gw.test/v1", "gpt-image-2", _PNG, ".png"),
     ],
-    ids=["ark-defaults-to-jpeg", "other-base-keeps-png"],
+    ids=["ark-jpeg", "ark-png", "other-jpeg", "other-png"],
 )
-async def test_a_picture_that_names_no_type_uses_the_base_default(
+async def test_a_picture_that_names_no_type_is_typed_from_its_bytes(
     monkeypatch, tmp_path, api_base, model, payload, suffix
 ) -> None:
-    """Ark's output_format default is jpeg (4.x and 4.5 are jpeg-only), so an
-    Ark entry that names no type is a JPEG; other bases keep the png default."""
+    """An entry that names no type is typed from the bytes it carries on every
+    base: a JPEG is a .jpg whether it came from Ark or a gateway. This is the
+    rule the MiniMax path already uses, not a per-base guess at the default."""
     encoded = base64.b64encode(payload).decode()
 
     def handler(request: httpx.Request) -> httpx.Response:

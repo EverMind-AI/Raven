@@ -968,9 +968,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             {"success": True, "model": model_id, "quality": quality or "", "paths": paths}, ensure_ascii=False
         )
 
-    async def _generated_bytes(
-        self, client: httpx.AsyncClient, item: Any, fallback_mime: str = "image/png"
-    ) -> tuple[str, bytes] | None:
+    async def _generated_bytes(self, client: httpx.AsyncClient, item: Any) -> tuple[str, bytes] | None:
         """The picture one ``data`` entry carries, as ``(mime, bytes)``, or None
         when it has none this code can take: inline as ``b64_json``, or behind
         its ``url`` -- an Ark-style endpoint may answer with download URLs, so
@@ -980,9 +978,9 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         The entry names its type as ``media_type`` or, on Ark, ``output_format``;
         a URL answer normally names it in storage's content type, with the
         entry's own fields standing in when that is not an image type. An entry
-        that names no type at all takes the caller's ``fallback_mime``, because
-        the provider's default is the caller's to know: Ark generates JPEG
-        unless asked otherwise.
+        that names no type at all is typed from the bytes it carries, the same
+        rule the MiniMax path already uses, so no caller has to guess a
+        provider's default.
 
         Behind a URL the generation is already billed, so a URL the guard
         refuses, the network cannot deliver or the storage will not serve
@@ -991,7 +989,8 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         if not isinstance(item, dict):
             return None
         if encoded := item.get("b64_json"):
-            return _picture_mime(item, fallback_mime), base64.b64decode(encoded)
+            data = base64.b64decode(encoded)
+            return _picture_mime(item, _image_mime(data)), data
         url = str(item.get("url") or "")
         if url.startswith("data:"):
             return _split_data_uri(url)
@@ -1006,7 +1005,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         if not fetched.is_success:
             raise _PictureUnfetchableError(url, f"HTTP {fetched.status_code} {fetched.text[:400]}".rstrip())
         content_type = fetched.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-        mime = content_type if content_type.startswith("image/") else _picture_mime(item, fallback_mime)
+        mime = content_type if content_type.startswith("image/") else _picture_mime(item, _image_mime(fetched.content))
         return mime, fetched.content
 
     async def _via_minimax(
@@ -1182,13 +1181,8 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                 await self._record_usage(payload, model_id, "images")
                 try:
                     pictures: list[tuple[str, bytes]] = []
-                    # Ark generates JPEG unless output_format asks otherwise
-                    # (4.x and 4.5 are JPEG-only), so an entry that names no
-                    # type at all is a JPEG there. Other bases keep the old
-                    # PNG default.
-                    fallback_mime = "image/jpeg" if volces else "image/png"
                     for item in payload.get("data") or []:
-                        picture = await self._generated_bytes(client, item, fallback_mime)
+                        picture = await self._generated_bytes(client, item)
                         if picture is not None:
                             pictures.append(picture)
                 except _PictureUnfetchableError as e:
