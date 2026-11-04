@@ -245,7 +245,9 @@ export function AddModelPop({ p }: { p: ProviderRow }): JSX.Element {
   /* The typed row stays one press: it is an id the list does not carry, so
      there is nothing in the list to tick. */
   const addTyped = (): void => {
-    void store.sheetToggleModel(p.id, q, false, typedKind)
+    /* Only a kind the person cycled is a statement; the chip's default is
+       `guessKind`'s reading of the name, which the backend makes itself. */
+    void store.sheetToggleModel(p.id, q, false, sheet.typed ?? undefined)
     store.sheetPatch({ q: '', typed: null })
   }
 

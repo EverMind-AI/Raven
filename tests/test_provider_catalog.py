@@ -626,6 +626,63 @@ def test_what_the_user_states_about_a_model_beats_the_catalogue() -> None:
     assert partial.description
 
 
+def test_an_uncatalogued_model_takes_the_kind_its_family_agrees_on() -> None:
+    """A model newer than the snapshot is still its family's model.
+
+    The bundled catalogue describes gpt-image-1.5 and gpt-image-2; nothing
+    describes 2.5 yet, and a name alone is not a rule. The family is: every row
+    naming that family is an image model, so this one is too.
+    """
+    from raven.providers.catalog import describe
+    from raven.providers.registry_data import kind_of
+
+    row = describe("custom", "gpt-image-2.5")
+    assert row.capabilities == ("image-generation",)
+    assert kind_of(row.capabilities, row.output_modalities) == "image"
+
+    # No family answer means no tag, rather than a guess.
+    assert describe("custom", "zzz-unknown-1").capabilities == ()
+
+
+def test_a_vendor_s_output_modalities_outrank_the_bundled_catalogue() -> None:
+    """The vendor describes the deployment a request actually reaches.
+
+    A catalogue row that says text for the same id is stale by comparison, and
+    the capability derived from it goes too: the icon may not contradict the
+    bucket.
+    """
+    from raven.providers.catalog import VendorFacts, describe
+    from raven.providers.registry_data import kind_of
+
+    row = describe("openai", "gpt-image-1.5", vendor=VendorFacts(output_modalities=("text",)))
+    assert kind_of(row.capabilities, row.output_modalities) == "text"
+    assert "image-generation" not in row.capabilities
+
+
+def test_a_vendor_s_endpoint_type_speaks_for_an_uncatalogued_model() -> None:
+    from raven.providers.catalog import VendorFacts, describe
+    from raven.providers.registry_data import kind_of
+
+    row = describe("custom", "our-image-model", vendor=VendorFacts(capabilities=("image-generation",)))
+    assert kind_of(row.capabilities, row.output_modalities) == "image"
+
+
+def test_outputs_the_user_states_beat_both_vendor_and_catalogue() -> None:
+    from raven.config.schema import ModelOverlay
+    from raven.providers.catalog import VendorFacts, describe
+    from raven.providers.registry_data import kind_of
+
+    row = describe(
+        "openai",
+        "gpt-image-1.5",
+        vendor=VendorFacts(output_modalities=("image",)),
+        overlay=ModelOverlay(output_modalities=["text"]),
+    )
+    assert row.stated_outputs
+    assert kind_of(row.capabilities, row.output_modalities, outputs_stated=row.stated_outputs) == "text"
+    assert "image-generation" not in row.capabilities
+
+
 def test_an_overlay_written_bare_matches_the_qualified_id() -> None:
     """Overlays are matched by identity, so a pre-contract spelling still applies."""
     from raven.providers.wire import merge_key

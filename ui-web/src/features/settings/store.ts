@@ -516,7 +516,7 @@ export async function sheetToggleModel(slug: string, id: string, listed: boolean
     await run(`prov:${slug}`, () => src.provider('remove_model', { slug, model: id }))
     return
   }
-  const stated = kind && kind !== 'text' ? statedTags(kind) : {}
+  const stated = kind ? statedTags(kind) : {}
   await run(`prov:${slug}`, () => src.provider('add_model', { slug, model: id, ...stated }))
 }
 

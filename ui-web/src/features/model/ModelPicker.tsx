@@ -30,9 +30,9 @@ import * as lang from '../../state/lang'
 import * as tier from '../../state/tier'
 import { recent } from './recent'
 import * as store from './store'
-import { KIND_LABEL, guessKind, sameModel } from './types'
+import { KIND_LABEL, sameModel } from './types'
 
-import type { Kind, Provider } from './types'
+import type { Provider } from './types'
 import type { JSX } from 'react'
 
 /** How many rows a group shows before it folds. */
@@ -205,10 +205,6 @@ function Pick(): JSX.Element {
      it rather than one per group, because an id is added to one provider. */
   const typedTo = currentProvider ?? providers[0]
   const exact = !!typedTo && providers.some((p) => store.column(p).some((m) => store.short(m).toLowerCase() === q))
-  /* What a typed id is added as: the slot's kind when a slot opened the picker
-     -- an id typed into the embedding row is an embedding model, whatever the
-     name looks like -- and the name's own guess otherwise. */
-  const typedKind: Kind = at.offer.title ? at.offer.kind : guessKind(query.trim())
   const showTyped = !!q && !exact && !!typedTo
 
   /* The last picks, for the composer's opening and only while nothing is
@@ -325,7 +321,11 @@ function Pick(): JSX.Element {
   }, [q])
 
   const chooseTyped = (): void => {
-    if (typedTo) void store.choose(query.trim(), typedTo.id, true, typedKind)
+    /* A slot states its own kind; the composer states nothing, because a guess
+       from the name is not the person's answer. */
+    if (typedTo) {
+      void store.choose(query.trim(), typedTo.id, true, at.offer.title ? at.offer.kind : undefined)
+    }
   }
 
   /* The rows a group shows: all of them while searching or once unfolded, the

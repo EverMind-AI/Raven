@@ -189,11 +189,14 @@ export function guessKind(id: string): Kind {
   return 'text'
 }
 
-/* The tags a person states for a typed id, by the kind they named. Text states
-   nothing: the backend infers from the name (`registry_data.inferred_tags`),
-   and an overlay of empty lists would overwrite a description somebody wrote. */
+/* The tags a person states for a typed id, by the kind they named.
+
+   Text states its output: the backend decides the kind from declared outputs
+   first, so a choice of Text that sends nothing cannot be honoured. Only a kind
+   the person chose is stated -- a guessed chip is not an answer, and stating it
+   would outrank a catalogue that knows better. */
 export const statedTags = (kind: Kind): { capabilities?: string[]; output_modalities?: string[] } => {
-  if (kind === 'text') return {}
+  if (kind === 'text') return { output_modalities: ['text'] }
   const table: Record<Exclude<Kind, 'text'>, [string, string[]]> = {
     image: ['image-generation', ['text', 'image']],
     audio: ['audio-generation', ['audio']],
@@ -261,9 +264,10 @@ export interface ModelSource {
   persist(m: string, provider: string, scope: 'session' | 'default' | 'both'): Promise<void | 'staged' | 'needs_restart'>
   /* Add a model to a provider's list. The picker's typed-id row calls it
      before the switch, so a conversation never names a model its provider does
-     not list. `kind` states what the person said it is, for an id no catalogue
-     describes; absent (text) states nothing and leaves the backend's own
-     name-based inference standing. */
+     not list. `kind` states what the person said it is; absent states nothing
+     and leaves the backend's own inference standing. A stated kind of text is
+     a statement too -- it travels as an output modality, because the backend
+     decides the kind from outputs before anything else. */
   addModel?(m: string, provider: string, kind?: Kind): Promise<void>
   setProtocol?(m: string, provider: string, protocol: ApiProtocol): Promise<void>
   /* The settings door, for the picker's own footer. Only offered when the

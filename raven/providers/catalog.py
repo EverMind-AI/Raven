@@ -52,6 +52,19 @@ SOURCE_OVERLAY = "overlay"
 
 
 @dataclass(frozen=True)
+class VendorFacts:
+    """What the provider's own model list says about one model.
+
+    These fields ride with the vendor's catalogue response, so they describe the
+    deployment a request actually reaches -- stronger evidence than a bundled
+    snapshot that may predate it.
+    """
+
+    capabilities: tuple[str, ...] = ()
+    output_modalities: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ModelRow:
     """One model, as a person reads it.
 
@@ -70,6 +83,9 @@ class ModelRow:
     input_modalities: tuple[str, ...] = ()
     output_modalities: tuple[str, ...] = ()
     reasoning_efforts: tuple[str, ...] = ()
+    #: Whether the outputs above are the user's own statement. Those outrank
+    #: even an embedding or rerank tag, which is what ``kind_of`` needs to know.
+    stated_outputs: bool = False
 
     @property
     def described(self) -> bool:
@@ -82,16 +98,34 @@ class ModelRow:
         return bool(self.capabilities or self.input_modalities or self.output_modalities)
 
 
-def describe(provider: str, model: str, *, overlay: "ModelOverlay | None" = None) -> ModelRow:
+def describe(
+    provider: str,
+    model: str,
+    *,
+    overlay: "ModelOverlay | None" = None,
+    vendor: "VendorFacts | None" = None,
+) -> ModelRow:
     """Everything known about this model for display purposes.
 
     Falls back to the id as its own label, so a caller can render the result
     unconditionally: a model the snapshot has never heard of -- one released
     since the last refresh, or served by a local deployment -- still comes back
     as a row rather than as nothing to show.
+
+    Evidence is layered in the order it deserves: the bundled catalogue, the
+    vendor's own model list over it, the user's overlay last. A model no source
+    gives outputs for still gets one more answer -- what the catalogue's family
+    of names agrees on (``registry_data.family_tags``).
     """
     from raven.providers.registry import canonical_provider_name
-    from raven.providers.registry_data import inferred_tags, row_by_name, row_for
+    from raven.providers.registry_data import (
+        CAPABILITIES,
+        MODALITIES,
+        clean_tags,
+        family_tags,
+        row_by_name,
+        row_for,
+    )
     from raven.providers.wire import split_model_id, stored_model_id
 
     provider = canonical_provider_name(provider)
@@ -113,30 +147,31 @@ def describe(provider: str, model: str, *, overlay: "ModelOverlay | None" = None
         # describes it either, so a rank-only row still lists.
         entry = row_by_name(vendor_id) or entry
 
-    if entry is not None:
-        row = ModelRow(
-            ref=ref,
-            provider=provider,
-            # A row without a name is still a row: the tags it carries are worth
-            # drawing, and the id is what the picker showed before either way.
-            label=entry.name or split_model_id(ref)[1] or ref,
-            source=SOURCE_SNAPSHOT if entry.name else SOURCE_ID_ONLY,
-            description=entry.description,
-            capabilities=_with_inferred(ref, entry.capabilities),
-            input_modalities=entry.input_modalities,
-            output_modalities=entry.output_modalities,
-        )
-    else:
-        # A model no catalogue carries -- a live fetch from a gateway serving
-        # hundreds of them -- still has a name, and for one whole class of
-        # model the name is the only thing that says what it is.
-        row = ModelRow(
-            ref=ref,
-            provider=provider,
-            label=split_model_id(ref)[1] or ref,
-            source=SOURCE_ID_ONLY,
-            capabilities=inferred_tags(ref),
-        )
+    capabilities = entry.capabilities if entry is not None else ()
+    outputs = entry.output_modalities if entry is not None else ()
+    if vendor is not None:
+        capabilities = _union_capabilities(capabilities, clean_tags(vendor.capabilities, CAPABILITIES))
+        stated = clean_tags(vendor.output_modalities, MODALITIES)
+        if stated:
+            outputs = stated
+            capabilities = _with_generation_caps(capabilities, stated)
+
+    capabilities = _with_inferred(ref, capabilities)
+    if not outputs and not _has_kind_tag(capabilities):
+        capabilities = _union_capabilities(capabilities, family_tags(ref))
+
+    row = ModelRow(
+        ref=ref,
+        provider=provider,
+        # A row without a name is still a row: the tags it carries are worth
+        # drawing, and the id is what the picker showed before either way.
+        label=(entry.name if entry is not None else "") or split_model_id(ref)[1] or ref,
+        source=SOURCE_SNAPSHOT if entry is not None and entry.name else SOURCE_ID_ONLY,
+        description=entry.description if entry is not None else "",
+        capabilities=capabilities,
+        input_modalities=entry.input_modalities if entry is not None else (),
+        output_modalities=outputs,
+    )
 
     return _with_overlay(row, overlay)
 
@@ -157,6 +192,50 @@ def _with_inferred(ref: str, capabilities: tuple[str, ...]) -> tuple[str, ...]:
     if not extra:
         return capabilities
     merged = set(capabilities) | set(extra)
+    return tuple(name for name in CAPABILITIES if name in merged)
+
+
+def _union_capabilities(base: tuple[str, ...], extra: tuple[str, ...]) -> tuple[str, ...]:
+    from raven.providers.registry_data import CAPABILITIES
+
+    merged = set(base) | set(extra)
+    return tuple(name for name in CAPABILITIES if name in merged)
+
+
+def _generation_capabilities(outputs: tuple[str, ...]) -> set[str]:
+    """The capability tags the declared outputs imply."""
+    found = {"embedding"} if "vector" in outputs else set()
+    for name in ("image", "audio", "video"):
+        if name in outputs:
+            found.add(f"{name}-generation")
+    return found
+
+
+def _has_kind_tag(capabilities: tuple[str, ...]) -> bool:
+    return bool({"embedding", "rerank"} & set(capabilities)) or any(
+        name.endswith("-generation") for name in capabilities
+    )
+
+
+def _with_generation_caps(capabilities: tuple[str, ...], outputs: tuple[str, ...]) -> tuple[str, ...]:
+    """Capabilities whose generative tags follow the outputs they came from."""
+    from raven.providers.registry_data import CAPABILITIES
+
+    kept = {name for name in capabilities if not name.endswith("-generation")}
+    merged = kept | _generation_capabilities(outputs)
+    return tuple(name for name in CAPABILITIES if name in merged)
+
+
+def _with_stated_outputs(capabilities: tuple[str, ...], outputs: tuple[str, ...]) -> tuple[str, ...]:
+    """Capabilities whose kind tags follow outputs the user stated themselves.
+
+    A stated output outranks every kind tag, embedding and rerank included, so
+    the tags that decided the kind before go with it.
+    """
+    from raven.providers.registry_data import CAPABILITIES
+
+    kept = {name for name in capabilities if not name.endswith("-generation") and name not in {"embedding", "rerank"}}
+    merged = kept | _generation_capabilities(outputs)
     return tuple(name for name in CAPABILITIES if name in merged)
 
 
@@ -209,19 +288,28 @@ def _with_overlay(row: ModelRow, overlay: "ModelOverlay | None") -> ModelRow:
     from raven.providers.registry_data import CAPABILITIES, MODALITIES, clean_tags
 
     stated_efforts = tuple(word for word in overlay.reasoning_efforts if word in REASONING_EFFORT_LADDER)
+    # Stated tags replace the catalogue's rather than joining them: a person
+    # correcting a row that says "vision" is saying it does not, and a union
+    # would make that correction unsayable.
+    stated_outputs = clean_tags(overlay.output_modalities, MODALITIES)
+    capabilities = clean_tags(overlay.capabilities, CAPABILITIES) or row.capabilities
+    if stated_outputs:
+        capabilities = _with_stated_outputs(capabilities, stated_outputs)
     changed = {
         "label": overlay.label or row.label,
         "description": overlay.description or row.description,
-        # Stated tags replace the catalogue's rather than joining them: a person
-        # correcting a row that says "vision" is saying it does not, and a union
-        # would make that correction unsayable.
-        "capabilities": clean_tags(overlay.capabilities, CAPABILITIES) or row.capabilities,
+        "capabilities": capabilities,
         "input_modalities": clean_tags(overlay.input_modalities, MODALITIES) or row.input_modalities,
-        "output_modalities": clean_tags(overlay.output_modalities, MODALITIES) or row.output_modalities,
+        "output_modalities": stated_outputs or row.output_modalities,
         "reasoning_efforts": stated_efforts or row.reasoning_efforts,
     }
     described = row.described or bool(overlay.label or overlay.description)
-    return replace(row, **changed, source=SOURCE_OVERLAY if described else row.source)
+    return replace(
+        row,
+        **changed,
+        source=SOURCE_OVERLAY if described else row.source,
+        stated_outputs=bool(stated_outputs),
+    )
 
 
 def _vendor_id(provider: str, model: str) -> str:

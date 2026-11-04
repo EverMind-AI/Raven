@@ -1181,6 +1181,113 @@ async def test_the_picker_offers_what_the_vendor_last_named_with_its_kind(
     assert not any("brand-new-model" in m for m in again["models"])
 
 
+async def test_fetched_models_take_their_kind_from_the_vendor_s_own_fields(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The vendor's list says what each model writes, so the name does not have
+    to. The kind is remembered with the list, which is what keeps the label
+    right after the model is added."""
+    _write_config(fake_home, {"providers": {"custom": {"apiKey": "k", "apiBase": "https://example.test/v1"}}})
+
+    def probe(name: str, **kwargs) -> dict:
+        return {
+            "ok": True,
+            "status": "valid",
+            "model_ids": ["zz-vendor/brand-new-image", "gpt-5.6-luna"],
+            "model_facts": {
+                "zz-vendor/brand-new-image": {"output_modalities": ["image"], "capabilities": []},
+                "gpt-5.6-luna": {"output_modalities": ["text"], "capabilities": []},
+            },
+        }
+
+    monkeypatch.setattr("raven.config.update_providers.test_provider", probe)
+    out = await model_fetch_models({"slug": "custom"})
+    live = {row["id"].rsplit("/", 1)[-1]: row for row in out["models"] if row["source"] == "live"}
+    # No catalogue row and no family of names: the vendor's field is the only
+    # evidence this id is an image model.
+    assert live["brand-new-image"]["kind"] == "image"
+    assert live["gpt-5.6-luna"]["kind"] == "text"
+
+    await model_module.model_add_models({"slug": "custom", "models": [live["brand-new-image"]["id"]]})
+    after = _entry(await model_options({}), "custom")
+    assert after["model_labels"][live["brand-new-image"]["id"]]["kind"] == "image"
+
+
+async def test_a_vendor_s_text_outputs_outrank_a_catalogued_image_row(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_config(fake_home, {"providers": {"custom": {"apiKey": "k", "apiBase": "https://example.test/v1"}}})
+    payload = {
+        "ok": True,
+        "status": "valid",
+        "model_ids": ["gpt-image-1.5"],
+        "model_facts": {"gpt-image-1.5": {"output_modalities": ["text"], "capabilities": []}},
+    }
+    monkeypatch.setattr("raven.config.update_providers.test_provider", lambda *a, **k: payload)
+
+    out = await model_fetch_models({"slug": "custom"})
+
+    row = next(row for row in out["models"] if row["source"] == "live")
+    assert row["kind"] == "text"
+    assert "image-generation" not in row.get("capabilities", [])
+
+    # The label keeps the vendor's answer after the model is added: the facts
+    # are remembered with the list, so a stale catalogue row cannot win back.
+    await model_module.model_add_models({"slug": "custom", "models": [row["id"]]})
+    after = _entry(await model_options({}), "custom")
+    assert after["model_labels"][row["id"]]["kind"] == "text"
+
+
+@pytest.mark.parametrize("with_facts", [False, True])
+async def test_the_issue_s_thirteen_models_file_five_as_images(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch, with_facts: bool
+) -> None:
+    """Both endpoints in the report: one that states the outputs per model and
+    one that states nothing, where the catalogue's family answers instead."""
+    images = ["gpt-image-1.5", "GPT-Image-2", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"]
+    texts = [
+        "codex-auto-review",
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-6-astra",
+        "gpt-6-luna",
+        "gpt-6-sol",
+        "gpt-6.1-sol",
+    ]
+    _write_config(fake_home, {"providers": {"custom": {"apiKey": "k", "apiBase": "https://example.test/v1"}}})
+    payload: dict = {"ok": True, "status": "valid", "model_ids": [*texts, *images]}
+    if with_facts:
+        payload["model_facts"] = {
+            **{mid: {"output_modalities": ["image"], "capabilities": []} for mid in images},
+            **{mid: {"output_modalities": ["text"], "capabilities": []} for mid in texts},
+        }
+    monkeypatch.setattr("raven.config.update_providers.test_provider", lambda *a, **k: payload)
+
+    out = await model_fetch_models({"slug": "custom"})
+
+    live = [row for row in out["models"] if row["source"] == "live"]
+    assert len(live) == 13
+    assert sum(row["kind"] == "image" for row in live) == 5
+    assert sum(row["kind"] == "text" for row in live) == 8
+
+
+async def test_add_model_stores_the_text_a_user_states(fake_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Choosing Text on the kind chip is a statement, and it has to survive to
+    the label -- the model is one whose name would otherwise infer image."""
+    _write_config(fake_home, {"providers": {"custom": {"apiKey": "k", "apiBase": "https://example.test/v1"}}})
+    monkeypatch.setattr(
+        "raven.config.update_providers.test_provider",
+        lambda *a, **k: {"ok": False, "status": "network_error"},
+    )
+
+    await model_add_model({"slug": "custom", "model": "gpt-image-2.5", "output_modalities": ["text"]})
+
+    entry = _entry(await model_options({}), "custom")
+    key = next(m for m in entry["model_labels"] if m.endswith("gpt-image-2.5"))
+    assert entry["model_labels"][key]["kind"] == "text"
+
+
 async def test_options_lists_lm_studio_models_from_the_local_server(
     fake_home: Path,
     monkeypatch: pytest.MonkeyPatch,

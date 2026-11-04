@@ -22,7 +22,7 @@ from typing import Any
 
 from raven.config.paths import get_cache_dir
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 CACHE_FILENAME = "served-models.json"
 
 
@@ -51,18 +51,23 @@ def _write(providers: dict[str, Any]) -> None:
         pass
 
 
-def remember(slug: str, models: dict[str, str]) -> None:
-    """Record what ``slug`` serves right now: model id to kind."""
+def remember(slug: str, models: dict[str, dict[str, Any]]) -> None:
+    """Record what ``slug`` serves right now: model id to its kind and facts."""
     providers = _read()
-    providers[slug] = {"at": time.time(), "models": {str(k): str(v) for k, v in models.items() if k}}
+    providers[slug] = {
+        "at": time.time(),
+        "models": {str(k): dict(v) for k, v in models.items() if k and isinstance(v, dict)},
+    }
     _write(providers)
 
 
-def recall(slug: str) -> dict[str, str]:
+def recall(slug: str) -> dict[str, dict[str, Any]]:
     """What ``slug`` last said it serves, or nothing if it was never asked."""
     entry = _read().get(slug)
     models = entry.get("models") if isinstance(entry, dict) else None
-    return {str(k): str(v) for k, v in models.items()} if isinstance(models, dict) else {}
+    if not isinstance(models, dict):
+        return {}
+    return {str(k): dict(v) for k, v in models.items() if isinstance(v, dict)}
 
 
 def forget(slug: str) -> None:
