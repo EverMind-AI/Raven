@@ -568,6 +568,23 @@ async def test_a_fetch_the_registry_refused_is_retried_from_the_mirror(
     assert (stand_in.entry / "package.json").is_file()
 
 
+@needs_posix
+async def test_a_mirror_that_refuses_too_is_reported_after_one_retry(
+    stand_in: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One retry, never a loop: the mirror attempt is the last one, and its failure is the answer."""
+    monkeypatch.delenv(mirrors.OPT_OUT_ENV, raising=False)
+    monkeypatch.setattr(mirrors, "package_launch_async", _deciding(["npx", "-y", _SPEC]))
+    env = {**stand_in.env, "FAKE_NPX_FETCH": "fail", "FAKE_NPX_STDERR": "npm error code ECONNRESET\n"}
+
+    with pytest.raises(AcpConnectionError):
+        await npx_fetch.ensure_fetched("Claude Code", ["npx", "-y", _SPEC], env=env, cwd=stand_in.cwd)
+
+    fetches = _fetches(stand_in.log)
+    assert len(fetches) == 2, "the refused fetch and exactly one mirror retry"
+    assert f"--registry={mirrors.NPM_REGISTRY}" in fetches[1]["argv"]
+
+
 def test_a_retry_from_the_mirror_is_taken_only_when_the_registry_was_not_chosen(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -579,6 +596,9 @@ def test_a_retry_from_the_mirror_is_taken_only_when_the_registry_was_not_chosen(
     retry = npx_fetch._mirror_retry("Claude Code", argv, _SPEC, "npm error code ECONNRESET\n", home, str(tmp_path))
     assert retry is not None and f"--registry={mirrors.NPM_REGISTRY}" in retry
     assert retry[0] == argv[0], "the resolved npx is reused"
+    assert npx_fetch._mirror_retry("a", retry, _SPEC, "npm error code ECONNRESET\n", home, str(tmp_path)) is None, (
+        "the retry is the last attempt, however it fails"
+    )
 
     assert npx_fetch._mirror_retry("a", argv, _SPEC, "npm error code EACCES\n", home, str(tmp_path)) is None
     chosen = {**home, "npm_config_registry": "https://corp.example/simple/"}

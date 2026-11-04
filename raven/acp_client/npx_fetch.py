@@ -349,9 +349,15 @@ def _mirror_retry(
     probe sees an answer, and the fetch then dies on a connection that is only
     intermittent. The npx entry is named by the specs alone (``cache_key``), so
     what the mirror installs here is the entry the launch afterwards finds.
+
+    One retry, never a loop: an ``argv`` that already names a registry is the
+    retry itself, and a mirror that fails the same way is reported to the reader
+    rather than attempted again.
     """
     code = fetch_failure_code(said)
     if code is None or not mirrors.enabled(env) or mirrors.npm_registry_chosen(env, cwd):
+        return None
+    if any(str(word).startswith("--registry=") for word in argv):
         return None
     logger.info("acp agent {!r}: npx could not fetch {} ({}); retrying from {}", name, spec, code, mirrors.NPM_REGISTRY)
     return [argv[0], "-y", f"--registry={mirrors.NPM_REGISTRY}", f"--package={spec}", "--", "node", "-e", "0"]
