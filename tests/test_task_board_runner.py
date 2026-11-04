@@ -984,6 +984,22 @@ async def test_a_question_the_reader_set_aside_during_the_carry_call_is_not_writ
     assert (board.groups[0].status, board.groups[0].steps[-1].questions) == ("idle", [])
 
 
+async def test_a_settled_question_puts_the_group_down_when_only_the_summary_changed(tmp_path):
+    """The turn settled the question and rewrote only the group's summary, so its
+    step still says needs_you; an empty answer has to move the group to idle."""
+    service = _service(tmp_path)
+    _waiting(service)
+    call = Scripted(
+        _update_with([], groups=[{"group": "g_c", "summary": "Settled now."}]),
+        _carry([{"group": "g_c", "questions": []}]),
+    )
+
+    board = await _run(service, call, dispatches=())
+
+    assert board is not None
+    assert (board.groups[0].status, board.groups[0].steps[-1].questions) == ("idle", [])
+
+
 async def test_an_update_without_a_step_still_asks_about_its_open_questions(tmp_path):
     """The turn rewrote the group itself and wrote no step: the newest step still
     asks something, so the question pass runs and the question stays open."""
@@ -1051,6 +1067,16 @@ def test_apply_carry_may_clear_an_older_steps_questions():
     out = apply_carry(board, {"groups": [{"group": "g_c", "questions": []}]}, ["g_c"], turn_at="T1", now_ms=2)
 
     assert (out.groups[0].status, out.groups[0].steps[-1].questions) == ("idle", [])
+
+
+def test_apply_carry_puts_a_waiting_group_down_when_nothing_remains():
+    asked = ProgressStep("s_0", "T0", None, "Asked which fix", ".", [], [WAITING])
+    board = Board([TaskGroup("g_c", "Fix bug A", "Waiting", "needs_you", 1, 1, [asked])], [])
+
+    out = apply_carry(board, {"groups": [{"group": "g_c", "questions": []}]}, ["g_c"], turn_at="T1", now_ms=2)
+
+    assert (out.groups[0].status, out.groups[0].steps[-1].questions) == ("idle", [])
+    assert out.groups[0].revisions[-1].after["status"] == "idle"
 
 
 def test_apply_carry_refuses_a_group_with_no_step():

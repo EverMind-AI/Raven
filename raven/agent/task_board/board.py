@@ -401,8 +401,9 @@ def apply_carry(
     carries. A question the newest step itself asked this turn may not be left out,
     since it went out with the reply and the user cannot have answered it yet; the
     questions of an older step are the ones this turn may have settled. A group left
-    with questions is ``needs_you``. :class:`UpdateRejectedError` names every rule
-    the answer breaks.
+    with questions is ``needs_you``; one left with none goes idle, so a waiting group
+    never outlives the question it waited on. :class:`UpdateRejectedError` names every
+    rule the answer breaks.
     """
     rules = _Rules()
     entries = args.get("groups")
@@ -451,6 +452,8 @@ def apply_carry(
         group.steps[-1].questions = questions
         if questions:
             group.status = "needs_you"
+        elif group.status == "needs_you":
+            group.status = "idle"
         group.updated_at = now_ms
     for group_id in carried:
         group, was = by_id[group_id], before[group_id]
