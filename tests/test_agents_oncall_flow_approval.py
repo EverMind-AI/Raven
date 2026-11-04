@@ -28,6 +28,7 @@ from oncall_flow.approval import (  # noqa: E402
     LAYER_ONE,
     REFUSE_ALL,
     ApprovalStore,
+    ApprovalStoreUnreadableError,
     OncallApprovalGate,
     apply_answer,
     make_approval_gate,
@@ -190,16 +191,16 @@ async def test_a_reply_in_the_owners_own_words_is_read_by_the_model(tmp_path):
     store.file("d1", "exec", "a", "ask")
     store.file("d2", "exec", "b", "ask")
     provider = _Provider("report_owner_decision", {"approve": [1], "refuse": [2]})
-    approve, refuse = await read_answer("first one yes, not the second", store.pending(), provider)
-    assert (approve, refuse) == ({1}, {2})
+    assert await read_answer("first one yes, not the second", store.pending(), provider) == ({1}, {2}, True)
 
 
 @pytest.mark.asyncio
 async def test_a_reply_nobody_can_read_leaves_everything_pending(tmp_path):
     store = ApprovalStore(tmp_path)
     store.file("d1", "exec", "a", "ask")
-    assert await read_answer("hmm, let me think", store.pending(), None) == (set(), set())
-    assert await read_answer("hmm", store.pending(), _Provider()) == (set(), set())
+    assert await read_answer("hmm, let me think", store.pending(), None) == (set(), set(), False)
+    assert await read_answer("hmm", store.pending(), _Provider()) == (set(), set(), False)
+    assert ApprovalStore(tmp_path).pending()[0]["n"] == 1
 
 
 @pytest.mark.asyncio
@@ -305,3 +306,104 @@ def test_the_gate_takes_the_rendered_mode(tmp_path):
     gate = make_approval_gate(_ctx(tmp_path, {"enabled": True, "approval": {"mode": "ask"}}))
     assert isinstance(gate, OncallApprovalGate) and gate.mode == "ask"
     assert gate.name == approval.OncallApprovalGate.name == "oncall_approval"
+
+
+# --- review findings: scope, a reply that failed to read, the file on disk ------
+
+
+@pytest.mark.asyncio
+async def test_an_approval_covers_the_directory_it_was_given_for(tmp_path):
+    gate = _gate(tmp_path, "ask")
+    here = {"command": "rm -rf build", "working_dir": "/srv/project-a"}
+    there = {"command": "rm -rf build", "working_dir": "/srv/project-b"}
+    await _ask(gate, "exec", here)
+    await apply_answer(tmp_path, APPROVE_ALL, [1])
+    assert await _ask(gate, "exec", here) is None
+    assert (await _ask(gate, "exec", there) or "").startswith("NOT RUN")
+
+
+@pytest.mark.asyncio
+async def test_a_relative_command_is_scoped_to_the_turns_directory(tmp_path):
+    gate = _gate(tmp_path, "ask")
+    call = {"command": "rm -rf build"}
+    await gate.adjudicate("exec", call, session_workdir=Path("/srv/a"))
+    await apply_answer(tmp_path, APPROVE_ALL, [1])
+    assert await gate.adjudicate("exec", call, session_workdir=Path("/srv/a")) is None
+    assert (await gate.adjudicate("exec", call, session_workdir=Path("/srv/b")) or "").startswith("NOT RUN")
+    assert "(in /srv/b)" in ApprovalStore(tmp_path).pending()[0]["action"]
+
+
+class _Flaky:
+    """Fails the first reply-reading call, then answers like a working model."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def chat_with_retry(self, **_: Any) -> _Reply:
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("HTTP 503: Service is too busy")
+        return _Reply([_Call("report_owner_decision", {"approve": [1], "refuse": []})])
+
+
+@pytest.mark.asyncio
+async def test_a_reply_that_failed_to_read_is_kept_and_read_again(tmp_path, monkeypatch):
+    monkeypatch.setattr(approval, "_RETRY_READ_AFTER_S", 0)
+    flaky = _Flaky()
+    gate = _gate(tmp_path, "ask", flaky)
+    await _ask(gate, "ops_submit", SUBMIT)
+    assert await apply_answer(tmp_path, "yes, go ahead", [1], flaky) == ([], [])
+    assert ApprovalStore(tmp_path).pending()[0]["answer"] == "yes, go ahead"
+    assert await _ask(gate, "ops_submit", SUBMIT) is None
+    assert flaky.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_a_failed_read_waits_before_trying_again(tmp_path):
+    class _Down:
+        calls = 0
+
+        async def chat_with_retry(self, **_: Any) -> _Reply:
+            _Down.calls += 1
+            raise RuntimeError("down")
+
+    gate = _gate(tmp_path, "ask", _Down())
+    await _ask(gate, "ops_submit", SUBMIT)
+    ApprovalStore(tmp_path).record_answer([1], "fine by me")
+    for _ in range(3):
+        await _ask(gate, "ops_submit", SUBMIT)
+    assert _Down.calls == 1
+    assert ApprovalStore(tmp_path).pending()[0]["answer"] == "fine by me"
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_file_is_never_overwritten_and_the_call_does_not_run(tmp_path):
+    path = tmp_path / "approvals.json"
+    path.write_text("{ half a file", encoding="utf-8")
+    out = await _ask(_gate(tmp_path, "ask"), "ops_submit", SUBMIT)
+    assert out is not None and out.startswith("NOT RUN") and "could not be read" in out
+    assert path.read_text(encoding="utf-8") == "{ half a file"
+    with pytest.raises(ApprovalStoreUnreadableError):
+        ApprovalStore(tmp_path).pending()
+
+
+@pytest.mark.asyncio
+async def test_a_replace_the_platform_refuses_briefly_is_retried(tmp_path, monkeypatch):
+    import raven.utils.atomic_io as atomic_io
+
+    real = atomic_io.atomic_replace
+    refusals = {"left": 2}
+
+    def held(path, data, **kw):
+        if refusals["left"]:
+            refusals["left"] -= 1
+            raise PermissionError(13, "The process cannot access the file because it is being used")
+        return real(path, data, **kw)
+
+    monkeypatch.setattr(atomic_io, "atomic_replace", held)
+    monkeypatch.setattr(approval, "_PAUSE_S", 0)
+    gate = _gate(tmp_path, "ask")
+    await _ask(gate, "ops_submit", SUBMIT)
+    await _ask(gate, "exec", REMOTE_WRITE)
+    assert [item["n"] for item in ApprovalStore(tmp_path).pending()] == [1, 2]
+    assert refusals["left"] == 0

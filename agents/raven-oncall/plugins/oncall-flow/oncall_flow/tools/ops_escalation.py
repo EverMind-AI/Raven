@@ -317,7 +317,11 @@ class OpsAskOwnerTool(_OpsScheduler):
 
         ask_id = uuid4().hex[:8]
         choices = [str(o).strip() for o in (options or []) if str(o).strip()]
-        waiting = approval.ApprovalStore(ops_home()).pending()
+        try:
+            waiting = approval.ApprovalStore(ops_home()).pending()
+        except approval.ApprovalStoreUnreadableError as exc:
+            logger.warning("oncall-flow: pending approvals not attached: {}", exc)
+            waiting = []
         if waiting:
             question = f"{question.strip()}\n\n{approval.pending_block(waiting)}".strip()
             choices = choices or list(approval.CHOICES)
