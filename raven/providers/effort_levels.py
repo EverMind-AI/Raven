@@ -114,10 +114,17 @@ def levels_for(
     if serving:
         statements_from = route if route is not None else authority
         if statements_from is not None and not _row_serves_provider(statements_from, serving):
-            # The only row this id resolves to describes another API. Its
-            # levels and flags are not evidence about the section that will
-            # receive the call: answer from that section's own ladder, or the
-            # flags' defaults when it states none.
+            # The row this id resolves to describes another API. Its levels
+            # and flags are not evidence about the section that will receive
+            # the call. The authority row may serve that section even when the
+            # route row does not (an OpenAI id can resolve to an OpenRouter
+            # alias); its own statements answer before the section's ladder.
+            if authority is not None and _row_serves_provider(authority, serving):
+                own = _stated_levels(authority)
+                if own is not None:
+                    return own
+                if _states_effort_flag(authority):
+                    return _derive(authority)
             vendor = _vendor_levels(model, serving)
             return vendor if vendor else _derive({})
     if route is not None:

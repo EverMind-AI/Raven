@@ -231,6 +231,24 @@ def test_a_direct_vendor_rows_ladder_does_not_answer_for_a_gateway(table):
     assert effort_levels.levels_for("deepseek/deepseek-r1", provider="deepseek") == ("low", "high", "max")
 
 
+def test_a_route_alias_filed_elsewhere_falls_back_to_the_authority(table):
+    """An OpenAI id can resolve to an OpenRouter alias in the table; the
+    authority row filed under OpenAI still answers for the OpenAI section."""
+    table(
+        {
+            "openrouter/openai/gpt-5.2": _row(litellm_provider="openrouter"),
+            "gpt-5.2": _row(litellm_provider="openai", supports_xhigh_reasoning_effort=True),
+        }
+    )
+    assert effort_levels.levels_for("openai/gpt-5.2", provider="openai") == (
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+    )
+
+
 def test_an_explicit_gateway_row_answers_for_itself(table):
     """The skip is for a row filed under another provider, not for the serving
     provider's own row."""
