@@ -1,7 +1,7 @@
 """A sub-agent reaching a host-held server through the bridge.
 
 Runs a real MCP client over a real ``raven mcp bridge`` process against a real
-FastMCP server, so the properties under test are the ones a dispatch depends on:
+MCPServer, so the properties under test are the ones a dispatch depends on:
 the sub-agent handshakes with the true server identity, server-initiated
 requests reach it, progress notifications arrive, a large result survives the
 hop, and an upstream that dies mid-request closes the sub-agent's connection
@@ -94,7 +94,7 @@ async def test_a_bridged_subagent_sees_the_real_server_and_its_reverse_requests_
                 # The identity the sub-agent handshakes with is the real
                 # server's, not raven's: nothing on this path terminates the
                 # session.
-                assert init.serverInfo.name == "bridge-e2e-upstream"
+                assert init.server_info.name == "bridge-e2e-upstream"
 
                 reverse = await asyncio.wait_for(session.call_tool("ask_client", {}), timeout=60)
                 assert "pong-from-subagent" in reverse.content[0].text
@@ -108,7 +108,7 @@ async def test_a_bridged_subagent_sees_the_real_server_and_its_reverse_requests_
                     session.call_tool("stepped", {"steps": 3}, progress_callback=on_progress), timeout=60
                 )
                 assert len(progress) == 3
-                assert stepped.structuredContent is not None
+                assert stepped.structured_content is not None
 
                 big = await asyncio.wait_for(session.call_tool("big", {"kb": 1024}), timeout=120)
                 assert len(big.content[0].text) == 1024 * 1024
@@ -159,11 +159,18 @@ async def test_an_upstream_that_goes_unreachable_closes_the_subagent_promptly(tm
         async with stdio_client(_bridge_params(path)) as (read, write):
             async with ClientSession(read, write) as session:
                 await asyncio.wait_for(session.initialize(), timeout=60)
-                with pytest.raises(Exception) as caught:
-                    await asyncio.wait_for(session.call_tool("go_silent", {}), timeout=_EOF_DEADLINE_S)
-                # A TimeoutError here is the failure this test exists to catch:
-                # it means the deadline expired with the connection still open.
-                assert not isinstance(caught.value, asyncio.TimeoutError)
+                try:
+                    result = await asyncio.wait_for(session.call_tool("go_silent", {}), timeout=_EOF_DEADLINE_S)
+                except asyncio.TimeoutError:
+                    # The deadline expiring is the failure this test exists to
+                    # catch: the connection was still open when it elapsed.
+                    pytest.fail("the endpoint did not close downstream within the EOF deadline")
+                except Exception:
+                    # mcp 2.x may surface the closed upstream as an exception...
+                    pass
+                else:
+                    # ...or as a tool result whose verdict rides on is_error.
+                    assert result.is_error, "the closed upstream must be reported as a tool failure"
     finally:
         await endpoints.aclose()
         _reap(pid_file)

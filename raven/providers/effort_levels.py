@@ -12,6 +12,10 @@ static table carries. It is network data, so the turn reads only the cache
 ``codex_catalog`` keeps; ``refresh`` lets the RPC warm that cache. A level the
 account states outside this build's ladder (``ultra``) is not offered.
 
+A row's explicit ``reasoning_effort_levels`` answers before per-level flags,
+including an empty list. A route's own list or flags answer before an inherited
+vendor list, so an explicit route restriction is not undone by inheritance.
+
 The answer is tri-state for the static table: a tuple of levels when the model
 or the user declares them, ``()`` when the model declares none, and ``None``
 when the table itself cannot be read (an internal failure, not a model answer).
@@ -39,6 +43,8 @@ EFFORT_FLAGS = (
     "supports_xhigh_reasoning_effort",
     "supports_max_reasoning_effort",
 )
+
+DECLARED_EFFORTS_KEY = "reasoning_effort_levels"
 
 #: The public order, least first. A declared overlay is normalized to it, and
 #: the ladder is the only place the words are stated.
@@ -76,9 +82,18 @@ def levels_for(model: str, declared: Sequence[str] = (), *, refresh: bool = Fals
     authority = _authority_row(model, by_name)
     if route is not None:
         merged = _merged(route, authority)
-        return _derive(merged) if merged.get("supports_reasoning") is True else ()
+        if merged.get("supports_reasoning") is not True:
+            return ()
+        own = _stated_levels(route)
+        if own is not None:
+            return own
+        if _states_effort_flag(route):
+            return _derive(merged)
+        stated = _stated_levels(merged)
+        return stated if stated is not None else _derive(merged)
     if authority is not None and authority.get("supports_reasoning") is True:
-        return _derive(authority)
+        stated = _stated_levels(authority)
+        return stated if stated is not None else _derive(authority)
     return ()
 
 
@@ -244,6 +259,18 @@ def _derive(row: dict[str, Any]) -> tuple[str, ...]:
     return tuple(levels)
 
 
+def _stated_levels(row: dict[str, Any]) -> tuple[str, ...] | None:
+    """Return a declared list, including an empty one, in the public order."""
+    raw = row.get(DECLARED_EFFORTS_KEY)
+    if not isinstance(raw, (list, tuple)):
+        return None
+    return tuple(name for name in LEVEL_ORDER if name in raw)
+
+
+def _states_effort_flag(row: dict[str, Any]) -> bool:
+    return any(row.get(flag) is not None for flag in EFFORT_FLAGS)
+
+
 def _canonical_vendor(model: str) -> str:
     from raven.providers.catalog import _vendor_id
     from raven.providers.registry import canonical_provider_name, find_by_model, split_model_id
@@ -296,7 +323,7 @@ def _merged(route: dict[str, Any], authority: dict[str, Any] | None) -> dict[str
     merged = dict(route)
     if authority is None:
         return merged
-    for flag in ("supports_reasoning", *EFFORT_FLAGS):
+    for flag in ("supports_reasoning", *EFFORT_FLAGS, DECLARED_EFFORTS_KEY):
         if merged.get(flag) is None:
             merged[flag] = authority.get(flag)
     return merged

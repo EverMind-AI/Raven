@@ -119,7 +119,7 @@ class TestFrameLoop:
     async def test_session_creation_with_uncached_ollama_models_finishes_before_eof_cleanup(
         self, stub, tmp_path, monkeypatch
     ):
-        from litellm.llms.ollama.completion.transformation import OllamaConfig
+        from litellm.llms.ollama.common_utils import OllamaModelInfo
 
         from raven.providers.litellm_setup import import_litellm
         from raven.rpc.methods.model import model_options
@@ -139,11 +139,11 @@ class TestFrameLoop:
         import_litellm()
         asked = []
 
-        def info(self, model, api_base=None):
+        def info(self, model, api_base=None, api_key=None):
             asked.append(model)
             return {}
 
-        monkeypatch.setattr(OllamaConfig, "get_model_info", info)
+        monkeypatch.setattr(OllamaModelInfo, "get_model_info", info)
 
         async def subscribe(params):
             return {"subscription_id": "sub-1"}

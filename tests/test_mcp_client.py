@@ -6,6 +6,8 @@ import asyncio
 from contextlib import AsyncExitStack, asynccontextmanager
 from types import SimpleNamespace
 
+from mcp.types import CallToolResult, TextContent
+
 from raven.agent.tools.registry import ToolRegistry
 from raven.config.schema import MCPServerConfig
 from raven.contracts.tool import ToolResult
@@ -28,15 +30,13 @@ def _wrapper(session: _Session) -> MCPToolWrapper:
     tool_def = SimpleNamespace(
         name="read",
         description="read something",
-        inputSchema={"type": "object", "properties": {}},
+        input_schema={"type": "object", "properties": {}},
     )
     return MCPToolWrapper(session, "server-x", tool_def, tool_timeout=30, taken=frozenset())
 
 
-def _result(*, is_error: bool, text: str) -> SimpleNamespace:
-    from mcp.types import TextContent
-
-    return SimpleNamespace(isError=is_error, content=[TextContent(type="text", text=text)])
+def _result(*, is_error: bool, text: str) -> CallToolResult:
+    return CallToolResult(content=[TextContent(type="text", text=text)], is_error=is_error)
 
 
 async def test_an_is_error_result_carries_ok_false() -> None:
@@ -114,7 +114,7 @@ def _paged_session(pages: dict):
 
 
 def _tool_def(name: str) -> SimpleNamespace:
-    return SimpleNamespace(name=name, description=name, inputSchema={"type": "object", "properties": {}})
+    return SimpleNamespace(name=name, description=name, input_schema={"type": "object", "properties": {}})
 
 
 @asynccontextmanager
@@ -140,8 +140,8 @@ async def _connect(monkeypatch, pages: dict) -> tuple:
 
 async def test_tools_list_pages_are_followed_until_the_cursor_ends(monkeypatch) -> None:
     pages = {
-        None: SimpleNamespace(tools=[_tool_def("a"), _tool_def("b")], nextCursor="page-2"),
-        "page-2": SimpleNamespace(tools=[_tool_def("c")], nextCursor=None),
+        None: SimpleNamespace(tools=[_tool_def("a"), _tool_def("b")], next_cursor="page-2"),
+        "page-2": SimpleNamespace(tools=[_tool_def("c")], next_cursor=None),
     }
 
     connected, asked, reg = await _connect(monkeypatch, pages)
@@ -153,8 +153,8 @@ async def test_tools_list_pages_are_followed_until_the_cursor_ends(monkeypatch) 
 
 async def test_a_repeated_cursor_stops_paging(monkeypatch) -> None:
     pages = {
-        None: SimpleNamespace(tools=[_tool_def("a")], nextCursor="same"),
-        "same": SimpleNamespace(tools=[_tool_def("b")], nextCursor="same"),
+        None: SimpleNamespace(tools=[_tool_def("a")], next_cursor="same"),
+        "same": SimpleNamespace(tools=[_tool_def("b")], next_cursor="same"),
     }
 
     connected, asked, _ = await _connect(monkeypatch, pages)
@@ -163,13 +163,44 @@ async def test_a_repeated_cursor_stops_paging(monkeypatch) -> None:
     assert asked == [None, "same"]
 
 
+async def test_a_streamable_http_server_is_reached_through_the_sdks_two_streams(monkeypatch) -> None:
+    """mcp 2.x's ``streamable_http_client`` yields ``(read, write)``, not three.
+
+    The fake keeps the SDK's real arity: an unpack of three raises before a
+    session is built, which is how a ``streamableHttp`` server loses every tool
+    while a fake that still yields three keeps the unit suite green.
+    """
+    import mcp
+    import mcp.client.streamable_http
+
+    entered: list[str] = []
+
+    @asynccontextmanager
+    async def two_stream_client(url, http_client):
+        entered.append(url)
+        yield object(), object()
+
+    session_cls, _asked = _paged_session({None: SimpleNamespace(tools=[_tool_def("ping")], next_cursor=None)})
+    monkeypatch.setattr(mcp, "ClientSession", session_cls)
+    monkeypatch.setattr(mcp.client.streamable_http, "streamable_http_client", two_stream_client)
+
+    cfg = MCPServerConfig(url="https://example.test/mcp")
+    reg = ToolRegistry()
+    async with AsyncExitStack() as stack:
+        connected = await connect_mcp_server("srv", cfg, reg, stack)
+
+    assert entered == ["https://example.test/mcp"]
+    assert connected.names == ["mcp_srv_ping"]
+    assert reg.has("mcp_srv_ping")
+
+
 async def test_registry_respects_the_mcp_servers_declared_extra_property_policy() -> None:
     for closed in (True, False):
         session = _Session(_result(is_error=False, text="received"))
         tool_def = SimpleNamespace(
             name="read",
             description="Read a path.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
                 "additionalProperties": not closed,

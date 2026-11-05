@@ -39,9 +39,9 @@ _REAL_FETCH = rates._fetch_openrouter_models
 # The real Ollama driver call, captured for the same reason: the suite's autouse
 # guard replaces it with an offline stub, and ``litellm.utils`` reads the class
 # at call time, so a test that wants the request path has to put it back.
-from litellm.llms.ollama.completion.transformation import OllamaConfig as _OllamaConfig
+from litellm.llms.ollama.common_utils import OllamaModelInfo as _OllamaModelInfo
 
-_REAL_OLLAMA_INFO = _OllamaConfig.get_model_info
+_REAL_OLLAMA_INFO = _OllamaModelInfo.get_model_info
 
 
 @pytest.fixture(autouse=True)
@@ -216,22 +216,16 @@ def test_a_network_failure_falls_through_to_the_bundled_copy(monkeypatch):
     assert token_rates("openrouter/nobody/has-heard-of-this", 1000, 500) is None
 
 
-def test_the_gateway_price_wins_over_the_routers_copy(monkeypatch):
-    """Who sends the request is not who bills for it.
+def test_the_gateway_price_is_the_one_charged(monkeypatch):
+    """Who sends the request is also who bills for it.
 
-    LiteLLM routes an ``openrouter/`` id and also carries a row for it, so its
-    answer used to win -- but OpenRouter is the party charging, and the two
-    disagree. Measured on the pinned LiteLLM: ``openrouter/z-ai/glm-4.6`` is
-    filed at 0.40/1.75 per million where OpenRouter's own table says 0.50/2.00,
-    so every such call was under-reported by a fifth.
-
-    A model LiteLLM knows is used deliberately: with one it does not, tier 1
-    misses and the old order would pass this too.
+    LiteLLM 1.108 dropped its ``openrouter/`` rows, so the gateway's own
+    catalogue is the only price source for an ``openrouter/`` id: tier 1
+    misses, and the numbers the catalogue reports are the ones charged.
     """
-    router = rates._try_litellm_rates("openrouter/openai/gpt-4.1", 1000, 500)
-    assert router, "fixture needs a model LiteLLM prices under its openrouter id"
+    assert rates._try_litellm_rates("openrouter/openai/gpt-4.1", 1000, 500) is None
 
-    gateway_prompt, gateway_completion = router[0] * 2, router[1] * 2
+    gateway_prompt, gateway_completion = 4e-6, 1.2e-5
     _patch_openrouter(
         monkeypatch,
         lambda req: _models_response(
@@ -272,8 +266,10 @@ def test_the_price_ladder_never_fetches_on_its_first_tier(monkeypatch):
     """
     counter = _patch_openrouter(monkeypatch, lambda req: _models_response(_DEEPSEEK_MODELS))
 
-    # A model LiteLLM knows, so tier 1 answers and tiers 2+ never run.
-    assert token_rates("openrouter/openai/gpt-4.1", 1000, 500) is not None
+    # A model LiteLLM's table files directly, so tier 1 answers and the fetch
+    # tier never runs. ``openrouter/`` ids have no table row in 1.108; their
+    # live-catalogue path is covered by ``test_the_live_table_is_fetched_once_and_reused``.
+    assert token_rates("deepseek/deepseek-chat", 1000, 500) is not None
 
     assert counter["calls"] == 0
 
@@ -644,7 +640,7 @@ def test_a_plan_billed_provider_still_reports_a_window(minimax_row):
         assert resolve_context_window(model), f"{model}: window still expected"
 
 
-def test_a_directly_routed_model_is_priced_as_the_vendor_prices_it():
+def test_a_directly_routed_model_is_priced_as_the_vendor_prices_it(monkeypatch):
     """The alias answers with OpenRouter's numbers, which a user routing straight
     to the vendor does not pay. Asked alias-first, this model reported half its
     window at half its price."""
@@ -652,7 +648,9 @@ def test_a_directly_routed_model_is_priced_as_the_vendor_prices_it():
     assert _rate_cost("deepseek/deepseek-chat", 1_000_000, 0) == pytest.approx(0.28)
 
     # Routed through the gateway, OpenRouter's own numbers are the right ones.
-    assert resolve_context_window("openrouter/deepseek/deepseek-chat") == 65_536
+    # 1.108 dropped its openrouter rows, so the catalogue is the source.
+    _seed_catalog(monkeypatch, {"deepseek/deepseek-chat": {"context_length": 65_536}})
+    assert resolve_context_window("openrouter/deepseek/deepseek-chat", allow_fetch=False) == 65_536
 
 
 def test_the_window_those_families_report_is_the_vendors_own(minimax_row):
@@ -1054,19 +1052,19 @@ def test_no_fetch_metadata_reads_an_ollama_model_litellm_answers_from_its_table(
     the model through another driver, so each of these reads the ``ollama/`` row
     with no request made. Skipping the ask sized them on the fallback window.
     """
-    from litellm.llms.ollama.completion.transformation import OllamaConfig
+    from litellm.llms.ollama.common_utils import OllamaModelInfo
 
     litellm = import_litellm()
     row = {"max_input_tokens": 16384, "max_output_tokens": 4096, "litellm_provider": "ollama"}
     _patch_table(monkeypatch, {"ollama/raven-cached-model": row}, info=litellm.get_model_info)
-    daemon = OllamaConfig.get_model_info
+    daemon = OllamaModelInfo.get_model_info
     asked = []
 
-    def ask(self, model, api_base=None):
+    def ask(self, model, api_base=None, api_key=None):
         asked.append(model)
-        return daemon(self, model, api_base)
+        return daemon(self, model, api_base, api_key)
 
-    monkeypatch.setattr(OllamaConfig, "get_model_info", ask)
+    monkeypatch.setattr(OllamaModelInfo, "get_model_info", ask)
 
     assert lookup(model, allow_fetch=False) == expected
     assert asked == []
@@ -1107,17 +1105,17 @@ def test_no_fetch_metadata_answers_a_direct_vendor_the_way_a_fetch_does(model):
     "model", ["ollama/raven-uncached-model", "ollama_chat/raven-uncached-model", "ollama-chat/raven-uncached-model"]
 )
 def test_no_fetch_metadata_does_not_reach_the_ollama_daemon(monkeypatch, model):
-    from litellm.llms.ollama.completion.transformation import OllamaConfig
+    from litellm.llms.ollama.common_utils import OllamaModelInfo
 
     # Route aliases can share LiteLLM's id-keyed cache across parameter cases.
     import_litellm().get_model_info.cache_clear()
     asked = []
 
-    def info(self, model, api_base=None):
+    def info(self, model, api_base=None, api_key=None):
         asked.append(model)
         return {"max_input_tokens": 16384, "max_output_tokens": 4096}
 
-    monkeypatch.setattr(OllamaConfig, "get_model_info", info)
+    monkeypatch.setattr(OllamaModelInfo, "get_model_info", info)
 
     assert rates.resolve_context_window(model, allow_fetch=False) is None
     assert rates.declared_max_output_tokens(model, allow_fetch=False) is None
@@ -1674,7 +1672,7 @@ def _serve_ollama(monkeypatch, window: int | None = None, *, payload: dict | Non
     """Point LiteLLM's Ollama driver at a real socket, and count the asks.
 
     A stand-in for the daemon rather than for the driver: ``litellm.utils``
-    reaches the driver through ``OllamaConfig`` looked up on the module at call
+    reaches the driver through ``OllamaModelInfo`` looked up on the module at call
     time, so a patched class attribute is answered by whichever stub is
     installed -- the suite's own offline guard among them -- and the request
     path this exercises is never entered. A socket on a loopback port is the
@@ -1717,9 +1715,9 @@ def _serve_ollama(monkeypatch, window: int | None = None, *, payload: dict | Non
     # reads the class at call time, so a socket is not enough on its own: the
     # stub has to be lifted for the driver to send anything at all. Restored by
     # the same fixture that installed it.
-    from litellm.llms.ollama.completion.transformation import OllamaConfig
+    from litellm.llms.ollama.common_utils import OllamaModelInfo
 
-    monkeypatch.setattr(OllamaConfig, "get_model_info", _REAL_OLLAMA_INFO)
+    monkeypatch.setattr(OllamaModelInfo, "get_model_info", _REAL_OLLAMA_INFO)
     return hits
 
 

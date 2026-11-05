@@ -258,7 +258,7 @@ def _message_text(content: Any) -> str:
             out.append(item.text)
             continue
         label = getattr(item, "type", type(item).__name__)
-        mime = getattr(item, "mimeType", None)
+        mime = getattr(item, "mime_type", None)
         out.append(f"[non-text prompt content: {label}{f' ({mime})' if mime else ''}]")
     return "\n".join(t for t in out if t)
 

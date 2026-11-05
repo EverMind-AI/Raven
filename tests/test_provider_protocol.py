@@ -1091,7 +1091,7 @@ def test_response_series_use_declared_vendor_addresses(vendor, model, base):
 @pytest.mark.parametrize(
     "vendor,model",
     [
-        ("moonshot", "moonshot/kimi-k2-turbo-preview"),
+        ("moonshot", "moonshot/kimi-k2.5"),
         ("groq", "groq/qwen/qwen3-32b"),
         ("dashscope", "dashscope/qwen-plus"),
         ("nvidia_nim", "nvidia_nim/deepseek-ai/deepseek-v3.1"),
@@ -1116,7 +1116,7 @@ def test_a_chosen_native_protocol_without_an_address_is_still_refused():
     from raven.providers.auth import MissingCredentialsError
 
     with pytest.raises(MissingCredentialsError, match="requires an explicit API base"):
-        make_provider(_provider_config("moonshot", "moonshot/kimi-k2-turbo-preview", override="responses"))
+        make_provider(_provider_config("moonshot", "moonshot/kimi-k2.5", override="responses"))
 
 
 def test_a_gateway_declaring_some_protocols_does_not_serve_the_others_at_its_default_address():
@@ -1169,7 +1169,7 @@ def test_a_mixed_endpoint_pool_stays_on_chat_until_every_member_has_an_address()
     unless every endpoint can be served."""
     from raven.providers.endpoint_rotor import EndpointRotorProvider
 
-    model = "moonshot/kimi-k2-turbo-preview"
+    model = "moonshot/kimi-k2.5"
     mixed = _pool_config(
         "moonshot",
         model,
@@ -1207,11 +1207,11 @@ def test_display_resolution_logs_nothing_and_construction_logs_once():
     records: list[str] = []
     sink = logger.add(lambda message: records.append(str(message)), level="INFO")
     try:
-        for vendor, model in (("dashscope", "dashscope/qwen-plus"), ("moonshot", "moonshot/kimi-k2-turbo-preview")):
+        for vendor, model in (("dashscope", "dashscope/qwen-plus"), ("moonshot", "moonshot/kimi-k2.5")):
             section = _provider_config(vendor, model).providers.get(vendor)
             assert effective_protocol(section, model, vendor) == "chat"
         assert records == []
-        make_provider(_provider_config("moonshot", "moonshot/kimi-k2-turbo-preview"))
+        make_provider(_provider_config("moonshot", "moonshot/kimi-k2.5"))
         assert sum("using chat" in r for r in records) == 1
         # An operator's own chat choice is not a stepping-aside, and the provider
         # it names is not missing an address: nothing to report.

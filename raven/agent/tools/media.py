@@ -83,16 +83,16 @@ def blocks_from_mcp_content(content: list[Any]) -> tuple[str, list[ContentPart]]
             texts.append(block.text)
             blocks.append(text_block(block.text))
         elif isinstance(block, types.ImageContent):
-            note = f"[image from MCP tool: {block.mimeType}]"
+            note = f"[image from MCP tool: {block.mime_type}]"
             texts.append(note)
             blocks.append(text_block(note))
-            blocks.append(image_block(to_data_uri_from_b64(block.data, block.mimeType)))
+            blocks.append(image_block(to_data_uri_from_b64(block.data, block.mime_type)))
         else:
             # Audio, resource links, embedded resources. Raven has no input path
             # for these, but they must never be str()'d -- a pydantic repr would
             # dump the whole base64 payload into the prompt as prose.
             label = getattr(block, "type", type(block).__name__)
-            mime = getattr(block, "mimeType", None)
+            mime = getattr(block, "mime_type", None)
             note = f"[unsupported MCP content: {label}{f' ({mime})' if mime else ''}]"
             texts.append(note)
             blocks.append(text_block(note))

@@ -645,7 +645,7 @@ class _Flow:
             return
         open_browser(self._server, auth_url)
 
-    async def callback(self) -> tuple[str, str | None]:
+    async def callback(self) -> Any:
         state = self._state
         if state is None or state not in _PENDING:
             raise OAuthUnavailableError("no pending authorization for this flow")
@@ -674,7 +674,9 @@ class _Flow:
             self._emit("oauth.done", {"server": self._server, "ok": False, "error": str(e)})
             raise
         self._emit("oauth.done", {"server": self._server, "ok": True})
-        return code, got_state
+        from mcp.shared.auth import AuthorizationCodeResult
+
+        return AuthorizationCodeResult(code=code, state=got_state)
 
 
 def cancel_pending(server: str, *, reason: str = "superseded by a newer authorization attempt") -> None:
@@ -1313,7 +1315,6 @@ async def provider_for(
         storage=storage,
         redirect_handler=flow.redirect,
         callback_handler=flow.callback,
-        timeout=OAUTH_FLOW_TIMEOUT,
         **kwargs,
     )
     # The SDK's _initialize() restores the tokens but not when they expire, and
@@ -1351,8 +1352,13 @@ async def provider_for(
 
 
 def is_auth_error(exc: BaseException) -> bool:
-    """Whether a connect failure means "user must (re)authorize"."""
+    """Whether a connect failure means "user must (re)authorize".
+
+    Both HTTP stacks are checked: mcp 2.x's transports raise httpx2 errors,
+    while raven's own OAuth responses still use httpx.
+    """
     import httpx
+    import httpx2
     from mcp.client.auth import OAuthFlowError, OAuthRegistrationError, OAuthTokenError
 
     def check(e: BaseException, depth: int = 0) -> bool:
@@ -1360,7 +1366,7 @@ def is_auth_error(exc: BaseException) -> bool:
             return False
         if isinstance(e, (OAuthFlowError, OAuthTokenError, OAuthRegistrationError, OAuthWaitTimeoutError)):
             return True
-        if isinstance(e, httpx.HTTPStatusError) and e.response.status_code in (401, 403):
+        if isinstance(e, (httpx.HTTPStatusError, httpx2.HTTPStatusError)) and e.response.status_code in (401, 403):
             return True
         if isinstance(e, BaseExceptionGroup):
             return any(check(sub, depth + 1) for sub in e.exceptions)

@@ -27,9 +27,9 @@ FIXTURE_SERVER = '''
 import os
 import sys
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-mcp = FastMCP("demo")
+mcp = MCPServer("demo")
 
 
 @mcp.tool()

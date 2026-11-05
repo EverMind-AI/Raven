@@ -124,6 +124,57 @@ async def test_an_open_endpoint_relays_to_the_held_upstream(tmp_path):
         await open_endpoint(str(path))
 
 
+async def test_the_relay_stamps_only_its_own_connections_initialize_result(monkeypatch):
+    import anyio
+    from mcp.shared.inbound import MCP_PROTOCOL_VERSION_HEADER
+    from mcp.shared.message import SessionMessage
+    from mcp.types import JSONRPCResponse
+
+    versions = iter(("2024-11-05", "2025-03-26"))
+
+    @contextlib.asynccontextmanager
+    async def transport(*args, **kwargs):
+        version = next(versions)
+        read_send, read_recv = anyio.create_memory_object_stream(4)
+        write_send, write_recv = anyio.create_memory_object_stream(4)
+
+        async def serve():
+            async for item in write_recv:
+                result = {"protocolVersion": "unrelated", "headers": item.metadata.headers if item.metadata else {}}
+                if item.message.method == "initialize":
+                    result["protocolVersion"] = version
+                await read_send.send(SessionMessage(JSONRPCResponse(jsonrpc="2.0", id=item.message.id, result=result)))
+
+        pump = asyncio.create_task(serve())
+        try:
+            yield read_recv, write_send
+        finally:
+            pump.cancel()
+            await asyncio.gather(pump, return_exceptions=True)
+
+    monkeypatch.setattr(endpoint, "open_mcp_transport", transport)
+    endpoints = McpEndpoints()
+    try:
+        address = await endpoints.open("versions", "upstream", MCPServerConfig(command="unused"))
+        for version in ("2024-11-05", "2025-03-26"):
+            reader, writer = await open_endpoint(str(address))
+
+            async def exchange(id, method):
+                writer.write(json.dumps({"jsonrpc": "2.0", "id": id, "method": method}).encode() + b"\n")
+                await writer.drain()
+                return json.loads(await asyncio.wait_for(reader.readline(), timeout=5))["result"]
+
+            try:
+                assert (await exchange(1, "ping"))["headers"] == {}
+                assert (await exchange(0, "initialize"))["protocolVersion"] == version
+                for id in (2, 3):
+                    assert (await exchange(id, "ping"))["headers"] == {MCP_PROTOCOL_VERSION_HEADER: version}
+            finally:
+                writer.close()
+    finally:
+        await endpoints.aclose()
+
+
 @pytest.mark.asyncio
 async def test_close_returns_even_while_a_downstream_is_still_connected():
     # Server.wait_closed returns only once every accepted connection has
@@ -306,15 +357,17 @@ class _FakeBox:
         import anyio
         from mcp.shared.message import SessionMessage
         from mcp.types import JSONRPCMessage
+        from pydantic import TypeAdapter
 
         self.spawned.append((command, tuple(args), cwd))
         read_send, read_recv = anyio.create_memory_object_stream(16)
         write_send, write_recv = anyio.create_memory_object_stream(16)
+        rpc_adapter = TypeAdapter(JSONRPCMessage)
 
         async def _serve() -> None:
             async for outgoing in write_recv:
-                request = outgoing.message.root
-                reply = JSONRPCMessage.model_validate(
+                request = outgoing.message
+                reply = rpc_adapter.validate_python(
                     {"jsonrpc": "2.0", "id": request.id, "result": {"in_the_box": request.method}}
                 )
                 await read_send.send(SessionMessage(reply))
