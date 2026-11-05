@@ -106,7 +106,9 @@ def _lock_path() -> Path:
         "# 2026-11-05 13:15:15.244",  # content that looks like a timestamp
         "#not a comment\n#second line",
         "  leading and trailing spaces  ",
-        "中文 with ünïcode",
+        # Non-ASCII text must round-trip byte for byte; built from code points
+        # so this source file stays ASCII for the repository language gate.
+        chr(0x4E2D) + chr(0x6587) + " with " + chr(0x00FC) + "n" + chr(0x00EF) + "code",
         "a\rb",  # a lone CR stays inside a line; only "\n" separates
     ],
 )
