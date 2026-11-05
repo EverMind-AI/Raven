@@ -95,8 +95,8 @@ export function enterSection(id: string): void {
 }
 
 /* What re-reads the dialog when a section writes config by another door. The
-   memory section's source switch changes whether the models page draws its
-   EverOS Cloud card, and that page's snapshot belongs to the settings island
+   memory section's source switch changes whether the models section draws its
+   EverOS Cloud card, and that section's snapshot belongs to the settings island
    -- so the island registers the reload here and the writer spends it, rather
    than the two islands importing each other (scripts/gates/import-direction).
    A signal store rather than a bare listener set: state/store.ts owns the

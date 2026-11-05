@@ -1214,8 +1214,8 @@ async def test_settings_set_nullable_keys_accept_null(cfg, key):
 async def test_settings_set_memory_backend_writes_the_name(cfg, monkeypatch):
     """The write is the whole change here.
 
-    The page follows the file per read, and memory.applyRuntime points the loop
-    serving chat memory at the same file in place, so this answer needs no
+    The section follows the file per read, and memory.applyRuntime points the
+    loop serving chat memory at the same file in place, so this answer needs no
     reload sentence.
     """
 

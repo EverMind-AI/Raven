@@ -234,7 +234,7 @@ export function refreshSoon(): void {
 }
 
 /* A section's write the island did not make itself -- the memory section's
-   source switch -- asks for this reload, because the models page's EverOS
+   source switch -- asks for this reload, because the models section's EverOS
    Cloud card is drawn from the snapshot cached here. The memory island spends
    the verb; this domain owns what it does with it. */
 settingsDialog.onRefresh(refreshSoon)

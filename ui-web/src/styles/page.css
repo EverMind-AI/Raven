@@ -4893,8 +4893,9 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
    down the width of a column: same buttons, same counts, no room for the
    sentence under each -- which is one line under the switch now, for whichever
    kind is picked. */
-/* Which EverOS this page reads. The same band as the kind switch under it, so
-   the page reads as one set of switches rather than a form that wandered in. */
+/* Which EverOS this section reads. The same band as the kind switch under it,
+   so the section reads as one set of switches rather than a form that
+   wandered in. */
 .memsrc {
   display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px;
   padding: 2px; background: var(--surface); border-radius: 9px;
@@ -4915,7 +4916,7 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 }
 .memchange:hover { color: var(--muted); }
 .memerr { color: var(--clay); }
-/* The cloud backend with no key: one panel, one field, one link. The pane it
+/* The cloud backend with no key: one panel, one field, one link. The column it
    replaces was the store's error frame, which blamed the service for a step
    the reader had not taken yet. */
 .memconnect {

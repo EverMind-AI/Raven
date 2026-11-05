@@ -36,7 +36,7 @@ export interface MemoryState {
   detail: MemItem | null
   /* The local/cloud switch: a write in flight, the server's sentence about
      what waits for a reload, and a write that failed. Kept apart from `err`,
-     which takes the whole page over -- a failed switch leaves the page
+     which takes the whole section over -- a failed switch leaves the section
      readable on the backend it still has. */
   backendBusy: boolean
   backendNotice: string
@@ -54,7 +54,7 @@ export interface MemoryState {
   localBusy: boolean
   localErr: string
   /* A backend switch's reads are out. The old store's counts and rows must not
-     sit under the new segment while they are; the page draws the wait. */
+     sit under the new segment while they are; the section draws the wait. */
   switching: boolean
 }
 
@@ -96,7 +96,7 @@ function failure(e: unknown): string {
   return (err.data && err.data.detail) || err.message || String(e)
 }
 
-/* The service refusing the key on file. The page can fix this one in place,
+/* The service refusing the key on file. The section can fix this one in place,
    so it must not be read as the service being down. The cloud's own body for
    this is "The API key in the request is missing or invalid", which carries
    no 401 in text -- the status is in the transport, not the sentence. */
@@ -139,15 +139,16 @@ export function refreshStats(): Promise<void> {
     .catch(() => set({ stats: null }))
 }
 
-/* The local/cloud switch's one write. The page re-reads the file per call, so
-   its rows follow at once; the loop serving chat memory built its backend at
-   boot, hence the reply's warning, which is shown under the switch. */
+/* The local/cloud switch's one write. The section re-reads the file per call, so
+   its rows follow at once; the loop serving chat memory keeps the backend it
+   booted with until `applyRuntime` points it at this one, which is a live
+   reference swap rather than a reload. */
 export function switchBackend(backend: string): void {
   if (get().backendBusy || get().stats?.backend === backend) return
   const stats = get().stats
   /* The segment moves at once, and the old store's numbers and rows go with
      it: they belong to the backend the reader just left. The wait below is
-     what the page draws instead. */
+     what the section draws instead. */
   set({
     stats: stats ? { ...stats, backend } : stats,
     switching: true,
@@ -159,15 +160,15 @@ export function switchBackend(backend: string): void {
   void (async () => {
     try {
       await source().setBackend(backend)
-      /* The settings dialog's models page drew its EverOS Cloud card from the
+      /* The settings dialog's models section drew its EverOS Cloud card from the
          snapshot it read when it opened, and `selected` just changed. Without
          this the reader who goes to enter the key finds no card. The island
          registers what re-reads it; state/ does not import an island. */
       settingsDialog.requestRefresh()
-      /* Point the running loop at the new backend before the page reads it: a
+      /* Point the running loop at the new backend before the section reads it: a
          local server that is down starts here, so the reads below see it
          rather than drawing the start panel. This is a live reference swap --
-         no generation reload, so the page's socket stays connected. */
+         no generation reload, so the document's socket stays connected. */
       const applied = await source().applyRuntime()
       if (!applied.ok) set({ backendNotice: applied.detail || t('gui.mem.reload_wait') })
       await refreshStats()
@@ -175,7 +176,7 @@ export function switchBackend(backend: string): void {
       set({ switching: false, backendBusy: false })
     } catch (e) {
       /* The optimistic segment above is a claim the file did not change, so
-         put it back from the file rather than leaving the page reading one
+         put it back from the file rather than leaving the section reading one
          store while the switch says the other. */
       set({ switching: false, backendBusy: false, backendErr: failure(e) })
       await refreshStats()
@@ -191,7 +192,7 @@ export function startCloudEdit(): void {
 }
 
 /* The local server's start button. The backend starts the same server when a
-   generation boots; this is the page's way to do it after that process went
+   generation boots; this is the section's way to do it after that process went
    away, without asking the reader to restart Raven. */
 export function startLocal(): void {
   if (get().localBusy) return
@@ -210,16 +211,16 @@ export function startLocal(): void {
   })()
 }
 
-/* The hosted backend's key, from the panel the page draws in place of the
+/* The hosted backend's key, from the panel the section draws in place of the
    store when there is none. The write is not the validation: a key can be
    saved and still be rejected, so the backend's own health check answers
-   before the page leaves its panel. Only an ``ok`` unlocks the store. */
+   before the section leaves its panel. Only an ``ok`` unlocks the store. */
 export function saveCloudKey(key: string): void {
   const value = key.trim()
   if (!value || get().cloudBusy) return
   /* `cloudRejected` is deliberately NOT cleared here. When the panel is up
      because the key on file was refused, clearing it would make the panel's
-     condition false for the duration of the check -- the page would flash to
+     condition false for the duration of the check -- the section would flash to
      the store and back when the probe refused it again. The flag moves only
      when the verdict does. */
   set({ cloudBusy: true, cloudErr: '' })
@@ -237,12 +238,12 @@ export function saveCloudKey(key: string): void {
         return
       }
       /* The key is what the running loop was missing; point it at the rebuilt
-         cloud backend before the page reads, then load the rows. The live swap
-         keeps the page's socket up, so the reader stays connected. */
+         cloud backend before the section reads, then load the rows. The live swap
+         keeps the document's socket up, so the reader stays connected. */
       const applied = await source().applyRuntime()
       await load()
       await refreshStats()
-      /* The models page caches its EverOS Cloud card; the key saved here is
+      /* The models section caches its EverOS Cloud card; the key saved here is
          the value that card shows, and it may already be open behind this. */
       settingsDialog.requestRefresh()
       set({ cloudBusy: false, cloudRejected: false, cloudEditing: false })

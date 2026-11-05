@@ -222,9 +222,9 @@ describe('memory island', () => {
     expect(asked).toContain('agent_case')
   })
 
-  /* Which EverOS the page reads. The switch is a settings write: the page
-     follows the file per read, while the loop serving chat memory follows on
-     the next reload -- the server's warning is that sentence. */
+  /* Which EverOS the section reads. The switch is a settings write: the section
+     follows the file per read, and the loop serving chat memory follows
+     through applyRuntime without a reload. */
   describe('memory source switch', () => {
     const both = {
       episodes: 1,
@@ -343,7 +343,7 @@ describe('memory island', () => {
       })
       expect(await screen.findByText('switch denied')).toBeTruthy()
       /* The optimistic pick is a claim the file did not back; the next read
-         puts the segment where the store still is, and the page keeps the
+         puts the segment where the store still is, and the section keeps the
          rows it had rather than taking the whole frame over. */
       await waitFor(() => {
         expect(screen.getByText('gui.mem.src_local').getAttribute('aria-pressed')).toBe('true')
@@ -372,7 +372,7 @@ describe('memory island', () => {
     })
 
     /* A working key can still be replaced. Without this link the only way to
-       change it would be the settings card the page no longer draws. */
+       change it would be the settings card the section no longer draws. */
     it('offers a change-key link when the cloud store is readable, and opens the panel', async () => {
       install({}, { ...both, backend: 'everos-cloud', cloud_key_set: true })
       await mount()
@@ -485,7 +485,7 @@ describe('memory island', () => {
     })
 
     /* Retrying from the refused state used to clear the flag that keeps the
-       panel up, so the page flashed to the store for the length of the check
+       panel up, so the section flashed to the store for the length of the check
        and back. The panel must stay put while the verdict is pending. */
     it('keeps the panel up while a refused key is checked again', async () => {
       let land: ((v: { status: string; hint: string }) => void) | null = null
@@ -544,7 +544,7 @@ describe('memory island', () => {
     })
 
     /* The local server is a process, not a setting: when it is not there the
-       page used to show four zeros. The start panel is the one action that
+       section used to show four zeros. The start panel is the one action that
        brings the store back without restarting Raven. */
     it('offers to start the local server when it is not running', async () => {
       let running = false
