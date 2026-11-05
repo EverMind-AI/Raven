@@ -1316,6 +1316,51 @@ class TestAutomaticSnapshotVerification:
         await schedule_snapshot_verification(_FakeManager([fine, refused]))
         assert verified == ["refused"], "a fresh pass is still trusted; a fresh refusal is not"
 
+    async def test_a_minted_row_is_re_verified_so_the_backfill_completes_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A row minted from a live session has its menus but not the effort
+        ladder, which is why it is written with ``effort_measured=False``. The
+        boot backfill is what finishes it; a complete row is still skipped, or
+        every start would spend a handshake per agent."""
+        from dataclasses import dataclass
+
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        @dataclass
+        class Snap:
+            status: str = "ready"
+            stale: bool = False
+            needs_auth: bool = False
+            model_menu_measured: bool = True
+            effort_measured: bool = True
+
+        minted, complete = _FakeRow("minted"), _FakeRow("complete")
+        verified: list[str] = []
+
+        def fake_snapshot_for(cfg: object) -> Snap:
+            return {
+                id(minted.config): Snap(effort_measured=False),
+                id(complete.config): Snap(),
+            }[id(cfg)]
+
+        async def fake_verify(cfg: object) -> Snap:
+            verified.append(cfg.name)
+            return Snap()
+
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", fake_snapshot_for)
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.acp_client.capabilities.SnapshotStore",
+            lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
+        )
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        await schedule_snapshot_verification(_FakeManager([minted, complete]))
+
+        assert verified == ["minted"], "a minted row is what the backfill exists to finish"
+
     async def test_failed_verification_does_not_stop_the_rest(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from raven.agent.subagent.probe import schedule_snapshot_verification
 
