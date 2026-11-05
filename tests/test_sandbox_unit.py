@@ -1970,7 +1970,7 @@ class TestConnectOneMcpServer:
 
         reached = []
 
-        def fake_stdio_client(params):
+        def fake_stdio_client(params, **kwargs):
             reached.append(params.command)
             raise RuntimeError("stdio_client reached -- expected in test")
 

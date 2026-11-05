@@ -2,12 +2,16 @@
 
 import asyncio
 import json
+import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 from raven.config.schema import MCPServerConfig
 from raven.mcp.client import open_mcp_transport
+
+_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.asyncio
@@ -18,6 +22,46 @@ async def test_stdio_transport_yields_streams_without_initialize():
     async with open_mcp_transport(cfg, "stdio") as (read, write):
         assert read is not None
         assert write is not None
+
+
+def test_a_stdio_server_starts_when_this_process_stderr_is_no_file(tmp_path):
+    """Capture, an embedded host and a StringIO redirect all hand the SDK a stderr no child can inherit.
+
+    The SDK binds its ``errlog`` default at import, so the fault shows up only
+    in a process whose stderr was replaced before the transport was first
+    imported -- a fresh interpreter is the only honest reproduction.
+    """
+    script = tmp_path / "stderr_without_a_file.py"
+    script.write_text(
+        "\n".join(
+            [
+                "import asyncio, io, sys",
+                "real, sys.stderr = sys.stderr, io.StringIO()",
+                "from raven.config.schema import MCPServerConfig",
+                "from raven.mcp.client import open_mcp_transport",
+                "cfg = MCPServerConfig(command=sys.executable, args=['-c', 'import sys; sys.stdin.read()'])",
+                "",
+                "async def main():",
+                "    async with open_mcp_transport(cfg, 'stdio') as (read, write):",
+                "        assert read is not None and write is not None",
+                "",
+                "try:",
+                "    asyncio.run(main())",
+                "except BaseException:",
+                "    sys.stderr = real",
+                "    raise",
+                "sys.stderr = real",
+                "print('STARTED')",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    run = subprocess.run(
+        [sys.executable, str(script)], capture_output=True, text=True, timeout=180, cwd=str(_ROOT), check=False
+    )
+    assert run.returncode == 0, run.stderr[-2000:]
+    assert "STARTED" in run.stdout
 
 
 def _reporting_server(observed) -> list[str]:
