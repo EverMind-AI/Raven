@@ -2425,6 +2425,37 @@ describe("the turn's delivered files", () => {
     expect(opened).toEqual(['/w/notes.md'])
   })
 
+  /* The token link is the only attachment the page can hand over. A manifest
+     written before the field -- or the offline canvas's -- carries none, and
+     an anchor with an empty href would save the page itself under the file's
+     name instead of the file. */
+  it('offers no download when the delivery carries no link', async () => {
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'make them', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: {
+          raven_delivery: {
+            files: [
+              { path: '/w/notes.md', name: 'notes.md', title: 'notes.md', size: 12000, media_type: 'text/markdown' },
+              { path: '/w/cv.pptx', name: 'cv.pptx', title: 'cv.pptx', size: 12000,
+                media_type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' },
+            ],
+            invalid: [],
+          },
+        } },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    expect($$('.atile a[download]')).toHaveLength(0)
+    /* The document still opens in the panel; the binary has nothing to offer,
+       so it does not draw an empty control strip either. */
+    expect($$('.atile')[0]!.querySelectorAll('.transcript-act')).toHaveLength(1)
+    expect($$('.atile')[1]!.querySelectorAll('.transcript-act')).toHaveLength(0)
+    expect($$('.atile')[1]!.querySelector('.transcript-acts')).toBeNull()
+  })
+
   it('shows a delivered deck by its first page, rendered by the gateway', async () => {
     /* A deck is a picture of itself, not a document face: the tile asks the
        file route for a thumb rendering of the deck's own path. */

@@ -1526,7 +1526,10 @@ const DeliveryTile = memo(function DeliveryTile({ row }: { row: DeliveryRow }): 
       <button className="hit" disabled={!ready}
         aria-label={t('gui.arts.open', { f: row.name })}
         onClick={open} />
-      {ready ? (
+      {/* A binary with no token link has nothing left to offer, so the row's
+          controls are not drawn empty. Everything else keeps one: a page opens
+          in a browser tab, a document the panel reads opens there. */}
+      {ready && (url || !BINARY_KINDS.has(kind)) ? (
         <span className="transcript-acts">
           {kind === 'html' ? (
             <a className="transcript-act" href={fileURL(row.path)} target="_blank" rel="noopener"
@@ -1534,10 +1537,16 @@ const DeliveryTile = memo(function DeliveryTile({ row }: { row: DeliveryRow }): 
               <Icon icon={InternetIcon} size={16} />
             </a>
           ) : null}
-          <a className="transcript-act" href={url} download={row.name}
-            data-tip={t('gui.arts.download')} aria-label={t('gui.arts.download')}>
-            <Icon icon={Download04Icon} size={16} />
-          </a>
+          {/* The token link is the only attachment the page can hand over. A
+              row without one -- a manifest written before the field, or the
+              offline canvas's -- offers no control rather than an anchor to
+              the page itself saved under the file's name. */}
+          {url ? (
+            <a className="transcript-act" href={url} download={row.name}
+              data-tip={t('gui.arts.download')} aria-label={t('gui.arts.download')}>
+              <Icon icon={Download04Icon} size={16} />
+            </a>
+          ) : null}
           {BINARY_KINDS.has(kind) ? null : (
             <button className="transcript-act" data-tip={t('gui.arts.open', { f: row.name })}
               aria-label={t('gui.arts.open', { f: row.name })} onClick={open}>
