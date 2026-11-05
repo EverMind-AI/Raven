@@ -14,6 +14,7 @@ default, run with ``-m integration``.
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 import sys
 import time
@@ -21,10 +22,13 @@ from contextlib import AsyncExitStack
 from pathlib import Path
 
 import pytest
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 
 from raven.agent.tools.registry import ToolRegistry
 from raven.config.schema import MCPServerConfig
 from raven.mcp.client import connect_mcp_server
+from raven.mcp.endpoint import McpEndpoints
 
 pytestmark = pytest.mark.integration
 
@@ -32,7 +36,7 @@ _UPSTREAM = Path(__file__).parent / "_mcp_streamable_upstream.py"
 _START_TIMEOUT_S = 30.0
 
 
-def _start_upstream(tmp_path: Path) -> tuple[subprocess.Popen[bytes], int]:
+def _start_upstream(tmp_path: Path, headers_file: Path | None = None) -> tuple[subprocess.Popen[bytes], int]:
     """The running server and the loopback port it bound.
 
     The port comes from the child rather than from a socket the parent binds
@@ -40,7 +44,10 @@ def _start_upstream(tmp_path: Path) -> tuple[subprocess.Popen[bytes], int]:
     between close and bind, and the failure then reads as a broken transport.
     """
     port_file = tmp_path / "port"
-    process = subprocess.Popen([sys.executable, str(_UPSTREAM), str(port_file)])
+    args = [sys.executable, str(_UPSTREAM), str(port_file)]
+    if headers_file is not None:
+        args.append(str(headers_file))
+    process = subprocess.Popen(args)
     deadline = time.monotonic() + _START_TIMEOUT_S
     while time.monotonic() < deadline:
         if process.poll() is not None:
@@ -73,4 +80,30 @@ async def test_a_streamable_http_server_registers_and_runs_its_tools(tmp_path):
         assert await asyncio.wait_for(registry.execute("mcp_streamable_ping", {}), timeout=60) == "pong"
     finally:
         await stack.aclose()
+        _stop_upstream(process)
+
+
+async def test_a_bridged_streamable_server_receives_the_negotiated_protocol_version(tmp_path):
+    headers_file = tmp_path / "headers.jsonl"
+    process, port = _start_upstream(tmp_path, headers_file)
+    cfg = MCPServerConfig(url=f"http://127.0.0.1:{port}/mcp")
+    endpoints = McpEndpoints()
+    try:
+        address = await endpoints.open("protocol", "streamable", cfg)
+        params = StdioServerParameters(
+            command=sys.executable, args=["-m", "raven", "mcp", "bridge", str(address)], env={"PATH": ""}
+        )
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                init = await asyncio.wait_for(session.initialize(), timeout=60)
+                result = await asyncio.wait_for(session.call_tool("ping", {}), timeout=60)
+                assert not result.is_error
+                assert result.content[0].text == "pong"
+                requests = [json.loads(line) for line in headers_file.read_text(encoding="utf-8").splitlines()]
+                posts = [request for request in requests if request["method"] == "POST"]
+                assert len(posts) >= 3
+                assert posts[0]["version"] == ""
+                assert all(request["version"] == init.protocol_version for request in posts[1:]), posts
+    finally:
+        await endpoints.aclose()
         _stop_upstream(process)

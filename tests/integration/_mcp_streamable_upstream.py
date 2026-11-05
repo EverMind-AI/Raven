@@ -9,6 +9,7 @@ event loop.
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 
 import uvicorn
@@ -24,7 +25,20 @@ def ping() -> str:
 
 async def main() -> None:
     app = server.streamable_http_app(host="127.0.0.1")
-    config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="error")
+
+    async def recorded(scope, receive, send):
+        if len(sys.argv) > 2 and scope["type"] == "http":
+            headers = dict(scope["headers"])
+            with open(sys.argv[2], "a", encoding="utf-8") as fh:
+                fh.write(
+                    json.dumps(
+                        {"method": scope["method"], "version": headers.get(b"mcp-protocol-version", b"").decode()}
+                    )
+                    + "\n"
+                )
+        await app(scope, receive, send)
+
+    config = uvicorn.Config(recorded, host="127.0.0.1", port=0, log_level="error")
     http = uvicorn.Server(config)
     serving = asyncio.create_task(http.serve())
     while not http.started:

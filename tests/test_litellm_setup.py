@@ -108,6 +108,47 @@ def test_import_litellm_keeps_an_explicit_model_cost_map_setting(monkeypatch) ->
     assert os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] == "False"
 
 
+def test_import_litellm_keeps_an_explicit_tokenizer_cache(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("TIKTOKEN_CACHE_DIR", str(tmp_path))
+
+    import_litellm()
+
+    assert os.environ["TIKTOKEN_CACHE_DIR"] == str(tmp_path)
+
+
+@pytest.mark.slow
+def test_token_estimates_use_the_bundled_encoding_offline_with_a_cold_cache(tmp_path) -> None:
+    import subprocess
+
+    probe = """
+import requests
+
+downloads = []
+def offline(url, *args, **kwargs):
+    downloads.append(url)
+    raise requests.ConnectionError("offline")
+requests.get = offline
+
+from raven.providers.litellm_setup import import_litellm
+import_litellm()
+from raven.utils.tokens import estimate_message_tokens
+
+for text, expected in [("x" * 32, 4), ("hello world hello world hello world", 6)]:
+    actual = estimate_message_tokens({"role": "user", "content": text})
+    assert actual == expected, (text, actual, expected)
+assert downloads == [], downloads
+"""
+    env = dict(os.environ)
+    env.pop("TIKTOKEN_CACHE_DIR", None)
+    env.pop("DATA_GYM_CACHE_DIR", None)
+    env.update(TMPDIR=str(tmp_path), TMP=str(tmp_path), TEMP=str(tmp_path))
+    done = subprocess.run(
+        [sys.executable, "-P", "-c", probe], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30
+    )
+
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
 def test_import_litellm_detaches_terminal_handlers() -> None:
     """Every litellm import in raven is deferred, so the handler litellm installs
     lands after the CLI has already stripped terminal handlers. Left attached, it

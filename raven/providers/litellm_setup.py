@@ -65,6 +65,17 @@ def _use_local_model_cost_map() -> None:
     os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 
+def _use_bundled_tokenizers() -> None:
+    """Keep Raven's estimator offline before LiteLLM lazily loads its tokenizers."""
+    from importlib.util import find_spec
+    from pathlib import Path
+
+    spec = find_spec("litellm")
+    if spec is not None and spec.origin is not None:
+        cache = Path(spec.origin).parent / "litellm_core_utils" / "tokenizers"
+        os.environ.setdefault("TIKTOKEN_CACHE_DIR", str(cache))
+
+
 # Rows the installed LiteLLM catalogue lacks and raven vouches for itself.
 # ``deepseek/deepseek-flash`` is DeepSeek's own API name for V4.1-Flash (the
 # retired ``deepseek-v4-flash`` routes to it); before LiteLLM 1.108 the
@@ -162,6 +173,7 @@ def import_litellm():
             return _READY
         _point_oauth_tokens_at_raven()
         _use_local_model_cost_map()
+        _use_bundled_tokenizers()
         loggers = [logging.getLogger(name) for name in _LITELLM_LOGGERS]
         prev_levels = [lg.level for lg in loggers]
         for lg in loggers:

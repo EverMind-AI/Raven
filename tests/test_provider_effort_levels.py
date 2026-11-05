@@ -57,6 +57,63 @@ def test_xhigh_and_max_are_opt_in(table):
     assert effort_levels.levels_for("openai/gpt-5.5-pro") == ("medium", "high", "xhigh")
 
 
+@pytest.mark.parametrize(
+    ("declared", "expected"),
+    [
+        (["low", "high", "max"], ("low", "high", "max")),
+        ([], ()),
+        (["none", "high", "ultra"], ("high",)),
+        (["max", "low", "low"], ("low", "max")),
+        (None, ("minimal", "low", "medium", "high")),
+        ("high", ("minimal", "low", "medium", "high")),
+    ],
+)
+def test_the_rows_declared_levels_answer_before_flag_defaults(table, declared, expected):
+    table({"gpt-5": _row(reasoning_effort_levels=declared)})
+    assert effort_levels.levels_for("openai/gpt-5") == expected
+
+
+def test_a_declared_list_overrules_flags_on_the_same_row(table):
+    table({"gpt-5": _row(reasoning_effort_levels=["high"], supports_max_reasoning_effort=True)})
+    assert effort_levels.levels_for("openai/gpt-5") == ("high",)
+
+
+def test_a_routes_own_flags_answer_before_an_inherited_list(table):
+    table(
+        {
+            "claude-opus-4-6": _row(litellm_provider="anthropic", reasoning_effort_levels=["high", "max"]),
+            "openrouter/anthropic/claude-opus-4.6": _row(supports_max_reasoning_effort=False),
+        }
+    )
+    assert effort_levels.levels_for("openrouter/anthropic/claude-opus-4.6") == ("minimal", "low", "medium", "high")
+
+
+@pytest.mark.parametrize("own", [None, [], ["low"]])
+def test_a_route_inherits_a_list_only_when_it_states_none(table, own):
+    table(
+        {
+            "claude-opus-4-6": _row(litellm_provider="anthropic", reasoning_effort_levels=["high", "max"]),
+            "openrouter/anthropic/claude-opus-4.6": _row(reasoning_effort_levels=own),
+        }
+    )
+    expected = ("high", "max") if own is None else tuple(own)
+    assert effort_levels.levels_for("openrouter/anthropic/claude-opus-4.6") == expected
+
+
+def test_an_explicit_list_does_not_enable_a_non_reasoning_model(table):
+    table({"gpt-5": _row(supports_reasoning=False, reasoning_effort_levels=["high"])})
+    assert effort_levels.levels_for("openai/gpt-5") == ()
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [("moonshot/kimi-k3", ("low", "high", "max")), ("mistral/mistral-medium-3", ("high",))],
+)
+def test_the_installed_table_declares_non_default_ladders(model, expected):
+    effort_levels.reset()
+    assert effort_levels.levels_for(model) == expected
+
+
 def test_a_route_that_declares_no_reasoning_has_no_levels(table):
     table({"openrouter/anthropic/claude-opus-4-5": {"supports_reasoning": False}})
     assert effort_levels.levels_for("openrouter/anthropic/claude-opus-4-5") == ()

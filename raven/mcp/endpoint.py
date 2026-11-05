@@ -226,9 +226,13 @@ async def _upstream_executor(up: _Upstream) -> Any:
 
 
 async def _relay(up: _Upstream, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-    from mcp.shared.message import SessionMessage
+    from mcp.shared.inbound import MCP_PROTOCOL_VERSION_HEADER
+    from mcp.shared.message import ClientMessageMetadata, SessionMessage
+    from mcp.types import JSONRPCRequest, JSONRPCResponse
 
     policy = _DenyPolicy(up.server, up.disabled_tools)
+    initialize_id: str | int | None = None
+    protocol_version: str | None = None
     # One writer, two producers: ``up_to_down`` forwards results and
     # ``down_to_up`` answers a refused call itself. Concurrent ``drain`` on one
     # StreamWriter trips an assertion in the flow-control mixin.
@@ -244,6 +248,7 @@ async def _relay(up: _Upstream, reader: asyncio.StreamReader, writer: asyncio.St
         async with open_mcp_transport(up.cfg, up.transport, executor, http_auth=up.http_auth) as (up_read, up_write):
 
             async def down_to_up() -> None:
+                nonlocal initialize_id, protocol_version
                 async for frame in iter_raw_frames(reader):
                     try:
                         message = _jsonrpc_adapter().validate_json(frame)
@@ -256,9 +261,18 @@ async def _relay(up: _Upstream, reader: asyncio.StreamReader, writer: asyncio.St
                     if (refusal := policy.refuse(message)) is not None:
                         await send_down(refusal)
                         continue
-                    await up_write.send(SessionMessage(message))
+                    if isinstance(message, JSONRPCRequest) and message.method == "initialize":
+                        initialize_id = message.id
+                        protocol_version = None
+                    metadata = (
+                        ClientMessageMetadata(headers={MCP_PROTOCOL_VERSION_HEADER: protocol_version})
+                        if protocol_version is not None
+                        else None
+                    )
+                    await up_write.send(SessionMessage(message, metadata=metadata))
 
             async def up_to_down() -> None:
+                nonlocal initialize_id, protocol_version
                 # The close belongs here rather than after teardown: an upstream
                 # that dies mid-request leaves the sub-agent waiting on a reply
                 # that will never come, and only an EOF on its side turns that
@@ -268,6 +282,12 @@ async def _relay(up: _Upstream, reader: asyncio.StreamReader, writer: asyncio.St
                         if isinstance(item, Exception):
                             logger.debug("mcp endpoint: upstream stream error: {}", item)
                             continue
+                        message = item.message
+                        if isinstance(message, JSONRPCResponse) and message.id == initialize_id:
+                            version = message.result.get("protocolVersion")
+                            if isinstance(version, str) and version:
+                                protocol_version = version
+                            initialize_id = None
                         policy.redact(item.message)
                         payload = item.message.model_dump_json(by_alias=True, exclude_none=True)
                         await send_down(payload.encode() + b"\n")
