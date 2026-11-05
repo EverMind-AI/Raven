@@ -61,7 +61,6 @@
 import { useSyncExternalStore } from 'react'
 
 import { MoveOnBar } from '../features/tasks/MoveOnBar'
-import { TaskRuns } from '../features/tasks/TasksPage'
 import { t } from '../i18n/t'
 import * as lang from '../state/lang'
 import { At } from './AtMenu'
@@ -144,13 +143,6 @@ export function Dock(): JSX.Element {
            each is its own floating glass card over the transcript, not a
            strip embedded in the box the user types in. */}
       <div className="sheets" id="sheetRack" />
-      {/* What is running while you type. Above the card and outside it: not
-          part of the reader's draft, but the work already under way -- said as
-          one count rather than a list, because the desk's tasks tab is the
-          list and this chip is the door to it. A component rather than the
-          mount point page.html carried, because the strip renders nothing at
-          all while nothing is running. */}
-      <TaskRuns />
       <DockIn />
     </div>
   )

@@ -16,6 +16,7 @@ import { onFrameBytes, onFrameJson, browserSource } from '../features/browser/so
 import { open as approveSheet } from '../features/composer/approve'
 import { closeCredential, openCredential } from '../features/composer/credential'
 import { answerInChat, askInChat, focusChat, startTaskWith } from '../features/composer/startTaskWith'
+import { setSubagentRuns } from '../features/composer/store'
 import { connSource } from '../features/connections/source'
 import { cronSource } from '../features/cron/source'
 import { openDeskTask } from '../features/desk/store'
@@ -44,7 +45,8 @@ import { tasksSource } from '../features/tasks/source'
 import {
   byKey as taskByKey, lendAnswer as lendTaskAnswer, lendFocus as lendTaskFocus, moveOnPending, onBoardUpdated,
   onNodeUpdated, onRunCompleted, onRunReplanned, onRunStarted, onSubagentStatus, refresh as refreshTasks,
-  refreshBoard as refreshTaskBoard, reset as resetTasks, takeMoveOn,
+  refreshBoard as refreshTaskBoard, reset as resetTasks, running as runningTasks,
+  subscribe as subscribeTasks, takeMoveOn,
 } from '../features/tasks/store'
 import * as trajectoryDetails from '../features/trajectory/detailStore'
 import * as trajectoryPoll from '../features/trajectory/poll'
@@ -362,6 +364,14 @@ export function installPushes(): void {
      ask it makes for itself finds no source and is not the one that lands. */
   void refreshTasks()
   void refreshTaskBoard()
+  /* The composer's waiting row needs the tasks store's live count, and a
+     sibling domain is reached through this wiring rather than by an import
+     edge. The subscription also covers a session reset, which empties the
+     rows before the new conversation's read lands -- so the previous
+     conversation's work never keeps the row alive. */
+  const paintSubagentRuns = (): void => { setSubagentRuns(runningTasks().length) }
+  paintSubagentRuns()
+  subscribeTasks(paintSubagentRuns)
   /* The rail's task board badge asks on that first frame too, and finds no
      source the same way; left to its own minute-long poll, the count would not
      show for a minute after every load. */

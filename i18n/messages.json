@@ -2865,6 +2865,10 @@
       "en": "Working · {t}",
       "zh": "输出中 · {t}"
     },
+    "gui.live.waiting_subagents": {
+      "en": "waiting for subagents",
+      "zh": "等待子代理返回"
+    },
     "gui.mem.down": {
       "zh": "长期记忆当前写不进去，这段时间的对话不会被记住。",
       "en": "Long-term memory is not being written; nothing from here on will be remembered."
@@ -9346,10 +9350,6 @@
     "gui.tasks.step_carried": {
       "en": "{n} carried on",
       "zh": "{n} 步转入后续运行"
-    },
-    "gui.tasks.running_n": {
-      "en": "{n} running",
-      "zh": "{n} 个任务在跑"
     },
     "gui.tasks.st_completed": {
       "en": "Completed",
