@@ -1704,6 +1704,20 @@ async def test_the_entry_lists_the_agents_mirasim_has_installed(
     assert "listed no agents" in capsys.readouterr().err
 
 
+async def test_the_entry_finds_a_host_on_whatever_port_its_token_file_names(
+    host: FakeHost, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`mirasim serve` is on neither the desktop app's port nor the remote host's socket."""
+    assert host.address is not None
+    monkeypatch.delenv(host_mod.HOST_ENV, raising=False)
+    monkeypatch.setenv("MIRASIM_HOME", str(tmp_path))
+    monkeypatch.setattr(host_mod, "remote_socket", lambda: tmp_path / "absent.sock")
+    (tmp_path / "run").mkdir()
+    (tmp_path / "run" / f"local-{host.address.port}.token").write_text("local\n", encoding="utf-8")
+    assert await server_mod._print_installed() == 0
+    assert json.loads(capsys.readouterr().out) == ["claude", "codex", "qwen"]
+
+
 # -- the menus when the host cannot say -----------------------------------------
 
 

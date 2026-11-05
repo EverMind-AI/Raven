@@ -53,6 +53,15 @@ def write_token(home: Path, port: int, token: str) -> None:
     (home / "run" / f"local-{port}.token").write_text(f"{token}\n", encoding="utf-8")
 
 
+def dead_port() -> int:
+    """A loopback port nothing listens on: bound, then let go."""
+    import socket as socket_mod
+
+    with socket_mod.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
 # -- where the host is ----------------------------------------------------------
 
 
@@ -118,6 +127,68 @@ def test_without_a_socket_the_desktop_port_is_found_by_its_token_file(
     assert locate_host(env) == HostAddress(port=DESKTOP_PORT, token="desk")
 
 
+def test_every_port_a_token_file_names_is_a_place_to_try_the_desktop_app_and_mirasim_serve_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A host writes `run/local-<port>.token` for the port it bound, and `mirasim serve` binds the next one
+    when 4939 is taken; a killed host leaves its file behind. So each file is a place to try, not a host."""
+    monkeypatch.setattr(host_mod, "remote_socket", lambda: tmp_path / "absent.sock")
+    env = {"MIRASIM_HOME": str(tmp_path)}
+    assert host_mod.locate_hosts(env) == []
+    for port, token in (
+        (36925, "old"),
+        (4939, "serve"),
+        (4940, "moved"),
+        (DESKTOP_PORT, "desk"),
+        (3000, "dev"),
+        (4100, " "),
+    ):
+        write_token(tmp_path, port, token)
+    for other in ("local-x.token", "local-0.token", "local-70000.token", "space-api.env"):
+        (tmp_path / "run" / other).write_text("x\n", encoding="utf-8")
+    assert host_mod.SERVE_PORT == 4939
+    assert host_mod.token_ports(env) == [DESKTOP_PORT, 4939, 3000, 4940, 36925]
+    assert host_mod.locate_hosts(env) == [
+        HostAddress(port=DESKTOP_PORT, token="desk"),
+        HostAddress(port=4939, token="serve"),
+        HostAddress(port=3000, token="dev"),
+        HostAddress(port=4940, token="moved"),
+        HostAddress(port=36925, token="old"),
+    ]
+    assert locate_host(env) == HostAddress(port=DESKTOP_PORT, token="desk")
+    (tmp_path / "run" / f"local-{DESKTOP_PORT}.token").unlink()
+    assert locate_host(env) == HostAddress(port=4939, token="serve")
+
+
+def test_a_place_a_token_file_names_is_marked_as_found_and_a_named_one_is_not(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(host_mod, "remote_socket", lambda: tmp_path / "absent.sock")
+    write_token(tmp_path, 4939, "serve")
+    env = {"MIRASIM_HOME": str(tmp_path)}
+    assert [(place.port, place.discovered) for place in host_mod.locate_hosts(env)] == [(4939, True)]
+    assert parse_address("4939", env).discovered is False
+
+
+@posix_only
+def test_a_named_host_or_the_remote_hosts_socket_is_the_only_place_to_try(
+    tmp_path: Path, socket_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import socket as socket_mod
+
+    env = {"MIRASIM_HOME": str(tmp_path)}
+    write_token(tmp_path, 4939, "serve")
+    assert host_mod.locate_hosts({**env, HOST_ENV: "5001"}) == [HostAddress(port=5001)]
+    path = socket_dir / "server.sock"
+    listener = socket_mod.socket(socket_mod.AF_UNIX)
+    listener.bind(str(path))
+    try:
+        monkeypatch.setattr(host_mod, "remote_socket", lambda: path)
+        assert host_mod.locate_hosts(env) == [HostAddress(socket=str(path))]
+    finally:
+        listener.close()
+
+
 def test_the_state_directory_and_token_follow_mirasim_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
@@ -156,14 +227,11 @@ async def test_a_request_is_answered_by_the_frame_its_predicate_takes(fake: Fake
 
 
 async def test_an_address_nothing_listens_on_is_unavailable_and_says_where() -> None:
-    import socket as socket_mod
-
-    with socket_mod.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
+    port = dead_port()
     conn = HostConnection(on_frame=lambda f: None, locate=lambda: HostAddress(port=port, token="t"))
-    with pytest.raises(HostUnavailableError, match=f"cannot reach the Mirasim host at 127.0.0.1:{port}"):
+    with pytest.raises(HostUnavailableError) as raised:
         await conn.connect()
+    assert str(raised.value) == f"cannot reach the Mirasim host at 127.0.0.1:{port}: nothing listens there"
     assert not conn.connected
 
 
@@ -227,6 +295,21 @@ async def test_a_socket_its_host_left_behind_is_unavailable(socket_dir: Path) ->
     conn = HostConnection(on_frame=lambda f: None, locate=lambda: HostAddress(socket=str(path)))
     with pytest.raises(HostUnavailableError, match=f"cannot reach the Mirasim host at unix socket {path}"):
         await conn.connect()
+
+
+@posix_only
+@pytest.mark.parametrize("left", ["socket file", "nothing"])
+async def test_a_socket_nothing_listens_on_says_so(socket_dir: Path, left: str) -> None:
+    import socket as socket_mod
+
+    path = socket_dir / "server.sock"
+    if left == "socket file":
+        with socket_mod.socket(socket_mod.AF_UNIX) as gone:
+            gone.bind(str(path))
+    conn = HostConnection(on_frame=lambda f: None, locate=lambda: HostAddress(socket=str(path)))
+    with pytest.raises(HostUnavailableError) as raised:
+        await conn.connect()
+    assert str(raised.value) == f"cannot reach the Mirasim host at unix socket {path}: nothing listens there"
 
 
 @pytest.mark.parametrize("token_in", ["query", "header"])
@@ -326,8 +409,189 @@ async def test_a_wrong_token_or_no_host_is_unavailable(fake: FakeHost, tmp_path:
         await malformed.connect()
 
 
+async def test_the_first_place_that_answers_is_the_host_connected_to(
+    fake: FakeHost, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A desktop app that was killed leaves its token file, which no longer hides a host running elsewhere."""
+    assert fake.address is not None and fake.address.port is not None
+    monkeypatch.setattr(host_mod, "remote_socket", lambda: tmp_path / "absent.sock")
+    monkeypatch.setattr(host_mod, "DESKTOP_PORT", dead_port())
+    env = {"MIRASIM_HOME": str(tmp_path)}
+    write_token(tmp_path, host_mod.DESKTOP_PORT, "stale")
+    write_token(tmp_path, fake.address.port, "local-secret")
+    assert host_mod.token_ports(env)[0] == host_mod.DESKTOP_PORT
+    conn = HostConnection(on_frame=lambda f: None, locate=lambda: host_mod.locate_hosts(env))
+    try:
+        await conn.connect()
+        assert conn.connected and conn.address == fake.address and conn.version == "0.0.537"
+    finally:
+        await conn.close()
+
+
+async def test_a_connection_told_nowhere_tries_every_place_its_environment_names(
+    fake: FakeHost, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert fake.address is not None and fake.address.port is not None
+    monkeypatch.delenv(HOST_ENV, raising=False)
+    monkeypatch.setenv("MIRASIM_HOME", str(tmp_path))
+    monkeypatch.setattr(host_mod, "remote_socket", lambda: tmp_path / "absent.sock")
+    monkeypatch.setattr(host_mod, "DESKTOP_PORT", dead_port())
+    write_token(tmp_path, host_mod.DESKTOP_PORT, "stale")
+    write_token(tmp_path, fake.address.port, "local-secret")
+    conn = HostConnection(on_frame=lambda f: None)
+    try:
+        await conn.connect()
+        assert conn.address == fake.address
+    finally:
+        await conn.close()
+
+
+async def test_a_host_that_comes_back_on_another_port_is_found_there(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every connect looks again, so the reconnect after a restart follows the token file to the new port."""
+    monkeypatch.setattr(host_mod, "remote_socket", lambda: tmp_path / "absent.sock")
+    env = {"MIRASIM_HOME": str(tmp_path)}
+    before, after = FakeHost(token="one"), FakeHost(token="two")
+    first = await before.start()
+    assert first.port is not None
+    write_token(tmp_path, first.port, "one")
+    conn = HostConnection(on_frame=lambda f: None, locate=lambda: host_mod.locate_hosts(env), wanted=lambda: True)
+    try:
+        await conn.connect()
+        assert conn.address == first
+        second = await after.start()
+        assert second.port is not None
+        (tmp_path / "run" / f"local-{first.port}.token").unlink()
+        write_token(tmp_path, second.port, "two")
+        await before.stop()
+        await after.wait_for(lambda: conn.connected and after.clients)
+        assert conn.address == second
+    finally:
+        await conn.close()
+        await after.stop()
+
+
+async def test_a_place_a_token_file_names_is_used_once_its_health_names_mirasim(fake: FakeHost) -> None:
+    assert fake.address is not None
+    found = HostAddress(port=fake.address.port, token=fake.address.token, discovered=True)
+    conn = HostConnection(on_frame=lambda f: None, locate=lambda: found)
+    try:
+        await conn.connect()
+        assert conn.connected
+    finally:
+        await conn.close()
+
+
+@pytest.mark.parametrize("answer", ["not-there", "not-json", "no-name", "unavailable"])
+async def test_a_place_a_token_file_names_is_left_alone_unless_its_health_names_mirasim(answer: str) -> None:
+    """A killed host's port may be any program's by now; only a host that says it is one gets the token."""
+    from aiohttp import web
+
+    seen: list[str] = []
+
+    async def health(request: web.Request) -> web.Response:
+        seen.append(request.path_qs)
+        if answer == "not-there":
+            return web.Response(status=404)
+        if answer == "unavailable":
+            return web.Response(status=503)
+        if answer == "not-json":
+            return web.Response(text="not json at all")
+        return web.json_response({"ok": True})
+
+    async def anything_else(request: web.Request) -> web.Response:
+        seen.append(request.path_qs)
+        return web.Response(status=404)
+
+    app = web.Application()
+    app.router.add_get("/api/health", health)
+    app.router.add_route("*", "/{rest:.*}", anything_else)
+    runner = web.AppRunner(app, shutdown_timeout=0.1)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+    found = HostAddress(port=port, token="s3cret-stale-token", discovered=True)
+    try:
+        conn = HostConnection(on_frame=lambda f: None, locate=lambda: found)
+        with pytest.raises(HostUnavailableError) as raised:
+            await conn.connect()
+        assert str(raised.value) == (
+            f"cannot reach the Mirasim host at 127.0.0.1:{port}: it did not identify itself as a Mirasim host"
+        )
+        assert seen == ["/api/health"]
+        assert not conn.connected
+    finally:
+        await runner.cleanup()
+
+
+async def test_a_place_whose_health_names_another_service_is_not_a_mirasim_host_and_never_sees_the_token(
+    fake: FakeHost,
+) -> None:
+    """A killed host's port may since be any service's. `/api/health` needs no token, so the probe sends none."""
+    from aiohttp import web
+
+    seen: list[str] = []
+
+    async def health(request: web.Request) -> web.Response:
+        seen.append(f"{request.path_qs} {sorted(request.headers.items())}")
+        return web.json_response({"ok": True, "name": "grafana", "version": "11.2.0"})
+
+    async def anything_else(request: web.Request) -> web.Response:
+        seen.append(f"{request.path_qs} {sorted(request.headers.items())}")
+        return web.Response(status=404)
+
+    app = web.Application()
+    app.router.add_get("/api/health", health)
+    app.router.add_route("*", "/{rest:.*}", anything_else)
+    runner = web.AppRunner(app, shutdown_timeout=0.1)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+    other = HostAddress(port=port, token="s3cret-stale-token", discovered=True)
+    try:
+        alone = HostConnection(on_frame=lambda f: None, locate=lambda: other)
+        with pytest.raises(HostUnavailableError) as raised:
+            await alone.connect()
+        assert str(raised.value) == (
+            f"cannot reach the Mirasim host at 127.0.0.1:{port}: it is not a Mirasim host: "
+            "its /api/health names 'grafana'"
+        )
+        conn = HostConnection(on_frame=lambda f: None, locate=lambda: [other, fake.address])
+        try:
+            await conn.connect()
+            assert conn.address == fake.address
+        finally:
+            await conn.close()
+        assert len(seen) == 2 and not any("s3cret" in request for request in seen)
+    finally:
+        await runner.cleanup()
+
+
+async def test_when_no_place_answers_each_is_named_with_why_and_never_with_its_token(fake: FakeHost) -> None:
+    assert fake.address is not None
+    gone = HostAddress(port=dead_port(), token="s3cret-one")
+    refused = HostAddress(port=fake.address.port, token="s3cret-two")
+    conn = HostConnection(on_frame=lambda f: None, locate=lambda: [gone, refused])
+    with pytest.raises(HostUnavailableError) as raised:
+        await conn.connect()
+    said = str(raised.value)
+    assert said.startswith("cannot reach a Mirasim host at any of the 2 places it may listen: ")
+    assert f"127.0.0.1:{gone.port} (nothing listens there); 127.0.0.1:{refused.port} (it turned this connection" in said
+    assert said.endswith(f"or name where the host listens in {HOST_ENV}")
+    assert raised.value.__cause__ is None and raised.value.__context__ is None
+    chain = "".join(traceback.format_exception(raised.value))
+    assert "s3cret" not in chain and "token=" not in chain and "/ws" not in chain
+    assert not conn.connected
+
+
 @pytest.mark.parametrize("health", [False, "not json"])
-async def test_a_host_that_cannot_say_its_version_is_still_one_to_talk_to(fake: FakeHost, health: bool | str) -> None:
+async def test_an_explicitly_selected_host_that_cannot_say_its_version_is_still_one_to_talk_to(
+    fake: FakeHost, health: bool | str
+) -> None:
+    """Compatibility: a host selected outright is tried as before, its health notwithstanding."""
     fake.health = health
     conn = HostConnection(on_frame=lambda f: None, locate=lambda: fake.address)
     try:
