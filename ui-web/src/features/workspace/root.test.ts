@@ -16,6 +16,15 @@ describe('the session root', () => {
     expect(relToWsRoot('/repo/src/a.ts')).toBe('src/a.ts')
     expect(relToWsRoot('/repository/src/a.ts')).toBe(null)
   })
+
+  /* A session can be rooted at the filesystem root -- an engine started by the
+     desktop shell inherits it -- and a lone slash is a root, not an unknown
+     one. */
+  it('keeps a root that is only a slash', () => {
+    wsSetRoot('/')
+    expect(relToWsRoot('/out/a.md')).toBe('out/a.md')
+    expect(relToWsRoot('/outside/a.md')).toBe('outside/a.md')
+  })
 })
 
 describe('the path a delivery lookup compares on', () => {
@@ -28,6 +37,11 @@ describe('the path a delivery lookup compares on', () => {
   it('resolves a relative path against the session root', () => {
     wsSetRoot('/repo')
     expect(absPath('out/a.md')).toBe('/repo/out/a.md')
+  })
+
+  it('resolves a relative path against a root that is only a slash', () => {
+    wsSetRoot('/')
+    expect(absPath('out/a.md')).toBe('/out/a.md')
   })
 
   /* Nothing to resolve against: the root is learned from the session's own

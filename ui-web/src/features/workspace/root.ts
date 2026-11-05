@@ -24,14 +24,18 @@ let wsRoot = ''
    Still one value for the page rather than one per conversation: the runtime
    that owns a conversation's state is stage B5's. */
 export const wsSetRoot = (cwd: unknown): void => {
-  wsRoot = typeof cwd === 'string' ? cwd.replace(/\/+$/, '') : ''
+  /* A lone slash is the root, not an unknown one: stripping it left the page
+     unable to resolve a relative path under a session rooted at "/". */
+  wsRoot = typeof cwd === 'string' ? (cwd === '/' ? '/' : cwd.replace(/\/+$/, '')) : ''
 }
 
 /* The path the panel shows relative to that root, or null when the path is
    not under it at all. */
 export const relToWsRoot = (p: string | null | undefined): string | null => {
   const s = String(p || '')
-  return wsRoot && s.startsWith(wsRoot + '/') ? s.slice(wsRoot.length + 1) : null
+  if (!wsRoot) return null
+  const prefix = wsRoot === '/' ? '/' : wsRoot + '/'
+  return s.startsWith(prefix) ? s.slice(prefix.length) : null
 }
 
 /* The path a delivery lookup compares against. The registry keys what the
