@@ -38,6 +38,19 @@ export const relToWsRoot = (p: string | null | undefined): string | null => {
   return wsRoot && s.startsWith(wsRoot + '/') ? s.slice(wsRoot.length + 1) : null
 }
 
+/* The path a delivery lookup compares against. The registry keys what the
+   gateway resolved -- an absolute path -- while the panel opens a file by the
+   path the model typed, usually relative to the session's working directory
+   (record.ts's `sameFile` reconciles the same two spellings for change rows).
+   Resolving the relative side here lets deliveries.byPath find the row without
+   falling back to a bare file name, which could hand back another file's
+   download token. */
+export const absPath = (p: string): string => {
+  const s = String(p || '').replace(/\\/g, '/')
+  if (!s || s.startsWith('/') || /^[A-Za-z]:\//.test(s) || s.startsWith('~')) return s
+  return wsRoot ? `${wsRoot.replace(/\\/g, '/').replace(/\/+$/, '')}/${s}` : s
+}
+
 /* What the workspace panel shows as a short path, and what its own tests
    shorten with. Handed in by the boot's own wiring (app/install.ts), which
    reads it off the installed source. */

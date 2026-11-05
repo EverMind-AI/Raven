@@ -2413,15 +2413,47 @@ describe("the turn's delivered files", () => {
     /* A page opens in a browser tab and in the panel; a document the panel
        reads opens there; a binary is fetched. */
     expect(acts).toEqual([
-      ['en:gui.arts.browser', 'en:gui.arts.open {"f":"page.html"}'],
-      ['en:gui.arts.open {"f":"notes.md"}'],
+      ['en:gui.arts.browser', 'en:gui.arts.download', 'en:gui.arts.open {"f":"page.html"}'],
+      ['en:gui.arts.download', 'en:gui.arts.open {"f":"notes.md"}'],
       ['en:gui.arts.download'],
     ])
     const [page, , deck] = $$('.atile')
     expect(page!.querySelector('a.transcript-act')?.getAttribute('target')).toBe('_blank')
     expect(deck!.querySelector('a.transcript-act')?.getAttribute('download')).toBe('cv.pptx')
+    expect($$('.atile')[1]!.querySelector('a.transcript-act')?.getAttribute('href')).toBe('/files/download?token=notes.md')
     act(() => { ($$('.atile')[1]!.querySelector('button.transcript-act') as HTMLElement).click() })
     expect(opened).toEqual(['/w/notes.md'])
+  })
+
+  /* The token link is the only attachment the page can hand over. A manifest
+     written before the field -- or the offline canvas's -- carries none, and
+     an anchor with an empty href would save the page itself under the file's
+     name instead of the file. */
+  it('offers no download when the delivery carries no link', async () => {
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'make them', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: {
+          raven_delivery: {
+            files: [
+              { path: '/w/notes.md', name: 'notes.md', title: 'notes.md', size: 12000, media_type: 'text/markdown' },
+              { path: '/w/cv.pptx', name: 'cv.pptx', title: 'cv.pptx', size: 12000,
+                media_type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' },
+            ],
+            invalid: [],
+          },
+        } },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    expect($$('.atile a[download]')).toHaveLength(0)
+    /* The document still opens in the panel; the binary has nothing to offer,
+       so it does not draw an empty control strip either. */
+    expect($$('.atile')[0]!.querySelectorAll('.transcript-act')).toHaveLength(1)
+    expect($$('.atile')[1]!.querySelectorAll('.transcript-act')).toHaveLength(0)
+    expect($$('.atile')[1]!.querySelector('.transcript-acts')).toBeNull()
   })
 
   it('shows a delivered deck by its first page, rendered by the gateway', async () => {
