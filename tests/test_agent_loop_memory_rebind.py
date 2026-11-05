@@ -70,7 +70,7 @@ def _loop(*, builders: list, router: SkillForgeRouter | None) -> AgentLoop:
     loop._turns_idle = asyncio.Event()
     loop._turns_idle.set()
     loop._memory_rebind_lock = asyncio.Lock()
-    loop._backend_stop_tasks = set()
+    loop._backend_stop_tasks = {}
     loop._store_pipeline = StorePipeline(
         lambda: loop.backend,
         on_ok=lambda: None,
@@ -103,6 +103,7 @@ async def test_rebind_replaces_the_live_references_and_lifecycle(tmp_path) -> No
         agent_id="a2",
         memory_top_k=7,
     )
+    await loop.retire_pending_backends()
 
     assert loop.backend is new
     assert new.starts == 1 and old.stops == 1
@@ -163,6 +164,7 @@ async def test_rebind_into_memory_off_drops_the_backend_source() -> None:
         agent_id="a1",
         memory_top_k=5,
     )
+    await loop.retire_pending_backends()
 
     assert loop.backend is None
     assert memory._backend is None
@@ -199,6 +201,7 @@ async def test_rebind_waits_for_the_turn_in_flight() -> None:
 
     loop._exit_turn()
     await switch
+    await loop.retire_pending_backends()
 
     assert loop.backend is new
     assert memory._backend is new
@@ -262,6 +265,7 @@ async def test_a_failing_stop_does_not_fail_the_switch() -> None:
         agent_id="a",
         memory_top_k=5,
     )
+    await loop.retire_pending_backends()
 
     assert loop.backend is new
     assert old.stops == 1
@@ -383,7 +387,162 @@ async def test_overlapping_switches_retire_each_other_in_order() -> None:
             memory_top_k=5,
         ),
     )
+    await loop.retire_pending_backends()
 
     assert loop.backend is new
     assert (mid.starts, new.starts) == (1, 1)
     assert (old.stops, mid.stops, new.stops) == (1, 1, 0)
+
+
+async def _noop(*_args, **_kwargs) -> None:
+    pass
+
+
+def _dispose_collaborators(loop: AgentLoop) -> None:
+    """The loop parts ``RavenRuntime.dispose`` reaches, on a bare test loop."""
+    loop.context.skills = SimpleNamespace(stop_file_watcher=lambda: None)
+    loop.subagents = SimpleNamespace(cancel_all=_noop)
+    loop.stop_plugin_services = _noop
+    loop.close_mcp = _noop
+    loop.stop = lambda: None
+
+    async def _drain() -> None:
+        await loop._store_pipeline.drain(0.1)
+
+    loop.drain_backend_stores = _drain
+
+
+@pytest.mark.asyncio
+async def test_dispose_stops_the_backend_the_loop_serves_now() -> None:
+    from raven.core.runtime import RavenRuntime
+
+    old, new = _Backend(), _Backend()
+    loop = _loop(builders=[MemorySegmentBuilder(None, old)], router=None)
+    loop.backend = old
+    _dispose_collaborators(loop)
+    rt = RavenRuntime(loop=loop, plugin_registry=None, strategies=None, deliverables=None)
+
+    await loop.rebind_memory_backend(
+        new,
+        name="everos-cloud",
+        user_id="u",
+        agent_id="a",
+        memory_top_k=5,
+    )
+    await loop.retire_pending_backends()
+    assert rt.backend is new
+
+    await rt.dispose()
+
+    assert old.stops == 1
+    assert new.stops == 1, "disposal must stop the backend the switch installed"
+
+
+@pytest.mark.asyncio
+async def test_dispose_drains_a_write_queued_after_memory_was_switched_on() -> None:
+    """The reviewer's memory-off case: boot had no backend, the switch
+    installed one, and the write it queued must drain at disposal."""
+    from raven.core.runtime import RavenRuntime
+
+    new = _StoreBackend()
+    loop = _loop(builders=[MemorySegmentBuilder(None, None)], router=None)
+    _dispose_collaborators(loop)
+    rt = RavenRuntime(loop=loop, plugin_registry=None, strategies=None, deliverables=None)
+
+    await loop.rebind_memory_backend(
+        new,
+        name="everos-cloud",
+        user_id="u",
+        agent_id="a",
+        memory_top_k=5,
+    )
+    new.gate.set()
+    loop._store_pipeline.enqueue("s1", [{"role": "user", "content": "hi"}])
+    await asyncio.sleep(0)
+    assert rt.backend is new
+
+    await rt.dispose()
+
+    assert new.written == [("s1", "hi")], "disposal must drain the backend the switch installed"
+    assert new.stops == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_switch_stops_the_backend_it_started() -> None:
+    old, new = _Backend(), _Backend()
+    loop = _loop(builders=[MemorySegmentBuilder(None, old)], router=None)
+    loop.backend = old
+    loop._enter_turn()
+    task = asyncio.create_task(
+        loop.rebind_memory_backend(
+            new,
+            name="everos-cloud",
+            user_id="u",
+            agent_id="a",
+            memory_top_k=5,
+        ),
+    )
+    await asyncio.sleep(0)
+    assert new.starts == 1 and loop.backend is old
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert loop.backend is old
+    assert new.stops == 1, "the started backend was never installed; nothing else owns it"
+    loop._exit_turn()
+
+
+@pytest.mark.asyncio
+async def test_teardown_force_stops_a_backend_whose_write_is_stuck() -> None:
+    old, new = _StoreBackend(), _Backend()
+    loop = _loop(builders=[MemorySegmentBuilder(None, old)], router=None)
+    loop.backend = old
+    loop._store_pipeline.enqueue("s1", [{"role": "user", "content": "stuck"}])
+    await asyncio.sleep(0)
+
+    await loop.rebind_memory_backend(
+        new,
+        name="everos-cloud",
+        user_id="u",
+        agent_id="a",
+        memory_top_k=5,
+    )
+    await loop.retire_pending_backends(timeout=0.05)
+
+    assert old.stops == 1
+    # Let the cut write return and the worker leave; nothing may outlive the test.
+    old.gate.set()
+    await loop._store_pipeline.drain(0.2)
+
+
+@pytest.mark.asyncio
+async def test_retiring_a_backend_cancels_its_pending_start_first(monkeypatch) -> None:
+    from raven.core import plugin_stack
+
+    order: list[str] = []
+
+    async def _cancel(_backend) -> None:
+        order.append("cancel_pending")
+
+    class _Ordered(_Backend):
+        async def stop(self) -> None:
+            order.append("stop")
+            await super().stop()
+
+    monkeypatch.setattr(plugin_stack, "cancel_pending_backend_starts", _cancel)
+    old, new = _Ordered(), _Backend()
+    loop = _loop(builders=[MemorySegmentBuilder(None, old)], router=None)
+    loop.backend = old
+
+    await loop.rebind_memory_backend(
+        new,
+        name="everos-cloud",
+        user_id="u",
+        agent_id="a",
+        memory_top_k=5,
+    )
+    await loop.retire_pending_backends()
+
+    assert order == ["cancel_pending", "stop"]

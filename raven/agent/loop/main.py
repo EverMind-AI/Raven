@@ -689,9 +689,10 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # One switch at a time; the section guards its own click, but two
         # clients can still call memory.applyRuntime concurrently.
         self._memory_rebind_lock = asyncio.Lock()
-        # Replaced backends whose queued writes outlived the inline wait; each
-        # is stopped by its own task once they drain.
-        self._backend_stop_tasks: set[asyncio.Task] = set()
+        # Replaced backends, keyed by the task that drains and stops each. The
+        # generation's teardown waits on these (or force-stops their backend);
+        # the value is the backend because a cancelled task never stops it.
+        self._backend_stop_tasks: dict[asyncio.Task, "MemoryBackend"] = {}
         # Fired after every dispatched turn (success, error, or cancel).
         # Used by the proactive-engine WakeScheduler to re-fire wakes that
         # were parked while the agent was busy. Callbacks must be cheap and
@@ -877,20 +878,30 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         backend's ``stop`` closes its HTTP client. Waiting here (the reference
         swap itself is one synchronous block, so a turn entering at that
         instant either counts first or reads the new backend) keeps a turn on
-        the backend it started with. A replaced backend is only stopped after
-        the store records it already owns have settled; a queue that outlives
-        the inline budget gets its own waiter, because stopping it early would
-        interrupt a write this switch did not own.
+        the backend it started with. A replaced backend is retired in its own
+        task only after the store records it already owns settle, because
+        stopping it early would interrupt a write this switch did not own;
+        the generation's teardown bounds that task. This is the memory
+        backend's generation door (see the ``RavenRuntime`` paper): the loop
+        owns the backend, and the runtime reads the current one through.
         """
         async with self._memory_rebind_lock:
             # Read under the lock: two overlapping switches that both captured
             # the pre-lock backend would stop it twice and retire neither
             # other's intermediate backend.
             old = self.backend
-            if backend is not None:
-                await backend.start()
-            while self._active_turns:
-                await self._turns_idle.wait()
+            try:
+                if backend is not None:
+                    await backend.start()
+                while self._active_turns:
+                    await self._turns_idle.wait()
+            except asyncio.CancelledError:
+                # The request went away before the swap -- a page reload is
+                # one way. The started backend was never installed, so
+                # nothing else owns its client.
+                if backend is not None and backend is not old:
+                    await self._stop_backend(backend)
+                raise
             self.backend = backend
             has = backend is not None
             self.context._has_memory_backend = has
@@ -936,28 +947,53 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                     source.weight = float(weights.get(name, type(source).weight))
                     router.add_source(source)
             if old is not None and old is not backend:
-                await self._retire_backend(old)
+                self._schedule_retire_backend(old)
+
+    def _schedule_retire_backend(self, backend: "MemoryBackend") -> None:
+        """Retire a replaced backend without holding the switch on its writes.
+
+        Called synchronously inside the swap block, so a cancellation after
+        the swap cannot strand the retirement: by the time the request may be
+        cancelled, the task that owns the stop exists.
+        """
+        task = asyncio.create_task(self._retire_backend(backend))
+        self._backend_stop_tasks[task] = backend
+        task.add_done_callback(lambda done: self._backend_stop_tasks.pop(done, None))
 
     async def _retire_backend(self, backend: "MemoryBackend") -> None:
         """Stop a replaced backend once the writes it already owns have settled.
 
-        The inline wait is short so a switch is not held by a failing write;
-        what outlives it is handed to a task, because stopping the backend
-        under a record it is still retrying fails a write the turn that
-        produced it believes is queued.
+        Runs in its own task, so a failing write cannot hold the switch open;
+        the settle is unbounded there and bounded only by the owner that
+        retires the generation (``retire_pending_backends``).
         """
-        from raven.agent.loop._shared import _STORE_DRAIN_BUDGET_S
+        from raven.core import plugin_stack
 
-        if await self._store_pipeline.settle_backend(backend, timeout=_STORE_DRAIN_BUDGET_S):
-            await self._stop_backend(backend)
-            return
-        task = asyncio.create_task(self._stop_backend_when_settled(backend))
-        self._backend_stop_tasks.add(task)
-        task.add_done_callback(self._backend_stop_tasks.discard)
-
-    async def _stop_backend_when_settled(self, backend: "MemoryBackend") -> None:
+        # The boot start is detached, so it may still be polling for
+        # readiness; stopping under it is the race ``dispose`` guards with the
+        # same call.
+        await plugin_stack.cancel_pending_backend_starts(backend)
         await self._store_pipeline.settle_backend(backend, timeout=None)
         await self._stop_backend(backend)
+
+    async def retire_pending_backends(self, timeout: float = 2.0) -> None:
+        """Settle every replaced backend's stop before the generation goes.
+
+        A task still waiting past ``timeout`` is waiting on a write this
+        teardown has already cut; stopping the backend anyway is the lesser
+        leak (its client would otherwise outlive the process/generation).
+        """
+        pending = {task: backend for task, backend in self._backend_stop_tasks.items() if not task.done()}
+        if not pending:
+            return
+        done, _ = await asyncio.wait(set(pending), timeout=timeout)
+        leftover = set(pending) - done
+        for task in leftover:
+            task.cancel()
+            await self._stop_backend(pending[task])
+        if leftover:
+            # No dangling retirement task survives the generation that owns it.
+            await asyncio.gather(*leftover, return_exceptions=True)
 
     async def _stop_backend(self, backend: "MemoryBackend") -> None:
         try:
