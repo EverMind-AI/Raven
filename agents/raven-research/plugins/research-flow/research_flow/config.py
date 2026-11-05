@@ -321,6 +321,24 @@ class DeadEndRetryConfig(_Base):
     reasons: tuple[str, ...] = ()
 
 
+class ModelEndpointConfig(_Base):
+    """A model the flow's own calls may name that the session's provider does not serve.
+
+    A ``model`` knob elsewhere in this config (``digest.model``, ``verify.model``, ...)
+    that equals an entry's ``model`` is sent to that entry's OpenAI-compatible
+    ``apiBase``; every other call stays on the session's provider. ``apiKeyEnv`` names
+    the environment variable holding the key, so the key never sits in a config file;
+    unset means a key-free endpoint. Unknown keys are refused: a misspelt ``apiKeyEnv``
+    would otherwise send the call without its key.
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
+
+    model: str = Field(min_length=1)
+    api_base: str = Field(min_length=1)
+    api_key_env: str | None = None
+
+
 # Two rejection classes, both denylists (an invented label passes). First the
 # base label of a superseded build: suffixed variants are legitimate - they name
 # a profile, not a semantics - so only the base is checked here.
@@ -555,6 +573,7 @@ class FlowConfig(_Base):
     iteration cap, so a spent budget never produces a silent turn.
     """
     dead_end_retry: DeadEndRetryConfig = Field(default_factory=DeadEndRetryConfig)
+    model_endpoints: list[ModelEndpointConfig] = Field(default_factory=list)
     context_window_tokens: int | None = None
     think_closing_tag_required: bool = True
     prompt_section_override: str | None = None
@@ -685,6 +704,9 @@ class FlowConfig(_Base):
         """
         if not overlay:
             return self
+        if "modelEndpoints" in overlay or "model_endpoints" in overlay:
+            # The endpoints wrap the provider once, at activation; a mode cannot move them.
+            raise ValueError("mode overlay names drFlow modelEndpoints, which only the base slice may set")
         _warn_retired(overlay)
         unknown = unknown_keys(overlay, type(self))
         if unknown:
@@ -707,6 +729,7 @@ __all__ = [
     "FinalShapeConfig",
     "FlowConfig",
     "ForceFinalizeConfig",
+    "ModelEndpointConfig",
     "PlainFirstConfig",
     "SearchConfig",
     "SearchSaturationConfig",

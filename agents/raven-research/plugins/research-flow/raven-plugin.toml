@@ -5,7 +5,7 @@
 # thinkClosingTagRequired, identityOverride, promptSectionOverride,
 # measuredGuidance, fetchMaxChars, search.*, digest.*, verify.*, budgetNote.*,
 # forceFinalize.*, spinBreaker.*, fetchFloor.*, fetchGate.*, sufficiency.*,
-# finalShape.*, conversation.*, askUser.*), minus the four the fork's LOOP
+# finalShape.*, conversation.*, askUser.*, modelEndpoints), minus the four the fork's LOOP
 # consumed and no seam here reaches (toolsAllowlist, minimalContext,
 # truncationWrapup, reactiveClamp - see config.py's _RETIRED_KEYS), plus the
 # plugin-only keys:

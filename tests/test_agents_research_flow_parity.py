@@ -273,6 +273,12 @@ PRODUCT_ONLY_FIELDS: dict[str, str] = {
         "the rerun). The fork ran the same selection as a second pass over persisted rows "
         "afterwards, where a product user could never reach it; in-run it needs a knob"
     ),
+    "model_endpoints": (
+        "models the flow's own calls (digest, verify, ...) may name that the session's "
+        "provider does not serve, each on its own OpenAI-compatible endpoint. The fork ran "
+        "every gate on the session's model; pinning a gate to a fixed model needs a second "
+        "endpoint, and the product path has no other way to reach one. Empty by default"
+    ),
     "evidence_floor": (
         "the per-mode evidence demand that makes max a different stop rule from high "
         "(gates/evidence_floor.py). Off in the base slice and in every fork mode, so the "

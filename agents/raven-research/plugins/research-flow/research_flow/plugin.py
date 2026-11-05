@@ -23,13 +23,14 @@ vendor, key and proxy keys above are not consulted).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import os
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from research_flow.config import FlowConfig
+from research_flow.config import FlowConfig, ModelEndpointConfig
 from research_flow.flow import ResearchFlowHook, SessionGear, ToolHandles, evidence_round_for, saturation_for
 from research_flow.prompts import _DIGEST_SOURCE_CAP_CHARS, _DIGEST_SYSTEM
 from research_flow.state import SessionStore
@@ -47,6 +48,7 @@ from research_flow.tools.web import (
 )
 
 if TYPE_CHECKING:
+    from raven.config.schema import ModelEndpoint
     from raven.contracts.llm_provider import LLMProvider
     from raven.plugins.context import PluginContext
 
@@ -90,8 +92,9 @@ def _make_digest_fn(
             model=use_model,
             temperature=0.1,
         )
-        # visible_answer, not a paired-tag regex: the digest model is the same served
-        # student, whose template prefills the opening tag, so its reply is
+        # visible_answer, not a paired-tag regex: unless ``digest.model`` names another
+        # endpoint, the digest model is the same served student, whose template
+        # prefills the opening tag, so its reply is
         # "reasoning</think>extraction" with no opener. A paired regex matches nothing
         # there and the whole chain of thought was being appended to the tool result and
         # persisted into the trajectory.
@@ -103,6 +106,45 @@ def _make_digest_fn(
     return digest
 
 
+def _resolve_endpoints(endpoints: Sequence[ModelEndpointConfig]) -> "list[ModelEndpoint]":
+    """``modelEndpoints`` with each key read from its env var, refusing one that is unset.
+
+    Refused rather than skipped: a skipped entry would send its model's calls to the
+    session's provider, and a reviewer or digest silently becoming another model is the
+    substitution this knob exists to rule out.
+    """
+    from raven.config.schema import ModelEndpoint
+
+    resolved = []
+    for ep in endpoints:
+        key = "EMPTY"
+        if ep.api_key_env:
+            key = os.environ.get(ep.api_key_env, "")
+            if not key:
+                raise ValueError(
+                    f"research-flow: modelEndpoints entry {ep.model!r} reads its key from "
+                    f"{ep.api_key_env}, which is not set"
+                )
+        resolved.append(ModelEndpoint(model=ep.model, api_base=ep.api_base, api_key=key))
+    return resolved
+
+
+def _routed(provider: "LLMProvider | None", endpoints: "list[ModelEndpoint]") -> "LLMProvider | None":
+    """The lent provider, with ``endpoints``' models dispatched to their own endpoints."""
+    if provider is None or not endpoints:
+        return provider
+    from raven.providers.per_model_provider import PerModelProvider
+
+    class _FlowRoutedProvider(PerModelProvider):
+        # PerModelProvider reports its first routed model as the default, which suits
+        # a router; here a call naming no model, and the ledger's reviewer column,
+        # must still mean the session's own model.
+        def get_default_model(self) -> str:
+            return self._fallback.get_default_model()
+
+    return _FlowRoutedProvider(endpoints, fallback=provider)
+
+
 class _Shared:
     """One activation's shared state: config, store, gear map, lazy instances."""
 
@@ -110,6 +152,9 @@ class _Shared:
         self._ctx = ctx
         raw = dict(ctx.config or {})
         self.cfg = FlowConfig.from_slice(raw)
+        self._endpoints = _resolve_endpoints(self.cfg.model_endpoints)
+        self._provider: LLMProvider | None = None
+        self._provider_built = False
         search_slice = raw.get("search") if isinstance(raw.get("search"), dict) else {}
         fetch_slice = raw.get("fetch") if isinstance(raw.get("fetch"), dict) else {}
         self.search_api_key = search_slice.get("apiKey")
@@ -144,7 +189,10 @@ class _Shared:
 
     @property
     def provider(self) -> "LLMProvider | None":
-        return self._ctx.services.provider
+        if not self._provider_built:
+            self._provider_built = True
+            self._provider = _routed(self._ctx.services.provider, self._endpoints)
+        return self._provider
 
     def installable(self) -> bool:
         """Whether this plugin may contribute anything at all.
