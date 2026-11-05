@@ -158,11 +158,22 @@ export function ofTurn(scope: string, turn: number): DeliveryRow[] {
    two spellings of one file can still differ in is separators (a Windows
    gateway sends backslashes), `.`/`..`, and the drive letter's case; compare
    on that, never on a bare file name, which could hand back another file's
-   download token. */
+   download token.
+
+   A UNC path keeps its two leading slashes. `//server/share/x` is a file on
+   the share and `/server/share/x` is a file under the local root, and a
+   spelling that lost the difference between them would answer for both. The
+   server and the share fold, because the redirector resolves those
+   case-insensitively; the path below the share does not, because a share can
+   hold a case-sensitive directory and two files in it are two files. */
 const canonPath = (p: string): string => {
   const s = String(p || '').replace(/\\/g, '/')
   const drive = /^([A-Za-z]):/.exec(s)
   const body = drive ? s.slice(drive[0].length) : s
+  /* A UNC path is two slashes and a server, and the drive above does not match
+     it: the leading slashes are the only thing that tells it apart from an
+     absolute path under the local root. */
+  const unc = !drive && body.startsWith('//')
   const out: string[] = []
   for (const seg of body.split('/')) {
     if (!seg || seg === '.') continue
@@ -172,6 +183,10 @@ const canonPath = (p: string): string => {
       continue
     }
     out.push(seg)
+  }
+  if (unc) {
+    const head = out.slice(0, 2).map((seg) => seg.toLowerCase())
+    return `//${[...head, ...out.slice(2)].join('/')}`
   }
   return `${drive ? drive[1]!.toLowerCase() + ':' : ''}${body.startsWith('/') ? '/' : ''}${out.join('/')}`
 }

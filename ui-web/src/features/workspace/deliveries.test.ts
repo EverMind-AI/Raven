@@ -54,6 +54,29 @@ describe('delivery registry', () => {
     expect(deliveries.byPath('\\\\server\\share\\out\\a.md')?.missing).toBe(true)
   })
 
+  /* A UNC path is a file on the share and an absolute path under the local
+     root is a file here, even where the two spell the same: a registry that
+     answered for both would hand one file's download token to the other. */
+  it('keeps a UNC path apart from an absolute path that spells the same', () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([
+      { path: '\\\\server\\share\\out\\a.md', name: 'a.md', download_path: '/t/unc' },
+    ]))
+    deliveries.record(deliveries.SESSION, 2, manifest([
+      { path: '/server/share/out/a.md', name: 'a.md', download_path: '/t/local' },
+    ]))
+
+    expect(deliveries.byPath('\\\\server\\share\\out\\a.md')?.downloadPath).toBe('/t/unc')
+    expect(deliveries.byPath('/server/share/out/a.md')?.downloadPath).toBe('/t/local')
+  })
+
+  it('does not answer a UNC spelling with an absolute path of the same name', () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([
+      { path: '/server/share/out/a.md', name: 'a.md', download_path: '/t/local' },
+    ]))
+
+    expect(deliveries.byPath('\\\\server\\share\\out\\a.md')).toBeNull()
+  })
+
   /* A Windows directory can be case-sensitive, and then two delivered files
      whose paths differ only by case are different files. The exact spelling
      wins; folding is only the fallback when no row matches exactly. */
