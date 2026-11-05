@@ -126,11 +126,16 @@ class RavenRuntime:
             # and returning at ``cancel()`` would let ``stop()`` run while
             # ``start()`` is still inside the backend.
             await plugin_stack.cancel_pending_backend_starts(current)
-            await self.loop.drain_backend_stores()
-            # Backends a live switch replaced are retired by their own tasks;
-            # they must finish (or be force-stopped) before this generation
-            # goes, or their clients outlive it.
-            await self.loop.retire_pending_backends()
+        # Outside the None check: a switch to memory-off leaves ``current``
+        # None while the backend it replaced still owns queued writes and a
+        # retirement task. The drain is a no-op on a generation that never
+        # had a backend, and the report prints nothing for zero.
+        await self.loop.drain_backend_stores()
+        # Backends a live switch replaced are retired by their own tasks; they
+        # must finish (or be force-stopped) before this generation goes, or
+        # their clients outlive it.
+        await self.loop.retire_pending_backends()
+        if current is not None:
             try:
                 await current.stop()
             except Exception:

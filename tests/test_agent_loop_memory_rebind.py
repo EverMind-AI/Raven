@@ -546,3 +546,33 @@ async def test_retiring_a_backend_cancels_its_pending_start_first(monkeypatch) -
     await loop.retire_pending_backends()
 
     assert order == ["cancel_pending", "stop"]
+
+
+@pytest.mark.asyncio
+async def test_dispose_retires_a_backend_a_switch_to_off_replaced() -> None:
+    """Switching to memory-off leaves ``current`` None while the backend the
+    switch replaced still owns a queued write and a retirement task."""
+    from raven.core.runtime import RavenRuntime
+
+    old = _StoreBackend()  # its gate stays shut: the write is still queued
+    loop = _loop(builders=[MemorySegmentBuilder(None, old)], router=None)
+    loop.backend = old
+    _dispose_collaborators(loop)
+    rt = RavenRuntime(loop=loop, plugin_registry=None, strategies=None, deliverables=None)
+
+    loop._store_pipeline.enqueue("s1", [{"role": "user", "content": "pending"}])
+    await asyncio.sleep(0)
+    await loop.rebind_memory_backend(
+        None,
+        name=None,
+        user_id="u",
+        agent_id="a",
+        memory_top_k=5,
+    )
+    assert loop.backend is None
+
+    await rt.dispose()
+
+    assert old.stops == 1, "disposal must retire a backend a switch to off replaced"
+    old.gate.set()
+    await loop._store_pipeline.drain(0.2)

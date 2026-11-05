@@ -94,10 +94,19 @@ def test_dispose_order_with_backend() -> None:
     ]
 
 
-def test_dispose_without_backend_skips_the_drain() -> None:
+def test_dispose_without_backend_still_drains() -> None:
+    """A switch to memory-off leaves ``current`` None while the backend it
+    replaced still owns queued writes and a retirement task; skipping the
+    drain there lost them. It is a no-op when no backend ever existed."""
     rec = _Recorder()
     asyncio.run(_runtime(rec, backend=False).dispose())
-    assert rec.calls == ["stop_plugin_services", "subagents.cancel_all", "close_mcp", "stop"]
+    assert rec.calls == [
+        "stop_plugin_services",
+        "subagents.cancel_all",
+        "close_mcp",
+        "stop",
+        "drain_backend_stores",
+    ]
 
 
 # ---------------------------------------------------------------------------
