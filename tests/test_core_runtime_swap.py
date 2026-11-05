@@ -350,7 +350,12 @@ def test_a_generation_is_sealed_after_construction():
 
     from raven.core.runtime import RavenRuntime
 
-    rt = RavenRuntime(loop=object(), plugin_registry=None, backend=None, strategies=None, deliverables=None)
+    class _Loop:
+        backend = None
+
+    rt = RavenRuntime(loop=_Loop(), plugin_registry=None, strategies=None, deliverables=None)
+    # The backend is a view over the loop's live one, not a sealed member.
+    assert rt.backend is None
     with pytest.raises(FrozenInstanceError):
         rt.loop = object()  # type: ignore[misc]
     with pytest.raises(FrozenInstanceError):
@@ -366,6 +371,7 @@ _GENERATION_DOORS = {
     "apply_agents",
     "apply_mcp_config",
     "set_default_binding",
+    "rebind_memory_backend",
     "mcp_manager",
     "mcp_manager_if_started",
     "_mcp_manager",
@@ -379,6 +385,10 @@ _DOOR_OPERATORS = {
     "raven/rpc/methods/reload.py": {"apply_mcp_config"},
     "raven/rpc/methods/subagents.py": {"apply_agents"},
     "raven/rpc/methods/config.py": {"set_default_binding"},
+    # The ruling this branch records: the memory backend may change identity
+    # mid-generation. The section's switch is its one entrance; the loop owns
+    # start/retire, and RavenRuntime.backend reads the current one through.
+    "raven/rpc/methods/memory.py": {"rebind_memory_backend"},
     "raven/agent/tools/plughub.py": {"mcp_manager"},
     # The console's read-only status peek; the private slot itself has no
     # operators at all, so any out-of-organ spelling of it is a stray.
@@ -485,10 +495,14 @@ async def test_a_backend_whose_stop_raises_does_not_break_the_generation_swap():
         async def drain_backend_stores(self):
             order.append("drain_backend_stores")
 
+        async def retire_pending_backends(self):
+            order.append("retire_pending_backends")
+
+    loop = _Loop()
+    loop.backend = _Backend()
     rt = RavenRuntime(
-        loop=_Loop(),
+        loop=loop,
         plugin_registry=None,
-        backend=_Backend(),
         strategies=None,
         deliverables=None,
     )
@@ -514,6 +528,7 @@ def _runtime_with_watcher(stopped: list[str]):
             pass
 
     class _Loop:
+        backend = None
         subagents = _Subagents()
         context = _Context()
 
@@ -529,7 +544,6 @@ def _runtime_with_watcher(stopped: list[str]):
     return RavenRuntime(
         loop=_Loop(),
         plugin_registry=None,
-        backend=None,
         strategies=None,
         deliverables=None,
     )
@@ -654,10 +668,14 @@ async def test_dispose_retires_a_detached_start_before_stopping_the_backend(monk
         async def drain_backend_stores(self):
             order.append("drain_backend_stores")
 
+        async def retire_pending_backends(self):
+            order.append("retire_pending_backends")
+
+    loop = _Loop()
+    loop.backend = _Backend()
     rt = RavenRuntime(
-        loop=_Loop(),
+        loop=loop,
         plugin_registry=None,
-        backend=_Backend(),
         strategies=None,
         deliverables=None,
     )
@@ -726,11 +744,15 @@ async def test_dispose_waits_for_the_cancelled_start_to_leave_before_stopping():
         async def drain_backend_stores(self):
             pass
 
+        async def retire_pending_backends(self):
+            pass
+
     backend = _SlowBackend()
+    loop = _Loop()
+    loop.backend = backend
     rt = RavenRuntime(
-        loop=_Loop(),
+        loop=loop,
         plugin_registry=None,
-        backend=backend,
         strategies=None,
         deliverables=None,
     )
