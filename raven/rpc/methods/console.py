@@ -811,6 +811,30 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
             result["warning"] = warning
         return result
 
+    if key == "memory.backend":
+        # The data & memory page's local/cloud switch. The value names a
+        # ``memory_backends`` contribution, so it is admitted against the
+        # activated registry rather than a hard-coded pair -- a user plugin's
+        # backend is as valid as the two EverOS ones. ``None`` still turns
+        # backend-driven memory off, the way the CLI wizard records a decline.
+        if value is not None and (not isinstance(value, str) or not value):
+            raise ConfigValidationError("memory.backend must be a backend name or null")
+        if value is not None:
+            from raven.config.raven import load_raven_config
+            from raven.core.plugin_stack import build_plugin_registry
+
+            installed = build_plugin_registry(load_raven_config()).memory_backend_names()
+            if value not in installed:
+                names = ", ".join(sorted(installed)) or "(none)"
+                raise ConfigValidationError(f"unknown memory backend: {value!r}; installed: {names}")
+        from raven.config.update import set_memory_backend
+
+        previous = set_memory_backend(value)
+        # The memory page follows the file per read; the loop serving chat
+        # memory is pointed at it by memory.applyRuntime, which the page calls
+        # after this write. Nothing here needs a restart.
+        return {"applied": True, "previous": previous}
+
     checker = _SETTINGS_SIMPLE_KEYS.get(key)
     if checker is not None:
         written = _write_raw_key(key, checker(value), merge=key in _MERGED_KEYS)

@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
-import { act, cleanup, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
+import * as settingsDialog from '../../state/settings'
 import { resetSources, setSources } from '../../state/sources'
 import { domSnapshot } from '../../test/domSnapshot'
 import { MemoryApp } from './MemoryPage'
@@ -34,6 +35,11 @@ function install(over: Partial<MemorySource> = {}, stats: MemStats | null = null
   const source: MemorySource = {
     stats: async () => stats,
     list: async () => ({ items: [item()], total: 1 }),
+    setBackend: async () => ({ applied: true }),
+    setCloudKey: async () => ({ applied: true }),
+    probeCloud: async () => ({ status: 'ok' }),
+    applyRuntime: async () => ({ ok: true }),
+    startLocal: async () => ({ ok: true, running: true, base_url: '' }),
     ...over,
   }
   setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
@@ -51,7 +57,8 @@ async function mount() {
   const view = render(<MemoryApp />, { container: document.getElementById('memoryBody')! })
   await act(async () => {
     store.setKind('episode')
-    await Promise.all([store.load(), store.refreshStats()])
+    await store.refreshStats()
+    await store.load()
   })
   return view
 }
@@ -213,6 +220,355 @@ describe('memory island', () => {
       screen.getByText('gui.mem.tab_case').click()
     })
     expect(asked).toContain('agent_case')
+  })
+
+  /* Which EverOS the page reads. The switch is a settings write: the page
+     follows the file per read, while the loop serving chat memory follows on
+     the next reload -- the server's warning is that sentence. */
+  describe('memory source switch', () => {
+    const both = {
+      episodes: 1,
+      profiles: 0,
+      agent_cases: 0,
+      agent_skills: 0,
+      backend: 'everos',
+      available_backends: ['everos', 'everos-cloud'],
+    }
+
+    it('marks the backend the file names and enables the one this install has', async () => {
+      install({}, both)
+      await mount()
+      expect(screen.getByText('gui.mem.src_local').getAttribute('aria-pressed')).toBe('true')
+      expect(screen.getByText('gui.mem.src_cloud').getAttribute('aria-pressed')).toBe('false')
+      expect((screen.getByText('gui.mem.src_cloud') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    it('writes the other backend, rereads the store and rebuilds the runtime', async () => {
+      const writes: string[] = []
+      const settingsRefresh = vi.spyOn(settingsDialog, 'requestRefresh').mockImplementation(() => {})
+      const runtime = vi.fn(async () => ({ ok: true }))
+      install(
+        {
+          stats: async () => ({ ...both, backend: writes.length ? 'everos-cloud' : 'everos' }),
+          setBackend: async (name: string) => {
+            writes.push(name)
+            return { applied: true }
+          },
+          applyRuntime: runtime,
+        },
+        both,
+      )
+      await mount()
+      await act(async () => {
+        ;(screen.getByText('gui.mem.src_cloud') as HTMLButtonElement).click()
+      })
+      expect(writes).toEqual(['everos-cloud'])
+      /* The settings dialog owes the reader the Cloud card after this switch;
+         `selected` is part of the snapshot it cached at open. */
+      expect(settingsRefresh).toHaveBeenCalled()
+      /* The chat loop does not read the file per call; the switch rebuilds it
+         instead of telling the reader to reload. */
+      expect(runtime).toHaveBeenCalled()
+      expect(screen.queryByText('gui.mem.reload_wait')).toBeNull()
+      expect(screen.getByText('gui.mem.src_cloud').getAttribute('aria-pressed')).toBe('true')
+    })
+
+    /* The old store's numbers and rows belong to the backend the reader just
+       left. They used to sit under the new segment until the new read landed,
+       which is what made the switch look stuck. */
+    it('clears the old store and shows the wait while the new backend is read', async () => {
+      let backend = 'everos'
+      let land: (() => void) | null = null
+      install(
+        {
+          stats: async () => ({ ...both, backend }),
+          list: async () => ({ items: [item()], total: 1 }),
+          setBackend: (name: string) => new Promise<{ applied: boolean }>((resolve) => {
+            land = () => {
+              backend = name
+              resolve({ applied: true })
+            }
+          }),
+        },
+        both,
+      )
+      await mount()
+      expect(await screen.findByText('shipped the island')).toBeTruthy()
+      await act(async () => {
+        ;(screen.getByText('gui.mem.src_cloud') as HTMLButtonElement).click()
+        await Promise.resolve()
+      })
+      expect(screen.getByText('gui.mem.switching')).toBeTruthy()
+      expect(screen.queryByText('shipped the island')).toBeNull()
+      expect(document.querySelector('.two-pane-wait .two-pane-row')).toBeTruthy()
+      expect(screen.getByText('gui.mem.src_cloud').getAttribute('aria-pressed')).toBe('true')
+      await act(async () => { land!(); await Promise.resolve(); await Promise.resolve() })
+      expect(screen.queryByText('gui.mem.switching')).toBeNull()
+      expect(await screen.findByText('shipped the island')).toBeTruthy()
+    })
+
+    it('says the switch waits when the gateway has a turn in flight', async () => {
+      const writes: string[] = []
+      install(
+        {
+          stats: async () => ({ ...both, backend: writes.length ? 'everos-cloud' : 'everos' }),
+          setBackend: async (name: string) => {
+            writes.push(name)
+            return { applied: true }
+          },
+          applyRuntime: async () => ({ ok: false, reason: 'busy' }),
+        },
+        both,
+      )
+      await mount()
+      await act(async () => {
+        ;(screen.getByText('gui.mem.src_cloud') as HTMLButtonElement).click()
+      })
+      expect(await screen.findByText('gui.mem.reload_wait')).toBeTruthy()
+    })
+
+    it('puts the switch back when the write is refused, and keeps the rows readable', async () => {
+      install(
+        {
+          stats: async () => both,
+          setBackend: async () => {
+            throw new Error('switch denied')
+          },
+        },
+        both,
+      )
+      await mount()
+      await act(async () => {
+        ;(screen.getByText('gui.mem.src_cloud') as HTMLButtonElement).click()
+      })
+      expect(await screen.findByText('switch denied')).toBeTruthy()
+      /* The optimistic pick is a claim the file did not back; the next read
+         puts the segment where the store still is, and the page keeps the
+         rows it had rather than taking the whole frame over. */
+      await waitFor(() => {
+        expect(screen.getByText('gui.mem.src_local').getAttribute('aria-pressed')).toBe('true')
+      })
+      expect(await screen.findByText('shipped the island')).toBeTruthy()
+      expect(screen.queryByText('gui.mem.err_t')).toBeNull()
+    })
+
+    it('shows a backend whose plugin is missing as disabled, not as absent', async () => {
+      install({}, { ...both, available_backends: ['everos'] })
+      await mount()
+      const cloud = screen.getByText('gui.mem.src_cloud') as HTMLButtonElement
+      expect(cloud.disabled).toBe(true)
+      expect(cloud.title).toBe('gui.mem.src_missing')
+    })
+
+    it('keeps the switch reachable while the selected backend has nothing to read', async () => {
+      const note = 'the everos-cloud-memory distribution is not installed'
+      install(
+        { list: async () => ({ items: [], total: 0, note }) },
+        { ...both, backend: 'everos-cloud', available_backends: ['everos'] },
+      )
+      await mount()
+      expect(await screen.findByText(note)).toBeTruthy()
+      expect(screen.getByText('gui.mem.src_local')).toBeTruthy()
+    })
+
+    /* A working key can still be replaced. Without this link the only way to
+       change it would be the settings card the page no longer draws. */
+    it('offers a change-key link when the cloud store is readable, and opens the panel', async () => {
+      install({}, { ...both, backend: 'everos-cloud', cloud_key_set: true })
+      await mount()
+      expect(await screen.findByText('shipped the island')).toBeTruthy()
+      expect(screen.getByText('gui.mem.cloud_change')).toBeTruthy()
+      await act(async () => {
+        fireEvent.click(screen.getByText('gui.mem.cloud_change'))
+      })
+      expect(screen.getByText('gui.mem.cloud_change_t')).toBeTruthy()
+      expect(screen.getByLabelText('gui.mem.cloud_ph')).toBeTruthy()
+    })
+
+    /* The cloud backend with no key: every read answers 401, so the store's
+       error frame used to blame the service for a step the reader had not
+       taken. The key panel takes the column instead, and nothing else. */
+    it('asks for the cloud key in place of the store, with no error frame under it', async () => {
+      install(
+        {
+          list: async () => {
+            throw new Error('everos refused the request: Missing authorization header')
+          },
+        },
+        { ...both, backend: 'everos-cloud', cloud_key_set: false },
+      )
+      await mount()
+      expect(await screen.findByText('gui.mem.cloud_t')).toBeTruthy()
+      expect(screen.getByText('gui.mem.cloud_sub')).toBeTruthy()
+      expect(screen.getByText('gui.mem.cloud_save')).toBeTruthy()
+      expect(screen.queryByText('gui.mem.err_t')).toBeNull()
+      expect(screen.queryByText('gui.plug.retry')).toBeNull()
+    })
+
+    it('writes the key, then rereads the store so the panel goes away', async () => {
+      const writes: string[] = []
+      let keySet = false
+      install(
+        {
+          stats: async () => ({ ...both, backend: 'everos-cloud', cloud_key_set: keySet }),
+          list: async () => ({ items: [item()], total: 1 }),
+          setCloudKey: async (key: string) => {
+            writes.push(key)
+            keySet = true
+            return { applied: true }
+          },
+        },
+        { ...both, backend: 'everos-cloud', cloud_key_set: false },
+      )
+      await mount()
+      expect(await screen.findByText('gui.mem.cloud_t')).toBeTruthy()
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText('gui.mem.cloud_ph'), { target: { value: 'ecm-123456' } })
+      })
+      await act(async () => {
+        fireEvent.click(screen.getByText('gui.mem.cloud_save'))
+      })
+      expect(writes).toEqual(['ecm-123456'])
+      expect(await screen.findByText('shipped the island')).toBeTruthy()
+      expect(screen.queryByText('gui.mem.cloud_t')).toBeNull()
+    })
+
+    /* A key that saves but does not work is the common typo. The write makes
+       `cloud_key_set` true either way, so writing alone would trade the panel
+       for a store that cannot be read; the probe is what keeps the reader
+       here, with the service's own sentence. */
+    it('keeps the panel and shows the service sentence when the key is rejected', async () => {
+      install(
+        {
+          stats: async () => ({ ...both, backend: 'everos-cloud', cloud_key_set: false }),
+          list: async () => ({ items: [item()], total: 1 }),
+          setCloudKey: async () => ({ applied: true }),
+          probeCloud: async () => ({ status: 'missing', hint: 'API key rejected (401)' }),
+        },
+        { ...both, backend: 'everos-cloud', cloud_key_set: false },
+      )
+      await mount()
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText('gui.mem.cloud_ph'), { target: { value: 'ecm-wrong' } })
+      })
+      await act(async () => {
+        fireEvent.click(screen.getByText('gui.mem.cloud_save'))
+      })
+      expect(await screen.findByText('API key rejected (401)')).toBeTruthy()
+      expect(screen.getByText('gui.mem.cloud_t')).toBeTruthy()
+      expect(screen.queryByText('shipped the island')).toBeNull()
+      expect(screen.queryByText('gui.mem.err_t')).toBeNull()
+    })
+
+    /* A bad key already on file has no Save click to hang the panel on: the
+       section opens, the store answers 401, and the reader still needs the
+       field rather than an "unreachable service" frame. */
+    it('reopens the key panel when the key on file is refused', async () => {
+      install(
+        {
+          stats: async () => ({ ...both, backend: 'everos-cloud', cloud_key_set: true }),
+          list: async () => {
+            throw {
+              data: {
+                detail:
+                  'internal_error: everos refused the request: The API key in the request is missing or invalid. Request id: abc',
+              },
+            }
+          },
+        },
+        { ...both, backend: 'everos-cloud', cloud_key_set: true },
+      )
+      await mount()
+      expect(await screen.findByText('gui.mem.cloud_bad_key')).toBeTruthy()
+      expect(screen.getByText('gui.mem.cloud_change_t')).toBeTruthy()
+      expect(screen.queryByText('gui.mem.err_t')).toBeNull()
+    })
+
+    /* Retrying from the refused state used to clear the flag that keeps the
+       panel up, so the page flashed to the store for the length of the check
+       and back. The panel must stay put while the verdict is pending. */
+    it('keeps the panel up while a refused key is checked again', async () => {
+      let land: ((v: { status: string; hint: string }) => void) | null = null
+      install(
+        {
+          stats: async () => ({ ...both, backend: 'everos-cloud', cloud_key_set: true }),
+          list: async () => {
+            throw {
+              data: {
+                detail:
+                  'internal_error: everos refused the request: The API key in the request is missing or invalid. Request id: abc',
+              },
+            }
+          },
+          setCloudKey: async () => ({ applied: true }),
+          probeCloud: () => new Promise<{ status: string; hint: string }>((resolve) => { land = resolve }),
+        },
+        { ...both, backend: 'everos-cloud', cloud_key_set: true },
+      )
+      await mount()
+      expect(await screen.findByText('gui.mem.cloud_bad_key')).toBeTruthy()
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText('gui.mem.cloud_ph'), { target: { value: 'ecm-again' } })
+      })
+      await act(async () => {
+        fireEvent.click(screen.getByText('gui.mem.cloud_save'))
+        await Promise.resolve()
+      })
+      expect(screen.getByText('gui.mem.cloud_change_t')).toBeTruthy()
+      expect(screen.getByText('gui.mem.cloud_checking')).toBeTruthy()
+      await act(async () => { land!({ status: 'missing', hint: 'still rejected' }); await Promise.resolve() })
+      expect(screen.getByText('still rejected')).toBeTruthy()
+      expect(screen.getByText('gui.mem.cloud_change_t')).toBeTruthy()
+    })
+
+    it('shows the check in flight on the save button', async () => {
+      let land: ((v: { status: string }) => void) | null = null
+      install(
+        {
+          stats: async () => ({ ...both, backend: 'everos-cloud', cloud_key_set: false }),
+          setCloudKey: async () => ({ applied: true }),
+          probeCloud: () => new Promise<{ status: string }>((resolve) => { land = resolve }),
+        },
+        { ...both, backend: 'everos-cloud', cloud_key_set: false },
+      )
+      await mount()
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText('gui.mem.cloud_ph'), { target: { value: 'ecm-123456' } })
+      })
+      await act(async () => {
+        fireEvent.click(screen.getByText('gui.mem.cloud_save'))
+        await Promise.resolve()
+      })
+      expect(screen.getByText('gui.mem.cloud_checking')).toBeTruthy()
+      await act(async () => { land!({ status: 'ok' }); await Promise.resolve() })
+    })
+
+    /* The local server is a process, not a setting: when it is not there the
+       page used to show four zeros. The start panel is the one action that
+       brings the store back without restarting Raven. */
+    it('offers to start the local server when it is not running', async () => {
+      let running = false
+      const starts = vi.fn(async () => {
+        running = true
+        return { ok: true, running: true, base_url: 'http://localhost:18791' }
+      })
+      install(
+        {
+          stats: async () => ({ ...both, backend: 'everos', local_running: running }),
+          list: async () => ({ items: [item()], total: 1 }),
+          startLocal: starts,
+        },
+        { ...both, backend: 'everos', local_running: false },
+      )
+      await mount()
+      expect(await screen.findByText('gui.mem.local_t')).toBeTruthy()
+      await act(async () => {
+        fireEvent.click(screen.getByText('gui.mem.local_start'))
+      })
+      expect(starts).toHaveBeenCalled()
+      expect(await screen.findByText('shipped the island')).toBeTruthy()
+      expect(screen.queryByText('gui.mem.local_t')).toBeNull()
+    })
   })
 
   it('keeps its rendered shape', async () => {

@@ -5214,6 +5214,36 @@ class MemoryStatsResult(_Strict):
             "names. Null when the store was actually consulted."
         ),
     )
+    backend: str | None = Field(
+        default=None,
+        description=(
+            "memory.backend as the file names it at read time; null when backend-driven "
+            "memory is off. The page marks this name's segment as the selected one."
+        ),
+    )
+    available_backends: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The EverOS backends whose plugin is importable where raven runs, in a stable "
+            "order: 'everos' for the local server, 'everos-cloud' for the hosted one. The "
+            "page draws one segment per name, disabled for the names this list omits."
+        ),
+    )
+    cloud_key_set: bool = Field(
+        default=False,
+        description=(
+            "Whether the hosted backend has an API key on file (or in EVEROS_CLOUD_API_KEY). "
+            "The memory page draws its key-entry panel in place of the store when the cloud "
+            "backend is selected and this is false."
+        ),
+    )
+    local_running: bool = Field(
+        default=False,
+        description=(
+            "Whether the local EverOS server answers where the local backend reads. The page "
+            "draws its start panel when the local backend is selected and this is false."
+        ),
+    )
 
 
 class MemoryItem(_Strict):
@@ -5255,6 +5285,30 @@ class MemoryListResult(_Strict):
             "names. Null when the store was actually consulted."
         ),
     )
+
+
+class MemoryStartLocalParams(_Strict):
+    pass
+
+
+class MemoryStartLocalResult(_Strict):
+    ok: bool
+    running: bool
+    base_url: str
+    detail: str | None = Field(
+        None,
+        description="Why the start failed, or the probe's verdict when it did not answer.",
+    )
+
+
+class MemoryApplyRuntimeParams(_Strict):
+    pass
+
+
+class MemoryApplyRuntimeResult(_Strict):
+    ok: bool
+    backend: str | None = Field(None, description="memory.backend the running loop now uses.")
+    detail: str | None = Field(None, description="Why the loop could not be pointed at that backend.")
 
 
 # ---------------------------------------------------------------------------
@@ -7466,6 +7520,8 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # memory.*
     "memory.stats": (MemoryStatsParams, MemoryStatsResult),
     "memory.list": (MemoryListParams, MemoryListResult),
+    "memory.startLocal": (MemoryStartLocalParams, MemoryStartLocalResult),
+    "memory.applyRuntime": (MemoryApplyRuntimeParams, MemoryApplyRuntimeResult),
     # trajectory.* -- the Web trajectory view
     "trajectory.state": (TrajectoryStateParams, TrajectoryStateResult),
     "trajectory.list": (TrajectoryListParams, TrajectoryListResult),

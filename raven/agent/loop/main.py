@@ -827,6 +827,55 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             except Exception as exc:  # noqa: BLE001 -- teardown must not die on bookkeeping
                 logger.warning("Error marking MCP servers after executor close: %s", exc)
 
+    async def rebind_memory_backend(
+        self,
+        backend: "MemoryBackend | None",
+        *,
+        name: str | None,
+        user_id: str,
+        memory_top_k: int,
+    ) -> None:
+        """Point this running loop at a new memory backend, in place.
+
+        A generation swap rebuilds the whole runtime and closes the page's
+        socket -- what the settings switch used to do on every click, which the
+        page drew as "not connected". The backend is the one part of the
+        generation whose seam is a live reference: the store pipeline reads
+        ``self.backend`` per turn, and the context engine's memory segment and
+        skill source carry it. Replacing those references is enough; the prompt
+        layout and the tool array stay exactly as they were.
+        """
+        old = self.backend
+        if backend is not None:
+            await backend.start()
+        self.backend = backend
+        has = backend is not None
+        self.context._has_memory_backend = has
+
+        from raven.context_engine.segments.identity import IdentitySegmentBuilder
+        from raven.context_engine.segments.memory import MemorySegmentBuilder
+        from raven.memory_engine.skill_forge.backend_source import BackendSkillSource
+
+        for builder in getattr(self.context_engine, "_builders", ()):
+            if isinstance(builder, MemorySegmentBuilder):
+                builder._backend = backend
+                builder._user_id = user_id
+                builder._memory_top_k = memory_top_k
+            elif isinstance(builder, IdentitySegmentBuilder):
+                builder._has_memory_backend = has
+        router = getattr(self.context_engine, "skills_router", None)
+        if router is not None:
+            for source in getattr(router, "_sources", ()):
+                if isinstance(source, BackendSkillSource):
+                    source._backend = backend
+                    if name:
+                        source.name = name
+        if old is not None and old is not backend:
+            try:
+                await old.stop()
+            except Exception:  # noqa: BLE001 -- the new backend already serves; a bad stop is not a failed switch
+                logger.exception("memory rebind: the previous backend did not stop cleanly")
+
     async def run(self) -> None:
         """Bring the agent runtime up and stay alive.
 
