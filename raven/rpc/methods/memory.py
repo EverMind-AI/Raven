@@ -535,7 +535,18 @@ async def memory_apply_runtime(params: dict, *, agent_loop_factory: Any = None) 
         # in. The config path is the fallback for a loop that did not expose
         # one (a harness), where the two are the same anyway.
         workspace = getattr(getattr(loop, "context", None), "workspace", None)
-        backend = maybe_build_memory_backend(workspace or load_config().workspace_path, cfg)
+        # The generation's own assembly inputs, when the loop carries them: a
+        # switch must build the same backend boot did -- the activated plugin
+        # set, with the host notify a boot-time warning would reach -- not a
+        # fresh registry from whatever is on disk now. A harness loop has
+        # neither, and falls back to the old build.
+        assembly = getattr(loop, "memory_assembly", None)
+        backend = maybe_build_memory_backend(
+            workspace or load_config().workspace_path,
+            cfg,
+            registry=getattr(assembly, "registry", None),
+            notify=getattr(assembly, "notify", None),
+        )
         if cfg.memory.backend is not None and backend is None:
             return {
                 "ok": False,
