@@ -100,12 +100,6 @@ async def test_enum_key(cfg):
         await rpc_console.settings_set({"key": "agents.defaults.reasoningEffort", "value": "extreme"})
 
 
-async def test_memory_backend_not_writable(cfg):
-    """The backend is not a user choice - long-term memory is EverOS."""
-    with pytest.raises(ConfigValidationError, match="not writable"):
-        await rpc_console.settings_set({"key": "memory.backend", "value": None})
-
-
 @pytest.fixture()
 def everos_toml(tmp_path, monkeypatch):
     path = tmp_path / "everos.toml"
@@ -1215,6 +1209,47 @@ async def test_settings_set_nullable_keys_accept_null(cfg, key):
     for part in key.split(".")[:-1]:
         node = node[part]
     assert node[key.split(".")[-1]] is None
+
+
+async def test_settings_set_memory_backend_writes_the_name(cfg, monkeypatch):
+    """The write is the whole change here.
+
+    The page follows the file per read, and memory.applyRuntime points the loop
+    serving chat memory at the same file in place, so this answer needs no
+    reload sentence.
+    """
+
+    class _Registry:
+        def memory_backend_names(self):
+            return ["everos", "everos-cloud"]
+
+    monkeypatch.setattr("raven.core.plugin_stack.build_plugin_registry", lambda _config: _Registry())
+    r = await rpc_console.settings_set({"key": "memory.backend", "value": "everos-cloud"})
+    assert r["applied"] is True
+    assert r["previous"] is None
+    assert "warning" not in r
+    assert _read(cfg)["memory"]["backend"] == "everos-cloud"
+
+    r = await rpc_console.settings_set({"key": "memory.backend", "value": None})
+    assert r["applied"] is True
+    assert _read(cfg)["memory"]["backend"] is None
+
+
+async def test_settings_set_memory_backend_refuses_a_name_no_plugin_contributes(cfg, monkeypatch):
+    class _Registry:
+        def memory_backend_names(self):
+            return ["everos"]
+
+    monkeypatch.setattr("raven.core.plugin_stack.build_plugin_registry", lambda _config: _Registry())
+    with pytest.raises(ConfigValidationError, match="unknown memory backend"):
+        await rpc_console.settings_set({"key": "memory.backend", "value": "mem0"})
+    assert "memory" not in _read(cfg)
+
+
+@pytest.mark.parametrize("value", ["", 7, ["everos"]])
+async def test_settings_set_memory_backend_refuses_a_non_name(cfg, value):
+    with pytest.raises(ConfigValidationError, match="backend name or null"):
+        await rpc_console.settings_set({"key": "memory.backend", "value": value})
 
 
 @pytest.mark.parametrize(

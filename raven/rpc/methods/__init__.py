@@ -247,7 +247,7 @@ def register_aligned_methods_except_system(
     # memory.* — a read-only view onto the memory engine, which shipped
     # without an RPC surface. (A matching subagent.* view waits for the
     # transcript writer that would give it anything to list.)
-    register_memory_methods(dispatcher)
+    register_memory_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_trajectory_methods(dispatcher)
     register_trajectory_export_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_bugreport_methods(dispatcher, agent_loop_factory=agent_loop_factory)

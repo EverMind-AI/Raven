@@ -11,6 +11,30 @@ import type { MemorySource } from './types'
 
 export const memorySource: MemorySource = {
   stats: () => gateway().call('memory.stats', {}),
+  /* The switch is a settings write, not a memory.* verb: it changes the same
+     file the settings page owns, and the server admits the key there. */
+  setBackend: (backend) => gateway().call('settings.set', {
+    key: 'memory.backend',
+    value: backend,
+  } as ParamsOf<'settings.set'>),
+  setCloudKey: (key) => gateway().call('settings.set', {
+    key: 'plugins.config.everos-cloud-memory.api_key',
+    value: key,
+  } as ParamsOf<'settings.set'>),
+  /* The same probe the settings card uses: it builds the backend from the
+     slice just written and calls health(), so a rejected key answers here
+     rather than in a memory read the page would have to interpret. */
+  probeCloud: () => gateway().call('settings.everosCloud', {}),
+  /* A live reference swap inside the running loop -- no generation reload, so
+     the page's socket stays up. A failed call is a real failure now. */
+  applyRuntime: async () => {
+    try {
+      return await gateway().call('memory.applyRuntime', {})
+    } catch (e) {
+      return { ok: false, detail: (e as Error).message || String(e) }
+    }
+  },
+  startLocal: () => gateway().call('memory.startLocal', {}),
   list: (req) => gateway().call('memory.list', {
     kind: req.kind,
     page: req.page,

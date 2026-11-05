@@ -6486,6 +6486,22 @@ export interface MemoryStatsResult {
    * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
    */
   note?: string | null;
+  /**
+   * memory.backend as the file names it at read time; null when backend-driven memory is off. The page marks this name's segment as the selected one.
+   */
+  backend?: string | null;
+  /**
+   * The EverOS backends whose plugin is importable where raven runs, in a stable order: 'everos' for the local server, 'everos-cloud' for the hosted one. The page draws one segment per name, disabled for the names this list omits.
+   */
+  available_backends?: string[];
+  /**
+   * Whether the hosted backend has an API key on file (or in EVEROS_CLOUD_API_KEY). The memory page draws its key-entry panel in place of the store when the cloud backend is selected and this is false.
+   */
+  cloud_key_set?: boolean;
+  /**
+   * Whether the local EverOS server answers where the local backend reads. The page draws its start panel when the local backend is selected and this is false.
+   */
+  local_running?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -6516,6 +6532,44 @@ export interface MemoryListResult {
    * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
    */
   note?: string | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MemoryStartLocalParams".
+ */
+export interface MemoryStartLocalParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MemoryStartLocalResult".
+ */
+export interface MemoryStartLocalResult {
+  ok: boolean;
+  running: boolean;
+  base_url: string;
+  /**
+   * Why the start failed, or the probe's verdict when it did not answer.
+   */
+  detail?: string | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MemoryApplyRuntimeParams".
+ */
+export interface MemoryApplyRuntimeParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MemoryApplyRuntimeResult".
+ */
+export interface MemoryApplyRuntimeResult {
+  ok: boolean;
+  /**
+   * memory.backend the running loop now uses.
+   */
+  backend?: string | null;
+  /**
+   * Why the loop could not be pointed at that backend.
+   */
+  detail?: string | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

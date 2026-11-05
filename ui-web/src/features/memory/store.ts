@@ -1,3 +1,4 @@
+import { t } from '../../i18n/t'
 import * as settingsDialog from '../../state/settings'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
@@ -33,6 +34,28 @@ export interface MemoryState {
   note: string
   err: string
   detail: MemItem | null
+  /* The local/cloud switch: a write in flight, the server's sentence about
+     what waits for a reload, and a write that failed. Kept apart from `err`,
+     which takes the whole page over -- a failed switch leaves the page
+     readable on the backend it still has. */
+  backendBusy: boolean
+  backendNotice: string
+  backendErr: string
+  /* The cloud key-entry panel: a write being checked, the sentence it was
+     refused with, and whether the key on file is known bad. The last one keeps
+     the panel up after the write -- `cloud_key_set` turns true either way. */
+  cloudBusy: boolean
+  cloudErr: string
+  cloudRejected: boolean
+  /* The reader asked to replace a working key. The panel is the same one the
+     no-key state uses; this is what opens it over a store that has a key. */
+  cloudEditing: boolean
+  /* The local server's start button: a start in flight and its refusal. */
+  localBusy: boolean
+  localErr: string
+  /* A backend switch's reads are out. The old store's counts and rows must not
+     sit under the new segment while they are; the page draws the wait. */
+  switching: boolean
 }
 
 const store = makeStore<MemoryState>({
@@ -46,6 +69,16 @@ const store = makeStore<MemoryState>({
   note: '',
   err: '',
   detail: null,
+  backendBusy: false,
+  backendNotice: '',
+  backendErr: '',
+  cloudBusy: false,
+  cloudErr: '',
+  cloudRejected: false,
+  cloudEditing: false,
+  localBusy: false,
+  localErr: '',
+  switching: false,
 })
 let debounce: ReturnType<typeof setTimeout> | undefined
 
@@ -63,6 +96,12 @@ function failure(e: unknown): string {
   return (err.data && err.data.detail) || err.message || String(e)
 }
 
+/* The service refusing the key on file. The page can fix this one in place,
+   so it must not be read as the service being down. The cloud's own body for
+   this is "The API key in the request is missing or invalid", which carries
+   no 401 in text -- the status is in the transport, not the sentence. */
+const AUTH_FAILURE = /\b(401|403)\b|unauthori[sz]ed|missing authorization|api key\b[^.]*(missing|invalid)/i
+
 export async function load(): Promise<void> {
   /* `note` is cleared with `err`: it explains the answer this load is about
      to fetch, and a stale one outlives the condition it described -- after
@@ -72,8 +111,24 @@ export async function load(): Promise<void> {
     const r = await source().list({ kind: get().kind, page: get().page, page_size: MEM_PAGE_SIZE, q: get().q || null })
     set({ items: r.items || [], total: r.total || 0, note: r.note || '', phase: 'ready' })
   } catch (e) {
+    const detail = failure(e)
+    /* A key on file that the service refuses is the key panel's state, not the
+       store's outage: the reader can replace it right here. Without this, a
+       re-entry after a bad key landed showed the error frame and no way back
+       to the field. */
+    if (get().stats?.backend === 'everos-cloud' && get().stats?.cloud_key_set && AUTH_FAILURE.test(detail)) {
+      set({
+        phase: 'ready',
+        items: [],
+        total: 0,
+        detail: null,
+        cloudRejected: true,
+        cloudErr: t('gui.mem.cloud_bad_key'),
+      })
+      return
+    }
     if ((e as { down?: boolean }).down) set({ phase: 'down' })
-    else set({ phase: 'error', err: failure(e) })
+    else set({ phase: 'error', err: detail })
   }
 }
 
@@ -84,6 +139,120 @@ export function refreshStats(): Promise<void> {
     .catch(() => set({ stats: null }))
 }
 
+/* The local/cloud switch's one write. The page re-reads the file per call, so
+   its rows follow at once; the loop serving chat memory built its backend at
+   boot, hence the reply's warning, which is shown under the switch. */
+export function switchBackend(backend: string): void {
+  if (get().backendBusy || get().stats?.backend === backend) return
+  const stats = get().stats
+  /* The segment moves at once, and the old store's numbers and rows go with
+     it: they belong to the backend the reader just left. The wait below is
+     what the page draws instead. */
+  set({
+    stats: stats ? { ...stats, backend } : stats,
+    switching: true,
+    backendBusy: true,
+    backendNotice: '', backendErr: '',
+    cloudRejected: false, cloudErr: '', cloudEditing: false, localErr: '',
+    page: 1, q: '', detail: null, items: [], total: 0, phase: 'loading',
+  })
+  void (async () => {
+    try {
+      await source().setBackend(backend)
+      /* The settings dialog's models page drew its EverOS Cloud card from the
+         snapshot it read when it opened, and `selected` just changed. Without
+         this the reader who goes to enter the key finds no card. The island
+         registers what re-reads it; state/ does not import an island. */
+      settingsDialog.requestRefresh()
+      /* Point the running loop at the new backend before the page reads it: a
+         local server that is down starts here, so the reads below see it
+         rather than drawing the start panel. This is a live reference swap --
+         no generation reload, so the page's socket stays connected. */
+      const applied = await source().applyRuntime()
+      if (!applied.ok) set({ backendNotice: applied.detail || t('gui.mem.reload_wait') })
+      await refreshStats()
+      await load()
+      set({ switching: false, backendBusy: false })
+    } catch (e) {
+      /* The optimistic segment above is a claim the file did not change, so
+         put it back from the file rather than leaving the page reading one
+         store while the switch says the other. */
+      set({ switching: false, backendBusy: false, backendErr: failure(e) })
+      await refreshStats()
+      await load()
+    }
+  })()
+}
+
+/* A working key can be replaced too: the same panel, opened from the link
+   under the source switch rather than by a missing key. */
+export function startCloudEdit(): void {
+  set({ cloudEditing: true, cloudErr: '', cloudRejected: false })
+}
+
+/* The local server's start button. The backend starts the same server when a
+   generation boots; this is the page's way to do it after that process went
+   away, without asking the reader to restart Raven. */
+export function startLocal(): void {
+  if (get().localBusy) return
+  set({ localBusy: true, localErr: '' })
+  void (async () => {
+    try {
+      const r = await source().startLocal()
+      set({ localBusy: false, localErr: r.ok ? '' : (r.detail || t('gui.mem.local_failed')) })
+      if (r.ok) {
+        await refreshStats()
+        await load()
+      }
+    } catch (e) {
+      set({ localBusy: false, localErr: failure(e) })
+    }
+  })()
+}
+
+/* The hosted backend's key, from the panel the page draws in place of the
+   store when there is none. The write is not the validation: a key can be
+   saved and still be rejected, so the backend's own health check answers
+   before the page leaves its panel. Only an ``ok`` unlocks the store. */
+export function saveCloudKey(key: string): void {
+  const value = key.trim()
+  if (!value || get().cloudBusy) return
+  /* `cloudRejected` is deliberately NOT cleared here. When the panel is up
+     because the key on file was refused, clearing it would make the panel's
+     condition false for the duration of the check -- the page would flash to
+     the store and back when the probe refused it again. The flag moves only
+     when the verdict does. */
+  set({ cloudBusy: true, cloudErr: '' })
+  void (async () => {
+    try {
+      await source().setCloudKey(value)
+      const probe = await source().probeCloud()
+      if (probe.status !== 'ok') {
+        set({
+          cloudBusy: false,
+          cloudEditing: false,
+          cloudRejected: true,
+          cloudErr: probe.hint || t('gui.mem.cloud_bad_key'),
+        })
+        return
+      }
+      /* The key is what the running loop was missing; point it at the rebuilt
+         cloud backend before the page reads, then load the rows. The live swap
+         keeps the page's socket up, so the reader stays connected. */
+      const applied = await source().applyRuntime()
+      await load()
+      await refreshStats()
+      /* The models page caches its EverOS Cloud card; the key saved here is
+         the value that card shows, and it may already be open behind this. */
+      settingsDialog.requestRefresh()
+      set({ cloudBusy: false, cloudRejected: false, cloudEditing: false })
+      if (!applied.ok) set({ backendNotice: applied.detail || t('gui.mem.reload_wait') })
+    } catch (e) {
+      set({ cloudBusy: false, cloudErr: failure(e) })
+    }
+  })()
+}
+
 /* What arriving at this section of the settings dialog costs: the counters and
    the first page -- so a reader who picks the row in the dialog's own nav gets
    the same two reads the opener above does. Registered at this module's own
@@ -92,8 +261,13 @@ export function refreshStats(): Promise<void> {
    alternative is src/app/install.ts importing three island stores for three
    lines, which is three island graphs in the page's own wiring. */
 function enter(): void {
-  void refreshStats()
-  void load()
+  set({ backendNotice: '', backendErr: '', cloudEditing: false, localErr: '' })
+  /* The counters first: ``load`` reads the backend and the cloud key state off
+     them to tell a refused key from an unreachable service. */
+  void (async () => {
+    await refreshStats()
+    await load()
+  })()
 }
 settingsDialog.onEnter('memory', enter)
 
