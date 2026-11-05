@@ -1,7 +1,9 @@
 /** Draggable floating navigation palette for workspace content. */
 
+import { Download04Icon } from '@hugeicons/core-free-icons'
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
+import { Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
 import * as tasksStore from '../tasks/store'
 import { TasksPanel } from '../tasks/TasksPage'
@@ -147,27 +149,47 @@ function DeliverableRow({ row, here }: { row: DeliveryRow; here: boolean }): JSX
   const mine = row.scope === deliveries.SESSION
   const when = here || !mine || row.turn == null ? '' : t('gui.ws.dlv_turn', { n: String(row.turn) })
   const meta = [row.name, size, when].filter(Boolean).join(' \u00b7 ')
-  return (
-    <button
-      className={'desk-row desk-dlv-row' + (row.missing ? ' gone' : '')}
-      title={row.description || row.path}
-      /* Through the workspace's own opener, not straight at the desk: that is
-         the door the transcript's delivery card uses, and it is what keeps a
-         source that cannot read files (the demo shell) answering with its own
-         note instead of a viewer that has nothing to show.
-         Left clickable on purpose when the file is gone: the viewer says so in
-         words, which is more than a dead row does. */
-      onClick={() => workspace.openDelivery(row.path)}
+  /* The row opens the file; the link beside it hands it over as an attachment,
+     which is the one thing that reaches a reader on another machine -- the
+     same control the transcript's delivery card and the viewer's header carry.
+     A sibling of the button, not a child of it: a link inside a button is not
+     a link, it is a button that navigates. A delivery that is gone offers
+     none: its token is gone with it, and the row says so already. */
+  const link = row.downloadPath && !row.missing ? (
+    <a
+      className="desk-dl"
+      href={row.downloadPath}
+      download={row.name}
+      data-tip={t('gui.arts.download')}
+      aria-label={t('gui.arts.download')}
     >
-      <span className="dlv-kind" data-kind={fileKind(row.name)}>
-        {row.ext ? row.ext.slice(0, 4).toUpperCase() : t('gui.arts.file')}
-      </span>
-      <span className="desk-name">
-        <b>{row.title}</b>
-        <s>{meta}</s>
-      </span>
-      {row.missing ? <i className="dlv-gone">{t('gui.arts.missing')}</i> : null}
-    </button>
+      <Icon icon={Download04Icon} size={14} />
+    </a>
+  ) : null
+  return (
+    <span className="desk-dlv">
+      <button
+        className={'desk-row desk-dlv-row' + (row.missing ? ' gone' : '')}
+        title={row.description || row.path}
+        /* Through the workspace's own opener, not straight at the desk: that is
+           the door the transcript's delivery card uses, and it is what keeps a
+           source that cannot read files (the demo shell) answering with its own
+           note instead of a viewer that has nothing to show.
+           Left clickable on purpose when the file is gone: the viewer says so in
+           words, which is more than a dead row does. */
+        onClick={() => workspace.openDelivery(row.path)}
+      >
+        <span className="dlv-kind" data-kind={fileKind(row.name)}>
+          {row.ext ? row.ext.slice(0, 4).toUpperCase() : t('gui.arts.file')}
+        </span>
+        <span className="desk-name">
+          <b>{row.title}</b>
+          <s>{meta}</s>
+        </span>
+        {row.missing ? <i className="dlv-gone">{t('gui.arts.missing')}</i> : null}
+      </button>
+      {link}
+    </span>
   )
 }
 

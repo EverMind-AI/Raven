@@ -5967,6 +5967,17 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-dlv-row.gone { opacity: .55; }
 .desk-dlv-row .dlv-gone { flex: none; padding: 0 5px; border: 1px solid var(--line); border-radius: 999px;
   color: var(--clay); font: 9px/1.6 var(--mono); font-style: normal; }
+/* The row opens the file; the link beside it hands it over as an attachment,
+   which is the one thing that reaches a reader on another machine. A sibling
+   of the button rather than a child of it: a link inside a button is not a
+   link, it is a button that navigates. So the row keeps its own click, and the
+   link is a control of its own beside it. */
+.desk-dlv { position: relative; display: block; }
+.desk-dlv:has(.desk-dl) .desk-dlv-row { padding-right: 36px; }
+.desk-dl { position: absolute; top: 50%; right: 9px; transform: translateY(-50%);
+  display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px;
+  color: var(--muted); transition: color .12s, background .12s; }
+.desk-dl:hover { color: var(--text); background: var(--surface); }
 
 .agent-roster { padding: 0; gap: 0; }
 .agent-group { min-width: 0; }
