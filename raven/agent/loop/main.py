@@ -869,7 +869,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
 
         from raven.context_engine.segments.identity import IdentitySegmentBuilder
         from raven.context_engine.segments.memory import MemorySegmentBuilder
-        from raven.memory_engine.skill_forge.backend_source import BackendSkillSource
+        from raven.memory_engine import BackendSkillSource
 
         for builder in getattr(self.context_engine, "_builders", ()):
             if isinstance(builder, MemorySegmentBuilder):
