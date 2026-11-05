@@ -5215,7 +5215,7 @@ class MemoryStatsResult(_Strict):
         default=None,
         description=(
             "memory.backend as the file names it at read time; null when backend-driven "
-            "memory is off. The page marks this name's segment as the selected one."
+            "memory is off. The section marks this name's segment as the selected one."
         ),
     )
     available_backends: list[str] = Field(
@@ -5223,21 +5223,21 @@ class MemoryStatsResult(_Strict):
         description=(
             "The EverOS backends whose plugin is importable where raven runs, in a stable "
             "order: 'everos' for the local server, 'everos-cloud' for the hosted one. The "
-            "page draws one segment per name, disabled for the names this list omits."
+            "section draws one segment per name, disabled for the names this list omits."
         ),
     )
     cloud_key_set: bool = Field(
         default=False,
         description=(
             "Whether the hosted backend has an API key on file (or in EVEROS_CLOUD_API_KEY). "
-            "The memory page draws its key-entry panel in place of the store when the cloud "
+            "The memory section draws its key-entry panel in place of the store when the cloud "
             "backend is selected and this is false."
         ),
     )
     local_running: bool = Field(
         default=False,
         description=(
-            "Whether the local EverOS server answers where the local backend reads. The page "
+            "Whether the local EverOS server answers where the local backend reads. The section "
             "draws its start panel when the local backend is selected and this is false."
         ),
     )

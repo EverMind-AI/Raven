@@ -49,8 +49,8 @@ const MEM_GLYPH = (
   <svg viewBox="0 0 24 24"><path d="m12 4.5 8 4-8 4-8-4z" /><path d="m4 12.5 8 4 8-4" /><path d="m4 16.5 8 4 8-4" /></svg>
 )
 
-/* Which EverOS this page reads. Two segments rather than a checkbox: the
-   question has two answers, and "off" is the wizard's choice, not this page's.
+/* Which EverOS this section reads. Two segments rather than a checkbox: the
+   question has two answers, and "off" is the wizard's choice, not this section's.
    A backend whose plugin is not installed keeps its segment, disabled -- the
    reason it cannot be picked is the useful part. */
 const BACKENDS: Array<{ name: string; label: string }> = [
@@ -60,7 +60,7 @@ const BACKENDS: Array<{ name: string; label: string }> = [
 
 /* Whether the install told us enough to draw a switch. A fixture or a failed
    stats read answers nothing, and two segments over no data would offer a
-   write the page cannot justify. */
+   write the section cannot justify. */
 const canSwitch = (s: store.MemoryState): boolean =>
   Boolean(s.stats?.backend) || Boolean(s.stats?.available_backends?.length)
 
@@ -92,7 +92,7 @@ function BackendSwitch({ s }: { s: store.MemoryState }): JSX.Element | null {
 
 /* A working key can still be replaced: the link opens the same panel over a
    store that already answers. Without it the only way to change the key would
-   be the settings card this page no longer draws. */
+   be the settings card this section no longer draws. */
 function ChangeCloudKey({ s }: { s: store.MemoryState }): JSX.Element | null {
   if (s.switching || s.stats?.backend !== 'everos-cloud' || s.stats?.cloud_key_set !== true || s.cloudRejected) return null
   return (
@@ -102,7 +102,7 @@ function ChangeCloudKey({ s }: { s: store.MemoryState }): JSX.Element | null {
   )
 }
 
-/* The cloud backend with no key: the page has nothing to read, and the store's
+/* The cloud backend with no key: the section has nothing to read, and the store's
    error frame would blame the service for a step the reader has not taken.
    One field, one button, one way to get a key -- the panel is the whole column
    until the key is on file. */

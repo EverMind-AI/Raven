@@ -6487,19 +6487,19 @@ export interface MemoryStatsResult {
    */
   note?: string | null;
   /**
-   * memory.backend as the file names it at read time; null when backend-driven memory is off. The page marks this name's segment as the selected one.
+   * memory.backend as the file names it at read time; null when backend-driven memory is off. The section marks this name's segment as the selected one.
    */
   backend?: string | null;
   /**
-   * The EverOS backends whose plugin is importable where raven runs, in a stable order: 'everos' for the local server, 'everos-cloud' for the hosted one. The page draws one segment per name, disabled for the names this list omits.
+   * The EverOS backends whose plugin is importable where raven runs, in a stable order: 'everos' for the local server, 'everos-cloud' for the hosted one. The section draws one segment per name, disabled for the names this list omits.
    */
   available_backends?: string[];
   /**
-   * Whether the hosted backend has an API key on file (or in EVEROS_CLOUD_API_KEY). The memory page draws its key-entry panel in place of the store when the cloud backend is selected and this is false.
+   * Whether the hosted backend has an API key on file (or in EVEROS_CLOUD_API_KEY). The memory section draws its key-entry panel in place of the store when the cloud backend is selected and this is false.
    */
   cloud_key_set?: boolean;
   /**
-   * Whether the local EverOS server answers where the local backend reads. The page draws its start panel when the local backend is selected and this is false.
+   * Whether the local EverOS server answers where the local backend reads. The section draws its start panel when the local backend is selected and this is false.
    */
   local_running?: boolean;
 }
