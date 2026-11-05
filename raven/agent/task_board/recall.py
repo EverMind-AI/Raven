@@ -45,8 +45,9 @@ def _open_first(groups: Sequence[TaskGroup]) -> list[TaskGroup]:
 
 def _unanswered(group: TaskGroup, indent: str) -> list[str]:
     """What a group waiting on the user still asks: its latest step's questions,
-    numbered as the user's board numbers them. An earlier step's were answered by
-    the turns after it, and a group no longer waiting asks nothing."""
+    numbered as the user's board numbers them. A question an earlier step asked is
+    carried onto the newest one while it stays open, so the latest step is the whole
+    list; a group no longer waiting asks nothing."""
     questions = group.steps[-1].questions if group.status == "needs_you" and group.steps else []
     if not questions:
         return []

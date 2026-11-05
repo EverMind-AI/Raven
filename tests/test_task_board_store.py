@@ -17,6 +17,7 @@ from raven.agent.task_board.board import (
     TaskGroup,
     TaskLink,
     UpdateRejectedError,
+    apply_carry,
     apply_update,
     board_from_dict,
     board_to_dict,
@@ -694,6 +695,45 @@ def test_an_undo_keeps_what_the_reader_set_after_the_undone_turn():
 
     assert (group.status, group.updated_at) == ("completed", 12)
     assert group.summary == "Blank page after login; the cause is found"
+
+
+def test_an_undo_puts_back_an_older_steps_questions_the_carry_changed():
+    before = _one_group("needs_you")
+    settled = apply_carry(before, {"groups": [{"group": "g_1", "questions": []}]}, ["g_1"], turn_at="T2", now_ms=9)
+
+    undone = drop_turns(settled, {"T2"})
+
+    group = undone.groups[0]
+    assert (group.status, group.steps[0].questions) == ("needs_you", ASKED)
+    assert board_to_dict(undone, revisions=True) == board_to_dict(before, revisions=True)
+
+
+def test_an_undo_removes_a_question_the_carry_added_to_an_older_step():
+    before = _one_group("needs_you")
+    added = apply_carry(
+        before,
+        {"groups": [{"group": "g_1", "questions": [*ASKED, "Which branch?"]}]},
+        ["g_1"],
+        turn_at="T2",
+        now_ms=9,
+    )
+
+    undone = drop_turns(added, {"T2"})
+
+    assert undone.groups[0].steps[0].questions == ASKED
+
+
+def test_an_undo_does_not_overwrite_a_question_the_reader_set_aside_after():
+    before = _one_group("needs_you")
+    step_id = before.groups[0].steps[0].id
+    narrowed = apply_carry(
+        before, {"groups": [{"group": "g_1", "questions": ASKED[:1]}]}, ["g_1"], turn_at="T2", now_ms=9
+    )
+    reader = ignore_question(narrowed, "g_1", step_id, ASKED[0], now_ms=10)
+
+    undone = drop_turns(reader, {"T2"})
+
+    assert undone.groups[0].steps[0].questions == []
 
 
 def test_an_undo_puts_back_a_groups_entry_the_turn_made_without_a_step():

@@ -249,8 +249,9 @@ summary in two lines (5.1).
   still runs, so recall, the sidebar and the page cannot disagree;
 - in both, a group that waits on the user (`needs_you`) closes with its unanswered questions:
   its latest step's, numbered as the page numbers them. One the user set aside has left the
-  step already; an earlier step's were answered by the turns after it, and a group no longer
-  waiting asks nothing;
+  step already; an earlier step's are carried onto the newest one while they stay open (and
+  stay on their own step when the pass gets no answer), and a group no longer waiting asks
+  nothing;
 - `query`: BM25 (`raven/utils/bm25.py`, CJK-aware) over each group's title and summary, its
   steps' titles and summaries, and linked Task summaries; a completed group's score is multiplied by `0.5`; returns the top
   group's whole thread plus the ids and titles of up to two runners-up, so the model can
