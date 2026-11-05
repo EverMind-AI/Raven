@@ -122,6 +122,8 @@ async function live({ session = null, answers = null }: Options = {}) {
       runtime.applyStagedTier(registry.viewRuntime(), sessionId, gen),
     applyStagedEffort: (sessionId: string, gen: number) =>
       runtime.applyStagedEffort(registry.viewRuntime(), sessionId, gen),
+    applyStagedPerm: (sessionId: string, gen: number) =>
+      runtime.applyStagedPerm(registry.viewRuntime(), sessionId, gen),
   }
   /* Everything the two sources read off the page. `modelSet` is the island's
      verb, faked above; the chip painter is the page's. */
@@ -943,6 +945,46 @@ describe('the staged tier write', () => {
     await applied
     expect(h.tierReads()).toEqual([{ sid: 'a', gen: began }])
     expect(began).toBe(h.gen())
+  })
+})
+
+describe('the staged permission write', () => {
+  /* The real applyStagedPerm over the real switch counter, with the
+     `config.set` write deferred. As with the tier and the effort, the re-read
+     after the write is about the session the promotion minted and carries the
+     promotion's ticket, so a reader who left for another view is not painted
+     with this session's mode. */
+  it('re-reads under the promotion\'s ticket after the write', async () => {
+    const h = await live({ session: 'a' })
+    h.overrides.staged.perm = 'full'
+    const began = h.gen()
+    const applied = h.overrides.applyStagedPerm('a', began)
+    expect(h.inFlight()).toEqual(['config.set'])
+    expect(h.param(0)).toEqual({ key: 'permissions.mode', value: 'full', scope: 'session', session_id: 'a' })
+    /* The reader opens another view while the write is in flight; that view
+       reads its own mode at once, under its own ticket. */
+    h.bump()
+    await h.settle(0, { applied: true })
+    await applied
+    expect(h.calls.filter((c) => c[0] === 'config.get').at(-1)![1])
+      .toEqual({ keys: ['permissions.mode'], session_id: 'a' })
+    /* The staged write's re-read lands under a spent ticket and paints
+       nothing; the view the reader opened keeps the mode its own read gave.
+       That read ran while the switch was starting, so the harness answered it
+       with a promise that never settles -- nothing else is waiting to paint. */
+    await h.settle(1, { config: { 'permissions.mode': 'full' } })
+    expect(h.calls.filter((c) => c[0] === 'setPermMode').map((c) => c[1])).toEqual([])
+  })
+
+  it('re-reads under a ticket that still stands when the reader stayed', async () => {
+    const h = await live({ session: 'a' })
+    h.overrides.staged.perm = 'full'
+    const began = h.gen()
+    const applied = h.overrides.applyStagedPerm('a', began)
+    await h.settle(0, { applied: true })
+    await applied
+    await h.settle(1, { config: { 'permissions.mode': 'full' } })
+    expect(h.calls.filter((c) => c[0] === 'setPermMode').map((c) => c[1])).toEqual(['full'])
   })
 })
 

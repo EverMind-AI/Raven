@@ -587,6 +587,11 @@ All notable changes to Raven are documented here.
   conversation while the write is in flight no longer paints the rung there.
   A pick whose reply lands after the reader has opened another conversation is
   dropped the same way, so a rung chosen on one is not echoed onto the other.
+- The permission chip's re-read after a draft's staged mode is written to the
+  conversation its first message minted now carries that promotion's switch as
+  well, as the tier and effort writes do: opening another conversation while
+  the write is in flight no longer paints the minted session's mode over the
+  view the reader moved to.
 - A key the vendor refuses is no longer called connected. The settings page
   and the first-run wizard ask the vendor about a key before storing it
   (`model.check_key`): a key answered with 401, or named invalid, is refused
