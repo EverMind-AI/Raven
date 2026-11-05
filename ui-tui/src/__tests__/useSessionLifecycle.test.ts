@@ -195,7 +195,8 @@ describe('useSessionLifecycle resumeById staleness guard', () => {
     setInputBuf: vi.fn(),
     setPasteSnips: vi.fn(),
     setQueueEdit: vi.fn(),
-    syncQueue: vi.fn()
+    syncQueue: vi.fn(),
+    updateInput: vi.fn()
   })
 
   const deferred = <T>() => {

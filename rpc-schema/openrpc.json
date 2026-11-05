@@ -10394,6 +10394,71 @@
       }
     },
     {
+      "name": "input.history.list",
+      "summary": "Return the newest composer history entries, oldest first.",
+      "params": [
+        {
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "description": "How many of the newest entries to return; capped at 1000."
+          }
+        }
+      ],
+      "result": {
+        "name": "InputHistoryListResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "entries": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "entries"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "input.history.append",
+      "summary": "Add one sent prompt to the shared composer history.",
+      "params": [
+        {
+          "name": "text",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "InputHistoryAppendResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "appended": {
+              "type": "boolean",
+              "description": "False when the text was blank or repeated the newest entry."
+            }
+          },
+          "required": [
+            "ok",
+            "appended"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
       "name": "session.interrupt",
       "summary": "Cancel the turn in flight on one session.",
       "params": [

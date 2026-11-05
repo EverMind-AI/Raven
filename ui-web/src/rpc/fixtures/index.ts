@@ -30,6 +30,7 @@ import { createCron } from './cron'
 import { createDeck } from './deck'
 import { createExt } from './ext'
 import { createFs } from './fs'
+import { createHistory } from './history'
 import { createImport } from './import'
 import { createImported } from './imported'
 import { createKnowledge } from './knowledge'
@@ -81,6 +82,7 @@ export function demoFixtures(env: FixtureEnv): Fixtures {
     ...createTasks(env).fixtures,
     ...createMemory(env).fixtures,
     ...createFs(env).fixtures,
+    ...createHistory().fixtures,
     ...createDeck(env).fixtures,
     ...createImport(env).fixtures,
     ...createImported(env, sessions).fixtures,

@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client'
 
 import { AttTray, QueueList, SlashList, TurnLive } from './ComposerPage'
+import * as history from './history'
 import * as store from './store'
 import './styles.css'
 import { open as openTemplates } from './templates'
@@ -122,6 +123,14 @@ export function parkDraftNow(): void {
 
 export function dockLift(): void {
   store.dockLift()
+}
+
+/* The history is ambient -- one shared file, one read per page -- so it is
+   loaded beside the boot rather than per conversation. Called once the socket
+   has been asked to connect, where a call made during the handshake is held
+   until the open instead of failing as "not connected" (rpc/wsTransport.ts). */
+export function initHistory(): void {
+  void history.init()
 }
 
 export const liveAnchor = (): number => store.liveAnchor()

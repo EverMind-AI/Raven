@@ -34,7 +34,8 @@ const composerActions = () => ({
   setInputBuf: vi.fn(),
   setPasteSnips: vi.fn(),
   setQueueEdit: vi.fn(),
-  syncQueue: vi.fn()
+  syncQueue: vi.fn(),
+  updateInput: vi.fn()
 })
 
 const composerState = {
