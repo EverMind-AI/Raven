@@ -26,6 +26,7 @@ from raven.agent.loop._shared import (
     _TOOL_METADATA_KEY,
     _TOOL_PREVIEW_MAX_CHARS,
     _WALL_CLOCK_STATIC_FALLBACK,
+    CONTEXT_RESET_REASON,
     OUTPUT_LIMIT_NUDGE,
     POST_TOOL_NUDGE,
     SKIPPED_AFTER_BLOCKED_CALL,
@@ -788,6 +789,7 @@ class TurnPathMixin:
         attempt_started_at: float | None = None,
         attempt: int = 1,
         rerun_pending: "Callable[[str | None, list[dict], str], bool] | None" = None,
+        context_reset_tokens: int | None = None,
         spend: TurnSpend | None = None,
     ) -> tuple[str | None, list[str], list[dict], LoopOutcome]:
         """Run the agent iteration loop.
@@ -832,6 +834,11 @@ class TurnPathMixin:
         one the rerun discards, and the minutes spent making it come out of the
         turn's own clock. Omitted, the seam fires for every answerless turn,
         which is what every agent that budgets no rerun sees.
+
+        ``context_reset_tokens`` ends this attempt with no answer and no wrap-up once
+        the context its last call filled reaches it (``stopped_by="context_reset"``).
+        The caller passes it only for an attempt it will run again, since the reset
+        exists to hand the question to a fresh attempt; omitted, nothing resets.
 
         ``spend`` is the turn's cost, which outlives this loop the way the
         clock above does: a rerun is a second attempt at one turn and bills
@@ -1044,6 +1051,19 @@ class TurnPathMixin:
                 logger.warning(
                     "Wall-clock budget {}s reached after {} iterations; wrapping up",
                     budgets.wall_clock_seconds,
+                    iteration,
+                )
+                break
+            # Between iterations, for the clock's reason. The attempt is dropped, not
+            # wrapped up: an answer squeezed out of a full context is the one the
+            # rerun is there to replace.
+            if context_reset_tokens and window.last_context_used >= context_reset_tokens:
+                stopped_by = "context_reset"
+                status = "interrupted"
+                logger.warning(
+                    "Context {} tokens reached the reset line {} after {} iterations; dropping the attempt",
+                    window.last_context_used,
+                    context_reset_tokens,
                     iteration,
                 )
                 break
@@ -2638,6 +2658,7 @@ class TurnPathMixin:
                 attempt_started_at=monotonic() if budgets.rerun_fresh_clock else None,
                 attempt=attempt,
                 rerun_pending=_rerun_pending,
+                context_reset_tokens=budgets.context_reset_tokens if retries_left > 0 else None,
                 spend=spend,
             )
 
@@ -2687,7 +2708,15 @@ class TurnPathMixin:
                     logger.exception("attempt check raised; judging the attempt by the dead-end tests alone")
             if budgets.dead_end_reasons:
                 reasons = [r for r in reasons if r.startswith(budgets.dead_end_reasons)]
+            # The loop dropped this attempt itself, so it owes the rerun whatever the
+            # filter kept.
+            if _context_reset() and CONTEXT_RESET_REASON not in reasons:
+                reasons.append(CONTEXT_RESET_REASON)
             return reasons
+
+        def _context_reset() -> bool:
+            end = turn_hook_meta.get("turn_end")
+            return isinstance(end, dict) and end.get("stopped_by") == "context_reset"
 
         def _clock_spent() -> bool:
             # A rerun on a fresh clock is never short of time before it starts.
@@ -2749,7 +2778,9 @@ class TurnPathMixin:
                         # did answer, and only failed the product's own check, is
                         # not told it produced nothing.
                         await on_progress(
-                            "That attempt's answer was not accepted; running the turn again."
+                            "That attempt filled its context; running the turn again."
+                            if _context_reset()
+                            else "That attempt's answer was not accepted; running the turn again."
                             if pending["answered"]
                             else "That attempt produced no answer; running the turn again."
                         )

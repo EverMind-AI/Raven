@@ -674,6 +674,9 @@ means the product has nothing against the attempt. A callable for the reason
 
 
 TURN_ATTEMPT_PICK_KEY = "turn_attempt_pick"
+
+#: The rerun reason of an attempt the loop dropped at ``TurnBudgets.context_reset_tokens``.
+CONTEXT_RESET_REASON = "context_reset"
 """Where a product leaves its choice of which attempt a turn ships when none was accepted.
 
 Called as ``pick(finals)`` once, after the last attempt of a turn that ran more than one
@@ -723,12 +726,18 @@ class TurnBudgets:
     the rest of one shared clock. Off by default, because a dead end is usually a turn
     that ran out of time and a fresh copy doubles it; a product that re-runs answers it
     judged unacceptable, whatever they cost, opts in and bounds the total itself.
+
+    ``context_reset_tokens`` ends an attempt, unanswered and with no wrap-up, once the
+    context its last call filled reaches this many tokens, so a rerun starts from the
+    question. Checked where the wall clock is, and only on an attempt a rerun follows:
+    the last one runs to its own end. Off (``None``) unless a product sets it.
     """
 
     wall_clock_seconds: float | None = None
     dead_end_retries: int = 0
     dead_end_reasons: tuple[str, ...] = ()
     rerun_fresh_clock: bool = False
+    context_reset_tokens: int | None = None
 
 
 def turn_budgets(metadata: dict[str, Any] | None) -> TurnBudgets:
@@ -745,6 +754,7 @@ def turn_budgets(metadata: dict[str, Any] | None) -> TurnBudgets:
     wall = raw.get("wall_clock_seconds")
     retries = raw.get("dead_end_retries")
     reasons = raw.get("dead_end_reasons")
+    reset = raw.get("context_reset_tokens")
     # ``bool`` is an ``int``, so a switch left in a number's place would otherwise
     # read as one retry or a one-second deadline -- a misconfiguration that ends
     # turns rather than one that is ignored.
@@ -758,6 +768,9 @@ def turn_budgets(metadata: dict[str, Any] | None) -> TurnBudgets:
         ),
         dead_end_reasons=tuple(str(r) for r in reasons) if isinstance(reasons, (list, tuple)) else (),
         rerun_fresh_clock=raw.get("rerun_fresh_clock") is True,
+        context_reset_tokens=int(reset)
+        if isinstance(reset, int) and not isinstance(reset, bool) and reset > 0
+        else None,
     )
 
 

@@ -6,6 +6,7 @@ in ``_shared``. Callers import ``AgentLoop`` from here.
 """
 
 from raven.agent.loop._shared import (
+    CONTEXT_RESET_REASON,
     TURN_ASK_KIND_KEY,
     TURN_ATTEMPT_CHECK_KEY,
     TURN_ATTEMPT_PICK_KEY,
@@ -23,6 +24,7 @@ from raven.agent.loop._shared import (
 from raven.agent.loop.main import AgentLoop
 
 __all__ = [
+    "CONTEXT_RESET_REASON",
     "TURN_ASK_KIND_KEY",
     "TURN_ATTEMPT_CHECK_KEY",
     "TURN_ATTEMPT_PICK_KEY",

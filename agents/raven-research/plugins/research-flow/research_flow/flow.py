@@ -174,6 +174,7 @@ def _turn_cargo(cfg: FlowConfig, text: str) -> dict[str, Any]:
             "dead_end_retries": retries,
             "dead_end_reasons": reasons,
             "rerun_fresh_clock": restart and cfg.verify_restart.fresh_clock,
+            "context_reset_tokens": cfg.verify_restart.context_reset_tokens if restart else None,
         },
         TURN_ASK_KIND_KEY: harness_ask_kind,
     }
@@ -1186,6 +1187,9 @@ class ResearchFlowParticipant(AgentParticipant):
         verify = facts.get("verify_gate") or {}
         if verify.get("scoped"):
             return None
+        # Dropped by the loop before it answered: nothing was delivered to review.
+        if turn_end.get("stopped_by") == "context_reset":
+            return "context_reset"
         # Before the review: an abstention makes no claim for the reviewer to reject.
         if abstain_fails and abstains(final_content):
             return "abstained"

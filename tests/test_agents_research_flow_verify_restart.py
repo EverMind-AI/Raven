@@ -38,6 +38,7 @@ def test_off_by_default_leaves_the_dead_end_budget_as_it_was():
         "dead_end_retries": 1,
         "dead_end_reasons": [],
         "rerun_fresh_clock": False,
+        "context_reset_tokens": None,
     }
 
 
@@ -46,6 +47,13 @@ def test_on_it_budgets_the_attempts_and_a_fresh_clock():
     assert budgets["dead_end_retries"] == 4, "five attempts, the first included"
     assert budgets["rerun_fresh_clock"] is True
     assert budgets["dead_end_reasons"] == [], "every dead end still reruns"
+
+
+def test_the_context_reset_line_rides_only_a_restart():
+    on = {"verifyRestart": {"enabled": True, "contextResetTokens": 131072}}
+    assert _budgets(on)["context_reset_tokens"] == 131072
+    assert _budgets({"verifyRestart": {"enabled": True}})["context_reset_tokens"] == 0, "0 is off"
+    assert _budgets({**on, "verify": {"enabled": False}})["context_reset_tokens"] is None
 
 
 def test_with_dead_ends_switched_off_only_unverified_attempts_rerun():
@@ -114,6 +122,11 @@ def test_what_counts_as_a_pass(review, policy, expected):
 def test_a_wrap_up_answer_is_unreviewed_even_after_an_earlier_pass():
     p = _participant(verify_gate={"final_review": "pass"})
     assert p.attempt_reasons(_OFF, "answer", {"status": "interrupted"}) == ["unverified:unreviewed"]
+
+
+def test_an_attempt_the_loop_dropped_at_the_reset_line_says_so():
+    end = {"status": "interrupted", "stopped_by": "context_reset"}
+    assert _participant().attempt_reasons(_OFF, None, end) == ["unverified:context_reset"]
 
 
 def test_an_attempt_that_never_drafted_is_unreviewed():
@@ -433,3 +446,38 @@ async def test_an_abstaining_draft_is_sent_back_and_the_named_answer_is_reviewed
     assert len(provider.reviewed) == 1, "the abstention was bounced before the reviewer saw it"
     (record,) = [json.loads(f.read_text()) for f in (tmp_path / "state" / "sessions").glob("*.json")]
     assert record["observers"]["best_guess"] == {"abstained": 1, "bounces": 1}
+
+
+class _FillsThenDrafts(_StudentAndReviewer):
+    """Attempt one searches until its context holds 200k tokens; later attempts draft."""
+
+    def __init__(self, drafts: list[str], verdicts: list[bool]) -> None:
+        super().__init__(drafts, verdicts)
+        self.searched = 0
+
+    async def chat(self, messages, tools=None, model=None, **kw):
+        student = tools and not any((t.get("function") or {}).get("name") == "review_verdict" for t in tools)
+        if student and not self.searched:
+            self.searched += 1
+            self.seeds.append([dict(m) for m in messages])
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(id="s", name="list_dir", arguments={"path": "."})],
+                finish_reason="tool_calls",
+                usage={"prompt_tokens": 200_000, "completion_tokens": 0},
+            )
+        return await super().chat(messages, tools=tools, model=model, **kw)
+
+
+@pytest.mark.asyncio
+async def test_an_attempt_whose_context_fills_restarts_before_it_answers(tmp_path):
+    provider = _FillsThenDrafts(drafts=["<answer>Alice</answer>"], verdicts=[True])
+    flow = {"verifyRestart": {"enabled": True, "maxAttempts": 2, "contextResetTokens": 131072}}
+
+    reply = await _turn(tmp_path, provider, flow)
+
+    assert reply.startswith("<answer>Alice</answer>")
+    assert len(provider.seeds) == 2, "the second attempt starts on the question"
+    assert len(provider.reviewed) == 1, "the dropped attempt delivered nothing to review"
+    (record,) = [json.loads(f.read_text()) for f in (tmp_path / "state" / "sessions").glob("*.json")]
+    assert record["observers"]["restart"]["log"] == "1:context_reset,2:pass"

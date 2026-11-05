@@ -339,6 +339,12 @@ class VerifyRestartConfig(_Base):
     ``pick`` is what ships when no attempt passes: ``vote`` the answer most attempts
     named (an abstention never outvotes a named answer; ties go to the better review,
     then the later attempt), ``last`` the last attempt's.
+
+    ``contextResetTokens`` also restarts an attempt, before it answers, once its context
+    reaches that many tokens: the discard-all of DeepSeek-V3.2, which Iris (arXiv
+    2609.04304) runs at 131072. The dropped attempt names nothing to vote for, and the
+    last attempt is never dropped. On a 100-question batch, runs whose context passed
+    131072 were right 8 of 47 times, against 47 of 53 below it. 0 (the default) is off.
     """
 
     enabled: bool = False
@@ -346,6 +352,7 @@ class VerifyRestartConfig(_Base):
     fresh_clock: bool = True
     require_first_pass: bool = False
     pick: Literal["vote", "last"] = "vote"
+    context_reset_tokens: int = Field(default=0, ge=0)
 
 
 class BestGuessConfig(_Base):

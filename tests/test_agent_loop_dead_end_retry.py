@@ -1123,3 +1123,106 @@ async def test_a_streaming_reader_sees_the_picked_answer_last_in_an_episode_of_i
     assert tail == "Bob won it."
     episodes = [v for kind, v in events if kind == "episode"]
     assert episodes == list(range(len(episodes)))
+
+
+# -- a context reset: the attempt whose context filled is dropped and run again ----
+
+
+def _searches(context_used: int) -> LLMResponse:
+    return LLMResponse(
+        content="",
+        tool_calls=[ToolCallRequest(id="call-a", name="list_dir", arguments={"path": "."})],
+        finish_reason="tool_calls",
+        usage={"prompt_tokens": context_used, "completion_tokens": 0},
+    )
+
+
+def _fills_its_context() -> list[LLMResponse]:
+    """An attempt whose second call fills 200k: a reset drops it there."""
+    return [_searches(1_000), _searches(200_000)]
+
+
+def _fills_then_answers() -> list[LLMResponse]:
+    """The same attempt, run on past the fill to an answer."""
+    return [*_fills_its_context(), LLMResponse(content="Bob, I think.", finish_reason="stop")]
+
+
+@pytest.mark.asyncio
+async def test_an_attempt_whose_context_fills_is_dropped_unanswered_and_run_again(tmp_path):
+    notes: list[str] = []
+
+    async def _progress(text: str, **_kw) -> None:
+        notes.append(text)
+
+    provider = _Scripted(_fills_its_context(), _answers("Alice Smith won it."))
+    hook = _Checks(lambda _text, _end: [], dead_end_retries=1, context_reset_tokens=131_072)
+    agent = _loop(tmp_path, provider, [hook])
+
+    out = await agent._process_message(_req(), session_key="s1", on_progress=_progress)
+
+    assert out[0] == "Alice Smith won it."
+    assert provider.calls == 3, "the attempt stopped after the call that filled it: no answer, no wrap-up"
+    assert not any("Bob" in str(m.get("content")) for m in provider.seeds[1]), "the rerun starts on the question"
+    assert [(text, end.get("stopped_by")) for text, end in hook.seen] == [
+        (None, "context_reset"),
+        ("Alice Smith won it.", None),
+    ]
+    assert hook.seen[0][1]["status"] == "interrupted", "labelled as a cut attempt, like the clock's"
+    assert "That attempt filled its context; running the turn again." in notes, notes
+
+
+@pytest.mark.asyncio
+async def test_the_last_attempt_is_never_reset(tmp_path):
+    provider = _Scripted(_fills_its_context(), _fills_then_answers())
+    hook = _Checks(lambda _text, _end: [], dead_end_retries=1, context_reset_tokens=131_072)
+    agent = _loop(tmp_path, provider, [hook])
+
+    out = await agent._process_message(_req(), session_key="s1")
+
+    assert out[0] == "Bob, I think.", "with no attempt after it, the last one runs to its own answer"
+    assert provider.attempts_used == 2
+
+
+@pytest.mark.asyncio
+async def test_an_agent_that_budgets_no_rerun_is_never_reset(tmp_path):
+    provider = _Scripted(_fills_then_answers())
+    agent = _loop(tmp_path, provider, [_Budgeted(context_reset_tokens=131_072)])
+
+    out = await agent._process_message(_req(), session_key="s1")
+
+    assert out[0] == "Bob, I think."
+    assert provider.calls == 3
+
+
+@pytest.mark.asyncio
+async def test_a_context_under_the_line_is_not_reset(tmp_path):
+    provider = _Scripted(_fills_then_answers(), _answers("never asked"))
+    agent = _loop(tmp_path, provider, [_Budgeted(dead_end_retries=1, context_reset_tokens=250_000)])
+
+    out = await agent._process_message(_req(), session_key="s1")
+
+    assert out[0] == "Bob, I think."
+    assert provider.attempts_used == 1
+
+
+@pytest.mark.asyncio
+async def test_a_reset_reruns_whatever_the_reason_filter_keeps(tmp_path):
+    """The loop dropped the attempt itself, so a product's narrowed filter cannot leave
+    the turn with that attempt's nothing."""
+    provider = _Scripted(_fills_its_context(), _answers("Alice Smith won it."))
+    hook = _Budgeted(dead_end_retries=1, dead_end_reasons=["unverified"], context_reset_tokens=131_072)
+    agent = _loop(tmp_path, provider, [hook])
+
+    out = await agent._process_message(_req(), session_key="s1")
+
+    assert out[0] == "Alice Smith won it."
+    assert provider.attempts_used == 2
+
+
+@pytest.mark.parametrize("raw", [True, "131072", 0, -1, 1.5e5, None])
+def test_a_reset_line_that_is_not_a_token_count_is_off(raw):
+    assert turn_budgets({TURN_BUDGETS_KEY: {"context_reset_tokens": raw}}).context_reset_tokens is None
+
+
+def test_a_reset_line_is_read_as_given():
+    assert turn_budgets({TURN_BUDGETS_KEY: {"context_reset_tokens": 131_072}}).context_reset_tokens == 131_072
