@@ -487,6 +487,24 @@ async def memory_start_local(params: dict) -> dict:
     }
 
 
+async def memory_switch_status(params: dict, *, agent_loop_factory: Any = None) -> dict:
+    """``memory.switchStatus`` — whether a switch would wait for a turn.
+
+    The section asks before writing anything, so a reader with a conversation
+    in progress can be told the switch lands when that turn finishes instead
+    of watching a spinner with no explanation. A loop that cannot answer is
+    "not busy": the switch still goes ahead, and ``applyRuntime``'s own wait
+    is what protects the turn.
+    """
+    del params
+    try:
+        loop = agent_loop_factory() if agent_loop_factory is not None else None
+        turns = int(getattr(loop, "active_turns", 0) or 0) if loop is not None else 0
+    except Exception:  # noqa: BLE001 - a status probe must not block the switch
+        turns = 0
+    return {"active": turns > 0, "turns": turns}
+
+
 async def memory_apply_runtime(params: dict, *, agent_loop_factory: Any = None) -> dict:
     """``memory.applyRuntime`` — point the running loop at the configured backend.
 
@@ -540,9 +558,13 @@ def register_memory_methods(dispatcher: "Dispatcher", *, agent_loop_factory: Any
     async def _apply(params: dict) -> dict:
         return await memory_apply_runtime(params, agent_loop_factory=agent_loop_factory)
 
+    async def _status(params: dict) -> dict:
+        return await memory_switch_status(params, agent_loop_factory=agent_loop_factory)
+
     dispatcher.register("memory.stats", memory_stats)
     dispatcher.register("memory.list", memory_list)
     dispatcher.register("memory.startLocal", memory_start_local)
+    dispatcher.register("memory.switchStatus", _status)
     dispatcher.register("memory.applyRuntime", _apply)
 
 
@@ -551,5 +573,6 @@ __all__ = [
     "memory_list",
     "memory_start_local",
     "memory_stats",
+    "memory_switch_status",
     "register_memory_methods",
 ]

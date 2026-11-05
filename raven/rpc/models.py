@@ -5298,6 +5298,21 @@ class MemoryStartLocalResult(_Strict):
     )
 
 
+class MemorySwitchStatusParams(_Strict):
+    pass
+
+
+class MemorySwitchStatusResult(_Strict):
+    active: bool = Field(
+        ...,
+        description=("Whether a turn is in flight and a live switch would wait for it to finish."),
+    )
+    turns: int = Field(
+        ...,
+        description="How many turns are in flight; zero when the switch can apply at once.",
+    )
+
+
 class MemoryApplyRuntimeParams(_Strict):
     pass
 
@@ -7518,6 +7533,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "memory.stats": (MemoryStatsParams, MemoryStatsResult),
     "memory.list": (MemoryListParams, MemoryListResult),
     "memory.startLocal": (MemoryStartLocalParams, MemoryStartLocalResult),
+    "memory.switchStatus": (MemorySwitchStatusParams, MemorySwitchStatusResult),
     "memory.applyRuntime": (MemoryApplyRuntimeParams, MemoryApplyRuntimeResult),
     # trajectory.* -- the Web trajectory view
     "trajectory.state": (TrajectoryStateParams, TrajectoryStateResult),

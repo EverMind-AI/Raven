@@ -1,4 +1,5 @@
 import { t } from '../../i18n/t'
+import * as confirm from '../../state/confirm'
 import * as settingsDialog from '../../state/settings'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
@@ -139,12 +140,42 @@ export function refreshStats(): Promise<void> {
     .catch(() => set({ stats: null }))
 }
 
-/* The local/cloud switch's one write. The section re-reads the file per call, so
-   its rows follow at once; the loop serving chat memory keeps the backend it
-   booted with until `applyRuntime` points it at this one, which is a live
-   reference swap rather than a reload. */
+/* The local/cloud switch's first half: a turn in flight is a question, not a
+   spinner. The loop switches only when that turn finishes, so the reader is
+   told that before anything is written and can back out. A status probe that
+   cannot answer does not block the switch -- `applyRuntime` still waits. */
 export function switchBackend(backend: string): void {
   if (get().backendBusy || get().stats?.backend === backend) return
+  set({ backendBusy: true, backendErr: '' })
+  void (async () => {
+    let busy = false
+    try {
+      busy = (await source().switchStatus()).active
+    } catch {
+      /* The guard is an explanation, not the safety boundary: the rebind waits
+         for the turn itself. */
+    }
+    if (busy) {
+      set({ backendBusy: false })
+      confirm.ask(
+        t('gui.mem.switch_busy_t'),
+        t('gui.mem.switch_busy_sub'),
+        t('gui.mem.switch_confirm'),
+        () => performSwitch(backend),
+        'primary',
+      )
+      return
+    }
+    performSwitch(backend)
+  })()
+}
+
+/* The switch itself: the config write, the live rebind and the reads that
+   follow. The section re-reads the file per call, so its rows follow at once;
+   the loop serving chat memory keeps the backend it booted with until
+   `applyRuntime` points it at this one, which is a live reference swap rather
+   than a reload. */
+function performSwitch(backend: string): void {
   const stats = get().stats
   /* The segment moves at once, and the old store's numbers and rows go with
      it: they belong to the backend the reader just left. The wait below is

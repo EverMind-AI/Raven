@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 257 methods, 147 component schemas.
+// 258 methods, 147 component schemas.
 
 /* eslint-disable */
 /**
@@ -5068,6 +5068,17 @@ export interface MemoryStartLocalResult {
    */
   detail?: string | null;
 }
+export interface MemorySwitchStatusParams {}
+export interface MemorySwitchStatusResult {
+  /**
+   * Whether a turn is in flight and a live switch would wait for it to finish.
+   */
+  active: boolean;
+  /**
+   * How many turns are in flight; zero when the switch can apply at once.
+   */
+  turns: number;
+}
 export interface MemoryApplyRuntimeParams {}
 export interface MemoryApplyRuntimeResult {
   ok: boolean;
@@ -7005,6 +7016,7 @@ export interface RpcMethods {
   'memory.stats': { params: MemoryStatsParams; result: MemoryStatsResult };
   'memory.list': { params: MemoryListParams; result: MemoryListResult };
   'memory.startLocal': { params: MemoryStartLocalParams; result: MemoryStartLocalResult };
+  'memory.switchStatus': { params: MemorySwitchStatusParams; result: MemorySwitchStatusResult };
   'memory.applyRuntime': { params: MemoryApplyRuntimeParams; result: MemoryApplyRuntimeResult };
   'playbooks.list': { params: PlaybooksListParams; result: PlaybooksListResult };
   'playbooks.get': { params: PlaybooksGetParams; result: PlaybooksGetResult };
@@ -7239,6 +7251,7 @@ export const RPC_METHODS = [
   "memory.list",
   "memory.startLocal",
   "memory.stats",
+  "memory.switchStatus",
   "model.add_endpoint",
   "model.add_model",
   "model.add_models",

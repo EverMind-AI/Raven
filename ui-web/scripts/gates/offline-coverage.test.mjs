@@ -55,6 +55,7 @@ const EXEMPT = {
      control is drawn on ?stub=1 or on a page opened from disk; the calls live
      in the store for the live page. */
   'memory.applyRuntime': 'the offline stats answer names no backend, so no switch is drawn',
+  'memory.switchStatus': 'the offline stats answer names no backend, so no switch is drawn',
   'memory.startLocal': 'the offline stats answer names no backend, so no start panel is drawn',
 }
 

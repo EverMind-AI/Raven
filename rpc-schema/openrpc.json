@@ -6899,6 +6899,32 @@
       }
     },
     {
+      "name": "memory.switchStatus",
+      "summary": "Whether a live memory-backend switch would wait for a turn in flight.",
+      "params": [],
+      "result": {
+        "name": "MemorySwitchStatusResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "active": {
+              "type": "boolean",
+              "description": "Whether a turn is in flight and a live switch would wait for it to finish."
+            },
+            "turns": {
+              "type": "integer",
+              "description": "How many turns are in flight; zero when the switch can apply at once."
+            }
+          },
+          "required": [
+            "active",
+            "turns"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
       "name": "memory.applyRuntime",
       "summary": "Point the running agent loop at the configured memory backend.",
       "params": [],

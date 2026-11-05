@@ -38,6 +38,7 @@ function install(over: Partial<MemorySource> = {}, stats: MemStats | null = null
     setBackend: async () => ({ applied: true }),
     setCloudKey: async () => ({ applied: true }),
     probeCloud: async () => ({ status: 'ok' }),
+    switchStatus: async () => ({ active: false, turns: 0 }),
     applyRuntime: async () => ({ ok: true }),
     startLocal: async () => ({ ok: true, running: true, base_url: '' }),
     ...over,
@@ -579,5 +580,73 @@ describe('memory island', () => {
     await mount()
     await screen.findByText('shipped the island')
     expect(domSnapshot(document.getElementById('memoryBody')!)).toMatchSnapshot()
+  })
+})
+
+/* A switch is asked about, not assumed. The rebind waits for a turn to end
+   itself, but a reader who clicks mid-conversation is told that before
+   anything is written -- and can back out. */
+describe('a switch while a conversation is in progress', () => {
+  const both = {
+    episodes: 1,
+    profiles: 0,
+    agent_cases: 0,
+    agent_skills: 0,
+    backend: 'everos',
+    available_backends: ['everos', 'everos-cloud'],
+  }
+
+  it('asks first, writes nothing until the answer, then switches', async () => {
+    const writes: string[] = []
+    const asked: Array<{ title: string; body: string; label: string; fn: () => void }> = []
+    install({
+      stats: async () => both,
+      switchStatus: async () => ({ active: true, turns: 1 }),
+      setBackend: async (name: string) => {
+        writes.push(name)
+        return { applied: true }
+      },
+    })
+    vi.spyOn(confirmStore, 'ask').mockImplementation((title, body, label, fn) => {
+      asked.push({ title, body, label, fn })
+    })
+
+    await mount()
+    await act(async () => {
+      store.switchBackend('everos-cloud')
+    })
+    await waitFor(() => expect(asked).toHaveLength(1))
+
+    expect(asked[0]!.title).toBe('gui.mem.switch_busy_t')
+    expect(asked[0]!.body).toBe('gui.mem.switch_busy_sub')
+    expect(asked[0]!.label).toBe('gui.mem.switch_confirm')
+    expect(writes).toEqual([])
+    expect(store.get().stats?.backend).toBe('everos')
+
+    await act(async () => {
+      asked[0]!.fn()
+    })
+    await waitFor(() => expect(writes).toEqual(['everos-cloud']))
+  })
+
+  it('switches without a question when the status probe cannot answer', async () => {
+    const writes: string[] = []
+    install({
+      stats: async () => both,
+      switchStatus: async () => {
+        throw new Error('an older gateway')
+      },
+      setBackend: async (name: string) => {
+        writes.push(name)
+        return { applied: true }
+      },
+    })
+
+    await mount()
+    await act(async () => {
+      store.switchBackend('everos-cloud')
+    })
+
+    await waitFor(() => expect(writes).toEqual(['everos-cloud']))
   })
 })
