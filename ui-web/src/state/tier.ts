@@ -71,10 +71,12 @@ export interface TierReply {
    to it, so a read that asked "whichever is current" asked about the one
    being left -- and painted its rung on the new view, where a pick of that
    very rung was then taken as already in force. The source answers null for a
-   read whose switch has been overtaken, and null paints nothing. */
+   read whose switch has been overtaken, and null paints nothing. `set` answers
+   null the same way: a write the reader changed views under is not echoed over
+   the view they are on now. */
 export interface TierSource {
   read(sid?: string | null, gen?: number): Promise<TierReply | null>
-  set(mode: string): Promise<TierReply>
+  set(mode: string): Promise<TierReply | null>
 }
 
 let mode = ''

@@ -413,6 +413,12 @@ export const tierSource: TierSource = {
     return ticket === generation() ? r : null
   },
   set: async (mode: string) => {
+    /* The write is about the conversation on screen when it was clicked, and
+       its reply paints the chip: the ticket is taken before the await, so a
+       reader who left that view mid-write is not shown its answer over the one
+       they are on now. The draft branch below answers without awaiting, so
+       there is no answer to overtake. */
+    const ticket = generation()
     const sid = sessionCurrent()
     if (!sid) {
       /* Staged, and echoed back as though written: there is no server state to
@@ -423,7 +429,7 @@ export const tierSource: TierSource = {
     }
     const r = await gateway().call('session.set_mode', { session_key: sid, mode })
     tierMenu = (r && r.availableModes) || tierMenu
-    return r
+    return ticket === generation() ? r : null
   },
 }
 

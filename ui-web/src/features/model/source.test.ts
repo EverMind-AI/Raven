@@ -329,6 +329,18 @@ describe('the live tier read', () => {
     expect(h.param(1)).toEqual({ session_key: '' })
   })
 
+  it('reads the view on screen when the caller names none', async () => {
+    /* The boot read and the command that re-reads the chip bring no
+       conversation of their own: the source answers for whatever is on screen,
+       under the ticket current when the read starts. */
+    const h = await live({ session: 'sess-1' })
+    const read = h.tierRead()
+    expect(h.inFlight()).toEqual(['session.set_mode'])
+    expect(h.param(0)).toEqual({ session_key: 'sess-1' })
+    await h.settle(0, { mode: 'high', availableModes: MENU })
+    expect(await read).toEqual({ mode: 'high', availableModes: MENU })
+  })
+
   it('keeps the catalogue a dropped answer carried, which is the deployment\'s and not the conversation\'s', async () => {
     /* A pick staged on a draft is echoed back with the catalogue last heard,
        so the row can draw the rungs before any session exists -- and the
@@ -340,6 +352,31 @@ describe('the live tier read', () => {
     await h.settle(0, { mode: 'max', availableModes: MENU })
     expect(await read).toBeNull()
     expect(await h.tierSet('high')).toEqual({ mode: 'high', availableModes: MENU })
+  })
+})
+
+describe('the live tier set', () => {
+  const MENU = [{ id: 'high', name: 'High' }, { id: 'max', name: 'Max' }]
+
+  it('drops a pick the switch has overtaken rather than painting it on the new view', async () => {
+    /* The write is about the conversation on screen when the row was clicked,
+       and its reply paints the chip. A reader who opens another conversation
+       before that reply lands must keep the new view's own rung: the store
+       absorbs nothing when the source answers null. */
+    const h = await live({ session: 'a' })
+    const set = h.tierSet('max')
+    expect(h.inFlight()).toEqual(['session.set_mode'])
+    expect(h.param(0)).toEqual({ session_key: 'a', mode: 'max' })
+    h.bump()
+    await h.settle(0, { mode: 'max', availableModes: MENU })
+    expect(await set).toBeNull()
+  })
+
+  it('answers a pick whose view still stands', async () => {
+    const h = await live({ session: 'a' })
+    const set = h.tierSet('max')
+    await h.settle(0, { mode: 'max', availableModes: MENU })
+    expect(await set).toEqual({ mode: 'max', availableModes: MENU })
   })
 })
 
