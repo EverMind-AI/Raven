@@ -599,6 +599,26 @@ def _run(port: int, open_browser: bool) -> None:
         typer.echo("raven serve stopped")
 
 
+def _read_serve_record() -> Optional[tuple[int, str, int]]:
+    """The port, token and pid this state file names, or None if it names nothing.
+
+    No claim is made about the pid: the caller decides what a live one is worth.
+    The gateway lock proves liveness on its own (``_gateway_hosted_page``), and
+    the attach probe reads the same fact out of the pid itself.
+    """
+    import json
+
+    try:
+        data = json.loads(_state_path().read_text(encoding="utf-8"))
+        port, token = int(data["port"]), str(data["token"])
+        pid = int(data.get("pid") or 0)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+    if port <= 0 or not token:
+        return None
+    return port, token, pid
+
+
 def _read_serve_state() -> Optional[tuple[int, str]]:
     """The port and token of the gateway recorded as running, if any.
 
@@ -606,15 +626,24 @@ def _read_serve_state() -> Optional[tuple[int, str]]:
     for a relauncher to read since before there was one. Absent, unreadable or
     malformed all mean the same thing here -- nothing to attach to -- because the
     caller's next move is the same either way.
-    """
-    import json
 
-    try:
-        data = json.loads(_state_path().read_text(encoding="utf-8"))
-        port, token = int(data["port"]), str(data["token"])
-    except (OSError, ValueError, KeyError, TypeError):
+    A record whose pid is gone is read the same way. The file outlives the
+    gateway that wrote it whenever the stop could not run that gateway's
+    teardown -- on Windows ``raven web --stop`` terminates the process, and the
+    loop's SIGTERM handler is not available there. Its port is then answered by
+    the next generation while that one boots, so trusting its token would post
+    the previous generation's secret to the fresh gateway and be refused: a live
+    engine reported as refusing the recorded token, when the recorded token
+    simply was not its own. The next generation writes its own record, and that
+    one names a pid that is alive.
+    """
+    record = _read_serve_record()
+    if record is None:
         return None
-    return (port, token) if port > 0 and token else None
+    port, token, pid = record
+    if pid > 0 and not _pid_alive(pid):
+        return None
+    return port, token
 
 
 async def _attach(port: int, token: str) -> Optional[str]:
@@ -670,7 +699,6 @@ def _gateway_hosted_page() -> Optional[tuple[int, str]]:
     mounting, and yields -- see ``_gateway_page._standalone_serve_owner``).
     Either of those cases reads as None, and starting is then correct.
     """
-    import json
     import time
 
     from raven.gateway.lock import read_status
@@ -678,13 +706,14 @@ def _gateway_hosted_page() -> Optional[tuple[int, str]]:
     status = read_status(now=time.time())
     if status is None or status.pid <= 0:
         return None
-    try:
-        pid = int(json.loads(_state_path().read_text(encoding="utf-8"))["pid"])
-    except (OSError, ValueError, KeyError, TypeError):
+    record = _read_serve_record()
+    # The lock is the liveness proof here: it is held by the process whose pid
+    # it names, so a record naming that pid needs no separate `_pid_alive`
+    # check -- and must not get one, which would read as "not hosting" whenever
+    # the platform probe cannot open a live process.
+    if record is None or record[2] != status.pid:
         return None
-    if pid != status.pid:
-        return None
-    return _read_serve_state()
+    return record[0], record[1]
 
 
 # ---------------------------------------------------------------------------
