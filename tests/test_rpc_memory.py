@@ -18,7 +18,7 @@ from tests._everos_presence import everos_plugin_absent
 @pytest.fixture(autouse=True)
 def fake_cfg(monkeypatch):
     monkeypatch.setattr(memory, "_cfg", lambda: ("http://x", "u1", "a1"))
-    # The page's start button is drawn off a real probe; a handler test must
+    # The section's start button is drawn off a real probe; a handler test must
     # not inherit the machine's local everos server.
     monkeypatch.setattr(memory, "_local_server_running", lambda: False)
     # A full server, so no test pays a real capability probe: ``http://x`` is
@@ -80,7 +80,7 @@ async def test_stats_degrades_when_everos_down(monkeypatch):
 
 
 def test_available_backends_follow_what_is_importable(monkeypatch):
-    """The page draws one segment per name; a name absent here keeps its
+    """The section draws one segment per name; a name absent here keeps its
     segment but is disabled, so the pair is stable and the list is the truth."""
     monkeypatch.setattr(memory, "everos_plugin_installed", lambda: True)
     monkeypatch.setattr("importlib.util.find_spec", lambda name: object() if name == "raven_everos_cloud" else None)
@@ -90,7 +90,7 @@ def test_available_backends_follow_what_is_importable(monkeypatch):
     )
     assert memory._available_backends() == ["everos", "everos-cloud"]
 
-    # Installed but turned off is not a choice the page can offer: the write
+    # Installed but turned off is not a choice the section can offer: the write
     # would be refused by the same config that disabled it.
     monkeypatch.setattr(
         "raven.config.raven.load_raven_config",
@@ -107,7 +107,7 @@ def test_available_backends_follow_what_is_importable(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_cloud_without_a_key_answers_before_the_network(monkeypatch):
-    """No key is a state, not an outage: the page draws its key panel, and the
+    """No key is a state, not an outage: the section draws its key panel, and the
     handlers must not send requests that can only come back 401."""
     monkeypatch.setattr(memory, "_configured_backend", lambda: "everos-cloud")
     monkeypatch.setattr(memory, "_available_backends", lambda: ["everos", "everos-cloud"])
@@ -476,7 +476,7 @@ def test_installed_cloud_distribution_means_the_page_is_available(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_start_local_answers_its_probe(monkeypatch):
-    """The page's button reports success only after the server answers."""
+    """The section's button reports success only after the server answers."""
     from raven_everos import server as everos_server
 
     calls: list[str] = []
@@ -519,13 +519,22 @@ async def test_start_local_reports_a_refusal(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_apply_runtime_points_the_loop_at_the_configured_backend(monkeypatch):
-    """The live swap is the whole point: no generation rebuild, so the page's
+    """The live swap is the whole point: no generation rebuild, so the section's
     socket stays up. The handler builds the same backend the runtime would."""
     seen: dict = {}
+    built: list = []
 
     class _Loop:
-        async def rebind_memory_backend(self, backend, *, name, user_id, memory_top_k):
-            seen.update(backend=backend, name=name, user_id=user_id, memory_top_k=memory_top_k)
+        context = SimpleNamespace(workspace="LOOP-WS")
+
+        async def rebind_memory_backend(self, backend, *, name, user_id, agent_id, memory_top_k):
+            seen.update(
+                backend=backend,
+                name=name,
+                user_id=user_id,
+                agent_id=agent_id,
+                memory_top_k=memory_top_k,
+            )
 
     monkeypatch.setattr(
         "raven.config.raven.load_raven_config",
@@ -535,17 +544,26 @@ async def test_apply_runtime_points_the_loop_at_the_configured_backend(monkeypat
     )
     monkeypatch.setattr(
         "raven.config.loader.load_config",
-        lambda: SimpleNamespace(workspace_path=SimpleNamespace()),
+        lambda: SimpleNamespace(workspace_path="CONFIG-WS"),
     )
     monkeypatch.setattr(
         "raven.core.plugin_stack.maybe_build_memory_backend",
-        lambda _workspace, _cfg: "BACKEND",
+        lambda workspace, _cfg: built.append(workspace) or "BACKEND",
     )
 
     out = await memory.memory_apply_runtime({}, agent_loop_factory=_Loop)
 
     assert out == {"ok": True, "backend": "everos", "detail": None}
-    assert seen == {"backend": "BACKEND", "name": "everos", "user_id": "u1", "memory_top_k": 5}
+    # The loop's own workspace: the gateway can serve a project other than the
+    # one its config file names.
+    assert built == ["LOOP-WS"]
+    assert seen == {
+        "backend": "BACKEND",
+        "name": "everos",
+        "user_id": "u1",
+        "agent_id": "a1",
+        "memory_top_k": 5,
+    }
 
 
 @pytest.mark.asyncio
