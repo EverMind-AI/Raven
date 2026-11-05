@@ -95,6 +95,15 @@ describe('delivery registry', () => {
     expect(deliveries.byPath('C:\\work\\a.md')?.missing).toBe(false)
   })
 
+  /* A doubled separator after the drive letter is still that drive's path, and
+     a drive letter is not a UNC server: the two slashes after it are one
+     separator too many, not the start of a share. */
+  it('keeps the drive letter when the path carries a doubled separator', () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([{ path: 'C:\\work\\out\\a.md', name: 'a.md' }]))
+
+    expect(deliveries.byPath('C://work/out/a.md')?.name).toBe('a.md')
+  })
+
   /* The redirector resolves a UNC server and share case-insensitively, so
      that much of the path folds with the spelling: it is one file, and a
      write under the other spelling is a write on the same row. Below the
@@ -136,6 +145,21 @@ describe('delivery registry', () => {
     expect(deliveries.byPath('C:\\work\\A.md')?.missing).toBe(false)
     /* And it asked about the row's own path, not the panel's. */
     expect(asked.some((url) => url.includes('A.md'))).toBe(true)
+  })
+
+  /* A path that names no delivery has no row to mark, and nothing to ask the
+     server about either. */
+  it('does nothing when the path names no delivery', async () => {
+    const asked: string[] = []
+    vi.stubGlobal('fetch', (url: string) => {
+      asked.push(String(url))
+      return Promise.resolve({ status: 404 })
+    })
+
+    await workspace.markDeliveryGone('/w/nothing.md')
+
+    expect(asked).toEqual([])
+    expect(deliveries.list()).toEqual([])
   })
 
   /* The other way round, and the ordinary case: the registry holds the path
