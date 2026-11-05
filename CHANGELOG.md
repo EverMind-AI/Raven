@@ -9,6 +9,15 @@ All notable changes to Raven are documented here.
 - Delivered files carry a download link in the tile, the desk's deliverables
   shelf, and the viewer header; a missing delivery draws no control.
 
+- Long-term memory can be switched between the local EverOS server and
+  EverOS Cloud from *Settings → Data & memory*, and the change reaches the
+  running gateway at once instead of waiting for a reload: chat recall follows
+  the new backend, a switch out of "memory off" starts feeding its skills,
+  and the after-turn feedback is routed to it. EverOS Cloud with no key opens
+  a key panel in place, a key saved there is checked before the store opens,
+  and a local server that is not running offers a Start button. The same
+  section's skills tab is "Skills" instead of "Know-how".
+
 ### Changed
 
 - LiteLLM moves to 1.108.0 and the MCP client to 2.3.0; `TIKTOKEN_CACHE_DIR`
