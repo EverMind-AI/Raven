@@ -43,11 +43,11 @@ class _StoreBackend(_Backend):
     def __init__(self) -> None:
         super().__init__()
         self.gate = asyncio.Event()
-        self.written: list[str] = []
+        self.written: list[tuple[str, str]] = []
 
     async def store(self, session_key, messages, metadata=None) -> bool:
         await self.gate.wait()
-        self.written.append(session_key)
+        self.written.append((session_key, messages[0]["content"]))
         return True
 
 
@@ -207,14 +207,17 @@ async def test_rebind_waits_for_the_turn_in_flight() -> None:
 
 @pytest.mark.asyncio
 async def test_a_switch_keeps_a_queued_write_on_its_own_backend(monkeypatch) -> None:
-    """The record was produced against ``old``; a switch must neither move it
-    to ``new`` nor stop ``old`` under it."""
+    """Both turns were produced against ``old``; a switch must neither move
+    them to ``new`` nor stop ``old`` under them. The second record is still
+    queued when the switch lands, so its backend call starts after it."""
     monkeypatch.setattr("raven.agent.loop._shared._STORE_DRAIN_BUDGET_S", 0.01)
     old, new = _StoreBackend(), _Backend()
     loop = _loop(builders=[MemorySegmentBuilder(None, old)], router=None)
     loop.backend = old
-    loop._store_pipeline.enqueue("s1", [{"role": "user", "content": "hi"}])
-    # Let the worker take the record and block inside the backend call.
+    loop._store_pipeline.enqueue("s1", [{"role": "user", "content": "one"}])
+    loop._store_pipeline.enqueue("s1", [{"role": "user", "content": "two"}])
+    # Let the worker take the first record and block inside the backend call;
+    # the second stays queued behind it.
     await asyncio.sleep(0)
 
     await loop.rebind_memory_backend(
@@ -226,7 +229,7 @@ async def test_a_switch_keeps_a_queued_write_on_its_own_backend(monkeypatch) -> 
     )
 
     assert loop.backend is new
-    assert old.stops == 0, "the old backend's record has not settled"
+    assert old.stops == 0, "the old backend's records have not settled"
 
     old.gate.set()
     for _ in range(200):
@@ -234,7 +237,10 @@ async def test_a_switch_keeps_a_queued_write_on_its_own_backend(monkeypatch) -> 
             break
         await asyncio.sleep(0.01)
 
-    assert old.written == ["s1"], "the queued turn was written to the backend it was produced against"
+    assert old.written == [("s1", "one"), ("s1", "two")], (
+        "both turns were written to the backend they were produced against; the second "
+        "is the one still queued when the switch lands"
+    )
     assert old.stops == 1
 
 
