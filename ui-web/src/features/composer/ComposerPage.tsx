@@ -187,13 +187,26 @@ const VERB_ROTATION_MS = verbSpec.rotationMs
    changes every 2.5s must not be announced. */
 export function TurnLive({ afterPaint }: { afterPaint?: () => void }): ReactElement | null {
   useComposer()
+  /* `subagentRuns` is pushed into the composer store by app/install.ts from
+     the tasks store, so this row reacts to a run starting or settling without
+     importing the sibling domain. */
   const live = store.get().live
   const [seed, setSeed] = useState(() => Math.floor(Math.random() * VERBS.length))
   useEffect(() => { if (afterPaint) afterPaint() })
   useEffect(() => {
     if (live) setSeed(Math.floor(Math.random() * VERBS.length))
   }, [live])
-  if (!live) return null
+  if (!live) {
+    /* The host turn is over but the work it delegated is not. No clock: this
+       row measures the sub-agents' remaining time, not the host's last turn. */
+    if (!store.waitingForSubagents()) return null
+    return (
+      <div className="turnlive cp-waiting" role="status">
+        <WorkGlyph />
+        <span>{t('gui.live.waiting_subagents')}</span>
+      </div>
+    )
+  }
   const ms = store.liveMs()
   const verb = VERBS[(seed + Math.floor(ms / VERB_ROTATION_MS)) % VERBS.length] ?? ''
   const clock = store.durText(ms)

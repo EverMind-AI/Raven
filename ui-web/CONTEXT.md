@@ -162,9 +162,9 @@ _Avoid_: "minimap" -- it marks turns, not a scaled copy of the transcript.
 The chat column's second view: the conversation's trace entries as an agent
 waterfall, in place of the transcript, drawn by `features/trajectory/` into
 `#trajHost` -- the box `src/chrome/ChatTop.tsx` renders beside `#scroll` and
-hands over empty. While it is up the composer card, the task strip and the
-desk step aside: `ChatTop.tsx` sets `data-traj` on the document and the
-stylesheet hides them under it. The sheet rack stays, so an approval, confirm
+hands over empty. While it is up the composer card and the desk step aside:
+`ChatTop.tsx` sets `data-traj` on the document and the stylesheet hides them
+under it. The sheet rack stays, so an approval, confirm
 or clarify sheet the open conversation raises is still in front of the reader,
 who would otherwise answer one they cannot see with the Escape that closes the
 details pane.
@@ -529,7 +529,8 @@ brought its own options, the sheet is a form the reader steps through -- back
 as well as forward, multi-select where the tool allows it -- and one Submit
 reports the lot. Filed under the session it was raised in and mounted only
 while that session is open -- see Sheet rack. A delegated graph used to
-dock here too and no longer does -- see Task strip.
+dock here too and no longer does; its live state reads at the transcript
+tail -- see Delegated-work tail row.
 _Avoid_: "dialog" for this -- a dialog is the settings or channel one, which is
 not docked and is not about a turn.
 
@@ -679,16 +680,15 @@ the reader typed into one lives in `src/state/sheetDrafts.ts` rather than in the
 input; a sheet re-added with a new view keeps its id and its place, so a repaint
 is a repaint and not a remount.
 
-**Task strip**:
-`TaskRuns` in `src/features/tasks/TasksPage.tsx`, rendered by
-`src/chrome/Dock.tsx` directly below the Sheet rack -- one chip saying how many
-tasks are running, their names as its hover title. It is a reminder that
-delegated work is under way, whether spawned or dispatched as a graph, not a
-list of it: the chip opens the Desk's tasks tab, whose rows name each run and
-open its pane, which is where the graph itself is drawn and panned. Nothing
-about a run docks in the rack: a graph there was the whole of
-itself between the transcript and the box you type in, for as long as the run
-lasted.
+**Delegated-work tail row**:
+`TurnLive` in `src/features/composer/ComposerPage.tsx`, mounted by
+`src/features/composer/mount.tsx` at the tail of `#stage`. While the host turn
+runs it carries the working glyph, the rotating verb and the clock; once the
+host has finished and a spawn or graph is still live it becomes one
+"waiting for subagents" row with the same glyph. The count is pushed into the
+composer store by `src/app/install.ts` from the tasks store, so the two
+domains keep their own graphs and no chip sits above the composer. The Desk's
+tasks tab remains the list of runs and where each pane is opened.
 _Avoid_: "dag sheet" -- there is no longer one. The run's durable record in the
 conversation is the trail's delegation card
 (`src/features/transcript/store.ts`'s `dagFeed`); `src/features/dag/mount.ts`

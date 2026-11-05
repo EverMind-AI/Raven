@@ -110,8 +110,7 @@ afterEach(() => {
 describe('the dock', () => {
   /* Two, where page.html had four: the five characters that used to perch on
      the composer were the landing page's decoration, and the landing page is
-     the composer on its own now. The running strip is a third child only while
-     something is running -- it renders nothing at all otherwise. */
+     the composer on its own now. */
   it('renders the band with the children page.html had, in order', () => {
     render()
     expect(Array.from(dock().children).map((child) => child.id || child.className)).toEqual([
