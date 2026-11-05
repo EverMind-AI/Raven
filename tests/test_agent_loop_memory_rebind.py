@@ -350,3 +350,40 @@ async def test_run_turn_counts_itself_so_a_switch_waits(monkeypatch) -> None:
     assert loop.active_turns == 0
     await seen["switch"]
     assert loop.backend is new
+
+
+@pytest.mark.asyncio
+async def test_overlapping_switches_retire_each_other_in_order() -> None:
+    """Two clients can switch at once. Each must capture the backend current
+    when it gets the lock; capturing before it stopped the same backend twice
+    and leaked the intermediate one."""
+
+    class _YieldingStart(_Backend):
+        async def start(self) -> None:
+            await asyncio.sleep(0)
+            await super().start()
+
+    old, mid, new = _Backend(), _YieldingStart(), _YieldingStart()
+    loop = _loop(builders=[MemorySegmentBuilder(None, old)], router=None)
+    loop.backend = old
+
+    await asyncio.gather(
+        loop.rebind_memory_backend(
+            mid,
+            name="everos-cloud",
+            user_id="u",
+            agent_id="a",
+            memory_top_k=5,
+        ),
+        loop.rebind_memory_backend(
+            new,
+            name="everos-cloud",
+            user_id="u",
+            agent_id="a",
+            memory_top_k=5,
+        ),
+    )
+
+    assert loop.backend is new
+    assert (mid.starts, new.starts) == (1, 1)
+    assert (old.stops, mid.stops, new.stops) == (1, 1, 0)
