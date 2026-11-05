@@ -239,6 +239,7 @@ class ParticipantHook(AgentHook):
             tools=_readonly(getattr(ctx, "tools", None)),
             window=getattr(ctx, "context_window_tokens", None) or None,
             max_iterations=getattr(ctx, "max_iterations", None) or None,
+            attempt=meta.get("attempt") if isinstance(meta.get("attempt"), int) else 1,
         )
 
     @staticmethod

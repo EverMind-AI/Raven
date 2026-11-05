@@ -66,6 +66,10 @@ class StepView:
     fallback for a caller with no active model binding to consult."""
     max_iterations: int | None = None
     """The loop's iteration cap this turn, for a participant that paces itself against it."""
+    attempt: int = 1
+    """Which run of the loop this is, counting from 1: a turn the product budgets a
+    rerun for runs it again from the question, and a participant's per-attempt
+    counters start over when this moves. A rollback does not move it."""
 
     @property
     def tools_ran(self) -> bool:

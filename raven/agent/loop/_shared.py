@@ -655,6 +655,17 @@ or sent to a client -- so a callable here crosses no serialization boundary.
 """
 
 
+TURN_ATTEMPT_CHECK_KEY = "turn_attempt_check"
+"""Where a product leaves its own test of whether a finished attempt is worth re-running.
+
+Called as ``check(final_content, turn_end)`` once per attempt, where the attempt ends,
+and returns extra reasons in the shape :func:`dead_reasons` returns them; an empty list
+means the product has nothing against the attempt. A callable for the reason
+``TURN_ASK_KIND_KEY`` is one: what makes an answer unacceptable is product knowledge
+(a reviewer's verdict, say), and the loop only budgets and runs the rerun.
+"""
+
+
 TURN_SYNTHESIS_KEY = "turn_synthesis"
 
 
@@ -690,11 +701,17 @@ class TurnBudgets:
 
     ``dead_end_reasons`` narrows which dead ends are worth re-running, matched as
     prefixes of what ``dead_reasons`` returns. Empty means all of them.
+
+    ``rerun_fresh_clock`` gives every attempt its own ``wall_clock_seconds`` instead of
+    the rest of one shared clock. Off by default, because a dead end is usually a turn
+    that ran out of time and a fresh copy doubles it; a product that re-runs answers it
+    judged unacceptable, whatever they cost, opts in and bounds the total itself.
     """
 
     wall_clock_seconds: float | None = None
     dead_end_retries: int = 0
     dead_end_reasons: tuple[str, ...] = ()
+    rerun_fresh_clock: bool = False
 
 
 def turn_budgets(metadata: dict[str, Any] | None) -> TurnBudgets:
@@ -723,6 +740,7 @@ def turn_budgets(metadata: dict[str, Any] | None) -> TurnBudgets:
             int(retries) if isinstance(retries, int) and not isinstance(retries, bool) and retries > 0 else 0
         ),
         dead_end_reasons=tuple(str(r) for r in reasons) if isinstance(reasons, (list, tuple)) else (),
+        rerun_fresh_clock=raw.get("rerun_fresh_clock") is True,
     )
 
 
@@ -734,4 +752,10 @@ def turn_ask_kind(metadata: dict[str, Any] | None) -> Callable[[object], "str | 
     what this names is a measurement and an instrument may not end the turn it measures.
     """
     value = (metadata or {}).get(TURN_ASK_KIND_KEY)
+    return value if callable(value) else None
+
+
+def turn_attempt_check(metadata: dict[str, Any] | None) -> Callable[[str | None, dict[str, Any]], list[str]] | None:
+    """Read the product's attempt check off the turn's hook metadata, or ``None``."""
+    value = (metadata or {}).get(TURN_ATTEMPT_CHECK_KEY)
     return value if callable(value) else None

@@ -19,6 +19,7 @@ short-circuit / rollback / note chaining semantics are the loop's own.
 
 from __future__ import annotations
 
+import copy
 import itertools
 import os
 from dataclasses import dataclass
@@ -30,10 +31,16 @@ from loguru import logger
 
 from raven.agent.hook.composite import CompositeHook
 from raven.agent.hook.participant import ParticipantHook
-from raven.agent.loop import TURN_ASK_KIND_KEY, TURN_BUDGETS_KEY, TURN_SYNTHESIS_KEY, TurnSynthesisPolicy
+from raven.agent.loop import (
+    TURN_ASK_KIND_KEY,
+    TURN_ATTEMPT_CHECK_KEY,
+    TURN_BUDGETS_KEY,
+    TURN_SYNTHESIS_KEY,
+    TurnSynthesisPolicy,
+)
 from raven.contracts.loop_hooks import HookDecision
 from raven.contracts.participant import Accept, AgentParticipant, Answer, End, Intake, Resample, StepView
-from research_flow.config import FlowConfig
+from research_flow.config import FlowConfig, VerifyRestartConfig
 from research_flow.gates.ask_user import (
     AskUserGate,
     ClarifyExemptHook,
@@ -107,12 +114,41 @@ if TYPE_CHECKING:
 _TURN_SEQ = itertools.count()
 
 
+UNVERIFIED_REASON = "unverified"
+"""The rerun reason the attempt check returns, as ``unverified:<last review outcome>``."""
+
+
+def _copied(facts: dict[str, Any]) -> dict[str, Any] | None:
+    # A snapshot that cannot be taken leaves the attempts sharing their counters, as
+    # before; it must not take the turn down.
+    try:
+        return copy.deepcopy(facts)
+    except Exception:  # noqa: BLE001
+        logger.warning("research-flow: intake facts not copyable; attempts share their counters")
+        return None
+
+
+def restarts_unverified(cfg: FlowConfig) -> bool:
+    return cfg.verify_restart.enabled and cfg.verify.enabled and cfg.verify_restart.max_attempts > 1
+
+
 def _turn_cargo(cfg: FlowConfig, text: str) -> dict[str, Any]:
+    retries = cfg.dead_end_retry.max_retries if cfg.dead_end_retry.enabled else 0
+    reasons = list(cfg.dead_end_retry.reasons)
+    restart = restarts_unverified(cfg)
+    if restart:
+        # One counter for both: a dead research attempt is also an unverified one.
+        retries = max(retries, cfg.verify_restart.max_attempts - 1)
+        if not cfg.dead_end_retry.enabled:
+            reasons = [UNVERIFIED_REASON]
+        elif reasons:
+            reasons.append(UNVERIFIED_REASON)
     cargo: dict[str, Any] = {
         TURN_BUDGETS_KEY: {
             "wall_clock_seconds": cfg.wall_clock_seconds,
-            "dead_end_retries": cfg.dead_end_retry.max_retries if cfg.dead_end_retry.enabled else 0,
-            "dead_end_reasons": list(cfg.dead_end_retry.reasons),
+            "dead_end_retries": retries,
+            "dead_end_reasons": reasons,
+            "rerun_fresh_clock": restart and cfg.verify_restart.fresh_clock,
         },
         TURN_ASK_KIND_KEY: harness_ask_kind,
     }
@@ -985,9 +1021,24 @@ class ResearchFlowParticipant(AgentParticipant):
         self._flow = flow
         self._facts: dict[str, Any] = {}
         self._ran: dict[tuple[str, int], tuple[StepView, HookDecision]] = {}
+        self._attempt = 1
+        # What the intake left, which every attempt starts from. A rerun starts from
+        # the question, so a revision budget the first attempt spent would otherwise
+        # ship the second attempt's first draft unreviewed; restoring the whole
+        # snapshot rather than popping named counters reaches gates added later too.
+        self._intake_facts: dict[str, Any] | None = None
 
     def _ctx(self, step: StepView, *, inbound: str | None = None, outbound: str | None = None) -> GateCtx:
         facts = self._facts
+        if step.attempt != self._attempt:
+            self._attempt = step.attempt
+            fresh = _copied(self._intake_facts) if self._intake_facts is not None else None
+            if fresh is not None:
+                record = facts.get("restart")
+                facts.clear()
+                facts.update(fresh)
+                if record is not None:
+                    facts["restart"] = record
         # The three loop readings the chain consults, refreshed from the step.
         if step.mode is not None:
             facts["mode"] = step.mode
@@ -1050,6 +1101,7 @@ class ResearchFlowParticipant(AgentParticipant):
 
     async def intake(self, text: str, step: StepView) -> Answer | None:
         decision = await self._phase("before_user_inbound", step, self._ctx(step, inbound=text))
+        self._intake_facts = _copied(self._facts)
         if decision.short_circuit_result is not None:
             return Intake(text=text, reply=decision.short_circuit_result)
         if decision.modified_content is not None:
@@ -1084,6 +1136,40 @@ class ResearchFlowParticipant(AgentParticipant):
     async def outbound(self, reply: str, step: StepView) -> str | None:
         decision = await self._phase("after_send", step, self._ctx(step, outbound=reply))
         return decision.modified_content
+
+    def _unverified(self, policy: VerifyRestartConfig, turn_end: dict[str, Any]) -> str | None:
+        """Why the answer this attempt delivered is not a reviewed pass, or None."""
+        facts = self._facts
+        mode = facts.get(_TURN_MODE_KEY)
+        if (mode is not None and not mode.research) or facts.get("clarify_requested"):
+            return None
+        verify = facts.get("verify_gate") or {}
+        if verify.get("scoped"):
+            return None
+        review = verify.get("final_review")
+        # Only a turn that ended on a draft ended on a reviewed one: a wrap-up after the
+        # iteration cap or the clock, and an error, deliver text no reviewer read.
+        if turn_end.get("status") != "completed" or review is None:
+            return "unreviewed"
+        accepted = {"pass", "degraded_elided", "degraded_no_claim"}
+        if not policy.require_first_pass:
+            accepted |= {"pass_revised", "budget_spent_pass"}
+        return None if review in accepted else str(review)
+
+    def attempt_reasons(
+        self, policy: VerifyRestartConfig, final_content: str | None, turn_end: dict[str, Any]
+    ) -> list[str]:
+        """The loop's attempt check: restart an attempt whose answer the reviewer did not pass."""
+        why = self._unverified(policy, turn_end)
+        record = self._facts.setdefault("restart", {})
+        record["attempts"] = self._attempt
+        record["verified"] = why is None
+        log = f"{self._attempt}:{why or 'pass'}"
+        record["log"] = f"{record['log']},{log}" if record.get("log") else log
+        if why is None:
+            return []
+        logger.info("verify-restart: attempt {} not passed ({})", self._attempt, why)
+        return [f"{UNVERIFIED_REASON}:{why}"]
 
     async def archive(self, step: StepView, reply: str | None) -> dict[str, Any] | None:
         await self._phase("after_send", step, self._ctx(step, outbound=reply or ""))
@@ -1156,7 +1242,12 @@ class ResearchFlowHook(ParticipantHook):
         text = ctx.inbound_content or ""
         slot = self.flow._reuse(GateCtx(session_key=ctx.session_key))
         ctx.metadata.update(_turn_cargo(slot.cfg, text))
-        return await super().before_user_inbound(ctx)
+        decision = await super().before_user_inbound(ctx)
+        if restarts_unverified(slot.cfg):
+            participant = self._seat(ctx).participant
+            if isinstance(participant, ResearchFlowParticipant):
+                ctx.metadata[TURN_ATTEMPT_CHECK_KEY] = partial(participant.attempt_reasons, slot.cfg.verify_restart)
+        return decision
 
 
 __all__ = [

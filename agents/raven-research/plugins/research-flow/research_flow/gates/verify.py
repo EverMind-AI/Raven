@@ -377,6 +377,10 @@ class DraftReviewerGate(Gate):
                 state["verdict_final"] = verdict
                 if verdict is not None:
                     state["reviews"] += 1
+                if verdict is None:
+                    state["final_review"] = "budget_spent_unavailable"
+                else:
+                    state["final_review"] = "budget_spent_pass" if verdict.get("pass", True) else "budget_spent_reject"
                 self._record(
                     state,
                     "budget_spent_reviewed",
@@ -385,6 +389,7 @@ class DraftReviewerGate(Gate):
                     reviewed=verdict is not None,
                 )
                 return HookDecision(notes=["verify_gate: revision budget spent; reviewed for the record, accepting"])
+            state["final_review"] = "budget_spent"
             self._record(state, "budget_spent", draft=draft, reviewed=False)
             return HookDecision(notes=["verify_gate: revision budget spent; accepting"])
 
@@ -393,10 +398,12 @@ class DraftReviewerGate(Gate):
         state["reviews"] += 1
         if verdict is None:
             state["fail_open"] += 1
+            state["final_review"] = "unavailable"
             self._record(state, "unavailable", draft=draft)
             return HookDecision(notes=["verify_gate: reviewer unavailable; fail-open"])
         if verdict.get("pass", True):
             state["passes"] += 1
+            state["final_review"] = "pass_revised" if state["revisions"] else "pass"
             self._record(state, "pass", verdict=verdict, draft=draft)
             return HookDecision(notes=["verify_gate: pass"])
 
@@ -437,17 +444,20 @@ class DraftReviewerGate(Gate):
                 state["evidence_elided_in_context"],
                 state["rejected_on_elided"],
             )
+            state["final_review"] = "degraded_elided"
             self._record(state, "degraded_elided", verdict=verdict, draft=draft)
             return HookDecision(notes=["verify_gate: reject degraded to pass (evidence elided)"])
 
         if self._strict_reject_only and not (verdict.get("unsupported_claims") or []):
             state["strict_overrides"] = state.get("strict_overrides", 0) + 1
             logger.warning("verify-gate: reject named no unsupported claim; degraded to pass (strict_reject_only)")
+            state["final_review"] = "degraded_no_claim"
             self._record(state, "degraded_no_claim", verdict=verdict, draft=draft)
             return HookDecision(notes=["verify_gate: reject degraded to pass (no named claim)"])
 
         state["rejects"] += 1
         state["revisions"] += 1
+        state["final_review"] = "rejected"
         self._record(state, "reject", verdict=verdict, draft=draft)
         feedback = self._format_feedback(verdict)
         # The round is opened before the bounce, not after the model asks for it:

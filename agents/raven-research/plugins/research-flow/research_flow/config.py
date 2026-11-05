@@ -321,6 +321,28 @@ class DeadEndRetryConfig(_Base):
     reasons: tuple[str, ...] = ()
 
 
+class VerifyRestartConfig(_Base):
+    """Start the turn over -- fresh budgets, the question alone -- until a reviewed answer passes.
+
+    An attempt passes when the answer it delivered is a draft the reviewer accepted.
+    Everything else is a restart: a rejected draft shipped once the revisions ran out,
+    a review that failed open, and a wrap-up answer the budget forced, which no
+    reviewer ever reads. The last attempt ships whatever it produced.
+
+    ``maxAttempts`` counts the first run. ``freshClock`` gives each attempt the whole
+    ``wallClockSeconds``, so a turn can run ``maxAttempts`` times as long and the
+    caller's own timeout has to allow it. ``requireFirstPass`` also restarts an answer
+    that passed only after a revision: on one 100-question batch first-review passes
+    were right 47 of 52 times and revised passes 4 of 9. Off by default because it
+    has not been measured as a restart rule.
+    """
+
+    enabled: bool = False
+    max_attempts: int = Field(default=5, ge=1)
+    fresh_clock: bool = True
+    require_first_pass: bool = False
+
+
 class ModelEndpointConfig(_Base):
     """A model the flow's own calls may name that the session's provider does not serve.
 
@@ -573,6 +595,7 @@ class FlowConfig(_Base):
     iteration cap, so a spent budget never produces a silent turn.
     """
     dead_end_retry: DeadEndRetryConfig = Field(default_factory=DeadEndRetryConfig)
+    verify_restart: VerifyRestartConfig = Field(default_factory=VerifyRestartConfig)
     model_endpoints: list[ModelEndpointConfig] = Field(default_factory=list)
     context_window_tokens: int | None = None
     think_closing_tag_required: bool = True
@@ -736,4 +759,5 @@ __all__ = [
     "SpinBreakerConfig",
     "SufficiencyConfig",
     "VerifyConfig",
+    "VerifyRestartConfig",
 ]

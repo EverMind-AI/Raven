@@ -21,10 +21,12 @@ import pytest
 
 from raven.agent.loop import (
     TURN_ASK_KIND_KEY,
+    TURN_ATTEMPT_CHECK_KEY,
     TURN_BUDGETS_KEY,
     AgentLoop,
     TurnBudgets,
     turn_ask_kind,
+    turn_attempt_check,
     turn_budgets,
     turn_path,
 )
@@ -857,3 +859,145 @@ def test_a_labeller_that_is_not_callable_leaves_the_ask_unnamed(metadata):
 
 def test_a_callable_labeller_is_handed_back_as_it_is():
     assert turn_ask_kind({TURN_ASK_KIND_KEY: _names_the_ask}) is _names_the_ask
+
+
+# -- a product's own objection to an answered attempt -------------------------------
+
+
+class _Checks(_Watches):
+    """A product that budgets reruns and judges each attempt itself, the way the
+    research flow restarts an answer its reviewer did not pass."""
+
+    def __init__(self, refuse, **budgets) -> None:
+        super().__init__(**budgets)
+        self._refuse = refuse
+        self.seen: list[tuple[str | None, dict]] = []
+        self.attempts_seen: list[int] = []
+
+    async def before_user_inbound(self, ctx) -> HookDecision:
+        await super().before_user_inbound(ctx)
+
+        def check(final_content, turn_end):
+            self.seen.append((final_content, turn_end))
+            return self._refuse(final_content, turn_end)
+
+        ctx.metadata[TURN_ATTEMPT_CHECK_KEY] = check
+        return HookDecision()
+
+    async def before_iteration(self, ctx) -> HookDecision:
+        self.attempts_seen.append(ctx.metadata.get("attempt"))
+        return HookDecision()
+
+
+@pytest.mark.asyncio
+async def test_an_answer_the_product_refuses_is_run_again_from_the_question(tmp_path):
+    provider = _Scripted(_answers("Bob, I think."), _answers("Alice Smith won it."))
+    hook = _Checks(lambda text, _end: ["unverified:rejected"] if text.startswith("Bob") else [], dead_end_retries=2)
+    agent = _loop(tmp_path, provider, [hook])
+
+    out = await agent._process_message(_req(), session_key="s1")
+
+    assert out[0] == "Alice Smith won it."
+    assert provider.attempts_used == 2
+    assert [m["role"] for m in provider.seeds[1]][-1] == "user", "the rerun starts on the question"
+    assert not any("Bob" in str(m.get("content")) for m in provider.seeds[1]), "with the refused answer gone"
+    assert [end.get("status") for _text, end in hook.seen] == ["completed", "completed"]
+    assert hook.attempts_seen == [1, 2], "each attempt is told which one it is"
+
+
+@pytest.mark.asyncio
+async def test_the_product_s_refusals_are_bounded_by_the_budget_and_the_last_answer_ships(tmp_path):
+    provider = _Scripted(_answers("one"), _answers("two"), _answers("three"), _answers("four"))
+    hook = _Checks(lambda _text, _end: ["unverified:rejected"], dead_end_retries=2)
+    agent = _loop(tmp_path, provider, [hook])
+
+    out = await agent._process_message(_req(), session_key="s1")
+
+    assert provider.attempts_used == 3
+    assert out[0] == "three"
+
+
+@pytest.mark.asyncio
+async def test_a_check_that_raises_leaves_the_attempt_to_the_loop_s_own_tests(tmp_path):
+    def boom(_text, _end):
+        raise RuntimeError("product bug")
+
+    provider = _Scripted(_answers("Alice Smith won it."), _answers("never asked"))
+    agent = _loop(tmp_path, provider, [_Checks(boom, dead_end_retries=2)])
+
+    out = await agent._process_message(_req(), session_key="s1")
+
+    assert out[0] == "Alice Smith won it."
+    assert provider.attempts_used == 1
+
+
+@pytest.mark.asyncio
+async def test_the_reason_filter_also_narrows_the_product_s_reasons(tmp_path):
+    provider = _Scripted(_answers("Bob, I think."), _answers("never asked"))
+    hook = _Checks(lambda _text, _end: ["unverified:rejected"], dead_end_retries=2, dead_end_reasons=["stranded"])
+    agent = _loop(tmp_path, provider, [hook])
+
+    out = await agent._process_message(_req(), session_key="s1")
+
+    assert out[0] == "Bob, I think."
+    assert provider.attempts_used == 1
+
+
+@pytest.mark.asyncio
+async def test_a_refused_answer_is_not_announced_as_no_answer(tmp_path):
+    notes: list[str] = []
+
+    async def _progress(text: str) -> None:
+        notes.append(text)
+
+    provider = _Scripted(_answers("Bob, I think."), _answers("Alice Smith won it."))
+    hook = _Checks(lambda text, _end: ["unverified:rejected"] if text.startswith("Bob") else [], dead_end_retries=1)
+    agent = _loop(tmp_path, provider, [hook])
+
+    await agent._process_message(_req(), session_key="s1", on_progress=_progress)
+
+    spoken = [n for n in notes if "again" in n]
+    assert spoken == ["That attempt's answer was not accepted; running the turn again."], notes
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_clock_gives_every_attempt_the_whole_budget(tmp_path, monkeypatch):
+    """The shared-clock twin of this test above ends at five calls: the rerun gets one
+    iteration of overrun and a wrap-up. On a fresh clock it gets its own ten seconds,
+    so it runs its three calls to empty-response exhaustion, and the turn-level record
+    still measures the turn."""
+    provider = _Scripted(_dead(), _dead())
+    monkeypatch.setattr(turn_path, "monotonic", lambda: 3.0 * provider.calls)
+    hook = _Watches(dead_end_retries=1, wall_clock_seconds=10.0, rerun_fresh_clock=True)
+    agent = _loop(tmp_path, provider, [hook])
+
+    await _run_answerless(agent)
+
+    assert provider.attempts_used == 2
+    assert provider.calls == 6, f"the rerun ran on the rest of the turn's clock: {provider.calls} calls"
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_clock_reruns_a_turn_whose_shared_clock_is_spent(tmp_path, monkeypatch):
+    """The twin of ``test_a_spent_wall_clock_stops_the_retry``: the same readings that
+    stop a shared-clock rerun leave a fresh-clock one to start."""
+    ticks = iter(range(1000))
+    monkeypatch.setattr(turn_path, "monotonic", lambda: float(next(ticks)))
+    provider = _Scripted(_dead(), _answers("Alice Smith won it."))
+    agent = _loop(tmp_path, provider, [_Budgeted(dead_end_retries=1, wall_clock_seconds=5.0, rerun_fresh_clock=True)])
+
+    out = await agent._process_message(_req(), session_key="s1")
+
+    assert provider.attempts_used == 2
+    assert out[0] == "Alice Smith won it."
+
+
+@pytest.mark.parametrize("raw", [True, "true", 1, None])
+def test_only_a_literal_true_turns_the_fresh_clock_on(raw):
+    budgets = turn_budgets({TURN_BUDGETS_KEY: {"rerun_fresh_clock": raw}})
+    assert budgets.rerun_fresh_clock is (raw is True)
+
+
+@pytest.mark.parametrize("metadata", [None, {}, {TURN_ATTEMPT_CHECK_KEY: "unverified"}])
+def test_a_check_that_is_not_callable_is_no_check(metadata):
+    assert turn_attempt_check(metadata) is None

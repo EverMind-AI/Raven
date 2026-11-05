@@ -277,6 +277,15 @@ all of them this addition: without it the package stands at 3,632.
 
 Measured at 3,682.
 
+
+And once more, 3,700 -> 3,710 (2026-11-05), for ``StepView.attempt`` on the
+participant paper: which run of the loop a step belongs to, when a product
+budgets a turn to be run again from the question. A participant's per-attempt
+counters start over when it moves, and a rollback does not move it, which is
+the one thing the participant could not derive. 4 lines, a field and its prose.
+
+Measured at 3,704.
+
 """
 
 from __future__ import annotations
@@ -287,7 +296,7 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 3_700
+CONTRACTS_LINE_CEILING = 3_710
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 

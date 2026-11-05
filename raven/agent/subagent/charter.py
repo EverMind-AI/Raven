@@ -349,6 +349,7 @@ def _step_payload(step: Any) -> dict[str, Any]:
         "tools": _pure_data(getattr(step, "tools", ())),
         "window": getattr(step, "window", None),
         "max_iterations": getattr(step, "max_iterations", None),
+        "attempt": getattr(step, "attempt", 1),
         "tools_ran": bool(getattr(step, "tools_ran", False)),
     }
 

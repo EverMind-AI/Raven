@@ -74,6 +74,7 @@ from raven.agent.loop._shared import (
     time,
     trace,
     turn_ask_kind,
+    turn_attempt_check,
     turn_budgets,
     turn_question,
     turn_synthesis,
@@ -740,6 +741,7 @@ class TurnPathMixin:
         session_history: list[dict[str, Any]] | None = None,
         origin: "Origin | None" = None,
         turn_started_at: float | None = None,
+        attempt_started_at: float | None = None,
         attempt: int = 1,
         rerun_pending: "Callable[[str | None, list[dict], str], bool] | None" = None,
         spend: TurnSpend | None = None,
@@ -769,10 +771,15 @@ class TurnPathMixin:
         elapsed time recorded at the end both measure the turn rather than the
         attempt; omitted, the attempt is the turn and the clock starts here.
 
+        ``attempt_started_at`` moves only the wall-clock budget onto this attempt's
+        own start, for a caller whose reruns each get a fresh clock; the elapsed
+        time recorded at the end still measures the turn.
+
         ``attempt`` is which run of the loop this is, counting from 1. It rides
         the turn's end record so a reader can tell the scope of the count beside
         it -- the iterations there are this attempt's, while the elapsed time is
-        the turn's. Nothing in the loop branches on it.
+        the turn's -- and the hook metadata, so a product can tell a rerun's first
+        step from a rollback of its own. Nothing in the loop branches on it.
 
         ``rerun_pending`` lets a caller that budgets reruns say this attempt is
         about to be run again, given ``(final_content, messages, status)``. It is
@@ -888,6 +895,7 @@ class TurnPathMixin:
         # same start to every attempt, so one budget covers the turn instead of
         # each attempt receiving a fresh copy of it.
         turn_t0 = turn_started_at if turn_started_at is not None else monotonic()
+        clock_t0 = attempt_started_at if attempt_started_at is not None else turn_t0
         stopped_by: str | None = None
         # The session's effort rides every model call of the turn as an explicit
         # argument. Omitted, not None, when the policy names none: an explicit
@@ -905,6 +913,7 @@ class TurnPathMixin:
         turn_meta = hook_metadata if hook_metadata is not None else {}
         turn_meta["mode"] = policy.mode
         turn_meta["mode_overlay"] = dict(policy.mode_overlay)
+        turn_meta["attempt"] = attempt
         hook_ctx = (
             AgentHookContext(
                 session_key=session_key or "",
@@ -986,7 +995,7 @@ class TurnPathMixin:
             # landing between a tool result and the model reading it produces a
             # trajectory nothing can interpret. The cost is an overrun of at most
             # one iteration, which the budget's own docstring states.
-            if budgets.wall_clock_seconds is not None and (monotonic() - turn_t0) >= budgets.wall_clock_seconds:
+            if budgets.wall_clock_seconds is not None and (monotonic() - clock_t0) >= budgets.wall_clock_seconds:
                 stopped_by = "wall_clock"
                 logger.warning(
                     "Wall-clock budget {}s reached after {} iterations; wrapping up",
@@ -2558,7 +2567,7 @@ class TurnPathMixin:
         spend = TurnSpend(key)
 
         async def _attempt(seed: list[dict], attempt: int):
-            pending.update(rerun=False, reasons=[])
+            pending.update(rerun=False, reasons=[], answered=False)
             # The list this attempt appends to, for the rescue paths below. A rerun
             # runs on a list of its own, and a turn cancelled during one used to be
             # saved from the first attempt's -- so a tool the reader watched run in
@@ -2582,6 +2591,7 @@ class TurnPathMixin:
                 session_history=session.messages[:prev_len],
                 origin=req.origin,
                 turn_started_at=turn_t0,
+                attempt_started_at=monotonic() if budgets.rerun_fresh_clock else None,
                 attempt=attempt,
                 rerun_pending=_rerun_pending,
                 spend=spend,
@@ -2592,11 +2602,12 @@ class TurnPathMixin:
         # the whole point is to start again from the question.
         budgets = turn_budgets(turn_hook_meta)
         ask_kind = turn_ask_kind(turn_hook_meta)
+        attempt_check = turn_attempt_check(turn_hook_meta)
         retries_left = budgets.dead_end_retries
         attempt_no = 1
         retry_seed = [dict(m) for m in initial_messages] if retries_left else None
         turn_t0 = monotonic()
-        pending: dict[str, Any] = {"rerun": False, "reasons": []}
+        pending: dict[str, Any] = {"rerun": False, "reasons": [], "answered": False}
         live: dict[str, list[dict]] = {"messages": initial_messages}
 
         def _seed_for_the_rerun(msgs: list[dict]) -> list[dict]:
@@ -2618,11 +2629,25 @@ class TurnPathMixin:
             # the end would otherwise become what the turn is judged to have ended on.
             turn = [m for m in msgs[turn_start_idx:] if not any(m.get(k) for k in _TURN_TRANSIENT_KEYS)]
             reasons = dead_reasons(messages=turn, final_content=final_content, status=status, ask_kind=ask_kind)
+            pending["answered"] = not reasons
+            if attempt_check is not None:
+                # The product's own objection to the attempt, beside the loop's. Asked
+                # every attempt, because it may also be keeping a record; a check that
+                # raises leaves the attempt judged by the loop's tests alone.
+                try:
+                    end = turn_hook_meta.get("turn_end")
+                    extra = attempt_check(final_content, dict(end) if isinstance(end, dict) else {})
+                    reasons += [str(r) for r in extra or () if r and str(r) not in reasons]
+                except Exception:
+                    logger.exception("attempt check raised; judging the attempt by the dead-end tests alone")
             if budgets.dead_end_reasons:
                 reasons = [r for r in reasons if r.startswith(budgets.dead_end_reasons)]
             return reasons
 
         def _clock_spent() -> bool:
+            # A rerun on a fresh clock is never short of time before it starts.
+            if budgets.rerun_fresh_clock:
+                return False
             return bool(budgets.wall_clock_seconds) and (monotonic() - turn_t0) >= budgets.wall_clock_seconds
 
         def _rerun_pending(final_content: str | None, msgs: list[dict], status: str) -> bool:
@@ -2674,8 +2699,14 @@ class TurnPathMixin:
                     if on_progress is not None:
                         # Neutral about what the turn was doing and about which
                         # attempt this is: the loop serves every agent, and the
-                        # budget allows more reruns than the one.
-                        await on_progress("That attempt produced no answer; running the turn again.")
+                        # budget allows more reruns than the one. An attempt that
+                        # did answer, and only failed the product's own check, is
+                        # not told it produced nothing.
+                        await on_progress(
+                            "That attempt's answer was not accepted; running the turn again."
+                            if pending["answered"]
+                            else "That attempt produced no answer; running the turn again."
+                        )
                     final_content, _, all_msgs, outcome = await _attempt(_seed_for_the_rerun(all_msgs), attempt_no)
                 # Session-level because this turn may persist no assistant row at
                 # all -- a turn whose whole budget went to reasoning has no

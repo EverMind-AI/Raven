@@ -273,6 +273,12 @@ PRODUCT_ONLY_FIELDS: dict[str, str] = {
         "the rerun). The fork ran the same selection as a second pass over persisted rows "
         "afterwards, where a product user could never reach it; in-run it needs a knob"
     ),
+    "verify_restart": (
+        "start a turn over, on fresh budgets, until the reviewer passes the answer it "
+        "delivers. The fork re-ran turns only from outside, over persisted rows; a restart "
+        "gated on the in-run reviewer's verdict needs the verdict, which only the run has. "
+        "Off by default"
+    ),
     "model_endpoints": (
         "models the flow's own calls (digest, verify, ...) may name that the session's "
         "provider does not serve, each on its own OpenAI-compatible endpoint. The fork ran "
