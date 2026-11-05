@@ -344,6 +344,24 @@ class TestAStaleServeRecord:
 
         assert serve_commands._read_serve_state() == (18999, "t")
 
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            "not json at all",
+            "[]",
+            json.dumps({"port": 0, "token": "t", "pid": 1}),
+            json.dumps({"port": 18999, "token": "", "pid": 1}),
+        ],
+    )
+    def test_a_record_that_names_nothing_is_not_attached_to(self, home: Path, payload: str) -> None:
+        """Unreadable, non-object and incomplete records keep the reader's old
+        answer: there is nothing to attach to."""
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(payload, encoding="utf-8")
+
+        assert serve_commands._read_serve_record() is None
+        assert serve_commands._read_serve_state() is None
+
     def test_the_wait_attaches_to_the_new_record_not_the_stale_one(self, home: Path, monkeypatch) -> None:
         """The gateway writes its own token while the wait is already polling.
         The wait must mint against that record, not the generation the file
