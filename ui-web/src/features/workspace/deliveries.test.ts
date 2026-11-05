@@ -54,6 +54,36 @@ describe('delivery registry', () => {
     expect(deliveries.byPath('\\\\server\\share\\out\\a.md')?.missing).toBe(true)
   })
 
+  /* A share and the current drive's root can share a tail: `\\server\share` is
+     a network share, `\server\share` is `D:\server\share`. They are two files,
+     so the canonical key keeps the share's second slash rather than folding the
+     two spellings together. */
+  it('keeps a UNC delivery apart from a drive-rooted path with the same tail', () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([
+      { path: '\\\\server\\share\\a.md', name: 'a.md', download_path: '/t/unc' },
+    ]))
+
+    expect(deliveries.byPath('\\server\\share\\a.md')).toBeNull()
+    expect(deliveries.byPath('/server/share/a.md')).toBeNull()
+    /* The share still matches, with either separator and either casing. */
+    expect(deliveries.byPath('//server/share/a.md')?.downloadPath).toBe('/t/unc')
+    expect(deliveries.byPath('\\\\SERVER\\share\\a.md')?.downloadPath).toBe('/t/unc')
+  })
+
+  /* And the write side agrees: a drive-rooted spelling that names nothing must
+     not grey the share's row, while the share's own spelling still marks it. */
+  it('marks no UNC row missing for a drive-rooted spelling of its tail', () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([
+      { path: '\\\\server\\share\\a.md', name: 'a.md', download_path: '/t/unc' },
+    ]))
+
+    deliveries.markMissing('\\server\\share\\a.md')
+    expect(deliveries.byPath('\\\\server\\share\\a.md')?.missing).toBe(false)
+
+    deliveries.markMissing('//SERVER/share/a.md')
+    expect(deliveries.byPath('\\\\server\\share\\a.md')?.missing).toBe(true)
+  })
+
   /* A Windows directory can be case-sensitive, and then two delivered files
      whose paths differ only by case are different files. The exact spelling
      wins; folding is only the fallback when no row matches exactly. */

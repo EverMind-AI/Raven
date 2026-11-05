@@ -163,6 +163,11 @@ const canonPath = (p: string): string => {
   const s = String(p || '').replace(/\\/g, '/')
   const drive = /^([A-Za-z]):/.exec(s)
   const body = drive ? s.slice(drive[0].length) : s
+  /* Two leading separators are not a separator difference: on Windows
+     `//server/share/a.md` is a network share, while `/server/share/a.md` is
+     rooted on the current drive. Collapsing them would make two different
+     files compare equal, and a lookup could hand one the other's token. */
+  const unc = s.startsWith('//')
   const out: string[] = []
   for (const seg of body.split('/')) {
     if (!seg || seg === '.') continue
@@ -173,7 +178,7 @@ const canonPath = (p: string): string => {
     }
     out.push(seg)
   }
-  return `${drive ? drive[1]!.toLowerCase() + ':' : ''}${body.startsWith('/') ? '/' : ''}${out.join('/')}`
+  return `${drive ? drive[1]!.toLowerCase() + ':' : ''}${unc ? '//' : body.startsWith('/') ? '/' : ''}${out.join('/')}`
 }
 
 /* A drive letter or a UNC prefix means Windows, where a path's case is not
