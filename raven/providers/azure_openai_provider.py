@@ -250,6 +250,10 @@ class AzureOpenAIProvider(LLMProvider):
                     "completion_tokens": usage_data.get("completion_tokens", 0),
                     "total_tokens": usage_data.get("total_tokens", 0),
                 }
+                prompt_details = usage_data.get("prompt_tokens_details")
+                cached = token_count(prompt_details.get("cached_tokens")) if isinstance(prompt_details, dict) else None
+                if cached is not None:
+                    usage["cache_read_input_tokens"] = cached
                 # Part of completion_tokens, and the one count that says a turn
                 # which returned nothing still thought. Left out when unreported:
                 # written as 0 it would read as a turn that did not think.

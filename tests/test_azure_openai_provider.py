@@ -332,3 +332,19 @@ def test_other_deployments_are_untouched() -> None:
     payload = _gpt_payload("gpt-4o", tools=True)
     assert "reasoning_effort" not in payload
     assert payload["temperature"] == 0.7
+
+
+def test_cached_prompt_tokens_are_kept() -> None:
+    """Chat Completions reports prompt-cache hits under ``prompt_tokens_details``;
+    dropping them bills cached input at the full uncached rate."""
+    provider = AzureOpenAIProvider(api_key="k", api_base="https://x.openai.azure.com")
+
+    def usage(**extra: object) -> dict:
+        body = {"prompt_tokens": 2006, "completion_tokens": 300, "total_tokens": 2306, **extra}
+        choice = {"message": {"content": "hi"}, "finish_reason": "stop"}
+        return provider._parse_response({"choices": [choice], "usage": body}).usage
+
+    assert usage(prompt_tokens_details={"cached_tokens": 1920})["cache_read_input_tokens"] == 1920
+    assert usage(prompt_tokens_details={"cached_tokens": 0})["cache_read_input_tokens"] == 0
+    assert "cache_read_input_tokens" not in usage()
+    assert "cache_read_input_tokens" not in usage(prompt_tokens_details={})
