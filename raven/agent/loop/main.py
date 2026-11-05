@@ -677,6 +677,21 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # Consecutive backend.store failures; see _note_memory_failure.
         self._memory_fail_streak = 0
         self._processing_lock = asyncio.Lock()
+        # Turns in flight on this loop, and the event that fires when the last
+        # one ends. A live memory-backend switch replaces references a running
+        # turn reads and stops the backend it may still be calling, so it waits
+        # here first. Deliberately not ``_processing_lock`` above: that one's
+        # ``is_processing`` is the wake scheduler's, and holding it for a turn's
+        # duration would serialize every session.
+        self._active_turns = 0
+        self._turns_idle = asyncio.Event()
+        self._turns_idle.set()
+        # One switch at a time; the section guards its own click, but two
+        # clients can still call memory.applyRuntime concurrently.
+        self._memory_rebind_lock = asyncio.Lock()
+        # Replaced backends whose queued writes outlived the inline wait; each
+        # is stopped by its own task once they drain.
+        self._backend_stop_tasks: set[asyncio.Task] = set()
         # Fired after every dispatched turn (success, error, or cancel).
         # Used by the proactive-engine WakeScheduler to re-fire wakes that
         # were parked while the agent was busy. Callbacks must be cheap and
@@ -855,58 +870,97 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         weight follows the new backend's configured share, and
         ``memory_config`` is what the after-turn feedback routes its id
         prefixes by.
+
+        The swap waits for the turns already in flight. Each RPC frame runs on
+        its own task, so a settings click can reach this while ``run_turn`` is
+        still recalling or storing through the backend -- and the cloud
+        backend's ``stop`` closes its HTTP client. Waiting here (the reference
+        swap itself is one synchronous block, so a turn entering at that
+        instant either counts first or reads the new backend) keeps a turn on
+        the backend it started with. A replaced backend is only stopped after
+        the store records it already owns have settled; a queue that outlives
+        the inline budget gets its own waiter, because stopping it early would
+        interrupt a write this switch did not own.
         """
         old = self.backend
-        if backend is not None:
-            await backend.start()
-        self.backend = backend
-        has = backend is not None
-        self.context._has_memory_backend = has
-        self.memory_config.backend = name
-        self.memory_config.user_id = user_id
-        self.memory_config.agent_id = agent_id
-        self.memory_config.memory_top_k = memory_top_k
+        async with self._memory_rebind_lock:
+            if backend is not None:
+                await backend.start()
+            while self._active_turns:
+                await self._turns_idle.wait()
+            self.backend = backend
+            has = backend is not None
+            self.context._has_memory_backend = has
+            self.memory_config.backend = name
+            self.memory_config.user_id = user_id
+            self.memory_config.agent_id = agent_id
+            self.memory_config.memory_top_k = memory_top_k
 
-        from raven.context_engine.segments.identity import IdentitySegmentBuilder
-        from raven.context_engine.segments.memory import MemorySegmentBuilder
-        from raven.memory_engine import BackendSkillSource
+            from raven.context_engine.segments.identity import IdentitySegmentBuilder
+            from raven.context_engine.segments.memory import MemorySegmentBuilder
+            from raven.memory_engine import BackendSkillSource
 
-        for builder in getattr(self.context_engine, "_builders", ()):
-            if isinstance(builder, MemorySegmentBuilder):
-                builder._backend = backend
-                builder._user_id = user_id
-                builder._memory_top_k = memory_top_k
-            elif isinstance(builder, IdentitySegmentBuilder):
-                builder._has_memory_backend = has
-        router = getattr(self.context_engine, "skills_router", None)
-        if router is not None:
-            source = next(
-                (s for s in getattr(router, "_sources", ()) if isinstance(s, BackendSkillSource)),
-                None,
-            )
-            if backend is None:
-                if source is not None:
-                    router.remove_source(source)
-            elif source is not None:
-                source._backend = backend
-                source._agent_id = agent_id
-                if name:
-                    source.name = name
+            for builder in getattr(self.context_engine, "_builders", ()):
+                if isinstance(builder, MemorySegmentBuilder):
+                    builder._backend = backend
+                    builder._user_id = user_id
+                    builder._memory_top_k = memory_top_k
+                elif isinstance(builder, IdentitySegmentBuilder):
+                    builder._has_memory_backend = has
+            router = getattr(self.context_engine, "skills_router", None)
+            if router is not None:
+                source = next(
+                    (s for s in getattr(router, "_sources", ()) if isinstance(s, BackendSkillSource)),
+                    None,
+                )
+                if backend is None:
+                    if source is not None:
+                        router.remove_source(source)
+                elif source is not None:
+                    source._backend = backend
+                    source._agent_id = agent_id
+                    if name:
+                        source.name = name
+                        weights = getattr(self._skill_forge_router_config, "weights", None) or {}
+                        source.weight = float(weights.get(name, type(source).weight))
+                elif name:
+                    # Memory was off when the router was built, so the factory
+                    # added no backend source. The page can turn it on live,
+                    # and recall has to follow or the new backend feeds no
+                    # skills.
+                    source = BackendSkillSource(backend, agent_id=agent_id, name=name)
                     weights = getattr(self._skill_forge_router_config, "weights", None) or {}
                     source.weight = float(weights.get(name, type(source).weight))
-            elif name:
-                # Memory was off when the router was built, so the factory
-                # added no backend source. The page can turn it on live, and
-                # recall has to follow or the new backend feeds no skills.
-                source = BackendSkillSource(backend, agent_id=agent_id, name=name)
-                weights = getattr(self._skill_forge_router_config, "weights", None) or {}
-                source.weight = float(weights.get(name, type(source).weight))
-                router.add_source(source)
-        if old is not None and old is not backend:
-            try:
-                await old.stop()
-            except Exception:  # noqa: BLE001 -- the new backend already serves; a bad stop is not a failed switch
-                logger.exception("memory rebind: the previous backend did not stop cleanly")
+                    router.add_source(source)
+            if old is not None and old is not backend:
+                await self._retire_backend(old)
+
+    async def _retire_backend(self, backend: "MemoryBackend") -> None:
+        """Stop a replaced backend once the writes it already owns have settled.
+
+        The inline wait is short so a switch is not held by a failing write;
+        what outlives it is handed to a task, because stopping the backend
+        under a record it is still retrying fails a write the turn that
+        produced it believes is queued.
+        """
+        from raven.agent.loop._shared import _STORE_DRAIN_BUDGET_S
+
+        if await self._store_pipeline.settle_backend(backend, timeout=_STORE_DRAIN_BUDGET_S):
+            await self._stop_backend(backend)
+            return
+        task = asyncio.create_task(self._stop_backend_when_settled(backend))
+        self._backend_stop_tasks.add(task)
+        task.add_done_callback(self._backend_stop_tasks.discard)
+
+    async def _stop_backend_when_settled(self, backend: "MemoryBackend") -> None:
+        await self._store_pipeline.settle_backend(backend, timeout=None)
+        await self._stop_backend(backend)
+
+    async def _stop_backend(self, backend: "MemoryBackend") -> None:
+        try:
+            await backend.stop()
+        except Exception:  # noqa: BLE001 -- the new backend already serves; a bad stop is not a failed switch
+            logger.exception("memory rebind: the previous backend did not stop cleanly")
 
     async def run(self) -> None:
         """Bring the agent runtime up and stay alive.
@@ -938,6 +992,28 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
     def is_processing(self) -> bool:
         """True while a turn is being dispatched under the global lock."""
         return self._processing_lock.locked()
+
+    @property
+    def active_turns(self) -> int:
+        """Turns in flight on this loop; a live backend switch waits for zero."""
+        return self._active_turns
+
+    def _enter_turn(self) -> None:
+        """Count a turn as in flight; ``_exit_turn`` is the other half.
+
+        Synchronous on purpose: the live memory-backend switch reads this
+        counter and does its reference swap in one block with no await between
+        the check and the swap, so a turn entering at that instant either
+        increments first (the switch waits) or runs after it (it sees the new
+        backend).
+        """
+        self._active_turns += 1
+        self._turns_idle.clear()
+
+    def _exit_turn(self) -> None:
+        self._active_turns -= 1
+        if self._active_turns == 0:
+            self._turns_idle.set()
 
     def notify_turn_complete(self) -> None:
         """Fire the turn-complete callbacks: the seam a host sink signals through."""
@@ -985,6 +1061,9 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         flush = True
         capture = None
         failure: BaseException | None = None
+        # Counted before the first await: from here until the finally below, a
+        # live memory-backend switch waits.
+        self._enter_turn()
         try:
             # The tools a session brought with it become visible here, for the same
             # reason the model binding does: this is where the turn's task begins.
@@ -1126,24 +1205,29 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 attach_full_detail(exc)
             raise
         finally:
-            if capture is not None and capture.status == "running" and self._playbooks is not None:
-                from raven.playbook.run_record import RunRecordStore
+            try:
+                if capture is not None and capture.status == "running" and self._playbooks is not None:
+                    from raven.playbook.run_record import RunRecordStore
 
-                capture.finish(
-                    status="cancelled" if not flush else "failed",
-                    error=None if failure is None else f"{type(failure).__name__}: {failure}",
-                )
-                try:
-                    RunRecordStore(self._playbooks.store.root).save(capture)
-                except Exception:  # noqa: BLE001 - cleanup cannot replace the turn's error
-                    logger.opt(exception=True).warning("playbook: failed turn record could not be saved")
-            # Every way a turn ends passes here, which is what makes this the
-            # place a foreground DAG run learns its turn is over. A direct chat
-            # runs on an instance's own lane, concurrently with the main agent's
-            # turn, and can own no graph, so its end must not release the main
-            # turn's runs.
-            if req.direct_target is None:
-                await self._release_dag_runs(session_key, flush=flush)
+                    capture.finish(
+                        status="cancelled" if not flush else "failed",
+                        error=None if failure is None else f"{type(failure).__name__}: {failure}",
+                    )
+                    try:
+                        RunRecordStore(self._playbooks.store.root).save(capture)
+                    except Exception:  # noqa: BLE001 - cleanup cannot replace the turn's error
+                        logger.opt(exception=True).warning("playbook: failed turn record could not be saved")
+                # Every way a turn ends passes here, which is what makes this
+                # the place a foreground DAG run learns its turn is over. A
+                # direct chat runs on an instance's own lane, concurrently with
+                # the main agent's turn, and can own no graph, so its end must
+                # not release the main turn's runs.
+                if req.direct_target is None:
+                    await self._release_dag_runs(session_key, flush=flush)
+            finally:
+                # Its own finally so a bookkeeping raise cannot leave the turn
+                # counted forever and wedge every later backend switch.
+                self._exit_turn()
 
     async def _release_dag_runs(self, session_key: str, *, flush: bool) -> None:
         """Release the foreground DAG runs the turn on ``session_key`` still binds.

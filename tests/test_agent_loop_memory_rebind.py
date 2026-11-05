@@ -11,6 +11,7 @@ never built.
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -21,6 +22,7 @@ from raven.context_engine.segments.identity import IdentitySegmentBuilder
 from raven.context_engine.segments.memory import MemorySegmentBuilder
 from raven.memory_engine.skill_forge.backend_source import BackendSkillSource
 from raven.memory_engine.skill_forge.router import SkillForgeRouter
+from raven.memory_engine.store_pipeline import StorePipeline
 
 
 class _Backend:
@@ -35,12 +37,26 @@ class _Backend:
         self.stops += 1
 
 
+class _StoreBackend(_Backend):
+    """A backend whose store blocks until the test opens its gate."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.gate = asyncio.Event()
+        self.written: list[str] = []
+
+    async def store(self, session_key, messages, metadata=None) -> bool:
+        await self.gate.wait()
+        self.written.append(session_key)
+        return True
+
+
 def _loop(*, builders: list, router: SkillForgeRouter | None) -> AgentLoop:
     """An AgentLoop with only the parts ``rebind_memory_backend`` touches.
 
-    The builders and the router are the real classes: their private fields are
-    the contract this method edits, so a stand-in would let a rename in either
-    module pass.
+    The builders, the router and the store pipeline are the real classes:
+    their private fields and queue are the contract this method edits, so a
+    stand-in would let a rename or a lost record pass.
     """
     loop = object.__new__(AgentLoop)
     loop.backend = None
@@ -50,6 +66,16 @@ def _loop(*, builders: list, router: SkillForgeRouter | None) -> AgentLoop:
     )
     loop.context = SimpleNamespace(_has_memory_backend=False)
     loop.context_engine = SimpleNamespace(_builders=builders, skills_router=router)
+    loop._active_turns = 0
+    loop._turns_idle = asyncio.Event()
+    loop._turns_idle.set()
+    loop._memory_rebind_lock = asyncio.Lock()
+    loop._backend_stop_tasks = set()
+    loop._store_pipeline = StorePipeline(
+        lambda: loop.backend,
+        on_ok=lambda: None,
+        on_failure=lambda _reason: None,
+    )
     return loop
 
 
@@ -143,3 +169,178 @@ async def test_rebind_into_memory_off_drops_the_backend_source() -> None:
     assert router._sources == []
     assert old.stops == 1
     assert loop.memory_config.backend is None
+
+
+@pytest.mark.asyncio
+async def test_rebind_waits_for_the_turn_in_flight() -> None:
+    """A settings click can land mid-turn; the swap must not split that turn
+    across two backends, and stop() must not close a client it is calling."""
+    old, new = _Backend(), _Backend()
+    memory = MemorySegmentBuilder(None, old)
+    loop = _loop(builders=[memory], router=None)
+    loop.backend = old
+    loop._enter_turn()
+
+    switch = asyncio.create_task(
+        loop.rebind_memory_backend(
+            new,
+            name="everos-cloud",
+            user_id="u",
+            agent_id="a",
+            memory_top_k=5,
+        ),
+    )
+    await asyncio.sleep(0)
+    assert loop.backend is old
+    assert old.stops == 0
+    # The new backend is started before the wait, which is harmless: nothing
+    # reads it until the swap.
+    assert new.starts == 1
+
+    loop._exit_turn()
+    await switch
+
+    assert loop.backend is new
+    assert memory._backend is new
+    assert old.stops == 1
+
+
+@pytest.mark.asyncio
+async def test_a_switch_keeps_a_queued_write_on_its_own_backend(monkeypatch) -> None:
+    """The record was produced against ``old``; a switch must neither move it
+    to ``new`` nor stop ``old`` under it."""
+    monkeypatch.setattr("raven.agent.loop._shared._STORE_DRAIN_BUDGET_S", 0.01)
+    old, new = _StoreBackend(), _Backend()
+    loop = _loop(builders=[MemorySegmentBuilder(None, old)], router=None)
+    loop.backend = old
+    loop._store_pipeline.enqueue("s1", [{"role": "user", "content": "hi"}])
+    # Let the worker take the record and block inside the backend call.
+    await asyncio.sleep(0)
+
+    await loop.rebind_memory_backend(
+        new,
+        name="everos-cloud",
+        user_id="u",
+        agent_id="a",
+        memory_top_k=5,
+    )
+
+    assert loop.backend is new
+    assert old.stops == 0, "the old backend's record has not settled"
+
+    old.gate.set()
+    for _ in range(200):
+        if old.stops:
+            break
+        await asyncio.sleep(0.01)
+
+    assert old.written == ["s1"], "the queued turn was written to the backend it was produced against"
+    assert old.stops == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failing_stop_does_not_fail_the_switch() -> None:
+    class _BadStop(_Backend):
+        async def stop(self) -> None:
+            self.stops += 1
+            raise RuntimeError("the client was already gone")
+
+    old, new = _BadStop(), _Backend()
+    loop = _loop(builders=[MemorySegmentBuilder(None, old)], router=None)
+    loop.backend = old
+
+    await loop.rebind_memory_backend(
+        new,
+        name="everos-cloud",
+        user_id="u",
+        agent_id="a",
+        memory_top_k=5,
+    )
+
+    assert loop.backend is new
+    assert old.stops == 1
+
+
+@pytest.mark.asyncio
+async def test_run_turn_counts_itself_so_a_switch_waits(monkeypatch) -> None:
+    """The wiring, not just the counter: a switch requested while ``run_turn``
+    runs must wait until the turn returns. The turn body is stubbed, so what
+    this pins is the enter/exit pair around it."""
+    from contextlib import nullcontext
+
+    from raven.agent.loop import main as main_mod
+
+    monkeypatch.setattr(main_mod, "use_binding", lambda _binding: nullcontext())
+    monkeypatch.setattr(
+        main_mod,
+        "knowledge_scope",
+        SimpleNamespace(bind=lambda *_a: nullcontext(), read=lambda *_a: None),
+    )
+    monkeypatch.setattr(main_mod, "delegate_scope", lambda _table: nullcontext())
+    monkeypatch.setattr(main_mod, "charter_scope", lambda _charter: nullcontext())
+    monkeypatch.setattr(main_mod, "bind_harness", lambda _harness: nullcontext())
+
+    old, new = _Backend(), _Backend()
+    loop = _loop(builders=[], router=None)
+    loop.backend = old
+    loop.sessions = None
+    loop.harness = None
+    loop._playbooks = None
+    loop._with_live_window = lambda binding: binding
+    loop.binding_for_session = lambda _key: object()
+    loop._turn_scope = lambda: nullcontext()
+    loop.tools = SimpleNamespace(
+        session_scope_for=lambda _key: nullcontext(),
+        turn_scope=lambda: nullcontext(),
+        get=lambda _name: None,
+    )
+    loop._take_session_charter = lambda _key: None
+    loop.session_persona = lambda _key: None
+
+    async def _resolve_playbook_turn(_req, _key, _binding):
+        return SimpleNamespace(
+            table=None,
+            active=False,
+            disposition=None,
+            selected_playbook=None,
+            artifact_name=None,
+            capture_workflow=None,
+            persisted=False,
+        )
+
+    loop._resolve_playbook_turn = _resolve_playbook_turn
+
+    seen: dict = {}
+
+    async def _run_turn(*_args, **_kwargs):
+        seen["during"] = loop.active_turns
+        seen["switch"] = asyncio.create_task(
+            loop.rebind_memory_backend(
+                new,
+                name="everos-cloud",
+                user_id="u",
+                agent_id="a",
+                memory_top_k=5,
+            ),
+        )
+        await asyncio.sleep(0)
+        seen["swapped_during"] = loop.backend is not old
+        return "done"
+
+    loop._run_turn = _run_turn
+    req = SimpleNamespace(
+        conversation="s1",
+        source=None,
+        direct_target=None,
+        text="hi",
+        playbook_mode=None,
+    )
+
+    out = await loop.run_turn(req, lambda *_a, **_k: None, lambda *_a, **_k: None)
+
+    assert out == "done"
+    assert seen["during"] == 1
+    assert seen["swapped_during"] is False
+    assert loop.active_turns == 0
+    await seen["switch"]
+    assert loop.backend is new
