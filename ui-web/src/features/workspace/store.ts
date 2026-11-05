@@ -416,7 +416,62 @@ export function openDelivery(p: string): void {
    path and the panel holds the path as the model typed it: marking the row
    missing under the panel's spelling alone would leave the row lit, and the
    download link on it pointing at a token that is already gone. */
-export const markDeliveryMissing = (path: string): void => deliveries.markMissing(absPath(path))
+export const markDeliveryMissing = (path: string): void => { void markDeliveryGone(path) }
+
+/* Whether the file is still there, asked of the server. The server resolves
+   the path on the gateway's own volume and answers for the file that path
+   names -- its case and all -- so it is the only one that can say which of
+   two spellings is the file and which is its neighbour. */
+async function fileGone(path: string): Promise<boolean> {
+  try {
+    const r = await fetch(fileURL(path), { method: 'HEAD', credentials: 'same-origin', cache: 'no-store' })
+    return r.status === 404
+  } catch {
+    /* No answer at all is not an answer about the file. */
+    return false
+  }
+}
+
+/* The file the reader opened is gone, and the delivery that names it goes
+   grey -- and only that one.
+
+   The registry keys the gateway's resolved path and the panel holds the path
+   the model typed, so the two can differ in case: the gateway resolved
+   `C:\Users\livxu\a.md` where the model typed `C:\Users\LIVXU\a.md`. On an
+   ordinary volume that is one file, and the row has to go grey. On a
+   case-sensitive volume they are two files, and greying the wrong one takes a
+   live delivery off the shelf and strips its download link.
+
+   The page cannot tell which volume it is on, so it does not guess: a row the
+   path names only by folding is asked about by its OWN path, and the server
+   answers for the file that path names. A row the path names exactly is the
+   file the reader opened, and the answer that brought it here is already the
+   server's.
+
+   `probed` is the row the read resolved, taken before the request went out:
+   a newer delivery for the same path may have landed since, and that file may
+   well be there. */
+async function markGone(key: string, probed: DeliveryRow | null): Promise<void> {
+  if (!probed) return
+  /* The registry moved on: the row standing here now is another delivery, and
+     the one that was probed is not the file the reader opened. */
+  if (deliveries.byPath(key) !== probed) return
+  if (deliveries.exactMatch(key)) {
+    deliveries.markMissing(key)
+    return
+  }
+  if (!(await fileGone(probed.path))) return
+  deliveries.markMissing(probed.path)
+}
+
+/* Mark the delivery the reader's path names, if the file is really gone. The
+   row is resolved here when the caller has none to hand -- a caller that read
+   the file has one, and passing it keeps a delivery that landed meanwhile out
+   of it. */
+export async function markDeliveryGone(path: string, probed?: DeliveryRow | null): Promise<void> {
+  const key = absPath(path)
+  await markGone(key, probed === undefined ? deliveries.byPath(key) : probed)
+}
 
 /* For the kinds that never read text: an <img> or a frame that failed to load
    says nothing about WHY, and "gone" is one of several answers -- the viewer
@@ -435,16 +490,12 @@ export async function probeDeliveryMissing(path: string): Promise<number | null>
   const probed = deliveries.byPath(key)
   try {
     const r = await fetch(fileURL(path), { method: 'HEAD', credentials: 'same-origin', cache: 'no-store' })
-    if (r.status === 404) markProbedMissing(key, probed)
+    if (r.status === 404) await markGone(key, probed)
     return r.status
   } catch {
     /* No answer at all is not an answer about the file. */
     return null
   }
-}
-
-function markProbedMissing(key: string, probed: DeliveryRow | null): void {
-  if (deliveries.byPath(key) === probed) deliveries.markMissing(key)
 }
 
 /* Fill the shelf from the gateway's registry for this conversation. Called when
@@ -478,8 +529,8 @@ export async function loadDeliveries(sessionKey: string): Promise<void> {
    The path handed on is the registry's spelling, not the panel's: the row is
    keyed by the gateway's absolute path, and marking under the spelling the
    model typed would leave the row lit. */
-function refused(f: WsFile, status: number, probed: DeliveryRow | null): Error {
-  if (status === 404) markProbedMissing(absPath(f.path), probed)
+async function refused(f: WsFile, status: number, probed: DeliveryRow | null): Promise<Error> {
+  if (status === 404) await markGone(absPath(f.path), probed)
   return new Error(status === 403 ? t('gui.ws.file_denied')
     : status === 404 ? t('gui.ws.file_gone')
       : status === 413 ? t('gui.ws.file_big') : `HTTP ${status}`)
@@ -490,7 +541,7 @@ export async function loadFileText(f: WsFile): Promise<void> {
   f.loading = true
   try {
     const r = await fetch(fileURL(f.path), { credentials: 'same-origin' })
-    if (!r.ok) throw refused(f, r.status, probed)
+    if (!r.ok) throw await refused(f, r.status, probed)
     f.text = await r.text()
   } catch (e) {
     f.err = (e as Error).message || String(e)
@@ -516,7 +567,7 @@ export async function sniffFile(f: WsFile): Promise<void> {
     const r = await fetch(fileURL(f.path), {
       credentials: 'same-origin', headers: { Range: `bytes=0-${SNIFF_BYTES - 1}` },
     })
-    if (r.status === 403 || r.status === 404) throw refused(f, r.status, probed)
+    if (r.status === 403 || r.status === 404) throw await refused(f, r.status, probed)
     /* An empty file has no first byte to ask for; it is empty text. */
     if (r.status === 416) {
       f.raw = true

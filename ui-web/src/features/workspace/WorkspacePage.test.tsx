@@ -386,6 +386,24 @@ describe('workspace island', () => {
     expect(screen.queryByText(/LibreOffice is not installed/)).not.toBeNull()
   })
 
+  /* A deck that is gone is a file that is gone, and the delivery that names
+     it goes grey with it -- and only that row: the row is asked about by its
+     own path, so a neighbour that differs from it by case alone is not greyed
+     for it. */
+  it('marks the delivery missing when the deck is gone', async () => {
+    wsSetRoot('/repo')
+    install(emptyWs({ file: { ...deckFile } }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    deliveries.seed([{ path: '/repo/deck.pptx', name: 'deck.pptx', title: 'Deck',
+                       download_path: '/files/download?token=x', size: 9 }])
+    vi.stubGlobal('fetch', () => Promise.resolve({
+      ok: false, status: 404, statusText: 'Not Found', text: async () => '404: /repo/deck.pptx',
+    }))
+    await mount()
+    await waitFor(() => { expect(deliveries.byPath('/repo/deck.pptx')?.missing).toBe(true) })
+    /* And the link on it went with it: the token is gone too. */
+    expect(document.querySelector('.fwrap .fbar a[download]')).toBeNull()
+  })
+
   it('redraws a deck delivered again under the same path', async () => {
     install(emptyWs({ file: { ...deckFile } }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
     vi.stubGlobal('fetch', () => Promise.resolve({

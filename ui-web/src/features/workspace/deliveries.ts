@@ -198,16 +198,25 @@ const windowsPath = (p: string): boolean => {
   return /^[A-Za-z]:/.test(s) || s.startsWith('//')
 }
 
+/* The rows whose canonical spelling is exactly this path's. The read side
+   takes the folded road when no row matches exactly; the write side never
+   does, because a row that differs only by case is a different file on a
+   case-sensitive volume, and a write that reached it would grey a live
+   delivery and strip its download link. */
+const exactRowsFor = (path: string): Held[] => {
+  const key = canonPath(path)
+  return rows.filter((row) => canonPath(row.path) === key)
+}
+
 /* The rows for a path, exact spelling first. A case-sensitive Windows
    directory can hold two delivered files whose paths differ only by case;
    folding first would hand one of them the other's download token. The folded
    comparison is the fallback for the ordinary case-insensitive volume, and
    only when no row matched exactly. */
 const rowsFor = (path: string): Held[] => {
-  const key = canonPath(path)
-  const exact = rows.filter((row) => canonPath(row.path) === key)
+  const exact = exactRowsFor(path)
   if (exact.length || !windowsPath(path)) return exact
-  const folded = key.toLowerCase()
+  const folded = canonPath(path).toLowerCase()
   return rows.filter((row) => windowsPath(row.path) && canonPath(row.path).toLowerCase() === folded)
 }
 
@@ -332,14 +341,26 @@ export function seed(files: unknown): void {
 /* The reader opened it and it was not there. Written back so the shelf row goes
    grey too, rather than each surface discovering the same absence for itself.
    Every turn's row for that path: the file is gone for all of them, and the
-   turn cards would otherwise disagree with the shelf about the same file. */
+   turn cards would otherwise disagree with the shelf about the same file.
+
+   The rows it reaches are the ones the path names exactly. A row that differs
+   only by case is a different file on a case-sensitive volume, and greying it
+   for this one would take a live delivery off the shelf and strip its download
+   link; a caller holding such a row asks the server about it first (see the
+   workspace store's `markDeliveryGone`). */
 export function markMissing(path: string): void {
-  const matching = rowsFor(path)
+  const matching = exactRowsFor(path)
   if (!matching.some((row) => !row.missing)) return
   const marks = new Set(matching)
   rows = rows.map((row) => (marks.has(row) && !row.missing ? { ...row, missing: true } : row))
   bump()
 }
+
+/* Whether a path names a row exactly -- the same file, spelled the way the
+   registry spells it. The write side needs the difference: an exact match is
+   the file the reader opened, and a folded one is a sibling the page cannot
+   tell from it. */
+export const exactMatch = (path: string): boolean => exactRowsFor(path).length > 0
 
 /* Park and restore, through the workspace store's snapshot: a conversation
    switched away from and back never replays its history, so without this the

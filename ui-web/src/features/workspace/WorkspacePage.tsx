@@ -651,6 +651,10 @@ function DeckBody({ f, version }: { f: WsFile; version: number | string | null }
     setGone(false)
     let alive = true
     const said = (e: unknown): string => ((e as Error) && (e as Error).message) || String(e)
+    /* The row the panel's path names, taken before the request goes out: the
+       registry may take another delivery for the same path while it is out,
+       and that file may well be there. */
+    const probed = deliveries.byPath(absPath(f.path))
     /* The first page is asked for before any of them are drawn, and it answers
        two questions at once: whether the rendering can be made at all -- a host
        with no LibreOffice, a deck that will not convert -- and how many pages
@@ -671,9 +675,12 @@ function DeckBody({ f, version }: { f: WsFile; version: number | string | null }
          The path is resolved before it is marked, because the registry keys the
          gateway's absolute path and the panel may hold the path as the model
          typed it: marking under the panel's spelling alone would leave the row
-         lit and the download link on it pointing at a token that is gone. */
+         lit and the download link on it pointing at a token that is gone.
+
+         And only that row: the delivery is asked about by its own path, so a
+         neighbour that differs from it by case alone is not greyed for it. */
       if (r.status === 404) {
-        deliveries.markMissing(absPath(f.path))
+        void store.markDeliveryGone(f.path, probed)
         setGone(true)
         return
       }

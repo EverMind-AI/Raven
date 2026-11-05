@@ -1,7 +1,7 @@
 /** Tests for the session's delivery registry and how it survives a park. */
 
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { setCurrent } from '../../lib/session'
 import { resetSources, setSources } from '../../state/sources'
@@ -14,6 +14,7 @@ const manifest = (files: Array<Record<string, unknown>>): unknown => ({ raven_de
 
 afterEach(() => {
   deliveries.restore([])
+  vi.unstubAllGlobals()
 })
 
 describe('delivery registry', () => {
@@ -92,6 +93,61 @@ describe('delivery registry', () => {
     deliveries.markMissing('C:\\work\\A.md')
     expect(deliveries.byPath('C:\\work\\A.md')?.missing).toBe(true)
     expect(deliveries.byPath('C:\\work\\a.md')?.missing).toBe(false)
+  })
+
+  /* The redirector resolves a UNC server and share case-insensitively, so
+     that much of the path folds with the spelling: it is one file, and a
+     write under the other spelling is a write on the same row. Below the
+     share the volume decides, and the page cannot: that spelling is another
+     file until the server says otherwise. */
+  it('folds the case of a UNC server and share, and of nothing below them', () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([{ path: '\\\\server\\share\\out\\a.md', name: 'a.md' }]))
+
+    expect(deliveries.exactMatch('\\\\SERVER\\share\\out\\a.md')).toBe(true)
+    expect(deliveries.exactMatch('\\\\server\\share\\OUT\\a.md')).toBe(false)
+  })
+
+  /* The write side may not cross to a neighbour: the panel's path can name a
+     file that is not there at all, and greying the row that IS there would
+     take a live delivery off the shelf and strip its download link. */
+  it('does not mark a case-variant neighbour missing', () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([{ path: 'C:\\work\\A.md', name: 'A.md' }]))
+
+    deliveries.markMissing('C:\\work\\a.md')
+
+    expect(deliveries.byPath('C:\\work\\A.md')?.missing).toBe(false)
+  })
+
+  /* Only the server can say which of two spellings is the file: it resolves
+     the path on the gateway's own volume. So a row the panel's path names
+     only by folding is asked about by its own path, and it is greyed only
+     when that file is gone as well. */
+  it('keeps a live delivery when the panel named a case-variant file that is gone', async () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([{ path: 'C:\\work\\A.md', name: 'A.md' }]))
+    const asked: string[] = []
+    vi.stubGlobal('fetch', (url: string) => {
+      asked.push(String(url))
+      /* The panel's spelling is not there; the registry's own spelling is. */
+      return Promise.resolve({ status: String(url).includes('a.md') ? 404 : 200 })
+    })
+
+    await workspace.probeDeliveryMissing('C:\\work\\a.md')
+
+    expect(deliveries.byPath('C:\\work\\A.md')?.missing).toBe(false)
+    /* And it asked about the row's own path, not the panel's. */
+    expect(asked.some((url) => url.includes('A.md'))).toBe(true)
+  })
+
+  /* The other way round, and the ordinary case: the registry holds the path
+     the gateway resolved and the panel holds the one the model typed, the
+     file is gone, and the row has to go grey. */
+  it('greys a row whose own file is gone when the panel named a case-variant', async () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([{ path: 'C:\\work\\a.md', name: 'a.md' }]))
+    vi.stubGlobal('fetch', () => Promise.resolve({ status: 404 }))
+
+    await workspace.probeDeliveryMissing('C:\\work\\A.md')
+
+    expect(deliveries.byPath('C:\\work\\a.md')?.missing).toBe(true)
   })
 
   /* POSIX paths are case-sensitive, so they must never take the folded road. */
