@@ -15,10 +15,13 @@ Two policies the router enforces (not its sources):
   The other sources still feed RRF so the router never produces a
   whole-pipeline failure because of one transient.
 
-The router's source list is **fixed at construction**: the sources are
-internal and hardcoded (Local, EverOS and Hub); third-party skill retrieval
-extension goes through :class:`MemoryBackend` rather than through new
-ForgeSkillSource implementations.
+The router's source list is fixed in its membership, not in its lifetime:
+the sources are internal (Local, EverOS and Hub) and a third-party skill
+retrieval extension goes through :class:`MemoryBackend` rather than through
+new ForgeSkillSource implementations. The one exception is the memory
+backend's source, which a live switch adds or removes with
+:meth:`add_source` / :meth:`remove_source` -- turning the backend on or off
+must not rebuild the engine the page's socket is attached to.
 """
 
 from __future__ import annotations
@@ -46,13 +49,33 @@ class SkillForgeRouter:
     ) -> None:
         # The list is captured by reference; callers should pass an
         # already-frozen tuple if they want to forbid mutation. We
-        # deliberately don't freeze for them — host wires sources at
-        # boot, never mutates, and verbose immutable wrappers add
-        # nothing.
+        # deliberately don't freeze for them — the host wires sources at
+        # boot and a live memory switch is the one later writer, so
+        # verbose immutable wrappers add nothing.
         self._sources = sources
         self._over_fetch_factor = max(1, over_fetch_factor)
         self._dedup_by = dedup_by
         self._rrf_k = rrf_k
+
+    def add_source(self, source: ForgeSkillSource) -> None:
+        """Wire one more source, for a switch that turns memory on.
+
+        The memory backend's source is absent when the router was built with
+        no backend, so there is nothing to update in place; recall has to
+        start feeding or the newly selected backend never reaches skills.
+        A rebuilt list rather than ``append``: the constructor accepts any
+        sequence, and a caller that passed a tuple asked for a list it cannot
+        mutate.
+        """
+        self._sources = [*self._sources, source]
+
+    def remove_source(self, source: ForgeSkillSource) -> None:
+        """Drop one source by identity, for a switch that turns memory off.
+
+        Identity rather than equality: two backend sources can carry the same
+        name and weight, and the one this router holds is the one to drop.
+        """
+        self._sources = [s for s in self._sources if s is not source]
 
     async def select(
         self,

@@ -68,26 +68,26 @@ def _configured_backend() -> str | None:
     return load_raven_config().memory.backend
 
 
-def _backend_for_page() -> str | None:
+def _backend_for_section() -> str | None:
     """The configured name, with an unreadable config answering as "not known".
 
-    ``memory.stats`` never raises: a page that cannot name the selected backend
+    ``memory.stats`` never raises: a section that cannot name the selected backend
     still draws its counts and its switch, and the note says what went wrong.
     """
     try:
         return _configured_backend()
-    except Exception:  # noqa: BLE001 - an unreadable config is not this page's to report
+    except Exception:  # noqa: BLE001 - an unreadable config is not this section's to report
         return None
 
 
 def _available_backends() -> list[str]:
     """The EverOS backends this install can actually select, local first.
 
-    The page draws one segment per name in ``MEMORY_BACKEND_DISTRIBUTIONS`` and
+    The section draws one segment per name in ``MEMORY_BACKEND_DISTRIBUTIONS`` and
     disables the absent ones, so a reader sees what the install has rather than
     only the name the file happens to carry. The probe is ``find_spec`` for the
     same reason the roster's is: presence, not an import that would pay the
-    engine's startup cost on every page load. A plugin the reader put in
+    engine's startup cost on every section load. A plugin the reader put in
     ``plugins.disabled`` is absent too -- offering it would be a segment whose
     write the same config refuses.
     """
@@ -97,7 +97,7 @@ def _available_backends() -> list[str]:
 
     try:
         disabled = set(load_raven_config().plugins.disabled or [])
-    except Exception:  # noqa: BLE001 - an unreadable config is not this page's to report
+    except Exception:  # noqa: BLE001 - an unreadable config is not this section's to report
         disabled = set()
 
     names: list[str] = []
@@ -111,7 +111,7 @@ def _available_backends() -> list[str]:
 def _local_server_running() -> bool:
     """Whether the local EverOS server answers where the local backend reads.
 
-    The page draws its start button off this; the four kind reads below cannot
+    The section draws its start button off this; the four kind reads below cannot
     tell "server not running" apart from "server up and empty" better than a
     probe can, and a probe is what the start button's own answer is checked
     with.
@@ -128,7 +128,7 @@ def _local_server_running() -> bool:
 def _cloud_key_set() -> bool:
     """Whether the hosted backend has a key on file, or in the environment.
 
-    The memory page needs this before its first store read: a selected cloud
+    The memory section needs this before its first store read: a selected cloud
     backend with no key answers every read with 401, and drawing that as "the
     service is down" hides the one action that fixes it. The same resolution the
     backend uses at runtime, so the panel and the client cannot disagree.
@@ -320,7 +320,7 @@ async def memory_stats(params: dict) -> dict:
     """``memory.stats`` — never raises; the page opens even when EverOS is down."""
     del params
     note = _unavailable_note()
-    backend = _backend_for_page()
+    backend = _backend_for_section()
     available = _available_backends()
     cloud_key_set = _cloud_key_set()
     local_running = False
@@ -329,7 +329,7 @@ async def memory_stats(params: dict) -> dict:
     if note is None and backend == _CLOUD_BACKEND and not cloud_key_set:
         # A missing key is not an unreachable service: answer here instead of
         # sending four requests that can only come back 401, and leave the
-        # page one state to draw -- its key panel.
+        # section one state to draw -- its key panel.
         note = "EverOS Cloud has no API key yet; add one in Settings > Memory."
     if note is not None:
         # Same shape as an unreachable server plus the one thing that shape
@@ -393,7 +393,7 @@ async def memory_list(params: dict) -> dict:
         # failure -- there is simply no EverOS store to list here -- and a
         # retry button offers an action that cannot help.
         return {"items": [], "total": 0, "page": 1, "page_size": 0, "note": note}
-    if _backend_for_page() == _CLOUD_BACKEND and not _cloud_key_set():
+    if _backend_for_section() == _CLOUD_BACKEND and not _cloud_key_set():
         # Same reason as stats: nothing to ask, and a 401 would read as the
         # service being down rather than as the step the reader has not taken.
         return {
@@ -441,10 +441,10 @@ async def memory_list(params: dict) -> dict:
 
 
 async def memory_start_local(params: dict) -> dict:
-    """``memory.startLocal`` — start the local EverOS server from the page.
+    """``memory.startLocal`` — start the local EverOS server from the section.
 
     The backend starts the same server when it boots; this is the path for a
-    page reading a local store whose server is not up (stopped, killed, or
+    section reading a local store whose server is not up (stopped, killed, or
     never started), so the reader can fix it without restarting Raven.
     """
     del params
@@ -469,12 +469,12 @@ async def memory_start_local(params: dict) -> dict:
         cfg = load_raven_config()
         plug = (cfg.plugins.config or {}).get("everos-memory", {})
         base_url = str(plug.get("base_url") or DEFAULT_EVEROS_BASE_URL).rstrip("/")
-    except Exception as e:  # noqa: BLE001 - the page shows the detail verbatim
+    except Exception as e:  # noqa: BLE001 - the section shows the detail verbatim
         return {"ok": False, "running": False, "base_url": "", "detail": f"config unreadable: {e}"}
 
     try:
         await ensure_everos_server(base_url, timeout=15.0)
-    except Exception as e:  # noqa: BLE001 - the page shows the detail verbatim
+    except Exception as e:  # noqa: BLE001 - the section shows the detail verbatim
         return {"ok": False, "running": False, "base_url": base_url, "detail": str(e)}
 
     verdict = await asyncio.to_thread(probe_health, base_url)
@@ -490,8 +490,8 @@ async def memory_start_local(params: dict) -> dict:
 async def memory_apply_runtime(params: dict, *, agent_loop_factory: Any = None) -> dict:
     """``memory.applyRuntime`` — point the running loop at the configured backend.
 
-    A generation swap rebuilds the whole runtime and closes the page's RPC
-    socket; the page drew that as "not connected" on every switch. The memory
+    A generation swap rebuilds the whole runtime and closes the document's RPC
+    socket; the section drew that as "not connected" on every switch. The memory
     backend is a live reference inside the loop, so replacing it in place keeps
     the socket and the prompt layout untouched. The new backend is started
     before the old one stops, so a switch to a local server whose process is
@@ -504,14 +504,20 @@ async def memory_apply_runtime(params: dict, *, agent_loop_factory: Any = None) 
 
     try:
         loop = agent_loop_factory() if agent_loop_factory is not None else None
-    except Exception as e:  # noqa: BLE001 - the page shows the detail
+    except Exception as e:  # noqa: BLE001 - the section shows the detail
         return {"ok": False, "backend": None, "detail": f"the running loop is not available: {e}"}
     if loop is None:
         return {"ok": False, "backend": None, "detail": "no running agent loop answered"}
 
     try:
         cfg = load_raven_config()
-        backend = maybe_build_memory_backend(load_config().workspace_path, cfg)
+        # The loop's own workspace, not the base config's: a gateway can serve
+        # a project other than the one its config file names, and the service
+        # locator this backend is built with has to be the tree its turns run
+        # in. The config path is the fallback for a loop that did not expose
+        # one (a harness), where the two are the same anyway.
+        workspace = getattr(getattr(loop, "context", None), "workspace", None)
+        backend = maybe_build_memory_backend(workspace or load_config().workspace_path, cfg)
         if cfg.memory.backend is not None and backend is None:
             return {
                 "ok": False,
@@ -522,9 +528,10 @@ async def memory_apply_runtime(params: dict, *, agent_loop_factory: Any = None) 
             backend,
             name=cfg.memory.backend,
             user_id=cfg.memory.user_id,
+            agent_id=cfg.memory.agent_id,
             memory_top_k=cfg.memory.memory_top_k,
         )
-    except Exception as e:  # noqa: BLE001 - the page shows the detail
+    except Exception as e:  # noqa: BLE001 - the section shows the detail
         return {"ok": False, "backend": None, "detail": str(e)}
     return {"ok": True, "backend": cfg.memory.backend, "detail": None}
 
@@ -540,7 +547,9 @@ def register_memory_methods(dispatcher: "Dispatcher", *, agent_loop_factory: Any
 
 
 __all__ = [
+    "memory_apply_runtime",
     "memory_list",
+    "memory_start_local",
     "memory_stats",
     "register_memory_methods",
 ]

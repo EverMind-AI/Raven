@@ -411,6 +411,9 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         from raven.context_engine import build_context_engine
 
         self.context_config = context_config
+        # Read again when a live switch changes which backend's skill source
+        # carries what weight; the router was built from this at boot.
+        self._skill_forge_router_config = skill_forge_router_config
         self._TOOL_RESULT_MAX_CHARS = max(0, int(context_config.tool_result_max_chars))
 
         # Skill Hub client — built once and shared by the HubSkillSource
@@ -833,17 +836,25 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         *,
         name: str | None,
         user_id: str,
+        agent_id: str,
         memory_top_k: int,
     ) -> None:
         """Point this running loop at a new memory backend, in place.
 
-        A generation swap rebuilds the whole runtime and closes the page's
-        socket -- what the settings switch used to do on every click, which the
-        page drew as "not connected". The backend is the one part of the
+        A generation swap rebuilds the whole runtime and closes the document's
+        RPC socket -- what the settings switch used to do on every click, which
+        the section drew as "not connected". The backend is the one part of the
         generation whose seam is a live reference: the store pipeline reads
         ``self.backend`` per turn, and the context engine's memory segment and
         skill source carry it. Replacing those references is enough; the prompt
         layout and the tool array stay exactly as they were.
+
+        Every reader of the boot-time backend has to move with it. The skill
+        router's source is added or removed as the switch turns memory on or
+        off (a router built with no backend has no source to update), its
+        weight follows the new backend's configured share, and
+        ``memory_config`` is what the after-turn feedback routes its id
+        prefixes by.
         """
         old = self.backend
         if backend is not None:
@@ -851,6 +862,10 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self.backend = backend
         has = backend is not None
         self.context._has_memory_backend = has
+        self.memory_config.backend = name
+        self.memory_config.user_id = user_id
+        self.memory_config.agent_id = agent_id
+        self.memory_config.memory_top_k = memory_top_k
 
         from raven.context_engine.segments.identity import IdentitySegmentBuilder
         from raven.context_engine.segments.memory import MemorySegmentBuilder
@@ -865,11 +880,28 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 builder._has_memory_backend = has
         router = getattr(self.context_engine, "skills_router", None)
         if router is not None:
-            for source in getattr(router, "_sources", ()):
-                if isinstance(source, BackendSkillSource):
-                    source._backend = backend
-                    if name:
-                        source.name = name
+            source = next(
+                (s for s in getattr(router, "_sources", ()) if isinstance(s, BackendSkillSource)),
+                None,
+            )
+            if backend is None:
+                if source is not None:
+                    router.remove_source(source)
+            elif source is not None:
+                source._backend = backend
+                source._agent_id = agent_id
+                if name:
+                    source.name = name
+                    weights = getattr(self._skill_forge_router_config, "weights", None) or {}
+                    source.weight = float(weights.get(name, type(source).weight))
+            elif name:
+                # Memory was off when the router was built, so the factory
+                # added no backend source. The page can turn it on live, and
+                # recall has to follow or the new backend feeds no skills.
+                source = BackendSkillSource(backend, agent_id=agent_id, name=name)
+                weights = getattr(self._skill_forge_router_config, "weights", None) or {}
+                source.weight = float(weights.get(name, type(source).weight))
+                router.add_source(source)
         if old is not None and old is not backend:
             try:
                 await old.stop()
