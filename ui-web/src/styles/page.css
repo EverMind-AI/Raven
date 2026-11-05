@@ -1599,7 +1599,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   color: var(--text); min-width: 0; display: flex; align-items: center; gap: 7px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.dlg .dgr .v.err { color: var(--clay); white-space: normal; }
+/* A delegated call's detail is a reading of how it went, not an alarm: the
+   failure word and the step's own error text carry it. */
+.dlg .dgr .v.err { color: var(--muted); white-space: normal; }
 .dlg .who {
   flex: none; font-family: var(--mono); font-size: 10.5px; color: var(--muted);
   border: 1px solid var(--line); border-radius: 5px; padding: 0.5px 6px;
@@ -1607,7 +1609,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .dlg .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--line); flex: none; }
 .dlg .dot.run { background: var(--gold); animation: breathe 1.5s ease-in-out infinite; }
 .dlg .dot.ok { background: var(--moss); }
-.dlg .dot.bad { background: var(--clay); }
+.dlg .dot.bad { background: var(--muted); }
 .dlg .dot.skip { background: var(--faint); }
 /* ── the dag graph ───────────────────────────────────────────────────────
    What `DagGraph` draws wherever it is mounted -- today the desk's task board,
@@ -1658,8 +1660,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .sdlv .st { display: inline-flex; align-items: center; gap: 5px; flex: none; color: var(--muted); }
 .sdlv .st .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex: none; }
 .sdlv.good .st .dot { background: var(--moss); }
-.sdlv.bad .st { color: var(--clay); }
-.sdlv.bad .st .dot { background: var(--clay); }
+.sdlv.bad .st { color: var(--muted); }
+.sdlv.bad .st .dot { background: var(--muted); }
 .sdlv.warn .st { color: var(--gold); }
 .sdlv.warn .st .dot { background: var(--gold); }
 .sdlv.dim .st { color: var(--faint); }
@@ -1767,7 +1769,6 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    glyphs beside it, and the same three states. */
 .wrow .transcript-ic { width: 14px; height: 14px; flex: none; color: var(--chat-quiet); }
 .wrow.tog:hover .transcript-ic { color: var(--muted); }
-.wrow.bad .transcript-ic { color: var(--chat-danger); }
 .wrow.run .transcript-ic { animation: breathe 1.5s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .wrow.run .transcript-ic { animation: none; opacity: .62; } }
 
@@ -1838,9 +1839,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .wrow .diffn { flex: none; font-variant-numeric: tabular-nums; font-size: var(--fs-body); }
 .wrow .diffn .a { color: var(--moss); }
 .wrow .diffn .d { color: var(--clay); }
-.chip.bad { color: var(--clay); background: color-mix(in oklab, var(--clay) 12%, transparent); }
-.wrow.bad .vb, .wrow.bad .ic, .wrow.bad .g { color: var(--chat-danger); }
-.wrow .err { color: var(--chat-danger); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A failed call is ordinary work: the word says so, the colour does not. */
+.chip.bad { color: var(--muted); background: var(--surface); }
+.wrow .err { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wrow.wait .vb, .wrow.wait .ic { color: var(--amber); }
 
 /* detail card: the only place raw commands, paths and output appear. A titled
@@ -1885,7 +1886,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .dtl pre .pth:hover { color: var(--amber); text-decoration: underline; text-underline-offset: 2px; }
 .dtl .exit { font-size: 10.5px; padding: 1px 6px; border-radius: 8px; }
 .dtl .exit.ok { color: var(--moss); background: color-mix(in oklab, var(--moss) 12%, transparent); }
-.dtl .exit.bad { color: var(--clay); background: color-mix(in oklab, var(--clay) 12%, transparent); }
+.dtl .exit.bad { color: var(--muted); background: var(--surface); }
 .dtl .dline { white-space: pre-wrap; overflow-wrap: anywhere; padding: 0 6px; margin: 0 -6px; }
 .dtl .dline.a { background: color-mix(in oklab, var(--moss) 13%, transparent); color: var(--moss); }
 .dtl .dline.d { background: color-mix(in oklab, var(--clay) 13%, transparent); color: var(--clay); }
@@ -7076,8 +7077,8 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   text-decoration: none;
 }
 /* The prototype's own three-state dot, shared with the task pane's status
-   bar: moss running, clay only for a failure or an interruption, faint grey
-   for everything else settled -- carried by `data-st` rather than a new
+   bar: moss running, a darker grey for a failure or an interruption, faint
+   grey for everything else settled -- carried by `data-st` rather than a new
    class. */
 .sarow.task[data-st="run"] .dot {
   background: var(--moss);
@@ -7085,16 +7086,16 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   animation: pulse 1.8s ease-in-out infinite;
 }
 .sarow.task[data-st="error"] .dot {
-  background: var(--clay);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--clay) 15%, transparent);
+  background: var(--muted);
+  box-shadow: none;
   animation: none;
 }
 .sarow.task[data-st="ok"] .dot { background: var(--faint); box-shadow: none; animation: none; }
 .tline { display: flex; align-items: baseline; gap: 8px; }
 .tline .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* A failed run says so in the one line it has. Colour rather than a word alone,
-   because the second line is what the eye lands on when scanning a group. */
-.sarow.task .st.fail { color: var(--clay); }
+/* A failed run says so in the one line it has: the words, in the same muted
+   register as the rest of the line, not a second colour code. */
+.sarow.task .st.fail { color: var(--muted); }
 
 /* The task view: what one delegated run is doing, step by step.
    Head, then the chips it produced, then either the node column or the card
@@ -7146,7 +7147,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .tkview > .tkchips { margin: 2px 0 4px; }
 /* Why a run stopped, at the top, where a reader looks before reading the
    steps. One line: the steps below say the rest. */
-.tkfail { font-size: 12px; line-height: 1.6; color: var(--clay);
+.tkfail { font-size: 12px; line-height: 1.6; color: var(--muted);
   background: var(--surface); border-radius: 8px; padding: 8px 10px; }
 
 /* ── one node, described ───────────────────────────────────────────────
@@ -7283,14 +7284,14 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   color: var(--muted); }
 .tkans { font-size: 12.5px; line-height: 1.8; color: var(--text); white-space: pre-wrap; }
 /* Where the answer would be, when the run stopped instead of answering. */
-.tkstop { font-size: 12px; line-height: 1.7; color: var(--clay);
+.tkstop { font-size: 12px; line-height: 1.7; color: var(--muted);
   background: var(--surface); border-radius: 8px; padding: 9px 11px; }
 .tklive { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--faint); }
 
-/* The same token the runtime uses for the same condition, carried by colour.
-   Beside the name, never instead of it. */
-.tkerr { flex: none; font-family: var(--mono); font-size: 10px; color: var(--clay);
-  background: color-mix(in oklab, var(--clay) 10%, var(--paper)); border-radius: 5px; padding: 1px 6px; }
+/* The same token the runtime uses for the same condition, carried by the word
+   rather than a colour. Beside the name, never instead of it. */
+.tkerr { flex: none; font-family: var(--mono); font-size: 10px; color: var(--muted);
+  background: var(--surface); border-radius: 5px; padding: 1px 6px; }
 
 
 

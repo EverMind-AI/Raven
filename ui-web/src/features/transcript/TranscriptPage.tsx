@@ -569,6 +569,7 @@ function PlainCallRow({ lane, c }: { lane: Lane; c: CallData }): ReactElement {
           {c.srv ? <span className="srv">{`[${c.srv}] `}</span> : null}
           {c.done ? store.verbOf(store.actName(c.name, c.args)) : store.verbIngOf(store.actName(c.name, c.args))}
         </span>
+        {c.done && !c.ok ? <span className="chip bad">{t('gui.fail')}</span> : null}
         {c.done && c.hunk && (c.hunk.add || c.hunk.del) ? (
           <span className="diffn"><span className="a">+{c.hunk.add}</span> <span className="d">-{c.hunk.del}</span></span>
         ) : null}
@@ -693,6 +694,7 @@ const DelegRow = memo(function DelegRow({ lane, c }: { lane: Lane; c: CallData }
         <span className="ar">{head
           ? `${head.instance ? head.instance + '@' : ''}${head.agent}: ${head.task}`
           : c.rowLabel || ''}</span>
+        {c.done && !c.ok ? <span className="chip bad">{t('gui.fail')}</span> : null}
         <Chev />
       </div>
       <div className="dtl dlg" hidden={!c.open}>
@@ -887,6 +889,7 @@ const DagCard = memo(function DagCard({ lane, c }: { lane: Lane; c: CallData }):
           {c.done ? store.verbOf(store.actName(c.name, c.args)) : store.verbIngOf(store.actName(c.name, c.args))}
         </span>
         <span className="ar">{rowLabel}</span>
+        {c.done && !c.ok ? <span className="chip bad">{t('gui.fail')}</span> : null}
         <Chev />
       </div>
       <div className="dtl dlg dagc" hidden={!c.open}>

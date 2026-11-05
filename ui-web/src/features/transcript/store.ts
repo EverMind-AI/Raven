@@ -1107,17 +1107,16 @@ function newCallData(
 const callKeepsOpen = (c: CallData): boolean => c.kind === 'spawn' || c.kind === 'dag'
 
 /* The row-fold transitions: a step that just outgrew a single call folds its
-   rows for the first time, and a failure is the one thing worth opening
-   unasked. Both are defaults -- `wkPinned` is the reader having taken the fold
-   over, and from then on nothing here moves it. A step holding a spawn or dag
-   call defaults open instead of folding, so the delegation is readable without
-   a click; the reader can still shut it. */
+   rows for the first time, and one holding a spawn or dag call defaults open
+   instead of folding, so the delegation is readable without a click. Both are
+   defaults -- `wkPinned` is the reader having taken the fold over, and from
+   then on nothing here moves it. A failed call does not open the fold: a tool
+   that went wrong is ordinary work, and the row carries the word instead. */
 function paintWork(lane: Lane, seg: StepData, grewPast1: boolean): void {
   if (seg.calls.length > 1 && !seg.wkPinned) {
     if (seg.calls.some(callKeepsOpen)) seg.wkOpen = true
     else if (grewPast1) seg.wkOpen = false
   }
-  if (seg.calls.length > 1 && seg.failed && !seg.wkPinned && !seg.wkOpen) seg.wkOpen = true
   bump(lane, seg)
 }
 
