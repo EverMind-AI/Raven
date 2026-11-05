@@ -1085,6 +1085,7 @@ class AcpAgentBackend:
         timeout: int | None = None,
         max_output_chars: int = 30000,
         snapshot: CapabilitySnapshot | None = None,
+        capability_fingerprint: str | None = None,
         registry: InstanceRegistry | None = None,
         mcps: list[str] | None = None,
         allow_mcp_secrets: bool = False,
@@ -1108,6 +1109,8 @@ class AcpAgentBackend:
         self.timeout = timeout
         self.max_output_chars = max_output_chars
         self._snapshot = snapshot
+        # The launch digest a minted row belongs to, when no row exists yet.
+        self._capability_fingerprint = capability_fingerprint
         # What each live session's model, effort and mode were before this host
         # touched them, and what this host last set them to, live in
         # `_SESSION_STATE`, held per pool slot: a hot apply replaces this
@@ -1357,6 +1360,9 @@ class AcpAgentBackend:
 
         Or, when a newer measurement has been stored since this backend was
         built, take that record instead, so the next response builds on it.
+        With no record at all, the first response carrying a menu mints one:
+        a boot probe that ran before the provider was configured wrote nothing,
+        and without this no successful dispatch could repair it.
 
         Best-effort at every step. The menus are what the NEXT dispatch and the
         row's picker read, never something this turn depends on, so neither the
@@ -1364,7 +1370,12 @@ class AcpAgentBackend:
         evidence.
         """
         try:
-            updated = relearn_session_menus(self._snapshot, result)
+            updated = relearn_session_menus(
+                self._snapshot,
+                result,
+                agent=self.name,
+                fingerprint=self._capability_fingerprint or "",
+            )
         except Exception as exc:  # noqa: BLE001 - a cache refresh must not sink a turn
             logger.warning("acp agent {!r}: refreshing menus from the session failed: {}", self.name, exc)
             return

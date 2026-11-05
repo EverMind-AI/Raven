@@ -776,6 +776,15 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
             f"installed at {resolved}, but its model menu has not been measured yet -- run a test",
             resolved,
         )
+    if not getattr(snapshot, "effort_measured", True):
+        # A record minted from a live session has its menus but not the effort
+        # ladder, which belongs to the row's model; the boot backfill completes
+        # it, and until then the row says what is missing.
+        return done(
+            "attention",
+            f"installed at {resolved}, but its reasoning-effort menu has not been measured yet -- run a test",
+            resolved,
+        )
     # The record of a refusal reads as Test and a connect read it.
     named = _pi_too_old(cfg, snapshot.detail)
     return done(snapshot.status, named[0] if named else snapshot.detail, resolved)
@@ -1136,6 +1145,10 @@ def _probe_remote(cfg: Any, machine_id: str, done: Any) -> ProbeResult:
         )
     if not getattr(snapshot, "model_menu_measured", True):
         return done("attention", f"{where}, but its model menu has not been measured yet -- run a test", machine_id)
+    if not getattr(snapshot, "effort_measured", True):
+        return done(
+            "attention", f"{where}, but its reasoning-effort menu has not been measured yet -- run a test", machine_id
+        )
     return done(snapshot.status, snapshot.detail, machine_id)
 
 
@@ -1453,16 +1466,22 @@ def _note_menu_re_measured(snapshot: Any, name: str) -> None:
 def capabilities_wanted(cfg: Any) -> bool:
     """Does this acp entry lack a fresh, complete capability record?
 
-    Four cases: no snapshot, one whose launch config has changed, one written
-    before the model menu was recorded, or one of raven's own whose menu came
-    back empty -- that last one bounded as ``_own_row_missing_its_menu`` bounds
-    it. A recorded failure, a credential refusal included, is not one of them;
-    the boot backfill re-measures those as well as these four. A row with a
-    complete record keeps it -- a connect must not spend a handshake re-measuring
-    what is already known.
+    Five cases: no snapshot, one whose launch config has changed, one written
+    before the model menu was recorded, one minted from a live session and left
+    with its effort menu unmeasured, or one of raven's own whose menu came back
+    empty -- that last one bounded as ``_own_row_missing_its_menu`` bounds it.
+    A recorded failure, a credential refusal included, is not one of them; the
+    boot backfill re-measures those as well as these five. A row with a complete
+    record keeps it -- a connect must not spend a handshake re-measuring what is
+    already known.
     """
     snapshot = acp_snapshot_for(cfg)
-    if snapshot is None or snapshot.stale or not getattr(snapshot, "model_menu_measured", True):
+    if (
+        snapshot is None
+        or snapshot.stale
+        or not getattr(snapshot, "model_menu_measured", True)
+        or not getattr(snapshot, "effort_measured", True)
+    ):
         return True
     return _own_row_missing_its_menu(snapshot, getattr(cfg, "name", "") or "")
 
@@ -1710,6 +1729,7 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
                 and not refused
                 and not menuless_own
                 and not failed_before
+                and getattr(snapshot, "effort_measured", True)
             ):
                 continue
             agent = MIRASIM_AGENTS.get(getattr(cfg, "preset", None) or "") if isinstance(row, _PresetRow) else None
