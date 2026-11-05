@@ -541,6 +541,12 @@ def _runtime_with_watcher(stopped: list[str]):
         def stop(self):
             pass
 
+        async def drain_backend_stores(self):
+            pass
+
+        async def retire_pending_backends(self):
+            pass
+
     return RavenRuntime(
         loop=_Loop(),
         plugin_registry=None,
