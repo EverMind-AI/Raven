@@ -666,9 +666,14 @@ function DeckBody({ f, version }: { f: WsFile; version: number | string | null }
         return
       }
       /* The file itself is gone, which is not a render that failed: it reads
-         the way a gone file of any other kind does. */
+         the way a gone file of any other kind does.
+
+         The path is resolved before it is marked, because the registry keys the
+         gateway's absolute path and the panel may hold the path as the model
+         typed it: marking under the panel's spelling alone would leave the row
+         lit and the download link on it pointing at a token that is gone. */
       if (r.status === 404) {
-        deliveries.markMissing(f.path)
+        deliveries.markMissing(absPath(f.path))
         setGone(true)
         return
       }

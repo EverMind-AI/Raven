@@ -11,6 +11,7 @@ import { pane } from '../../state/wsPane'
 import * as browser from '../browser/mount'
 import * as agents from '../subagents/mount'
 import * as deliveries from './deliveries'
+import { absPath } from './root'
 
 import type { DeliveryRow, WorkspaceSnapshot, WorkspaceSource, WsFile, WsShared } from './types'
 import type { ReactElement } from 'react'
@@ -409,20 +410,32 @@ export function openDelivery(p: string): void {
 }
 
 /* Re-exported so the viewer does not have to know where the registry lives;
-   the store is what it already talks to. */
-export const markDeliveryMissing = (path: string): void => deliveries.markMissing(path)
+   the store is what it already talks to.
+
+   The path is resolved first, because the registry keys the gateway's absolute
+   path and the panel holds the path as the model typed it: marking the row
+   missing under the panel's spelling alone would leave the row lit, and the
+   download link on it pointing at a token that is already gone. */
+export const markDeliveryMissing = (path: string): void => deliveries.markMissing(absPath(path))
 
 /* For the kinds that never read text: an <img> or a frame that failed to load
    says nothing about WHY, and "gone" is one of several answers -- the viewer
    caps a render at 25 MB and refuses a path outside what the agent may read,
    and a file served 200 that the browser cannot decode fails here too. So the
    status is asked for, and only 404 marks the shelf. The transcript's tile
-   probes the same way. */
+   probes the same way.
+
+   Two spellings, two jobs. The lookup resolves the path, because the registry
+   keys the gateway's absolute path; the fetch does not, because the server
+   roots a relative path itself -- and roots an upload against agent home
+   rather than the session's directory -- so the path it is given is the path
+   it needs. */
 export async function probeDeliveryMissing(path: string): Promise<number | null> {
-  const probed = deliveries.byPath(path)
+  const key = absPath(path)
+  const probed = deliveries.byPath(key)
   try {
     const r = await fetch(fileURL(path), { method: 'HEAD', credentials: 'same-origin', cache: 'no-store' })
-    if (r.status === 404) markProbedMissing(path, probed)
+    if (r.status === 404) markProbedMissing(key, probed)
     return r.status
   } catch {
     /* No answer at all is not an answer about the file. */
@@ -430,8 +443,8 @@ export async function probeDeliveryMissing(path: string): Promise<number | null>
   }
 }
 
-function markProbedMissing(path: string, probed: DeliveryRow | null): void {
-  if (deliveries.byPath(path) === probed) deliveries.markMissing(path)
+function markProbedMissing(key: string, probed: DeliveryRow | null): void {
+  if (deliveries.byPath(key) === probed) deliveries.markMissing(key)
 }
 
 /* Fill the shelf from the gateway's registry for this conversation. Called when
@@ -460,16 +473,20 @@ export async function loadDeliveries(sessionKey: string): Promise<void> {
 
 /* Only 404 says the file is gone. A refusal (403) or a file too big to render
    (413) is the viewer's limit, not the file's absence, and marking a
-   deliverable missing for either would put a lie on the shelf. */
+   deliverable missing for either would put a lie on the shelf.
+
+   The path handed on is the registry's spelling, not the panel's: the row is
+   keyed by the gateway's absolute path, and marking under the spelling the
+   model typed would leave the row lit. */
 function refused(f: WsFile, status: number, probed: DeliveryRow | null): Error {
-  if (status === 404) markProbedMissing(f.path, probed)
+  if (status === 404) markProbedMissing(absPath(f.path), probed)
   return new Error(status === 403 ? t('gui.ws.file_denied')
     : status === 404 ? t('gui.ws.file_gone')
       : status === 413 ? t('gui.ws.file_big') : `HTTP ${status}`)
 }
 
 export async function loadFileText(f: WsFile): Promise<void> {
-  const probed = deliveries.byPath(f.path)
+  const probed = deliveries.byPath(absPath(f.path))
   f.loading = true
   try {
     const r = await fetch(fileURL(f.path), { credentials: 'same-origin' })
@@ -493,7 +510,7 @@ const SNIFF_BYTES = 8192
    over the view ceiling (413) cannot be read as text either way, so it stays
    the note, and so does an answer that is no answer at all. */
 export async function sniffFile(f: WsFile): Promise<void> {
-  const probed = deliveries.byPath(f.path)
+  const probed = deliveries.byPath(absPath(f.path))
   f.loading = true
   try {
     const r = await fetch(fileURL(f.path), {

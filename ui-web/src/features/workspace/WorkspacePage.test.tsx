@@ -468,6 +468,37 @@ describe('workspace island', () => {
     expect(document.querySelector('.fwrap .fbar a[download]')?.getAttribute('href')).toBe('/files/download?token=x')
   })
 
+  /* The registry keys the gateway's resolved path; the panel holds the path
+     the model typed. A file that is gone has to be marked under the registry's
+     spelling -- otherwise the row stays lit and the download link on it keeps
+     pointing at a token that is gone. */
+  it('marks the delivery missing when the file is opened by its workspace-relative path', async () => {
+    wsSetRoot('/repo')
+    install(emptyWs({ file: store.makeFile('out/notes.md') }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    deliveries.seed([{ path: '/repo/out/notes.md', name: 'notes.md', title: 'T', download_path: '/files/download?token=x', size: 9 }])
+    vi.stubGlobal('fetch', () => Promise.resolve({
+      ok: false, status: 404, statusText: 'Not Found', text: async () => '404: /repo/out/notes.md',
+    }))
+    await mount()
+    await waitFor(() => { expect(deliveries.byPath('/repo/out/notes.md')?.missing).toBe(true) })
+    /* And the link on it went with it: the token is gone too. */
+    expect(document.querySelector('.fwrap .fbar a[download]')).toBeNull()
+  })
+
+  /* The same, for the kind that never reads text: the picture's own failure
+     asks the status, and the answer marks the row the same way. */
+  it('marks the delivery missing when a picture is opened by its workspace-relative path', async () => {
+    wsSetRoot('/repo')
+    install(emptyWs({ file: { path: 'out/shot.png', kind: 'img', raw: false, text: null, err: null, size: null, loading: false } }),
+      { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    deliveries.seed([{ path: '/repo/out/shot.png', name: 'shot.png', title: 'T', download_path: '/files/download?token=x', size: 9 }])
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: false, status: 404 }))
+    await mount()
+    const img = document.querySelector('.fview .shot img') as HTMLImageElement
+    await act(async () => { img.dispatchEvent(new Event('error')) })
+    await waitFor(() => { expect(deliveries.byPath('/repo/out/shot.png')?.missing).toBe(true) })
+  })
+
   /* Where the bar offers a new tab, that button joins the reveal in one group,
      so the squares touch. happy-dom applies no stylesheet, so this pins the
      markup the domain's rule selects and the browser shows the spacing. */

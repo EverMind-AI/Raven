@@ -7,6 +7,7 @@
 import { hostIsLocal } from '../../lib/platform'
 import { current as sessionCurrent } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
+import { _resetForTests as _resetRoot, absPath, relToWsRoot, wsSetRoot } from './root'
 import { changes as workspaceChanges, showFile } from './store'
 
 import type { ProseSource, ProseTarget } from '../../lib/prose'
@@ -20,36 +21,12 @@ export function relToWorkspace(p: string | null | undefined): string | null {
   return s.replace(/^\.\//, '')
 }
 
-/* The session's working directory, taken from the session's own init bundle
-   (`info.cwd`, set by wsSetRoot below). It used to be learned from fs.list's
-   answers, which meant the shortener only worked once something had browsed
-   the tree; the resume that opens the session has always carried it.
-
-   Still one value for the page rather than one per conversation: the runtime
-   that owns a conversation's state is stage B5's. */
-let wsRoot = ''
-
-export const wsSetRoot = (cwd: unknown): void => {
-  wsRoot = typeof cwd === 'string' ? cwd.replace(/\/+$/, '') : ''
-}
-
-export const relToWsRoot = (p: string | null | undefined): string | null => {
-  const s = String(p || '')
-  return wsRoot && s.startsWith(wsRoot + '/') ? s.slice(wsRoot.length + 1) : null
-}
-
-/* The path a delivery lookup compares against. The registry keys what the
-   gateway resolved -- an absolute path -- while the panel opens a file by the
-   path the model typed, usually relative to the session's working directory
-   (record.ts's `sameFile` reconciles the same two spellings for change rows).
-   Resolving the relative side here lets deliveries.byPath find the row without
-   falling back to a bare file name, which could hand back another file's
-   download token. */
-export const absPath = (p: string): string => {
-  const s = String(p || '').replace(/\\/g, '/')
-  if (!s || s.startsWith('/') || /^[A-Za-z]:\//.test(s) || s.startsWith('~')) return s
-  return wsRoot ? `${wsRoot.replace(/\\/g, '/').replace(/\/+$/, '')}/${s}` : s
-}
+/* The session's working directory and the path it resolves to are the panel's
+   own. They live in `root` so the workspace store can reach them without a
+   cycle -- the store marks a delivery missing, and that is a write on the same
+   registry the reads are -- and they are re-exported here because this is
+   where the page has always imported them from. */
+export { absPath, relToWsRoot, wsSetRoot }
 
 /* What the workspace panel shows as a short path, and what its own tests
    shorten with. Handed in by the boot's own wiring (app/install.ts), which
@@ -159,7 +136,7 @@ export const workspaceSource: WorkspaceSource = {
 /* Test seam only: the workspace root and the two injected helpers are the
    module's. */
 export function _resetForTests(): void {
-  wsRoot = ''
+  _resetRoot()
   shorten = (p) => p
   hostPlatformLive = () => ''
 }
