@@ -22,11 +22,13 @@ import pytest
 from raven.agent.loop import (
     TURN_ASK_KIND_KEY,
     TURN_ATTEMPT_CHECK_KEY,
+    TURN_ATTEMPT_PICK_KEY,
     TURN_BUDGETS_KEY,
     AgentLoop,
     TurnBudgets,
     turn_ask_kind,
     turn_attempt_check,
+    turn_attempt_pick,
     turn_budgets,
     turn_path,
 )
@@ -1001,3 +1003,123 @@ def test_only_a_literal_true_turns_the_fresh_clock_on(raw):
 @pytest.mark.parametrize("metadata", [None, {}, {TURN_ATTEMPT_CHECK_KEY: "unverified"}])
 def test_a_check_that_is_not_callable_is_no_check(metadata):
     assert turn_attempt_check(metadata) is None
+
+
+# -- the pick: which attempt ships when none was accepted -------------------------------
+
+
+class _Picks(_Checks):
+    """A product that refuses attempts and, when every one is refused, picks one to ship."""
+
+    def __init__(self, refuse, pick, **budgets) -> None:
+        super().__init__(refuse, **budgets)
+        self._pick = pick
+        self.offered: list[list[str]] = []
+
+    async def before_user_inbound(self, ctx) -> HookDecision:
+        await super().before_user_inbound(ctx)
+
+        def pick(finals):
+            self.offered.append(list(finals))
+            return self._pick(finals)
+
+        ctx.metadata[TURN_ATTEMPT_PICK_KEY] = pick
+        return HookDecision()
+
+
+def _refuse_all(_text, _end):
+    return ["unverified:rejected"]
+
+
+@pytest.mark.asyncio
+async def test_with_no_attempt_accepted_the_product_s_pick_ships_with_its_own_transcript(tmp_path):
+    provider = _Scripted(_answers("Bob won it."), _answers("Alice won it."), _answers("Carol won it."))
+    hook = _Picks(_refuse_all, lambda finals: 0, dead_end_retries=2)
+    agent = _loop(tmp_path, provider, [hook])
+
+    out = await agent._process_message(_req(), session_key="s1")
+
+    assert out[0] == "Bob won it."
+    assert hook.offered == [["Bob won it.", "Alice won it.", "Carol won it."]]
+    said = [r.get("content") for r in _persisted(tmp_path) if r.get("role") == "assistant"]
+    assert said == ["Bob won it."], "the persisted turn is the shipped attempt's, not the last one's"
+
+
+@pytest.mark.asyncio
+async def test_an_accepted_last_attempt_is_never_second_guessed(tmp_path):
+    provider = _Scripted(_answers("Bob won it."), _answers("Alice won it."))
+    hook = _Picks(
+        lambda text, _end: ["unverified:rejected"] if text.startswith("Bob") else [], lambda f: 0, dead_end_retries=2
+    )
+    agent = _loop(tmp_path, provider, [hook])
+
+    out = await agent._process_message(_req(), session_key="s1")
+
+    assert out[0] == "Alice won it."
+    assert hook.offered == []
+
+
+@pytest.mark.asyncio
+async def test_a_single_attempt_offers_nothing_to_pick_from(tmp_path):
+    provider = _Scripted(_answers("Bob won it."))
+    hook = _Picks(_refuse_all, lambda f: 0, dead_end_retries=0)
+    agent = _loop(tmp_path, provider, [hook])
+
+    out = await agent._process_message(_req(), session_key="s1")
+
+    assert out[0] == "Bob won it."
+    assert hook.offered == []
+
+
+def _raises(_finals):
+    raise RuntimeError("boom")
+
+
+@pytest.mark.parametrize("pick", [_raises, lambda f: 7, lambda f: -1, lambda f: "0", lambda f: None])
+@pytest.mark.asyncio
+async def test_a_pick_that_fails_or_names_no_attempt_ships_the_last(tmp_path, pick):
+    provider = _Scripted(_answers("Bob won it."), _answers("Alice won it."))
+    agent = _loop(tmp_path, provider, [_Picks(_refuse_all, pick, dead_end_retries=1)])
+
+    out = await agent._process_message(_req(), session_key="s1")
+
+    assert out[0] == "Alice won it."
+
+
+@pytest.mark.asyncio
+async def test_a_pick_of_an_attempt_that_said_nothing_ships_the_last(tmp_path):
+    provider = _Scripted(_dead(), _answers("Alice won it."))
+    agent = _loop(tmp_path, provider, [_Picks(_refuse_all, lambda f: 0, dead_end_retries=1)])
+
+    out = await agent._process_message(_req(), session_key="s1")
+
+    assert out[0] == "Alice won it."
+
+
+def test_a_pick_that_is_not_callable_is_ignored():
+    assert turn_attempt_pick({TURN_ATTEMPT_PICK_KEY: "vote"}) is None
+    assert turn_attempt_pick(None) is None
+
+
+@pytest.mark.asyncio
+async def test_a_streaming_reader_sees_the_picked_answer_last_in_an_episode_of_its_own(tmp_path):
+    """Every attempt streamed its own answer; the reader must end on the one that ships."""
+    events: list[tuple[str, object]] = []
+
+    async def _token(delta: str) -> None:
+        events.append(("text", delta))
+
+    async def _episode(index: int) -> None:
+        events.append(("episode", index))
+
+    provider = _Scripted(_answers("Bob won it."), _answers("Alice won it."))
+    agent = _loop(tmp_path, provider, [_Picks(_refuse_all, lambda finals: 0, dead_end_retries=1)])
+
+    out = await agent._process_message(_req(), session_key="s1", on_token_delta=_token, on_episode_start=_episode)
+
+    assert out[0] == "Bob won it."
+    last_episode = max(i for i, (kind, _v) in enumerate(events) if kind == "episode")
+    tail = "".join(str(v) for kind, v in events[last_episode + 1 :] if kind == "text")
+    assert tail == "Bob won it."
+    episodes = [v for kind, v in events if kind == "episode"]
+    assert episodes == list(range(len(episodes)))

@@ -34,6 +34,7 @@ from raven.agent.hook.participant import ParticipantHook
 from raven.agent.loop import (
     TURN_ASK_KIND_KEY,
     TURN_ATTEMPT_CHECK_KEY,
+    TURN_ATTEMPT_PICK_KEY,
     TURN_BUDGETS_KEY,
     TURN_SYNTHESIS_KEY,
     TurnSynthesisPolicy,
@@ -57,6 +58,7 @@ from research_flow.gates.ask_user import (
     turn_brief,
 )
 from research_flow.gates.base import Gate, GateCtx
+from research_flow.gates.best_guess import BestGuessGate
 from research_flow.gates.budget_note import BudgetNoteObserver
 from research_flow.gates.conversation import (
     ConversationGate,
@@ -95,6 +97,7 @@ from research_flow.gates.sufficiency import SufficiencyGate
 from research_flow.gates.verify import DraftReviewerGate
 from research_flow.state import SessionStore
 from research_flow.support.answer_text import visible_answer
+from research_flow.support.best_guess import abstains, answer_key, same_answer
 from research_flow.support.evidence_round import EvidenceRound
 from research_flow.support.fetch_gate_core import FetchGate
 from research_flow.support.harness_text import harness_ask_kind
@@ -116,6 +119,28 @@ _TURN_SEQ = itertools.count()
 
 UNVERIFIED_REASON = "unverified"
 """The rerun reason the attempt check returns, as ``unverified:<last review outcome>``."""
+
+# The wrap-up's share of ``bestGuess``: a turn cut short is told to name its likeliest answer.
+_BEST_GUESS_WRAP_UP = (
+    "If the evidence does not settle the question, still name the single most likely "
+    "answer, in the answer format, with how confident you are. Do not reply that the "
+    "answer cannot be determined."
+)
+
+# How far an unpassed attempt's review got, for breaking a tie between answers: a pass
+# that only a first-pass rule refused, a draft nobody read, a wrap-up, a rejected draft,
+# an abstention.
+_REVIEW_RANK = {
+    "pass_revised": 4,
+    "budget_spent_pass": 4,
+    "budget_spent": 3,
+    "unavailable": 3,
+    "budget_spent_unavailable": 3,
+    "unreviewed": 2,
+    "rejected": 1,
+    "budget_spent_reject": 1,
+    "abstained": 0,
+}
 
 
 def _copied(facts: dict[str, Any]) -> dict[str, Any] | None:
@@ -152,16 +177,20 @@ def _turn_cargo(cfg: FlowConfig, text: str) -> dict[str, Any]:
         },
         TURN_ASK_KIND_KEY: harness_ask_kind,
     }
+    best_guess = cfg.best_guess.enabled
     if cfg.final_shape.report_structure:
         layout = cfg.final_shape.effective_layout
         repair, fallback = interrupted_report_rewrite_prompt, interrupted_report_fallback
         if layout == READER_LAYOUT:
             repair, fallback = partial(repair, layout=layout), partial(fallback, layout=layout)
+        guidance = interrupted_report_guidance(text, layout)
         cargo[TURN_SYNTHESIS_KEY] = TurnSynthesisPolicy(
-            guidance=interrupted_report_guidance(text, layout),
+            guidance=f"{guidance}\n\n{_BEST_GUESS_WRAP_UP}" if best_guess else guidance,
             repair_prompt=repair if cfg.final_shape.report_bounce else None,
             format_fallback=fallback,
         )
+    elif best_guess:
+        cargo[TURN_SYNTHESIS_KEY] = TurnSynthesisPolicy(guidance=_BEST_GUESS_WRAP_UP)
     return cargo
 
 
@@ -762,6 +791,13 @@ def build_chain(
         if ask_user_on:
             floor = ClarifyExemptHook(floor, layout)
         observers.append(floor)
+    if cfg.best_guess.enabled and cfg.best_guess.bounces:
+        # Before the reviewer: an abstaining draft is not worth a review, and the
+        # candidate the bounce brings back is reviewed like any draft.
+        guess: Gate = BestGuessGate(cfg.best_guess.bounces, closing_tag_required=cfg.think_closing_tag_required)
+        if ask_user_on:
+            guess = ClarifyExemptHook(guess, layout)
+        observers.append(guess)
     if cfg.verify.enabled:
         if provider is None:
             _skip("verify")
@@ -1027,6 +1063,8 @@ class ResearchFlowParticipant(AgentParticipant):
         # ship the second attempt's first draft unreviewed; restoring the whole
         # snapshot rather than popping named counters reaches gates added later too.
         self._intake_facts: dict[str, Any] | None = None
+        # Why each finished attempt was not passed, in order, for the pick.
+        self._unpassed: list[str | None] = []
 
     def _ctx(self, step: StepView, *, inbound: str | None = None, outbound: str | None = None) -> GateCtx:
         facts = self._facts
@@ -1137,7 +1175,9 @@ class ResearchFlowParticipant(AgentParticipant):
         decision = await self._phase("after_send", step, self._ctx(step, outbound=reply))
         return decision.modified_content
 
-    def _unverified(self, policy: VerifyRestartConfig, turn_end: dict[str, Any]) -> str | None:
+    def _unverified(
+        self, policy: VerifyRestartConfig, final_content: str | None, turn_end: dict[str, Any], abstain_fails: bool
+    ) -> str | None:
         """Why the answer this attempt delivered is not a reviewed pass, or None."""
         facts = self._facts
         mode = facts.get(_TURN_MODE_KEY)
@@ -1146,6 +1186,9 @@ class ResearchFlowParticipant(AgentParticipant):
         verify = facts.get("verify_gate") or {}
         if verify.get("scoped"):
             return None
+        # Before the review: an abstention makes no claim for the reviewer to reject.
+        if abstain_fails and abstains(final_content):
+            return "abstained"
         review = verify.get("final_review")
         # Only a turn that ended on a draft ended on a reviewed one: a wrap-up after the
         # iteration cap or the clock, and an error, deliver text no reviewer read.
@@ -1157,10 +1200,17 @@ class ResearchFlowParticipant(AgentParticipant):
         return None if review in accepted else str(review)
 
     def attempt_reasons(
-        self, policy: VerifyRestartConfig, final_content: str | None, turn_end: dict[str, Any]
+        self,
+        policy: VerifyRestartConfig,
+        final_content: str | None,
+        turn_end: dict[str, Any],
+        *,
+        abstain_fails: bool = False,
     ) -> list[str]:
         """The loop's attempt check: restart an attempt whose answer the reviewer did not pass."""
-        why = self._unverified(policy, turn_end)
+        why = self._unverified(policy, final_content, turn_end, abstain_fails)
+        del self._unpassed[self._attempt - 1 :]
+        self._unpassed.append(why)
         record = self._facts.setdefault("restart", {})
         record["attempts"] = self._attempt
         record["verified"] = why is None
@@ -1170,6 +1220,31 @@ class ResearchFlowParticipant(AgentParticipant):
             return []
         logger.info("verify-restart: attempt {} not passed ({})", self._attempt, why)
         return [f"{UNVERIFIED_REASON}:{why}"]
+
+    def pick_attempt(self, finals: list[str]) -> int | None:
+        """The loop's attempt pick: of attempts none of which passed, the answer most named.
+
+        An abstention or an answer the span reader cannot locate has no vote, so a named
+        one, which has at least its own, always beats it; a tie goes to the attempt whose
+        review got further (an abstention ranks last), then to the later one.
+        """
+        keys = [answer_key(text) for text in finals]
+
+        def standing(i: int) -> tuple[int, int, int]:
+            key = keys[i]
+            votes = sum(1 for other in keys if key and other and same_answer(key, other))
+            why = self._unpassed[i] if i < len(self._unpassed) else None
+            return votes, _REVIEW_RANK.get(why or "", 2), i
+
+        named = [i for i, text in enumerate(finals) if text.strip()]
+        if not named:
+            return None
+        chosen = max(named, key=standing)
+        record = self._facts.setdefault("restart", {})
+        record["shipped"] = chosen + 1
+        record["votes"] = standing(chosen)[0]
+        logger.info("verify-restart: no attempt passed; shipping attempt {} of {}", chosen + 1, len(finals))
+        return chosen
 
     async def archive(self, step: StepView, reply: str | None) -> dict[str, Any] | None:
         await self._phase("after_send", step, self._ctx(step, outbound=reply or ""))
@@ -1246,7 +1321,13 @@ class ResearchFlowHook(ParticipantHook):
         if restarts_unverified(slot.cfg):
             participant = self._seat(ctx).participant
             if isinstance(participant, ResearchFlowParticipant):
-                ctx.metadata[TURN_ATTEMPT_CHECK_KEY] = partial(participant.attempt_reasons, slot.cfg.verify_restart)
+                ctx.metadata[TURN_ATTEMPT_CHECK_KEY] = partial(
+                    participant.attempt_reasons,
+                    slot.cfg.verify_restart,
+                    abstain_fails=slot.cfg.best_guess.enabled,
+                )
+                if slot.cfg.verify_restart.pick == "vote":
+                    ctx.metadata[TURN_ATTEMPT_PICK_KEY] = participant.pick_attempt
         return decision
 
 

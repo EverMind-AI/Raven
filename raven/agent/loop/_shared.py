@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass, field, replace
@@ -296,6 +297,12 @@ _STALLED_SYNTHESIS_PROMPT = (
     "— there is no further turn to answer them. Reply in the same language as "
     "the user's request (this instruction is in English, but it is not the "
     "conversation language)."
+)
+
+# The one follow-up a wrap-up gets when its reply was a tool call written out as text.
+_TOOL_MARKUP_REPAIR_PROMPT = (
+    "That reply was a tool call, and no tools can run now. Do not call tools. Write "
+    "your final answer as plain text, using only what you have already gathered."
 )
 
 _STALLED_STATIC_FALLBACK = (
@@ -666,6 +673,16 @@ means the product has nothing against the attempt. A callable for the reason
 """
 
 
+TURN_ATTEMPT_PICK_KEY = "turn_attempt_pick"
+"""Where a product leaves its choice of which attempt a turn ships when none was accepted.
+
+Called as ``pick(finals)`` once, after the last attempt of a turn that ran more than one
+and whose last attempt still had reasons against it, with every attempt's final text in
+order. Returns the index of the attempt to ship, or ``None`` for the last. The loop ships
+the chosen attempt's whole transcript, so what is persisted is the work behind the answer.
+"""
+
+
 TURN_SYNTHESIS_KEY = "turn_synthesis"
 
 
@@ -759,3 +776,23 @@ def turn_attempt_check(metadata: dict[str, Any] | None) -> Callable[[str | None,
     """Read the product's attempt check off the turn's hook metadata, or ``None``."""
     value = (metadata or {}).get(TURN_ATTEMPT_CHECK_KEY)
     return value if callable(value) else None
+
+
+def turn_attempt_pick(metadata: dict[str, Any] | None) -> Callable[[list[str]], int | None] | None:
+    """Read the product's attempt pick off the turn's hook metadata, or ``None``."""
+    value = (metadata or {}).get(TURN_ATTEMPT_PICK_KEY)
+    return value if callable(value) else None
+
+
+_TOOL_MARKUP_BLOCK = re.compile(r"<tool_call>.*?(?:</tool_call>|\Z)|<function=[^>]*>.*?(?:</function>|\Z)", re.S)
+
+
+def tool_markup_only(text: str | None) -> bool:
+    """Whether a reply is nothing but tool calls written out as text.
+
+    Asked of a call that offered no tools: a model trained to always call writes its
+    call into the content (Qwen's XML, Hermes JSON), and that string is not an answer.
+    """
+    if not text or ("<tool_call>" not in text and "<function=" not in text):
+        return False
+    return not _TOOL_MARKUP_BLOCK.sub("", text).strip()

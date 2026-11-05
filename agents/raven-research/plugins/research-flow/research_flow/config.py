@@ -335,12 +335,32 @@ class VerifyRestartConfig(_Base):
     that passed only after a revision: on one 100-question batch first-review passes
     were right 47 of 52 times and revised passes 4 of 9. Off by default because it
     has not been measured as a restart rule.
+
+    ``pick`` is what ships when no attempt passes: ``vote`` the answer most attempts
+    named (an abstention never outvotes a named answer; ties go to the better review,
+    then the later attempt), ``last`` the last attempt's.
     """
 
     enabled: bool = False
     max_attempts: int = Field(default=5, ge=1)
     fresh_clock: bool = True
     require_first_pass: bool = False
+    pick: Literal["vote", "last"] = "vote"
+
+
+class BestGuessConfig(_Base):
+    """Ask for the most likely answer where the turn would otherwise abstain.
+
+    A final draft whose answer says no answer can be given ("No verifiable answer",
+    "cannot be determined") is sent back ``bounces`` times per attempt to name the
+    candidate its evidence best supports, and a wrap-up is told to do the same. Under
+    ``verifyRestart`` an abstaining answer is never a pass: the reviewer finds no
+    unsupported claim in it, so it would otherwise end the restarts. Off by default:
+    for a reader, an honest "not found" can be the right reply.
+    """
+
+    enabled: bool = False
+    bounces: int = Field(default=1, ge=0)
 
 
 class ModelEndpointConfig(_Base):
@@ -596,6 +616,7 @@ class FlowConfig(_Base):
     """
     dead_end_retry: DeadEndRetryConfig = Field(default_factory=DeadEndRetryConfig)
     verify_restart: VerifyRestartConfig = Field(default_factory=VerifyRestartConfig)
+    best_guess: BestGuessConfig = Field(default_factory=BestGuessConfig)
     model_endpoints: list[ModelEndpointConfig] = Field(default_factory=list)
     context_window_tokens: int | None = None
     think_closing_tag_required: bool = True
@@ -760,4 +781,5 @@ __all__ = [
     "SufficiencyConfig",
     "VerifyConfig",
     "VerifyRestartConfig",
+    "BestGuessConfig",
 ]

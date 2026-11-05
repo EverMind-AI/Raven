@@ -22,6 +22,7 @@ from raven.agent.loop._shared import (
     _STALLED_STATIC_FALLBACK,
     _STALLED_SYNTHESIS_PROMPT,
     _TOOL_DURATION_MS_KEY,
+    _TOOL_MARKUP_REPAIR_PROMPT,
     _TOOL_METADATA_KEY,
     _TOOL_PREVIEW_MAX_CHARS,
     _WALL_CLOCK_STATIC_FALLBACK,
@@ -72,9 +73,11 @@ from raven.agent.loop._shared import (
     stream_llm_call,
     strip_think_blocks,
     time,
+    tool_markup_only,
     trace,
     turn_ask_kind,
     turn_attempt_check,
+    turn_attempt_pick,
     turn_budgets,
     turn_question,
     turn_synthesis,
@@ -618,6 +621,8 @@ class TurnPathMixin:
             except Exception as exc:
                 logger.warning("Early-exit synthesis call failed: {}", exc)
                 text = ""
+            if tool_markup_only(text):
+                text = await self._repair_tool_markup(_call, synth_messages, text)
             if text and synthesis_policy.repair_prompt is not None:
                 repair = synthesis_policy.repair_prompt(text)
                 if repair:
@@ -661,8 +666,27 @@ class TurnPathMixin:
                         **effort_kwargs,
                     )
             text = self._strip_think(response.content)
-            if response.finish_reason != "error" and text:
+            if response.finish_reason != "error" and text and not tool_markup_only(text):
                 return text
+            if response.finish_reason != "error" and text:
+
+                async def _plain(rows: list[dict]) -> str:
+                    with _llm_purpose("main"):
+                        again = await self.provider.chat_with_retry(
+                            messages=rows,
+                            tools=None,
+                            model=model,
+                            fallback_models=fallback_models,
+                            **effort_kwargs,
+                        )
+                    return (self._strip_think(again.content) or "") if again.finish_reason != "error" else ""
+
+                text = await self._repair_tool_markup(_plain, synth_messages, text)
+                if text:
+                    # The markup already streamed; the answer follows it on the same stream.
+                    if on_token_delta is not None:
+                        await on_token_delta(text)
+                    return text
             logger.warning(
                 "Early-exit synthesis returned no usable content (finish_reason={})",
                 response.finish_reason,
@@ -678,6 +702,26 @@ class TurnPathMixin:
         if on_token_delta is not None:
             await on_token_delta(fallback)
         return fallback
+
+    @staticmethod
+    async def _repair_tool_markup(
+        call: Callable[[list[dict]], Awaitable[str]], synth_messages: list[dict], text: str
+    ) -> str:
+        """Ask once more for a wrap-up whose reply was a tool call written out as text.
+
+        Returns ``""`` when the second reply is markup again or the call fails, so the
+        caller's own fallback takes over: the markup is never what the turn ships.
+        """
+        logger.warning("Early-exit synthesis replied with a tool call as text; asking once for a plain answer")
+        try:
+            revised = await call(
+                synth_messages
+                + [{"role": "assistant", "content": text}, {"role": "user", "content": _TOOL_MARKUP_REPAIR_PROMPT}]
+            )
+        except Exception as exc:
+            logger.warning("Early-exit synthesis markup repair failed: {}", exc)
+            return ""
+        return "" if tool_markup_only(revised) else (revised or "")
 
     def _flush_autofill(self, messages: list[dict[str, Any]], rows: list[dict[str, Any]]) -> None:
         """Write what raven answered for the user into the turn, as a tool call.
@@ -2603,6 +2647,7 @@ class TurnPathMixin:
         budgets = turn_budgets(turn_hook_meta)
         ask_kind = turn_ask_kind(turn_hook_meta)
         attempt_check = turn_attempt_check(turn_hook_meta)
+        attempt_pick = turn_attempt_pick(turn_hook_meta)
         retries_left = budgets.dead_end_retries
         attempt_no = 1
         retry_seed = [dict(m) for m in initial_messages] if retries_left else None
@@ -2676,6 +2721,7 @@ class TurnPathMixin:
             # .pptx is not, and only the turn knows which is which.
             with turn_tier(self.session_tier(key)), turn_attachments(req.media), spend.collecting():
                 final_content, _, all_msgs, outcome = await _attempt(initial_messages, attempt_no)
+                finished = [(final_content, all_msgs, outcome)]
                 # The conditional rerun. A dead turn has no answer to damage -- "empty
                 # implies wrong" is a scoring rule, so the count of right answers among
                 # dead turns starts at zero and a second attempt can only raise it. It
@@ -2708,6 +2754,27 @@ class TurnPathMixin:
                             else "That attempt produced no answer; running the turn again."
                         )
                     final_content, _, all_msgs, outcome = await _attempt(_seed_for_the_rerun(all_msgs), attempt_no)
+                    finished.append((final_content, all_msgs, outcome))
+                # None of the attempts was accepted: the product may ship an earlier one
+                # rather than the last (the answer most attempts agree on, say). The whole
+                # transcript goes with it, so what is persisted is the work behind it.
+                if attempt_pick is not None and len(finished) > 1 and pending["reasons"]:
+                    chosen = None
+                    try:
+                        chosen = attempt_pick([fc or "" for fc, _m, _o in finished])
+                    except Exception:
+                        logger.exception("attempt pick raised; shipping the last attempt")
+                    if (
+                        isinstance(chosen, int)
+                        and 0 <= chosen < len(finished) - 1
+                        and (finished[chosen][0] or "").strip()
+                        and not finished[chosen][2].error
+                    ):
+                        final_content, all_msgs, outcome = finished[chosen]
+                        logger.info("No attempt accepted; shipping attempt {} of {}", chosen + 1, len(finished))
+                        if on_token_delta is not None:
+                            await _tap_episode(episodes["next"])
+                            await _tap_token(final_content)
                 # Session-level because this turn may persist no assistant row at
                 # all -- a turn whose whole budget went to reasoning has no
                 # message to hang a record on. Stamped with the index this turn's

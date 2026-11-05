@@ -18,7 +18,12 @@ from types import SimpleNamespace
 import pytest
 
 from raven.agent.loop import TURN_SYNTHESIS_KEY, AgentLoop, TurnSynthesisPolicy
-from raven.agent.loop._shared import _MAX_ITER_STATIC_FALLBACK, _MAX_ITER_SYNTHESIS_PROMPT
+from raven.agent.loop._shared import (
+    _MAX_ITER_STATIC_FALLBACK,
+    _MAX_ITER_SYNTHESIS_PROMPT,
+    _TOOL_MARKUP_REPAIR_PROMPT,
+    tool_markup_only,
+)
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.config.raven import CheckpointConfig, RuntimeConfig
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
@@ -203,6 +208,7 @@ def _bind_synth(provider, max_iterations: int = 40):
         provider=provider,
         max_iterations=max_iterations,
         _strip_think=AgentLoop._strip_think,
+        _repair_tool_markup=AgentLoop._repair_tool_markup,
     )
     return AgentLoop._synthesize_final_on_exhaustion.__get__(fake_self)
 
@@ -304,3 +310,100 @@ async def test_synthesis_falls_back_to_static_on_exception():
     synth = _bind_synth(provider, max_iterations=40)
     result = await synth([], "m", None)
     assert result == _MAX_ITER_STATIC_FALLBACK.format(n=40)
+
+
+# --------------------------------------------------------------------------- #
+# A wrap-up that writes a tool call as text is asked once for a plain answer   #
+# --------------------------------------------------------------------------- #
+
+_QWEN_CALL = "<tool_call>\n<function=web_search>\n<parameter=query>\nwho won\n</parameter>\n</function>\n</tool_call>"
+_HERMES_CALL = '<tool_call>\n{"name": "web_search", "arguments": {"query": "who won"}}\n</tool_call>'
+
+
+class _Replies(_RecordingProvider):
+    """Answers each call with the next reply in a list."""
+
+    def __init__(self, *replies: str) -> None:
+        super().__init__(response=None)
+        self._replies = list(replies)
+
+    async def chat_with_retry(self, **kwargs):
+        self.calls.append(kwargs)
+        return LLMResponse(content=self._replies.pop(0), finish_reason="stop")
+
+
+@pytest.mark.parametrize(
+    ("text", "markup"),
+    [
+        (_QWEN_CALL, True),
+        (_QWEN_CALL + "\n" + _QWEN_CALL, True),
+        (_HERMES_CALL, True),
+        ("<tool_call>\n<function=web_fetch>\n<parameter=url>\nhttps://x", True),  # cut off mid-call
+        ("Alice won.\n\n" + _QWEN_CALL, False),
+        ("The model emits `<tool_call>` tags when it wants a tool.", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_what_counts_as_a_tool_call_written_out_as_text(text, markup):
+    assert tool_markup_only(text) is markup
+
+
+@pytest.mark.parametrize("policy", [None, TurnSynthesisPolicy(guidance="Name your best guess.")])
+@pytest.mark.asyncio
+async def test_a_wrap_up_that_calls_a_tool_as_text_is_asked_once_for_a_plain_answer(policy):
+    provider = _Replies(_QWEN_CALL, "Alice won, on the evidence gathered.")
+    result = await _bind_synth(provider)([{"role": "user", "content": "who won?"}], "m", None, synthesis_policy=policy)
+
+    assert result == "Alice won, on the evidence gathered."
+    assert len(provider.calls) == 2
+    second = provider.calls[1]
+    assert second["tools"] is None
+    assert second["messages"][-2] == {"role": "assistant", "content": _QWEN_CALL}
+    assert second["messages"][-1] == {"role": "user", "content": _TOOL_MARKUP_REPAIR_PROMPT}
+
+
+@pytest.mark.parametrize("policy", [None, TurnSynthesisPolicy(guidance="Name your best guess.")])
+@pytest.mark.asyncio
+async def test_markup_twice_falls_back_rather_than_shipping_a_tool_call(policy):
+    provider = _Replies(_QWEN_CALL, _HERMES_CALL)
+    result = await _bind_synth(provider, max_iterations=9)([], "m", None, synthesis_policy=policy)
+
+    assert result == _MAX_ITER_STATIC_FALLBACK.format(n=9)
+    assert len(provider.calls) == 2, "asked once, not until it complies"
+
+
+@pytest.mark.asyncio
+async def test_a_plain_wrap_up_is_not_asked_again():
+    provider = _Replies("Alice won.\n\n" + _QWEN_CALL)
+    result = await _bind_synth(provider)([], "m", None)
+
+    assert result.startswith("Alice won.")
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_wrap_up_streams_the_plain_answer_after_the_markup():
+    provider = _Replies("Alice won.")
+    deltas: list[str] = []
+
+    async def _stream(**kwargs):
+        await kwargs["on_token_delta"](_QWEN_CALL)
+        return LLMResponse(content=_QWEN_CALL, finish_reason="stop")
+
+    async def _on_delta(text: str) -> None:
+        deltas.append(text)
+
+    fake_self = SimpleNamespace(
+        provider=provider,
+        max_iterations=40,
+        _strip_think=AgentLoop._strip_think,
+        _repair_tool_markup=AgentLoop._repair_tool_markup,
+        _llm_call_stream=_stream,
+    )
+    synth = AgentLoop._synthesize_final_on_exhaustion.__get__(fake_self)
+
+    result = await synth([], "m", None, on_token_delta=_on_delta)
+
+    assert result == "Alice won."
+    assert deltas == [_QWEN_CALL, "Alice won."]

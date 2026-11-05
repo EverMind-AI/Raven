@@ -19,8 +19,11 @@ sys.path.insert(0, str(PLUGIN_DIR))
 from research_flow import flow as flow_mod  # noqa: E402
 from research_flow.config import FlowConfig, VerifyRestartConfig  # noqa: E402
 from research_flow.flow import ResearchFlowParticipant  # noqa: E402
+from research_flow.gates.base import GateCtx  # noqa: E402
+from research_flow.gates.best_guess import BestGuessGate  # noqa: E402
+from research_flow.support.best_guess import abstains, answer_key, same_answer  # noqa: E402
 
-from raven.agent.loop import TURN_BUDGETS_KEY  # noqa: E402
+from raven.agent.loop import TURN_BUDGETS_KEY, TURN_SYNTHESIS_KEY  # noqa: E402
 from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy  # noqa: E402
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest  # noqa: E402
 
@@ -248,3 +251,185 @@ async def test_off_the_rejected_answer_ships_as_before(tmp_path):
 
     assert reply.startswith("B: Bob.")
     assert len(provider.seeds) == 1
+
+
+# -- bestGuess: reading an abstention off the answer span -------------------------------
+
+_ABSTAINED = [
+    "<answer>No verifiable answer</answer>",
+    "Reasoning above.\n\n<answer>Cannot be determined from the available evidence; no verified author fits.</answer>",
+    "<answer>Unable to definitively identify \u2014 research incomplete due to tool limitations</answer>",
+    "<answer>Unknown \u2014 no title has been verified.</answer>",
+    "<answer>Indeterminable \u2014 insufficient evidence to identify the region</answer>",
+    "**Answer: Cannot be determined from evidence.**",
+    "<answer>\u65e0\u6cd5\u786e\u5b9a\u552f\u4e00\u7b54\u6848</answer>",  # cannot determine a unique answer
+    "No verifiable answer.",  # short and unmarked
+]
+_ANSWERED = [
+    "<answer>Irma P. Hall</answer>",
+    "I could not verify the 2022 clue against any page I opened.\n\n<answer>Goldfish</answer>",
+    "<answer>Uncertain \u2014 no verifiable match; a degree-only identification points to Finnish</answer>",
+    "<answer>Not verified, but the best available guess is the Sierra Nevada yellow-legged frog</answer>",
+    "<answer>#2013NewBeginnings</answer>",
+    "<answer>Leeds United, although the second clue could not be confirmed in a primary source and the "
+    "fixture list I reached was incomplete for that season</answer>",
+    "A long report with no marker. " * 20 + "It cannot be determined.",
+    "<answer><tool_call>\n<function=web_search>\n</function>\n</tool_call></answer>",
+    "",
+]
+
+
+@pytest.mark.parametrize("text", _ABSTAINED)
+def test_an_abstaining_answer_is_read_as_one(text):
+    assert abstains(text)
+    assert answer_key(text) is None
+
+
+@pytest.mark.parametrize("text", _ANSWERED)
+def test_a_named_or_unlocatable_answer_is_not_an_abstention(text):
+    assert not abstains(text)
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "same"),
+    [
+        ("<answer>Irma P. Hall</answer>", "Answer: **Irma Hall**", True),
+        ("<answer>Goldfish (Carassius auratus)</answer>", "<answer>goldfish</answer>", True),
+        ("<answer>The Beatles</answer>", "<answer>Beatles</answer>", True),
+        ("<answer>Irma P. Hall</answer>", "<answer>Hall</answer>", False),
+        ("<answer>Leeds United</answer>", "<answer>Newcastle United</answer>", False),
+    ],
+)
+def test_two_answers_agree_when_one_s_words_sit_inside_the_other_s(a, b, same):
+    assert same_answer(answer_key(a), answer_key(b)) is same
+
+
+def test_under_best_guess_an_abstention_the_reviewer_passed_is_not_a_pass():
+    p = _participant(verify_gate={"final_review": "pass"})
+    text = "<answer>No verifiable answer</answer>"
+    assert p.attempt_reasons(_OFF, text, _DONE) == [], "off: the reviewer's pass stands"
+    assert p.attempt_reasons(_OFF, text, _DONE, abstain_fails=True) == ["unverified:abstained"]
+
+
+def test_best_guess_tells_the_wrap_up_to_name_its_likeliest_answer():
+    def guidance(slice_):
+        policy = flow_mod._turn_cargo(FlowConfig.from_slice(slice_), "q").get(TURN_SYNTHESIS_KEY)
+        return policy.guidance if policy else None
+
+    assert guidance({"finalShape": {"reportStructure": False}}) is None
+    assert guidance({"finalShape": {"reportStructure": False}, "bestGuess": {"enabled": True}}) == (
+        flow_mod._BEST_GUESS_WRAP_UP
+    )
+    both = guidance({"bestGuess": {"enabled": True}})
+    assert both.endswith(flow_mod._BEST_GUESS_WRAP_UP) and both != flow_mod._BEST_GUESS_WRAP_UP
+
+
+class _Reply:
+    def __init__(self, content: str) -> None:
+        self.content = content
+        self.has_tool_calls = False
+        self.reasoning_content = None
+
+
+@pytest.mark.asyncio
+async def test_the_gate_bounces_an_abstaining_draft_its_budget_s_worth_of_times():
+    gate = BestGuessGate(bounces=1)
+    facts: dict = {}
+    ctx = GateCtx(session_key="s", response=_Reply("<answer>No verifiable answer</answer>"), metadata=facts)
+
+    first = await gate.after_iteration(ctx)
+    second = await gate.after_iteration(ctx)
+
+    assert first.rollback and first.rollback_inject[-1]["role"] == "user"
+    assert not second.rollback
+    assert facts["best_guess"] == {"abstained": 2, "bounces": 1}
+    named = GateCtx(session_key="s", response=_Reply("<answer>Alice</answer>"), metadata={})
+    assert not (await gate.after_iteration(named)).rollback
+
+
+# -- the vote: which attempt ships when none passed -------------------------------------
+
+
+def _voted(finals: list[str], whys: list[str]) -> int | None:
+    p = _participant()
+    p._unpassed = list(whys)
+    return p.pick_attempt(finals)
+
+
+def test_the_answer_most_attempts_named_ships():
+    finals = [
+        "<answer>Bob</answer>",
+        "<answer>Alice Smith</answer>",
+        "<answer>Alice Smith.</answer>",
+        "<answer>Carol</answer>",
+    ]
+    assert _voted(finals, ["rejected"] * 4) == 2, "Alice twice; the later of the two"
+
+
+def test_an_abstention_never_outvotes_a_named_answer():
+    finals = ["<answer>Bob</answer>", "<answer>No verifiable answer</answer>", "<answer>Cannot be determined</answer>"]
+    assert _voted(finals, ["rejected", "abstained", "abstained"]) == 0
+
+
+def test_with_nothing_named_an_abstention_loses_to_a_report_whose_answer_cannot_be_located():
+    report = "A long report with no marker. " * 20
+    assert _voted([report, "<answer>No verifiable answer</answer>"], ["rejected", "abstained"]) == 0
+
+
+def test_a_tie_goes_to_the_better_review_then_the_later_attempt():
+    finals = ["<answer>Bob</answer>", "<answer>Alice</answer>", "<answer>Carol</answer>"]
+    assert _voted(finals, ["budget_spent", "rejected", "rejected"]) == 0
+    assert _voted(finals, ["rejected", "rejected", "rejected"]) == 2
+
+
+def test_the_vote_is_on_the_record():
+    p = _participant()
+    p._unpassed = ["rejected", "rejected"]
+    p.pick_attempt(["<answer>Bob</answer>", "<answer>Bob</answer>"])
+    assert p._facts["restart"]["shipped"] == 2
+    assert p._facts["restart"]["votes"] == 2
+
+
+@pytest.mark.asyncio
+async def test_with_no_attempt_passed_the_answer_most_attempts_named_ships(tmp_path):
+    """Each attempt: one draft rejected, the next shipped once the revision is spent."""
+    drafts = [
+        "<answer>Bob</answer>",
+        "Second look.\n<answer>Bob</answer>",
+        "<answer>Bob Jones</answer>",
+        "Second look.\n<answer>Bob Jones</answer>",
+        "<answer>Alice</answer>",
+        "Second look.\n<answer>Alice</answer>",
+    ]
+    provider = _StudentAndReviewer(drafts=drafts, verdicts=[False, False, False])
+
+    reply = await _turn(tmp_path, provider, {"verifyRestart": {"enabled": True, "maxAttempts": 3}})
+
+    assert reply.startswith("Second look.\n<answer>Bob Jones</answer>"), "Bob twice outvotes Alice once"
+    (record,) = [json.loads(f.read_text()) for f in (tmp_path / "state" / "sessions").glob("*.json")]
+    assert record["observers"]["restart"]["shipped"] == 2
+    assert record["observers"]["restart"]["log"] == "1:budget_spent,2:budget_spent,3:budget_spent"
+
+
+@pytest.mark.asyncio
+async def test_pick_last_ships_the_last_attempt_as_before(tmp_path):
+    drafts = ["<answer>Bob</answer>", "<answer>Bob.</answer>", "<answer>Alice</answer>", "<answer>Alice.</answer>"]
+    provider = _StudentAndReviewer(drafts=drafts, verdicts=[False, False])
+
+    reply = await _turn(tmp_path, provider, {"verifyRestart": {"enabled": True, "maxAttempts": 2, "pick": "last"}})
+
+    assert reply.startswith("<answer>Alice.</answer>")
+
+
+@pytest.mark.asyncio
+async def test_an_abstaining_draft_is_sent_back_and_the_named_answer_is_reviewed(tmp_path):
+    provider = _StudentAndReviewer(
+        drafts=["<answer>No verifiable answer</answer>", "<answer>Alice</answer>"], verdicts=[True]
+    )
+
+    reply = await _turn(tmp_path, provider, {"bestGuess": {"enabled": True}})
+
+    assert reply.startswith("<answer>Alice</answer>")
+    assert len(provider.reviewed) == 1, "the abstention was bounced before the reviewer saw it"
+    (record,) = [json.loads(f.read_text()) for f in (tmp_path / "state" / "sessions").glob("*.json")]
+    assert record["observers"]["best_guess"] == {"abstained": 1, "bounces": 1}

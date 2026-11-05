@@ -279,6 +279,11 @@ PRODUCT_ONLY_FIELDS: dict[str, str] = {
         "gated on the in-run reviewer's verdict needs the verdict, which only the run has. "
         "Off by default"
     ),
+    "best_guess": (
+        "send an abstaining draft back to name its likeliest answer, and tell a wrap-up the "
+        "same. The fork had no abstention check; an abstention gives a reviewer no claim to "
+        "reject, so under a verdict-gated restart it needs one. Off by default"
+    ),
     "model_endpoints": (
         "models the flow's own calls (digest, verify, ...) may name that the session's "
         "provider does not serve, each on its own OpenAI-compatible endpoint. The fork ran "

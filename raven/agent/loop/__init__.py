@@ -8,6 +8,7 @@ in ``_shared``. Callers import ``AgentLoop`` from here.
 from raven.agent.loop._shared import (
     TURN_ASK_KIND_KEY,
     TURN_ATTEMPT_CHECK_KEY,
+    TURN_ATTEMPT_PICK_KEY,
     TURN_BUDGETS_KEY,
     TURN_SYNTHESIS_KEY,
     LoopOutcome,
@@ -15,6 +16,7 @@ from raven.agent.loop._shared import (
     TurnSynthesisPolicy,
     turn_ask_kind,
     turn_attempt_check,
+    turn_attempt_pick,
     turn_budgets,
     turn_synthesis,
 )
@@ -23,6 +25,7 @@ from raven.agent.loop.main import AgentLoop
 __all__ = [
     "TURN_ASK_KIND_KEY",
     "TURN_ATTEMPT_CHECK_KEY",
+    "TURN_ATTEMPT_PICK_KEY",
     "TURN_BUDGETS_KEY",
     "TURN_SYNTHESIS_KEY",
     "AgentLoop",
@@ -31,6 +34,7 @@ __all__ = [
     "TurnSynthesisPolicy",
     "turn_ask_kind",
     "turn_attempt_check",
+    "turn_attempt_pick",
     "turn_budgets",
     "turn_synthesis",
 ]
