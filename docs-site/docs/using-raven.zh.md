@@ -52,10 +52,12 @@ raven agent --continue -m "Expand the previous summary; do not modify files"
 ## 设置思考深度 { #set-the-reasoning-effort }
 
 思考深度是模型每次回答前思考多少。可选的词由当前模型声明：多数模型是 `minimal`、
-`low`、`medium`、`high`，厂商提供时还会有 `xhigh`、`max`；没有声明任何档位的模型
-不会出现这一行。各厂商把这些词映射成自己的请求参数（Anthropic 的自适应思考强度与
-思考预算，OpenAI 风格接口的 `reasoning_effort` 字段），没有思考能力的模型会忽略它。
-不设置时使用厂商自己的默认值。
+`low`、`medium`、`high`，厂商提供时还会有 `xhigh`、`max`；有些接口的档位更窄，只收其中
+几个（DeepSeek 只收 `low`、`high`、`max`，把 `minimal` 归入 `low`、`medium` 归入
+`high`）。档位跟随实际承接请求的服务商，而不只看模型名：同一个模型经网关访问时，用网关
+的档位。没有声明任何档位的模型不会出现这一行。各厂商把这些词映射成自己的请求参数
+（Anthropic 的自适应思考强度与思考预算，OpenAI 风格接口的 `reasoning_effort` 字段），
+没有思考能力的模型会忽略它。不设置时使用厂商自己的默认值。
 
 两处可以设置：
 

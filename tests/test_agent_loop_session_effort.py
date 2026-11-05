@@ -418,7 +418,14 @@ def _fake_model_declares_every_level(monkeypatch):
     monkeypatch.setattr(
         wiring.effort_levels,
         "levels_for",
-        lambda model, declared=(), refresh=False: ("minimal", "low", "medium", "high", "xhigh", "max"),
+        lambda model, declared=(), *, provider=None, refresh=False: (
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        ),
     )
 
 
@@ -428,7 +435,7 @@ async def test_a_pick_the_model_does_not_declare_is_dropped(tmp_path, monkeypatc
     monkeypatch.setattr(
         wiring.effort_levels,
         "levels_for",
-        lambda model, declared=(), refresh=False: ("medium", "high"),
+        lambda model, declared=(), *, provider=None, refresh=False: ("medium", "high"),
     )
     loop = _loop(tmp_path, _ScriptedProvider([_text("ok")]))
     assert loop.session_reasoning_effort("cli:c", "minimal") is None
@@ -448,7 +455,9 @@ async def test_a_model_with_no_row_still_gets_the_configured_effort(tmp_path, mo
     default was sent on main and keeps being sent for models the table lacks."""
     from raven.agent.loop import wiring
 
-    monkeypatch.setattr(wiring.effort_levels, "levels_for", lambda model, declared=(), refresh=False: ())
+    monkeypatch.setattr(
+        wiring.effort_levels, "levels_for", lambda model, declared=(), *, provider=None, refresh=False: ()
+    )
     loop = _loop(tmp_path, _ScriptedProvider([_text("ok")]))
     loop._live_config = _live_with_effort(tmp_path, "high")
     assert loop.session_reasoning_effort("cli:c") == "high"
@@ -460,7 +469,7 @@ async def test_an_undeclared_pick_falls_back_to_the_mode_or_configured_word(tmp_
     monkeypatch.setattr(
         wiring.effort_levels,
         "levels_for",
-        lambda model, declared=(), refresh=False: ("medium", "high"),
+        lambda model, declared=(), *, provider=None, refresh=False: ("medium", "high"),
     )
     loop = _loop(tmp_path, _ScriptedProvider([_text("ok")]))
     loop._live_config = _live_with_effort(tmp_path, "medium")
@@ -474,7 +483,7 @@ async def test_a_routed_model_bounds_the_effort_the_turn_sends(tmp_path, monkeyp
     clamp must follow the model the calls actually name."""
     from raven.agent.loop import wiring
 
-    def levels(model, declared=(), refresh=False):
+    def levels(model, declared=(), *, provider=None, refresh=False):
         return ("low", "medium") if model == "router/model-b" else ("high",)
 
     monkeypatch.setattr(wiring.effort_levels, "levels_for", levels)
@@ -492,7 +501,9 @@ async def test_a_routed_model_bounds_the_effort_the_turn_sends(tmp_path, monkeyp
 async def test_a_model_that_declares_no_reasoning_drops_the_pick(tmp_path, monkeypatch):
     from raven.agent.loop import wiring
 
-    monkeypatch.setattr(wiring.effort_levels, "levels_for", lambda model, declared=(), refresh=False: ())
+    monkeypatch.setattr(
+        wiring.effort_levels, "levels_for", lambda model, declared=(), *, provider=None, refresh=False: ()
+    )
     loop = _loop(tmp_path, _ScriptedProvider([_text("ok")]))
     assert loop.session_reasoning_effort("cli:c", "high") is None
 
@@ -500,9 +511,30 @@ async def test_a_model_that_declares_no_reasoning_drops_the_pick(tmp_path, monke
 async def test_an_unreadable_table_keeps_the_pick(tmp_path, monkeypatch):
     from raven.agent.loop import wiring
 
-    monkeypatch.setattr(wiring.effort_levels, "levels_for", lambda model, declared=(), refresh=False: None)
+    monkeypatch.setattr(
+        wiring.effort_levels, "levels_for", lambda model, declared=(), *, provider=None, refresh=False: None
+    )
     loop = _loop(tmp_path, _ScriptedProvider([_text("ok")]))
     assert loop.session_reasoning_effort("cli:c", "high") == "high"
+
+
+async def test_the_pick_is_bounded_by_the_section_that_serves_the_turn(tmp_path, monkeypatch):
+    """A forced gateway can serve a bare vendor id; the ladder and the overlay
+    follow the section the binding sends through, not the id's prefix."""
+    from raven.agent.loop import wiring
+
+    seen: dict[str, str | None] = {}
+
+    def levels(model, declared=(), *, provider=None, refresh=False):
+        seen["provider"] = provider
+        return ("minimal", "low", "medium", "high")
+
+    monkeypatch.setattr(wiring.effort_levels, "levels_for", levels)
+    provider = _ScriptedProvider([_text("ok")])
+    provider.provider_name = "openrouter"
+    loop = _loop(tmp_path, provider)
+    assert loop.session_reasoning_effort("cli:c", "medium") == "medium"
+    assert seen["provider"] == "openrouter"
 
 
 def _live_with_legacy_overlay(tmp_path) -> LiveConfig:
@@ -535,7 +567,7 @@ async def test_a_legacy_provider_spelling_reaches_the_overlay(tmp_path, monkeypa
     monkeypatch.setattr(
         wiring.effort_levels,
         "levels_for",
-        lambda model, declared=(), refresh=False: tuple(declared) if declared else ("minimal", "low"),
+        lambda model, declared=(), *, provider=None, refresh=False: tuple(declared) if declared else ("minimal", "low"),
     )
     loop = AgentLoop(
         provider=_ScriptedProvider([_text("ok")]),

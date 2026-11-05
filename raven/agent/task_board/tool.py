@@ -29,7 +29,7 @@ REFUSED_UPDATE = "The board is updated for you after this turn ends; use action=
 PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "action": {"type": "string", "enum": ["recall", "update"]},
+        "action": {"type": "string", "enum": ["recall", "update", "carry"]},
         "query": {"type": "string"},
         "group_id": {"type": "string"},
         "include_turns": {"type": "boolean"},
@@ -65,7 +65,8 @@ class TaskBoardTool(Tool):
             "This conversation's task board -- one group per matter, one step per turn that moved it -- "
             "kept for you after every turn, so never call action=update. action=recall: alone lists the "
             "groups, with the questions they still wait on; group_id gives one group's thread; query "
-            "finds a matter by its words; include_turns adds each step's turn."
+            "finds a matter by its words; include_turns adds each step's turn. action=carry belongs to "
+            "the after-turn pass; never call it."
         )
 
     @property
@@ -80,7 +81,7 @@ class TaskBoardTool(Tool):
         include_turns: bool = False,
         **_: Any,
     ) -> str:
-        if action == "update":
+        if action in ("update", "carry"):
             return REFUSED_UPDATE
         if action != "recall":
             return f"Error: unknown action {action!r}; use action=recall."

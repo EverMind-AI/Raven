@@ -330,10 +330,14 @@ ranking is `session_effort.in_force`, one rule with one home: the turn runs at i
 it, and the turn sends the word in force on every call, None included, so a default cleared
 on a running gateway lands on its next turn -- the provider's own copy of the key, frozen at
 boot, is never consulted. The pick's words are the levels the conversation's model declares
-(`providers/effort_levels.py`: LiteLLM's static table first, a provider's
-`model_overlay.reasoningEfforts` over it); `session.set_effort` offers and validates exactly
-those, a model that declares none has no row, and a stored pick the current model does not
-declare is dropped at the turn and in `session.info` (`session_effort.clamp`); the mode's
+(`providers/effort_levels.py`: the route row's own `reasoning_effort_levels`, else its
+per-level flags, else the vendor row's `reasoning_effort_levels`, else the flags inherited
+from that row, else the serving provider's `ProviderSpec.reasoning_efforts`, else the flags'
+defaults, with a provider's `model_overlay.reasoningEfforts` over all of them; the serving
+provider is the config's route for the model, not the id's prefix, and a row filed under
+another provider than that section is skipped); `session.set_effort` offers and validates
+exactly those, a model that declares none has no row, and a stored pick the current model
+does not declare is dropped at the turn and in `session.info` (`session_effort.clamp`); the mode's
 word or the configured default then runs, since those two are not narrowed by the model.
 The install-wide `agents.defaults.reasoningEffort` keeps `REASONING_EFFORTS`
 (`config/schema.py`), shared with the console's checker and the agent's own `raven_config`
@@ -832,7 +836,10 @@ on the card, with an Ignore that sets that one question aside (`tasks.ignore_que
 last one set aside leaves the group idle; the host is told at its next turn, as declined, so it
 does not ask again), one Answer (a reply drafted in the composer), and Move on; each names the
 group the next message is about, in that message's turn; recall reads the
-ones still open back to the host. Because the page lists them, the host's reply rules stop asking open questions again on every reply for a reader of
+ones still open back to the host. A turn that updates a waiting group without asking anything
+new carries those questions onto its step, so the latest step normally holds the whole list;
+when that pass gets no answer -- a provider error, three refusals, or a reader's change
+meanwhile -- the update stands as written and the earlier step keeps them. Because the page lists them, the host's reply rules stop asking open questions again on every reply for a reader of
 the page with the board on (`render.board_on_page`); other channels and the terminal still do, and a turn a run's result opens is read on the surface the turn that dispatched it declared. Chinese surfaces call it 事件. The page marks it running while a Task it started runs, failed when one failed, and
 done otherwise; clicking it scrolls the transcript to that turn's reply.
 _Avoid_: "subtask" (it records progress, it is not a unit of work), "step" alone (the node

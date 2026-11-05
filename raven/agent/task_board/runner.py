@@ -16,6 +16,10 @@ delegated result's, a Move on's -- has its update confined to them, and to
 wherever it places its dispatches, before it is checked. Each refusal is logged,
 and each update that never landed.
 
+When the update wrote a step over one whose questions the user never answered,
+one more call follows, continuing from the update's own exchange: it decides which
+of those questions are still open and records the complete list on the newest
+step, so a turn that only explains something cannot bury a pending question.
 Updates of one session run one at a time, so the next turn's update is built
 on this one's result. Nothing here touches the session's messages.
 """
@@ -32,7 +36,9 @@ from raven.agent.task_board.board import (
     Board,
     Dispatch,
     Pending,
+    TaskGroup,
     UpdateRejectedError,
+    apply_carry,
     apply_update,
     board_to_dict,
     confine_update,
@@ -48,6 +54,7 @@ MAX_ATTEMPTS = 3
 OPEN_STEPS_SHOWN = 2
 TEMPLATE = "task_board_update"
 SCOPE_TEMPLATE = "task_board_scope"
+CARRY_TEMPLATE = "task_board_carry"
 
 _PROSE = "Answer with a task_board call (action=update), not with text."
 _NOT_UPDATE = "Only action=update is accepted here; the board is already in the instruction above."
@@ -55,6 +62,13 @@ _REFUSED = (
     "Rejected, and nothing was written. Call task_board again with action=update, sending the whole update with"
     " each of these fixed:"
 )
+_CARRY_PROSE = "Answer with a task_board call (action=carry), not with text."
+_NOT_CARRY = "Only action=carry is accepted here; the board is already in the instruction above."
+_CARRY_REFUSED = (
+    "Rejected, and nothing was written. Call task_board again with action=carry, sending the whole answer with"
+    " each of these fixed:"
+)
+_ACCEPTED = "The update was accepted and written to the board."
 
 
 def should_run(status: str, dispatches: Sequence[Dispatch], *, silent: bool = False) -> bool:
@@ -95,6 +109,68 @@ def build_instruction(board: Board, dispatches: Sequence[Dispatch], owners: Sequ
     return prompt(TEMPLATE).format(board=_snapshot(board), dispatches=_handles(board, dispatches), scope=_scope(owners))
 
 
+def carry_candidates(before: Board, after: Board, turn_at: str) -> list[tuple[TaskGroup, TaskGroup]]:
+    """The groups whose latest step already asked something and this turn updated.
+
+    A question is open only while it sits on the group's latest step and the group is
+    ``needs_you`` -- the rule recall reads -- so ``before`` is read both ways.
+    ``after`` says which of those groups the turn touched -- a step written, or the
+    group's own title, summary or status rewritten -- and each pair is that group as
+    it stood and as the update left it.
+    """
+    prior = {
+        group.id: group
+        for group in before.groups
+        if group.status == "needs_you" and group.steps and group.steps[-1].questions
+    }
+    waiting = []
+    for group in after.groups:
+        old = prior.get(group.id)
+        if old is None:
+            continue
+        newest = group.steps[-1] if group.steps else None
+        touched = (
+            (newest is not None and newest.turn_at == turn_at)
+            or len(group.steps) != len(old.steps)
+            or (group.title, group.summary, group.status) != (old.title, old.summary, old.status)
+        )
+        if touched:
+            waiting.append((old, group))
+    return waiting
+
+
+def _carry_record(groups: Sequence[tuple[TaskGroup, TaskGroup]]) -> str:
+    lines: list[str] = []
+    for before, after in groups:
+        asked, newest = before.steps[-1], after.steps[-1]
+        lines.append(f"- {after.id} {after.title}")
+        lines.append(f"    the step that asked: {asked.title} -- " + "; ".join(asked.questions))
+        lines.append(f"    the step now newest: {newest.title} ({after.status})")
+        lines.append("    questions it lists: " + ("; ".join(newest.questions) or "(none)"))
+    return "\n".join(lines)
+
+
+def build_carry_instruction(groups: Sequence[tuple[TaskGroup, TaskGroup]]) -> str:
+    return prompt(CARRY_TEMPLATE).format(groups=_carry_record(groups))
+
+
+def _still_open(waiting: Sequence[tuple[TaskGroup, TaskGroup]], board: Board) -> list[str]:
+    """The groups whose asked step and status the reader has not touched since the preview.
+
+    The question pass is a model round trip, and the reader can set a question aside
+    or complete the group while it runs; writing the model's list back would undo that.
+    """
+    groups = {group.id: group for group in board.groups}
+    kept = []
+    for before, group in waiting:
+        asked = before.steps[-1]
+        current = groups.get(group.id)
+        step = next((s for s in current.steps if s.id == asked.id), None) if current is not None else None
+        if step is not None and step.questions == asked.questions and current.status == group.status:
+            kept.append(group.id)
+    return kept
+
+
 def _assistant_row(response: LLMResponse, call: ToolCallRequest) -> dict[str, Any]:
     row: dict[str, Any] = {
         "role": "assistant",
@@ -118,12 +194,16 @@ def _refusal(exc: UpdateRejectedError) -> str:
     return "\n".join([_REFUSED, *(f"{n}. {problem}" for n, problem in enumerate(exc.problems, 1))])
 
 
+def _carry_refusal(exc: UpdateRejectedError) -> str:
+    return "\n".join([_CARRY_REFUSED, *(f"{n}. {problem}" for n, problem in enumerate(exc.problems, 1))])
+
+
 def _faults(exc: UpdateRejectedError) -> str:
     return " | ".join(map(str, exc.problems))
 
 
-def _refused(session_key: str, attempt: int, why: str) -> None:
-    logger.info("Task board update for {}, attempt {} of {}, refused: {}", session_key, attempt, MAX_ATTEMPTS, why)
+def _refused(session_key: str, attempt: int, why: str, *, what: str = "update") -> None:
+    logger.info("Task board {} for {}, attempt {} of {}, refused: {}", what, session_key, attempt, MAX_ATTEMPTS, why)
 
 
 def _as_placed(service: TaskBoardService, session_key: str, board: Board, handles: Sequence[str]) -> list[str]:
@@ -156,9 +236,10 @@ async def _ask(
     turn_id: str | None,
     now_ms: Callable[[], int],
     owners: list[str],
-) -> tuple[dict[str, Any], bool] | None:
-    """Up to MAX_ATTEMPTS asks; the arguments of an update the board accepted and whether
-    they are a salvage, whose text past a limit stands, or ``None``.
+) -> tuple[dict[str, Any], bool, list[dict]] | None:
+    """Up to MAX_ATTEMPTS asks; the arguments of an update the board accepted, whether
+    they are a salvage, whose text past a limit stands, and the exchange the asks left
+    -- the question pass continues from it. ``None`` when no update was had.
 
     A turn that belongs to ``owners`` has its update confined to them before it is
     checked, so what would be dropped anyway never costs a refusal. When the last
@@ -198,7 +279,11 @@ async def _ask(
                     logger.info(
                         "Task board update for {} kept to {}; the rest was about other matters", session_key, owners
                     )
-                return confined, False
+                rows += [
+                    _assistant_row(response, tool_call),
+                    {"role": "tool", "tool_call_id": tool_call.id, "name": TOOL_NAME, "content": _ACCEPTED},
+                ]
+                return confined, False, rows
         rows += [
             _assistant_row(response, tool_call),
             {"role": "tool", "tool_call_id": tool_call.id, "name": TOOL_NAME, "content": result},
@@ -210,7 +295,61 @@ async def _ask(
         apply_update(board, kept, dispatches, turn_at=turn_at, turn_id=turn_id, now_ms=now_ms(), allow_long=True)
     except UpdateRejectedError:
         return None
-    return kept, True
+    return kept, True, rows
+
+
+async def _ask_carry(
+    board: Board,
+    waiting: Sequence[tuple[TaskGroup, TaskGroup]],
+    *,
+    session_key: str,
+    call: Callable[[list[dict]], Awaitable[LLMResponse]],
+    exchange: list[dict],
+    turn_at: str,
+    now_ms: Callable[[], int],
+) -> dict[str, Any] | None:
+    """Up to MAX_ATTEMPTS asks for the questions a group's latest step keeps.
+
+    It continues from ``exchange``, the update call's own rows, so the model reads
+    what it just recorded before it decides which earlier questions are still open.
+    ``None`` when no answer was had: the update then stands as it was written.
+    """
+    eligible = [group.id for _before, group in waiting]
+    rows = list(exchange) + [{"role": "user", "content": build_carry_instruction(waiting)}]
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            response = await call(rows)
+        except Exception as exc:
+            logger.warning("Task board questions for {} failed at the provider: {}", session_key, exc)
+            return None
+        if response.finish_reason == "error":
+            logger.warning("Task board questions for {} failed at the provider: {}", session_key, response.content)
+            return None
+        tool_call = next((c for c in response.tool_calls if c.name == TOOL_NAME), None)
+        if tool_call is None:
+            _refused(session_key, attempt, "answered in text", what="questions")
+            rows += [
+                {"role": "assistant", "content": response.content or ""},
+                {"role": "user", "content": _CARRY_PROSE},
+            ]
+            continue
+        args = tool_call.arguments if isinstance(tool_call.arguments, dict) else {}
+        if args.get("action") != "carry":
+            _refused(session_key, attempt, f"called action={args.get('action')}", what="questions")
+            result = _NOT_CARRY
+        else:
+            try:
+                apply_carry(board, args, eligible, turn_at=turn_at, now_ms=now_ms())
+            except UpdateRejectedError as exc:
+                _refused(session_key, attempt, _faults(exc), what="questions")
+                result = _carry_refusal(exc)
+            else:
+                return args
+        rows += [
+            _assistant_row(response, tool_call),
+            {"role": "tool", "tool_call_id": tool_call.id, "name": TOOL_NAME, "content": result},
+        ]
+    return None
 
 
 async def park_dispatches(
@@ -282,6 +421,10 @@ async def run_post_turn(
     ones the turn belongs to, and its update is confined to them and to wherever
     it places the work it started. They are resolved on the board the queue
     hands over, where the update before this one has placed its runs.
+
+    A step that wrote over one asking questions gets one more call, after the
+    update and before the write: an answer that never comes leaves the update as
+    it was written, the way it stands today.
     """
     async with service.queue(session_key):
         try:
@@ -300,13 +443,40 @@ async def run_post_turn(
         except Exception:
             logger.opt(exception=True).warning("Task board update for {} failed", session_key)
             answer = None
+        carry: dict[str, Any] | None = None
+        waiting: list[tuple[TaskGroup, TaskGroup]] = []
+        if answer is not None:
+            try:
+                preview = apply_update(
+                    board,
+                    answer[0],
+                    dispatches,
+                    turn_at=turn_at,
+                    turn_id=turn_id,
+                    now_ms=now_ms(),
+                    allow_long=answer[1],
+                )
+            except UpdateRejectedError:
+                preview = None
+            if preview is not None:
+                waiting = carry_candidates(board, preview, turn_at)
+                if waiting:
+                    carry = await _ask_carry(
+                        preview,
+                        waiting,
+                        session_key=session_key,
+                        call=call,
+                        exchange=answer[2],
+                        turn_at=turn_at,
+                        now_ms=now_ms,
+                    )
         async with service.lock(session_key):
             if service.generation(session_key) != generation or service.was_dropped(session_key, turn_at):
                 return None
             board = service.load(session_key)
             try:
                 if answer is not None:
-                    args, salvaged = answer
+                    args, salvaged, _rows = answer
                     try:
                         updated = apply_update(
                             board,
@@ -323,6 +493,31 @@ async def run_post_turn(
                         )
                         updated = None
                     if updated is not None:
+                        if carry is not None:
+                            kept = _still_open(waiting, updated)
+                            entries = [entry for entry in carry.get("groups") or [] if entry.get("group") in kept]
+                            if len(kept) != len(waiting):
+                                logger.info(
+                                    "Task board questions for {}: {} group(s) changed while the pass ran; left as the"
+                                    " reader set them",
+                                    session_key,
+                                    len(waiting) - len(kept),
+                                )
+                            if entries:
+                                try:
+                                    updated = apply_carry(
+                                        updated,
+                                        {**carry, "groups": entries},
+                                        kept,
+                                        turn_at=turn_at,
+                                        now_ms=now_ms(),
+                                    )
+                                except UpdateRejectedError as exc:
+                                    logger.warning(
+                                        "Task board questions for {} no longer fit the board: {}",
+                                        session_key,
+                                        _faults(exc),
+                                    )
                         if board_to_dict(updated) != board_to_dict(board):
                             await service.write(session_key, updated)
                         if salvaged:

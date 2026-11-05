@@ -976,7 +976,13 @@ class LLMProvider(_LLMProviderPaper):
                 # primary's word is not evidence about what this hop accepts.
                 # Re-clamp it here, or a recovery call fails on the very word
                 # the fallback was chosen to get away from.
-                hop_effort = effort_levels.downgrade(reasoning_effort, effort_levels.levels_for(current_model or ""))
+                hop_effort = effort_levels.downgrade(
+                    reasoning_effort,
+                    effort_levels.levels_for(
+                        current_model or "",
+                        provider=getattr(self, "provider_name", "") or "",
+                    ),
+                )
                 if hop_effort != reasoning_effort:
                     logger.debug(
                         "fallback model={} does not declare reasoning_effort={}; sending {}",
