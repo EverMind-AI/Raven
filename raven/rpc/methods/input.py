@@ -1,4 +1,6 @@
-"""``input.detect_drop`` RPC handler -- is this pasted text a dropped file?
+"""The ``input.*`` RPC handlers: file-drop detection and the composer history.
+
+``input.detect_drop`` -- is this pasted text a dropped file?
 
 ui-tui asks on every submit and on every paste, because a terminal reports a
 drag-and-drop as ordinary pasted text and only the shape of that text says
@@ -19,6 +21,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlparse
 
+from raven.input_history import MAX_ENTRIES
+from raven.input_history import append as append_history
+from raven.input_history import read_entries
 from raven.utils.images import detect_image_mime, estimate_image_tokens, image_pixel_size
 
 if TYPE_CHECKING:
@@ -125,9 +130,36 @@ async def input_detect_drop(params: dict) -> dict:
     return matched
 
 
+async def input_history_list(params: dict) -> dict:
+    """``input.history.list`` -- the newest composer history entries, oldest first.
+
+    ``limit`` is optional and capped, because the file grows without bound
+    (the TUI only caps its in-memory copy) and a page asking for its history
+    at boot must not pull an ever-growing answer over the socket.
+    """
+    raw = params.get("limit")
+    try:
+        limit = MAX_ENTRIES if raw is None else int(raw)
+    except (TypeError, ValueError):
+        limit = MAX_ENTRIES
+    return {"entries": read_entries(max(0, min(limit, MAX_ENTRIES)))}
+
+
+async def input_history_append(params: dict) -> dict:
+    """``input.history.append`` -- add one sent prompt to the shared history."""
+    return {"ok": True, "appended": append_history(str(params.get("text") or ""))}
+
+
 def register_input_methods(dispatcher: "Dispatcher") -> None:
-    """Register ``input.detect_drop`` on a dispatcher instance."""
+    """Register the ``input.*`` handlers on a dispatcher instance."""
     dispatcher.register("input.detect_drop", input_detect_drop)
+    dispatcher.register("input.history.list", input_history_list)
+    dispatcher.register("input.history.append", input_history_append)
 
 
-__all__ = ["input_detect_drop", "register_input_methods"]
+__all__ = [
+    "input_detect_drop",
+    "input_history_append",
+    "input_history_list",
+    "register_input_methods",
+]

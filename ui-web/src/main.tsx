@@ -195,3 +195,7 @@ markStart()
 /* The page's own boot: the seam, the pushes, the actions, then everything a
    first frame needs from the gateway (app/boot.ts). */
 boot()
+/* After `boot()`, not before: its first step asks the socket to connect, and a
+   call made during that handshake is held rather than rejected. The history is
+   not part of the first frame, so it is not awaited. */
+composer.initHistory()

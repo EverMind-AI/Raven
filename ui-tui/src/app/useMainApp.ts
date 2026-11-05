@@ -1258,7 +1258,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
       queueEditIdx: composerState.queueEditIdx,
       queuedDisplay: composerState.queuedDisplay,
       submit,
-      updateInput: composerActions.setInput,
+      updateInput: composerActions.updateInput,
       voiceRecordKey
     }),
     [cols, composerActions, composerState, empty, pagerPageSize, submit, voiceRecordKey]

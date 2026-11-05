@@ -518,6 +518,12 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
       if (action === 'clear-input') {
         disarmEscClear()
 
+        // The clear is a discard, not a delete: keep the line recoverable with
+        // Up. Upstream does this in runDoubleEsc's clear branch.
+        if (cState.input.trim()) {
+          cActions.pushHistory(cState.input)
+        }
+
         return cActions.clearIn()
       }
 

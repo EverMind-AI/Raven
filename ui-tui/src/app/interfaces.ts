@@ -199,6 +199,8 @@ export interface ComposerActions {
   setPasteSnips: StateSetter<PasteSnippet[]>
   setQueueEdit: (index: null | number) => void
   syncQueue: () => void
+  /** Text as the user edits it; detaches a recalled history entry once edited. */
+  updateInput: StateSetter<string>
 }
 
 export interface ComposerRefs {
