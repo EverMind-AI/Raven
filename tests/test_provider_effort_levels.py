@@ -140,6 +140,171 @@ def test_the_pinned_table_declares_the_models_the_spec_names():
     )
     assert effort_levels.levels_for("zai/glm-5") == ("minimal", "low", "medium", "high")
     assert effort_levels.levels_for("zhipu/glm-5.3-flash") == ("minimal", "low", "medium", "high")
+    assert effort_levels.levels_for("deepseek/deepseek-flash") == ("low", "high", "max")
+    assert effort_levels.levels_for("deepseek/deepseek-reasoner") == ("low", "high", "max")
+    assert effort_levels.levels_for("deepseek/deepseek-chat") == ()
+
+
+def test_a_row_that_states_its_ladder_wins_whole(table):
+    table(
+        {"moonshot/kimi-k3": {**_row(litellm_provider="moonshot"), "reasoning_effort_levels": ["max", "low", "high"]}}
+    )
+    assert effort_levels.levels_for("moonshot/kimi-k3") == ("low", "high", "max")
+
+
+def test_a_row_that_states_an_empty_ladder_takes_no_level(table):
+    table({"openai/gpt-chat-latest": {**_row(), "reasoning_effort_levels": []}})
+    assert effort_levels.levels_for("openai/gpt-chat-latest") == ()
+
+
+def test_a_route_row_inherits_the_vendors_stated_ladder(table):
+    table(
+        {
+            "claude-opus-4-6": {
+                **_row(litellm_provider="anthropic"),
+                "reasoning_effort_levels": ["low", "high", "max"],
+            },
+            "openrouter/anthropic/claude-opus-4.6": {"supports_reasoning": True},
+        }
+    )
+    assert effort_levels.levels_for("openrouter/anthropic/claude-opus-4.6") == ("low", "high", "max")
+
+
+def test_the_vendors_ladder_answers_a_row_that_states_no_levels(table):
+    table({"deepseek/deepseek-flash": {"supports_reasoning": True, "litellm_provider": "deepseek"}})
+    assert effort_levels.levels_for("deepseek/deepseek-flash") == ("low", "high", "max")
+
+
+def test_the_vendors_ladder_does_not_invent_reasoning_for_a_model_the_table_lacks(table):
+    table({"openai/gpt-5": _row()})
+    assert effort_levels.levels_for("deepseek/deepseek-v4-flash") == ()
+
+
+def test_a_rows_own_level_flag_beats_the_vendors_ladder(table):
+    table(
+        {
+            "deepseek/deepseek-flash": {
+                "supports_reasoning": True,
+                "litellm_provider": "deepseek",
+                "supports_max_reasoning_effort": False,
+            }
+        }
+    )
+    assert effort_levels.levels_for("deepseek/deepseek-flash") == ("minimal", "low", "medium", "high")
+
+
+def test_the_vendors_ladder_follows_the_provider_that_serves_the_call(table):
+    """A hand-written or older-config id can name a vendor the request never
+    reaches; the ladder belongs to the API that receives the word."""
+    table({"deepseek/deepseek-r1": {"supports_reasoning": True, "litellm_provider": "deepseek"}})
+    assert effort_levels.levels_for("deepseek/deepseek-r1") == ("low", "high", "max")
+    assert effort_levels.levels_for("deepseek/deepseek-r1", provider="deepseek") == ("low", "high", "max")
+    assert effort_levels.levels_for("deepseek/deepseek-r1", provider="openrouter") == (
+        "minimal",
+        "low",
+        "medium",
+        "high",
+    )
+    # No single serving section: the id's own vendor answers, as before.
+    assert effort_levels.levels_for("deepseek/deepseek-r1", provider="auto") == ("low", "high", "max")
+    assert effort_levels.levels_for("deepseek/deepseek-r1", provider="") == ("low", "high", "max")
+
+
+def test_a_direct_vendor_rows_ladder_does_not_answer_for_a_gateway(table):
+    """A future table row for the direct vendor names its levels. A gateway
+    serving the same id has its own answer, not the vendor's ladder."""
+    table(
+        {
+            "deepseek/deepseek-r1": {
+                "supports_reasoning": True,
+                "litellm_provider": "deepseek",
+                "reasoning_effort_levels": ["low", "high", "max"],
+            }
+        }
+    )
+    assert effort_levels.levels_for("deepseek/deepseek-r1", provider="openrouter") == (
+        "minimal",
+        "low",
+        "medium",
+        "high",
+    )
+    assert effort_levels.levels_for("deepseek/deepseek-r1", provider="deepseek") == ("low", "high", "max")
+
+
+def test_a_route_alias_filed_elsewhere_falls_back_to_the_authority(table):
+    """An OpenAI id can resolve to an OpenRouter alias in the table; the
+    authority row filed under OpenAI still answers for the OpenAI section."""
+    table(
+        {
+            "openrouter/openai/gpt-5.2": _row(litellm_provider="openrouter"),
+            "gpt-5.2": _row(litellm_provider="openai", supports_xhigh_reasoning_effort=True),
+        }
+    )
+    assert effort_levels.levels_for("openai/gpt-5.2", provider="openai") == (
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+    )
+
+
+def test_an_explicit_gateway_row_answers_for_itself(table):
+    """The skip is for a row filed under another provider, not for the serving
+    provider's own row."""
+    table(
+        {
+            "openrouter/deepseek/deepseek-r1": {
+                **_row(litellm_provider="openrouter"),
+                "reasoning_effort_levels": ["high"],
+            }
+        }
+    )
+    assert effort_levels.levels_for("openrouter/deepseek/deepseek-r1", provider="openrouter") == ("high",)
+
+
+def test_a_route_rows_own_flag_beats_an_inherited_ladder(table):
+    """An inherited list describes the vendor's row; the route's own flag is the
+    more specific statement about the API that receives the call."""
+    table(
+        {
+            "claude-opus-4-6": {
+                **_row(litellm_provider="anthropic"),
+                "reasoning_effort_levels": ["low", "high", "max"],
+            },
+            "openrouter/anthropic/claude-opus-4.6": {
+                "supports_reasoning": True,
+                "supports_max_reasoning_effort": False,
+            },
+        }
+    )
+    assert effort_levels.levels_for("openrouter/anthropic/claude-opus-4.6") == (
+        "minimal",
+        "low",
+        "medium",
+        "high",
+    )
+
+
+def test_the_vendors_ladder_is_read_in_the_public_order(table, monkeypatch):
+    """A spec written out of order still reaches the effort row least-first:
+    the effort row, not the spec, owns the public order."""
+    from dataclasses import replace
+
+    from raven.providers import registry
+
+    real = registry.find_by_name
+    out_of_order = replace(real("deepseek"), reasoning_efforts=("max", "low", "high"))
+    monkeypatch.setattr(registry, "find_by_name", lambda name: out_of_order if name == "deepseek" else real(name))
+    table({"deepseek/deepseek-flash": {"supports_reasoning": True, "litellm_provider": "deepseek"}})
+    assert effort_levels.levels_for("deepseek/deepseek-flash") == ("low", "high", "max")
+
+
+def test_every_vendors_ladder_uses_the_rungs_this_build_offers():
+    from raven.providers.registry import PROVIDERS
+
+    for spec in PROVIDERS:
+        assert set(spec.reasoning_efforts) <= set(effort_levels.LEVEL_ORDER), spec.name
 
 
 def test_a_route_row_inherits_the_vendors_missing_flags(table):

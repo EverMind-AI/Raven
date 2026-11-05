@@ -199,7 +199,13 @@ class PerModelProvider(LLMProvider):
                 # The sub-provider below gets ``fallback_models=[]``, so the
                 # base loop's hop clamp never sees that this is a fallback.
                 # Re-clamp here, where the hop is still visible.
-                hop = effort_levels.downgrade(effort, effort_levels.levels_for(current_model or ""))
+                hop = effort_levels.downgrade(
+                    effort,
+                    effort_levels.levels_for(
+                        current_model or "",
+                        provider=getattr(sub, "provider_name", "") or "",
+                    ),
+                )
                 if hop != effort:
                     hop_kwargs = {**kwargs, "reasoning_effort": hop}
                     logger.debug(

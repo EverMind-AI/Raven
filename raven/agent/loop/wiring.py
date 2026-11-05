@@ -548,16 +548,29 @@ class WiringMixin:
         from raven.providers.overlay import declared_for
         from raven.providers.registry import find_by_model, split_model_id
 
-        model_id = model or (
-            self.session_model(session_key) if session_key and self.has_session_binding(session_key) else self.model
-        )
+        if model:
+            model_id = model
+            serving = getattr(self.provider, "provider_name", "") or ""
+        elif session_key and self.has_session_binding(session_key):
+            binding = self.binding_for_session(session_key)
+            model_id = binding.model
+            serving = getattr(binding.provider, "provider_name", "") or ""
+        else:
+            model_id = self.model
+            serving = getattr(self.provider, "provider_name", "") or ""
         provider, _rest = split_model_id(model_id)
         if not provider:
             spec = find_by_model(model_id)
             provider = getattr(spec, "name", "") if spec else ""
+        # The section the loop's binding actually sends through answers for
+        # both the overlay and the ladder; the id's own vendor is the fallback
+        # for a provider that cannot name a single section (a multi-vendor
+        # resolver, or a routed endpoint built with no section of its own).
+        provider = serving or provider
         levels = effort_levels.levels_for(
             model_id,
             declared_for(self._live_config.get("providers") or {}, provider, model_id),
+            provider=provider,
         )
         valid_pick = session_effort.clamp(pick, levels)
         if pick is not None and valid_pick is None:

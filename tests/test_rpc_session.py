@@ -3520,11 +3520,43 @@ def levels(monkeypatch):
         monkeypatch.setattr(
             session_module.effort_levels,
             "levels_for",
-            lambda model, declared=(), refresh=False: None if words is None else tuple(words),
+            lambda model, declared=(), *, provider=None, refresh=False: None if words is None else tuple(words),
         )
 
     use(["minimal", "low", "medium", "high"])
     return use
+
+
+def test_effort_levels_asks_the_provider_the_config_routes_through(monkeypatch) -> None:
+    """A forced gateway serves a bare vendor id; the ladder and the overlay
+    must follow the gateway, not the id's prefix."""
+    seen: dict[str, str | None] = {}
+
+    def resolve(model, declared=(), *, provider=None, refresh=False):
+        seen["provider"] = provider
+        return ("minimal", "low", "medium", "high")
+
+    monkeypatch.setattr(session_module.effort_levels, "levels_for", resolve)
+
+    class _Routed:
+        providers = None
+
+        def get_provider_name(self, model):
+            return "openrouter"
+
+    assert session_module._effort_levels("deepseek/deepseek-r1", _Routed()) == (
+        "minimal",
+        "low",
+        "medium",
+        "high",
+    )
+    assert seen["provider"] == "openrouter"
+
+    class _Unrouted:
+        providers = None
+
+    session_module._effort_levels("deepseek/deepseek-r1", _Unrouted())
+    assert seen["provider"] == "deepseek"
 
 
 async def test_an_effort_read_reports_no_pick_the_default_and_the_words(tmp_path, monkeypatch) -> None:
@@ -4521,7 +4553,7 @@ async def test_a_draft_read_names_the_model_it_asks_about(tmp_path, monkeypatch)
     _configured_effort(monkeypatch, "low")
     seen = {}
 
-    def resolve(model, declared=(), refresh=False):
+    def resolve(model, declared=(), *, provider=None, refresh=False):
         seen["model"] = model
         return ("low", "high")
 
@@ -4602,7 +4634,7 @@ async def test_a_model_param_does_not_override_a_sessions_model(tmp_path, monkey
     _configured_effort(monkeypatch, "low")
     seen = {}
 
-    def resolve(model, declared=(), refresh=False):
+    def resolve(model, declared=(), *, provider=None, refresh=False):
         seen["model"] = model
         return ("low", "high")
 

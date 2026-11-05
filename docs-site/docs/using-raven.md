@@ -61,8 +61,12 @@ or a DAG node id. See [DAG Orchestration](orchestration.md).
 
 The reasoning effort is how much the model thinks before each answer. The words
 a conversation may pick are the ones its model declares: `minimal`, `low`,
-`medium` and `high` on most models, and `xhigh` or `max` where the provider
-publishes them. A model that declares none offers no row at all. Each provider
+`medium` and `high` on most models, `xhigh` or `max` where the provider
+publishes them, and whatever narrower ladder an API actually takes (DeepSeek
+offers `low`, `high` and `max`, folding `minimal` onto `low` and `medium` onto
+`high`). The ladder follows the provider that serves the request, not only the
+model's name: the same model reached through a gateway takes the gateway's
+words. A model that declares none offers no row at all. Each provider
 maps the words to its own request (Anthropic's adaptive effort and thinking
 budgets, the `reasoning_effort` field of OpenAI-style APIs), and a model with no
 thinking to move ignores them. Left unset, the provider's own default applies.
