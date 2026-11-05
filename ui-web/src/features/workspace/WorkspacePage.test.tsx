@@ -10,6 +10,7 @@ import { resetSources, setSources } from '../../state/sources'
 import { domSnapshot } from '../../test/domSnapshot'
 import { installWsPane } from '../../test/wsPaneHarness'
 import * as deliveries from './deliveries'
+import { wsSetRoot } from './source'
 import * as store from './store'
 import { WorkspaceApp } from './WorkspacePage';
 
@@ -100,6 +101,7 @@ afterEach(() => {
   act(() => {
     store.reset()
   })
+  wsSetRoot('')
   localStorage.clear()
   store._resetForTests()
   cleanup()
@@ -453,6 +455,17 @@ describe('workspace island', () => {
     await mount()
     expect(document.querySelector('.fwrap .fbar')).toBeTruthy()
     expect(document.querySelector('.fwrap a[download]')).toBeNull()
+  })
+
+  /* The registry keys the gateway's resolved absolute path; the panel opens a
+     file by the path the model typed, which is relative to the session's
+     working directory. The header's link has to find the row either way. */
+  it('offers the attachment link when the file is opened by its workspace-relative path', async () => {
+    wsSetRoot('/repo')
+    install(emptyWs({ file: store.makeFile('out/shot.png') }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    deliveries.seed([{ path: '/repo/out/shot.png', name: 'shot.png', title: 'T', download_path: '/files/download?token=x', size: 9 }])
+    await mount()
+    expect(document.querySelector('.fwrap .fbar a[download]')?.getAttribute('href')).toBe('/files/download?token=x')
   })
 
   /* Where the bar offers a new tab, that button joins the reveal in one group,

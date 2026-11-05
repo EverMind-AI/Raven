@@ -31,6 +31,18 @@ describe('delivery registry', () => {
     expect(deliveries.ofTurn(deliveries.SESSION, 2)[0]?.ext).toBe('csv')
   })
 
+  /* The registry keys the gateway's resolved path; a caller may hold the path
+     with the platform's other separator or a redundant segment. The same file
+     is the same row -- but a bare name is not enough to match on, because two
+     delivered files can share one. */
+  it('finds a row under either separator and a redundant segment, but not by name', () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([{ path: 'D:\\work\\out\\a.md', name: 'a.md' }]))
+
+    expect(deliveries.byPath('d:/work/out/a.md')?.name).toBe('a.md')
+    expect(deliveries.byPath('D:\\work\\out\\.\\a.md')?.name).toBe('a.md')
+    expect(deliveries.byPath('a.md')).toBeNull()
+  })
+
   it('shows a re-delivered file once, at the turn that delivered it again', () => {
     deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/a.md', name: 'a.md', size: 12 }]))
     deliveries.record(deliveries.SESSION, 3, manifest([{ path: '/w/a.md', name: 'a.md', size: 40 }]))

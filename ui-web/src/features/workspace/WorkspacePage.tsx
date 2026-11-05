@@ -9,6 +9,7 @@ import * as lang from '../../state/lang'
 import { show as menuAt } from '../../state/menu'
 import { show as toast } from '../../state/toast'
 import * as deliveries from './deliveries'
+import { absPath } from './source'
 import {
   RENDERED, TWO_VIEWS, appFor, canOpenInApp, copyToClip, extOf, fileURL, pageURL,
   hostPlatform, looksBinary, mdHtml, openInApp, runURL, setAppFor, versioned,
@@ -305,7 +306,7 @@ function BinNote({ f, title, detail }: { f: WsFile; title?: string; detail?: str
   const chosen = appFor(f.path)
   const canApp = canOpenInApp()
   const ext = extOf(f.path)
-  const size = f.size ?? (deliveries.byPath(f.path) as { size?: number } | null)?.size ?? 0
+  const size = f.size ?? (deliveries.byPath(absPath(f.path)) as { size?: number } | null)?.size ?? 0
   const meta = [ext ? t('gui.ws.file_kind', { k: ext.toUpperCase() }) : '', deliveries.humanSize(size)]
     .filter(Boolean).join(' \u00b7 ')
   const hand = (app: string | null): void => {
@@ -441,7 +442,10 @@ function FileActs({ f }: { f: WsFile }): JSX.Element {
   const platform = hostPlatform()
   const revealTip = t(platform === 'mac' ? 'gui.ws.reveal_finder'
     : platform === 'windows' ? 'gui.ws.reveal_explorer' : 'gui.ws.reveal_folder')
-  const delivered = useSyncExternalStore(deliveries.subscribe, () => deliveries.byPath(f.path))
+  /* The registry keys the resolved absolute path; a change row open in the
+     pane carries the path the model typed, usually relative to the session
+     root. Both spellings name the same file, so the lookup resolves first. */
+  const delivered = useSyncExternalStore(deliveries.subscribe, () => deliveries.byPath(absPath(f.path)))
   return (
     <>
       {/* A delivered file is handed over as the gateway's attachment, which
@@ -553,7 +557,7 @@ function FileBody({ f }: { f: WsFile }): JSX.Element {
   const asFrame = (f.kind === 'pdf' || f.kind === 'html') && !asSource
   const asDeck = f.kind === 'office'
   const deliveredAt = useSyncExternalStore(deliveries.subscribe,
-    () => asImage || asDeck ? deliveries.byPath(f.path)?.when ?? null : null)
+    () => asImage || asDeck ? deliveries.byPath(absPath(f.path))?.when ?? null : null)
   const version = f.seq == null ? deliveredAt : `${f.seq}:${deliveredAt ?? ''}`
   const sniffs = f.kind === 'bin' && !f.raw && !f.sniffed && store.sniffable(f.path)
   const wantsText = !asImage && !asFrame && !asDeck && (f.kind !== 'bin' || f.raw)

@@ -152,12 +152,40 @@ export function ofTurn(scope: string, turn: number): DeliveryRow[] {
   return mine.filter((row) => newest.get(row.path) === row)
 }
 
+/* One file, two spellings. The registry keys what the gateway resolved, and a
+   caller may hold the path as the model typed it -- the panel's change rows
+   carry that spelling (record.ts's `sameFile` reconciles the same pair). What
+   two spellings of one file can still differ in is separators (a Windows
+   gateway sends backslashes), `.`/`..`, and the drive letter's case; compare
+   on that, never on a bare file name, which could hand back another file's
+   download token. */
+const canonPath = (p: string): string => {
+  const s = String(p || '').replace(/\\/g, '/')
+  const drive = /^([A-Za-z]):/.exec(s)
+  const body = drive ? s.slice(drive[0].length) : s
+  const out: string[] = []
+  for (const seg of body.split('/')) {
+    if (!seg || seg === '.') continue
+    if (seg === '..') {
+      if (out.length && out[out.length - 1] !== '..') out.pop()
+      else out.push('..')
+      continue
+    }
+    out.push(seg)
+  }
+  const joined = `${drive ? drive[1]!.toLowerCase() + ':' : ''}${body.startsWith('/') ? '/' : ''}${out.join('/')}`
+  /* A drive letter means Windows, where the whole path is case-insensitive. */
+  return drive ? joined.toLowerCase() : joined
+}
+
+const samePath = (a: string, b: string): boolean => canonPath(a) === canonPath(b)
+
 /* The newest row for a path: what the pane says about the file that is open.
    Session-wide, because the pane is -- it shows the file, not the stream that
    last handed it over. */
 export const byPath = (path: string): DeliveryRow | null =>
   rows.reduce<Held | null>(
-    (best, row) => (row.path === path && (!best || later(row, best)) ? row : best),
+    (best, row) => (samePath(row.path, path) && (!best || later(row, best)) ? row : best),
     null,
   )
 
@@ -278,8 +306,8 @@ export function seed(files: unknown): void {
    Every turn's row for that path: the file is gone for all of them, and the
    turn cards would otherwise disagree with the shelf about the same file. */
 export function markMissing(path: string): void {
-  if (!rows.some((row) => row.path === path && !row.missing)) return
-  rows = rows.map((row) => (row.path === path && !row.missing ? { ...row, missing: true } : row))
+  if (!rows.some((row) => samePath(row.path, path) && !row.missing)) return
+  rows = rows.map((row) => (samePath(row.path, path) && !row.missing ? { ...row, missing: true } : row))
   bump()
 }
 
