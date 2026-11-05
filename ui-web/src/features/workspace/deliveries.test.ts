@@ -43,6 +43,41 @@ describe('delivery registry', () => {
     expect(deliveries.byPath('a.md')).toBeNull()
   })
 
+  /* A UNC path is case-insensitive on Windows even though it carries no drive
+     letter; the registry may hold the gateway's spelling and the panel
+     another. */
+  it('finds a UNC row under a differently-cased spelling, and marks it there', () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([{ path: '\\\\server\\share\\out\\a.md', name: 'a.md' }]))
+
+    expect(deliveries.byPath('\\\\SERVER\\share\\out\\a.md')?.name).toBe('a.md')
+    deliveries.markMissing('\\\\SERVER\\share\\out\\a.md')
+    expect(deliveries.byPath('\\\\server\\share\\out\\a.md')?.missing).toBe(true)
+  })
+
+  /* A Windows directory can be case-sensitive, and then two delivered files
+     whose paths differ only by case are different files. The exact spelling
+     wins; folding is only the fallback when no row matches exactly. */
+  it('keeps case-differing files apart when the exact spelling has a row', () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([{ path: 'C:\\work\\A.md', name: 'A.md', download_path: '/t/upper' }]))
+    deliveries.record(deliveries.SESSION, 1, manifest([{ path: 'C:\\work\\a.md', name: 'a.md', download_path: '/t/lower' }]))
+
+    expect(deliveries.byPath('C:\\work\\A.md')?.downloadPath).toBe('/t/upper')
+    expect(deliveries.byPath('C:\\work\\a.md')?.downloadPath).toBe('/t/lower')
+    /* The drive letter itself is never case-significant. */
+    expect(deliveries.byPath('c:\\work\\a.md')?.downloadPath).toBe('/t/lower')
+
+    deliveries.markMissing('C:\\work\\A.md')
+    expect(deliveries.byPath('C:\\work\\A.md')?.missing).toBe(true)
+    expect(deliveries.byPath('C:\\work\\a.md')?.missing).toBe(false)
+  })
+
+  /* POSIX paths are case-sensitive, so they must never take the folded road. */
+  it('does not fold the case of a POSIX path', () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/A.md', name: 'A.md' }]))
+
+    expect(deliveries.byPath('/w/a.md')).toBeNull()
+  })
+
   it('shows a re-delivered file once, at the turn that delivered it again', () => {
     deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/a.md', name: 'a.md', size: 12 }]))
     deliveries.record(deliveries.SESSION, 3, manifest([{ path: '/w/a.md', name: 'a.md', size: 40 }]))

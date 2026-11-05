@@ -173,21 +173,34 @@ const canonPath = (p: string): string => {
     }
     out.push(seg)
   }
-  const joined = `${drive ? drive[1]!.toLowerCase() + ':' : ''}${body.startsWith('/') ? '/' : ''}${out.join('/')}`
-  /* A drive letter means Windows, where the whole path is case-insensitive. */
-  return drive ? joined.toLowerCase() : joined
+  return `${drive ? drive[1]!.toLowerCase() + ':' : ''}${body.startsWith('/') ? '/' : ''}${out.join('/')}`
 }
 
-const samePath = (a: string, b: string): boolean => canonPath(a) === canonPath(b)
+/* A drive letter or a UNC prefix means Windows, where a path's case is not
+   significant unless the directory it names was made case-sensitive. */
+const windowsPath = (p: string): boolean => {
+  const s = String(p || '').replace(/\\/g, '/')
+  return /^[A-Za-z]:/.test(s) || s.startsWith('//')
+}
+
+/* The rows for a path, exact spelling first. A case-sensitive Windows
+   directory can hold two delivered files whose paths differ only by case;
+   folding first would hand one of them the other's download token. The folded
+   comparison is the fallback for the ordinary case-insensitive volume, and
+   only when no row matched exactly. */
+const rowsFor = (path: string): Held[] => {
+  const key = canonPath(path)
+  const exact = rows.filter((row) => canonPath(row.path) === key)
+  if (exact.length || !windowsPath(path)) return exact
+  const folded = key.toLowerCase()
+  return rows.filter((row) => windowsPath(row.path) && canonPath(row.path).toLowerCase() === folded)
+}
 
 /* The newest row for a path: what the pane says about the file that is open.
    Session-wide, because the pane is -- it shows the file, not the stream that
    last handed it over. */
 export const byPath = (path: string): DeliveryRow | null =>
-  rows.reduce<Held | null>(
-    (best, row) => (samePath(row.path, path) && (!best || later(row, best)) ? row : best),
-    null,
-  )
+  rowsFor(path).reduce<Held | null>((best, row) => (!best || later(row, best) ? row : best), null)
 
 
 /* What the shelf shows, so the tab's number matches its list: paths, not rows.
@@ -306,8 +319,10 @@ export function seed(files: unknown): void {
    Every turn's row for that path: the file is gone for all of them, and the
    turn cards would otherwise disagree with the shelf about the same file. */
 export function markMissing(path: string): void {
-  if (!rows.some((row) => samePath(row.path, path) && !row.missing)) return
-  rows = rows.map((row) => (samePath(row.path, path) && !row.missing ? { ...row, missing: true } : row))
+  const matching = rowsFor(path)
+  if (!matching.some((row) => !row.missing)) return
+  const marks = new Set(matching)
+  rows = rows.map((row) => (marks.has(row) && !row.missing ? { ...row, missing: true } : row))
   bump()
 }
 
