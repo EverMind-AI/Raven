@@ -25,6 +25,21 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
+class MemoryAssembly:
+    """How this generation built its memory backend.
+
+    The live switch is the memory backend's door and rebuilds it after the
+    config write. Handing the loop the same registry and host notify keeps
+    that rebuild identical to ``build_runtime``'s: the generation's activated
+    plugin set (not whatever a fresh disk read would find), and a notice
+    reaches the same host a boot-time warning would.
+    """
+
+    registry: Any
+    notify: Callable[[str], None] | None
+
+
+@dataclass(frozen=True)
 class RavenRuntime:
     """One assembled generation of the agent: the loop plus the parts an
     entrance still needs handles to after construction.
@@ -351,6 +366,10 @@ def build_runtime(
         host=host,
     )
     loop.configure_personalization(config.agents.defaults.enable_personalization)
+    # The live memory-backend switch rebuilds this backend; give the loop the
+    # generation's own assembly inputs so the door builds it the way boot did
+    # instead of re-reading the plugin set from disk without the host notify.
+    loop.memory_assembly = MemoryAssembly(registry=plugin_registry, notify=notify)
     # Contributed background services ride the generation: built inert here,
     # started only by a resident host (loop.start_plugin_services), retired
     # first at disposal. A one-shot turn never starts them.

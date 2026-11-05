@@ -548,7 +548,7 @@ async def test_apply_runtime_points_the_loop_at_the_configured_backend(monkeypat
     )
     monkeypatch.setattr(
         "raven.core.plugin_stack.maybe_build_memory_backend",
-        lambda workspace, _cfg: built.append(workspace) or "BACKEND",
+        lambda workspace, _cfg, **_kwargs: built.append(workspace) or "BACKEND",
     )
 
     out = await memory.memory_apply_runtime({}, agent_loop_factory=_Loop)
@@ -586,7 +586,7 @@ async def test_apply_runtime_reports_a_backend_that_could_not_be_built(monkeypat
         "raven.config.loader.load_config",
         lambda: SimpleNamespace(workspace_path=SimpleNamespace()),
     )
-    monkeypatch.setattr("raven.core.plugin_stack.maybe_build_memory_backend", lambda _w, _c: None)
+    monkeypatch.setattr("raven.core.plugin_stack.maybe_build_memory_backend", lambda _w, _c, **_kwargs: None)
 
     class _Loop:
         async def rebind_memory_backend(self, *_a, **_k):  # pragma: no cover - must not run
@@ -665,7 +665,7 @@ async def test_apply_runtime_reports_a_failed_rebind(monkeypatch):
         "raven.config.loader.load_config",
         lambda: SimpleNamespace(workspace_path="WS"),
     )
-    monkeypatch.setattr("raven.core.plugin_stack.maybe_build_memory_backend", lambda _w, _c: "BACKEND")
+    monkeypatch.setattr("raven.core.plugin_stack.maybe_build_memory_backend", lambda _w, _c, **_kwargs: "BACKEND")
 
     class _Loop:
         async def rebind_memory_backend(self, *_args, **_kwargs):
@@ -705,3 +705,35 @@ async def test_switch_status_does_not_block_on_a_factory_that_raises():
         raise RuntimeError("half built")
 
     assert await memory.memory_switch_status({}, agent_loop_factory=_factory) == {"active": False, "turns": 0}
+
+
+@pytest.mark.asyncio
+async def test_apply_runtime_builds_with_the_generations_assembly(monkeypatch):
+    """The switch rebuilds the backend with the registry and notify boot used,
+    not a fresh disk read and a dropped notice."""
+    from raven.core.runtime import MemoryAssembly
+
+    seen: dict = {}
+
+    class _Loop:
+        context = SimpleNamespace(workspace="LOOP-WS")
+        memory_assembly = MemoryAssembly(registry="REGISTRY", notify="NOTIFY")
+
+        async def rebind_memory_backend(self, *_args, **_kwargs):
+            pass
+
+    monkeypatch.setattr(
+        "raven.config.raven.load_raven_config",
+        lambda: SimpleNamespace(
+            memory=SimpleNamespace(backend="everos", user_id="u", agent_id="a", memory_top_k=5),
+        ),
+    )
+    monkeypatch.setattr(
+        "raven.core.plugin_stack.maybe_build_memory_backend",
+        lambda workspace, _cfg, **kwargs: seen.update(workspace=workspace, **kwargs) or "BACKEND",
+    )
+
+    out = await memory.memory_apply_runtime({}, agent_loop_factory=_Loop)
+
+    assert out["ok"] is True
+    assert seen == {"workspace": "LOOP-WS", "registry": "REGISTRY", "notify": "NOTIFY"}
