@@ -1084,4 +1084,3 @@ async def test_a_plain_version_call_never_announces(monkeypatch) -> None:
 
     assert result["latest_version"] == "9.9.9"
     assert frames == []
-
