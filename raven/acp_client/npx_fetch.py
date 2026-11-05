@@ -62,6 +62,47 @@ _INCOMPLETE_ENTRY = re.compile(
     r"'(?P<directory>[^'\n]*[\\/]_npx[\\/](?P<key>[0-9a-f]{16}))[\\/]package\.json'"
 )
 
+# npm's own report of a failed fetch, as npm prints it before exiting: the code
+# on a line of its own, then (for a network failure) lines headed "network".
+# `npm error` is npm 10, `npm ERR!` npm 9 and older; both measured 2026-09-23
+# against an unreachable and an unresolvable registry, npm 10.9.8 and 9.9.4.
+# A line that follows Raven's own "stderr tail: " marker counts too: that is the
+# shape a registered machine's node relays the report in, where the code line is
+# no longer first on its line.
+_NPM_CODE = re.compile(r"(?:^|(?<=stderr tail: ))npm (?:ERR!|error) code (\S+)", re.MULTILINE)
+_NPM_NETWORK = re.compile(r"^npm (?:ERR!|error) network ", re.MULTILINE)
+# The codes that mean the registry could not be reached or would not serve the
+# package: the network, TLS in front of it, or the registry's own answer (the
+# E<status> codes, and ETARGET for a mirror that lacks the pinned version). A
+# local failure -- EACCES on the cache, ENOSPC -- is deliberately not here: no
+# network, registry or proxy setting fixes it, and a mirror is not tried for it.
+_NPM_FETCH_CODES = frozenset(
+    {
+        "ECONNREFUSED",
+        "ECONNRESET",
+        "FETCH_ERROR",
+        "ECONNABORTED",
+        "ENOTFOUND",
+        "EAI_AGAIN",
+        "ETIMEDOUT",
+        "EHOSTUNREACH",
+        "ENETUNREACH",
+        "ENETDOWN",
+        "EPROTO",
+        "ERR_SOCKET_TIMEOUT",
+        "ETARGET",
+        "EINTEGRITY",
+        "CERT_HAS_EXPIRED",
+        "SELF_SIGNED_CERT_IN_CHAIN",
+        "DEPTH_ZERO_SELF_SIGNED_CERT",
+        "UNABLE_TO_GET_ISSUER_CERT",
+        "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+        "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+        "ERR_TLS_CERT_ALTNAME_INVALID",
+    }
+)
+_NPM_STATUS_CODE = re.compile(r"E\d{3}")
+
 _POLL_S = 0.1
 _NPM_CONFIG_TIMEOUT_S = 15.0
 _STDERR_TAIL = 400
@@ -110,6 +151,24 @@ def incomplete_entry(text: str) -> IncompleteEntry | None:
     """The npx entry npm reports holding a package and no ``package.json``, if ``text`` is that report."""
     match = _INCOMPLETE_ENTRY.search(text or "")
     return IncompleteEntry(match["directory"], match["key"]) if match else None
+
+
+def fetch_failure_code(stderr: str) -> str | None:
+    """npm's own error code when the registry would not serve the package, else ``None``.
+
+    ``"network"`` stands for a report that named no code but said the network
+    was what failed. Evidence rather than inference: only npm's own line counts,
+    so a registry that answered with a version it does not have (``ETARGET``) is
+    included and a local failure (``EACCES`` on the cache) is not.
+    """
+    text = stderr or ""
+    for match in _NPM_CODE.finditer(text):
+        code = match.group(1)
+        if code in _NPM_FETCH_CODES or _NPM_STATUS_CODE.fullmatch(code):
+            return code
+    if _NPM_NETWORK.search(text):
+        return "network"
+    return None
 
 
 async def ensure_fetched(
@@ -240,31 +299,68 @@ async def _fetch(name: str, npx: str, spec: str, *, env: dict[str, str], cwd: st
         )
         return
     try:
-        try:
-            proc = await asyncio.to_thread(_spawn, argv, env, cwd, log)
-        except (OSError, ValueError) as exc:
-            raise AcpConnectionError(f"acp agent {name!r}: cannot start {npx!r}: {exc}") from exc
-        logger.info("acp agent {!r}: fetching {} with npx before its first start (pid {})", name, spec, proc.pid)
-        try:
-            while (returncode := proc.poll()) is None:
-                await asyncio.sleep(_POLL_S)
-        except BaseException:
-            # Nobody is waiting any more, and the fetch must still finish: a thread
-            # of its own reaps it, so it is neither killed nor left a zombie.
-            threading.Thread(target=proc.wait, name=f"npx-fetch-{proc.pid}", daemon=True).start()
-            raise
-        if returncode != 0:
+        attempt = argv
+        refused: str | None = None
+        while True:
+            try:
+                proc = await asyncio.to_thread(_spawn, attempt, env, cwd, log)
+            except (OSError, ValueError) as exc:
+                raise AcpConnectionError(f"acp agent {name!r}: cannot start {npx!r}: {exc}") from exc
+            logger.info("acp agent {!r}: fetching {} with npx before its first start (pid {})", name, spec, proc.pid)
+            try:
+                while (returncode := proc.poll()) is None:
+                    await asyncio.sleep(_POLL_S)
+            except BaseException:
+                # Nobody is waiting any more, and the fetch must still finish: a thread
+                # of its own reaps it, so it is neither killed nor left a zombie.
+                threading.Thread(target=proc.wait, name=f"npx-fetch-{proc.pid}", daemon=True).start()
+                raise
             log.seek(0)
             said = log.read().decode("utf-8", errors="replace")
-            tail = said.strip()[-_STDERR_TAIL:] or "<empty>"
-            raise AcpConnectionError(
-                f"acp agent {name!r}: npx could not fetch {spec} (exit {returncode}); stderr tail: {tail}",
-                stderr=said,
-                returncode=returncode,
-            )
-        logger.info("acp agent {!r}: fetched {}", name, spec)
+            if returncode == 0:
+                logger.info("acp agent {!r}: fetched {}", name, spec)
+                return
+            if refused is None:
+                refused = said
+            attempt = _mirror_retry(name, attempt, spec, said, env, cwd)
+            if attempt is None:
+                # The first attempt's words: that registry is the one the launch
+                # itself will ask, so its reason is the one the reader can act on.
+                tail = (refused or said).strip()[-_STDERR_TAIL:] or "<empty>"
+                raise AcpConnectionError(
+                    f"acp agent {name!r}: npx could not fetch {spec} (exit {returncode}); stderr tail: {tail}",
+                    stderr=refused or said,
+                    returncode=returncode,
+                )
+            # The next attempt's report is its own: a truncated file keeps what
+            # was written to it, and a stale code line would be read as this one.
+            log.seek(0)
+            log.truncate()
     finally:
         log.close()
+
+
+def _mirror_retry(
+    name: str, argv: Sequence[str], spec: str, said: str, env: Mapping[str, str], cwd: str | None
+) -> list[str] | None:
+    """The same fetch from the mirror, when npm says the registry would not serve it.
+
+    A registry that answers slowly is not moved by `mirrors.package_launch`: its
+    probe sees an answer, and the fetch then dies on a connection that is only
+    intermittent. The npx entry is named by the specs alone (``cache_key``), so
+    what the mirror installs here is the entry the launch afterwards finds.
+
+    One retry, never a loop: an ``argv`` that already names a registry is the
+    retry itself, and a mirror that fails the same way is reported to the reader
+    rather than attempted again.
+    """
+    code = fetch_failure_code(said)
+    if code is None or not mirrors.enabled(env) or mirrors.npm_registry_chosen(env, cwd):
+        return None
+    if any(str(word).startswith("--registry=") for word in argv):
+        return None
+    logger.info("acp agent {!r}: npx could not fetch {} ({}); retrying from {}", name, spec, code, mirrors.NPM_REGISTRY)
+    return [argv[0], "-y", f"--registry={mirrors.NPM_REGISTRY}", f"--package={spec}", "--", "node", "-e", "0"]
 
 
 def _spawn(argv: list[str], env: dict[str, str], cwd: str | None, log: IO[bytes]) -> subprocess.Popen[bytes]:
@@ -283,4 +379,11 @@ def _spawn(argv: list[str], env: dict[str, str], cwd: str | None, log: IO[bytes]
     )
 
 
-__all__ = ["IncompleteEntry", "cache_key", "ensure_fetched", "fetchable_package", "incomplete_entry"]
+__all__ = [
+    "IncompleteEntry",
+    "cache_key",
+    "ensure_fetched",
+    "fetch_failure_code",
+    "fetchable_package",
+    "incomplete_entry",
+]
