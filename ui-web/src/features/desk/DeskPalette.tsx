@@ -517,6 +517,9 @@ export function DeskPalette(): JSX.Element | null {
       role="dialog"
       aria-label={t('gui.workspace')}
       data-anchored={!geom.detached}
+      /* The tab whose ground the frame takes: the Tasks board paints on
+         `--surface`, so the chrome above and below it has to as well. */
+      data-tab={state.tab}
       /* Which way it is moving, for the stylesheet -- and genuinely inert
          while it leaves. A tab clicked on the way out would act on a desk the
          reader has already dismissed, a screen reader has no reason to be told

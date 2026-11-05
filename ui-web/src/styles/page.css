@@ -5890,6 +5890,18 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-tabs button .lb { display: none; font-weight: 600; }
 .desk-tabs button[aria-selected="true"] .lb { display: inline; }
 .desk-body { flex: 1; min-height: 0; overflow: auto; padding: 5px 0; }
+/* The Tasks tab's board paints on --surface (features/tasks/styles.css's
+   `.tkboard`). The palette's own ground is --ink, which showed through the
+   transparent drag strip and the body's 5px padding as a white band above and
+   below the board. The frame takes the ground the tab actually paints on; the
+   selected tab, the unread count and the flat list's hover move one step up
+   the same ramp so they stay distinct, and the header's rule takes the
+   stronger line the white ground used to supply. */
+.desk-palette[data-tab="tasks"] { background: var(--surface); }
+.desk-palette[data-tab="tasks"] .desk-drag { border-bottom-color: var(--line); }
+.desk-palette[data-tab="tasks"] .desk-tabs button[aria-selected="true"] { background: var(--raised); }
+.desk-palette[data-tab="tasks"] .desk-count { border-color: var(--surface); }
+.desk-palette[data-tab="tasks"] .salist.tasks .sarow:hover { background: var(--raised); }
 /* The size handle sits on whichever edge is FREE, which anchored is the left
    one: the right edge is pinned under the launcher and hard against the
    window's own gutter, so a corner there is both the hardest place on screen
