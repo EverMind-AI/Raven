@@ -882,8 +882,11 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         the inline budget gets its own waiter, because stopping it early would
         interrupt a write this switch did not own.
         """
-        old = self.backend
         async with self._memory_rebind_lock:
+            # Read under the lock: two overlapping switches that both captured
+            # the pre-lock backend would stop it twice and retire neither
+            # other's intermediate backend.
+            old = self.backend
             if backend is not None:
                 await backend.start()
             while self._active_turns:
