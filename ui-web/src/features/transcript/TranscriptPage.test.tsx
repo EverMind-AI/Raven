@@ -2413,13 +2413,14 @@ describe("the turn's delivered files", () => {
     /* A page opens in a browser tab and in the panel; a document the panel
        reads opens there; a binary is fetched. */
     expect(acts).toEqual([
-      ['en:gui.arts.browser', 'en:gui.arts.open {"f":"page.html"}'],
-      ['en:gui.arts.open {"f":"notes.md"}'],
+      ['en:gui.arts.browser', 'en:gui.arts.download', 'en:gui.arts.open {"f":"page.html"}'],
+      ['en:gui.arts.download', 'en:gui.arts.open {"f":"notes.md"}'],
       ['en:gui.arts.download'],
     ])
     const [page, , deck] = $$('.atile')
     expect(page!.querySelector('a.transcript-act')?.getAttribute('target')).toBe('_blank')
     expect(deck!.querySelector('a.transcript-act')?.getAttribute('download')).toBe('cv.pptx')
+    expect($$('.atile')[1]!.querySelector('a.transcript-act')?.getAttribute('href')).toBe('/files/download?token=notes.md')
     act(() => { ($$('.atile')[1]!.querySelector('button.transcript-act') as HTMLElement).click() })
     expect(opened).toEqual(['/w/notes.md'])
   })

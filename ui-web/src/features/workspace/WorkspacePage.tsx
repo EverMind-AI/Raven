@@ -1,5 +1,7 @@
+import { Download04Icon } from '@hugeicons/core-free-icons'
 import { useEffect, useState, useSyncExternalStore } from 'react'
 
+import { Icon } from '../../components/Icon'
 import { PaneHead, PaneHeadSeg, usePaneHead } from '../../components/PaneHead'
 import { t } from '../../i18n/t'
 import { toUnified } from '../../lib/hunks'
@@ -439,8 +441,22 @@ function FileActs({ f }: { f: WsFile }): JSX.Element {
   const platform = hostPlatform()
   const revealTip = t(platform === 'mac' ? 'gui.ws.reveal_finder'
     : platform === 'windows' ? 'gui.ws.reveal_explorer' : 'gui.ws.reveal_folder')
+  const delivered = useSyncExternalStore(deliveries.subscribe, () => deliveries.byPath(f.path))
   return (
     <>
+      {/* A delivered file is handed over as the gateway's attachment, which
+          reaches a browser on any machine; reveal reaches only the host. */}
+      {delivered?.downloadPath && !delivered.missing ? (
+        <a
+          className="ghost-ic tipdn"
+          href={delivered.downloadPath}
+          download={delivered.name}
+          data-tip={t('gui.arts.download')}
+          aria-label={t('gui.arts.download')}
+        >
+          <Icon icon={Download04Icon} size={15} />
+        </a>
+      ) : null}
       {f.kind === 'pdf' || f.kind === 'html' ? (
         <button
           className="ghost-ic tipdn workspace-ext"

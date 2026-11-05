@@ -1458,9 +1458,9 @@ const askIfGone = (url: string): Promise<boolean> =>
     .catch(() => false)
 
 /* What a card's buttons offer, by kind (Figma: Raven / AssistantMessage, the
-   output-file variants). A page is opened in a browser tab as well as in the
-   panel; a document the panel can read is opened there; a binary is fetched.
-   The card itself opens in the panel whichever it is. */
+   output-file variants). Every file can be fetched as an attachment; a page is
+   opened in a browser tab as well, and a document the panel can read is opened
+   there. The card itself opens in the panel whichever it is. */
 const BINARY_KINDS = new Set(['office', 'pdf', 'bin'])
 
 const DeliveryTile = memo(function DeliveryTile({ row }: { row: DeliveryRow }): ReactElement {
@@ -1534,12 +1534,11 @@ const DeliveryTile = memo(function DeliveryTile({ row }: { row: DeliveryRow }): 
               <Icon icon={InternetIcon} size={16} />
             </a>
           ) : null}
-          {BINARY_KINDS.has(kind) ? (
-            <a className="transcript-act" href={url} download={row.name}
-              data-tip={t('gui.arts.download')} aria-label={t('gui.arts.download')}>
-              <Icon icon={Download04Icon} size={16} />
-            </a>
-          ) : (
+          <a className="transcript-act" href={url} download={row.name}
+            data-tip={t('gui.arts.download')} aria-label={t('gui.arts.download')}>
+            <Icon icon={Download04Icon} size={16} />
+          </a>
+          {BINARY_KINDS.has(kind) ? null : (
             <button className="transcript-act" data-tip={t('gui.arts.open', { f: row.name })}
               aria-label={t('gui.arts.open', { f: row.name })} onClick={open}>
               <Icon icon={ArrowUpRight01Icon} size={16} />
