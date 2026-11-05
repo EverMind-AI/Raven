@@ -596,3 +596,112 @@ async def test_apply_runtime_reports_a_backend_that_could_not_be_built(monkeypat
 
     assert out["ok"] is False
     assert "could not be built" in out["detail"]
+
+
+# ── the section's probes, on a config or plugin that cannot answer ───────
+
+
+def _unreadable_config(*_args, **_kwargs):
+    raise RuntimeError("the config is unreadable")
+
+
+def test_backend_for_section_answers_none_for_an_unreadable_config(monkeypatch):
+    monkeypatch.setattr("raven.config.raven.load_raven_config", _unreadable_config)
+
+    assert memory._backend_for_section() is None
+
+
+def test_available_backends_survives_an_unreadable_config(monkeypatch):
+    monkeypatch.setattr("raven.config.raven.load_raven_config", _unreadable_config)
+
+    assert isinstance(memory._available_backends(), list)
+
+
+def test_cloud_key_set_is_false_when_the_plugin_cannot_answer(monkeypatch):
+    cloud_backend = pytest.importorskip("raven_everos_cloud.backend")
+
+    def _boom(_slice):
+        raise RuntimeError("the plugin is broken")
+
+    monkeypatch.setattr(cloud_backend, "resolve_api_key", _boom)
+    monkeypatch.setattr(
+        "raven.config.raven.load_raven_config",
+        lambda: SimpleNamespace(plugins=SimpleNamespace(config={})),
+    )
+
+    assert memory._cloud_key_set() is False
+
+
+@pytest.mark.asyncio
+async def test_start_local_reports_an_unreadable_config(monkeypatch):
+    monkeypatch.setattr("raven.config.raven.load_raven_config", _unreadable_config)
+
+    out = await memory.memory_start_local({})
+
+    assert out["ok"] is False
+    assert "config unreadable" in out["detail"]
+
+
+@pytest.mark.asyncio
+async def test_apply_runtime_reports_a_factory_that_raises():
+    def _factory():
+        raise RuntimeError("half built")
+
+    out = await memory.memory_apply_runtime({}, agent_loop_factory=_factory)
+
+    assert out["ok"] is False
+    assert "not available" in out["detail"]
+
+
+@pytest.mark.asyncio
+async def test_apply_runtime_reports_a_failed_rebind(monkeypatch):
+    monkeypatch.setattr(
+        "raven.config.raven.load_raven_config",
+        lambda: SimpleNamespace(
+            memory=SimpleNamespace(backend="everos", user_id="u1", agent_id="a1", memory_top_k=5),
+        ),
+    )
+    monkeypatch.setattr(
+        "raven.config.loader.load_config",
+        lambda: SimpleNamespace(workspace_path="WS"),
+    )
+    monkeypatch.setattr("raven.core.plugin_stack.maybe_build_memory_backend", lambda _w, _c: "BACKEND")
+
+    class _Loop:
+        async def rebind_memory_backend(self, *_args, **_kwargs):
+            raise RuntimeError("swap refused")
+
+    out = await memory.memory_apply_runtime({}, agent_loop_factory=_Loop)
+
+    assert out["ok"] is False
+    assert "swap refused" in out["detail"]
+
+
+# ── memory.switchStatus ──────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_switch_status_reports_the_turns_in_flight():
+    class _Loop:
+        active_turns = 2
+
+    out = await memory.memory_switch_status({}, agent_loop_factory=_Loop)
+
+    assert out == {"active": True, "turns": 2}
+
+
+@pytest.mark.asyncio
+async def test_switch_status_is_idle_without_a_loop_or_a_reader():
+    class _OlderLoop:
+        pass
+
+    assert await memory.memory_switch_status({}, agent_loop_factory=None) == {"active": False, "turns": 0}
+    assert await memory.memory_switch_status({}, agent_loop_factory=_OlderLoop) == {"active": False, "turns": 0}
+
+
+@pytest.mark.asyncio
+async def test_switch_status_does_not_block_on_a_factory_that_raises():
+    def _factory():
+        raise RuntimeError("half built")
+
+    assert await memory.memory_switch_status({}, agent_loop_factory=_factory) == {"active": False, "turns": 0}

@@ -25,6 +25,9 @@ export const memorySource: MemorySource = {
      slice just written and calls health(), so a rejected key answers here
      rather than in a memory read the section would have to interpret. */
   probeCloud: () => gateway().call('settings.everosCloud', {}),
+  /* Asked before the write: a turn in flight turns the switch into a question
+     the reader answers, rather than a spinner that lasts as long as the turn. */
+  switchStatus: () => gateway().call('memory.switchStatus', {}),
   /* A live reference swap inside the running loop -- no generation reload, so
      the document's socket stays up. A failed call is a real failure now. */
   applyRuntime: async () => {

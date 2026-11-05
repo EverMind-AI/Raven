@@ -75,6 +75,13 @@ export interface CloudProbe {
   api_key_set?: boolean
 }
 
+/* What memory.switchStatus answers: whether a live switch would wait for a
+   turn in flight, and how many are running. */
+export interface SwitchStatus {
+  active: boolean
+  turns: number
+}
+
 /* What memory.startLocal answers: whether the server now answers, and the
    sentence to show when it does not. */
 export interface LocalStartReply {
@@ -100,6 +107,9 @@ export interface MemorySource {
   /* Asks the hosted backend whether the key on file works. Called after the
      write and before the section leaves its key panel. */
   probeCloud(): Promise<CloudProbe>
+  /* Whether a switch would wait for a turn in flight. Asked before anything is
+     written, so the section can put the question to the reader first. */
+  switchStatus(): Promise<SwitchStatus>
   /* Points the running agent loop at the configured backend. A live reference
      swap, not a runtime rebuild: the document's socket stays up and the
      prompt layout is untouched. */

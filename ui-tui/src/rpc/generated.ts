@@ -6553,6 +6553,25 @@ export interface MemoryStartLocalResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MemorySwitchStatusParams".
+ */
+export interface MemorySwitchStatusParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MemorySwitchStatusResult".
+ */
+export interface MemorySwitchStatusResult {
+  /**
+   * Whether a turn is in flight and a live switch would wait for it to finish.
+   */
+  active: boolean;
+  /**
+   * How many turns are in flight; zero when the switch can apply at once.
+   */
+  turns: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "MemoryApplyRuntimeParams".
  */
 export interface MemoryApplyRuntimeParams {}

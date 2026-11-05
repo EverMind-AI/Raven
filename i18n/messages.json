@@ -3013,6 +3013,18 @@
       "zh": "这个 Raven 未安装",
       "en": "Not installed in this Raven"
     },
+    "gui.mem.switch_busy_sub": {
+      "en": "Long-term memory switches when that turn finishes. Continue?",
+      "zh": "切换会在当前对话结束后生效。继续吗？"
+    },
+    "gui.mem.switch_busy_t": {
+      "en": "A conversation is in progress",
+      "zh": "有对话正在进行"
+    },
+    "gui.mem.switch_confirm": {
+      "en": "Switch anyway",
+      "zh": "仍然切换"
+    },
     "gui.mem.switching": {
       "en": "Switching...",
       "zh": "切换中..."
