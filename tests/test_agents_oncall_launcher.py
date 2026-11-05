@@ -244,6 +244,12 @@ def test_the_approval_mode_precedence(launcher):
     assert mode(host="bogus") == "smart"
 
 
+def test_a_review_timeout_that_is_not_a_number_refuses_to_launch(launcher):
+    with pytest.raises(SystemExit, match="reviewTimeoutSeconds"):
+        launcher.apply_approval_policy({}, {"approval": {"reviewTimeoutSeconds": "60s"}}, {})
+    assert launcher.apply_approval_policy({}, {"approval": {"reviewTimeoutSeconds": 30}}, {}) == "smart"
+
+
 def test_the_fork_schema_key_never_reaches_trunks_loader(grounded):
     data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
     assert "oncall" not in data["tools"], "the gate arms via the plugin slice, not tools.oncall"

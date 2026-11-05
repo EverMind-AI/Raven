@@ -15,7 +15,9 @@ same in every turn whoever started it:
 
 1. The on-call's own bookkeeping (``LAYER_ONE``) and the trunk's default-allow
    reads always pass. They touch the campaign ledger, the schedule and the
-   report, never a machine.
+   report, never a machine. ``ops_declare`` is not one of them: a declaration
+   carries reading commands that run on the machine at once and on every
+   wake, so it is approved like any other work, and approving it covers them.
 2. Everything else follows the mode the owner set on the host, captured at
    launch: ``full`` passes, ``smart`` asks the reviewer and, when it
    escalates or cannot answer, hands the call to the owner, ``ask`` hands
@@ -30,13 +32,16 @@ same in every turn whoever started it:
 State is one file beside the campaigns (``approvals.json``), so an approval
 survives a restart. A call is keyed by its tool, every argument and the
 directory it runs in (``action_key``): an approval covers that exact call,
-nothing broader.
+nothing broader, and only until the campaign it was asked under concludes.
+The owner is shown the whole call, where it runs first; a call too long to
+show whole is not filed at all.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -57,7 +62,6 @@ LAYER_ONE: frozenset[str] = frozenset(
         "ops_outputs",
         "ops_case_changes",
         "ops_note",
-        "ops_declare",
         "ops_ask_owner",
         "ops_finish",
     }
@@ -65,6 +69,7 @@ LAYER_ONE: frozenset[str] = frozenset(
 
 MODES = ("full", "smart", "ask")
 DEFAULT_REVIEW_TIMEOUT_S = 60.0
+MAX_ACTION_CHARS = 4000
 _FILE = "approvals.json"
 _ATTEMPTS = 5
 _PAUSE_S = 0.05
@@ -90,6 +95,19 @@ def _held_off(call: Callable[[], T]) -> T:
         except PermissionError:
             time.sleep(_PAUSE_S)
     return call()
+
+
+def _decisions(raw: Any) -> dict[str, dict[str, Any]]:
+    """Approved or refused calls as ``{key: {"scope", ...}}``, older shapes included."""
+    if isinstance(raw, list):
+        return {str(k): {"scope": ""} for k in raw}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): (v if isinstance(v, dict) else {"scope": "", "reason": str(v)}) for k, v in raw.items()}
+
+
+def _concluded(scope: str) -> bool:
+    return bool(scope) and (Path(scope) / "concluded.json").exists()
 
 
 class ApprovalStore:
@@ -119,8 +137,8 @@ class ApprovalStore:
             raise ApprovalStoreUnreadableError(f"{self._path} does not hold an object")
         data.setdefault("next", 1)
         data.setdefault("pending", [])
-        data.setdefault("approved", [])
-        data.setdefault("refused", {})
+        data["approved"] = _decisions(data.get("approved"))
+        data["refused"] = _decisions(data.get("refused"))
         return data
 
     def _change(self, edit: Callable[[dict[str, Any]], R]) -> R:
@@ -135,12 +153,16 @@ class ApprovalStore:
         return result
 
     def verdict(self, key: str) -> tuple[str, str]:
-        """``("approved"|"refused"|"pending"|"", reason)`` for one call."""
+        """``("approved"|"refused"|"pending"|"", reason)`` for one call.
+
+        A decision lasts as long as the campaign it was asked under: once that
+        campaign is concluded the call reads as undecided and is asked again.
+        """
         data = self._read()
-        if key in data["approved"]:
-            return "approved", ""
-        if key in data["refused"]:
-            return "refused", str(data["refused"][key])
+        for kind in ("approved", "refused"):
+            decision = data[kind].get(key)
+            if decision is not None and not _concluded(decision.get("scope", "")):
+                return kind, str(decision.get("reason", ""))
         for item in data["pending"]:
             if item.get("digest") == key:
                 return "pending", str(item.get("n"))
@@ -160,7 +182,7 @@ class ApprovalStore:
                     "n": n,
                     "digest": key,
                     "tool": tool,
-                    "action": action[:300],
+                    "action": action,
                     "why": why[:200],
                     "since": int(time.time()),
                 }
@@ -171,6 +193,17 @@ class ApprovalStore:
 
     def pending(self) -> list[dict[str, Any]]:
         return list(self._read()["pending"])
+
+    def scope(self, numbers: list[int], cdir: str) -> None:
+        """Tie the items one question carried to the campaign it was asked under."""
+        wanted = set(numbers)
+
+        def edit(data: dict[str, Any]) -> None:
+            for item in data["pending"]:
+                if int(item.get("n", 0)) in wanted:
+                    item["scope"] = cdir
+
+        self._change(edit)
 
     def record_answer(self, numbers: list[int], answer: str) -> None:
         """Keep an owner's free-text reply on the items it answered, to be read later."""
@@ -213,12 +246,17 @@ class ApprovalStore:
             kept, approved, refused = [], [], []
             for item in data["pending"]:
                 n = int(item.get("n", 0))
+                scope = str(item.get("scope", ""))
                 if n in refuse:
-                    data["refused"][item["digest"]] = reason[:300] or "the owner did not approve it"
+                    data["refused"][item["digest"]] = {
+                        "scope": scope,
+                        "reason": reason[:300] or "the owner did not approve it",
+                    }
+                    data["approved"].pop(item["digest"], None)
                     refused.append(n)
                 elif n in approve:
-                    if item["digest"] not in data["approved"]:
-                        data["approved"].append(item["digest"])
+                    data["approved"][item["digest"]] = {"scope": scope}
+                    data["refused"].pop(item["digest"], None)
                     approved.append(n)
                 else:
                     kept.append(item)
@@ -238,9 +276,31 @@ def action_key(name: str, params: Mapping[str, Any], session_workdir: Path | Non
     would have allowed it in any other. The directory is the one the call
     names, else the turn's own, because a relative command acts there.
     """
-    body = json.dumps(dict(params), sort_keys=True, ensure_ascii=False, default=str)
-    where = str(params.get("working_dir") or session_workdir or "")
+    where = _where(params, session_workdir)
+    args = dict(params)
+    if args.get("working_dir"):
+        args["working_dir"] = where
+    body = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(f"{name}\x00{body}\x00{where}".encode()).hexdigest()
+
+
+def _where(params: Mapping[str, Any], session_workdir: Path | None) -> str:
+    """The directory a call runs in, spelled one way per directory on this OS."""
+    raw = str(params.get("working_dir") or session_workdir or "")
+    return os.path.normcase(os.path.normpath(raw)) if raw else ""
+
+
+def describe(name: str, params: Mapping[str, Any], session_workdir: Path | None) -> str:
+    """The whole call as the owner reads it: where it runs first, then what it does."""
+    from raven.permissions.builtin import action_line
+
+    machine = str(params.get("machine") or "").strip()
+    raw_dir = str(params.get("working_dir") or session_workdir or "")
+    place = ", ".join(p for p in (f"on {machine}" if machine else "", f"in {raw_dir}" if raw_dir else "") if p)
+    line = action_line(name, dict(params))
+    if machine and line.endswith(f" (on {machine})"):
+        line = line[: -len(f" (on {machine})")]
+    return f"[{place}] {line}" if place else line
 
 
 def pending_block(items: list[dict[str, Any]]) -> str:
@@ -391,7 +451,7 @@ class OncallApprovalGate:
             return None
         try:
             return await self._decide(name, args, session_workdir)
-        except ApprovalStoreUnreadableError as exc:
+        except (ApprovalStoreUnreadableError, OSError) as exc:
             logger.warning("oncall approval: {}", exc)
             return (
                 "NOT RUN: the on-call's approval records could not be read just now, so this "
@@ -400,8 +460,6 @@ class OncallApprovalGate:
             )
 
     async def _decide(self, name: str, args: dict[str, Any], session_workdir: Path | None) -> str | None:
-        from raven.permissions.builtin import action_line
-
         store = ApprovalStore(self._home)
         await self._read_kept_answers(store)
         key = action_key(name, args, session_workdir)
@@ -420,8 +478,14 @@ class OncallApprovalGate:
             if outcome is not None and outcome.allow:
                 return None
             why = (outcome.reason if outcome is not None else "") or "the reviewer escalated it"
-        where = str(args.get("working_dir") or session_workdir or "")
-        action = action_line(name, args) + (f" (in {where})" if where else "")
+        action = describe(name, args, session_workdir)
+        if len(action) > MAX_ACTION_CHARS:
+            return (
+                f"NOT RUN: this action needs the owner's approval ({why}), but at {len(action)} "
+                f"characters it is too long to show them whole (the limit is {MAX_ACTION_CHARS}), "
+                "and an owner cannot approve what they cannot read. It was not filed. Split it "
+                "into shorter steps, or move the long part into a script file and run that."
+            )
         n = store.file(key, name, action, why)
         logger.info("oncall approval: {} filed as pending #{} ({})", name, n, why)
         return (
@@ -465,6 +529,25 @@ class OncallApprovalGate:
             return None
 
 
+def review_timeout(raw: Any) -> float:
+    """The reviewer's limit in seconds; a value that is not a positive number is the default.
+
+    Never raises: a factory that raised would be skipped by the plugin host, and
+    with the trunk gate rendered at ``full`` that would leave every call
+    unreviewed. The launcher refuses such a value before serving; this is the
+    floor for a config that reached the engine some other way.
+    """
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        if raw not in (None, ""):
+            logger.warning(
+                "oncall approval: reviewTimeoutSeconds {!r} is not a number; using {}", raw, DEFAULT_REVIEW_TIMEOUT_S
+            )
+        return DEFAULT_REVIEW_TIMEOUT_S
+    return value if value > 0 else DEFAULT_REVIEW_TIMEOUT_S
+
+
 def make_approval_gate(ctx: "PluginContext"):
     """Manifest factory. Declines when the flow is off or no policy was rendered.
 
@@ -484,7 +567,7 @@ def make_approval_gate(ctx: "PluginContext"):
         home=state_root(raw, ctx.services.workspace),
         mode=policy["mode"],
         provider=getattr(ctx.services, "provider", None),
-        review_timeout_s=float(policy.get("reviewTimeoutSeconds") or DEFAULT_REVIEW_TIMEOUT_S),
+        review_timeout_s=review_timeout(policy.get("reviewTimeoutSeconds")),
     )
 
 
@@ -498,6 +581,8 @@ __all__ = [
     "make_approval_gate",
     "pending_block",
     "read_answer",
+    "describe",
+    "review_timeout",
     "APPROVE_ALL",
     "REFUSE_ALL",
     "CHOICES",

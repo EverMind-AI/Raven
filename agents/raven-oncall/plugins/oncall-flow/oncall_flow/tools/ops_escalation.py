@@ -324,7 +324,7 @@ class OpsAskOwnerTool(_OpsScheduler):
             waiting = []
         if waiting:
             question = f"{question.strip()}\n\n{approval.pending_block(waiting)}".strip()
-            choices = choices or list(approval.CHOICES)
+            choices = choices + [c for c in approval.CHOICES if c not in choices]
         log_event(
             cdir,
             "ask_owner",
@@ -404,6 +404,11 @@ class OpsAskOwnerTool(_OpsScheduler):
         )
         if self._direct_ask is not None and self._session_key:
             withdraw_question(cdir, "superseded by a new question")
+            if waiting:
+                try:
+                    approval.ApprovalStore(ops_home()).scope([int(i["n"]) for i in waiting], str(cdir))
+                except (approval.ApprovalStoreUnreadableError, OSError) as exc:
+                    logger.warning("oncall-flow: pending approvals not tied to {}: {}", campaign, exc)
             task = asyncio.create_task(
                 self._await_answer(
                     cdir, campaign, ask_id, prompt, choices, self._session_key, [int(i["n"]) for i in waiting]

@@ -26,6 +26,7 @@ from oncall_flow import approval  # noqa: E402
 from oncall_flow.approval import (  # noqa: E402
     APPROVE_ALL,
     LAYER_ONE,
+    MAX_ACTION_CHARS,
     REFUSE_ALL,
     ApprovalStore,
     ApprovalStoreUnreadableError,
@@ -100,6 +101,15 @@ async def test_a_trunk_default_read_passes_even_in_ask_mode(tmp_path):
 def test_scheduling_the_next_wake_is_layer_one():
     assert "ops_check_later" in LAYER_ONE and "ops_ask_owner" in LAYER_ONE
     assert "ops_submit" not in LAYER_ONE and "ops_kill" not in LAYER_ONE
+
+
+@pytest.mark.asyncio
+async def test_a_declaration_is_approved_like_work_because_its_readings_run_on_the_machine(tmp_path):
+    assert "ops_declare" not in LAYER_ONE
+    declare = {"campaign": "c", "readings": [{"name": "x", "command": "python3 -c \"open('m','w')\""}]}
+    out = await _ask(_gate(tmp_path, "ask"), "ops_declare", declare)
+    assert out is not None and out.startswith("NOT RUN")
+    assert ApprovalStore(tmp_path).pending()[0]["tool"] == "ops_declare"
 
 
 # --- layer two follows the owner's mode ---------------------------------------
@@ -330,7 +340,7 @@ async def test_a_relative_command_is_scoped_to_the_turns_directory(tmp_path):
     await apply_answer(tmp_path, APPROVE_ALL, [1])
     assert await gate.adjudicate("exec", call, session_workdir=Path("/srv/a")) is None
     assert (await gate.adjudicate("exec", call, session_workdir=Path("/srv/b")) or "").startswith("NOT RUN")
-    assert "(in /srv/b)" in ApprovalStore(tmp_path).pending()[0]["action"]
+    assert f"[in {Path('/srv/b')}]" in ApprovalStore(tmp_path).pending()[0]["action"]
 
 
 class _Flaky:
@@ -407,3 +417,87 @@ async def test_a_replace_the_platform_refuses_briefly_is_retried(tmp_path, monke
     await _ask(gate, "exec", REMOTE_WRITE)
     assert [item["n"] for item in ApprovalStore(tmp_path).pending()] == [1, 2]
     assert refusals["left"] == 0
+
+
+# --- second review: what the owner sees, how long it lasts, failing closed ----
+
+
+@pytest.mark.asyncio
+async def test_the_owner_sees_the_whole_call_with_where_it_runs_first(tmp_path):
+    command = "cat /var/log/app/" + "a" * 290 + ".log; rm -rf /srv/data"
+    await _ask(_gate(tmp_path, "ask"), "exec", {"command": command, "machine": "conn_prod"})
+    shown = approval.pending_block(ApprovalStore(tmp_path).pending())
+    assert "[on conn_prod]" in shown and "rm -rf /srv/data" in shown
+    assert shown.index("[on conn_prod]") < shown.index("cat /var/log")
+
+
+@pytest.mark.asyncio
+async def test_a_call_too_long_to_show_whole_is_not_filed(tmp_path):
+    out = await _ask(
+        _gate(tmp_path, "ask"), "exec", {"command": "echo " + "x" * MAX_ACTION_CHARS, "machine": "conn_prod"}
+    )
+    assert out is not None and "too long to show them whole" in out
+    assert ApprovalStore(tmp_path).pending() == []
+
+
+@pytest.mark.asyncio
+async def test_an_approval_ends_with_the_campaign_it_was_asked_under(tmp_path):
+    cdir = tmp_path / "campaign-a"
+    cdir.mkdir()
+    gate = _gate(tmp_path, "ask")
+    await _ask(gate, "ops_submit", SUBMIT)
+    ApprovalStore(tmp_path).scope([1], str(cdir))
+    await apply_answer(tmp_path, APPROVE_ALL, [1])
+    assert await _ask(gate, "ops_submit", SUBMIT) is None
+    (cdir / "concluded.json").write_text("{}", encoding="utf-8")
+    assert (await _ask(gate, "ops_submit", SUBMIT) or "").startswith("NOT RUN")
+
+
+@pytest.mark.asyncio
+async def test_two_spellings_of_one_directory_are_one_approval(tmp_path):
+    gate = _gate(tmp_path, "ask")
+    await _ask(gate, "exec", {"command": "make", "working_dir": "/srv/a/"})
+    await apply_answer(tmp_path, APPROVE_ALL, [1])
+    assert await _ask(gate, "exec", {"command": "make", "working_dir": "/srv/./a"}) is None
+
+
+@pytest.mark.asyncio
+async def test_a_store_the_platform_keeps_refusing_answers_not_run(tmp_path, monkeypatch):
+    def refuse(*_a, **_k):
+        raise PermissionError(13, "held by another process")
+
+    monkeypatch.setattr(ApprovalStore, "file", refuse)
+    out = await _ask(_gate(tmp_path, "ask"), "ops_submit", SUBMIT)
+    assert out is not None and out.startswith("NOT RUN") and "could not be read" in out
+
+
+def test_a_misspelt_review_timeout_still_builds_the_gate(tmp_path):
+    assert approval.review_timeout("60s") == approval.DEFAULT_REVIEW_TIMEOUT_S
+    assert approval.review_timeout(-3) == approval.DEFAULT_REVIEW_TIMEOUT_S
+    assert approval.review_timeout("15") == 15.0
+    gate = make_approval_gate(
+        _ctx(tmp_path, {"enabled": True, "approval": {"mode": "ask", "reviewTimeoutSeconds": "60s"}})
+    )
+    assert isinstance(gate, OncallApprovalGate)
+
+
+@pytest.mark.asyncio
+async def test_the_approval_choices_ride_alongside_the_models_own_options(tmp_path):
+    home = tmp_path / "ops"
+    tools_base.set_home(home)
+    await _ask(_gate(home, "ask"), "ops_submit", SUBMIT)
+    owner = _Owner()
+    tool = OpsAskOwnerTool()
+    tool.bind_runtime(RuntimeHandles(direct_ask=owner))
+    tool.set_context("acp", "s1", session_key="acp:s1")
+    cdir = _campaign(tmp_path)
+    await tool.execute(
+        campaign="c",
+        question="Which seed?",
+        expected_loss_minutes=60,
+        options=["seed 1", "seed 2"],
+        ledger=str(cdir / "ledger.json"),
+    )
+    await _settle()
+    assert owner.asked[0]["choices"] == ["seed 1", "seed 2", APPROVE_ALL, REFUSE_ALL]
+    assert ApprovalStore(home).pending()[0]["scope"] == str(cdir)

@@ -185,6 +185,17 @@ def apply_approval_policy(config: dict, flow_slice: dict, host: dict) -> str:
     here: a later change on the host reaches the on-call when it next starts.
     """
     approval = flow_slice.setdefault("approval", {})
+    timeout = approval.get("reviewTimeoutSeconds")
+    if timeout is not None:
+        try:
+            valid = float(timeout) > 0
+        except (TypeError, ValueError):
+            valid = False
+        if not valid:
+            raise SystemExit(
+                f"error: oncall-flow approval.reviewTimeoutSeconds must be a positive number of "
+                f"seconds, got {timeout!r}; the on-call does not start with its approval gate unsure"
+            )
     own = (config.get("permissions") or {}).get("mode")
     host_mode = (host.get("permissions") or {}).get("mode")
     mode = next(
