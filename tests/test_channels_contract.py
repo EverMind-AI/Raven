@@ -11,6 +11,15 @@ from raven.channels import (
 )
 from raven.channels.contract import capability_violations
 
+
+def test_retry_delivery_error_is_the_hub_type_on_the_channel_contract():
+    from raven.channels import contract
+    from raven.spine.delivery import RetryDeliveryError
+
+    assert getattr(contract, "RetryDeliveryError", None) is RetryDeliveryError
+    assert "RetryDeliveryError" in contract.__all__
+
+
 # ── minimal conforming channel + opt-in variants (test doubles) ───────
 
 

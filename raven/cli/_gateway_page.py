@@ -39,6 +39,7 @@ class PageMount:
     # with the page's own turns to that session. None when the stack built no
     # spine.
     submit: Callable[[Any], Any] | None = None
+    scheduler: Any = None
 
 
 # The credentials the last mount in this process held. A generation swap tears
@@ -92,7 +93,7 @@ async def _standalone_serve_owner() -> tuple[int, int] | None:
     return None
 
 
-async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
+async def mount_page(agent_loop: Any, preferred_port: int, *, linked_chat: Any = None) -> PageMount | None:
     """Serve the page on ``agent_loop``, on the `raven serve` port policy.
 
     Returns ``None`` when a live standalone `raven serve` already owns
@@ -150,7 +151,9 @@ async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
     bound_port = await pick_port(preferred_port, strict=port_strict())
     ws_gateway.port = bound_port
 
-    stack = await build_rpc_stack(ws_gateway.broadcast, agent_loop=agent_loop, credential_cards=True)
+    stack = await build_rpc_stack(
+        ws_gateway.broadcast, agent_loop=agent_loop, credential_cards=True, linked_chat=linked_chat
+    )
     ws_gateway.dispatcher = stack.dispatcher
 
     dist = resolve_ui_dist()
@@ -213,6 +216,7 @@ async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
         teardown=teardown,
         direct_targets=stack.direct_targets,
         submit=stack.turn_scheduler.submit if stack.turn_scheduler is not None else None,
+        scheduler=stack.turn_scheduler,
     )
 
 

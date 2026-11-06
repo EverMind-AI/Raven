@@ -257,6 +257,7 @@ async def build_rpc_stack(
     credential_cards: bool = False,
     emitter: Any = None,
     ensure_stack: Callable[[], Awaitable[bool]] | None = None,
+    linked_chat: Any = None,
 ) -> RpcStack:
     """Assemble dispatcher + engine wired to ``send_frame``.
 
@@ -467,6 +468,7 @@ async def build_rpc_stack(
             approval_responder=approval_responder or approval_broker,
             credential_asker=credential_broker if credential_cards else None,
             live_usages=live_usages,
+            linked_chat=linked_chat,
         )
         if owns_loop:
             agent_loop.subagents.set_submit(turn_scheduler.submit)
@@ -516,6 +518,7 @@ async def build_rpc_stack(
         default_channel=channel,
         ensure_stack=ensure_stack,
         live_usages=live_usages,
+        linked_turn_id=linked_chat.active_turn_id if linked_chat is not None else None,
     )
     if agent_loop is not None:
         _lend_settings_writers(agent_loop, dispatcher)

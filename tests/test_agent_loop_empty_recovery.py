@@ -5375,24 +5375,46 @@ async def test_a_proactive_turn_that_skips_after_send_stays_silent(workspace, mo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "arguments,fails,answered",
+    "arguments,fails,cross_target,answered",
     [
-        pytest.param(_SEND, False, True, id="sent_to_its_own_chat"),
-        pytest.param(_SEND, True, False, id="a_send_that_failed"),
-        pytest.param('{"content": "here is your answer", "chat_id": "c2"}', False, True, id="sent_naming_another_chat"),
+        pytest.param(_SEND, False, False, True, id="sent_to_its_own_chat"),
+        pytest.param(_SEND, True, False, False, id="a_send_that_failed"),
+        pytest.param(
+            '{"content": "here is your answer", "chat_id": "c2"}',
+            False,
+            False,
+            False,
+            id="a_chat_only_destination_is_refused",
+        ),
+        pytest.param(
+            '{"content": "here is your answer", "channel": "telegram", "chat_id": "c2"}',
+            False,
+            True,
+            False,
+            id="sent_to_another_chat",
+        ),
     ],
 )
-async def test_a_stored_turn_reads_the_message_tools_live_verdict(workspace, monkeypatch, arguments, fails, answered):
+async def test_a_stored_turn_reads_the_message_tools_live_verdict(
+    workspace, monkeypatch, arguments, fails, cross_target, answered
+):
     """A turn the runtime opened calls the message tool and closes on the marker. The live turn counts it
-    answered when the send went out (``MessageTool.sent_in_turn``) -- the tool hands every send to the
-    turn's own reader, whatever chat the call names -- and the session list and an ACP replay read the
-    stored turn by that same verdict. Only a send that failed leaves a Silent Turn there, taken back whole."""
+    answered when a same-target send went out (``MessageTool.sent_in_turn``). A cross-target send is queued
+    for another surface, and a destination naming only a chat is refused, so neither answers this turn --
+    and the session list and an ACP replay read the stored turn by that same verdict, taking the unanswered
+    turn back whole."""
     from raven.acp.replay import replay
     from raven.rpc.methods.session import _map_to_wire
 
     _served(monkeypatch, [_tool_reply("message", arguments), _reply("[SILENT]")])
     agent = _litellm_agent(workspace)
     _wire_message_tool(agent)
+    if cross_target:
+
+        async def queued(channel: str, chat_id: str, content: str, media: list[str]) -> str:
+            return "Message queued for delivery"
+
+        agent.tools.get("message").set_target_sender(queued)
     if fails:
 
         async def unreachable(content: str, media: list[str]) -> None:

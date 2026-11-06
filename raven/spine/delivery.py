@@ -15,6 +15,7 @@ channels.contract re-export), not the reverse.
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from functools import partial
 from typing import Protocol, runtime_checkable
 
 from loguru import logger
@@ -56,13 +57,23 @@ class Outlet(Protocol):
     """A channel's send surface. ``deliver`` either renders the deliverable or, if
     the channel can't express it, eats it with a normal return (logging its own
     skip). Only a real failure — transport error, bug — raises, which the hub
-    retries. Eating is not failure. Lifecycle (connect/teardown) stays on the
-    channel; an outlet is just the send seam."""
+    retries. ``RetryDeliveryError`` supplies a continuation for unacknowledged
+    parts without resetting the deliverable's retry budget. Eating is not
+    failure. Lifecycle (connect/teardown) stays on the channel; an outlet is just
+    the send seam."""
 
     name: str
     capabilities: Capabilities
 
     async def deliver(self, out: Deliverable) -> None: ...
+
+
+class RetryDeliveryError(RuntimeError):
+    """Resume unacknowledged work under the hub's existing retry budget."""
+
+    def __init__(self, message: str, resume: Callable[[], Awaitable[None]]) -> None:
+        super().__init__(message)
+        self.resume = resume
 
 
 _SEND_MAX_RETRIES = 3
@@ -180,12 +191,13 @@ class DeliveryHub:
     async def dispatch(self, out: Deliverable) -> None:
         await self._enqueue(out)
 
-    async def post(self, out: Deliverable) -> None:
+    async def post(self, out: Deliverable) -> bool:
         """Send a deliverable that did not come from a turn (e.g. a Sentinel menu).
         Routes like dispatch; the caller stamps source.channel. Returns once the
         event is queued, not once delivered — delivery is the outlet worker's, and
-        a full queue backpressures this channel's caller."""
-        await self._enqueue(out)
+        a full queue backpressures this channel's caller. False means no outlet
+        accepted the event."""
+        return await self._enqueue(out)
 
     async def close_stream(self, conversation_id: str) -> None:
         """End a conversation's stream. Routes a close marker through the outlet's
@@ -199,13 +211,13 @@ class DeliveryHub:
         if queue is not None:
             await queue.put(_StreamClose(conversation_id))
 
-    async def _enqueue(self, out: Deliverable) -> None:
+    async def _enqueue(self, out: Deliverable) -> bool:
         if out.source is None:
             raise ValueError(f"cannot route a {type(out).__name__} with no source")
         channel = out.source.channel
         if channel not in self._outlets:
             logger.warning("no outlet for channel {!r}; dropping {}", channel, type(out).__name__)
-            return
+            return False
         if isinstance(out, StreamDelta) and out.conversation_id is not None:
             # Remember the channel this stream rides so a later close_stream (driven
             # by a sourceless lifecycle event) can route its marker here. A delta
@@ -223,6 +235,7 @@ class DeliveryHub:
             # silently deadlock this channel's senders. Mirrors the lane worker.
             self._workers[channel] = asyncio.create_task(self._run_outlet(channel))
         await queue.put(out)  # full queue blocks only this channel (per-outlet backpressure)
+        return self._queues.get(channel) is queue
 
     async def _run_outlet(self, channel: str) -> None:
         queue = self._queues[channel]
@@ -260,11 +273,14 @@ class DeliveryHub:
 
     async def _deliver_with_retry(self, outlet: Outlet, out: Deliverable) -> None:
         delay = _RETRY_BASE_DELAY
+        deliver: Callable[[], Awaitable[None]] = partial(outlet.deliver, out)
         for attempt in range(self._send_max_retries + 1):
             try:
-                await outlet.deliver(out)
+                await deliver()
                 return
             except Exception as exc:
+                if isinstance(exc, RetryDeliveryError):
+                    deliver = exc.resume
                 if attempt == self._send_max_retries:
                     self.dropped += 1
                     logger.error(

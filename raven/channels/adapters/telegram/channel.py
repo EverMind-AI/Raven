@@ -7,11 +7,13 @@ import html
 import re
 import time
 import unicodedata
+from collections import deque
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 from telegram import BotCommand, Update
+from telegram.error import BadRequest, Forbidden, InvalidToken, NetworkError, RetryAfter, TelegramError
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -22,13 +24,30 @@ from telegram.ext import (
 from telegram.request import HTTPXRequest
 
 from raven.channels.base import ChannelBase
-from raven.channels.contract import Capabilities
+from raven.channels.contract import Capabilities, RetryDeliveryError
+from raven.channels.errors import retryable_http, transient_network
 from raven.channels.transcribe import transcribe_audio
 from raven.config.paths import get_media_dir
 from raven.utils.messages import split_message
 
 MAX_MESSAGE_LEN = 4000
 _ALBUM_WINDOW_S = 0.6
+
+
+class _TelegramRequest(HTTPXRequest):
+    async def do_request(self, *args, **kwargs) -> tuple[int, bytes]:
+        code, payload = await super().do_request(*args, **kwargs)
+        # PTB otherwise discards the status in favor of an arbitrary JSON description.
+        if 400 <= code < 500 and code not in {400, 401, 403, 404, 409, 429}:
+            raise TelegramError(f"Permanent Telegram HTTP failure ({code})")
+        return code, payload
+
+
+def _retryable_send_error(exc: Exception) -> bool:
+    if isinstance(exc, BadRequest):
+        return False
+    return isinstance(exc, (NetworkError, RetryAfter)) or transient_network(exc) or retryable_http(exc)
+
 
 # Telegram media APIs keyed by the kind we resolve from a file extension.
 _EXT_KIND = {
@@ -222,7 +241,7 @@ class TelegramChannel(ChannelBase):
         self._running = True
         self._stop_event = asyncio.Event()  # fresh per start (restart-safe)
 
-        request = HTTPXRequest(
+        request = _TelegramRequest(
             connection_pool_size=16,
             pool_timeout=5.0,
             connect_timeout=30.0,
@@ -281,21 +300,44 @@ class TelegramChannel(ChannelBase):
 
     async def send(self, chat_id: str, content: str, media: list[str] | None = None) -> None:
         if not self._app:
-            logger.warning("Telegram bot not running")
+            logger.error("Telegram bot not running")
             return
         self._stop_typing(chat_id)
         try:
             chat_id_int = int(chat_id)
         except ValueError:
-            logger.error("Invalid chat_id: {}", chat_id)
+            logger.error("Invalid Telegram chat_id")
             return
 
-        for path in media or []:
-            await self._send_media(chat_id_int, path)
-
+        pending = deque(("media", path) for path in media or [])
         if content and content != "[empty message]":
-            for chunk in split_message(content, MAX_MESSAGE_LEN):
-                await self._send_streamed(chat_id_int, chunk)
+            pending.extend(("text", chunk) for chunk in split_message(content, MAX_MESSAGE_LEN))
+
+        async def resume() -> None:
+            while pending:
+                kind, value = pending[0]
+                try:
+                    if kind == "media":
+                        await self._send_media(chat_id_int, value)
+                    elif kind == "text":
+                        await self._send_streamed(chat_id_int, value)
+                    else:
+                        await self._send_text(chat_id_int, value)
+                except Exception as exc:
+                    if _retryable_send_error(exc):
+                        raise RetryDeliveryError(
+                            f"Telegram {kind} delivery failed ({type(exc).__name__})", resume
+                        ) from None
+                    logger.error("Telegram {} delivery failed ({})", kind, type(exc).__name__)
+                    pending.popleft()
+                    if isinstance(exc, Forbidden | InvalidToken):
+                        return
+                    if kind == "media":
+                        pending.appendleft(("notice", f"[Failed to send: {Path(value).name}]"))
+                else:
+                    pending.popleft()
+
+        await resume()
 
     async def _send_media(self, chat_id, path) -> None:
         kind = _outbound_kind(path)
@@ -306,29 +348,20 @@ class TelegramChannel(ChannelBase):
         }
         send = senders.get(kind, self._app.bot.send_document)
         arg = kind if kind in ("photo", "voice", "audio") else "document"
-        try:
-            with open(path, "rb") as fh:
-                await send(chat_id=chat_id, **{arg: fh})
-        except Exception as e:
-            logger.error("Failed to send media {}: {}", path, e)
-            await self._app.bot.send_message(
-                chat_id=chat_id,
-                text=f"[Failed to send: {path.rsplit('/', 1)[-1]}]",
-            )
+        with open(path, "rb") as fh:
+            receipt = await send(chat_id=chat_id, **{arg: fh})
+        logger.info("Telegram delivered chat_id={} message_id={}", chat_id, receipt.message_id)
 
     async def _send_text(self, chat_id, text) -> None:
         try:
-            await self._app.bot.send_message(
+            receipt = await self._app.bot.send_message(
                 chat_id=chat_id,
                 text=_markdown_to_html(text),
                 parse_mode="HTML",
             )
-        except Exception as e:
-            logger.warning("HTML send failed, retrying as plain text: {}", e)
-            try:
-                await self._app.bot.send_message(chat_id=chat_id, text=text)
-            except Exception as e2:
-                logger.error("Error sending Telegram message: {}", e2)
+        except BadRequest:
+            receipt = await self._app.bot.send_message(chat_id=chat_id, text=text)
+        logger.info("Telegram delivered chat_id={} message_id={}", chat_id, receipt.message_id)
 
     async def _send_streamed(self, chat_id, text) -> None:
         """Animate the reply via the draft API, then persist the final text."""
