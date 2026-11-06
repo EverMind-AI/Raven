@@ -21,9 +21,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlparse
 
-from raven.input_history import MAX_ENTRIES
+from raven.input_history import MAX_ENTRIES, read_entries
 from raven.input_history import append as append_history
-from raven.input_history import read_entries
 from raven.utils.images import detect_image_mime, estimate_image_tokens, image_pixel_size
 
 if TYPE_CHECKING:
