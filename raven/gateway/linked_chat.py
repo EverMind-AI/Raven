@@ -60,11 +60,12 @@ def load_binding(path: Path) -> Binding | None:
 
 
 class LinkedChat:
-    def __init__(self, binding, agent, hub, sources):
+    def __init__(self, binding, agent, hub, sources, channels=None):
         self.binding = binding
         self.agent = agent
         self.hub = hub
         self.sources = sources
+        self.channels = channels or {}
         self.active = {}
         self.stopping = False
         self._question_turn: ContextVar[tuple[str, str] | None] = ContextVar("linked_chat_question_turn", default=None)
@@ -108,11 +109,18 @@ class LinkedChat:
         active = self.active.get(cid)
         return True if active is not None and turn == (cid, active[0]) else None
 
+    async def _end_refused_turn(self, req) -> None:
+        """A refused request still started the adapter's typing indicator."""
+        from raven.gateway.spine import end_channel_turn
+
+        await end_channel_turn(self.channels.get(req.source.channel), req.source.chat_id)
+
     async def dispatch(self, req, scheduler, broker, subagents):
         """True means handled, including a refused Telegram request; never fall back."""
         if req.source.channel != "telegram":
             return False
         if not self._authorized(req) or req.conversation is not None:
+            await self._end_refused_turn(req)
             return True
 
         async def reply(text):
@@ -124,11 +132,17 @@ class LinkedChat:
         cid = self.binding.session_key
         command = req.text.strip().split(maxsplit=1)[0].split("@", 1)[0].lower() if req.text.strip() else ""
         if command == "/stop":
+            if self.stopping:
+                await reply("A stop is already in progress.")
+                return True
             self.stopping = True
             try:
                 stopped = await scheduler.cancel_conversation_reported(
                     cid, cancel_children=lambda: subagents.cancel_by_session(cid, reason="the user sent /stop")
                 )
+            except SchedulerDrainingError:
+                await reply("A stop is already in progress.")
+                return True
             finally:
                 self.stopping = False
             await reply(f"Stopped {stopped} task(s)." if stopped else "No active task to stop.")

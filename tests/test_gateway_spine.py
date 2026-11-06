@@ -1041,13 +1041,13 @@ async def test_a_channel_whose_end_turn_raises_costs_a_log_line_not_the_turn():
     teardown waits on."""
     from loguru import logger
 
-    from raven.gateway.spine import _end_turn
+    from raven.gateway.spine import end_channel_turn
 
     ch = _RaisingEnd("telegram")
     lines: list[str] = []
     sink_id = logger.add(lambda m: lines.append(m.record["message"]), level="WARNING")
     try:
-        await _end_turn(ch, "c7")
+        await end_channel_turn(ch, "c7")
     finally:
         logger.remove(sink_id)
 
