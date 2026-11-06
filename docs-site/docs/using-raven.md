@@ -93,10 +93,13 @@ blank to fall back to the table.
 A pick made for one conversation outranks the global setting and the
 conversation's mode. It is kept on the conversation's own record, so it survives
 a gateway restart and comes back when the conversation is resumed, and it lands
-on the next turn. A pick the current model does not declare is not sent: the
-conversation's mode word or the global setting runs instead, and the pick stays
-saved for a model that declares it. It moves Raven's own model calls only;
-sub-agents keep the configured default.
+on the next turn. A pick the current model does not declare runs at the
+highest word that model declares below it (`max` picked on one model, then a
+switch to a model that stops at `high`, runs at `high`); only when the model
+declares nothing at or below it does the conversation's mode word or the
+global setting run instead. The pick stays saved as named for a model that
+declares it. It moves Raven's own model calls only; sub-agents keep the
+configured default.
 
 ## Add capability deliberately
 

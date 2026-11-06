@@ -841,7 +841,7 @@ async def test_summary_always_uses_the_session_model(workspace):
 
 @pytest.fixture(autouse=True)
 def _fake_model_declares_every_level(monkeypatch):
-    """The turn clamps to the model's levels; the scripted model declares them all."""
+    """The turn bounds the pick by the model's levels; the scripted model declares them all."""
     from raven.agent.loop import wiring
 
     monkeypatch.setattr(

@@ -1360,7 +1360,7 @@ async def test_a_turn_whose_calls_read_no_window_still_reports_a_whole_usage(wor
 
 @pytest.fixture(autouse=True)
 def _fake_model_declares_every_level(monkeypatch):
-    """The turn clamps to the model's levels; the scripted model declares them all."""
+    """The turn bounds the pick by the model's levels; the scripted model declares them all."""
     from raven.agent.loop import wiring
 
     monkeypatch.setattr(

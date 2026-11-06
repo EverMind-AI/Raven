@@ -329,13 +329,18 @@ All notable changes to Raven are documented here.
   Codex account catalogue's own `supported_reasoning_levels` for its models
   (read from the cache by the turn and reports, refreshed by an explicit set
   off the event loop, with an expired answer kept as last-good), and no control
-  at all for a model that declares none. The turn and the status bar clamp a
-  stored pick to the current model, so switching models cannot send a level the
-  new model does not accept; the pick itself is kept and applies again if a
-  later model declares it, and the conversation's mode word or the global
-  setting runs meanwhile. A fallback hop re-clamps the word for the model it
-  actually calls. The global `agents.defaults.reasoningEffort` is
-  unchanged.
+  at all for a model that declares none. The turn and the status bar bound a
+  stored pick by the current model, so switching models cannot send a level the
+  new model does not accept: a word the new model stops short of runs at the
+  highest level it declares below it (`max` picked on one model, then a switch
+  to one that stops at `high`, runs at `high`), the way a fallback hop already
+  runs the primary's word for the model it actually calls, and the pick is
+  dropped only for a model that declares nothing at or below it, with the
+  conversation's mode word or the global setting running meanwhile; the pick
+  itself is kept as named and applies again if a later model declares it. The
+  global `agents.defaults.reasoningEffort` is unchanged. The picker's effort
+  row wraps between rungs rather than inside a word when a model declares more
+  than one line holds.
 
 - Empty and abnormal model replies are handled the way Hermes Agent handles
   them. A reply that is only the silence marker `[SILENT]` ends the turn with
