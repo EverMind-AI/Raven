@@ -4439,9 +4439,9 @@ class TranscriptMessage(_Strict):
     replied_via_tool: bool | None = Field(
         default=None,
         description=(
-            "Set on one assistant entry of a turn whose reader got its reply from a tool: a message-tool send "
-            "that went out (the tool hands every send to the turn's own reader, whatever chat the call names) or a "
-            "file delivery. A send that failed does not set it. The entry "
+            "Set on one assistant entry of a turn whose reader got its reply from a tool: a same-target "
+            "message-tool send that went out (a cross-target send is queued for another surface and does not set "
+            "it) or a file delivery. A send that failed does not set it. The entry "
             "is the turn's last assistant entry with text or tool calls, not counting a notice the runtime files "
             "after the turn: the `silent` marker's entry when the turn ends on one, and otherwise, when its last "
             "reply had no text, the last entry that made a tool call, which need not be the call that sent the "

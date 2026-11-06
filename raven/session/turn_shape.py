@@ -8,9 +8,9 @@ rather than in either surface: a rule the two copies do not share is a rule that
 drifts, and the drift shows as one surface drawing a turn the other hides.
 
 Whether a tool answered is the live turn's verdict -- ``MessageTool.sent_in_turn``, a
-send that went out (the tool hands every send to the turn's own reader, whatever chat
-the call names), or a file delivery -- filed as ``replied_via_tool`` on the turn's last
-assistant row with text or tool calls: the marker's row when the turn ends on one,
+same-target send that went out (a cross-target send is queued for another surface and
+does not answer this one), or a file delivery -- filed as ``replied_via_tool`` on the
+turn's last assistant row with text or tool calls: the marker's row when the turn ends on one,
 which is the only row a reader asks. A reader does not work it out from the calls it
 can see: a call that failed answered nobody. The flag has one name in both shapes a
 transcript comes in -- the stored row and the flattened row the wire carries -- so a
