@@ -33,6 +33,7 @@ from oncall_flow.approval import (  # noqa: E402
     OncallApprovalGate,
     apply_answer,
     make_approval_gate,
+    pending_block,
     read_answer,
 )
 from oncall_flow.tools import base as tools_base  # noqa: E402
@@ -110,6 +111,28 @@ async def test_a_declaration_is_approved_like_work_because_its_readings_run_on_t
     out = await _ask(_gate(tmp_path, "ask"), "ops_declare", declare)
     assert out is not None and out.startswith("NOT RUN")
     assert ApprovalStore(tmp_path).pending()[0]["tool"] == "ops_declare"
+
+
+@pytest.mark.asyncio
+async def test_a_pending_declaration_shows_every_reading_and_action_command(tmp_path):
+    readings = [{"name": f"r{i}", "command": f"echo reading-{i}", "when": "each_wake"} for i in range(5)]
+    readings.append({"name": "w", "command": "python3 -c \"open('/tmp/x','w').write('x')\"", "when": "at_declare"})
+    declare = {
+        "campaign": "production-health-watch",
+        "condition": "Keep error rate below threshold",
+        "connection": "conn_prod",
+        "objective": "error rate",
+        "objective_kind": "watch",
+        "command": "echo would-alert",
+        "actions": [{"name": "page", "command": "notify --team ops", "repeat": "harmful"}],
+        "readings": readings,
+    }
+    await _ask(_gate(tmp_path, "ask"), "ops_declare", declare)
+    shown = pending_block(ApprovalStore(tmp_path).pending())
+    for reading in readings:
+        assert reading["command"] in shown and f"when={reading['when']!r}" in shown
+    assert "notify --team ops" in shown and "echo would-alert" in shown and "conn_prod" in shown
+    assert "more" not in shown
 
 
 # --- layer two follows the owner's mode ---------------------------------------

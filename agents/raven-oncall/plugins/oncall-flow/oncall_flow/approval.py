@@ -297,10 +297,44 @@ def describe(name: str, params: Mapping[str, Any], session_workdir: Path | None)
     machine = str(params.get("machine") or "").strip()
     raw_dir = str(params.get("working_dir") or session_workdir or "")
     place = ", ".join(p for p in (f"on {machine}" if machine else "", f"in {raw_dir}" if raw_dir else "") if p)
-    line = action_line(name, dict(params))
+    line = _declaration_lines(params) if name == "ops_declare" else action_line(name, dict(params))
     if machine and line.endswith(f" (on {machine})"):
         line = line[: -len(f" (on {machine})")]
     return f"[{place}] {line}" if place else line
+
+
+def _declaration_lines(params: Mapping[str, Any]) -> str:
+    """A declaration in full: every argument, and each reading and action on its own line.
+
+    The generic ``action_line`` is a summary that shows a list as its first
+    members plus ``+N more``. Approving a declaration releases every reading
+    command it carries (run at once and on every wake) and every action it
+    allows later, so all of them are shown whole; ``MAX_ACTION_CHARS`` then
+    refuses to file one too long to show.
+    """
+    head: list[str] = []
+    rows: list[str] = []
+    for key in sorted(params):
+        value = params[key]
+        if key == "command" and isinstance(value, str):
+            rows.insert(0, f"    command: {value}")
+        elif isinstance(value, list):
+            rows.append(f"    {key}:" if value else f"    {key}: []")
+            rows += [f"      - {_row(item)}" for item in value]
+        else:
+            head.append(f"{key}={value!r}")
+    return "\n".join([" ".join(["ops_declare", *head]), *rows])
+
+
+def _row(item: Any) -> str:
+    """One reading or action: its other fields, then its command exactly as it will run."""
+    if not isinstance(item, Mapping):
+        return repr(item)
+    fields = " ".join(f"{k}={v!r}" for k, v in item.items() if k != "command")
+    command = item.get("command")
+    if not isinstance(command, str):
+        return f"{fields} command={command!r}".strip() if "command" in item else fields
+    return f"{fields} command: {command}".strip()
 
 
 def pending_block(items: list[dict[str, Any]]) -> str:
