@@ -141,3 +141,19 @@ def test_cron_without_tz_follows_local_dst(monkeypatch) -> None:
     finally:
         monkeypatch.undo()
         time.tzset()
+
+
+def test_cron_without_tz_is_never_scheduled_in_the_past_on_dst_fall_back(monkeypatch) -> None:
+    """In the repeated hour of a fall-back, the next run must be after `now`."""
+    from raven.proactive_engine.schedulers.cron.service import _compute_next_run
+
+    monkeypatch.setenv("TZ", "America/New_York")
+    time.tzset()
+    try:
+        # 2027-11-07T06:15Z is 01:15 EST, the second pass through 01:00-02:00.
+        now_ms = int(datetime(2027, 11, 7, 6, 15, tzinfo=timezone.utc).timestamp() * 1000)
+        next_ms = _compute_next_run(CronSchedule(kind="cron", expr="30 1 * * *"), now_ms)
+        assert next_ms is not None and next_ms > now_ms
+    finally:
+        monkeypatch.undo()
+        time.tzset()
