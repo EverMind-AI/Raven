@@ -100,7 +100,7 @@ class TestListing:
 
     async def test_a_paging_server_hands_over_every_page(self):
         pages = {
-            None: types.ListPromptsResult(prompts=[types.Prompt(name="triage")], nextCursor="page-2"),
+            None: types.ListPromptsResult(prompts=[types.Prompt(name="triage")], next_cursor="page-2"),
             "page-2": types.ListPromptsResult(prompts=[types.Prompt(name="review")]),
         }
         session = _PagingSession(pages)
@@ -168,7 +168,7 @@ class TestExpanding:
     async def test_non_text_content_is_described_never_stringified(self):
         # A pydantic repr would dump a whole base64 payload into the prompt as
         # prose -- the same failure the tool-result renderer exists to avoid.
-        img = types.ImageContent(type="image", data="QUJD", mimeType="image/png")
+        img = types.ImageContent(type="image", data="QUJD", mime_type="image/png")
         res = self._result(types.PromptMessage(role="user", content=img))
         mgr = _Manager({"gh": _Session(result=res)})
         out = await GetMcpPromptTool(mgr).execute(server="gh", name="p")

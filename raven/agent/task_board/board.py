@@ -45,8 +45,9 @@ class TaskLink:
 class ProgressStep:
     """One turn's advance on a group: a title, and a summary recall reads back.
 
-    The step that left its group needing the user also carries the questions its reply
-    asked about the matter; the page shows them still unanswered, with the summary.
+    The step that left its group needing the user also carries the questions the matter
+    still waits on -- those its reply asked, plus any carried from the step before it;
+    the page shows them still unanswered, with the summary.
     """
 
     id: str
@@ -61,12 +62,14 @@ class ProgressStep:
 @dataclass
 class GroupRevision:
     """What one turn's update changed on a group that already stood: each field it
-    changed, as it was before and as the update left it. An undo of that turn puts
-    back what it changed, and only where nothing written since has changed it again."""
+    changed, as it was before and as the update left it, and the questions the carry
+    rewrote on a step of an earlier turn, by step id. An undo of that turn puts back
+    what it changed, and only where nothing written since has changed it again."""
 
     turn_at: str
     before: dict[str, Any]
     after: dict[str, Any]
+    questions: dict[str, tuple[list[str], list[str]]] = field(default_factory=dict)
 
 
 REVISED_FIELDS = ("title", "summary", "status", "updated_at")
@@ -385,6 +388,97 @@ def apply_update(
     return out
 
 
+def apply_carry(
+    board: Board,
+    args: Mapping[str, Any],
+    eligible: Sequence[str],
+    *,
+    turn_at: str,
+    now_ms: int,
+) -> Board:
+    """The board with the questions each group's newest step now carries.
+
+    ``eligible`` names the groups this turn updated while their latest step still
+    asked something. Each has to be answered with the complete list its newest step
+    carries. A question the newest step itself asked this turn may not be left out,
+    since it went out with the reply and the user cannot have answered it yet; the
+    questions of an older step are the ones this turn may have settled. A group left
+    with questions is ``needs_you``; one left with none goes idle, so a waiting group
+    never outlives the question it waited on. :class:`UpdateRejectedError` names every
+    rule the answer breaks.
+    """
+    rules = _Rules()
+    entries = args.get("groups")
+    if not isinstance(entries, list) or not all(isinstance(raw, Mapping) for raw in entries):
+        raise UpdateRejectedError(Problem("groups must be a list of objects"))
+    known = set(eligible)
+    by_id = {group.id: group for group in board.groups}
+    carried: dict[str, list[str]] = {}
+    for index, raw in enumerate(entries):
+        where = f"groups[{index}]"
+        group_id = raw.get("group")
+        if not isinstance(group_id, str) or group_id not in known:
+            rules.refuse(f"not asked about: {group_id}", where)
+            continue
+        if group_id in carried:
+            rules.refuse(f"{group_id} appears twice", where)
+            continue
+        questions = raw.get("questions")
+        if not isinstance(questions, list) or not all(isinstance(question, str) for question in questions):
+            rules.refuse("questions must be a list of questions", where)
+            continue
+        for number, question in enumerate(questions):
+            rules.filled(question, f"questions[{number}]", where, QUESTION_WORDS)
+        carried[group_id] = [question.strip() for question in questions]
+    for group_id in eligible:
+        if group_id not in carried:
+            rules.refuse(f"not answered: {group_id}")
+            continue
+        group = by_id.get(group_id)
+        if group is None or not group.steps:
+            rules.refuse(f"no step to carry on: {group_id}")
+            continue
+        if group.steps[-1].turn_at != turn_at:
+            continue
+        missing = [question for question in group.steps[-1].questions if question not in carried[group_id]]
+        if missing:
+            rules.refuse(f"a question the newest step already asks is missing: {missing[0]}")
+    if rules.problems:
+        raise UpdateRejectedError(rules.problems)
+
+    out = copy.deepcopy(board)
+    by_id = {group.id: group for group in out.groups}
+    before = {group_id: _revised(by_id[group_id]) for group_id in carried}
+    rewritten: dict[str, dict[str, tuple[list[str], list[str]]]] = {}
+    for group_id, questions in carried.items():
+        group = by_id[group_id]
+        step = group.steps[-1]
+        was = list(step.questions)
+        step.questions = questions
+        if step.turn_at != turn_at and was != questions:
+            rewritten[group_id] = {step.id: (was, list(questions))}
+        if questions:
+            group.status = "needs_you"
+        elif group.status == "needs_you":
+            group.status = "idle"
+        group.updated_at = now_ms
+    for group_id in carried:
+        group, was = by_id[group_id], before[group_id]
+        now = _revised(group)
+        changed = [name for name in REVISED_FIELDS if now[name] != was[name]]
+        step_questions = rewritten.get(group_id, {})
+        if changed or step_questions:
+            group.revisions.append(
+                GroupRevision(
+                    turn_at,
+                    {name: was[name] for name in changed},
+                    {name: now[name] for name in changed},
+                    step_questions,
+                )
+            )
+    return out
+
+
 def _revised(group: TaskGroup) -> dict[str, Any]:
     return {name: getattr(group, name) for name in REVISED_FIELDS}
 
@@ -501,8 +595,9 @@ def drop_turns(board: Board, removed: Set[str]) -> Board:
 
     Named rather than inferred from what the log still holds: consolidation moves
     old messages out of the session, and their turns' steps stay. A group such a
-    turn changed gets back each field that turn changed, newest turn first, unless
-    a later writer -- the reader's own Mark completed -- changed it again.
+    turn changed gets back each field that turn changed, and the questions the carry
+    rewrote on a step that is still there, newest turn first, unless a later writer
+    -- the reader's own Mark completed or set-aside -- changed it again.
     """
     out = copy.deepcopy(board)
     for group in out.groups:
@@ -511,6 +606,10 @@ def drop_turns(board: Board, removed: Set[str]) -> Board:
             for name, value in revision.after.items():
                 if getattr(group, name) == value:
                     setattr(group, name, revision.before[name])
+            for step_id, (was, now) in revision.questions.items():
+                step = next((s for s in group.steps if s.id == step_id), None)
+                if step is not None and step.questions == now:
+                    step.questions = list(was)
         group.revisions = [r for r in group.revisions if r.turn_at not in removed]
     out.groups = [g for g in out.groups if g.steps]
     out.unassigned = [p for p in out.unassigned if p.turn_at not in removed]
@@ -544,7 +643,21 @@ def board_to_dict(board: Board, *, revisions: bool = False) -> dict[str, Any]:
                 **(
                     {
                         "revisions": [
-                            {"turn_at": r.turn_at, "before": dict(r.before), "after": dict(r.after)}
+                            {
+                                "turn_at": r.turn_at,
+                                "before": dict(r.before),
+                                "after": dict(r.after),
+                                **(
+                                    {
+                                        "questions": {
+                                            step_id: {"before": list(was), "after": list(now)}
+                                            for step_id, (was, now) in r.questions.items()
+                                        }
+                                    }
+                                    if r.questions
+                                    else {}
+                                ),
+                            }
                             for r in g.revisions
                         ]
                     }
@@ -587,7 +700,18 @@ def board_from_dict(data: Mapping[str, Any]) -> Board:
                     for s in g.get("steps") or []
                 ],
                 revisions=[
-                    GroupRevision(str(r["turn_at"]), dict(r.get("before") or {}), dict(r.get("after") or {}))
+                    GroupRevision(
+                        str(r["turn_at"]),
+                        dict(r.get("before") or {}),
+                        dict(r.get("after") or {}),
+                        {
+                            str(step_id): (
+                                [str(q) for q in (change.get("before") or [])],
+                                [str(q) for q in (change.get("after") or [])],
+                            )
+                            for step_id, change in (r.get("questions") or {}).items()
+                        },
+                    )
                     for r in g.get("revisions") or []
                 ],
             )

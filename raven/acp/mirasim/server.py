@@ -100,7 +100,7 @@ from raven.acp.mirasim.catalog import (
     installed_ids,
     read_catalog,
 )
-from raven.acp.mirasim.host import HostAddress, HostConnection, HostUnavailableError, locate_host
+from raven.acp.mirasim.host import HostConnection, HostUnavailableError, Located, locate_hosts
 from raven.acp.mirasim.interactions import (
     PERMISSION,
     Reply,
@@ -312,7 +312,7 @@ class MirasimAgent:
         agent: str,
         store: BindingStore,
         emit: Callable[[dict[str, Any]], None],
-        locate: Callable[[], HostAddress | None] = locate_host,
+        locate: Callable[[], Located] = locate_hosts,
     ) -> None:
         self.agent = agent
         self.store = store
@@ -1701,7 +1701,7 @@ async def serve(
     *,
     agent: str,
     store: BindingStore,
-    locate: Callable[[], HostAddress | None] = locate_host,
+    locate: Callable[[], Located] = locate_hosts,
 ) -> None:
     """Serve ACP on one reader/writer pair until the client closes stdin."""
 
@@ -1740,7 +1740,7 @@ The caller (``INSTALLED_NO_HOST_EXIT`` in ``raven.agent.subagent.mirasim_presets
 installed: every handshake would fail on the same missing host."""
 
 
-async def _print_installed(locate: Callable[[], HostAddress | None] = locate_host) -> int:
+async def _print_installed(locate: Callable[[], Located] = locate_hosts) -> int:
     """``--installed``: the agents the running host has installed, for a caller deciding which are worth a handshake."""
     host = HostConnection(on_frame=lambda frame: None, locate=locate)
     try:

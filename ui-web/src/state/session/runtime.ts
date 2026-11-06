@@ -657,9 +657,9 @@ export async function promote(preview?: string, atPointer?: (id: string) => void
   claimComposerDraft(sessionCurrent())
   claimDeskDraft(sessionCurrent())
   await applyStagedModel(draftRt, s.id, gen)
-  await applyStagedTier(draftRt, s.id)
+  await applyStagedTier(draftRt, s.id, gen)
   await applyStagedEffort(draftRt, s.id, gen)
-  await applyStagedPerm(draftRt, s.id)
+  await applyStagedPerm(draftRt, s.id, gen)
   sessionDraw()
   await subscribe(s.id)
   return s.id
@@ -711,8 +711,15 @@ export async function applyStagedModel(rt: SessionRuntime, sessionId: string, ge
 
    A failure is said rather than reversed silently, and then re-read: the chip is
    showing the staged tier as though it were in force, so leaving it there after
-   a refusal is the one outcome worse than the refusal. */
-export async function applyStagedTier(rt: SessionRuntime, sessionId: string): Promise<void> {
+   a refusal is the one outcome worse than the refusal.
+
+   `gen` is the ticket the promotion began under, as `applyStagedModel` takes
+   it: the re-read runs after the awaited write, and a ticket taken then is
+   whichever view the reader has opened since -- so a reader who left for
+   another conversation while the write was in flight got this session's rung
+   painted over that conversation's own read. Under the promotion's ticket the
+   source drops that answer instead. */
+export async function applyStagedTier(rt: SessionRuntime, sessionId: string, gen: number): Promise<void> {
   const mode = rt.staged.tier
   rt.staged.tier = null
   if (!mode) return
@@ -721,7 +728,7 @@ export async function applyStagedTier(rt: SessionRuntime, sessionId: string): Pr
   } catch (e) {
     toast(`${t('gui.tier.title')}: ${detailOf(e)}`)
   }
-  void loadTier()
+  void loadTier(sessionId, gen)
 }
 
 /* The reasoning effort picked while this was still a draft, written now that
@@ -753,8 +760,15 @@ export async function applyStagedEffort(rt: SessionRuntime, sessionId: string, g
 
 /* The permission mode picked while this was still a draft, written now that
    there is a session_id to write it under. Awaited before the turn is sent so
-   its first tool call already reads the chosen mode. */
-export async function applyStagedPerm(rt: SessionRuntime, sessionId: string): Promise<void> {
+   its first tool call already reads the chosen mode.
+
+   `gen` is the ticket the promotion began under, as the tier and effort writes
+   take it: the re-read runs after the awaited write, and a ticket taken then is
+   whichever view the reader has opened since -- so a reader who left for
+   another conversation while the write was in flight got this session's mode
+   painted over that conversation's own read. Under the promotion's ticket the
+   read drops that answer instead. */
+export async function applyStagedPerm(rt: SessionRuntime, sessionId: string, gen: number): Promise<void> {
   const mode = rt.staged.perm
   rt.staged.perm = null
   if (!mode) return
@@ -763,7 +777,7 @@ export async function applyStagedPerm(rt: SessionRuntime, sessionId: string): Pr
   } catch (e) {
     toast(`${t('gui.perm.title')}: ${detailOf(e)}`)
   }
-  void loadPermMode(sessionId)
+  void loadPermMode(sessionId, gen)
 }
 
 const detailOf = (e: unknown): string => {

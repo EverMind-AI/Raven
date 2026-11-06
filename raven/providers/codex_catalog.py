@@ -12,8 +12,8 @@ be offered.
 
 The cache also keeps each model's ``supported_reasoning_levels``, the account's
 own declaration of the effort words it takes. ``account_efforts`` answers from
-that cache, or fetches when a caller asks it to; a level outside this build's
-ladder (``ultra``) is dropped there.
+that cache for the turn, or fetches when the RPC says it may; a level outside
+this build's ladder (``ultra``) is dropped there.
 """
 
 from __future__ import annotations
@@ -117,9 +117,9 @@ def account_efforts(slug: str, *, refresh: bool = False, timeout: float = 5.0) -
     to the provider default is safer than sending an unvalidated word. ``()``
     means the catalogue has no answer to offer -- it never was read, the fetch
     failed with nothing cached, or it does not offer this model (or states no
-    levels for it). The retry descent reads cache-only; a caller that may wait
-    passes ``refresh=True`` to fetch, and a failed refresh falls back to the
-    last-good answer.
+    levels for it). The turn and reports read cache-only; an explicit effort
+    set passes ``refresh=True`` to fetch, and a failed refresh falls back to
+    the last-good answer.
     """
     global _cache, _failure
 

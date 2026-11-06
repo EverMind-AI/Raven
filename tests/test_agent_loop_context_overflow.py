@@ -837,3 +837,22 @@ async def test_summary_always_uses_the_session_model(workspace):
 
     assert final == "answer after compaction"
     assert provider.summary_models and all(m == "stub" for m in provider.summary_models)
+
+
+@pytest.fixture(autouse=True)
+def _fake_model_declares_every_level(monkeypatch):
+    """The turn clamps to the model's levels; the scripted model declares them all."""
+    from raven.agent.loop import wiring
+
+    monkeypatch.setattr(
+        wiring.effort_levels,
+        "levels_for",
+        lambda model, declared=(), *, provider=None, refresh=False: (
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        ),
+    )

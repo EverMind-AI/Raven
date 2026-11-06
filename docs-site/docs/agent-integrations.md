@@ -202,7 +202,7 @@ your local installation has passed a live task.
 | `hermes` | `hermes acp --accept-hooks` | Native authentication; the flag accepts previously unseen shell hooks |
 | `openclaw` | `openclaw acp` | Its gateway and authentication; startup has a longer handshake allowance |
 | `mirothinker` | OpenAI-compatible HTTP | Endpoint/model/key; preset opts out of stateful replay |
-| `mirasim_<agent>` | Raven's own ACP adapter over the Mirasim host's protocol | Mirasim installed on this computer and running, and the agent installed inside it. The rows are offered when Raven finds Mirasim: a host to reach (the desktop app's port with its token written, or the socket of a server Mirasim runs here over ssh, either one answering), else the launcher Mirasim writes under its home (`~/.mirasim/bin/mirasim`, which it puts on no PATH), `mirasim` on the login shell's PATH, or a server a Mirasim installed here over ssh (`~/.mirasim-remote`); a row whose Mirasim is installed but not running says to open the app, or to let the app on another computer reach this one again. Session MCP withheld via `sessionMcp: false` |
+| `mirasim_<agent>` | Raven's own ACP adapter over the Mirasim host's protocol | Mirasim installed on this computer and running, and the agent installed inside it. The rows are offered when Raven finds Mirasim: a host to reach (a port a Mirasim host wrote its token for, such as the desktop app's or `mirasim serve`'s, or the socket of a server Mirasim runs here over ssh, either one answering), else the launcher Mirasim writes under its home (`~/.mirasim/bin/mirasim`, which it puts on no PATH), `mirasim` on the login shell's PATH, or a server a Mirasim installed here over ssh (`~/.mirasim-remote`); a row whose Mirasim is installed but not running says to open the app or start `mirasim serve`, or to let the app on another computer reach this one again. Session MCP withheld via `sessionMcp: false` |
 
 GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi also
 have preset entries. Adapter versions and exact commands are maintained in
@@ -229,8 +229,8 @@ from its next turn. A session with no model chosen runs on Mirasim's default for
 the agent, route included.
 
 The adapter is one more client of the Mirasim host already running on the
-machine -- the desktop app's, or the one Mirasim keeps on a machine it reaches
-over SSH -- so it starts nothing of its own, and Raven's turns show in the Mirasim
+machine -- the desktop app's, the one `mirasim serve` runs, or the one Mirasim
+keeps on a machine it reaches over SSH -- so it starts nothing of its own, and Raven's turns show in the Mirasim
 app as they run. A turn streams: its thinking, text, tool calls, plan and the
 files it delivers reach Raven as they happen, and the context it used is reported
 when it ends. A cancel stops the turn. Text sent to a running turn is taken into
@@ -246,9 +246,19 @@ to ask is left to the Mirasim app.
 
 The adapter looks for the host in this order: the socket of the host Mirasim
 keeps on a machine it reaches over SSH (`~/.mirasim-remote/run/server.sock`,
-Linux and macOS only), then the desktop app on `127.0.0.1:4970` with the token
-it writes to `run/local-4970.token` under Mirasim's state directory
-(`MIRASIM_HOME`, else `~/.mirasim`). When the host listens anywhere else,
+Linux and macOS only), then every loopback port a host wrote its token for, as
+`run/local-<port>.token` under Mirasim's state directory (`MIRASIM_HOME`, else
+`~/.mirasim`): the desktop app's `4970` first, then `4939`, where
+`mirasim serve` listens unless told otherwise, then the rest in ascending
+order. The first that answers is the host, and a port with a token file counts
+as answering only when its `/api/health` names a Mirasim host: the token that
+file holds goes only to a host that identified itself, not to whatever else may
+hold the port by then. A host whose health cannot say is still reachable by
+naming it in `RAVEN_MIRASIM_HOST`. A host writes its file for the port
+it actually bound, so one that moved on because its own port was taken is still
+found, a file a killed host left behind is passed over, and a host that comes
+back on another port is found there when the adapter reconnects. When the host
+listens anywhere else,
 `RAVEN_MIRASIM_HOST` names it: `unix:<path>` for a socket (not on Windows, where
 the desktop app's port is the way in), or a loopback port as `<port>`,
 `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`. On Linux and macOS

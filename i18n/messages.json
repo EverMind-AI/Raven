@@ -244,11 +244,11 @@
     "effort": {
       "en": {
         "name": "effort",
-        "help": "show or set how much the model thinks for this conversation [minimal|low|medium|high|xhigh|max|default]"
+        "help": "show or set how much the model thinks for this conversation [word] - the words are the ones the model declares"
       },
       "zh": {
         "name": "思考深度",
-        "help": "查看或设置本会话的思考深度 [minimal|low|medium|high|xhigh|max|default]"
+        "help": "查看或设置本会话的思考深度 [word] - 可选词由当前模型声明"
       }
     },
     "fast": {
@@ -6253,7 +6253,7 @@
     },
     "gui.effort.xhigh": {
       "en": "Extra high",
-      "zh": "超高"
+      "zh": "极高"
     },
     "gui.effort.max": {
       "en": "Max",

@@ -55,7 +55,7 @@ def _view(name: str, config: MCPServerConfig, *, state: str | None = None, scope
 
 
 def _wrapper(server: str, tool: str) -> MCPToolWrapper:
-    definition = SimpleNamespace(name=tool, description="", inputSchema={})
+    definition = SimpleNamespace(name=tool, description="", input_schema={})
     return MCPToolWrapper(SimpleNamespace(), server, definition)
 
 
@@ -105,7 +105,7 @@ async def test_two_in_process_children_can_share_one_live_wrapper_concurrently()
             return SimpleNamespace(content=[])
 
     session = _Session()
-    definition = SimpleNamespace(name="search", description="", inputSchema={})
+    definition = SimpleNamespace(name="search", description="", input_schema={})
     wrapper = MCPToolWrapper(session, "docs", definition)
     source = _Source(
         {"docs": _view("docs", MCPServerConfig(command="unused"), state="connected")},

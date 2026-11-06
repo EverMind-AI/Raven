@@ -1010,10 +1010,10 @@ def _no_ollama_model_info(monkeypatch):
     1/4. LiteLLM already catches the failure and answers with a zeroed row, so
     that is what this hands back, minus the wait.
     """
-    from litellm.llms.ollama.completion.transformation import OllamaConfig
+    from litellm.llms.ollama.common_utils import OllamaModelInfo
     from litellm.types.utils import ModelInfoBase
 
-    def unreachable(self, model: str, api_base: str | None = None) -> ModelInfoBase:
+    def unreachable(self, model: str, api_base: str | None = None, api_key: str | None = None) -> ModelInfoBase:
         if model.startswith(("ollama/", "ollama_chat/")):
             model = model.split("/", 1)[1]
         return ModelInfoBase(
@@ -1027,7 +1027,7 @@ def _no_ollama_model_info(monkeypatch):
             max_output_tokens=None,
         )
 
-    monkeypatch.setattr(OllamaConfig, "get_model_info", unreachable)
+    monkeypatch.setattr(OllamaModelInfo, "get_model_info", unreachable)
     yield
 
 

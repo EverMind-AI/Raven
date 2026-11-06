@@ -463,8 +463,8 @@ jobs:
       - name: Test Windows MCP lending and endpoint lifetimes
         run: uv run --frozen --python 3.13 --no-sync pytest tests/test_mcp_transport.py tests/test_mcp_bridge.py tests/test_mcp_endpoint.py tests/test_cli_mcp_commands.py tests/test_subagent_acp_mcp_lifecycle.py tests/test_node_client.py -q -n 0 --tb=short
 
-      - name: Test Windows MCP bridge against a real server
-        run: uv run --frozen --python 3.13 --no-sync pytest tests/integration/test_mcp_bridge_e2e.py -m integration -q -n 0 --tb=short
+      - name: Test Windows MCP transports against real servers
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/integration/test_mcp_bridge_e2e.py tests/integration/test_mcp_streamable_http_e2e.py -m integration -q -n 0 --tb=short
 
       # Which sub-agent a trajectory entry belongs to is read from span ancestry
       # in a log the trace store writes with CRLF line ends here, and the unit

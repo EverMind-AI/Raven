@@ -25,11 +25,9 @@ if TYPE_CHECKING:
 async def _walk(list_page: Callable[..., Awaitable[Any]], attr: str) -> list[Any]:
     """Every item a list verb serves, read page by page.
 
-    The cursor travels through ``params=PaginatedRequestParams`` because the
-    ``cursor=`` overload is deprecated in the pinned mcp 1.30.0 and the ty gate
-    fails on the warning. The caller keeps its timeout around the whole walk,
-    so a server that never stops paging fails visibly instead of stalling the
-    turn.
+    The cursor travels through ``params=PaginatedRequestParams``, the only form
+    mcp 2.x accepts. The caller keeps its timeout around the whole walk, so a
+    server that never stops paging fails visibly instead of stalling the turn.
     """
     from mcp import types
 
@@ -39,7 +37,7 @@ async def _walk(list_page: Callable[..., Awaitable[Any]], attr: str) -> list[Any
     while True:
         page = await list_page(params=types.PaginatedRequestParams(cursor=cursor))
         items.extend(getattr(page, attr))
-        cursor = page.nextCursor
+        cursor = page.next_cursor
         # A server that keeps returning the same cursor would page forever.
         if not cursor or cursor in seen:
             return items
@@ -55,7 +53,7 @@ async def walk_resources(session: ClientSession) -> list[types.Resource]:
 
 
 async def walk_resource_templates(session: ClientSession) -> list[types.ResourceTemplate]:
-    return await _walk(session.list_resource_templates, "resourceTemplates")
+    return await _walk(session.list_resource_templates, "resource_templates")
 
 
 async def walk_prompts(session: ClientSession) -> list[types.Prompt]:

@@ -25,7 +25,6 @@ import asyncio
 import hashlib
 import json
 import os
-import re
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
@@ -260,6 +259,15 @@ class CapabilitySnapshot:
     time from the row's keys and never written as a field of its own: an
     unmeasured menu is written as the key's absence, so a verdict re-recorded
     over such a row does not turn "never measured" into "measured, none"."""
+    effort_measured: bool = True
+    """Whether the reasoning-effort menu was measured, or left for a probe.
+
+    A record minted from a live session reads the menus that session reported,
+    but the effort ladder belongs to the row's own model while the session
+    opened on the agent's default, so the mint leaves it unmeasured. False is
+    persisted, and ``capabilities_wanted`` asks the next boot's backfill to
+    complete the record. Absent from rows written before the field, which all
+    came from a probe: absence means measured."""
     stale: bool = False
     """Measured against a launch config this agent no longer has.
 
@@ -318,6 +326,7 @@ class CapabilitySnapshot:
     def to_row(self) -> dict[str, Any]:
         row = self.to_wire()
         row["fingerprint"] = self.fingerprint
+        row["effortMeasured"] = self.effort_measured
         if not self.model_menu_measured:
             del row["modelChoices"]
         return row
@@ -399,6 +408,7 @@ class CapabilitySnapshot:
             unfetched=bool(row.get("unfetched")),
             elapsed_ms=int(row.get("elapsedMs") or 0),
             model_menu_measured="modelChoices" in row,
+            effort_measured=bool(row.get("effortMeasured", True)),
         )
 
 
@@ -475,6 +485,41 @@ class SnapshotStore:
             atomic_update(self._path, merge)
         except OSError as exc:  # a snapshot is a cache, never a dependency
             logger.warning("acp capability snapshot write failed (not remembered): {}", exc)
+
+    def record_if_absent(self, snapshot: CapabilitySnapshot) -> tuple[CapabilitySnapshot, bool] | None:
+        """Store ``snapshot`` unless this agent already has a readable row.
+
+        For evidence gathered outside a probe: the first session an agent opens
+        is newer than nothing, which is all a boot probe that failed leaves
+        behind. An existing row is the measurement that got there first -- a
+        probe's, or another session's -- so it is returned instead of being
+        overwritten, and this call writes nothing. Returns the record now
+        stored and whether this call wrote it; ``None`` when the store could
+        not be written.
+        """
+
+        def merge(current: str | None) -> tuple[str | None, tuple[CapabilitySnapshot, bool] | None]:
+            rows = self._parse(current)
+            stored = next((r for r in rows if r.get("agent") == snapshot.agent), None)
+            if stored is not None:
+                existing = CapabilitySnapshot.from_row(stored)
+                if existing is not None:
+                    return None, (
+                        replace(
+                            existing,
+                            stale=snapshot.stale or existing.fingerprint != snapshot.fingerprint,
+                        ),
+                        False,
+                    )
+            rows = [r for r in rows if r.get("agent") != snapshot.agent]
+            rows.append(snapshot.to_row())
+            return self._dump(rows), (snapshot, True)
+
+        try:
+            return atomic_update(self._path, merge)
+        except OSError as exc:  # a snapshot is a cache, never a dependency
+            logger.warning("acp capability snapshot write failed (not remembered): {}", exc)
+            return None
 
     def revise(self, snapshot: CapabilitySnapshot, **changes: Any) -> tuple[CapabilitySnapshot, bool] | None:
         """Apply ``changes`` to the stored record ``snapshot`` was read from.
@@ -881,11 +926,71 @@ def _read_session_modes(result: Any) -> tuple[AcpMode, ...]:
     )
 
 
+def _mint_session_menus(
+    result: Any,
+    *,
+    agent: str,
+    fingerprint: str,
+    store: SnapshotStore | None,
+) -> CapabilitySnapshot | None:
+    """The first capability record for an agent, from the session it just opened.
+
+    A boot probe that failed writes no row, and ``relearn_session_menus`` could
+    only revise one that existed, so the menus stayed empty for the life of the
+    process. A session this agent opened is evidence the probe never got: the
+    handshake completed and the agent opened a session. Only the menus are
+    taken here -- the fields an ``initialize`` answer carries keep the probe's
+    defaults, so nothing outside the menus changes until a probe runs -- and
+    the next successful probe overwrites the row wholesale. ``effort_measured``
+    stays false so the boot backfill knows to finish the record rather than
+    skip one that looks ready.
+    """
+    if not agent or not fingerprint:
+        return None
+    session_id = _dict(result).get("sessionId")
+    if not isinstance(session_id, str) or not session_id:
+        return None
+    modes = _read_session_modes(result)
+    choices = () if _read_session_menu_unread(result) else _read_session_model_choices(result)
+    if not modes and not choices:
+        return None
+    minted = CapabilitySnapshot(
+        agent=agent,
+        fingerprint=fingerprint,
+        status="ready",
+        detail="menus learned from a live session; no handshake probe has run",
+        measured_at_ms=int(time.time() * 1000),
+        model_choices=choices,
+        model_menu_measured=bool(choices),
+        effort_measured=False,
+        available_modes=modes,
+    )
+    revised = (store or SnapshotStore()).record_if_absent(minted)
+    if revised is None:
+        return None
+    updated, written = revised
+    if not written:
+        logger.info(
+            "acp agent {!r}: a capability record appeared while its first session was opening; keeping that one",
+            agent,
+        )
+        return updated
+    logger.info(
+        "acp agent {!r}: recorded {} mode(s) and {} model(s) from the first session it opened",
+        agent,
+        len(updated.available_modes),
+        len(updated.model_choices),
+    )
+    return updated
+
+
 def relearn_session_menus(
     snapshot: CapabilitySnapshot | None,
     result: Any,
     *,
     store: SnapshotStore | None = None,
+    agent: str = "",
+    fingerprint: str = "",
 ) -> CapabilitySnapshot | None:
     """Re-record an agent's modes and model menu from a live session response, if they moved.
 
@@ -927,9 +1032,17 @@ def relearn_session_menus(
     is the probe's, measured on the row's own model. Taking a session's over it
     made the agent-wide record swing with every model switch, each swing a
     rebuild of the whole agent table.
+
+    With no record at all -- a boot probe that failed leaves none -- a response
+    carrying a menu mints the first one instead of being dropped, when the
+    caller names the agent and the launch fingerprint its row belongs to. The
+    early return this branch replaces made the menus stay empty for the life of
+    the process, so no successful dispatch could repair the failed probe.
+    ``agent`` and ``fingerprint`` are absent at call sites that only refresh an
+    existing record, and then nothing is minted.
     """
     if snapshot is None:
-        return None
+        return _mint_session_menus(result, agent=agent, fingerprint=fingerprint, store=store)
     changes: dict[str, Any] = {}
     modes = _read_session_modes(result)
     if modes and modes != snapshot.available_modes:
@@ -973,45 +1086,6 @@ def looks_like_auth(text: str) -> bool:
     return any(hint in lowered for hint in _AUTH_HINTS)
 
 
-# npm's own report of a failed fetch, as npm prints it before exiting: the code
-# on a line of its own, then (for a network failure) lines headed "network".
-# `npm error` is npm 10, `npm ERR!` npm 9 and older; both measured 2026-09-23
-# against an unreachable and an unresolvable registry, npm 10.9.8 and 9.9.4.
-_NPM_CODE = re.compile(r"^npm (?:ERR!|error) code (\S+)", re.MULTILINE)
-_NPM_NETWORK = re.compile(r"^npm (?:ERR!|error) network ", re.MULTILINE)
-# The codes that mean the registry could not be reached or would not serve the
-# package: the network, TLS in front of it, or the registry's own answer (the
-# E<status> codes, and ETARGET for a mirror that lacks the pinned version). A
-# local failure -- EACCES on the cache, ENOSPC -- is deliberately not here: no
-# network, registry or proxy setting fixes it, and that is what this verdict
-# tells its reader to look at.
-_NPM_FETCH_CODES = frozenset(
-    {
-        "ECONNREFUSED",
-        "ECONNRESET",
-        "ECONNABORTED",
-        "ENOTFOUND",
-        "EAI_AGAIN",
-        "ETIMEDOUT",
-        "EHOSTUNREACH",
-        "ENETUNREACH",
-        "ENETDOWN",
-        "EPROTO",
-        "ERR_SOCKET_TIMEOUT",
-        "ETARGET",
-        "EINTEGRITY",
-        "CERT_HAS_EXPIRED",
-        "SELF_SIGNED_CERT_IN_CHAIN",
-        "DEPTH_ZERO_SELF_SIGNED_CERT",
-        "UNABLE_TO_GET_ISSUER_CERT",
-        "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
-        "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
-        "ERR_TLS_CERT_ALTNAME_INVALID",
-    }
-)
-_NPM_STATUS_CODE = re.compile(r"E\d{3}")
-
-
 def launches_with_npx(command: str) -> bool:
     """Whether ``command`` is run by ``npx``, which fetches what it names on first use."""
     try:
@@ -1043,17 +1117,19 @@ def npx_fetch_failure(command: str, exc: BaseException, stderr: str | None = Non
     Evidence rather than inference, in the way `looks_like_auth` is not: the
     verdict needs npm's own error-code line, read from the whole stderr
     (``AcpConnectionError.stderr``, or ``stderr`` for a caller that holds the
-    client) because npm prints that line first. The timeout is the one reading
-    without such a line, and it is kept to an ``initialize`` that ran out on an
-    ``npx`` command whose package was not fetched ahead of the handshake
+    client) because npm prints that line first. A launch on a registered machine
+    relays the same report inside the node's own sentence (`stderr tail: npm
+    error code ...`), so that sentence is evidence too, read by the connect
+    (`verify_agent`) and by `probe.ping_agent`. The timeout is the one reading
+    without such a line, and
+    it is kept to an ``initialize`` that ran out on an ``npx`` command whose
+    package was not fetched ahead of the handshake
     (`npx_fetch.fetchable_package`) -- an agent that has not finished starting,
     where a first download is the likeliest cause and the one the reader can act
     on. One that was fetched ahead had its download over before the handshake
-    began, so running out there is the agent's own start. Every caller reads a
-    launch on this computer, where that fetch runs: an agent on a registered
-    machine, whose Raven node starts it with no fetch ahead, has its failure
-    reported as the machine gave it before any of them is reached
-    (`verify_agent`, `probe.ping_agent`).
+    began, so running out there is the agent's own start. That half stays this
+    computer's: a row on a registered machine is started by its node with no
+    fetch ahead, so a start that ran out there is the machine's to report.
     """
     if not launches_with_npx(command):
         return None
@@ -1066,21 +1142,29 @@ def npx_fetch_failure(command: str, exc: BaseException, stderr: str | None = Non
         if isinstance(current, protocol.AcpConnectionError) and current.stderr:
             stderr = stderr or current.stderr
         current = current.__cause__
-    if not stderr:
-        return None
-    for match in _NPM_CODE.finditer(stderr):
-        code = match.group(1)
-        if code in _NPM_FETCH_CODES or _NPM_STATUS_CODE.fullmatch(code):
-            return code
-    if _NPM_NETWORK.search(stderr):
-        return "network"
-    return None
+    return npx_fetch.fetch_failure_code(stderr or "")
 
 
 def npx_fetch_lead(verdict: str) -> str:
-    """The sentence `npx_fetch_failure`'s verdict is reported with, for the log, the CLI and the TUI."""
+    """The sentence `npx_fetch_failure`'s verdict is reported with, for the log, the CLI and the TUI.
+
+    ETARGET gets words of its own because it is the one verdict that reads like a
+    bad pin rather than a bad connection: npm states that the version does not
+    exist, and it can state that from a cached packument it fell back to when the
+    registry did not answer. Measured 2026-11-04 on npm 10.9.3: three
+    FETCH_ERRORs against registry.npmjs.org, then a stale body that predated the
+    pinned version, reported as `No matching version found`. The sentence names
+    the cache so a reader checks that before hunting for a typo.
+    """
     if verdict == "timeout":
         return "it did not finish starting in time, and npx may still have been downloading it"
+    if verdict == "ETARGET":
+        return (
+            "npx could not download it (ETARGET: the registry metadata it read has no such version); "
+            "check the network, the npm registry or the proxy -- npm can fall back to cached metadata "
+            "when the registry does not answer, so a version published since that cache was written is "
+            "missing from it"
+        )
     return f"npx could not download it ({verdict}); check the network, the npm registry or the proxy"
 
 
@@ -1249,17 +1333,21 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
         except AcpError as exc:
             tail = client.stderr_tail(400)
             suffix = f"; stderr: {tail}" if tail else ""
-            if there is not None:
-                # In the far side's own words (a full disk, a crash), never
-                # "missing": whatever is absent is absent there.
-                return done("attention", f"handshake failed: {exc}{suffix}")
-            unfetched = npx_fetch_failure(getattr(cfg, "command", "") or "", exc, client.stderr_tail() or None)
+            # On a registered machine npm's report reaches this side inside the
+            # node's own sentence (`stderr tail: ...`), and there is no local
+            # stderr to read: that sentence is the evidence, as it is for a ping.
+            evidence = client.stderr_tail() or (str(exc) if there is not None else None)
+            unfetched = npx_fetch_failure(command, exc, evidence)
             if unfetched is not None:
                 # Not `missing`: nothing is absent that an install would bring, and
                 # the roster answers `missing` with the agent's own installer.
                 return done(
                     "attention", f"{npx_fetch_lead(unfetched)}; handshake failed: {exc}{suffix}", unfetched=True
                 )
+            if there is not None:
+                # In the far side's own words (a full disk, a crash), never
+                # "missing": whatever is absent is absent there.
+                return done("attention", f"handshake failed: {exc}{suffix}")
             return done("missing", f"handshake failed: {exc}{suffix}")
 
         handshake = _read_initialize(init)

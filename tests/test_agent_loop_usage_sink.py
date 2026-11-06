@@ -562,41 +562,6 @@ async def test_a_pick_this_raven_does_not_know_is_ignored(workspace, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_a_pick_above_what_the_wire_takes_runs_at_its_top_rung(workspace, monkeypatch):
-    """``max`` picked on a Claude, then the session moved to a model whose wire
-    takes the four (``EffortProvider`` inherits the base answer): the turn runs
-    at ``high`` -- as much thinking as this wire takes -- not at a request the
-    wire would refuse, and not at the configured default."""
-    _point_config(workspace, monkeypatch, {"agents": {"defaults": {"reasoningEffort": "low"}}})
-    provider = EffortProvider("stub")
-    agent = _make_agent(workspace, provider, model="stub", window=None)
-    agent.sessions.get_or_create("s1").metadata["reasoning_effort"] = "max"
-
-    await _one_turn(agent)
-
-    assert provider.efforts == ["high"]
-
-
-class SixRungProvider(EffortProvider):
-    """A wire that takes the two rungs over high, the way anthropic_messages does."""
-
-    def reasoning_efforts(self, model=None):
-        return ("minimal", "low", "medium", "high", "xhigh", "max")
-
-
-@pytest.mark.asyncio
-async def test_a_pick_the_wire_takes_goes_out_as_named(workspace, monkeypatch):
-    _point_config(workspace, monkeypatch, {"agents": {"defaults": {"reasoningEffort": "low"}}})
-    provider = SixRungProvider("stub")
-    agent = _make_agent(workspace, provider, model="stub", window=None)
-    agent.sessions.get_or_create("s1").metadata["reasoning_effort"] = "max"
-
-    await _one_turn(agent)
-
-    assert provider.efforts == ["max"]
-
-
-@pytest.mark.asyncio
 async def test_a_cleared_pick_is_the_default_again(workspace, monkeypatch):
     """Cleared is null on the record, not absent (a metadata patch sets keys);
     both read as no pick."""
@@ -1391,3 +1356,22 @@ async def test_a_turn_whose_calls_read_no_window_still_reports_a_whole_usage(wor
 
     assert TurnUsage.model_validate(sink).context_used == 0
     assert reported_usage(sink) is None
+
+
+@pytest.fixture(autouse=True)
+def _fake_model_declares_every_level(monkeypatch):
+    """The turn clamps to the model's levels; the scripted model declares them all."""
+    from raven.agent.loop import wiring
+
+    monkeypatch.setattr(
+        wiring.effort_levels,
+        "levels_for",
+        lambda model, declared=(), *, provider=None, refresh=False: (
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        ),
+    )

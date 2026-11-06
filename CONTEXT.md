@@ -325,29 +325,28 @@ the model (`FORK_CARRIES` in `session/manager.py`). `_run_agent_loop` is handed
 it by the turn entrance that holds the record, the way the model is, and ranks it: the
 configured `agents.defaults.reasoningEffort` underneath, a Session Mode's own
 `reasoningEffort` over that, this pick over both, a hook's rollback override on top. The
-ranking is `session_effort.in_force`, one rule with one home: the turn runs at it and
-`session.info` / `session.set_effort` report it, and the turn sends the word in force on
-every call, None included, so a default cleared on a running gateway lands on its next
-turn -- the provider's own copy of the key, frozen at boot, is never consulted. The words
-a session may pick are its model's provider's (`LLMProvider.reasoning_efforts`, forwarded
-by the wrappers the way `reasoning_wire_keys` is): the four every wire takes
-(`REASONING_EFFORTS`, `config/schema.py`), and `xhigh` and `max` over them on the Anthropic
-Messages wire (`_ADAPTIVE_EFFORTS` is the table). `session.set_effort` answers `options`
-from that and refuses a word the provider does not take, naming the ones it does. The
-record may carry any rung this raven knows (`REASONING_EFFORT_RUNGS`, the retry descent's
-ladder read upward), because the model can move after the pick: the turn asks its own
-provider again (`session_effort.fit`) and runs a pick the new wire does not take at the
-highest rung it does take, logged, rather than at a request it would refuse -- the pick
-only; a mode's `reasoningEffort` is the catalogue's word and goes out as named. The
-install-wide `agents.defaults.reasoningEffort` keeps `REASONING_EFFORTS`
+ranking is `session_effort.in_force`, one rule with one home: the turn runs at it
+(`session_reasoning_effort` on the loop) and `session.info` / `session.set_effort` report
+it, and the turn sends the word in force on every call, None included, so a default cleared
+on a running gateway lands on its next turn -- the provider's own copy of the key, frozen at
+boot, is never consulted. The pick's words are the levels the conversation's model declares
+(`providers/effort_levels.py`: the route row's own `reasoning_effort_levels`, else its
+per-level flags, else the vendor row's `reasoning_effort_levels`, else the flags inherited
+from that row, else the serving provider's `ProviderSpec.reasoning_efforts`, else the flags'
+defaults, with a provider's `model_overlay.reasoningEfforts` over all of them; the serving
+provider is the config's route for the model, not the id's prefix, and a row filed under
+another provider than that section is skipped); `session.set_effort` offers and validates
+exactly those, a model that declares none has no row, and a stored pick the current model
+does not declare is dropped at the turn and in `session.info` (`session_effort.clamp`); the mode's
+word or the configured default then runs, since those two are not narrowed by the model.
+The install-wide `agents.defaults.reasoningEffort` keeps `REASONING_EFFORTS`
 (`config/schema.py`), shared with the console's checker and the agent's own `raven_config`
 door -- a key that is clearable on both (null is the provider's own default) and that the
-settings page draws, when unset, as a rung of its own rather than as `low`. The page
-re-reads the row on a model switch and draws such a pick beside the words it can move to.
-Lands on the next turn, like a tier; reaches no sub-agent, unlike one -- a sub-agent is
-still told the configured default (`RAVEN_PARENT_REASONING_EFFORT`), and the TUI's
-`/effort` is refused inside a direct chat with an instance, since the pick is the main
-conversation's and an instance has none.
+settings page draws, when unset, as a rung of its own rather than as `low`. Lands on the
+next turn, like a tier;
+reaches no sub-agent, unlike one -- a sub-agent is still told the configured default
+(`RAVEN_PARENT_REASONING_EFFORT`), and the TUI's `/effort` is refused inside a direct chat
+with an instance, since the pick is the main conversation's and an instance has none.
 _Avoid_: reading the pick off `SessionPolicy`. A mode switch replaces the whole policy and a
 restart empties it; the record is the pick's one home, and the policy carries only the
 mode's own effort.
@@ -837,7 +836,10 @@ on the card, with an Ignore that sets that one question aside (`tasks.ignore_que
 last one set aside leaves the group idle; the host is told at its next turn, as declined, so it
 does not ask again), one Answer (a reply drafted in the composer), and Move on; each names the
 group the next message is about, in that message's turn; recall reads the
-ones still open back to the host. Because the page lists them, the host's reply rules stop asking open questions again on every reply for a reader of
+ones still open back to the host. A turn that updates a waiting group without asking anything
+new carries those questions onto its step, so the latest step normally holds the whole list;
+when that pass gets no answer -- a provider error, three refusals, or a reader's change
+meanwhile -- the update stands as written and the earlier step keeps them. Because the page lists them, the host's reply rules stop asking open questions again on every reply for a reader of
 the page with the board on (`render.board_on_page`); other channels and the terminal still do, and a turn a run's result opens is read on the surface the turn that dispatched it declared. Chinese surfaces call it 事件. The page marks it running while a Task it started runs, failed when one failed, and
 done otherwise; clicking it scrolls the transcript to that turn's reply.
 _Avoid_: "subtask" (it records progress, it is not a unit of work), "step" alone (the node

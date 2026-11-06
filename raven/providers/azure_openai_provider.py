@@ -250,6 +250,21 @@ class AzureOpenAIProvider(LLMProvider):
                     "completion_tokens": usage_data.get("completion_tokens", 0),
                     "total_tokens": usage_data.get("total_tokens", 0),
                 }
+                # Prompt-cache counts, reported only on models that cache.
+                # ``prompt_tokens`` already includes them (the accounting
+                # default), so these break it down rather than add to it. Left
+                # out when unreported: written as 0 they would claim a cache
+                # miss or a write the response never reported.
+                prompt_details = usage_data.get("prompt_tokens_details")
+                if isinstance(prompt_details, dict):
+                    cached = token_count(prompt_details.get("cached_tokens"))
+                    if cached is not None:
+                        usage["cache_read_input_tokens"] = cached
+                    # GPT-5.6 and later report writes too; the LiteLLM and
+                    # Responses paths already map the same wire shape.
+                    written = token_count(prompt_details.get("cache_write_tokens"))
+                    if written is not None:
+                        usage["cache_creation_input_tokens"] = written
                 # Part of completion_tokens, and the one count that says a turn
                 # which returned nothing still thought. Left out when unreported:
                 # written as 0 it would read as a turn that did not think.

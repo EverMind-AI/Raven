@@ -58,7 +58,7 @@ def test_the_schema_is_the_small_face_both_actions_share(sessions):
 
     assert tool.name == TOOL_NAME == "task_board"
     assert params["required"] == ["action"]
-    assert params["properties"]["action"]["enum"] == ["recall", "update"]
+    assert params["properties"]["action"]["enum"] == ["recall", "update", "carry"]
     assert set(params["properties"]) == {"action", "query", "group_id", "include_turns", "steps", "groups"}
     # The update's shape is the post-turn instruction's to state, once per turn,
     # not this schema's to carry on every call of every turn.
@@ -77,6 +77,10 @@ def test_the_description_says_recall_lists_the_questions_still_open(sessions):
     assert "questions" in _tool(sessions).description
 
 
+def test_the_description_names_carry_as_the_post_turn_pass(sessions):
+    assert "carry" in _tool(sessions).description
+
+
 async def test_update_during_a_turn_is_refused(sessions):
     tool = _tool(sessions)
 
@@ -84,6 +88,15 @@ async def test_update_during_a_turn_is_refused(sessions):
         action="update",
         steps=[{"new_title": "x", "new_summary": "x", "title": "y", "summary": "y", "status": "idle"}],
     )
+
+    assert result == REFUSED_UPDATE
+    assert not (sessions.session_dir(KEY) / BOARD_FILENAME).exists()
+
+
+async def test_carry_during_a_turn_is_refused(sessions):
+    tool = _tool(sessions)
+
+    result = await tool.execute(action="carry", groups=[{"group": "g_c", "questions": ["Which fix?"]}])
 
     assert result == REFUSED_UPDATE
     assert not (sessions.session_dir(KEY) / BOARD_FILENAME).exists()

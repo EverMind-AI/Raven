@@ -1647,7 +1647,7 @@ class TestBoxliteStartProcessBridges:
         await asyncio.sleep(0.05)
 
         msg = await asyncio.wait_for(read_recv.receive(), timeout=1.0)
-        # MCP SDK 1.x: read stream carries SessionMessage wrapping JSONRPCMessage
+        # MCP SDK 2.x: read stream carries SessionMessage wrapping JSONRPCMessage
         assert isinstance(msg, SessionMessage)
         assert isinstance(msg.message, mcp_types.JSONRPCMessage)
 
@@ -1717,10 +1717,11 @@ class TestBoxliteStartProcessBridges:
 
         _, write_send = await executor.start_process("mcp-server", [])
 
-        # MCP SDK 1.x: write stream carries SessionMessage
+        # MCP SDK 2.x: write stream carries SessionMessage
         from mcp.shared.message import SessionMessage
+        from pydantic import TypeAdapter
 
-        rpc_msg = JSONRPCMessage.model_validate({"jsonrpc": "2.0", "id": 1, "method": "ping"})
+        rpc_msg = TypeAdapter(JSONRPCMessage).validate_python({"jsonrpc": "2.0", "id": 1, "method": "ping"})
         await write_send.send(SessionMessage(message=rpc_msg))
         await asyncio.sleep(0.05)
 
@@ -2003,7 +2004,7 @@ class TestConnectOneMcpServer:
 
         @asynccontextmanager
         async def fake_streamable_http_client(url, http_client):
-            yield object(), object(), None
+            yield object(), object()
 
         class FakeSession:
             def __init__(self, read, write):
@@ -2044,7 +2045,7 @@ class TestConnectOneMcpServer:
         from contextlib import AsyncExitStack, asynccontextmanager
         from types import SimpleNamespace
 
-        import httpx
+        import httpx2
         import mcp
         import mcp.client.sse
 
@@ -2088,9 +2089,9 @@ class TestConnectOneMcpServer:
                 return SimpleNamespace(capabilities=SimpleNamespace(tools=object()))
 
             async def list_tools(self, *, params=None):
-                return SimpleNamespace(tools=[], nextCursor=None)
+                return SimpleNamespace(tools=[], next_cursor=None)
 
-        monkeypatch.setattr(httpx, "AsyncClient", fake_http_client)
+        monkeypatch.setattr(httpx2, "AsyncClient", fake_http_client)
         monkeypatch.setattr(mcp, "ClientSession", FakeSession)
         monkeypatch.setattr(mcp.client.sse, "sse_client", fake_sse_client)
 
@@ -2107,7 +2108,7 @@ class TestConnectOneMcpServer:
         assert clients[0]["headers"] == {"X-Config": "config", "X-Shared": "sdk", "X-SDK": "sdk"}
         assert clients[0]["timeout"] == "timeout"
         assert clients[0]["auth"] == "auth"
-        # Not merely the default: httpx applies client-level headers to every
+        # Not merely the default: the client applies client-level headers to every
         # hop of a redirect chain and scrubs only Authorization when the origin
         # changes, so a server answering 302 could read a custom header meant
         # for it alone -- and cfg.headers is where the plugin market renders the

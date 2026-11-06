@@ -141,7 +141,7 @@ def _wrapper(server: str, tool: str):
 
     from raven.mcp.client import MCPToolWrapper
 
-    return MCPToolWrapper(SimpleNamespace(), server, SimpleNamespace(name=tool, description="", inputSchema={}))
+    return MCPToolWrapper(SimpleNamespace(), server, SimpleNamespace(name=tool, description="", input_schema={}))
 
 
 class _StaticSource:

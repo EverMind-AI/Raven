@@ -458,87 +458,6 @@ def test_every_wrapper_forwards_the_question_of_what_a_rung_sends() -> None:
     ), "the base default really does read the two rungs as different requests"
 
 
-def test_the_reasoning_efforts_are_the_wires_own() -> None:
-    """``LLMProvider.reasoning_efforts``: the words a session may pick come from
-    the adapter whose wire carries them. The base answers the four every wire
-    takes; ``anthropic_messages`` answers its own table, which has ``xhigh`` and
-    ``max`` over them, and every word it offers is one it would send; the
-    OpenAI-shaped adapters and litellm keep the base answer. The two lists in
-    config are the same ladder the retry descends, read upward, so a pick and a
-    retry never disagree about which rung is higher."""
-    from types import SimpleNamespace
-
-    from raven.config.schema import REASONING_EFFORT_RUNGS, REASONING_EFFORTS
-    from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
-    from raven.providers.azure_openai_provider import AzureOpenAIProvider
-    from raven.providers.base import LLMProvider
-    from raven.providers.litellm_provider import LiteLLMProvider
-    from raven.providers.openai_codex_provider import OpenAICodexProvider
-    from raven.providers.openai_responses_provider import OpenAIResponsesProvider
-
-    assert REASONING_EFFORTS == ("minimal", "low", "medium", "high")
-    assert REASONING_EFFORT_RUNGS == ("minimal", "low", "medium", "high", "xhigh", "max")
-    assert REASONING_EFFORT_RUNGS == tuple(reversed(REASONING_EFFORT_LADDER))
-    assert REASONING_EFFORT_RUNGS[: len(REASONING_EFFORTS)] == REASONING_EFFORTS
-
-    assert LLMProvider.reasoning_efforts(SimpleNamespace(), "m") == REASONING_EFFORTS
-    for adapter in (OpenAIResponsesProvider, OpenAICodexProvider, AzureOpenAIProvider, LiteLLMProvider):
-        assert "reasoning_efforts" not in adapter.__dict__, f"{adapter.__name__} sends the label verbatim: four words"
-
-    anthropic = AnthropicMessagesProvider(api_key="k", default_model="claude-opus-5")
-    assert anthropic.reasoning_efforts("claude-opus-5") == REASONING_EFFORT_RUNGS
-    assert anthropic.reasoning_efforts("claude-opus-4-5") == REASONING_EFFORT_RUNGS, (
-        "one answer per wire, not per model"
-    )
-    assert anthropic.reasoning_efforts() == REASONING_EFFORT_RUNGS
-    for model in ("claude-opus-5", "claude-opus-4-5"):
-        for word in anthropic.reasoning_efforts(model):
-            assert anthropic.reasoning_wire_keys(model, word), f"{word} is offered but would send nothing on {model}"
-
-
-def test_the_wrappers_forward_reasoning_efforts_to_the_adapter() -> None:
-    """Pinned by naming the wrappers, like ``reasoning_wire_keys``: a wrapper
-    that inherited the base answer would offer four words over a wire that
-    takes six, and the picker would never show the two rungs."""
-    from raven.providers.base import LLMProvider
-    from raven.providers.endpoint_rotor import EndpointRotorProvider
-    from raven.providers.lazy import LazyProvider
-    from raven.providers.per_model_provider import PerModelProvider
-    from raven.providers.resolving_provider import ResolvingProvider
-
-    for wrapper in (LazyProvider, PerModelProvider, ResolvingProvider, EndpointRotorProvider):
-        assert "reasoning_efforts" in wrapper.__dict__, f"{wrapper.__name__} would answer LLMProvider's four"
-
-    inner = AnthropicMessagesProvider(api_key="k", default_model="claude-opus-5")
-    six = inner.reasoning_efforts("claude-opus-5")
-
-    lazy = LazyProvider.__new__(LazyProvider)
-    lazy._provider = inner
-    assert lazy.reasoning_efforts("claude-opus-5") == six
-
-    class _Four(LLMProvider):
-        async def chat(self, *a, **k):  # pragma: no cover - never called
-            raise AssertionError
-
-        def get_default_model(self) -> str:
-            return "m"
-
-    per_model = PerModelProvider.__new__(PerModelProvider)
-    per_model._by_model = {"claude-opus-5": inner}
-    per_model._fallback = _Four()
-    assert per_model.reasoning_efforts("claude-opus-5") == six
-    assert per_model.reasoning_efforts("other") == ("minimal", "low", "medium", "high")
-
-    rotor = EndpointRotorProvider.__new__(EndpointRotorProvider)
-    rotor._inners = [inner]
-    assert rotor.reasoning_efforts("claude-opus-5") == six
-
-    resolving = ResolvingProvider.__new__(ResolvingProvider)
-    resolving._pick = lambda model: inner if model == "claude-opus-5" else _Four()  # type: ignore[method-assign]
-    assert resolving.reasoning_efforts("claude-opus-5") == six
-    assert resolving.reasoning_efforts("gpt") == ("minimal", "low", "medium", "high")
-
-
 def test_anthropic_replays_only_signed_thinking_blocks() -> None:
     """A stream cut at the output ceiling ends inside the thinking, so the block
     carries no signature; sent back, the API refused it as a modified thinking
@@ -1172,7 +1091,7 @@ def test_response_series_use_declared_vendor_addresses(vendor, model, base):
 @pytest.mark.parametrize(
     "vendor,model",
     [
-        ("moonshot", "moonshot/kimi-k2-turbo-preview"),
+        ("moonshot", "moonshot/kimi-k2.5"),
         ("groq", "groq/qwen/qwen3-32b"),
         ("dashscope", "dashscope/qwen-plus"),
         ("nvidia_nim", "nvidia_nim/deepseek-ai/deepseek-v3.1"),
@@ -1197,7 +1116,7 @@ def test_a_chosen_native_protocol_without_an_address_is_still_refused():
     from raven.providers.auth import MissingCredentialsError
 
     with pytest.raises(MissingCredentialsError, match="requires an explicit API base"):
-        make_provider(_provider_config("moonshot", "moonshot/kimi-k2-turbo-preview", override="responses"))
+        make_provider(_provider_config("moonshot", "moonshot/kimi-k2.5", override="responses"))
 
 
 def test_a_gateway_declaring_some_protocols_does_not_serve_the_others_at_its_default_address():
@@ -1250,7 +1169,7 @@ def test_a_mixed_endpoint_pool_stays_on_chat_until_every_member_has_an_address()
     unless every endpoint can be served."""
     from raven.providers.endpoint_rotor import EndpointRotorProvider
 
-    model = "moonshot/kimi-k2-turbo-preview"
+    model = "moonshot/kimi-k2.5"
     mixed = _pool_config(
         "moonshot",
         model,
@@ -1288,11 +1207,11 @@ def test_display_resolution_logs_nothing_and_construction_logs_once():
     records: list[str] = []
     sink = logger.add(lambda message: records.append(str(message)), level="INFO")
     try:
-        for vendor, model in (("dashscope", "dashscope/qwen-plus"), ("moonshot", "moonshot/kimi-k2-turbo-preview")):
+        for vendor, model in (("dashscope", "dashscope/qwen-plus"), ("moonshot", "moonshot/kimi-k2.5")):
             section = _provider_config(vendor, model).providers.get(vendor)
             assert effective_protocol(section, model, vendor) == "chat"
         assert records == []
-        make_provider(_provider_config("moonshot", "moonshot/kimi-k2-turbo-preview"))
+        make_provider(_provider_config("moonshot", "moonshot/kimi-k2.5"))
         assert sum("using chat" in r for r in records) == 1
         # An operator's own chat choice is not a stepping-aside, and the provider
         # it names is not missing an address: nothing to report.

@@ -92,6 +92,21 @@ _MIME_EXT = {mime: ext.lstrip(".") for ext, mime in _EXT_MIME.items()}
 _MIME_EXT["image/jpeg"] = "jpg"
 
 
+def _picture_mime(item: Any, fallback: str = "image/png") -> str:
+    """The type of one ``data`` entry: ``media_type``, else Ark's ``output_format``.
+
+    Ark names the format on the entry (``png``/``jpeg``) instead of sending a
+    ``media_type``, so reading only the latter wrote a JPEG as ``.png``. A
+    format this tree has no extension for falls back to the caller's default.
+    """
+    if media_type := str(item.get("media_type") or "").strip():
+        return media_type
+    fmt = str(item.get("output_format") or "").strip().lower().lstrip(".")
+    fmt = "jpeg" if fmt == "jpg" else fmt
+    mime = f"image/{fmt}"
+    return mime if mime in _MIME_EXT else fallback
+
+
 class _ByProvider:
     """A schema field read per provider: the MiniMax one where the tool runs on
     MiniMax, the default elsewhere and on the class, which has no section to ask."""
@@ -956,9 +971,16 @@ class ImageGenerateTool(_OpenRouterMediaTool):
     async def _generated_bytes(self, client: httpx.AsyncClient, item: Any) -> tuple[str, bytes] | None:
         """The picture one ``data`` entry carries, as ``(mime, bytes)``, or None
         when it has none this code can take: inline as ``b64_json``, or behind
-        its ``url`` -- an Ark-style endpoint answers with download URLs only, so
+        its ``url`` -- an Ark-style endpoint may answer with download URLs, so
         the bytes are fetched (through the guarded fetch: a provider response
         is as untrusted a place for a URL as a model's chat text).
+
+        The entry names its type as ``media_type`` or, on Ark, ``output_format``;
+        a URL answer normally names it in storage's content type, with the
+        entry's own fields standing in when that is not an image type. An entry
+        that names no type at all is typed from the bytes it carries, the same
+        rule the MiniMax path already uses, so no caller has to guess a
+        provider's default.
 
         Behind a URL the generation is already billed, so a URL the guard
         refuses, the network cannot deliver or the storage will not serve
@@ -967,7 +989,8 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         if not isinstance(item, dict):
             return None
         if encoded := item.get("b64_json"):
-            return str(item.get("media_type") or "image/png"), base64.b64decode(encoded)
+            data = base64.b64decode(encoded)
+            return _picture_mime(item, _image_mime(data)), data
         url = str(item.get("url") or "")
         if url.startswith("data:"):
             return _split_data_uri(url)
@@ -981,7 +1004,8 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             raise _PictureUnfetchableError(url, "not a fetchable public target")
         if not fetched.is_success:
             raise _PictureUnfetchableError(url, f"HTTP {fetched.status_code} {fetched.text[:400]}".rstrip())
-        mime = fetched.headers.get("content-type", "image/png").split(";", 1)[0].strip()
+        content_type = fetched.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        mime = content_type if content_type.startswith("image/") else _picture_mime(item, _image_mime(fetched.content))
         return mime, fetched.content
 
     async def _via_minimax(
@@ -1066,9 +1090,9 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         speaks the Ark dialect on the generations route: ``size`` as a "1K"/"2K"
         resolution tier or an explicit WxH pair (the pair is sent to keep the
         asked-for frame; the tier only when the ratio is not one we spell), and
-        the pictures behind ``data[].url`` rather than ``b64_json``. Ark has no
-        edits route, so a call with references is refused there before anything
-        is sent."""
+        asks for the pictures inline as ``b64_json`` -- an answer that still
+        carries ``data[].url`` is fetched as before. Ark has no edits route, so
+        a call with references is refused there before anything is sent."""
         headers = self._headers()
         openrouter = httpx.URL(self.api_base).host == "openrouter.ai"
         volces = httpx.URL(self.api_base).host.endswith(".volces.com")
@@ -1120,6 +1144,12 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                     body = {"model": model_id, "prompt": prompt, "n": 1}
                     retry_sizeless = False
                     if volces:
+                        # Ask for the pixels inline. A URL answer is a second
+                        # request to provider-named storage, which the guarded
+                        # fetch refuses behind a fake-IP resolver -- losing a
+                        # picture already billed. An endpoint that still
+                        # answers data[].url is read by the URL path anyway.
+                        body["response_format"] = "b64_json"
                         # Ark's size is a resolution tier or an explicit WxH
                         # pair, and the pair must fit the selected model's own
                         # window: spell the ratio as pixels inside it, keep the

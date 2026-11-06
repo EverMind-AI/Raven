@@ -471,7 +471,7 @@ def build_third_party_backend(
         )
     if kind == "acp":
         from raven.acp_client.acp_agent import AcpAgentBackend
-        from raven.acp_client.capabilities import CapabilitySnapshot
+        from raven.acp_client.capabilities import CapabilitySnapshot, snapshot_fingerprint
 
         snapshot = acp_snapshot_for(cfg)
         return AcpAgentBackend(
@@ -485,6 +485,7 @@ def build_third_party_backend(
             timeout=cfg.timeout if timeout is None else timeout,
             max_output_chars=cfg.max_output_chars,
             snapshot=snapshot if isinstance(snapshot, CapabilitySnapshot) else None,
+            capability_fingerprint=snapshot_fingerprint(cfg),
             registry=registry,
             mcps=cfg.mcps,
             allow_mcp_secrets=cfg.allow_mcp_secrets,

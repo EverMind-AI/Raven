@@ -38,19 +38,6 @@ All notable changes to Raven are documented here.
   inside a TUI direct chat with an instance `/effort` is refused rather than
   moving the main conversation while saying "this conversation".
 
-- Two more reasoning-effort rungs, **`xhigh`** and **`max`**, for a
-  conversation whose model is served by the Anthropic Messages adapter: the
-  picker row and `/effort` offer them there. The words a conversation may pick
-  now come from its model's provider (`LLMProvider.reasoning_efforts`: the four
-  every provider takes, six on that wire) rather than from one global list, so
-  `session.set_effort` answers `options` per model and refuses a word the
-  provider does not take, naming the ones it does. The global
-  `agents.defaults.reasoningEffort` keeps the four words every provider takes,
-  since it reaches every model call and every sub-agent. A pick the
-  conversation's model no longer takes (`max`, then a switch to a four-word
-  model) runs at the highest word that provider takes, and the empty-reply
-  retry descends from the new rungs like any other.
-
 - The settings dialog's **Skills** and **Plugins** pages have an **Add**
   button. Neither page can install anything -- a skill is fetched from Skill
   Hub by `use_skill` and an MCP server is connected from the PlugHub catalogue
@@ -588,6 +575,23 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- The *Mode* row of the WebUI's model picker (the sub-agent tier) read the
+  conversation being left rather than the one being opened: a switch asked
+  before the page's current session had moved over, so opening B from A
+  painted A's rung on B, and picking that rung on B was taken as already in
+  force. The row now reads the opened conversation under its own switch, and
+  an answer overtaken by a later switch is dropped rather than painted, as the
+  *Reasoning effort* row and the permission chip already do. The re-read after
+  a draft's staged rung is written to the conversation its first message
+  minted runs under that promotion's switch as well, so leaving for another
+  conversation while the write is in flight no longer paints the rung there.
+  A pick whose reply lands after the reader has opened another conversation is
+  dropped the same way, so a rung chosen on one is not echoed onto the other.
+- The permission chip's re-read after a draft's staged mode is written to the
+  conversation its first message minted now carries that promotion's switch as
+  well, as the tier and effort writes do: opening another conversation while
+  the write is in flight no longer paints the minted session's mode over the
+  view the reader moved to.
 - A key the vendor refuses is no longer called connected. The settings page
   and the first-run wizard ask the vendor about a key before storing it
   (`model.check_key`): a key answered with 401, or named invalid, is refused

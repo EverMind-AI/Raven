@@ -122,6 +122,13 @@ class ProviderSpec:
     # Provider supports cache_control on content blocks (e.g. Anthropic prompt caching)
     supports_prompt_caching: bool = False
 
+    # The reasoning-effort words this vendor's API accepts, stated here when
+    # LiteLLM's table carries the model but not its ladder and the per-level
+    # flags cannot express the set (DeepSeek takes low/high/max, and no flag can
+    # drop medium). Read only for a model the table already declares reasons; an
+    # empty tuple leaves the table's flags to answer, which is every other vendor.
+    reasoning_efforts: tuple[str, ...] = ()
+
     # Whether a tool result may carry an image block. None = decide by probing
     # the resolved LiteLLM target (see supports_image_tool_result); set it only
     # to override that, e.g. a gateway whose backend is known to be Anthropic.
@@ -826,6 +833,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         shown_api_base="https://api.deepseek.com",
         homepage="https://deepseek.com/",
         skip_prefixes=("deepseek/",),  # avoid double-prefix
+        reasoning_efforts=("low", "high", "max"),
         env_extras=(),
         is_gateway=False,
         is_local=False,

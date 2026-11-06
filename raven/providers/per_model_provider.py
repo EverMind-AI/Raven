@@ -116,11 +116,6 @@ class PerModelProvider(LLMProvider):
         a property of that endpoint's wire."""
         return self._pick(model).reasoning_wire_keys(model, reasoning_effort)
 
-    def reasoning_efforts(self, model: str | None = None) -> tuple[str, ...]:
-        """Asked of the endpoint that would serve this model, like
-        ``reasoning_wire_keys``: which rungs a wire takes is that wire's."""
-        return self._pick(model).reasoning_efforts(model)
-
     def supports_assistant_prefill(self, model: str | None = None) -> bool:
         """Asked of the endpoint that would serve this model, like
         ``supports_prompt_caching``: the vendor rule rides on that endpoint."""
@@ -204,7 +199,13 @@ class PerModelProvider(LLMProvider):
                 # The sub-provider below gets ``fallback_models=[]``, so the
                 # base loop's hop clamp never sees that this is a fallback.
                 # Re-clamp here, where the hop is still visible.
-                hop = effort_levels.downgrade(effort, effort_levels.levels_for(current_model or ""))
+                hop = effort_levels.downgrade(
+                    effort,
+                    effort_levels.levels_for(
+                        current_model or "",
+                        provider=getattr(sub, "provider_name", "") or "",
+                    ),
+                )
                 if hop != effort:
                     hop_kwargs = {**kwargs, "reasoning_effort": hop}
                     logger.debug(

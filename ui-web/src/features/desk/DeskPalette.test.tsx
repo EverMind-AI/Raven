@@ -440,6 +440,36 @@ describe('the desk shelf', () => {
     expect(panes.map((pane) => pane.id)).toEqual(['file:/w/a.md'])
   })
 
+  /* The row opens the file; the link beside it hands it over as an attachment,
+     which is the one thing that reaches a reader on another machine. */
+  it('offers the attachment link on a delivered row', async () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([
+      { path: '/w/a.md', name: 'a.md', title: 'Comparison', download_path: '/files/download?token=t1' },
+    ]))
+    await shelf()
+    const a = document.querySelector('.desk-dlv .desk-dl') as HTMLAnchorElement
+    expect(a.getAttribute('href')).toBe('/files/download?token=t1')
+    expect(a.getAttribute('download')).toBe('a.md')
+  })
+
+  /* A delivery that is gone offers none: its token is gone with it, and the
+     row says so already. */
+  it('offers no attachment link on a row that is gone', async () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([
+      { path: '/w/gone.md', name: 'gone.md', title: 'Gone', download_path: '/files/download?token=t2', missing: true },
+    ]))
+    await shelf()
+    expect(document.querySelector('.desk-dl')).toBeNull()
+  })
+
+  /* A manifest written before the field, or the offline canvas's: no link of
+     its own, so no control that points nowhere. */
+  it('offers no attachment link on a delivery with no link of its own', async () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/b.md', name: 'b.md', title: 'B' }]))
+    await shelf()
+    expect(document.querySelector('.desk-dl')).toBeNull()
+  })
+
   /* The demo shell's source cannot read a file, and a viewer with nothing to
      show is worse than the note it answers with. */
   it('hands the path to a source that cannot read files, opening no pane', async () => {

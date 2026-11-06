@@ -1136,6 +1136,73 @@ async def test_a_test_of_a_machine_row_that_needs_a_sign_in_offers_no_fix_for_th
     assert HOST not in result.detail
 
 
+_NPM_ETARGET = (
+    "acp agent 'claude_code@box': connection ended (exit 1); stderr tail: "
+    "npm error code ETARGET\n"
+    "npm error notarget No matching version found for "
+    "@agentclientprotocol/claude-agent-acp@0.94.0."
+)
+
+
+async def test_a_machine_row_whose_npx_could_not_fetch_is_named_as_a_download(monkeypatch):
+    """The node relays npm's own words inside its sentence, so the fetch is read back out of them.
+
+    The reader was shown "connection ended (exit 1)" with npm's ETARGET stacked under it, which
+    names no cause at all: no agent ran, and the fix is a registry the machine can reach.
+    """
+
+    class _Died:
+        async def run(self, *args: Any, **kwargs: Any) -> str:
+            raise AcpConnectionError(_NPM_ETARGET)
+
+    monkeypatch.setattr(probe, "build_third_party_backend", lambda *args, **kwargs: _Died())
+    cfg = remote_config(command="npx -y @agentclientprotocol/claude-agent-acp@0.94.0")
+
+    pinged = await probe.ping_agent(cfg)
+
+    assert pinged.ok is False
+    assert "npx could not download it (ETARGET" in pinged.detail
+    assert "connection ended" in pinged.detail, "what the machine said is still reported"
+    assert pinged.detail.endswith("(on machine 'box': any fix is made there)")
+    assert pinged.remedy is None, "a command offered here would fetch it on this computer"
+
+
+async def test_a_test_of_a_machine_row_whose_handshake_never_started_names_the_download(monkeypatch):
+    """Test reads the handshake's record, so the fetch has to be named where that record is made.
+
+    The handshake never starts because npm never got the adapter, which arrives here as the
+    node's sentence; the Test button reports what the snapshot holds, not a second reading.
+    """
+    from raven.acp_client import capabilities
+
+    class _Client:
+        def stderr_tail(self, *args: Any) -> str:
+            return ""
+
+        async def request(self, *args: Any, **kwargs: Any) -> Any:
+            raise AcpConnectionError(_NPM_ETARGET)
+
+        async def close(self) -> None:
+            return None
+
+    class _Link:
+        async def open_channel(self, *args: Any, **kwargs: Any) -> Any:
+            return object()
+
+    async def reach(*args: Any, **kwargs: Any) -> Any:
+        return capabilities._OnMachine(_Link(), SimpleNamespace(label="box"))
+
+    monkeypatch.setattr(capabilities, "_reach", reach)
+    monkeypatch.setattr(capabilities, "AcpClient", SimpleNamespace(over=lambda *args, **kwargs: _Client()))
+    cfg = remote_config(command="npx -y @agentclientprotocol/claude-agent-acp@0.94.0")
+
+    tested = await probe.run_test(cfg, source="config")
+
+    assert tested.ok is False
+    assert tested.detail.startswith("npx could not download it (ETARGET")
+    assert tested.remedy is None, "a command offered here would fetch it on this computer"
+
+
 async def test_the_machine_note_survives_a_refusal_longer_than_the_detail_cap(box):
     long_reason = "Authentication required: " + "x" * 2500
     cfg = remote_config(mode="no_session").model_copy(

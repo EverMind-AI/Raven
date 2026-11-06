@@ -156,7 +156,7 @@ export const SLASH_TEXT: Record<Locale, Record<string, SlashText>> = {
     },
     effort: {
       name: '思考深度',
-      help: '查看或设置本会话的思考深度 [minimal|low|medium|high|xhigh|max|default]'
+      help: '查看或设置本会话的思考深度 [word] - 可选词由当前模型声明'
     },
     fast: {
       name: '快速模式',
@@ -266,7 +266,7 @@ export const SLASH_TEXT: Record<Locale, Record<string, SlashText>> = {
     },
     effort: {
       name: 'effort',
-      help: 'show or set how much the model thinks for this conversation [minimal|low|medium|high|xhigh|max|default]'
+      help: 'show or set how much the model thinks for this conversation [word] - the words are the ones the model declares'
     },
     lang: {
       name: 'lang',
@@ -5450,7 +5450,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.effort.low': '低',
     'gui.effort.medium': '中',
     'gui.effort.high': '高',
-    'gui.effort.xhigh': '超高',
+    'gui.effort.xhigh': '极高',
     'gui.effort.max': '最高',
     'gui.effort.scope': '模型每次回答前思考多少，只作用于本会话，不影响子智能体。',
     'gui.effort.now': '「默认」跟随设置页里的全局值，当前是「{name}」。',

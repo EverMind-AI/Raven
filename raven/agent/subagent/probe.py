@@ -720,9 +720,10 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
         # The adapter runs no executable of Mirasim's; it reaches the host. So the
         # row is read by whether a host is there to reach, then by whether
         # Mirasim is installed at all -- told apart, because the reader's next
-        # move differs: open the app (or let the app on another computer reach
-        # this one again), or install it. Both sentences cover both ways a host
-        # comes to be here, as the adapter's own refusal does.
+        # move differs: start a host -- open the app, start `mirasim serve`, or
+        # let the app on another computer reach this one again -- or install it.
+        # The not-running sentence names each way a host comes to be here, as
+        # the adapter's own refusal does.
         state, where = mirasim_presets.presence(_mirasim_env(cfg), path=cfg_path or path)
         if state == "absent":
             return replace(
@@ -737,8 +738,8 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
         if state == "installed":
             return done(
                 "attention",
-                f"Mirasim is installed ({where}) but no host of it is running: open the Mirasim app, or let the "
-                "Mirasim app on another computer reach this one again, then check again",
+                f"Mirasim is installed ({where}) but no host of it is running: open the Mirasim app or start "
+                "`mirasim serve`, or let the Mirasim app on another computer reach this one again, then check again",
                 where,
             )
     requirement = shim_requirement_for(cfg)
@@ -773,6 +774,15 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
         return done(
             "attention",
             f"installed at {resolved}, but its model menu has not been measured yet -- run a test",
+            resolved,
+        )
+    if not getattr(snapshot, "effort_measured", True):
+        # A record minted from a live session has its menus but not the effort
+        # ladder, which belongs to the row's model; the boot backfill completes
+        # it, and until then the row says what is missing.
+        return done(
+            "attention",
+            f"installed at {resolved}, but its reasoning-effort menu has not been measured yet -- run a test",
             resolved,
         )
     # The record of a refusal reads as Test and a connect read it.
@@ -1135,6 +1145,10 @@ def _probe_remote(cfg: Any, machine_id: str, done: Any) -> ProbeResult:
         )
     if not getattr(snapshot, "model_menu_measured", True):
         return done("attention", f"{where}, but its model menu has not been measured yet -- run a test", machine_id)
+    if not getattr(snapshot, "effort_measured", True):
+        return done(
+            "attention", f"{where}, but its reasoning-effort menu has not been measured yet -- run a test", machine_id
+        )
     return done(snapshot.status, snapshot.detail, machine_id)
 
 
@@ -1245,7 +1259,16 @@ async def ping_agent(cfg: Any) -> PingResult:
         # on this computer, and this agent is on another one.
         if failure is None:
             return PingResult(False, "it started and then answered nothing")
-        text, _fix = _refusal(cfg, *_said(failure))
+        from raven.acp_client.capabilities import npx_fetch_failure, npx_fetch_lead
+
+        shown, answer = _said(failure)
+        # npm's report reaches this side inside the node's own sentence
+        # (`stderr tail: ...`) rather than in an `stderr` field, so that
+        # sentence is the evidence read.
+        unfetched = npx_fetch_failure((getattr(cfg, "command", None) or "").strip(), failure, shown)
+        if unfetched is not None:
+            return PingResult(False, _on_machine(f"{npx_fetch_lead(unfetched)}. It said: {shown}", machine))
+        text, _fix = _refusal(cfg, shown, answer)
         return PingResult(False, _on_machine(text, machine))
     # An agent whose ACP answer leaves the reason out is asked for it its own way,
     # once the pool is closed, so the process asked is not racing the one pinged.
@@ -1443,16 +1466,22 @@ def _note_menu_re_measured(snapshot: Any, name: str) -> None:
 def capabilities_wanted(cfg: Any) -> bool:
     """Does this acp entry lack a fresh, complete capability record?
 
-    Four cases: no snapshot, one whose launch config has changed, one written
-    before the model menu was recorded, or one of raven's own whose menu came
-    back empty -- that last one bounded as ``_own_row_missing_its_menu`` bounds
-    it. A recorded failure, a credential refusal included, is not one of them;
-    the boot backfill re-measures those as well as these four. A row with a
-    complete record keeps it -- a connect must not spend a handshake re-measuring
-    what is already known.
+    Five cases: no snapshot, one whose launch config has changed, one written
+    before the model menu was recorded, one minted from a live session and left
+    with its effort menu unmeasured, or one of raven's own whose menu came back
+    empty -- that last one bounded as ``_own_row_missing_its_menu`` bounds it.
+    A recorded failure, a credential refusal included, is not one of them; the
+    boot backfill re-measures those as well as these five. A row with a complete
+    record keeps it -- a connect must not spend a handshake re-measuring what is
+    already known.
     """
     snapshot = acp_snapshot_for(cfg)
-    if snapshot is None or snapshot.stale or not getattr(snapshot, "model_menu_measured", True):
+    if (
+        snapshot is None
+        or snapshot.stale
+        or not getattr(snapshot, "model_menu_measured", True)
+        or not getattr(snapshot, "effort_measured", True)
+    ):
         return True
     return _own_row_missing_its_menu(snapshot, getattr(cfg, "name", "") or "")
 
@@ -1700,6 +1729,7 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
                 and not refused
                 and not menuless_own
                 and not failed_before
+                and getattr(snapshot, "effort_measured", True)
             ):
                 continue
             agent = MIRASIM_AGENTS.get(getattr(cfg, "preset", None) or "") if isinstance(row, _PresetRow) else None

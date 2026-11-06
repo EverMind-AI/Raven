@@ -1263,6 +1263,13 @@ _NPM9_ENOTFOUND = (
         (_NPM9_ENOTFOUND, "ENOTFOUND"),
         ("npm error code E404\nnpm error 404 Not Found - GET https://registry.example/pkg\n", "E404"),
         ("npm error code ETARGET\nnpm error notarget No matching version found\n", "ETARGET"),
+        # The shape a registered machine's node relays: the code line follows
+        # Raven's own "stderr tail: " marker instead of starting the text.
+        (
+            "acp agent 'x': connection ended (exit 1); stderr tail: npm error code ETARGET\n"
+            "npm error notarget No matching version found\n",
+            "ETARGET",
+        ),
         ("npm error network request to https://registry.example failed\n", "network"),
         # A local failure: no network, registry or proxy setting fixes it.
         ("npm error code EACCES\nnpm error syscall mkdir\n", None),
@@ -1277,6 +1284,16 @@ def test_a_fetch_failure_is_read_off_npm_s_own_error_code(stderr: str, verdict: 
 
     died = AcpConnectionError("acp agent 'x': connection ended (exit 1)", stderr=stderr)
     assert npx_fetch_failure("npx -y some-adapter@1.0.0", died) == verdict
+
+
+def test_an_etarget_lead_names_the_metadata_cache_before_the_pin() -> None:
+    """npm states a missing version from a cache it may have fallen back to on its own."""
+    from raven.acp_client.capabilities import npx_fetch_lead
+
+    lead = npx_fetch_lead("ETARGET")
+    assert lead.startswith("npx could not download it (ETARGET"), lead
+    assert "cached metadata" in lead
+    assert npx_fetch_lead("ENOTFOUND").endswith("check the network, the npm registry or the proxy")
 
 
 def test_only_a_command_that_fetches_and_only_a_start_that_ran_out_are_download_verdicts() -> None:
@@ -1670,11 +1687,157 @@ def test_an_unchanged_menu_is_not_rewritten(tmp_path: Path) -> None:
 
 
 def test_nothing_is_invented_for_an_agent_never_measured(tmp_path: Path) -> None:
-    """A snapshot carries a fingerprint and a status this response cannot supply,
-    so there is nothing to update -- the probe is what creates one."""
+    """A caller that cannot name the row's agent and launch config gets nothing:
+    the fingerprint is what makes a minted record loadable at all."""
     store = SnapshotStore(path=tmp_path / "caps.json")
     assert relearn_session_menus(None, _session_result({"id": "fast"}), store=store) is None
     assert not (tmp_path / "caps.json").exists()
+
+
+def test_a_first_session_mints_the_capabilities_a_failed_probe_never_wrote(tmp_path: Path) -> None:
+    """The boot probe runs before the provider is configured, fails, and writes
+    no row, so every dispatch read an empty menu and no number of successful
+    sessions repaired it. A session that opened is evidence the probe never got."""
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+
+    minted = relearn_session_menus(
+        None,
+        _session_result({"id": "medium", "name": "Medium", "description": "balanced"}),
+        store=store,
+        agent="a",
+        fingerprint=snapshot_fingerprint(cfg),
+    )
+
+    assert minted is not None
+    assert minted.status == "ready"
+    assert [m.id for m in minted.available_modes] == ["medium"]
+    assert minted.effort_measured is False, "the effort ladder belongs to the row's model, not this session's"
+    loaded = store.load([cfg])["a"]
+    assert [m.id for m in loaded.available_modes] == ["medium"]
+    assert loaded.effort_measured is False, "the row keeps the marker the backfill reads"
+
+
+def test_a_minted_record_asks_the_next_boot_to_finish_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A probe measures the effort menu against the row's own model; a minted
+    record did not, so the backfill must complete it rather than skip a row
+    that looks ready."""
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    store = SnapshotStore(path=path)
+    minted = relearn_session_menus(
+        None,
+        _menu_reply(models=[{"value": "stub:model-a", "name": "model-a"}], modes=[{"id": "medium"}]),
+        store=store,
+        agent="a",
+        fingerprint=snapshot_fingerprint(cfg),
+    )
+    assert minted is not None and minted.model_menu_measured is True
+    assert capabilities_wanted(cfg) is True
+
+    store.record(replace(minted, effort_measured=True))
+
+    assert capabilities_wanted(cfg) is False
+
+
+async def test_a_minted_row_reads_attention_until_a_probe_measures_its_effort_menu(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The row's menus are usable, but the free probe must not call it a complete
+    measurement: its effort ladder belongs to the row's model and only a probe
+    reads that."""
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    store = SnapshotStore(path=path)
+    minted = relearn_session_menus(
+        None,
+        _menu_reply(models=[{"value": "stub:model-a", "name": "model-a"}], modes=[{"id": "medium"}]),
+        store=store,
+        agent="a",
+        fingerprint=snapshot_fingerprint(cfg),
+    )
+    assert minted is not None
+
+    probed = await probe_one(cfg, source="config")
+    assert probed.status == "attention"
+    assert "reasoning-effort menu has not been measured" in probed.detail
+
+    store.record(replace(minted, effort_measured=True))
+
+    assert (await probe_one(cfg, source="config")).status == "ready"
+
+
+def test_a_minted_record_never_overwrites_the_one_a_probe_wrote(tmp_path: Path) -> None:
+    """The row got there first, and a probe's is the record the roster was built
+    on: a session response may fill an empty file, never replace one."""
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    store.record(
+        CapabilitySnapshot(
+            agent="a",
+            fingerprint=snapshot_fingerprint(cfg),
+            status="ready",
+            detail="probed",
+            measured_at_ms=1,
+            can_load=True,
+        )
+    )
+
+    kept = relearn_session_menus(
+        None,
+        _session_result({"id": "medium"}),
+        store=store,
+        agent="a",
+        fingerprint=snapshot_fingerprint(cfg),
+    )
+
+    assert kept is not None and kept.detail == "probed" and kept.can_load
+    assert store.load([cfg])["a"].detail == "probed"
+
+
+def test_a_first_session_without_a_menu_mints_nothing(tmp_path: Path) -> None:
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    assert relearn_session_menus(None, {"sessionId": "s1"}, store=store, agent="a", fingerprint="fp") is None
+    assert not (tmp_path / "caps.json").exists()
+
+
+def test_a_first_session_without_an_id_mints_nothing(tmp_path: Path) -> None:
+    """``status`` would claim a session this response never confirmed."""
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    result = _session_result({"id": "medium"})
+    result.pop("sessionId")
+    assert relearn_session_menus(None, result, store=store, agent="a", fingerprint="fp") is None
+    assert not (tmp_path / "caps.json").exists()
+
+
+def test_the_acp_backend_mints_from_the_first_session_it_opens(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The wiring the unit tests above cannot see: the backend has to carry the
+    launch fingerprint, or the row it writes belongs to no config and the next
+    read skips it."""
+    cfg = stub_config("a")
+    snapshot_path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: snapshot_path)
+    backend = AcpAgentBackend(
+        name=cfg.name,
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=None,
+        capability_fingerprint=snapshot_fingerprint(cfg),
+    )
+
+    backend._relearn_menus(_session_result({"id": "medium"}))
+
+    loaded = SnapshotStore(path=snapshot_path).load([cfg])
+    assert [m.id for m in loaded["a"].available_modes] == ["medium"]
+    assert loaded["a"].effort_measured is False
+
+
+def test_the_backend_factory_carries_the_launch_fingerprint() -> None:
+    cfg = stub_config("a")
+    backend = build_third_party_backend(cfg)
+    assert backend._capability_fingerprint == snapshot_fingerprint(cfg)
 
 
 def _menu_reply(
@@ -3449,12 +3612,23 @@ async def test_a_resumed_session_whose_earlier_spend_is_unknown_books_no_cost(tm
     assert got.cost_usd is None and got.cost_missing_calls == 1
 
 
-async def test_a_session_nobody_can_resume_leaves_no_spend_behind(tmp_path: Path) -> None:
+async def test_a_session_nobody_can_resume_leaves_no_spend_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The cumulative cost is kept to measure a resumed session's next turn by.
     A stateless agent's sessions are never resumed, and keeping one entry per
-    dispatch would grow for as long as the process lives."""
+    dispatch would grow for as long as the process lives.
+
+    Stateless is a measured record here, not the absence of one: a live session
+    now mints its capabilities from the same handshake a probe reads, so an
+    unmeasured agent that advertises ``loadSession`` is stateful from its first
+    dispatch on.
+    """
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
     cfg = stub_config("a")
     cfg.env.update({**_CLAUDE_TURN, "ACP_STUB_COST_PER_PROMPT": "0.01"})
+    SnapshotStore(path=path).record(_snapshot("a", cfg, can_resume=False))
     backend = build_third_party_backend(cfg)
 
     await backend.run("ping", task_id="t1", workspace=tmp_path, session_key="cli:root", executor=None)

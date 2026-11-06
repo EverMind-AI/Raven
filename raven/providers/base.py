@@ -17,7 +17,6 @@ from typing import Any
 
 from loguru import logger
 
-from raven.config.schema import REASONING_EFFORTS
 from raven.contracts.llm_provider import (  # noqa: F401
     CallRecord,
     ChatDelta,
@@ -864,20 +863,6 @@ class LLMProvider(_LLMProviderPaper):
             record["provider_fence"] = fence
         return record
 
-    def reasoning_efforts(self, model: str | None = None) -> tuple[str, ...]:
-        """The reasoning efforts a request to this model may name, least first.
-
-        What a session's own pick is checked against (``session.set_effort``)
-        and what the picker row and ``/effort`` draw, so the words come from
-        the wire that will carry them rather than from one list for every
-        vendor. Here the four every wire takes (``REASONING_EFFORTS``); an
-        adapter whose wire takes more overrides this -- ``anthropic_messages``
-        does, with ``xhigh`` and ``max`` -- and a wrapper forwards it to the
-        adapter that would serve the model, the way ``reasoning_wire_keys`` is
-        forwarded, so the router a session sees answers for its vendor.
-        """
-        return REASONING_EFFORTS
-
     def reasoning_wire_keys(self, model: str | None, reasoning_effort: str | None) -> dict[str, Any]:
         """The reasoning keys a request for this effort would carry.
 
@@ -991,7 +976,13 @@ class LLMProvider(_LLMProviderPaper):
                 # primary's word is not evidence about what this hop accepts.
                 # Re-clamp it here, or a recovery call fails on the very word
                 # the fallback was chosen to get away from.
-                hop_effort = effort_levels.downgrade(reasoning_effort, effort_levels.levels_for(current_model or ""))
+                hop_effort = effort_levels.downgrade(
+                    reasoning_effort,
+                    effort_levels.levels_for(
+                        current_model or "",
+                        provider=getattr(self, "provider_name", "") or "",
+                    ),
+                )
                 if hop_effort != reasoning_effort:
                     logger.debug(
                         "fallback model={} does not declare reasoning_effort={}; sending {}",

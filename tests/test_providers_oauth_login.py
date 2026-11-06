@@ -358,7 +358,7 @@ async def test_a_page_sign_in_runs_the_real_driver_and_leaves_the_token_owner_on
         def post(self, url: str, **_kw) -> httpx.Response:
             return httpx.Response(200, json=answers[url], request=httpx.Request("POST", url))
 
-    monkeypatch.setattr(driver, "_get_httpx_client", lambda *_a, **_k: _Vendor())
+    monkeypatch.setattr(driver, "get_httpx_client", lambda *_a, **_k: _Vendor())
     # A driver that no longer mints through the hooked step never hands a code
     # over; fail on that in seconds rather than the page's minute.
     monkeypatch.setattr(oauth_login, "_HANDOFF_TIMEOUT_S", 5)

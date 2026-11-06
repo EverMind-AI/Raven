@@ -5,15 +5,22 @@ server that runs the agents, keeps the sessions and speaks JSON frames over a
 WebSocket at ``/ws``. This adapter is one more client of it -- it never starts a
 host of its own, because two hosts over one ``~/.mirasim`` contend for the same
 sessions and the same machine identity. Where the host listens, in the order
-:func:`locate_host` looks:
+:func:`locate_hosts` names the places to try:
 
 - ``RAVEN_MIRASIM_HOST``: ``unix:<path>`` for a socket, ``<port>`` or
   ``127.0.0.1:<port>`` for a loopback port, when the host is somewhere else;
 - ``~/.mirasim-remote/run/server.sock``: the host Mirasim runs on a machine it
   reaches over SSH (POSIX only). The same user is trusted there, no token;
-- ``127.0.0.1:4970``: the installed desktop app's server, whose access token is
-  ``local-4970.token`` under Mirasim's state directory (``MIRASIM_HOME``,
-  else ``~/.mirasim``) -- the file ``mirasim ui-cli --port`` reads.
+- every loopback port a host wrote its access token for, as
+  ``run/local-<port>.token`` under Mirasim's state directory (``MIRASIM_HOME``,
+  else ``~/.mirasim``) -- the files ``mirasim ui-cli --port`` reads. The
+  installed desktop app's port, 4970, comes first, then 4939, where
+  ``mirasim serve`` listens unless told otherwise, then the rest in ascending
+  order. A host writes the file for the port it bound -- ``mirasim serve``
+  moves on to the next port when its own is taken -- and removes it when it
+  stops, but one that is killed leaves it behind. So a file names a place to
+  try, not a host: the first place that answers is the host, and every connect
+  looks again, which finds a host that came back on another port.
 
 Two frames are never sent, because the answers carry secrets: ``ready`` makes
 the host push its whole settings tree, IM bot tokens included, and
@@ -25,7 +32,14 @@ header alone with 401 (measured against 0.0.571, 0.0.576 and 0.0.585). It goes
 in the ``x-mirasim-token`` header as well, which the hosts this adapter was
 written against (0.0.537 to 0.0.558) read. So the one URL that carries it is
 never logged and never quoted in an error: a refused upgrade is worded from
-its status, and the token is taken out of whatever else is said.
+its status, and the token is taken out of whatever else is said. ``/api/health``
+is the one path a host serves without a token, so it is asked without one: the
+port a killed host left its file for may be another program's by now, and a
+place whose health names another service is passed over before the upgrade. A
+place found from a token file has to name a Mirasim host there at all, because
+the upgrade is the request that carries that file's token; a place named in
+``RAVEN_MIRASIM_HOST``, or Mirasim's SSH socket (no token), is still tried when
+its health cannot say.
 
 One connection serves every session of the adapter. A frame comes back to its
 request by what the host echoes, which differs per frame: ``clientRef`` on
@@ -44,8 +58,9 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import time
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -56,6 +71,10 @@ from loguru import logger
 
 HOST_ENV = "RAVEN_MIRASIM_HOST"
 DESKTOP_PORT = 4970
+SERVE_PORT = 4939
+"""Where ``mirasim serve`` listens unless ``--port`` or ``MIRASIM_SERVER_PORT`` names another port."""
+TOKEN_FILE = re.compile(r"local-([1-9][0-9]{0,4})\.token")
+"""The name a host gives the file it writes its token in, under ``run/``, after the port it bound."""
 UNIX_SOCKETS = os.name != "nt"
 """Whether asyncio can open a unix socket here: on Windows neither of its event loops can."""
 
@@ -71,13 +90,27 @@ MAX_FRAME_BYTES = 64 * 1024 * 1024
 RECONNECT_PAUSES_S = (0.2, 0.5, 1.0, 2.0, 5.0)
 
 NO_HOST = (
-    "No Mirasim host is running on this machine: start the Mirasim app (or let it reach this machine), "
-    f"or name where the host listens in {HOST_ENV}."
+    "No Mirasim host is running on this machine: start the Mirasim app or `mirasim serve` (or let the app "
+    f"reach this machine), or name where the host listens in {HOST_ENV}."
 )
 
 
 class HostUnavailableError(Exception):
     """The host could not be reached, or the connection to it dropped."""
+
+
+class _UnreachableError(HostUnavailableError):
+    """One place did not answer; ``reason`` says why, in words that carry nothing of its token."""
+
+    def __init__(self, address: HostAddress, reason: str) -> None:
+        super().__init__(f"cannot reach the Mirasim host at {address.describe()}: {reason}")
+        self.address = address
+        self.reason = reason
+
+
+class _NotMirasimError(Exception):
+    """What answers at a place is not a Mirasim host: its ``/api/health`` names another program, or, at a
+    place found by scanning, does not name one at all."""
 
 
 @dataclass(frozen=True)
@@ -89,6 +122,10 @@ class HostAddress:
     token: str | None = field(default=None, repr=False)
     host: str = "127.0.0.1"
     """The loopback name the port is reached on, as the address named it: ``localhost`` and ``[::1]`` stay so."""
+
+    discovered: bool = field(default=False, compare=False)
+    """Whether scanning ``run/local-<port>.token`` found this place, which must then name itself in
+    ``/api/health`` before the token is sent to it: the file only says where a host once was."""
 
     @property
     def base_url(self) -> str:
@@ -136,19 +173,48 @@ def parse_address(value: str, env: Mapping[str, str] | None = None) -> HostAddre
     return HostAddress(port=port, token=port_token(port, env), host=host or "127.0.0.1")
 
 
-def locate_host(env: Mapping[str, str] | None = None) -> HostAddress | None:
-    """Where the running host listens, or ``None`` when there is none to find (see the module docstring)."""
+def token_ports(env: Mapping[str, str] | None = None) -> list[int]:
+    """The loopback ports a host wrote its token for under ``run/``, in the order they are tried.
+
+    The desktop app's port first, then ``mirasim serve``'s, then the rest in ascending order. A blank file
+    holds no token (:func:`port_token`), so its port is not one to try.
+    """
+    try:
+        names = os.listdir(mirasim_home(env) / "run")
+    except OSError:
+        return []
+    ports = {int(found.group(1)) for name in names if (found := TOKEN_FILE.fullmatch(name))}
+    ordered = sorted(
+        (port for port in ports if port < 65536), key=lambda port: (port != DESKTOP_PORT, port != SERVE_PORT, port)
+    )
+    return [port for port in ordered if port_token(port, env) is not None]
+
+
+def locate_hosts(env: Mapping[str, str] | None = None) -> list[HostAddress]:
+    """The places the running host may listen, in the order they are tried (see the module docstring).
+
+    A host named in ``RAVEN_MIRASIM_HOST`` is the only place, and so is the socket of the host Mirasim
+    runs here over SSH while that socket is on disk; otherwise each port :func:`token_ports` names, with
+    its token. Whether a place answers is for :meth:`HostConnection.connect` to find out.
+    """
     env = env if env is not None else os.environ
     if named := env.get(HOST_ENV, "").strip():
-        return parse_address(named, env)
+        return [parse_address(named, env)]
     socket = remote_socket()
     if UNIX_SOCKETS:
         with contextlib.suppress(OSError):
             if socket.is_socket():
-                return HostAddress(socket=str(socket))
-    token = port_token(DESKTOP_PORT, env)
-    return HostAddress(port=DESKTOP_PORT, token=token) if token is not None else None
+                return [HostAddress(socket=str(socket))]
+    return [HostAddress(port=port, token=port_token(port, env), discovered=True) for port in token_ports(env)]
 
+
+def locate_host(env: Mapping[str, str] | None = None) -> HostAddress | None:
+    """The first place :func:`locate_hosts` names, or ``None`` when it names none."""
+    return next(iter(locate_hosts(env)), None)
+
+
+Located = HostAddress | Sequence[HostAddress] | None
+"""What a ``locate`` callable answers: one place, several to try in order, or none."""
 
 Predicate = Callable[[dict[str, Any]], bool]
 
@@ -160,7 +226,7 @@ class HostConnection:
         self,
         *,
         on_frame: Callable[[dict[str, Any]], None],
-        locate: Callable[[], HostAddress | None] = locate_host,
+        locate: Callable[[], Located] = locate_hosts,
         on_connect: Callable[[], Awaitable[None]] | None = None,
         on_lost: Callable[[], None] | None = None,
         wanted: Callable[[], bool] = lambda: False,
@@ -192,7 +258,11 @@ class HostConnection:
         return self._ws is not None and not self._ws.closed
 
     async def connect(self) -> None:
-        """Connect unless connected; :exc:`HostUnavailableError` when there is no host to reach."""
+        """Connect unless connected; :exc:`HostUnavailableError` when there is no host to reach.
+
+        The places ``locate`` names are tried in order, and the first that answers is the host. Where none
+        does, a lone place's own refusal is raised, and with several the error names each and why.
+        """
         if self.connected:
             return
         async with self._connect_lock:
@@ -201,48 +271,24 @@ class HostConnection:
             if self._closed:
                 raise HostUnavailableError("the connection to the Mirasim host was closed")
             try:
-                address = self._locate()
+                located = self._locate()
             except ValueError as exc:
                 raise HostUnavailableError(str(exc)) from exc
-            if address is None:
+            places = [located] if isinstance(located, HostAddress) else list(located or ())
+            if not places:
                 raise HostUnavailableError(NO_HOST)
-            if address.socket and not UNIX_SOCKETS:
-                raise HostUnavailableError(
-                    f"cannot reach the Mirasim host at {address.describe()}: asyncio opens no unix socket on this "
-                    f"platform, so name the Mirasim app's port in {HOST_ENV} instead"
-                )
-            connector: aiohttp.BaseConnector = (
-                aiohttp.UnixConnector(path=address.socket) if address.socket else aiohttp.TCPConnector()
-            )
-            session = aiohttp.ClientSession(
-                connector=connector, timeout=aiohttp.ClientTimeout(total=None, connect=CONNECT_TIMEOUT_S)
-            )
-            headers = {"x-mirasim-token": address.token} if address.token else {}
-            failed: BaseException | None = None
-            try:
-                version = await _health(session, address, headers)
-                # The session's timeout bounds the connection, not the upgrade's answer: a host that
-                # takes the request and never upgrades would hold this lock, and every send, forever.
-                async with asyncio.timeout(CONNECT_TIMEOUT_S):
-                    ws = await session.ws_connect(
-                        upgrade_url(address),
-                        headers=headers,
-                        max_msg_size=MAX_FRAME_BYTES,
-                    )
-            except BaseException as exc:
-                await session.close()
-                if not isinstance(exc, (aiohttp.ClientError, OSError, TimeoutError)):
-                    raise
-                failed = exc
-            if failed is not None:
-                # Raised outside the handler so nothing is chained by default: a refused
-                # upgrade's own exception holds the request, URL and token included
-                # (`request_info`), and a formatted traceback would print it. Any other
-                # failure names no URL and stays the cause.
-                unavailable = HostUnavailableError(
-                    f"cannot reach the Mirasim host at {address.describe()}: {_reason(failed, address)}"
-                )
-                raise unavailable from (None if isinstance(failed, aiohttp.ClientResponseError) else failed)
+            refusals: list[_UnreachableError] = []
+            for address in places:
+                try:
+                    session, ws, version = await self._open(address)
+                except _UnreachableError as exc:
+                    refusals.append(exc)
+                    continue
+                break
+            else:
+                if len(refusals) == 1:
+                    raise refusals[0]
+                raise HostUnavailableError(_none_answered(refusals))
             self._session, self._ws, self.address, self.version = session, ws, address, version
             self.lost_at = None
             self.epoch += 1
@@ -253,6 +299,47 @@ class HostConnection:
             logger.info("Mirasim adapter: connected to the Mirasim host {} at {}", version or "?", address.describe())
         if self._on_connect is not None:
             await self._on_connect()
+
+    async def _open(
+        self, address: HostAddress
+    ) -> tuple[aiohttp.ClientSession, aiohttp.ClientWebSocketResponse, str | None]:
+        """The session, WebSocket and version of the host at ``address``; :exc:`_UnreachableError` when it does not answer."""
+        if address.socket and not UNIX_SOCKETS:
+            raise _UnreachableError(
+                address,
+                f"asyncio opens no unix socket on this platform, so name the Mirasim app's port in {HOST_ENV} instead",
+            )
+        connector: aiohttp.BaseConnector = (
+            aiohttp.UnixConnector(path=address.socket) if address.socket else aiohttp.TCPConnector()
+        )
+        session = aiohttp.ClientSession(
+            connector=connector, timeout=aiohttp.ClientTimeout(total=None, connect=CONNECT_TIMEOUT_S)
+        )
+        headers = {"x-mirasim-token": address.token} if address.token else {}
+        failed: BaseException | None = None
+        try:
+            version = await _health(session, address)
+            # The session's timeout bounds the connection, not the upgrade's answer: a host that
+            # takes the request and never upgrades would hold the connect lock, and every send, forever.
+            async with asyncio.timeout(CONNECT_TIMEOUT_S):
+                ws = await session.ws_connect(
+                    upgrade_url(address),
+                    headers=headers,
+                    max_msg_size=MAX_FRAME_BYTES,
+                )
+        except BaseException as exc:
+            await session.close()
+            if not isinstance(exc, (aiohttp.ClientError, OSError, TimeoutError, _NotMirasimError)):
+                raise
+            failed = exc
+        if failed is not None:
+            # Raised outside the handler so nothing is chained by default: a refused
+            # upgrade's own exception holds the request, URL and token included
+            # (`request_info`), and a formatted traceback would print it. Any other
+            # failure names no URL and stays the cause.
+            unreachable = _UnreachableError(address, _reason(failed, address))
+            raise unreachable from (None if isinstance(failed, aiohttp.ClientResponseError) else failed)
+        return session, ws, version
 
     async def send(self, frame: dict[str, Any]) -> None:
         """Send one frame, connecting first if need be."""
@@ -380,8 +467,15 @@ def _reason(exc: BaseException, address: HostAddress) -> str:
     a host that turns the token away is told apart from one that is not there,
     in words the roster does not read as the agent's own sign-in being wrong
     (``looks_like_auth``): the token is Raven's way in to the host, not the
-    agent's. Whatever another failure says has the token taken out as well.
+    agent's. A connection nothing took -- the port's host is gone, or the socket
+    file is all that is left of it -- is said in so many words, which matters
+    most when a killed host's token files are listed one after another. Whatever
+    another failure says has the token taken out as well.
     """
+    if isinstance(exc, aiohttp.ClientConnectorError) and isinstance(
+        exc.os_error, (ConnectionRefusedError, FileNotFoundError)
+    ):
+        return "nothing listens there"
     if isinstance(exc, aiohttp.ClientResponseError):
         if exc.status in (401, 403):
             where = f"Mirasim's run/local-{address.port}.token" if address.port else "its token file"
@@ -395,32 +489,59 @@ def _reason(exc: BaseException, address: HostAddress) -> str:
     return said.replace(address.token, "<token>") if address.token else said
 
 
-async def _health(session: aiohttp.ClientSession, address: HostAddress, headers: dict[str, str]) -> str | None:
-    """The host's version from ``/api/health``, or ``None``: a host that cannot say is still one to talk to."""
+async def _health(session: aiohttp.ClientSession, address: HostAddress) -> str | None:
+    """The host's version from ``/api/health``, or ``None`` when an explicitly selected host did not say.
+
+    Asked without the token, which the path does not take (see the module docstring). A place found by
+    scanning must name a Mirasim host here, because the upgrade is the request that carries its token:
+    another program on that port, and a host that cannot say, both raise :exc:`_NotMirasimError`. A place
+    named outright is trusted as before, and only a name for another program raises.
+    """
+    body: Any = None
     try:
         async with session.get(
-            f"{address.base_url}/api/health", headers=headers, timeout=aiohttp.ClientTimeout(total=HEALTH_TIMEOUT_S)
+            f"{address.base_url}/api/health", timeout=aiohttp.ClientTimeout(total=HEALTH_TIMEOUT_S)
         ) as response:
             body = await response.json(content_type=None) if response.status == 200 else None
     except (aiohttp.ClientConnectionError, OSError, TimeoutError):
         raise
     except (aiohttp.ClientError, ValueError):
-        return None
+        pass
+    name = body.get("name") if isinstance(body, dict) else None
+    if isinstance(name, str):
+        if name != "mirasim":
+            raise _NotMirasimError(f"it is not a Mirasim host: its /api/health names {name[:80]!r}")
+    elif address.discovered:
+        raise _NotMirasimError("it did not identify itself as a Mirasim host")
     version = body.get("version") if isinstance(body, dict) else None
     return version.strip() if isinstance(version, str) and version.strip() else None
+
+
+def _none_answered(refusals: Sequence[_UnreachableError]) -> str:
+    """Why no place answered: each place and its reason, in the order they were tried."""
+    places = "; ".join(f"{refusal.address.describe()} ({refusal.reason})" for refusal in refusals)
+    return (
+        f"cannot reach a Mirasim host at any of the {len(refusals)} places it may listen: {places}; start the "
+        f"Mirasim app or `mirasim serve` (or let the app reach this machine), or name where the host listens in "
+        f"{HOST_ENV}"
+    )
 
 
 __all__ = [
     "DESKTOP_PORT",
     "HOST_ENV",
     "NO_HOST",
+    "SERVE_PORT",
     "HostAddress",
     "HostConnection",
     "HostUnavailableError",
+    "Located",
     "locate_host",
+    "locate_hosts",
     "mirasim_home",
     "parse_address",
     "port_token",
     "remote_socket",
+    "token_ports",
     "upgrade_url",
 ]
