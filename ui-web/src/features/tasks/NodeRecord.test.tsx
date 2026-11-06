@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
 import { cleanup, fireEvent, render } from '@testing-library/react'
+// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetSources, setSources } from '../../state/sources'
@@ -182,6 +184,28 @@ describe('the multi-call summary', () => {
       />,
     )
     expect(container.querySelector('.tkbadchip')?.textContent).toBe('1 failed')
+  })
+
+  it('names a single failed call with the shared word', () => {
+    const { container } = render(
+      <StepList
+        steps={[tool({ name: 'read_file', id: 'c1', result: 'ENOENT', ok: false })]}
+        running={false}
+      />,
+    )
+    expect(container.querySelector('.tkbadchip')?.textContent).toBe('failed')
+  })
+
+  it('keeps a failed call out of the clay ink', () => {
+    /* The `tkbad` class still marks the state; the stylesheet must not paint
+       it with the failure colour any more. */
+    const css = readFileSync('src/features/tasks/styles.css', 'utf8')
+    expect(css).not.toMatch(/\.tkwrow\.tkbad[^{]*\{[^}]*--clay/)
+    expect(css).not.toMatch(/\.tkbadchip[^{]*\{[^}]*--clay/)
+    /* The call's own exit badge and a delegated call's state dot are the same
+       kind of reading: neutral ink, with the word carrying the failure. */
+    expect(css).not.toMatch(/\.tkexit\.bad[^{]*\{[^}]*--clay/)
+    expect(css).not.toMatch(/\.tkstt \.dot\.bad[^{]*\{[^}]*--clay/)
   })
 
   it('renders a single call as just its own row, with no summary and nothing hidden', () => {

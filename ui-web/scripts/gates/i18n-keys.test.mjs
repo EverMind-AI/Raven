@@ -58,6 +58,7 @@ const LEGACY_FLAT = new Set([
   'gui.cron_new',
   'gui.expand_rail',
   'gui.expand_ws',
+  'gui.fail',
   'gui.n_failed',
   'gui.new_task',
   'gui.reconnected',

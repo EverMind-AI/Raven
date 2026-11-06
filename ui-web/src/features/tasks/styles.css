@@ -84,21 +84,23 @@
   padding-left: 3px;
 }
 .tkmeta > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-/* The same three-state dot as the list row: moss running, clay only for a
-   failure or an interruption, faint otherwise. */
+/* The same three-state dot as the list row: moss running, a darker grey for a
+   failure or an interruption, faint otherwise. The word beside it carries the
+   failure; the dot only says "settled, not cleanly". */
 .tkmeta[data-st="run"] .dot {
   background: var(--moss);
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--moss) 18%, transparent);
   animation: pulse 1.8s ease-in-out infinite;
 }
 .tkmeta[data-st="error"] .dot {
-  background: var(--clay);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--clay) 15%, transparent);
+  background: var(--muted);
+  box-shadow: none;
   animation: none;
 }
 .tkmeta[data-st="ok"] .dot { background: var(--faint); box-shadow: none; animation: none; }
 /* Stop: quiet until pointed at, since stopping a run is rarely what the reader
-   came to the pane to do. */
+   came to the pane to do. This is a destructive control, not a failure state,
+   so it keeps the warning colour on hover. */
 .tkhalt:hover:not(:disabled) {
   color: var(--clay);
   background: color-mix(in oklab, var(--clay) 8%, transparent);
@@ -110,14 +112,15 @@
 
 .tklistrow { position: relative; }
 
-/* The "why" banner: a red band for a failure, a cooler one for an
-   interruption, with a link underneath to the node it happened on. */
+/* The "why" banner: one neutral surface for a failure and for an
+   interruption, with a link underneath to the node it happened on. The text
+   says which happened; the ground does not compete with it. */
 .tkwhy {
   margin: 8px 0;
   padding: 10px 12px;
   border-radius: 10px;
-  background: color-mix(in oklab, var(--clay) 7%, var(--ink));
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--clay) 18%, transparent);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
 }
 .tkwhy p {
   margin: 0;
@@ -227,7 +230,7 @@
 .tkretry {
   margin-left: 8px;
   font-size: 12px;
-  color: var(--clay);
+  color: var(--muted);
   text-decoration: underline;
   text-underline-offset: 3px;
   cursor: pointer;
@@ -437,8 +440,10 @@
   height: 13px;
   color: var(--faint);
 }
+/* A failed row keeps its state class, but wears the ordinary row's ink: the
+   word beside it is what says the call went wrong. */
 .tkwrow.tkbad .tkic {
-  color: var(--clay);
+  color: var(--faint);
 }
 .tkwrow.tkbusy .tkic {
   animation: breathe 1.6s ease-in-out infinite;
@@ -447,7 +452,7 @@
   flex: none;
 }
 .tkwrow.tkbad .tkvb {
-  color: var(--clay);
+  color: var(--muted);
 }
 .tksrv {
   color: var(--faint);
@@ -483,14 +488,15 @@
 .tkwrow.tkopen .tkcv {
   transform: rotate(90deg);
 }
+/* A failed call is ordinary work: the word says so, the colour does not. */
 .tkbadchip {
   flex: none;
   font-size: 10.5px;
   padding: 0 6px;
   border-radius: 8px;
   line-height: 16px;
-  color: var(--clay);
-  background: color-mix(in oklab, var(--clay) 12%, transparent);
+  color: var(--muted);
+  background: var(--surface);
 }
 .tkwrow.tknoresult .tkic,
 .tkwrow.tknoresult .tkvb,
@@ -583,8 +589,8 @@
   background: color-mix(in oklab, var(--moss) 12%, transparent);
 }
 .tkexit.bad {
-  color: var(--clay);
-  background: color-mix(in oklab, var(--clay) 12%, transparent);
+  color: var(--muted);
+  background: var(--surface);
 }
 
 /* A delegated call's own key/value grid, rather than one flat pre -- proto.js's
@@ -618,6 +624,11 @@
   align-items: center;
   gap: 7px;
 }
+/* A delegated call's state dot is the page-wide `.dot bad`; inside a task
+   record it wears the record's neutral ink too, so a failed step reads as a
+   word rather than a red alarm. The shared `.dot.bad` stays warning-coloured
+   for the surfaces that need it (connections, system failures). */
+.tkstt .dot.bad { background: var(--muted); box-shadow: none; }
 
 /* One step of a node's own run (NodeRecord.tsx's `StepGroupView`): a
    thought, something said between calls, and the tool calls it led to,
@@ -819,7 +830,7 @@
 @keyframes tkrunspin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .tkrunspin { animation: none; } }
 .tkfork .nd[data-st="completed"] .tkrunrt { color: var(--moss); }
-.tkfork .nd[data-st="failed"] .tkrunrt { color: var(--clay); }
+.tkfork .nd[data-st="failed"] .tkrunrt { color: var(--muted); }
 .tkfork .nd[data-st="running"] .tkrunrt { color: var(--amber-dp); }
 
 /* The prototype's own streaming caret (proto.css's `.caret`), tk-prefixed
@@ -858,6 +869,8 @@
   max-height: 45%;
 }
 .tkchips .add { color: var(--moss); font-style: normal; }
+/* A removed-line count, not a failure: diffs keep the conventional red for
+   deletions, the same way the workspace's own diff panes do. */
 .tkchips .del { color: var(--clay); font-style: normal; }
 
 /* Folded to two lines by TasksPage.tsx's `ChipStrip`, which decides from the
@@ -1161,7 +1174,7 @@
   line-height: 1;
 }
 .tkstep[data-st="ok"] .tkmark { background: var(--moss); }
-.tkstep[data-st="error"] .tkmark { background: var(--clay); }
+.tkstep[data-st="error"] .tkmark { background: var(--muted); }
 .tkstep[data-st="run"] .tkmark {
   border: 1.8px solid var(--sky);
   border-right-color: transparent;

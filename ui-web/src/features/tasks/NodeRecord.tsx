@@ -436,6 +436,7 @@ function CallRow({ call, nodeKey, foldKey, running }: {
           </span>
         )
         : null}
+      {bad ? <span className="tkbadchip">{t('gui.fail')}</span> : null}
       {kind === 'plain' && bad ? <span className="err">{firstErrLine(call.result)}</span> : null}
       {noResult ? <span className="tknoresultchip">{t('gui.tasks.call_no_result')}</span> : null}
       {withDtl ? <Glyph d={ACT_ICO.chev as string} cls="tkcv" /> : null}

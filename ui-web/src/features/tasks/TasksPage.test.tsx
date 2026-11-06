@@ -2002,3 +2002,42 @@ describe('the pane of a reassigned node', () => {
     expect(entry?.zh).not.toBe(entry?.en)
   })
 })
+
+/* Execution failures are said in words on the task surfaces. The warning
+   colour stays for the stop control, diff deletions, and the data-read errors
+   that ask the reader to look (`.tkerrb` / `.tkberr`). A token cannot be
+   observed in happy-dom, so the stylesheet is what these read. */
+describe('the task surfaces\' failure colour', () => {
+  const rule = (head: string): string => {
+    const css = readFileSync('src/features/tasks/styles.css', 'utf8')
+    const at = css.indexOf(head)
+    expect(at, head).toBeGreaterThanOrEqual(0)
+    return css.slice(at, css.indexOf('}', at) + 1)
+  }
+
+  it('paints a failed task or step with the neutral tokens', () => {
+    for (const sel of [
+      '.tkmeta[data-st="error"] .dot {', '.tkwhy {', '.tkretry {',
+      '.tkexit.bad {', '.tkfork .nd[data-st="failed"] .tkrunrt {',
+      '.tkstep[data-st="error"] .tkmark {', '.tkstt .dot.bad {',
+    ]) {
+      expect(rule(sel), sel).not.toMatch(/--(?:clay|chat-danger)/)
+    }
+    /* The banner still has its own surface; only the alarm colour is gone. */
+    expect(rule('.tkwhy {')).toContain('var(--surface)')
+  })
+
+  it('keeps the data-read failures in the system warning colour', () => {
+    /* `.tkerrb` is a node record that could not be read; `.tkberr` is the
+       Tasks page failing to refresh. Neither is an execution outcome, so both
+       keep the original clay treatment. */
+    expect(rule('.tkerrb {')).toMatch(/color:\s*var\(--clay\)/)
+    expect(rule('.tkerrb {')).toContain('color-mix(in oklab, var(--clay) 8%, var(--paper))')
+    expect(rule('.tkberr {')).toMatch(/color:\s*var\(--clay\)/)
+  })
+
+  it('keeps the destructive stop and the diff deletion count in the warning colour', () => {
+    expect(rule('.tkhalt:hover:not(:disabled) {')).toContain('--clay')
+    expect(rule('.tkchips .del {')).toContain('--clay')
+  })
+})

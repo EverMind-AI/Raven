@@ -52,6 +52,7 @@ exports[`transcript island, history > keeps its rendered shape 1`] = `
                     path
                     path
                   span.vb
+                  span.chip.bad
                   span.err
                   svg.cv
                     path
