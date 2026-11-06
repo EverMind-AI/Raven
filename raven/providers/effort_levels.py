@@ -151,25 +151,16 @@ def reset() -> None:
     _index.cache_clear()
 
 
-def clamp(value: str | None, levels: tuple[str, ...] | None) -> str | None:
-    """The value if this model declares it; None otherwise.
-
-    ``None`` levels mean the table could not be read, which is not a model
-    answer: the caller's value is left alone (fail open). An empty tuple means
-    the model declares no reasoning at all, so even a valid word is dropped.
-    """
-    if levels is None:
-        return value
-    return value if value in levels else None
-
-
 def downgrade(value: str | None, levels: tuple[str, ...] | None) -> str | None:
     """The value where the model declares it, else the highest level below it.
 
     For a fallback hop: the primary's word is not evidence about this model,
     and dropping straight to None would make the recovery call a different
-    request from the one just attempted. A model declaring nothing at or below
-    the word gets None; an unreadable table keeps the value (fail open).
+    request from the one just attempted. For a conversation's own pick
+    (``session_effort.downgrade``): the person asked for as much thinking as
+    the word names, and the model they moved to gives as much as it takes. A
+    model declaring nothing at or below the word gets None; an unreadable
+    table keeps the value (fail open).
     """
     if levels is None or value in levels:
         return value

@@ -79,17 +79,24 @@ def test_of_still_rejects_a_word_outside_the_ladder() -> None:
     assert session_effort.of({"reasoning_effort": "turbo"}) is None
 
 
-def test_clamp_keeps_a_declared_value() -> None:
-    assert session_effort.clamp("high", ("minimal", "low", "medium", "high")) == "high"
+def test_downgrade_keeps_a_declared_value() -> None:
+    assert session_effort.downgrade("high", ("minimal", "low", "medium", "high")) == "high"
 
 
-def test_clamp_drops_an_undeclared_value() -> None:
-    assert session_effort.clamp("max", ("minimal", "low", "medium", "high")) is None
+def test_downgrade_runs_an_undeclared_value_at_the_highest_declared_below_it() -> None:
+    assert session_effort.downgrade("max", ("minimal", "low", "medium", "high")) == "high"
+    assert session_effort.downgrade("xhigh", ("low", "high", "max")) == "high"
+    assert session_effort.downgrade("medium", ("low", "high", "max")) == "low"
 
 
-def test_clamp_drops_everything_when_the_model_declares_none() -> None:
-    assert session_effort.clamp("high", ()) is None
+def test_downgrade_drops_a_value_the_model_declares_nothing_below() -> None:
+    assert session_effort.downgrade("minimal", ("medium", "high")) is None
+    assert session_effort.downgrade("low", ("medium", "high", "xhigh")) is None
 
 
-def test_clamp_is_a_no_op_when_the_table_could_not_be_read() -> None:
-    assert session_effort.clamp("high", None) == "high"
+def test_downgrade_drops_everything_when_the_model_declares_none() -> None:
+    assert session_effort.downgrade("high", ()) is None
+
+
+def test_downgrade_is_a_no_op_when_the_table_could_not_be_read() -> None:
+    assert session_effort.downgrade("high", None) == "high"

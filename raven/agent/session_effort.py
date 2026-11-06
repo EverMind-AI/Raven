@@ -13,10 +13,12 @@ Where it ranks (``in_force``, the one rule the turn runs at and the RPC
 reports): the configured default underneath, a Session Mode's own
 ``reasoningEffort`` over that, this pick over both, and a hook's rollback
 override over the lot (``_run_agent_loop``'s ``gen_overrides``). The model then
-bounds the result (``clamp``): a level the current model does not declare is
-dropped to None, the provider's own default, and the stored pick is left on the
-record so it applies again if a later model declares it. Raven's own calls
-only: a sub-agent is told the configured default, as before.
+bounds the pick (``downgrade``): a level the current model does not declare
+runs at the highest level it declares below it, the way a fallback hop runs
+the primary's word, and at None -- the provider's own default -- only when it
+declares nothing at or below; the stored pick is left on the record as named,
+so it applies again if a later model declares it. Raven's own calls only: a
+sub-agent is told the configured default, as before.
 
 The words are ``REASONING_EFFORT_LADDER`` (``contracts/llm_provider.py``); the
 provider maps each to its own wire, and a model with no thinking to move
@@ -73,16 +75,22 @@ def in_force(pick: str | None, mode_effort: str | None, configured: str | None) 
     return pick or mode_effort or configured or None
 
 
-def clamp(value: str | None, levels: tuple[str, ...] | None) -> str | None:
-    """The value if this model declares it; None otherwise.
+def downgrade(value: str | None, levels: tuple[str, ...] | None) -> str | None:
+    """The value where this model declares it, else the highest level it declares below it.
 
-    ``None`` levels mean the table could not be read, which is not a model
-    answer: the caller's value is left alone (fail open). An empty tuple means
-    the model declares no reasoning at all, so even a valid word is dropped.
+    The rule a fallback hop already runs the primary's word through
+    (``effort_levels.downgrade``), applied to a conversation's own pick:
+    ``max`` picked on a model that takes it, then a switch to one that stops
+    at ``high``, runs at ``high`` -- as much thinking as that model takes,
+    which is what the person asked for -- rather than at the default they
+    moved away from. A model declaring nothing at or below the value gets
+    None, the provider's own default; an empty tuple (no reasoning at all)
+    drops every word. ``None`` levels mean the table could not be read, which
+    is not a model answer: the caller's value is left alone (fail open).
     """
-    from raven.providers.effort_levels import clamp as _clamp
+    from raven.providers.effort_levels import downgrade as _downgrade
 
-    return _clamp(value, levels)
+    return _downgrade(value, levels)
 
 
 def read(sessions: Any, session_key: str | None) -> str | None:

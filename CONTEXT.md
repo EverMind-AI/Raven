@@ -337,7 +337,9 @@ defaults, with a provider's `model_overlay.reasoningEfforts` over all of them; t
 provider is the config's route for the model, not the id's prefix, and a row filed under
 another provider than that section is skipped); `session.set_effort` offers and validates
 exactly those, a model that declares none has no row, and a stored pick the current model
-does not declare is dropped at the turn and in `session.info` (`session_effort.clamp`); the mode's
+does not declare runs, at the turn and in `session.info`, at the highest level that model
+declares below it (`session_effort.downgrade`, the rule a fallback hop already runs the
+primary's word through) and is dropped only when it declares nothing at or below; the mode's
 word or the configured default then runs, since those two are not narrowed by the model.
 The install-wide `agents.defaults.reasoningEffort` keeps `REASONING_EFFORTS`
 (`config/schema.py`), shared with the console's checker and the agent's own `raven_config`

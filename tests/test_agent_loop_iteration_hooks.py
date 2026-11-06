@@ -583,7 +583,7 @@ def test_the_loop_wires_this_sessions_tier_into_the_subagent_manager(tmp_path):
 
 @pytest.fixture(autouse=True)
 def _fake_model_declares_every_level(monkeypatch):
-    """The turn clamps to the model's levels; fake/model declares them all."""
+    """The turn bounds the pick by the model's levels; fake/model declares them all."""
     from raven.agent.loop import wiring
 
     monkeypatch.setattr(

@@ -535,11 +535,13 @@ class WiringMixin:
         read off the session's record, the session's mode's word, and the
         configured default as the file has it now. ``model`` is the id the loop
         was handed for this turn -- the router's pick when it made one, else the
-        session's own -- and bounds the **pick** (``session_effort.clamp``): a
-        level it does not declare, by LiteLLM's table or its provider overlay,
-        is dropped rather than sent. The mode's word and the configured default
-        are not narrowed here; they are not this conversation's pick and were
-        sent as they stand before the pick existed. Beside ``session_tier`` for
+        session's own -- and bounds the **pick** (``session_effort.downgrade``):
+        a level it does not declare, by LiteLLM's table or its provider
+        overlay, runs at the highest level it does declare below it, and is
+        dropped only when it declares nothing at or below. The mode's word and
+        the configured default are not narrowed here; they are not this
+        conversation's pick and were sent as they stand before the pick
+        existed. Beside ``session_tier`` for
         the reason it gives -- the turn and the RPC need the one rule, and the
         policy it reads lives here -- and reached on ``self`` by the turn, so
         nothing imports anything new.
@@ -572,13 +574,14 @@ class WiringMixin:
             declared_for(self._live_config.get("providers") or {}, provider, model_id),
             provider=provider,
         )
-        valid_pick = session_effort.clamp(pick, levels)
-        if pick is not None and valid_pick is None:
+        valid_pick = session_effort.downgrade(pick, levels)
+        if pick is not None and valid_pick != pick:
             logger.debug(
-                "session {}: reasoning effort {} is not declared by {}; using the session default",
+                "session {}: reasoning effort {} is not declared by {}; running at {}",
                 session_key,
                 pick,
                 model_id,
+                valid_pick or "the session default",
             )
         return session_effort.in_force(
             valid_pick,

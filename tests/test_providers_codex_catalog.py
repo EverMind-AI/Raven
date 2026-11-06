@@ -365,7 +365,7 @@ def test_a_failed_refresh_keeps_the_last_good_levels(
     assert codex_catalog.account_efforts("gpt-5.6-sol", refresh=True) == ("high",)
 
 
-def test_an_expired_answer_clamps_a_stale_pick(monkeypatch: pytest.MonkeyPatch, signed_in) -> None:
+def test_an_expired_answer_still_bounds_a_stale_pick(monkeypatch: pytest.MonkeyPatch, signed_in) -> None:
     from raven.agent import session_effort
 
     _serve(
@@ -393,4 +393,5 @@ def test_an_expired_answer_clamps_a_stale_pick(monkeypatch: pytest.MonkeyPatch, 
     monkeypatch.setattr(codex_catalog.time, "monotonic", lambda: real() + 301)
     levels = codex_catalog.account_efforts("gpt-5.6-sol")
     assert levels == ("low", "medium", "high", "xhigh", "max")
-    assert session_effort.clamp("minimal", levels) is None
+    assert session_effort.downgrade("minimal", levels) is None
+    assert session_effort.downgrade("high", levels) == "high"
