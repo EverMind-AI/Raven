@@ -8185,6 +8185,41 @@ export interface InputDetectDropResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "InputHistoryListParams".
+ */
+export interface InputHistoryListParams {
+  /**
+   * How many of the newest entries to return; capped at 1000.
+   */
+  limit?: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "InputHistoryListResult".
+ */
+export interface InputHistoryListResult {
+  entries: string[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "InputHistoryAppendParams".
+ */
+export interface InputHistoryAppendParams {
+  text: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "InputHistoryAppendResult".
+ */
+export interface InputHistoryAppendResult {
+  ok: boolean;
+  /**
+   * False when the text was blank or repeated the newest entry.
+   */
+  appended: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SessionInterruptParams".
  */
 export interface SessionInterruptParams {

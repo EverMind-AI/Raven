@@ -31,6 +31,8 @@ export const PARAMS = {
   'turn.subscribe': { session_key: 'a' },
   'turn.unsubscribe': { subscription_id: 'sub-1' },
   'turn.send': { session_key: 'a', content: 'look at the market' },
+  'input.history.list': { limit: 1000 },
+  'input.history.append': { text: 'look at the market' },
   'turn.cancel': { session_key: 'a' },
   'deliverables.list': { session_key: 'a' },
   'dag.get': { run_id: '20260821T004119Z-4c1d8ea2', session_key: 'a' },

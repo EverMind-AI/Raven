@@ -26,9 +26,6 @@ const REQUIRED = ['types.ts', 'source.ts', 'store.ts', 'manifest.ts']
 /* What a domain is missing today, and why. Down or gone: the way off this list
    is the file, never another line here. */
 const EXCEPTIONS = {
-  'composer/source.ts':
-    'the dock\'s seam is assembled by the page: the palette half in app/install.ts and the '
-    + 'rest by the settings chrome, because no transport answers either half',
   'dag/source.ts': 'answers no seam of its own -- a graph arrives on the turn\'s own events',
   'desk/source.ts':
     'a pane shows the workspace\'s record, so the desk reads the workspace\'s source the way '

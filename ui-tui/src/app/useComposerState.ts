@@ -13,11 +13,17 @@ import { useCallback, useMemo, useState } from 'react'
 
 import type { PasteEvent } from '../components/textInput.js'
 import type { ImageAttachResponse, InputDetectDropResponse } from '../gatewayTypes.js'
-import type { MaybePromise, PasteSnippet, UseComposerStateOptions, UseComposerStateResult } from './interfaces.js'
+import type {
+  MaybePromise,
+  PasteSnippet,
+  StateSetter,
+  UseComposerStateOptions,
+  UseComposerStateResult
+} from './interfaces.js'
 
 import { LARGE_PASTE } from '../config/limits.js'
 import { useCompletion } from '../hooks/useCompletion.js'
-import { useInputHistory } from '../hooks/useInputHistory.js'
+import { shouldDetachEditedHistoryInput, useInputHistory } from '../hooks/useInputHistory.js'
 import { useQueue } from '../hooks/useQueue.js'
 import { isUsableClipboardText, readClipboardText } from '../lib/clipboard.js'
 import { resolveEditor } from '../lib/editor.js'
@@ -139,6 +145,28 @@ export function useComposerState({
     setHistoryIdx(null)
     historyDraftRef.current = ''
   }, [historyDraftRef, setQueueEdit, setHistoryIdx])
+
+  /**
+   * The composer's text as the user edits it. Everything else that writes
+   * `input` (history cycling, queue recall, completions, restored failures)
+   * goes through the raw `setInput` so it can move the caret to a history
+   * entry without that move counting as an edit.
+   */
+  const updateInput = useCallback<StateSetter<string>>(
+    next => {
+      setInput(prev => {
+        const value = typeof next === 'function' ? next(prev) : next
+
+        if (shouldDetachEditedHistoryInput(historyIdx, historyRef.current, value)) {
+          historyDraftRef.current = value
+          setHistoryIdx(null)
+        }
+
+        return value
+      })
+    },
+    [historyDraftRef, historyIdx, historyRef, setHistoryIdx]
+  )
 
   const handleResolvedPaste = useCallback(
     async ({
@@ -317,7 +345,8 @@ export function useComposerState({
       setInputBuf,
       setPasteSnips,
       setQueueEdit,
-      syncQueue
+      syncQueue,
+      updateInput
     }),
     [
       clearIn,
@@ -331,7 +360,8 @@ export function useComposerState({
       setCompIdx,
       setHistoryIdx,
       setQueueEdit,
-      syncQueue
+      syncQueue,
+      updateInput
     ]
   )
 

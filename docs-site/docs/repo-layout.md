@@ -49,6 +49,7 @@ repository's commit conventions.
 | `home` | Shared `RAVEN_HOME` and configuration-path resolution (`home.py`) |
 | `i18n` | Language catalogs, translations, and prompt localization |
 | `importer` | Cold-start import from other AI tools |
+| `input_history` | Composer history shared with the TUI: parsing, appending, and the Python-side lock |
 | `knowledge` | Document ingestion, indexing, and retrieval for user knowledge bases |
 | `market` | PlugHub catalog, trust checks, installation, and contribution ledgers |
 | `mcp` | MCP server connections and tool integration |

@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 255 methods, 147 component schemas.
+// 257 methods, 147 component schemas.
 
 /* eslint-disable */
 /**
@@ -6250,6 +6250,25 @@ export interface InputDetectDropResult {
   height?: number;
   token_estimate?: number;
 }
+export interface InputHistoryListParams {
+  /**
+   * How many of the newest entries to return; capped at 1000.
+   */
+  limit?: number;
+}
+export interface InputHistoryListResult {
+  entries: string[];
+}
+export interface InputHistoryAppendParams {
+  text: string;
+}
+export interface InputHistoryAppendResult {
+  ok: boolean;
+  /**
+   * False when the text was blank or repeated the newest entry.
+   */
+  appended: boolean;
+}
 export interface SessionInterruptParams {
   session_id: string;
 }
@@ -7044,6 +7063,8 @@ export interface RpcMethods {
   'delegation.status': { params: DelegationStatusParams; result: DelegationStatusResult };
   'delegation.pause': { params: DelegationPauseParams; result: DelegationPauseResult };
   'input.detect_drop': { params: InputDetectDropParams; result: InputDetectDropResult };
+  'input.history.list': { params: InputHistoryListParams; result: InputHistoryListResult };
+  'input.history.append': { params: InputHistoryAppendParams; result: InputHistoryAppendResult };
   'session.interrupt': { params: SessionInterruptParams; result: SessionInterruptResult };
   'shell.exec': { params: ShellExecParams; result: ShellExecResult };
   'skills.manage': { params: SkillsManageParams; result: SkillsManageResult };
@@ -7161,6 +7182,8 @@ export const RPC_METHODS = [
   "import.stop",
   "imported.upload",
   "input.detect_drop",
+  "input.history.append",
+  "input.history.list",
   "knowledge.bases.create",
   "knowledge.bases.delete",
   "knowledge.bases.list",

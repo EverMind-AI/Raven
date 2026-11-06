@@ -361,6 +361,14 @@ export function useSubmission(opts: UseSubmissionOptions) {
         return
       }
 
+      // History stores resolved content, not `[[…]]` labels: the paste
+      // snippets are cleared on submit, so a recalled entry has to carry the
+      // pasted body itself. This is the same expander `send()` runs, fed the
+      // same snapshot -- each call builds its own label map, and `send()`
+      // still receives the original label text, so the message the agent gets
+      // is expanded exactly once while the transcript keeps the compact form.
+      const toHistory = expandSnips(composerState.pasteSnips)(full)
+
       // Sending is the one act that means "I am done reading back there". A
       // reader scrolled up has broken the transcript's stickiness, and every
       // path below writes to the bottom of it -- the prompt echo, the slash
@@ -382,7 +390,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
           appendDirectMessage(directKey(activeChat.agent, activeChat.handle), echo)
         }
 
-        composerActions.pushHistory(full)
+        composerActions.pushHistory(toHistory)
         slashRef.current(full)
         composerActions.clearIn()
 
@@ -398,7 +406,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
       const live = getUiState()
 
       if (!live.sid) {
-        composerActions.pushHistory(full)
+        composerActions.pushHistory(toHistory)
         composerActions.enqueue(full)
         composerActions.clearIn()
 
@@ -447,7 +455,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
         return sendQueued(picked)
       }
 
-      composerActions.pushHistory(full)
+      composerActions.pushHistory(toHistory)
 
       if (getUiState().busy) {
         return handleBusyInput(full)
@@ -465,6 +473,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
       appendMessage,
       composerActions,
       composerRefs,
+      composerState.pasteSnips,
       handleBusyInput,
       interpolate,
       revealLatest,
