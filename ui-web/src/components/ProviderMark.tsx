@@ -41,6 +41,7 @@ const ICONS: Record<string, string> = {
   hosted_vllm: 'vllm',
   huggingface: 'huggingface',
   lm_studio: 'lmstudio',
+  llmtr: 'llmtr',
   longcat: 'longcat',
   minimax: 'minimax',
   minimax_cn_api: 'minimax',
@@ -177,6 +178,7 @@ const DARK_PAIRED = new Set([
 const TONES: Record<string, 'mono' | 'hybrid' | 'mono-white'> = {
   amd: 'mono-white',
   anthropic: 'hybrid',
+  llmtr: 'hybrid',
   mineru: 'hybrid',
   opper: 'mono',
   vllm: 'mono',
