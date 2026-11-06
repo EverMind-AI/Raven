@@ -9,7 +9,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from raven.gateway.linked_chat import Binding, LinkedChat, load_binding
 from raven.rpc.question_broker import QuestionBroker, RoutingQuestionBroker
@@ -178,8 +178,9 @@ class NativeTests(unittest.IsolatedAsyncioTestCase):
         self.prior_bytes = self.sessions.session_path(prior.key).read_bytes()
         self.metadata = dict(project.metadata)
         self.hub = Hub()
+        self.telegram = SimpleNamespace(name="telegram", end_turn=AsyncMock())
         self.loop = Loop(self.sessions)
-        self.link = LinkedChat(Binding(OWNER, OWNER, KEY), self.loop, self.hub, {})
+        self.link = LinkedChat(Binding(OWNER, OWNER, KEY), self.loop, self.hub, {}, {"telegram": self.telegram})
         self.emitter = Emitter()
         self.closed = []
         self.scheduler, self.rpc_hub, self.turn_ids, self.teardown = build_rpc_spine(
@@ -336,6 +337,11 @@ class NativeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.hub.events, [])
         self.assertEqual(self.loop.calls[0][0].source.channel, "tui")
         self.assertTrue(any(e["type"] == "token.delta" for _, e in self.emitter.events))
+
+    async def test_a_refused_request_ends_the_adapter_turn(self):
+        """The request is swallowed, but the typing indicator it started is not."""
+        await self.dispatch(dm("hello", sender_id="222"))
+        self.telegram.end_turn.assert_awaited_once_with(OWNER)
 
     async def test_actual_gateway_dispatch_selects_page_not_gateway(self):
         tree = ast.parse((ROOT / "raven/cli/gateway_commands.py").read_text())

@@ -718,7 +718,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 # Built here, inside the running loop, not in the sync command
                 # prologue: Scheduler pins its home loop at construction (submit
                 # must come from that loop), and the prologue has no loop yet.
-                from raven.gateway.spine import build_gateway
+                from raven.gateway.spine import build_gateway, end_channel_turn
 
                 gw_scheduler, gw_hub, gw_readback_texts, gw_sources, gw_teardown = build_gateway(
                     agent,
@@ -865,7 +865,9 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                         "Telegram project linking requires POSIX ownership checks; inbound Telegram messages "
                         "are refused. Remove telegram-project-link.json and restart to restore standalone chats."
                     )
-                linked_chat = LinkedChat(binding, agent, gw_hub, gw_sources) if binding is not None else None
+                linked_chat = (
+                    LinkedChat(binding, agent, gw_hub, gw_sources, channels.channels) if binding is not None else None
+                )
                 if page_on is not None:
                     from raven.cli._gateway_page import mount_page
 
@@ -962,6 +964,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
 
                 async def _inbound_dispatch(req) -> None:
                     if link_unavailable and req.source.channel == "telegram":
+                        await end_channel_turn(channels.get_channel(req.source.channel), req.source.chat_id)
                         return
                     if linked_chat is not None and await linked_chat.dispatch(
                         req, page_mount.scheduler if page_mount is not None else None, question_broker, agent.subagents

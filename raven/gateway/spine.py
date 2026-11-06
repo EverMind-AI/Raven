@@ -246,7 +246,7 @@ def _make_gateway_sink(
                 if origin is Origin.USER and source is not None:
                     people = [source, *people]
                 for channel_name, chat_id in dict.fromkeys((person.channel, person.chat_id) for person in people):
-                    task = asyncio.create_task(_end_turn((channels or {}).get(channel_name), chat_id))
+                    task = asyncio.create_task(end_channel_turn((channels or {}).get(channel_name), chat_id))
                     ending.add(task)
                     task.add_done_callback(ending.discard)
             agent_loop.notify_turn_complete()
@@ -256,7 +256,7 @@ def _make_gateway_sink(
     return sink
 
 
-async def _end_turn(channel: Channel | None, chat_id: str) -> None:
+async def end_channel_turn(channel: Channel | None, chat_id: str) -> None:
     """Best-effort: the turn is already over, so a channel that cannot be told
     so costs a log line, not the turn."""
     end = getattr(channel, "end_turn", None)

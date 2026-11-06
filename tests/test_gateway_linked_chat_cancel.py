@@ -278,3 +278,27 @@ async def test_dm_stop_still_reports_the_active_turn_and_discards_pending_page_i
     await r.hub.wait_idle("telegram")
     r.telegram.send.assert_awaited_once_with(OWNER, "Stopped 2 task(s).")
     assert_cleared(r)
+
+
+async def test_an_overlapping_stop_keeps_the_first_stop_state(linked_page):
+    """A second /stop must not raise, clear the first stop's frame, or go unanswered."""
+    r = linked_page
+    await inbound(r, "linked work")
+    await running(r)
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def slow_cancel(cid, **kwargs):
+        started.set()
+        await release.wait()
+        return 0
+
+    r.subagents.cancel_by_session = slow_cancel
+    first = asyncio.create_task(inbound(r, "/stop"))
+    await asyncio.wait_for(started.wait(), 2)
+    await inbound(r, "/stop")
+    assert r.link.stopping is True
+    release.set()
+    await asyncio.wait_for(first, 2)
+    assert r.link.stopping is False
+    await r.hub.wait_idle("telegram")
+    r.telegram.send.assert_any_await(OWNER, "A stop is already in progress.")

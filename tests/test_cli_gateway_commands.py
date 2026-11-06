@@ -24,6 +24,7 @@ def _binding_namespace(tmp_path):
     from unittest.mock import AsyncMock, Mock
 
     from raven.cli import gateway_commands
+    from raven.gateway.spine import end_channel_turn
 
     tree = ast.parse(Path(gateway_commands.__file__).read_text(encoding="utf-8"))
     bind = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "_bind_generation")
@@ -41,6 +42,10 @@ def _binding_namespace(tmp_path):
         "question_broker": SimpleNamespace(pending_req=Mock(return_value=None)),
         "page_mount": None,
         "logger": Mock(),
+        "channels": SimpleNamespace(
+            channels={}, get_channel=Mock(return_value=SimpleNamespace(name="telegram", end_turn=AsyncMock()))
+        ),
+        "end_channel_turn": end_channel_turn,
     }
     exec(
         compile(ast.Module(body=bind.body[start:end] + [dispatch], type_ignores=[]), gateway_commands.__file__, "exec"),
@@ -80,6 +85,8 @@ async def test_binding_platform_failure_keeps_gateway_but_refuses_telegram(tmp_p
         await namespace["_inbound_dispatch"](dm("/stop"))
         namespace["agent"].subagents.cancel_by_session.assert_not_awaited()
         namespace["gw_hub"].dispatch.assert_not_awaited()
+    channel = namespace["channels"].get_channel.return_value
+    assert channel.end_turn.await_count == (2 if present and unsupported else 0)
 
 
 def test_binding_platform_handler_does_not_hide_invalid_supported_configuration(tmp_path):
