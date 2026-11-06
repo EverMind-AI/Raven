@@ -51,7 +51,12 @@ _O_BINARY = getattr(os, "O_BINARY", 0)
 
 
 def history_path() -> Path:
-    """The file both front ends share, resolved the way the TUI resolves it."""
+    """The file both front ends share.
+
+    The two agree when ``RAVEN_HOME`` is unset or absolute. A ``~`` or a
+    relative value does not: ``raven_home()`` expands it here while the TUI
+    joins the literal string, so the two can name different files.
+    """
     return raven_home() / HISTORY_FILENAME
 
 
@@ -86,6 +91,10 @@ def read_entries(limit: int = MAX_ENTRIES) -> list[str]:
 
     The file itself is never trimmed -- the TUI only caps its in-memory copy --
     so the cap belongs at this read boundary, before the answer reaches a page.
+
+    ``Path.read_text`` applies universal-newline translation, so a CRLF file
+    converted by an external editor yields clean entries here while the TUI
+    reader keeps the trailing ``\\r``. Both writers emit LF.
     """
     if limit <= 0:
         return []
