@@ -481,3 +481,124 @@ NAME_GUESSES = [
 @pytest.mark.parametrize(("model_id", "kind"), NAME_GUESSES)
 def test_kind_of_a_name_alone(model_id: str, kind: str) -> None:
     assert kind_of(inferred_tags(model_id), ()) == kind
+
+
+def test_kind_follows_output_modalities_before_a_capability() -> None:
+    """What a model writes is the fact; a capability is derived from it.
+
+    The generator derives ``image-generation`` from ``outputModalities``, so
+    bundled rows agree. When a stronger source overrides the outputs -- a
+    vendor's own model list, or the user -- the stale derivation must not
+    outvote them.
+    """
+    from raven.providers.registry_data import kind_of
+
+    assert kind_of(["image-generation"], ["text"]) == "text"
+    assert kind_of(["audio-generation"], ["text"]) == "text"
+    assert kind_of([], ["vector"]) == "embedding"
+    assert kind_of([], ["text", "image"]) == "image"
+    assert kind_of(["image-generation"], ["image"]) == "image"
+
+
+def test_embedding_and_rerank_tags_still_decide_before_outputs() -> None:
+    """The bundled catalogue writes ``("text",)`` for all 24 embedding and
+    rerank rows; their tag is the only thing that says what they are, and letting
+    outputs decide would file every one of them as text."""
+    from raven.providers.registry_data import kind_of
+
+    assert kind_of(["embedding"], ["text"]) == "embedding"
+    assert kind_of(["rerank"], ["text"]) == "reranker"
+
+
+def test_a_kind_tag_decides_before_the_outputs_it_can_live_with() -> None:
+    """A reranker writes text, and that text cannot contradict it.
+
+    The stated-tags path used to answer from outputs alone, which filed every
+    explicitly chosen reranker as text. A kind tag is the statement; the output
+    vocabulary has no word for a ranking. Stale tags are stripped by the caller
+    before this function sees them, which is what keeps a Text choice on an
+    inferred embedder working.
+    """
+    from raven.providers.registry_data import kind_of
+
+    assert kind_of(["rerank"], ["text"]) == "reranker"
+    assert kind_of(["embedding"], ["text"]) == "embedding"
+    assert kind_of(["function-call"], ["image"]) == "image"
+
+
+def test_an_uncatalogued_version_inherits_its_family_s_kind() -> None:
+    """The snapshot describes the family, not a release newer than itself.
+
+    ``gpt-image-2.5`` arrived after the bundled files; every row naming its
+    family is an image model and nothing else, so the family answers for it.
+    No family name appears in the rule -- the catalogue supplies the tokens.
+    """
+    from raven.providers.registry_data import family_tags
+
+    assert family_tags("gpt-image-2.5") == ("image-generation",)
+    assert family_tags("gpt-image-2.5-flare") == ("image-generation",)
+    assert family_tags("gpt-images-2.5") == ()
+    assert family_tags("gpt-4o") == ()
+
+
+def test_a_mixed_family_answers_nothing() -> None:
+    """A prefix covering chat, image and audio models is not a fact to inherit;
+    answering with the majority would file chat models under Image."""
+    from raven.providers.registry_data import family_tags
+
+    assert family_tags("gpt-9-nova") == ()
+
+
+def test_no_name_in_the_catalogue_is_filed_as_an_image_by_the_family_fallback() -> None:
+    """Leave-one-out over the catalogue's own names.
+
+    Each name is removed from the family table and the rest of its family is
+    asked. A non-image name must never come back Image: the fallback may miss a
+    model, but a wrong bucket is the failure this rule exists to avoid.
+    """
+    import collections
+
+    from raven.providers.registry_data import _family_tokens, _index, kind_of
+
+    names: dict[str, set[str]] = collections.defaultdict(set)
+    for row in _index().values():
+        name = row.model_id or row.api_model_id
+        if not name:
+            continue
+        bare = name.rsplit("/", 1)[-1].lower()
+        names[bare].add(kind_of(row.capabilities, row.output_modalities))
+
+    families: dict[tuple[str, ...], collections.Counter] = collections.defaultdict(collections.Counter)
+    for name, kinds in names.items():
+        for kind in kinds:
+            families[_family_tokens(name)][kind] += 1
+
+    def infer(name: str) -> str | None:
+        tokens = _family_tokens(name)
+        for size in range(len(tokens), 0, -1):
+            answer = families.get(tokens[:size])
+            if not answer:
+                continue
+            # The excluded name contributes only to its own full tuple. Taking
+            # its kind off a shorter prefix removes somebody else's vote and
+            # can leave a false unanimous answer behind.
+            rest = answer
+            if size == len(tokens):
+                rest = answer - collections.Counter({kind: 1 for kind in names[name]})
+            if not rest:
+                continue
+            return next(iter(rest)) if len(rest) == 1 else None
+        return None
+
+    false_image = []
+    hits = 0
+    for name, kinds in names.items():
+        if len(kinds) != 1:
+            continue
+        answer = infer(name)
+        if kinds == {"image"}:
+            hits += bool(answer == "image")
+        elif answer == "image":
+            false_image.append(name)
+    assert hits, "the fallback recovered no image name at all; the corpus or the tokens moved"
+    assert not false_image, f"the family fallback filed a non-image name as image: {false_image[:10]}"

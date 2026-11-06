@@ -262,9 +262,10 @@ export async function choose(m: string, provider: string, typed = false, kind?: 
      must not name a model its provider does not list. */
   if (typed) {
     try {
-      /* The kind the chip was showing when it was clicked, which is what the
-         person said this id is -- not the offer's, which is only its default. */
-      await src.addModel?.(m, provider, kind ?? offer.kind)
+      /* The kind the caller stated -- a slot's own, or a chip the person
+         cycled. The offer's kind is only this opening's default, and stating
+         a guess would outrank a catalogue that knows better. */
+      await src.addModel?.(m, provider, kind)
     } catch (e) {
       toast(t('gui.op.switch_failed', { detail: detail(e) }))
       return

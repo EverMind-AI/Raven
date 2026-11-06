@@ -82,6 +82,7 @@ from raven.rpc.models import (
 )
 
 if TYPE_CHECKING:
+    from raven.providers.catalog import VendorFacts
     from raven.rpc.dispatcher import Dispatcher
     from raven.rpc.methods.session import AgentLoopFactory
 
@@ -257,21 +258,26 @@ def _model_labels(slug: str, models: "list[str]", *, section: Any = _UNLOADED) -
     from raven.providers.rates import resolve_context_window
     from raven.providers.registry_data import kind_of
     from raven.providers.served_models import recall
+    from raven.providers.wire import merge_key
 
     overlays = _configured_overlays(slug, section=section)
-    served = recall(slug)
+    served = {merge_key(slug, model): facts for model, facts in recall(slug).items()}
     out: dict[str, dict[str, Any]] = {}
     for model in models:
-        row = describe(slug, model, overlay=_overlay_for(overlays, slug, model))
+        facts = served.get(merge_key(slug, model))
+        row = describe(slug, model, overlay=_overlay_for(overlays, slug, model), vendor=_vendor_facts(facts))
         window = resolve_context_window(model, allow_fetch=False)
         if not (row.described or row.tagged or window or row.reasoning_efforts):
             # A model only the vendor's own list names still has the kind that
             # list proved, which is what keeps an embedding model out of the
             # chat slot's column.
-            if model in served:
-                out[model] = {"label": row.label, "kind": served[model]}
+            if facts and facts.get("kind"):
+                out[model] = {"label": row.label, "kind": str(facts["kind"])}
             continue
-        entry: dict[str, Any] = {"label": row.label, "kind": kind_of(row.capabilities, row.output_modalities)}
+        entry: dict[str, Any] = {
+            "label": row.label,
+            "kind": kind_of(row.capabilities, row.output_modalities),
+        }
         if row.description:
             entry["description"] = row.description
         if row.capabilities:
@@ -315,6 +321,19 @@ def _overlay_for(overlays: dict[str, Any], slug: str, model: str) -> Any:
     from raven.providers.wire import merge_key
 
     return overlays.get(merge_key(slug, model))
+
+
+def _vendor_facts(facts: Any) -> "VendorFacts | None":
+    """The vendor's per-model facts in the shape ``describe`` takes, or None."""
+    from raven.providers.catalog import VendorFacts
+
+    if not isinstance(facts, dict):
+        return None
+    outputs = tuple(name for name in facts.get("output_modalities") or [] if isinstance(name, str))
+    capabilities = tuple(name for name in facts.get("capabilities") or [] if isinstance(name, str))
+    if not outputs and not capabilities:
+        return None
+    return VendorFacts(capabilities=capabilities, output_modalities=outputs)
 
 
 def _docs_url(slug: str) -> str | None:
@@ -800,7 +819,8 @@ async def model_check_key(params: dict) -> dict:
         section_override=override,
     )
     if probe.get("ok"):
-        await _remember_served(slug, _served_rows(slug, probe))
+        _, served = _served_rows(slug, probe)
+        await _remember_served(slug, served)
     http_status = probe.get("http_status")
     models_count = probe.get("models_count")
     error = probe.get("error")
@@ -814,8 +834,12 @@ async def model_check_key(params: dict) -> dict:
     }
 
 
-def _served_rows(slug: str, probe: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _served_rows(slug: str, probe: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     """What ``slug`` can serve, as the picker's rows, from one probe's answer.
+
+    The second half is what the vendor itself said about the ids it listed --
+    the kind plus the facts it stated -- which is what ``served_models``
+    remembers for the next picker open.
 
     The vendor's live list unioned with the bundled catalogue (except for a
     gateway that renames what it resells, which answers to its own spelling
@@ -839,6 +863,10 @@ def _served_rows(slug: str, probe: dict[str, Any]) -> dict[str, dict[str, Any]]:
     overlays = _configured_overlays(slug, section=section)
 
     live_keys = {merge_key(slug, m) for m in live}
+    # What the vendor said about each model it lists, in the shape `describe`
+    # layers over the catalogue. Missing for a vendor that publishes no such
+    # field, in which case the catalogue and its families answer.
+    facts = probe.get("model_facts") if isinstance(probe.get("model_facts"), dict) else {}
     # What the endpoint a model was listed at proves about it, which is better
     # evidence than its name: nothing in "voyageai/voyage-code-4" says
     # embedding, and being served from `/embeddings/models` says it outright.
@@ -850,6 +878,7 @@ def _served_rows(slug: str, probe: dict[str, Any]) -> dict[str, dict[str, Any]]:
     spec = find_by_name(slug)
     bundled = () if (spec is not None and spec.renames_models) else catalogue_for(slug)
     rows: dict[str, dict[str, Any]] = {}
+    served: dict[str, dict[str, Any]] = {}
     for raw in [*live, *bundled]:
         stored = _stored_spelling(slug, raw)
         # Keyed by identity: the vendor's spelling and the registry's are the
@@ -857,18 +886,26 @@ def _served_rows(slug: str, probe: dict[str, Any]) -> dict[str, dict[str, Any]]:
         key = merge_key(slug, stored)
         if key in rows:
             continue
-        row = describe(slug, stored, overlay=_overlay_for(overlays, slug, stored))
-        capabilities = row.capabilities
+        raw_facts = facts.get(raw)
+        if not isinstance(raw_facts, dict):
+            raw_facts = {}
         proven = implied.get(raw)
-        if proven and proven not in capabilities:
-            from raven.providers.registry_data import CAPABILITIES
-
-            merged = {*capabilities, proven}
-            capabilities = tuple(name for name in CAPABILITIES if name in merged)
+        vendor_caps = tuple(name for name in raw_facts.get("capabilities") or [] if isinstance(name, str))
+        if proven and proven not in vendor_caps:
+            vendor_caps = (*vendor_caps, proven)
+        raw_outputs = tuple(name for name in raw_facts.get("output_modalities") or [] if isinstance(name, str))
+        row = describe(
+            slug,
+            stored,
+            overlay=_overlay_for(overlays, slug, stored),
+            vendor=_vendor_facts({"capabilities": list(vendor_caps), "output_modalities": list(raw_outputs)}),
+        )
+        capabilities = row.capabilities
+        kind = kind_of(capabilities, row.output_modalities)
         entry: dict[str, Any] = {
             "id": stored,
             "label": row.label,
-            "kind": kind_of(capabilities, row.output_modalities),
+            "kind": kind,
             "added": key in configured,
             "source": "live" if key in live_keys else "registry",
         }
@@ -883,20 +920,28 @@ def _served_rows(slug: str, probe: dict[str, Any]) -> dict[str, dict[str, Any]]:
         if window := resolve_context_window(stored, allow_fetch=False):
             entry["context_window"] = window
         rows[key] = entry
+        if key in live_keys:
+            served[stored] = {
+                "kind": kind,
+                "capabilities": sorted(set(vendor_caps)),
+                "output_modalities": list(raw_outputs),
+            }
 
-    return rows
+    return rows, served
 
 
-async def _remember_served(slug: str, rows: dict[str, dict[str, Any]]) -> None:
+async def _remember_served(slug: str, served: dict[str, dict[str, Any]]) -> None:
     """Record what the vendor just said it serves (``raven.providers.served_models``).
 
     Every ask writes it -- the catalogue read, the connect's check -- so the
     pickers list the live catalogue right after a connect without asking
     again. Only the rows the vendor listed: the bundled ones are not its word.
+    The per-model facts ride along, so a label keeps the vendor's answer over a
+    stale catalogue row.
     """
     from raven.providers.served_models import remember
 
-    await asyncio.to_thread(remember, slug, {r["id"]: r["kind"] for r in rows.values() if r["source"] == "live"})
+    await asyncio.to_thread(remember, slug, served)
 
 
 async def model_fetch_models(params: dict) -> dict:
@@ -935,9 +980,9 @@ async def model_fetch_models(params: dict) -> dict:
         test_provider, slug, timeout_s=_FETCH_TIMEOUT_S, full_catalogue=True, check_credential=parsed.verify
     )
     asked = bool(probe.get("ok"))
-    rows = _served_rows(slug, probe)
+    rows, served = _served_rows(slug, probe)
     if asked:
-        await _remember_served(slug, rows)
+        await _remember_served(slug, served)
 
     # By name, and stably: the order a vendor lists its catalogue in is not an
     # order anybody reads, and it changes between calls for some of them.

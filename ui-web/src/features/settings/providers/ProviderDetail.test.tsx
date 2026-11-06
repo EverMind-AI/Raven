@@ -510,6 +510,24 @@ describe('provider detail', () => {
     }])
   })
 
+  it('shows Auto when the name only falls back to Text, and states Text in one click', async () => {
+    /* The name's Text is the fallback, not a fact: the backend files a name
+       like gpt-image-2.5 by its catalogue family, so a chip that said Text
+       promised a bucket it did not get. Auto states nothing; one click states
+       Text explicitly. */
+    const calls = await catalogue([{ id: 'gpt-5', label: 'gpt-5', kind: 'text', added: false }])
+    await act(async () => { fireEvent.change(popSearch(), { target: { value: 'typed-one' } }) })
+    const chip = (): HTMLElement => document.querySelector('.settings-apkind') as HTMLElement
+    expect(chip().textContent).toBe('gui.model.type.auto')
+    await act(async () => { fireEvent.click(chip()) })
+    expect(chip().textContent).toBe('gui.model.type.text')
+    await act(async () => { fireEvent.click(document.querySelector('.settings-apadd')!) })
+    expect(calls[calls.length - 1]).toEqual(['provider', {
+      op: 'add_model', slug: 'anthropic', model: 'typed-one',
+      output_modalities: ['text'],
+    }])
+  })
+
   it('a vendor with no list endpoint says so and still takes a typed id', async () => {
     const calls = await catalogue([], 'unsupported')
     expect(screen.getByText('gui.settings.providers.no_list')).toBeTruthy()

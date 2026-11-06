@@ -374,7 +374,7 @@ export const modelSource: ModelSource = {
   loading: () => providersLoading,
   persist: persistModel,
   addModel: async (m: string, provider: string, kind?: Kind) => {
-    await gateway().call('model.add_model', { slug: provider, model: m, ...statedTags(kind ?? 'text') })
+    await gateway().call('model.add_model', { slug: provider, model: m, ...(kind ? statedTags(kind) : {}) })
     await loadProviders()
   },
   setProtocol: async (model: string, provider: string, protocol: ApiProtocol) => {

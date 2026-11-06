@@ -137,7 +137,7 @@ def clean_tags(values: Any, allowed: tuple[str, ...]) -> tuple[str, ...]:
     Ordered by the vocabulary rather than by the file so an icon row does not
     reshuffle between two models that carry the same tags.
     """
-    if not isinstance(values, list):
+    if not isinstance(values, (list, tuple)):
         return ()
     present = {str(value) for value in values}
     return tuple(name for name in allowed if name in present)
@@ -279,26 +279,105 @@ def inferred_tags(model_id: str) -> tuple[str, ...]:
 KINDS: tuple[str, ...] = ("text", "image", "embedding", "reranker", "audio", "video")
 
 
+def _kind_from_outputs(outputs: "set[str]") -> str:
+    if "vector" in outputs:
+        return "embedding"
+    for name in ("image", "audio", "video"):
+        if name in outputs:
+            return name
+    return "text"
+
+
 def kind_of(capabilities: "tuple[str, ...] | list[str]", outputs: "tuple[str, ...] | list[str]") -> str:
     """Which bucket this model belongs in, from what it can do and what it writes.
 
     Vision does not make a model an image model: reading pictures is something a
     text model does, and filtering "Image" to everything that can see would put
-    most of a modern catalogue behind it. What a model *writes* is the question.
+    most of a modern catalogue behind it. What a model *writes* is the question,
+    so declared outputs outrank a derived ``*-generation`` capability.
+
+    Embedding and rerank tags decide before outputs. The catalogue writes
+    ``("text",)`` for all 24 of those rows, and a reranker's own output is text,
+    so neither output can contradict the tag. Callers strip the tags a stronger
+    source overrode before calling -- a declared output from a vendor or the
+    user removes the bundled ones -- so a tag surviving here is one nobody
+    contradicted.
     """
     caps, outs = set(capabilities), set(outputs)
     if "embedding" in caps:
         return "embedding"
     if "rerank" in caps:
         return "reranker"
-    # Either spelling. The generator derives the capability from the modality,
-    # so a catalogued model states both -- but a model tagged from the endpoint
-    # it was served at has only the capability, and reading just the modality
-    # put 35 of OpenRouter's 50 image models in the Text bucket.
+    if outs:
+        return _kind_from_outputs(outs)
     for name in ("image", "audio", "video"):
-        if name in outs or f"{name}-generation" in caps:
+        if f"{name}-generation" in caps:
             return name
     return "text"
+
+
+#: The spellings that differ between releases of one family, dropped before the
+#: family lookup: a version, a date stamp, and the release words a vendor puts
+#: in front of one.
+_FAMILY_VERSION = re.compile(r"[\d.]+[a-z]?|v[\d.]+|\d{4,}|latest|preview|exp|experimental|beta|alpha|free")
+
+
+def _family_tokens(model_id: str) -> tuple[str, ...]:
+    """The words in a name that name its family, without the release.
+
+    ``gpt-image-2.5-flare`` and ``gpt-image-1.5`` share ``gpt image``: the
+    version is what changes between releases, so it is not part of the family.
+    """
+    bare = model_id.rsplit("/", 1)[-1].lower()
+    return tuple(token for token in re.split(r"[-_:@ ]+", bare) if token and not _FAMILY_VERSION.fullmatch(token))
+
+
+@lru_cache(maxsize=1)
+def _family_kinds() -> dict[tuple[str, ...], frozenset[str]]:
+    """Every kind the catalogue files a family of names under, keyed by tokens.
+
+    One entry per full token tuple. A lookup walks up from the longest prefix,
+    so a name carrying a suffix nobody wrote down still finds its family.
+    """
+    kinds: dict[tuple[str, ...], set[str]] = {}
+    for row in _index().values():
+        name = row.model_id or row.api_model_id
+        if not name:
+            continue
+        tokens = _family_tokens(name)
+        if tokens:
+            kinds.setdefault(tokens, set()).add(kind_of(row.capabilities, row.output_modalities))
+    return {tokens: frozenset(found) for tokens, found in kinds.items()}
+
+
+#: The capability that states each kind, for the fallback below.
+_KIND_TAGS: dict[str, tuple[str, ...]] = {
+    "image": ("image-generation",),
+    "audio": ("audio-generation",),
+    "video": ("video-generation",),
+    "embedding": ("embedding",),
+    "reranker": ("rerank",),
+}
+
+
+def family_tags(model_id: str) -> tuple[str, ...]:
+    """The kind the catalogue's own family agrees on, or nothing.
+
+    A model newer than the snapshot carries no row; its family may. Asked from
+    the longest token prefix down and answered only when every catalogue row in
+    that family is the same kind: a prefix covering two kinds says nothing about
+    a third name, and a wrong bucket is worse than no bucket.
+    """
+    tokens = _family_tokens(model_id)
+    families = _family_kinds()
+    for size in range(len(tokens), 0, -1):
+        kinds = families.get(tokens[:size])
+        if not kinds:
+            continue
+        if len(kinds) != 1:
+            return ()
+        return _KIND_TAGS.get(next(iter(kinds)), ())
+    return ()
 
 
 def row_for(provider: str, api_model_id: str) -> RegistryRow | None:
@@ -395,4 +474,5 @@ def reset_cache() -> None:
     _provider_models.cache_clear()
     _providers.cache_clear()
     _index.cache_clear()
+    _family_kinds.cache_clear()
     _by_name.cache_clear()
