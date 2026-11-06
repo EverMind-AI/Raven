@@ -49,7 +49,7 @@ from uuid import uuid4
 
 from loguru import logger
 
-from oncall_flow import wakes
+from oncall_flow import approval, wakes
 from oncall_flow.escalation import (
     anything_running as _anything_running,
 )
@@ -82,7 +82,7 @@ from oncall_flow.handoff import (
 )
 from oncall_flow.state_claims import check as check_state_claims
 from oncall_flow.state_claims import read_facts
-from oncall_flow.tools.base import _OpsScheduler
+from oncall_flow.tools.base import _OpsScheduler, ops_home
 
 DONE, FAILED, STOPPED = "done", "failed", "stopped"
 _OUTCOMES = frozenset({DONE, FAILED, STOPPED})
@@ -317,6 +317,14 @@ class OpsAskOwnerTool(_OpsScheduler):
 
         ask_id = uuid4().hex[:8]
         choices = [str(o).strip() for o in (options or []) if str(o).strip()]
+        try:
+            waiting = approval.ApprovalStore(ops_home()).pending()
+        except approval.ApprovalStoreUnreadableError as exc:
+            logger.warning("oncall-flow: pending approvals not attached: {}", exc)
+            waiting = []
+        if waiting:
+            question = f"{question.strip()}\n\n{approval.pending_block(waiting)}".strip()
+            choices = choices + [c for c in approval.CHOICES if c not in choices]
         log_event(
             cdir,
             "ask_owner",
@@ -396,8 +404,15 @@ class OpsAskOwnerTool(_OpsScheduler):
         )
         if self._direct_ask is not None and self._session_key:
             withdraw_question(cdir, "superseded by a new question")
+            if waiting:
+                try:
+                    approval.ApprovalStore(ops_home()).scope([int(i["n"]) for i in waiting], str(cdir))
+                except (approval.ApprovalStoreUnreadableError, OSError) as exc:
+                    logger.warning("oncall-flow: pending approvals not tied to {}: {}", campaign, exc)
             task = asyncio.create_task(
-                self._await_answer(cdir, campaign, ask_id, prompt, choices, self._session_key),
+                self._await_answer(
+                    cdir, campaign, ask_id, prompt, choices, self._session_key, [int(i["n"]) for i in waiting]
+                ),
                 name=f"oncall-ask:{campaign}:{ask_id}",
             )
             _ASKING[str(cdir)] = (ask_id, task)
@@ -427,7 +442,14 @@ class OpsAskOwnerTool(_OpsScheduler):
         )
 
     async def _await_answer(
-        self, cdir: Path, campaign: str, ask_id: str, prompt: str, choices: list[str], conversation_id: str
+        self,
+        cdir: Path,
+        campaign: str,
+        ask_id: str,
+        prompt: str,
+        choices: list[str],
+        conversation_id: str,
+        approvals: list[int] | None = None,
     ) -> None:
         """Wait out one question on its own task, and file what came back.
 
@@ -458,6 +480,12 @@ class OpsAskOwnerTool(_OpsScheduler):
             return
         still_open = (_open_question(cdir) or {}).get("ask_id") == ask_id
         _append_note(cdir, answer.strip()[:2000], source="owner", ask_id=ask_id)
+        if approvals:
+            try:
+                approved, refused = await approval.apply_answer(ops_home(), answer, approvals)
+                log_event(cdir, "owner_approvals", ask_id=ask_id, approved=approved, refused=refused)
+            except Exception:  # noqa: BLE001 -- the note above already holds the answer
+                logger.warning("oncall-flow: settling approvals failed for {}", campaign, exc_info=True)
         if not still_open:
             log_event(cdir, "owner_answered_late", ask_id=ask_id)
             return

@@ -168,6 +168,45 @@ def _guide_text() -> str:
     return base.rstrip("\n") + "\n\n" + GUIDE_SECTION.read_text(encoding="utf-8")
 
 
+APPROVAL_MODES = ("full", "smart", "ask")
+
+
+def apply_approval_policy(config: dict, flow_slice: dict, host: dict) -> str:
+    """Hand the approval decision to the plugin's gate, at the owner's mode.
+
+    Most of this product's turns are wakes it scheduled itself, where the trunk
+    gate has no one to ask and refuses -- which once refused the call that
+    schedules the next wake. So the trunk gate is rendered at ``full``, where
+    only builtin denials and the host's deny rules (carried by
+    ``inherit_host_denials``) refuse, and ``oncall_flow.approval`` applies the
+    mode per call. The mode is the first one set of: this slice's own
+    ``approval.mode``, this product config's ``permissions.mode``, the host's
+    ``permissions.mode``, then the trunk default ``smart``. It is read once,
+    here: a later change on the host reaches the on-call when it next starts.
+    """
+    approval = flow_slice.setdefault("approval", {})
+    timeout = approval.get("reviewTimeoutSeconds")
+    if timeout is not None:
+        try:
+            valid = float(timeout) > 0
+        except (TypeError, ValueError):
+            valid = False
+        if not valid:
+            raise SystemExit(
+                f"error: oncall-flow approval.reviewTimeoutSeconds must be a positive number of "
+                f"seconds, got {timeout!r}; the on-call does not start with its approval gate unsure"
+            )
+    own = (config.get("permissions") or {}).get("mode")
+    host_mode = (host.get("permissions") or {}).get("mode")
+    mode = next(
+        (m for m in (approval.get("mode"), own, host_mode) if m in APPROVAL_MODES),
+        "smart",
+    )
+    approval["mode"] = mode
+    config.setdefault("permissions", {})["mode"] = "full"
+    return mode
+
+
 def render_config(source: Path) -> Path:
     """Write a copy of ``source`` with the secrets merged in, under the state root."""
     config = json.loads(source.read_text(encoding="utf-8"))
@@ -218,6 +257,8 @@ def render_config(source: Path) -> Path:
     plugins["dirs"] = [str(PLUGINS_DIR)]
     flow_slice = plugins.setdefault("config", {}).setdefault(FLOW_PLUGIN_ID, {})
     flow_slice.setdefault("stateRoot", str(root / "oncall_flow"))
+    mode = apply_approval_policy(config, flow_slice, host)
+    log(f"[run] approval: {mode} (trunk gate full; the oncall_approval gate applies it)")
 
     catalogue = render.mode_catalogue(
         MODES_DIR,

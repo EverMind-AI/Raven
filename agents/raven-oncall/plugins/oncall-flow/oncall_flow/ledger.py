@@ -173,7 +173,12 @@ class Ledger:
     def _load(self) -> None:
         try:
             payload = json.loads(self._path.read_text(encoding="utf-8"))
-            self._records = {k: _record_from_dict(v) for k, v in payload.get("records", {}).items()}
+            if not isinstance(payload, dict):
+                raise TypeError(f"expected an object, found {type(payload).__name__}")
+            records = payload.get("records", {})
+            if not isinstance(records, dict) or not all(isinstance(v, dict) for v in records.values()):
+                raise TypeError("records must be an object of objects")
+            self._records = {k: _record_from_dict(v) for k, v in records.items()}
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             raise LedgerCorruptError(
                 f"ledger at {self._path} is unreadable ({exc}); "
