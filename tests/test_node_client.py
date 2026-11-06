@@ -28,6 +28,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from loguru import logger
 
 from raven.acp_client import remote
 from raven.acp_client.client import AcpClient
@@ -1723,6 +1724,21 @@ async def test_a_stream_the_host_cannot_serve_is_closed_with_the_reason_and_the_
         assert node.streams == {} and _told(client, protocol.MCP_CLOSE)[-1]["stream"] == 7
     finally:
         endpoint.close()
+
+
+async def test_a_stream_the_host_refuses_is_named_in_the_log_not_only_told_down_a_pipe_that_closes(tmp_path):
+    """The agent's side sees a closed pipe and nothing else, so a refusal has to be said here or nowhere."""
+    pool = NodePool()
+    client = _live(pool, tmp_path)
+    said: list[str] = []
+    sink = logger.add(lambda message: said.append(message.record["message"]), level="WARNING")
+    try:
+        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "task": "agent", "lend": "d1", "server": "pg"})
+        assert _told(client, protocol.MCP_CLOSE) == [{"stream": 1, "reason": "server 'pg' is not lent to that run"}]
+        (line,) = said
+        assert "'pg'" in line and "'agent'" in line and "not lent to that run" in line, said
+    finally:
+        logger.remove(sink)
 
 
 async def test_the_bridge_argv_is_the_node_s_own_and_a_node_without_a_daemon_names_none(tmp_path):

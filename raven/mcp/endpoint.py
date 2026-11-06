@@ -270,6 +270,7 @@ async def _relay(up: _Upstream, reader: asyncio.StreamReader, writer: asyncio.St
                         else None
                     )
                     await up_write.send(SessionMessage(message, metadata=metadata))
+                logger.debug("mcp endpoint: the agent's side of {!r} ended", up.server)
 
             async def up_to_down() -> None:
                 nonlocal initialize_id, protocol_version
@@ -292,6 +293,7 @@ async def _relay(up: _Upstream, reader: asyncio.StreamReader, writer: asyncio.St
                         payload = item.message.model_dump_json(by_alias=True, exclude_none=True)
                         await send_down(payload.encode() + b"\n")
                 finally:
+                    logger.debug("mcp endpoint: the upstream for {!r} ended", up.server)
                     writer.close()
 
             pumps = (asyncio.create_task(down_to_up()), asyncio.create_task(up_to_down()))

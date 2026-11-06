@@ -23,6 +23,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from loguru import logger
 
 from raven.acp_client import remote, remote_runs
 from raven.acp_client.capabilities import snapshot_fingerprint, verify_agent
@@ -443,9 +444,22 @@ async def test_an_mcp_server_the_host_holds_is_reached_from_the_machine_through_
     grant = McpGrant(granted=(GrantedServer("probe", "stdio", upstream),))
     cfg = remote_config(command=f"{sys.executable} {_HANDOFF_AGENT}", env={"ACP_HANDOFF_RECEIPT": str(receipt)})
 
-    reply = await build_third_party_backend(cfg).run(
-        "marker-42", task_id="t1", workspace=tmp_path, executor=None, mcp_grant=grant
-    )
+    # This side's own log, in a file of the test's: a failure here used to say
+    # only that the agent's pipe closed, while the reason the host ended the
+    # stream -- an upstream that went, a relay that stopped -- was logged to
+    # handlers the run's output never shows.
+    host_log = tmp_path / "host.log"
+    sink = logger.add(str(host_log), level="DEBUG", format="{level} | {message}")
+    try:
+        reply = await build_third_party_backend(cfg).run(
+            "marker-42", task_id="t1", workspace=tmp_path, executor=None, mcp_grant=grant
+        )
+    except Exception as exc:
+        said = host_log.read_text(encoding="utf-8") if host_log.exists() else ""
+        tail = "\n".join(said.splitlines()[-40:]) or "<the host logged nothing>"
+        raise RuntimeError(f"{exc}\n\nhost log tail:\n{tail}") from exc
+    finally:
+        logger.remove(sink)
 
     assert reply.split("\n\n[raven]")[0] == "MCP_HANDOFF_OK:marker-42", "the tool's answer, through the node"
     assert "MCP servers 'probe' were lent to acp agent 'stub@box' through the Raven node on machine 'box'" in reply

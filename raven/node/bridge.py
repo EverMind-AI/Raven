@@ -105,6 +105,9 @@ async def run_mcp_async(
                         out.flush()
                         parts = []
                 elif frame.get("method") == protocol.MCP_CLOSE:
+                    reason = params.get("reason")
+                    if isinstance(reason, str) and reason:
+                        print(f"raven node mcp bridge: the stream ended: {reason}", file=sys.stderr, flush=True)
                     return
 
         pumps = [asyncio.create_task(inward()), asyncio.create_task(outward())]
