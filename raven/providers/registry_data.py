@@ -230,8 +230,8 @@ def _index() -> dict[tuple[str, str], RegistryRow]:
     return index
 
 
-#: Ids that name an embedding or a reranking model, for the one thing no
-#: catalogue publishes.
+#: Ids that name an embedding, a reranking, or an OpenAI image model, for the
+#: one thing no catalogue publishes.
 #:
 #: models.dev carries no flag for either: BGE M3 arrives with
 #: ``modalities.output = ["text"]``, ``tool_call = false`` and nothing else, so
@@ -242,16 +242,24 @@ def _index() -> dict[tuple[str, str], RegistryRow]:
 #: these under names nobody wrote down.
 #:
 #: So it is read off the name, which is the only signal there is. Measured
-#: against the whole bundled catalogue: 24 of 1392 models match, every one of
-#: them an embedder or a reranker, and no chat model matches. The families are
-#: named the same way everywhere because the weights are the same weights --
-#: BAAI's bge, Alibaba's gte and Qwen3-Embedding, Cohere's embed, OpenAI's
-#: text-embedding, and anything spelled "embed" or "rerank" outright.
+#: against the whole bundled catalogue: 24 of 1392 models match the embedding
+#: rules, every one of them an embedder or a reranker, and no chat model
+#: matches. The families are named the same way everywhere because the weights
+#: are the same weights -- BAAI's bge, Alibaba's gte and Qwen3-Embedding,
+#: Cohere's embed, OpenAI's text-embedding, and anything spelled "embed" or
+#: "rerank" outright.
+#:
+#: The GPT Image family is the same problem on a shorter clock: the snapshot
+#: names the image models it was built around, and the next one the vendor
+#: ships (``gpt-image-2.5``, ``gpt-image-2.5-sunburst``) falls through to Text
+#: until a refresh lands. The family name is stable across every release, and
+#: a model named ``gpt-image`` writes images.
 #:
 #: Read for display only. Being wrong here shows one wrong icon and files a
 #: model under one wrong filter; it cannot shape a request.
 _RERANK_NAME = re.compile(r"rerank", re.I)
 _EMBEDDING_NAME = re.compile(r"(?:^|[-_/])(?:bge|gte|e5|m3e|text2vec|uae|jina-clip)(?:[-_.]|$)|embed", re.I)
+_IMAGE_NAME = re.compile(r"gpt[-_.]?image", re.I)
 
 
 def inferred_tags(model_id: str) -> tuple[str, ...]:
@@ -270,6 +278,8 @@ def inferred_tags(model_id: str) -> tuple[str, ...]:
         return ("rerank",)
     if _EMBEDDING_NAME.search(bare):
         return ("embedding",)
+    if _IMAGE_NAME.search(bare):
+        return ("image-generation",)
     return ()
 
 

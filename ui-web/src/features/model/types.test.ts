@@ -5,7 +5,7 @@ import { KIND_ORDER } from './types'
 
 import type { Kind } from './types'
 
-/* The same nine rows as tests/test_provider_registry_data.py's NAME_GUESSES.
+/* The same rows as tests/test_provider_registry_data.py's NAME_GUESSES.
    Two literal copies rather than a shared fixture: the point is that a change
    to either side shows up as a disagreement, which a shared file would hide. */
 const TABLE: Array<[string, Kind]> = [
@@ -15,6 +15,9 @@ const TABLE: Array<[string, Kind]> = [
   ['jina-embeddings-v3', 'embedding'],
   ['bge-m3', 'embedding'],
   ['gte-large', 'embedding'],
+  ['gpt-image-2.5', 'image'],
+  ['GPT-Image-2', 'image'],
+  ['custom/gpt-image-2.5-sunburst', 'image'],
   ['rerank-co/gpt-4', 'text'],
   ['google/gemini-2.5-flash-image', 'text'],
   ['deepseek-v4-pro', 'text'],

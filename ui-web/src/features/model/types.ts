@@ -107,10 +107,10 @@ export interface Offer {
 
    `guessKind` is the exception, and it guesses about a model nobody has
    described: an id a person just typed. It is a translation of
-   `registry_data.inferred_tags` -- same two patterns, same last path segment,
-   rerank asked first because a reranker is usually named after the embedding
-   family it reranks for. `tests/test_provider_registry_data.py` and
-   `types.test.ts` assert the same nine rows so the copy cannot drift. */
+   `registry_data.inferred_tags` -- same three patterns, same last path
+   segment, rerank asked first because a reranker is usually named after the
+   embedding family it reranks for. `tests/test_provider_registry_data.py`
+   and `types.test.ts` assert the same rows so the copy cannot drift. */
 
 /* The registry's answer, or text. A model with no label entry is one nothing
    describes, which `kind_of((), ())` also calls text; an unknown string is a
@@ -181,11 +181,13 @@ export const KIND_GLYPH: Record<Kind, string> = {
 
 const RERANK = /rerank/i
 const EMBEDDING = /(?:^|[-_/])(?:bge|gte|e5|m3e|text2vec|uae|jina-clip)(?:[-_.]|$)|embed/i
+const IMAGE = /gpt[-_.]?image/i
 
 export function guessKind(id: string): Kind {
   const bare = id.split('/').pop() ?? id
   if (RERANK.test(bare)) return 'reranker'
   if (EMBEDDING.test(bare)) return 'embedding'
+  if (IMAGE.test(bare)) return 'image'
   return 'text'
 }
 
