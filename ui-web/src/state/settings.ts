@@ -19,6 +19,7 @@
  */
 
 import { markNew as markNewCurrent } from '../features/rail/store'
+import { makeStore } from './store'
 
 /* Which section the settings dialog opens on.
  *
@@ -93,6 +94,25 @@ export function enterSection(id: string): void {
   enters.get(id)?.()
 }
 
+/* What re-reads the dialog when a section writes config by another door. The
+   memory section's source switch changes whether the models section draws its
+   EverOS Cloud card, and that section's snapshot belongs to the settings island
+   -- so the island registers the reload here and the writer spends it, rather
+   than the two islands importing each other (scripts/gates/import-direction).
+   A signal store rather than a bare listener set: state/store.ts owns the
+   notify, and the value this one carries is only the bump. */
+const refreshes = makeStore(0)
+
+/** Registers what re-reads the dialog after a write it did not make itself. */
+export function onRefresh(fn: () => void): () => void {
+  return refreshes.subscribe(fn)
+}
+
+/** Spends it: a section calls this after writing a setting the island caches. */
+export function requestRefresh(): void {
+  refreshes.set((n) => n + 1)
+}
+
 /** Opens the dialog on one section, for the domains that are one. */
 export function openSection(id: string): void {
   if (settingsTab.id !== id) leaveSection()
@@ -141,4 +161,5 @@ export function _resetForTests(): void {
   opener = null
   slots.clear()
   enters.clear()
+  refreshes._resetForTests()
 }

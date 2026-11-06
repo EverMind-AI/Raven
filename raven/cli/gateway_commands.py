@@ -1360,15 +1360,22 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     await agent.stop_plugin_services()
                 except Exception:
                     _logger.exception("plugin services stop failed; continuing shutdown")
-                if backend is not None:
-                    try:
-                        outcome = await agent.drain_backend_stores()
-                        report_memory_write_outcome(outcome, console)
-                        await backend.stop()
-                    except Exception:
-                        _logger.exception(
-                            "memory backend stop failed; continuing shutdown",
-                        )
+                # Read live: the boot handle in ``backend`` is stale after a
+                # Settings switch, and the client that must close is the one
+                # the loop serves now. The drain and the replacement
+                # retirements run even when that is None -- a switch to
+                # memory-off leaves them behind the None.
+                current = runtime.backend
+                try:
+                    outcome = await agent.drain_backend_stores()
+                    report_memory_write_outcome(outcome, console)
+                    await agent.retire_pending_backends()
+                    if current is not None:
+                        await current.stop()
+                except Exception:
+                    _logger.exception(
+                        "memory backend stop failed; continuing shutdown",
+                    )
 
         bounded_asyncio.run(run())
 

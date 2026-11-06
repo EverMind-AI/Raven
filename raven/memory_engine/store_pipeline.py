@@ -47,11 +47,14 @@ class _Record(NamedTuple):
 
     The worker outlives the turn that spawned it, so the contextvars snapshot
     it was forked with names the wrong turn from the second record onwards --
-    each record has to carry its own.
+    each record has to carry its own. ``backend`` is bound the same way: the
+    turn was produced against that backend, and a live switch between enqueue
+    and the write must not move it to the other store.
     """
 
     messages: list[dict]
     trace_ctx: Any
+    backend: Any
 
 
 class DrainOutcome(NamedTuple):
@@ -132,6 +135,38 @@ class StorePipeline:
         """
         return sum(len(q) for q in self._queues.values()) + len(self._active)
 
+    def _records_for(self, backend: Any) -> int:
+        """Queued or in-flight records bound to ``backend`` (not yet settled)."""
+        queued = sum(1 for q in self._queues.values() for record in q if record.backend is backend)
+        return queued + sum(1 for record in self._active.values() if record.backend is backend)
+
+    async def settle_backend(self, backend: Any, *, timeout: float | None = None) -> bool:
+        """Wait until no record bound to ``backend`` is queued or in flight.
+
+        A replaced backend may only be stopped after this returns True (or
+        after the records finish on their own): its worker is still writing
+        turns that were produced against it, and ``stop`` closes the HTTP
+        client under them. A finite ``timeout`` answers False and leaves the
+        records to drain in their own time; ``None`` waits for them, for a
+        caller with nothing else to do.
+
+        Polled rather than event-driven: the wait is a switch's, not a hot
+        path, and a signal would need a per-backend condition whose registry
+        outlives the backend it names -- the same stale-entry problem the
+        rebind exists to avoid.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = None if timeout is None else loop.time() + timeout
+        while self._records_for(backend):
+            if deadline is None:
+                await asyncio.sleep(0.05)
+                continue
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return False
+            await asyncio.sleep(min(0.05, remaining))
+        return True
+
     def _shed(self, reason: str) -> None:
         self._dropped += 1
         self._on_failure(reason)
@@ -146,7 +181,8 @@ class StorePipeline:
         slot, so taking the global branch as well would cost two stored turns
         to admit one.
         """
-        if self._get_backend() is None:
+        backend = self._get_backend()
+        if backend is None:
             return
         if not messages_slice:
             return
@@ -191,7 +227,7 @@ class StorePipeline:
                 return
         if q is None:
             q = self._queues[session_key] = deque(maxlen=MAX_QUEUED)
-        q.append(_Record(messages_slice, trace.current()))
+        q.append(_Record(messages_slice, trace.current(), backend))
         if session_key not in self._workers:
             self._workers[session_key] = asyncio.create_task(self._worker(session_key))
 
@@ -221,7 +257,12 @@ class StorePipeline:
                             with trace.use_context(record.trace_ctx):
                                 self._in_flight.add(session_key)
                                 try:
-                                    landed = await self._store_once(session_key, record.messages, attempt=attempt)
+                                    landed = await self._store_once(
+                                        session_key,
+                                        record.messages,
+                                        record.backend,
+                                        attempt=attempt,
+                                    )
                                 finally:
                                     self._in_flight.discard(session_key)
                     except Exception as e:  # noqa: BLE001 - the turn must survive a failed index
@@ -262,17 +303,27 @@ class StorePipeline:
                 self._queues.pop(session_key, None)
 
     @trace.instrument("memory.store", extract=semconv.memory_store)
-    async def _store_once(self, session_key: str, messages_slice: list[dict], *, attempt: int) -> bool:
+    async def _store_once(
+        self,
+        session_key: str,
+        messages_slice: list[dict],
+        backend: Any,
+        *,
+        attempt: int,
+    ) -> bool:
         """One attempt at one write, kept separate as the ``memory.store`` span
         boundary: a span per attempt, rather than one span covering a record's
         retries and the backoff waits between them.
+
+        ``backend`` is the one captured when the record was enqueued, not
+        whatever the loop serves now: a live switch must not retry an old
+        turn's write against the new store.
 
         ``attempt`` (0 on the first try) is passed through as metadata so a
         backend that tracks its own turn-based state -- EverOS's flush cadence,
         notably -- can advance that state once per record instead of once per
         attempt. A backend that ignores metadata sees no difference.
         """
-        backend = self._get_backend()
         # Only an explicit False is a failure: a backend that returns nothing
         # never claimed the write was lost.
         return await backend.store(session_key, messages_slice, metadata={"attempt": attempt}) is not False

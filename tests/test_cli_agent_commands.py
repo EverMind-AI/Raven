@@ -160,6 +160,10 @@ def _invoke_agent_capturing_session(
     class _StubAgentLoop:
         def __init__(self, **kwargs):
             self.channels_config = kwargs.get("channels_config")
+            # The real loop carries the backend; RavenRuntime.backend reads it
+            # through, and the one-shot CLI retires it at teardown. It arrives
+            # inside the engine bundle, as the real constructor takes it.
+            self.backend = getattr(kwargs.get("engine"), "backend", None)
             self.subagents = _StubSubagents()
             # The teardown stops the loop's skill watcher, so the double
             # carries the context the real loop always has.
@@ -543,6 +547,7 @@ def test_agent_auth_error_exit_nonzero_with_guidance(
     class _AuthFailAgentLoop:
         def __init__(self, **kwargs):
             self.channels_config = kwargs.get("channels_config")
+            self.backend = getattr(kwargs.get("engine"), "backend", None)
             self.subagents = _StubSubagents()
             self.context = SimpleNamespace(skills=SimpleNamespace(stop_file_watcher=lambda: None))
 
@@ -785,6 +790,7 @@ def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *,
     class _StubAgentLoop:
         def __init__(self, **kwargs):
             self.channels_config = kwargs.get("channels_config")
+            self.backend = getattr(kwargs.get("engine"), "backend", None)
             self.subagents = _StubSubagents()
             self.context = SimpleNamespace(skills=SimpleNamespace(stop_file_watcher=lambda: None))
             self.strategies = StrategyRegistry([])

@@ -152,6 +152,13 @@ const UNSENT = new Set([
   // machines.add: 1 -- a register the offline library refuses (every id it is
   // asked for with no fields is one) writes no row, and the row is the write's.
   'machines.add.row',
+  // memory.stats: 4 -- the offline demo has no engine behind it, so its note
+  // is the whole answer, there is no source to switch to, no cloud key to ask
+  // for, and no local server to probe. The live handler names the configured
+  // backend, every installed one, whether the hosted key is on file, and
+  // whether the local server answers.
+  'memory.stats.backend', 'memory.stats.available_backends', 'memory.stats.cloud_key_set',
+  'memory.stats.local_running',
   // credential.submit: 1 -- the offline card always saves, and an error is the refusal's alone
   'credential.submit.error',
   // browser.close: 7

@@ -81,4 +81,24 @@ describe('the EverOS Cloud card', () => {
 
     expect(calls).toContainEqual(['set', { key: 'plugins.config.everos-cloud-memory.api_key', value: 'ecm-key-rot8' }])
   })
+
+  /* The write for this key includes its probe, so the button is the one place
+     that can say "checking" while it runs. Without it a rejected key was a
+     status chip changing a few seconds after a click that looked inert. */
+  it('shows the check in flight on the key row until the write settles', async () => {
+    const data = withCloud()
+    let land: (() => void) | null = null
+    install(data, { set: () => new Promise((resolve) => { land = () => resolve(data) }) })
+    render(createElement(EverosCloudCard), { container: document.body.appendChild(document.createElement('div')) })
+    await act(async () => { await store.open() })
+
+    const input = screen.getByLabelText('gui.settings.cloud.key') as HTMLInputElement
+    await act(async () => { fireEvent.change(input, { target: { value: 'ecm-key-rot8' } }) })
+    const save = input.closest('.settings-taglist')!.querySelector('button.mini') as HTMLButtonElement
+    await act(async () => { fireEvent.click(save); await Promise.resolve() })
+
+    expect(screen.getByText('gui.set.checking')).toBeTruthy()
+    expect(save.disabled).toBe(true)
+    await act(async () => { land!(); await Promise.resolve() })
+  })
 })

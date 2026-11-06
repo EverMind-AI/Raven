@@ -233,6 +233,12 @@ export function refreshSoon(): void {
   refreshTimer = setTimeout(() => { refreshTimer = null; void refresh() }, REFRESH_SOON_MS)
 }
 
+/* A section's write the island did not make itself -- the memory section's
+   source switch -- asks for this reload, because the models section's EverOS
+   Cloud card is drawn from the snapshot cached here. The memory island spends
+   the verb; this domain owns what it does with it. */
+settingsDialog.onRefresh(refreshSoon)
+
 /* One load at a time: the dialog opens before its values are in, so the open
    and the deferred first draw can both ask, and `model.options` is seconds of
    work on a home with many providers. */

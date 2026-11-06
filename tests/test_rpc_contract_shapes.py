@@ -281,6 +281,8 @@ class _FullServer:
 async def test_memory_stats(monkeypatch: pytest.MonkeyPatch) -> None:
     from raven.rpc.methods.memory import memory_stats
 
+    # The page's local-server probe would resolve the stub hostname below.
+    monkeypatch.setattr("raven.rpc.methods.memory._local_server_running", lambda: False)
     _everos(monkeypatch, {"data": {"total_count": 3}})
     _check("memory.stats", await memory_stats({}))
 
@@ -292,6 +294,7 @@ async def test_memory_stats_with_everos_down(monkeypatch: pytest.MonkeyPatch) ->
     async def _boom(*a: Any, **k: Any) -> dict:
         raise RuntimeError("connection refused")
 
+    monkeypatch.setattr("raven.rpc.methods.memory._local_server_running", lambda: False)
     monkeypatch.setattr("raven.rpc.methods.memory._post", _boom)
     monkeypatch.setattr("raven.rpc.methods.memory._cfg", lambda: ("http://x", "u", "a"))
     out = _check("memory.stats", await memory_stats({}))
