@@ -5232,12 +5232,12 @@ def test_the_docs_site_no_longer_offers_to_turn_the_judge_off(page: str) -> None
 
 
 def test_the_changelog_entry_names_the_feature_and_the_retired_switch() -> None:
-    """`## Unreleased` is hand-kept, so nothing but this test notices an entry the
+    """The release section is hand-kept, so nothing but this test notices an entry the
     feature should have had. The retired switch changes what an upgraded build does,
     so it is filed under Changed, apart from the feature it serves."""
-    unreleased = _heading_span(_repo_text("CHANGELOG.md"), "## Unreleased")
-    added = _flat(_heading_span(unreleased, "### Added"))
-    changed = _flat(_heading_span(unreleased, "### Changed"))
+    release = _heading_span(_repo_text("CHANGELOG.md"), "## v0.2.5")
+    added = _flat(_heading_span(release, "### Added"))
+    changed = _flat(_heading_span(release, "### Changed"))
 
     assert "`routes`" in added and "`when`" in added
     assert "`not_executed`" in added
@@ -5294,10 +5294,10 @@ def test_the_english_docs_page_says_what_a_reassign_keeps_and_what_it_cannot_mov
 
 
 def test_the_changelog_entry_names_the_reassign_decision_and_its_scope() -> None:
-    """`## Unreleased` is hand-kept. A shipped decision the entry never names is
+    """The release section is hand-kept. A shipped decision the entry never names is
     undiscoverable, and a scope the entry omits -- stint rounds -- is one a reader
     would take as supported."""
-    added = _flat(_heading_span(_heading_span(_repo_text("CHANGELOG.md"), "## Unreleased"), "### Added"))
+    added = _flat(_heading_span(_heading_span(_repo_text("CHANGELOG.md"), "## v0.2.7"), "### Added"))
 
     assert "`reassign`" in added
     assert "`agent`" in added
