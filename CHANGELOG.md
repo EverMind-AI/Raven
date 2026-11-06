@@ -211,23 +211,12 @@ Raven 0.2.7 is a patch release. Each conversation now keeps a Task Board of the 
   the next page, close search) fires after five consecutive searches that
   surface nothing new rather than ten.
 
-- A model call that fails with a retryable error after the provider's own
-  seconds-long ladder now waits out a second, longer one
-  (`agents.defaults.llmErrorRetryDelays`, default 15/30/60s) before the turn
-  is given up; a body that is not JSON and a wording no bucket names are both
-  retried instead of ending the turn, and an image the endpoint refuses for its
-  size -- or a text-only model refuses at all -- is taken out of the
-  conversation and the call asked again. The streaming path, which every ACP
-  hosting uses, waits out the same ladder after its one reconnect instead of
-  failing the turn on the second error. An unattended run may also ask, with
-  `agents.defaults.llmRetryAfterOutput`, for a streamed call that failed after
-  it had produced output to be asked again (the deck launcher does). Off, the
-  turn's answering call now hands back the words that streamed: with
-  empty-response recovery on the turn continues them (see the entry on empty
-  and abnormal replies above), and with it off they are delivered as they
-  stand with a note that the reply is partial. A sub-agent run and the turn's
-  other model calls, such as the wrap-up of a turn that ran out of steps,
-  still treat the cut as before.
+- A streamed answer whose model call failed after it had produced output now
+  hands back the words that streamed: with empty-response recovery on the turn
+  continues them (see the entry on empty and abnormal replies above), and with
+  it off they are delivered as they stand with a note that the reply is partial.
+  A sub-agent run and the turn's other model calls, such as the wrap-up of a
+  turn that ran out of steps, still treat the cut as before.
 
 ### Fixed
 
@@ -313,35 +302,14 @@ Raven 0.2.6 is a patch release. This release changes how a long conversation sta
   record, so an in-turn summary or an elided tool body no longer reaches the
   session file. `CONTRACTS_VERSION` moves to 39.
 
-- The Agent Hub has a **Machines** tab: the registered machines with the state
-  of each one's link and Raven node, a form that registers one (it reaches the
-  machine first, like `raven ops connection add`, and explains a refusal by
-  its kind), **Install node** / **Update node** run in the background with the
-  card reporting the end, and **Remove machine**. A preset's sheet picks where
-  it runs (*Runs on*) among the machines with this Raven's node, with the
-  working directory there. `raven ops connection remove <id>` is the command
-  behind the removal, and `install-node` now records the node it put on the
-  machine (`node_install` on the row), which is how the tab says a machine has
-  the node before any link is up. The form, and `raven ops connection add
-  --non-interactive --auth password --password-stdin`, register a machine by
-  password as well: the password (at least six characters, or the scrubber
-  would pass it as ordinary text) is kept on this computer for Raven's own
-  logins (`~/.raven/keys/<id>.password`, readable by the owner alone), handed
-  to ssh on every connection through its askpass hook, and never on a command
-  line, in a log or in an answer; such a machine gets no ssh alias and no jump
-  host, its password answers the registered account's own password prompt (at
-  the address as ssh resolves it, so a `Host` alias from the owner's ssh config
-  works too, though not one Raven wrote for another machine that sends ssh
-  elsewhere: such a pair is refused at registration in either order and again
-  on connecting, while a key machine whose alias names its own id as the
-  address, `gpu1` at `gpu1`, leaves a password machine at `gpu1` free to
-  register, and a password connection never canonicalizes the host)
-  and no other, Oncall campaigns run on it as Raven's own
-  connections do and at
-  the registered address alone, and the mode is not offered on Windows. A failed
-  or cancelled registration preserves the password written by another pending
-  registration of the same machine, including when both passwords are identical.
-  New RPC group `machines.{list,add,install_node,doctor,remove}`.
+- The password-machine rules around ssh aliases are refined: a password answers
+  the registered account's own password prompt at the address as ssh resolves
+  it, so a `Host` alias from the owner's ssh config works, but not one Raven
+  wrote for another machine that sends ssh elsewhere -- such a pair is refused
+  at registration in either order and again on connecting. A key machine whose
+  alias names its own id as the address (`gpu1` at `gpu1`) leaves a password
+  machine at `gpu1` free to register, and a password connection never
+  canonicalizes the host.
 
 - The Machines tab's connect form can be waited on and stopped. Its line
   counts the seconds, the hint says what the wait is for and its limit, and
@@ -715,6 +683,29 @@ Raven 0.2.6 is a patch release. This release changes how a long conversation sta
 Raven 0.2.5 is a patch release. This release strengthens multi-agent coding, adds remote agent execution on registered machines, introduces conditional branches in DAG workflows, and improves native Windows support. Raven can delegate tasks to connected agents on any registered machine, using each agent's capabilities and working environment. Multi-agent coding can use this capability to coordinate local and remote coding agents. Document support is also expanded.
 
 ### Added
+
+- The Agent Hub has a **Machines** tab: the registered machines with the state
+  of each one's link and Raven node, a form that registers one (it reaches the
+  machine first, like `raven ops connection add`, and explains a refusal by
+  its kind), **Install node** / **Update node** run in the background with the
+  card reporting the end, and **Remove machine**. A preset's sheet picks where
+  it runs (*Runs on*) among the machines with this Raven's node, with the
+  working directory there. `raven ops connection remove <id>` is the command
+  behind the removal, and `install-node` now records the node it put on the
+  machine (`node_install` on the row), which is how the tab says a machine has
+  the node before any link is up. The form, and `raven ops connection add
+  --non-interactive --auth password --password-stdin`, register a machine by
+  password as well: the password (at least six characters, or the scrubber
+  would pass it as ordinary text) is kept on this computer for Raven's own
+  logins (`~/.raven/keys/<id>.password`, readable by the owner alone), handed
+  to ssh on every connection through its askpass hook, and never on a command
+  line, in a log or in an answer; such a machine gets no ssh alias and no jump
+  host, its password answers the registered account's own password prompt and
+  no other, Oncall campaigns run on it as Raven's own connections do and at
+  the registered address alone, and the mode is not offered on Windows. A failed
+  or cancelled registration preserves the password written by another pending
+  registration of the same machine, including when both passwords are identical.
+  New RPC group `machines.{list,add,install_node,doctor,remove}`.
 
 - The Machines tab says what to do next. A card names the agent entries
   connected on the machine (*No agent connected here yet* until one is; the
@@ -1837,6 +1828,19 @@ Raven 0.2.0 is the first minor release since 0.1.13, and much of what it carries
 
 - A comment-rectification pass brought in-tree comments back to the
   comment rules: English only, why over what, no edit markers.
+
+- A model call that fails with a retryable error after the provider's own
+  seconds-long ladder now waits out a second, longer one
+  (`agents.defaults.llmErrorRetryDelays`, default 15/30/60s) before the turn
+  is given up; a body that is not JSON and a wording no bucket names are both
+  retried instead of ending the turn, and an image the endpoint refuses for its
+  size -- or a text-only model refuses at all -- is taken out of the
+  conversation and the call asked again. The streaming path, which every ACP
+  hosting uses, waits out the same ladder after its one reconnect instead of
+  failing the turn on the second error. An unattended run may also ask, with
+  `agents.defaults.llmRetryAfterOutput`, for a streamed call that failed after
+  it had produced output to be asked again (the deck launcher does); off, the
+  turn fails as before.
 
 ### Fixed
 
