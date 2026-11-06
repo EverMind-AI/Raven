@@ -34,6 +34,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -444,6 +445,83 @@ def test_a_stale_lock_is_broken(history_home: Path) -> None:
 def test_append_leaves_no_lock_behind(history_home: Path) -> None:
     assert append("x") is True
     assert not _lock_path().exists()
+
+
+# ---------------------------------------------------------------------------
+# The failure branches: append reports, never raises, and a lock it cannot
+# manage must not take the append down with it.
+# ---------------------------------------------------------------------------
+
+
+def test_append_reports_a_zero_length_write(history_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # os.write returning 0 means the same buffer would be retried forever.
+    monkeypatch.setattr(os, "write", lambda fd, data: 0)
+    assert append("short") is False
+
+
+def test_append_reports_a_write_error(history_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def failing_write(fd: int, data: bytes) -> int:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "write", failing_write)
+    assert append("nope") is False
+
+
+def test_append_survives_a_close_error(history_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def failing_close(fd: int) -> None:
+        raise OSError("already closed")
+
+    monkeypatch.setattr(os, "close", failing_close)
+    assert append("still lands") is True
+    assert read_entries() == ["still lands"]
+
+
+def test_append_survives_a_lock_unlink_error(history_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def failing_unlink(self: Path, *args: object, **kwargs: object) -> None:
+        raise OSError("another handle holds it")
+
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+    assert append("lock stays") is True
+    assert read_entries() == ["lock stays"]
+
+
+class _StubLock:
+    """A lock path whose ``stat``/``unlink`` outcomes the test scripts."""
+
+    def __init__(self, stats: list[SimpleNamespace | OSError], unlink_error: OSError | None = None) -> None:
+        self._stats = list(stats)
+        self._unlink_error = unlink_error
+
+    def stat(self) -> SimpleNamespace:
+        outcome = self._stats.pop(0)
+        if isinstance(outcome, OSError):
+            raise outcome
+        return outcome
+
+    def unlink(self) -> None:
+        if self._unlink_error is not None:
+            raise self._unlink_error
+
+
+def _old_stat(*, ino: int = 1) -> SimpleNamespace:
+    old = time.time() - (input_history._LOCK_STALE_S + 1)
+    return SimpleNamespace(st_ino=ino, st_mtime=old, st_mtime_ns=int(old * 1_000_000_000))
+
+
+def test_break_stale_returns_true_when_the_lock_stat_fails() -> None:
+    assert input_history._break_stale(_StubLock([OSError("vanished mid-check")])) is True
+
+
+def test_break_stale_returns_false_when_the_lock_changed() -> None:
+    # Two waiters can both decide an old lock is stale; the second stat is the
+    # check that the waiter is still looking at the lock it decided about.
+    assert input_history._break_stale(_StubLock([_old_stat(ino=1), _old_stat(ino=2)])) is False
+
+
+def test_break_stale_returns_true_when_unlink_fails() -> None:
+    stat = _old_stat()
+    lock = _StubLock([stat, stat], unlink_error=OSError("another writer holds it"))
+    assert input_history._break_stale(lock) is True
 
 
 def test_parse_does_not_normalise_line_endings_but_read_entries_does(history_home: Path) -> None:
