@@ -172,7 +172,7 @@ def make_provider(config: Config, model: str | None = None):
             # not in the resolver, which the model picker runs over every
             # catalogue row for display, and not for an operator's own chat choice.
             logger.info(
-                "model {!r} reads as {} but {!r} has no {} address on every endpoint; using chat",
+                "model {!r} reads as {} but {!r} has no {} address on every endpoint; using LiteLLM",
                 model,
                 inferred_protocol(model),
                 provider_name,
