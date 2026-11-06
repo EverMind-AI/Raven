@@ -75,10 +75,11 @@ class MessageTool(Tool):
 
     @property
     def sent_in_turn(self) -> bool:
-        """Whether a send went out this turn.
+        """Whether a same-target send went out this turn.
 
-        The send callback hands every message to the turn's own reader, whatever
-        channel or chat the call names, so a send that went out reached the reader.
+        A cross-target send is queued for another surface, and a destination that
+        names only one of channel or chat is refused, so neither counts as this
+        turn's reply.
         """
         return self._cur().sent
 
