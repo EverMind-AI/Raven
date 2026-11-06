@@ -164,9 +164,7 @@ async def test_history_list_tolerates_bad_limits(history_home: Path) -> None:
     assert (await input_history_list({"limit": -5}))["entries"] == []
 
 
-async def test_history_list_caps_an_oversized_limit(
-    history_home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_history_list_caps_an_oversized_limit(history_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("raven.rpc.methods.input.MAX_ENTRIES", 3)
     for i in range(5):
         input_history.append(f"e{i}")

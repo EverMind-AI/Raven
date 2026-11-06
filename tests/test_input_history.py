@@ -415,9 +415,7 @@ def test_processes_appending_unique_texts_lose_nothing(history_home: Path) -> No
     assert sorted(entries) == sorted(f"p{w}-{i}" for w in range(workers) for i in range(per_worker))
 
 
-def test_a_wedged_lock_falls_through_to_an_unlocked_append(
-    history_home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_wedged_lock_falls_through_to_an_unlocked_append(history_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Not a guarantee this module claims: after the timeout it appends anyway
     # rather than holding a turn behind a lock nobody released. The foreign
     # lock is left alone, because the writer never owned it.
@@ -473,10 +471,7 @@ def test_parse_does_not_normalise_line_endings_but_read_entries_does(history_hom
 
 # Exactly what history.ts append() writes for the two entries in the task's
 # sample: a leading newline, "# <UTC ISO without T/Z>", then the + lines.
-_TUI_WRITTEN = (
-    "\n# 2026-11-05 13:15:15.244\n+hello world\n"
-    "\n# 2026-11-05 13:15:15.245\n+line1\n+line2\n"
-)
+_TUI_WRITTEN = "\n# 2026-11-05 13:15:15.244\n+hello world\n\n# 2026-11-05 13:15:15.245\n+line1\n+line2\n"
 
 
 def test_reads_what_the_tui_writer_wrote(history_home: Path) -> None:
