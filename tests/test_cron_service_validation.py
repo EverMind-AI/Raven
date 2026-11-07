@@ -126,6 +126,7 @@ def test_non_cron_schedules_do_not_read_the_default(tmp_path, kind):
     assert _add(svc, schedule).schedule == schedule
 
 
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="moving the process zone needs time.tzset")
 def test_cron_without_tz_follows_local_dst(monkeypatch) -> None:
     """A 09:00 cron with no tz stays at 09:00 local time across a DST change."""
     from raven.proactive_engine.schedulers.cron.service import _compute_next_run
@@ -143,6 +144,7 @@ def test_cron_without_tz_follows_local_dst(monkeypatch) -> None:
         time.tzset()
 
 
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="moving the process zone needs time.tzset")
 def test_cron_without_tz_is_never_scheduled_in_the_past_on_dst_fall_back(monkeypatch) -> None:
     """In the repeated hour of a fall-back, the next run must be after `now`."""
     from raven.proactive_engine.schedulers.cron.service import _compute_next_run
