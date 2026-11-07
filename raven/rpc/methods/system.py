@@ -14,6 +14,7 @@ import re
 import shlex
 import sys
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -163,6 +164,66 @@ async def system_ping(params: dict) -> dict:
         "pong": True,
         "server_time_ms": int(time.time() * 1000),
     }
+
+
+#: The tail is read from the end of the file, never the whole file: a sink that
+#: has grown past its rotation size is not re-read in full to answer a
+#: twenty-line request, and no client can make this read proportional to the
+#: log's size.
+_LOG_TAIL_MAX_BYTES = 256 * 1024
+
+#: What `raven tui` names its loguru file sink (`redirect_loguru_to_file`).
+_LOG_TAIL_FILE = "tui.log"
+
+
+def _tail_text(path: Path, limit: int) -> str:
+    """The last ``limit`` lines of ``path``, read from the end; empty when unreadable."""
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            window_start = max(0, size - _LOG_TAIL_MAX_BYTES)
+            fh.seek(window_start)
+            data = fh.read()
+    except OSError:
+        return ""
+    lines = data.decode("utf-8", errors="replace").splitlines()
+    if window_start > 0 and lines:
+        # The window's first line is cut mid-line unless it began exactly on a
+        # newline; dropping it keeps a fragment from reading as a whole line.
+        lines = lines[1:]
+    return "\n".join(lines[-limit:])
+
+
+async def system_logs(params: dict) -> dict:
+    """`system.logs` — the tail of this host's own runtime log file.
+
+    The surface that asks is the TUI's ``/logs``, which once paged a placeholder
+    because the in-process-RPC path has no child-process stdout to tail. The
+    records it wants are the ones loguru already writes to
+    ``<logs>/tui.log``, so this answers from there. The home-directory
+    resolution stays on the Python side, where ``get_logs_dir`` already follows
+    ``--config`` instances, rather than in each client's expansion of
+    ``RAVEN_HOME``.
+
+    A file that does not exist yet (a host that never started a TUI sink)
+    answers empty text rather than an error: the caller already has an honest
+    line for "nothing to show".
+    """
+    import asyncio
+
+    from raven.config.paths import get_logs_dir
+
+    raw = params.get("lines", 20)
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise ConfigValidationError(
+            "lines must be an integer",
+            data={"field": "lines", "reason": "wrong_type"},
+        )
+    limit = min(80, max(1, raw))
+    log_path = get_logs_dir() / _LOG_TAIL_FILE
+    text = await asyncio.to_thread(_tail_text, log_path, limit)
+    return {"path": str(log_path), "text": text}
 
 
 def _cached_update() -> tuple[bool, str] | None:
@@ -514,6 +575,7 @@ def register_system_methods(
         return await system_version(params, send_frame=send_frame)
 
     dispatcher.register("system.hello", _hello)
+    dispatcher.register("system.logs", system_logs)
     dispatcher.register("system.ping", system_ping)
     dispatcher.register("system.version", _version)
     dispatcher.register("system.upgrade", system_upgrade)
@@ -521,6 +583,7 @@ def register_system_methods(
 
 __all__ = [
     "system_hello",
+    "system_logs",
     "system_ping",
     "system_version",
     "system_upgrade",

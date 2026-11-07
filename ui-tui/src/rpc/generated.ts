@@ -5195,6 +5195,30 @@ export interface SystemHelloResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SystemLogsParams".
+ */
+export interface SystemLogsParams {
+  /**
+   * How many trailing lines to return; out-of-range values are clamped, not rejected.
+   */
+  lines?: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SystemLogsResult".
+ */
+export interface SystemLogsResult {
+  /**
+   * Absolute path of the tailed file, so the reader knows where the rest lives.
+   */
+  path: string;
+  /**
+   * The trailing lines joined with newlines; empty when the file does not exist yet.
+   */
+  text: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SystemPingParams".
  */
 export interface SystemPingParams {}

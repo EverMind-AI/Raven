@@ -3958,6 +3958,49 @@
       ]
     },
     {
+      "name": "system.logs",
+      "summary": "Tail this host's own runtime log file.",
+      "params": [
+        {
+          "name": "lines",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 80,
+            "default": 20,
+            "description": "How many trailing lines to return; out-of-range values are clamped, not rejected."
+          }
+        }
+      ],
+      "result": {
+        "name": "SystemLogsResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "text"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Absolute path of the tailed file, so the reader knows where the rest lives."
+            },
+            "text": {
+              "type": "string",
+              "description": "The trailing lines joined with newlines; empty when the file does not exist yet."
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
+    },
+    {
       "name": "system.ping",
       "summary": "Liveness probe.",
       "params": [],

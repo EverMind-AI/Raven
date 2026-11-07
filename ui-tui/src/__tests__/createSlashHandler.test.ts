@@ -697,6 +697,33 @@ describe('createSlashHandler', () => {
     expect(ctx.transcript.sys).toHaveBeenCalledWith('usage: /indicator [ascii|emoji|kaomoji|unicode]')
   })
 
+  it('pages the runtime log tail /logs fetched over rpc', async () => {
+    const rpc = vi.fn(() => Promise.resolve({ path: '/home/u/.raven/logs/tui.log', text: 'line-a\nline-b' }))
+    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
+
+    expect(createSlashHandler(ctx)('/logs')).toBe(true)
+    expect(rpc).toHaveBeenCalledWith('system.logs', { lines: 20 }, { quiet: true })
+    await vi.waitFor(() => expect(ctx.transcript.page).toHaveBeenCalledWith('line-a\nline-b', 'Logs'))
+  })
+
+  it('honors the /logs line-count argument within its clamp', async () => {
+    const rpc = vi.fn(() => Promise.resolve({ path: '/x/tui.log', text: '' }))
+    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
+
+    expect(createSlashHandler(ctx)('/logs 40')).toBe(true)
+    expect(rpc).toHaveBeenCalledWith('system.logs', { lines: 40 }, { quiet: true })
+    expect(createSlashHandler(ctx)('/logs 500')).toBe(true)
+    expect(rpc).toHaveBeenLastCalledWith('system.logs', { lines: 80 }, { quiet: true })
+  })
+
+  it('says no gateway logs when the tail is empty', async () => {
+    const rpc = vi.fn(() => Promise.resolve({ path: '/x/tui.log', text: '' }))
+    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
+
+    expect(createSlashHandler(ctx)('/logs')).toBe(true)
+    await vi.waitFor(() => expect(ctx.transcript.sys).toHaveBeenCalledWith('no gateway logs'))
+  })
+
   it('drops stale slash.exec output after a newer slash', async () => {
     let resolveLate: (v: { output?: string }) => void
     let slashExecCalls = 0
@@ -704,7 +731,6 @@ describe('createSlashHandler', () => {
     const ctx = buildCtx({
       gateway: {
         gw: {
-          getLogTail: vi.fn(() => ''),
           request: vi.fn((method: string) => {
             if (method === 'slash.exec') {
               slashExecCalls += 1
@@ -740,7 +766,6 @@ describe('createSlashHandler', () => {
     const ctx = buildCtx({
       gateway: {
         gw: {
-          getLogTail: vi.fn(() => ''),
           request: vi.fn((method: string) => {
             if (method === 'slash.exec') {
               return Promise.reject(new Error('no'))
@@ -825,7 +850,6 @@ describe('createSlashHandler', () => {
     const ctx = buildCtx({
       gateway: {
         gw: {
-          getLogTail: vi.fn(() => ''),
           request: vi.fn((method: string) => {
             if (method === 'slash.exec') {
               return Promise.reject(new Error('skill command: use command.dispatch'))
@@ -1063,7 +1087,6 @@ const buildComposer = () => ({
 
 const buildGateway = () => ({
   gw: {
-    getLogTail: vi.fn(() => ''),
     request: vi.fn(() => Promise.resolve({}))
   },
   rpc: vi.fn(() => Promise.resolve({}))

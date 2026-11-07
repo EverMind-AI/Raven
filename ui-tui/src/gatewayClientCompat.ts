@@ -4,8 +4,8 @@
 //
 // GatewayClientCompat — EventEmitter-shaped adapter wrapping the typed
 // production RpcClient. Provides the GatewayClient API surface
-// (`request<T>(method, params)`, `start()`, `kill()`, `getLogTail()`,
-// `drain()`, `.on('event'/'exit', handler)`) so the hermes-fork-imported
+// (`request<T>(method, params)`, `start()`, `kill()`, `drain()`,
+// `.on('event'/'exit', handler)`) so the hermes-fork-imported
 // ui-tui consumes the typed RpcClient backend through one seam.
 //
 // Lifetime: permanent. This adapter IS the boundary between the typed RPC
@@ -25,8 +25,7 @@
 //      the real skin arrives via config sync.
 //   3. `request<T>(m, p)` delegates to `rpc<T>(m, p)`.
 //   4. `kill()` → `RpcClient.close()` + emit 'exit'.
-//   5. `getLogTail()` → placeholder string (no buffered stdout in real path).
-//   6. `drain()` → flush pre-subscriber buffered events from `bufferedEvents`,
+//   5. `drain()` → flush pre-subscriber buffered events from `bufferedEvents`,
 //      matching `GatewayClientStub.drain()` semantics so the boot-time
 //      `gateway.ready` signal is not lost when `useMainApp.ts` attaches its
 //      `.on('event', ...)` handler after `start()`.
@@ -169,15 +168,6 @@ export class GatewayClientCompat extends EventEmitter {
     } finally {
       this.emit('exit', 0)
     }
-  }
-
-  /**
-   * Placeholder — the real gateway path has no buffered child-process stdout
-   * to tail (server logs are written by Python `loguru` to its own files).
-   * Hermes UI's `/logs` slash command treats this as a no-data signal.
-   */
-  getLogTail(_limit = 20): string {
-    return '(real gateway via RPC — see Python loguru sink for server logs)'
   }
 
   private publish(ev: GatewayEvent): void {

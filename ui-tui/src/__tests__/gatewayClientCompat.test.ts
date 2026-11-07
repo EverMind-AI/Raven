@@ -5,7 +5,7 @@
 // GatewayClientCompat — adapter unit tests against a mock unix socket
 // server (same pattern as `src/rpc/__tests__/client.test.ts`). Covers
 // handshake, gateway.ready synth, drain-replay, request delegation,
-// kill semantics, and getLogTail placeholder.
+// and kill semantics.
 
 import type { Server, Socket } from 'node:net'
 
@@ -257,14 +257,6 @@ describe('GatewayClientCompat', () => {
     client = null // disable afterEach cleanup
     // Followup safety: localClient has set `killed = true`; no socket left dangling.
     expect(localClient).toBeDefined()
-  })
-
-  it('getLogTail() returns a non-empty placeholder string', async () => {
-    client = new GatewayClientCompat({ socketPath: mock.socketPath })
-    const tail = client.getLogTail()
-
-    expect(typeof tail).toBe('string')
-    expect(tail.length).toBeGreaterThan(0)
   })
 
   it('honors an injected RpcClient (test seam for custom transports)', async () => {

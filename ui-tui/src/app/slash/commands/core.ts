@@ -17,7 +17,8 @@ import type {
 import type {
   SessionSetModeResult,
   SubagentsInstanceCreateResult,
-  SubagentsInstanceSetModeResult
+  SubagentsInstanceSetModeResult,
+  SystemLogsResult
 } from '../../../rpc/generated.js'
 import type { Msg, PanelSection } from '../../../types.js'
 import type { StatusBarMode } from '../../interfaces.js'
@@ -736,12 +737,18 @@ export const coreCommands: SlashCommand[] = [
   },
 
   {
-    help: 'view gateway logs',
+    help: 'view the runtime log tail',
     name: 'logs',
     run: (arg, ctx) => {
-      const text = ctx.gateway.gw.getLogTail(Math.min(80, Math.max(1, parseInt(arg, 10) || 20)))
-
-      text ? ctx.transcript.page(text, 'Logs') : ctx.transcript.sys('no gateway logs')
+      const lines = Math.min(80, Math.max(1, parseInt(arg, 10) || 20))
+      ctx.gateway
+        .rpc<SystemLogsResult>('system.logs', { lines }, { quiet: true })
+        .then(
+          ctx.guarded<SystemLogsResult>(r => {
+            r?.text ? ctx.transcript.page(r.text, 'Logs') : ctx.transcript.sys('no gateway logs')
+          })
+        )
+        .catch(ctx.guardedErr)
     }
   },
 

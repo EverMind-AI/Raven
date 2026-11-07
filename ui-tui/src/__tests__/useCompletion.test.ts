@@ -309,7 +309,7 @@ describe('useCompletion slash branch — no complete.slash RPC', () => {
   })
 
   it('slash input populates completions without calling gw.request', async () => {
-    const gw = { request: vi.fn(() => Promise.resolve(null)), getLogTail: vi.fn(() => '') } as unknown as GatewayClient
+    const gw = { request: vi.fn(() => Promise.resolve(null)) } as unknown as GatewayClient
     const out = { completions: [] as { display: string }[], gwCallCount: 0 }
 
     render(React.createElement(HookSpy, { input: '/s', blocked: false, gw, out }))
@@ -325,10 +325,7 @@ describe('useCompletion slash branch — no complete.slash RPC', () => {
 
   it('path-like input calls gw.request("complete.path", ...) after the debounce', async () => {
     const gw = {
-      request: vi.fn(() =>
-        Promise.resolve({ items: [{ text: 'src/foo.ts', display: 'src/foo.ts' }], replace_from: 2 })
-      ),
-      getLogTail: vi.fn(() => '')
+      request: vi.fn(() => Promise.resolve({ items: [{ text: 'src/foo.ts', display: 'src/foo.ts' }], replace_from: 2 }))
     } as unknown as GatewayClient
     const out = { completions: [] as { display: string }[], gwCallCount: 0 }
 

@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 258 methods, 147 component schemas.
+// 259 methods, 147 component schemas.
 
 /* eslint-disable */
 /**
@@ -4031,6 +4031,22 @@ export interface SystemHelloResult {
    */
   platform?: 'mac' | 'windows' | 'linux';
 }
+export interface SystemLogsParams {
+  /**
+   * How many trailing lines to return; out-of-range values are clamped, not rejected.
+   */
+  lines?: number;
+}
+export interface SystemLogsResult {
+  /**
+   * Absolute path of the tailed file, so the reader knows where the rest lives.
+   */
+  path: string;
+  /**
+   * The trailing lines joined with newlines; empty when the file does not exist yet.
+   */
+  text: string;
+}
 export interface SystemPingParams {}
 export interface SystemPingResult {
   pong: true;
@@ -6974,6 +6990,7 @@ export interface RpcMethods {
   'session.set_effort': { params: SessionSetEffortParams; result: SessionSetEffortResult };
   'session.set_knowledge': { params: SessionSetKnowledgeParams; result: SessionSetKnowledgeResult };
   'system.hello': { params: SystemHelloParams; result: SystemHelloResult };
+  'system.logs': { params: SystemLogsParams; result: SystemLogsResult };
   'system.ping': { params: SystemPingParams; result: SystemPingResult };
   'system.version': { params: SystemVersionParams; result: SystemVersionResult };
   'cli.dispatch': { params: CliDispatchParams; result: CliDispatchResult };
@@ -7403,6 +7420,7 @@ export const RPC_METHODS = [
   "subagents.update",
   "sudo.respond",
   "system.hello",
+  "system.logs",
   "system.ping",
   "system.upgrade",
   "system.version",
